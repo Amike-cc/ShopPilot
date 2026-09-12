@@ -1,0 +1,1693 @@
+<template>
+  <div class="workbench">
+    <!-- 左栏：店铺侧边栏 - §8.2 StoreSidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">商</div>
+        <div class="brand-name">ShopPilot</div>
+      </div>
+
+      <div class="sidebar-tools">
+        <div class="search-box">
+          <span class="search-ico">🔍</span>
+          <input v-model="ws.search" placeholder="搜索店铺 / 平台 / 标签" />
+        </div>
+        <button class="btn-new" @click="openCreateDialog()" title="新建店铺">+</button>
+      </div>
+
+<div class="filter-platform" v-if="ws.platformCounts && Object.keys(ws.platformCounts).length > 0">
+        <div class="fp-header">
+          <span class="fp-label">平台</span>
+          <button v-if="ws.filterPlatform" class="fp-clear" @click="ws.filterPlatform = ''" title="清除平台筛选">✕</button>
+        </div>
+        <button
+          :class="['fp-chip', { on: !ws.filterPlatform }]"
+          @click="ws.filterPlatform = ''"
+          title="显示全部平台"
+        >
+          全部
+          <span class="fp-count">{{ totalFilteredCount }}</span>
+        </button>
+        <template v-for="p in availablePlatforms" :key="p.name">
+          <button
+            :class="['fp-chip', { on: ws.filterPlatform === p.name }]"
+            :style="chipStyle(ws.filterPlatform === p.name, p.color)"
+            @click="ws.filterPlatform = p.name"
+            :title="p.name + '（' + p.count + ' 家店铺）'"
+          >
+            <template v-if="p.platform">
+              <PlatformIcon :name="p.platform" :size="12" />
+            </template>
+            <template v-else>
+              <span class="fp-other-icon">📦</span>
+            </template>
+            <span>{{ p.shortName }}</span>
+            <span class="fp-count">{{ p.count }}</span>
+          </button>
+        </template>
+      </div>
+
+      <div class="store-list">
+        <div v-if="ws.filteredStores.length === 0" class="empty-hint">
+          <template v-if="ws.search || ws.filterPlatform">
+            没有匹配的店铺
+            <br />
+            <button class="link" @click="clearFilters">清除全部筛选条件</button>
+          </template>
+          <template v-else>
+            没有店铺<br /><button class="link" @click="openCreateDialog()">新建第一个</button>
+          </template>
+        </div>
+        <div v-for="grp in ws.groupedStores" :key="grp.group" class="store-group">
+          <div class="group-title">{{ grp.group }}</div>
+          <div
+            v-for="s in grp.items"
+            :key="s.id"
+            :class="['store-card', { active: ws.selectedStoreId === s.id, displayed: ws.displayedStoreId === s.id }]"
+            @click="ws.selectStore(s.id)"
+            @contextmenu.prevent="onStoreContext(s, $event)"
+          >
+            <PlatformIcon :name="s.platform" :size="32" />
+            <div class="store-meta">
+              <div class="store-name">{{ s.name }}</div>
+              <div class="store-sub">
+                <span class="dot" :style="{ background: statusColor(s.status) }"></span>
+                <PlatformIcon :name="s.platform" :size="12" />
+                <span>{{ s.platform }}</span>
+              </div>
+            </div>
+            <button
+              class="store-action"
+              :title="isOpen(s.id) ? '关闭浏览器' : '打开浏览器'"
+              @click.stop="toggleStore(s.id)"
+            >{{ isOpen(s.id) ? '⏻' : '▶' }}</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="foot-btn" @click="openTrash">🗑 回收站<span v-if="ws.trashStores.length" class="badge">{{ ws.trashStores.length }}</span></button>
+        <button class="foot-btn" @click="onCapture" :disabled="!ws.activeTab" title="截图当前页">📸 截图</button>
+      </div>
+    </aside>
+
+    <!-- 中栏：浏览器视口 - §8.2 BrowserViewport -->
+    <main class="browser-col">
+      <template v-if="ws.displayedStoreId">
+        <!-- 标签栏（兼作标题栏拖拽区；右栏收起时右上角是原生窗口按钮，需避让） -->
+        <div class="tab-strip" :class="{ 'wco-avoid': rightPanelCollapsed }">
+          <div class="tabs">
+            <div
+              v-for="t in ws.displayedTabs"
+              :key="t.id"
+              :class="['tab', { active: ws.activeTab?.id === t.id, pinned: t.isPinned }]"
+              @click="ws.activateTab(t.id)"
+            >
+              <span v-if="t.loading" class="tab-spinner"></span>
+              <span class="tab-title" :title="t.title || t.url">{{ t.title || '新标签页' }}</span>
+              <button class="tab-close" @click.stop="ws.closeTab(t.id)">×</button>
+            </div>
+          </div>
+          <button class="tab-add" @click="ws.newTab()" title="新标签页">+</button>
+        </div>
+
+        <!-- 地址栏 -->
+        <div class="address-bar">
+          <button class="nav-btn" @click="ws.tabControl('back')" title="后退">‹</button>
+          <button class="nav-btn" @click="ws.tabControl('forward')" title="前进">›</button>
+          <button class="nav-btn" @click="ws.tabControl('reload')" title="刷新">⟳</button>
+          <div class="url-box">
+            <input
+              ref="urlInput"
+              v-model="urlDraft"
+              @keydown.enter="submitUrl"
+              :key="ws.activeTab?.id + ws.activeTab?.url"
+              spellcheck="false"
+            />
+          </div>
+          <button class="nav-btn" @click="bookmarkCurrent" title="收藏本页">☆</button>
+          <button class="nav-btn" @click="openWindow" title="独立窗口打开">⧉</button>
+        </div>
+
+        <!-- WebContentsView 挂载区域（透明占位，主进程按此 bounds 覆盖真实页面） -->
+        <div class="viewport" ref="viewportEl"></div>
+      </template>
+
+      <!-- 欢迎页 -->
+      <div v-else class="welcome">
+        <div class="welcome-inner">
+          <div class="welcome-logo">商</div>
+          <h1>欢迎使用 ShopPilot</h1>
+          <p class="welcome-desc">电商店铺浏览器工作台。选择左侧店铺开始，或创建一个新店铺。</p>
+          <div class="quick-platforms">
+            <button v-for="p in quickPlatforms" :key="p.name" class="qp" @click="quickCreate(p)">
+              <PlatformIcon :name="p.name" :size="16" />{{ p.name }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- 右栏：面板 - §8.2 概览/书签/下载（可收起为窄轨：图标=面板，展开即回到该面板） -->
+    <aside class="right-panel" :class="{ collapsed: rightPanelCollapsed }" v-if="ws.displayedStoreId" data-test="right-panel">
+      <div class="panel-rail" v-if="rightPanelCollapsed">
+        <button class="rail-btn" data-test="panel-expand" title="展开右侧栏（Ctrl+Shift+B）" @click="expandPanel()">‹</button>
+        <button
+          v-for="t in panelTabs"
+          :key="t.key"
+          :class="['rail-btn', { on: ws.rightPanel === t.key }]"
+          :title="t.label"
+          :data-test="'rail-' + t.key"
+          @click="expandPanel(t.key)"
+        >
+          {{ t.icon }}
+          <span v-if="t.key === 'tasks' && confirmationCount > 0" class="rail-badge" data-test="rail-confirm-badge"></span>
+        </button>
+      </div>
+
+      <template v-else>
+      <div class="panel-tabs">
+        <button :class="['ptab', { on: ws.rightPanel === 'bookmarks' }]" @click="switchPanel('bookmarks')">收藏</button>
+        <button :class="['ptab', { on: ws.rightPanel === 'downloads' }]" @click="switchPanel('downloads')">下载</button>
+        <button :class="['ptab', { on: ws.rightPanel === 'env' }]" @click="switchPanel('env')">环境</button>
+        <button :class="['ptab', { on: ws.rightPanel === 'tasks' }]" @click="switchPanel('tasks')">任务</button>
+        <button class="panel-collapse" data-test="panel-collapse" title="收起右侧栏（Ctrl+Shift+B）" @click="collapsePanel()">›</button>
+      </div>
+
+      <!-- 人工确认门禁：必须在任何面板都能看到（曾在"任务"面板分支内，用户切到别的面板时任务干等，看起来像卡死） -->
+      <div v-for="c in ws.confirmations" :key="c.runId" class="confirm-bar" data-test="task-confirm">
+        <div class="cf-txt">
+          ⚠ 需要人工确认
+          <div class="row-sub">{{ c.message }}（步骤 {{ c.stepIndex + 1 }}）</div>
+        </div>
+        <div class="cf-btns">
+          <button class="mini-btn primary" data-test="confirm-allow" @click="confirmRun(c.runId, true)">允许</button>
+          <button class="mini-btn" data-test="confirm-deny" @click="confirmRun(c.runId, false)">拒绝</button>
+        </div>
+      </div>
+
+      <div class="panel-body" v-if="ws.rightPanel === 'bookmarks'">
+        <!-- 平台入口（§16 平台适配层）：只读展示，不入库；深链随平台改版可能变化 -->
+        <div class="env-sec" v-if="entryRoutes.length" data-test="entry-routes">
+          <div class="env-h"><PlatformIcon :name="displayedPlatformName" :size="14" /><span style="margin-left:6px">{{ displayedPlatformName }} · 平台入口</span></div>
+          <div v-for="r in entryRoutes" :key="r.id" class="row-item" data-test="entry-route" @click="ws.navigate(r.url)">
+            <div class="row-main">{{ r.title }}</div>
+            <div class="row-sub">{{ shortUrl(r.url) }}</div>
+          </div>
+          <div class="env-note">平台入口由内置适配器提供，页面改版可能调整地址；失效可直接在下方自建收藏。</div>
+        </div>
+
+        <div v-if="ws.bookmarks.length === 0" class="empty-hint">暂无收藏</div>
+        <div v-for="b in ws.bookmarks" :key="b.id" class="row-item" @click="ws.navigate(b.url)">
+          <div class="row-main">{{ b.title }}</div>
+          <div class="row-sub">{{ shortUrl(b.url) }}</div>
+          <button class="row-del" @click.stop="delBookmark(b.id)">×</button>
+        </div>
+      </div>
+
+      <div class="panel-body" v-else-if="ws.rightPanel === 'downloads'">
+        <div v-if="ws.downloads.length === 0" class="empty-hint">暂无下载</div>
+        <div v-for="d in ws.downloads" :key="d.id" class="row-item">
+          <div class="row-main" :title="d.fileName">{{ d.fileName }}</div>
+          <div class="row-sub">
+            <span :class="['dl-state', d.state]">{{ dlStateText(d.state) }}</span>
+            <span v-if="d.sizeBytes"> · {{ fmtSize(d.sizeBytes) }}</span>
+          </div>
+          <button class="row-del" @click.stop="showInFolder(d.id)" title="打开所在文件夹">📁</button>
+        </div>
+      </div>
+
+      <!-- 环境面板：代理绑定 / 代理管理 / 指纹验证 - §8.1 / §13 -->
+      <div class="panel-body env-body" v-else-if="ws.rightPanel === 'env'">
+        <div class="env-sec">
+          <div class="env-h">网络出口</div>
+          <div class="bind-row">
+            <select v-model="proxyBindId" @change="applyBind">
+              <option value="">直连（不使用代理）</option>
+              <option v-for="p in proxies" :key="p.id" :value="p.id">{{ p.label || p.host + ':' + p.port }}</option>
+            </select>
+          </div>
+          <div class="env-note" v-if="envBindingNote">{{ envBindingNote }}</div>
+          <div class="env-note ok" v-if="lastProxyAuth">✔ 已注入代理凭据 {{ lastProxyAuth.username }}（{{ new Date(lastProxyAuth.at).toLocaleTimeString() }}）</div>
+        </div>
+
+        <div class="env-sec">
+          <div class="env-h">代理列表</div>
+          <div v-if="proxies.length === 0" class="empty-hint">暂无代理，可在下方添加</div>
+          <div v-for="p in proxies" :key="p.id" class="proxy-item">
+            <span class="p-dot" :style="{ background: p.status === 'ok' ? '#10B981' : p.status === 'error' ? '#EF4444' : '#6B7280' }" :title="'状态: ' + p.status"></span>
+            <div class="p-info">
+              <div class="row-main">{{ p.label || p.host }}<span v-if="p.hasCredential" title="含凭据"> 🔑</span></div>
+              <div class="row-sub">{{ p.type }}://{{ p.host }}:{{ p.port }} · {{ p.lastLatencyMs != null ? p.lastLatencyMs + ' ms' : '未检测' }}</div>
+            </div>
+            <button class="mini-btn" @click="testProxy(p)" :disabled="testingIds.includes(p.id)">{{ testingIds.includes(p.id) ? '…' : '检测' }}</button>
+            <button class="row-del" @click="removeProxy(p.id)" title="删除">×</button>
+          </div>
+          <div class="proxy-add">
+            <input v-model="np.label" placeholder="名称（可选）" />
+            <div class="add-line">
+              <select v-model="np.type"><option value="http">http</option><option value="https">https</option><option value="socks5">socks5</option></select>
+              <input v-model="np.host" placeholder="主机" class="f-host" />
+              <input v-model.number="np.port" type="number" placeholder="端口" class="f-port" />
+            </div>
+            <div class="add-line">
+              <input v-model="np.user" placeholder="用户名（可选）" autocomplete="off" />
+              <input v-model="np.pass" type="password" placeholder="密码（可选，本机加密存储）" autocomplete="new-password" />
+            </div>
+            <button class="mini-btn primary" @click="addProxy" :disabled="!np.host || !np.port">保存代理</button>
+          </div>
+        </div>
+
+        <div class="env-sec">
+          <div class="env-h">环境指纹
+            <button class="mini-btn" style="margin-left:auto" @click="verifyEnv" :disabled="verifying">{{ verifying ? '验证中…' : '打开该店铺页面后验证' }}</button>
+          </div>
+          <div v-if="verifyItems.length === 0" class="env-note">未验证。字段实际值需在店铺浏览器打开后采集，无法验证的字段如实标记"未验证"。</div>
+          <div v-for="it in verifyItems" :key="it.field" class="verify-item">
+            <span>{{ it.state === 'verified' ? '✅' : '❓' }}</span>
+            <div class="v-info">
+              <div class="row-main">{{ it.field }}</div>
+              <div class="row-sub" :title="'期望 ' + it.expected + ' / 实际 ' + (it.actual ?? '—')">期望 {{ clip(it.expected) }} → 实际 {{ clip(it.actual) }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 会话与 Cookie - §6.3 / §10.2 -->
+        <div class="env-sec" data-test="session-sec">
+          <div class="env-h">会话与 Cookie</div>
+          <div class="cf-btns" style="margin-bottom:6px">
+            <button class="mini-btn" data-test="btn-export-session" @click="exportSession" :disabled="secBusy">导出加密会话包…</button>
+            <button class="mini-btn" data-test="btn-import-session" @click="importSession" :disabled="secBusy">导入会话包…</button>
+          </div>
+          <div class="env-note">导出包经口令加密（scrypt + AES-256-GCM）并带有效期；口令由主进程托管窗口采集，不经过界面脚本。</div>
+          <input v-model="ckSearch" placeholder="搜索 Cookie（名称/域）" class="ck-search" @input="refreshCookies" />
+          <div class="row-sub" style="margin:4px 0">共 {{ cookiesTotal }} 条<span v-if="ckSearch">（筛选后 {{ cookies.length }}）</span></div>
+          <div v-for="c in cookies.slice(0, 40)" :key="c.domain + c.path + c.name" class="proxy-item ck-item">
+            <div class="p-info">
+              <div class="row-main" :title="c.valuePreview">{{ c.name }}<span v-if="c.httpOnly" class="ck-flag">HttpOnly</span><span v-if="c.secure" class="ck-flag">Secure</span></div>
+              <div class="row-sub">{{ c.domain }}{{ c.path }} · {{ c.session ? '会话级' : c.expires }} · {{ c.valuePreview }}</div>
+            </div>
+            <button class="row-del" @click="delCookie(c)" title="删除该 Cookie">×</button>
+          </div>
+          <button v-if="cookiesTotal > 0" class="mini-btn danger-btn" @click="clearCookies">清空该店铺全部 Cookie</button>
+        </div>
+
+        <!-- 应用锁 - §6.5 -->
+        <div class="env-sec" data-test="lock-sec">
+          <div class="env-h">应用锁</div>
+          <template v-if="!ws.securityEnabled">
+            <div class="env-note">未设置主密码。设置后可随时锁定应用；锁定会隐藏浏览器视图并拒绝一切业务操作，解锁需主密码。</div>
+            <input v-model="pw1" type="password" placeholder="新主密码（≥8 位）" autocomplete="new-password" />
+            <input v-model="pw2" type="password" placeholder="再次输入" autocomplete="new-password" style="margin-top:6px" />
+            <button class="mini-btn primary" data-test="btn-set-pw" :disabled="pw1.length < 8 || pw1 !== pw2" @click="setMasterPw">设置主密码</button>
+          </template>
+          <template v-else>
+            <div class="cf-btns" style="margin-bottom:6px">
+              <button class="mini-btn primary" data-test="btn-lock-now" @click="lockNow">🔒 立即锁定</button>
+              <button class="mini-btn" @click="showChangePw = !showChangePw">{{ showChangePw ? '收起' : '更换密码' }}</button>
+              <button class="mini-btn danger-btn" @click="removePw">移除主密码</button>
+            </div>
+            <div class="bind-row">
+              <span class="row-sub" style="margin-right:8px">空闲自动锁定</span>
+              <select v-model.number="idleMinSel" data-test="sel-idle" @change="applyIdle">
+                <option :value="0">关闭</option>
+                <option :value="5">5 分钟</option>
+                <option :value="15">15 分钟</option>
+                <option :value="30">30 分钟</option>
+                <option :value="60">60 分钟</option>
+              </select>
+            </div>
+            <template v-if="showChangePw">
+              <input v-model="oldPw" type="password" placeholder="旧主密码" autocomplete="off" />
+              <input v-model="pw1" type="password" placeholder="新主密码（≥8 位）" autocomplete="new-password" style="margin-top:6px" />
+              <input v-model="pw2" type="password" placeholder="再次输入" autocomplete="new-password" style="margin-top:6px" />
+              <button class="mini-btn primary" style="margin-top:6px" :disabled="!oldPw || pw1.length < 8 || pw1 !== pw2" @click="setMasterPw">更新</button>
+            </template>
+          </template>
+          <div v-if="secMsg" class="env-note" :class="{ ok: secMsgOk }">{{ secMsg }}</div>
+        </div>
+
+        <!-- 备份与诊断 - §10.2 / §22 / §28 -->
+        <div class="env-sec" data-test="diag-sec">
+          <div class="env-h">备份与诊断</div>
+          <div class="cf-btns" style="flex-wrap:wrap">
+            <button class="mini-btn" data-test="btn-backup" :disabled="busyBackup" @click="doBackup">{{ busyBackup ? '备份中…' : '立即备份数据库' }}</button>
+            <button class="mini-btn" data-test="btn-diag" :disabled="busyDiag" @click="doDiagnostics">导出诊断包</button>
+            <button class="mini-btn" @click="doAuditExport">导出审计日志</button>
+          </div>
+          <div v-if="backups.length" class="row-sub" style="margin-top:6px">最近备份：{{ backups[0].createdAt ? new Date(backups[0].createdAt).toLocaleString() : '—' }}（{{ (backups[0].sizeBytes / 1024).toFixed(0) }} KB）
+            <button class="mini-btn" style="margin-left:6px" @click="doRestore(backups[0].id)">恢复到此备份</button>
+          </div>
+          <div class="env-note">诊断包只含版本、系统、迁移版本、代理体检与脱敏日志，绝不含会话 Cookie、密码或订单原文（§22）。</div>
+        </div>
+      </div>
+
+      <!-- 任务面板 - §4.4 / §6.6 -->
+      <div class="panel-body env-body" v-else>
+        <div class="env-sec tc-headsec">
+          <div class="env-h" style="margin:0">任务列表</div>
+          <button class="mini-btn primary" @click="openTaskDialog">+ 新建任务</button>
+        </div>
+
+        <div v-if="ws.tasks.length === 0" class="empty-hint">暂无任务。任务只能由预定义读取型步骤组成，提交类动作必须经人工确认节点</div>
+        <div v-for="t in ws.tasks" :key="t.id" class="env-sec task-card" :class="{ on: detailTaskId === t.id }">
+          <div class="tc-head" @click="toggleTaskDetail(t)">
+            <div class="p-info">
+              <div class="row-main">{{ t.name }}</div>
+              <div class="row-sub">
+                {{ t.steps.length }} 步 · {{ storeName(t.storeScope) }}<span v-if="t.schedule"> · 每 {{ Math.round(t.schedule.everyMs / 60000) }} 分钟</span><span v-if="liveStatus(t)"> · {{ statusLabel(liveStatus(t)) }}</span>
+              </div>
+            </div>
+            <button class="mini-btn primary" title="立即运行" @click.stop="runTask(t)">▶</button>
+            <button class="row-del" title="删除任务" @click.stop="delTask(t.id)">×</button>
+          </div>
+
+          <template v-if="detailTaskId === t.id">
+            <div class="step-row" v-for="(s, i) in t.steps" :key="i">
+              <span class="s-ico">{{ stepIcon(t, i) }}</span>
+              <div class="p-info">
+                <div class="row-main">{{ i + 1 }}. {{ s.type }}<span class="row-sub"> · {{ s.timeoutMs / 1000 }}s<template v-if="s.retryLimit"> · 重试{{ s.retryLimit }}</template></span></div>
+                <div class="row-sub">{{ stepInputBrief(s) }}<template v-if="stepResultBrief(t, i)"> ⇒ {{ stepResultBrief(t, i) }}</template></div>
+              </div>
+            </div>
+
+            <div class="tc-btns" v-if="detailRunId(t)">
+              <button class="mini-btn" v-if="liveStatus(t) === 'running'" @click="runOp(t, 'pause')">暂停</button>
+              <button class="mini-btn" v-if="liveStatus(t) === 'paused'" @click="runOp(t, 'resume')">继续</button>
+              <button class="mini-btn" v-if="liveStatus(t) === 'failed'" @click="runOp(t, 'retry')" title="跳过已成功步骤，副作用步骤不可恢复">从失败步骤继续</button>
+              <button class="mini-btn" v-if="['running','paused','queued','waiting_confirmation'].includes(liveStatus(t))" @click="runOp(t, 'cancel')">取消</button>
+              <button class="mini-btn" @click="loadTaskDetail(t)">刷新</button>
+            </div>
+            <div class="row-sub" v-if="liveMessage(t)" style="padding:2px 0">{{ liveMessage(t) }}</div>
+
+            <div class="log-box" v-if="ws.taskLogs[detailRunId(t)]?.length">
+              <div class="log-line" v-for="(l, i) in ws.taskLogs[detailRunId(t)]" :key="i">
+                {{ new Date(l.at || Date.now()).toLocaleTimeString() }} [{{ l.phase }}]{{ l.stepType ? ' ' + l.stepType : '' }} {{ l.message || '' }}
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+      </template>
+    </aside>
+
+    <!-- 新建店铺对话框 -->
+    <div v-if="ws.createDialogOpen" class="modal-mask" @click.self="ws.createDialogOpen = false">
+      <div class="modal">
+        <h2>新建店铺</h2>
+        <label>店铺名称<input v-model="form.name" data-test="store-name" placeholder="例如：美国主站" /></label>
+        <label>平台
+          <div class="platform-pick">
+            <PlatformIcon :name="form.platform" :size="18" />
+            <select v-model="form.platform" data-test="platform-select" @change="onPlatformChange">
+              <option v-for="p in quickPlatforms" :key="p.name" :value="p.name">{{ p.name }}</option>
+              <option value="其他">其他（自定义平台）</option>
+            </select>
+          </div>
+        </label>
+        <label>后台地址<input v-model="form.adminUrl" placeholder="例如：https://mms.pinduoduo.com" data-test="admin-url" />
+          <span class="field-note" v-if="form.adminUrl">已按所选平台填入默认后台地址，可自行修改</span>
+        </label>
+        <label>标签（逗号分隔）<input v-model="form.tags" placeholder="主账号, 售后组" /></label>
+        <label>备注<textarea v-model="form.notes" rows="2"></textarea></label>
+        <div class="modal-actions">
+          <button class="btn-ghost" @click="ws.createDialogOpen = false">取消</button>
+          <button class="btn-primary" @click="submitCreate" :disabled="!form.name.trim() || !form.adminUrl.trim()">创建</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新建任务对话框 - §4.4 预定义步骤 -->
+    <div v-if="taskDialogOpen" class="modal-mask" @click.self="taskDialogOpen = false">
+      <div class="modal modal-wide">
+        <h2>新建读取型任务</h2>
+        <div class="row-sub" style="margin-bottom:8px">任务只能由预定义步骤组成；提交类动作不提供无人值守路径，一律经「人工确认」节点。</div>
+        <label>名称<input v-model="tf.name" placeholder="例如：订单概览巡检" /></label>
+        <label>绑定店铺
+          <select v-model="tf.storeId">
+            <option value="">（不绑定，每次运行时选择）</option>
+            <option v-for="s in ws.stores" :key="s.id" :value="s.id">{{ s.name }}</option>
+          </select>
+        </label>
+        <label>定时（分钟，留空 = 仅手动）<input v-model.number="tf.everyMin" type="number" min="1" placeholder="例如 60" /></label>
+
+        <div class="env-h">快速模板</div>
+        <div class="tpl-row">
+          <button class="mini-btn" v-for="tp in stepTemplates" :key="tp.name" @click="applyTemplate(tp)">{{ tp.name }}</button>
+        </div>
+
+        <div class="env-h" style="margin-top:12px">步骤（按顺序执行）</div>
+        <div class="tstep" v-for="(st, i) in tf.steps" :key="i">
+          <div class="add-line">
+            <select v-model="st.type" class="t-type">
+              <option v-for="ty in stepTypes" :key="ty" :value="ty">{{ ty }}</option>
+            </select>
+            <span class="mini-lab">超时</span>
+            <input v-model.number="st.timeoutSec" type="number" min="1" class="f-port2" data-test="step-timeout" title="超时（秒）" />
+            <span class="mini-lab">重试</span>
+            <input v-model.number="st.retry" type="number" min="0" max="5" class="f-port2" data-test="step-retry" title="重试次数（0–5）" />
+            <button class="row-del" data-test="step-del" title="删除该步骤" @click="tf.steps.splice(i, 1)">×</button>
+          </div>
+          <div class="add-line" v-for="f in fieldsOf(st.type)" :key="f.key">
+            <input v-model="st.params[f.key]" :placeholder="f.ph" class="f-wide" />
+          </div>
+        </div>
+        <button class="mini-btn" @click="tf.steps.push({ type: 'waitForSelector', timeoutSec: 15, retry: 0, params: {} })">+ 添加步骤</button>
+
+        <div class="modal-actions">
+          <button class="btn-ghost" @click="taskDialogOpen = false">取消</button>
+          <button class="btn-primary" @click="submitTask" :disabled="!tf.name || tf.steps.length === 0">创建任务</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 回收站抽屉 -->
+    <div v-if="ws.trashOpen" class="modal-mask" @click.self="ws.trashOpen = false">
+      <div class="modal">
+        <h2>回收站</h2>
+        <div v-if="ws.trashStores.length === 0" class="empty-hint">回收站是空的</div>
+        <div v-for="s in ws.trashStores" :key="s.id" class="trash-row">
+          <PlatformIcon :name="s.platform" :size="28" />
+          <div class="trash-meta"><div>{{ s.name }}</div><div class="row-sub"><PlatformIcon :name="s.platform" :size="12" /> {{ s.platform }}</div></div>
+          <button class="btn-ghost sm" @click="ws.restoreStore(s.id)">恢复</button>
+          <button class="btn-danger sm" @click="confirmPurge(s)">彻底删除</button>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-ghost" @click="ws.trashOpen = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 店铺右键菜单（§4.3 店铺操作 / §6.6 复制配置） -->
+    <div
+      v-if="ctx.open && ctx.store"
+      class="ctx-menu"
+      data-test="store-ctx"
+      :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
+      @click.stop
+      @contextmenu.prevent
+    >
+      <button class="ctx-item" data-test="ctx-toggle" @click="ctxAction('toggle')">
+        {{ isOpen(ctx.store.id) ? '关闭浏览器' : '打开浏览器' }}
+      </button>
+      <button class="ctx-item" data-test="ctx-standalone" :disabled="!ctxStandalone" title="需先打开该店铺并选中标签页" @click="ctxAction('standalone')">
+        在独立窗口打开当前标签页
+      </button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item" data-test="ctx-rename" @click="ctxAction('rename')">重命名…</button>
+      <button class="ctx-item" data-test="ctx-copycfg" :disabled="otherStores.length === 0" title="只复制环境指纹配置，不含会话与代理凭据" @click="ctxAction('copycfg')">
+        复制环境配置到其他店铺…
+      </button>
+      <button class="ctx-item" data-test="ctx-copyid" @click="ctxAction('copyid')">复制店铺 ID</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" data-test="ctx-trash" @click="ctxAction('trash')">移入回收站</button>
+    </div>
+
+    <!-- 重命名店铺 -->
+    <div v-if="rename.open" class="modal-mask" @click.self="rename.open = false">
+      <div class="modal">
+        <h2>重命名店铺</h2>
+        <input v-model="rename.value" data-test="rename-input" maxlength="60" placeholder="店铺名称" @keydown.enter="doRename" />
+        <div class="modal-actions">
+          <button class="btn-ghost" @click="rename.open = false">取消</button>
+          <button class="btn-primary" data-test="rename-save" :disabled="!rename.value.trim()" @click="doRename">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 复制环境配置（§6.6：只迁移配置结构，绝不迁移 Cookie 或代理凭据） -->
+    <div v-if="copycfg.open" class="modal-mask" @click.self="copycfg.open = false">
+      <div class="modal">
+        <h2>复制环境配置</h2>
+        <div class="env-note">来源「{{ copycfg.sourceName }}」。只复制环境指纹配置（UA / 语言 / 时区 / 屏幕 / WebGL 等），<b>不含 Cookie 会话，也不迁移代理凭据</b>。</div>
+        <div v-if="otherStores.length === 0" class="empty-hint">没有其他店铺可复制</div>
+        <label v-for="s in otherStores" :key="s.id" class="store-pick">
+          <input type="checkbox" :value="s.id" v-model="copycfg.targets" data-test="pick-target" />
+          <span>{{ s.name }}</span>
+        </label>
+        <div class="modal-actions">
+          <button class="btn-ghost" @click="copycfg.open = false">取消</button>
+          <button class="btn-primary" data-test="copy-apply" :disabled="copycfg.targets.length === 0" @click="doCopyConfig">复制到选中店铺</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 通用二次确认（危险操作；替代 window.confirm 的原生弹窗） -->
+    <div v-if="confirmBox.open" class="modal-mask" @click.self="confirmBox.open = false">
+      <div class="modal">
+        <h2>{{ confirmBox.title }}</h2>
+        <div class="env-note">{{ confirmBox.message }}</div>
+        <div class="modal-actions">
+          <button class="btn-ghost" data-test="confirm-cancel" @click="confirmBox.open = false">取消</button>
+          <button class="btn-danger" data-test="confirm-ok" @click="runConfirm">确认</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast-host">
+      <div v-for="t in ws.toasts" :key="t.id" :class="['toast', t.kind]">{{ t.text }}</div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
+import PlatformIcon from '../../components/PlatformIcon.vue'
+
+const ws = useWorkspaceStore()
+const viewportEl = ref<HTMLElement | null>(null)
+const urlInput = ref<HTMLElement | null>(null)
+const urlDraft = ref('')
+
+// ── 平台筛选增强 ──
+/** 当前搜索+状态筛选后未过滤平台前的总店铺数 */
+const totalFilteredCount = computed(() => {
+  return Object.values(ws.platformCounts).reduce((a, b) => a + b, 0)
+})
+
+/** 可用平台列表：只在 quickPlatforms 有店铺的平台 + "其他"(自定义平台聚合) */
+const availablePlatforms = computed(() => {
+  const counts = ws.platformCounts
+  // 已知平台：只保留有店铺的
+  const known = quickPlatforms
+    .filter(p => counts[p.name])
+    .map(p => ({ name: p.name, shortName: p.name, platform: p.name, color: p.color, count: counts[p.name] }))
+  // "其他": 不在 quickPlatforms 中的自定义平台
+  const knownNames = new Set(quickPlatforms.map(p => p.name))
+  let otherCount = 0
+  for (const plat of Object.keys(counts)) {
+    if (!knownNames.has(plat)) otherCount += counts[plat]
+  }
+  const result = [...known]
+  if (otherCount > 0) {
+    result.push({ name: '__other__', shortName: '其他', platform: '', color: '#8B5CF6', count: otherCount })
+  }
+  return result
+})
+
+/** 每个平台 chip 的激活态样式（使用平台色替代统一 primary 色） */
+function chipStyle(active: boolean, color: string) {
+  if (!active) return {}
+  return { backgroundColor: color, borderColor: color }
+}
+
+let resizeObserver: ResizeObserver | null = null
+
+// 平台目录来自主进程（shared/constants/platforms.ts），国内四家：拼多多/微信小店/快手小店/抖店
+interface PlatformDef { name: string; color: string; adminUrl: string; entryRoutes: Array<{ title: string; url: string }> }
+const quickPlatforms = (window.shopilot.platforms || []) as PlatformDef[]
+const DEFAULT_PLATFORM = quickPlatforms[0]?.name || '拼多多'
+
+const form = reactive({ name: '', platform: DEFAULT_PLATFORM, adminUrl: '', tags: '', notes: '' })
+
+/** 选中平台后自动填入该平台默认后台地址（仅当地址为空或仍是别的平台的默认值时，不覆盖用户手填） */
+function applyPlatformDefaults(name: string) {
+  const def = quickPlatforms.find(p => p.name === name)
+  if (!def) return
+  const cur = (form.adminUrl || '').trim()
+  const isOtherPlatformDefault = quickPlatforms.some(p => p.name !== name && p.adminUrl === cur)
+  if (!cur || isOtherPlatformDefault) form.adminUrl = def.adminUrl
+}
+function onPlatformChange() { applyPlatformDefaults(form.platform) }
+
+/** 一键清除所有筛选条件（搜索 + 平台 + 状态） */
+function clearFilters() {
+  ws.search = ''
+  ws.filterPlatform = ''
+}
+
+function isOpen(id: string) { return ws.openStoreIds.includes(id) }
+
+function statusColor(s: string) {
+  return ({ online: '#10B981', launching: '#3B82F6', needs_login: '#F59E0B', proxy_error: '#EF4444', archived: '#6B6B6B' } as any)[s] || '#6B7280'
+}
+
+function shortUrl(u: string) { try { return new URL(u).host } catch { return u } }
+function fmtSize(n: number) { if (n < 1024) return n + ' B'; if (n < 1048576) return (n / 1024).toFixed(1) + ' KB'; return (n / 1048576).toFixed(1) + ' MB' }
+function dlStateText(s: string) { return ({ completed: '已完成', in_progress: '下载中', cancelled: '已取消', interrupted: '中断' } as any)[s] || s }
+
+type ViewportReport = { x: number; y: number; width: number; height: number }
+let pendingViewportReport: ViewportReport | null = null
+let viewportReportRunning = false
+
+/**
+ * ResizeObserver、面板切换和窗口 resize 可能在同一帧连续触发。
+ * IPC invoke 虽然返回 Promise，但多个调用并不保证按视觉状态顺序完成，
+ * 旧 bounds 晚到时会把原生 WebContentsView 留在过期宽度。串行提交并只保留最新值。
+ */
+function flushViewportReports() {
+  if (viewportReportRunning) return
+  viewportReportRunning = true
+  void (async () => {
+    try {
+      while (pendingViewportReport) {
+        const next = pendingViewportReport
+        pendingViewportReport = null
+        await window.shopilot.browser.setViewport(next)
+      }
+    } finally {
+      viewportReportRunning = false
+      if (pendingViewportReport) flushViewportReports()
+    }
+  })()
+}
+
+function reportViewport() {
+  const el = viewportEl.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  pendingViewportReport = {
+    x: Math.round(r.left), y: Math.round(r.top),
+    width: Math.max(0, Math.round(r.width)), height: Math.max(0, Math.round(r.height))
+  }
+  flushViewportReports()
+}
+
+async function toggleStore(id: string) {
+  if (isOpen(id)) await ws.closeStore(id)
+  else await ws.openStore(id)
+}
+
+function submitUrl() {
+  let u = urlDraft.value.trim()
+  if (!u) return
+  if (!/^[a-z]+:\/\//i.test(u)) u = 'https://' + u
+  ws.navigate(u)
+}
+
+watch(() => ws.activeTab?.url, (v) => { urlDraft.value = v || '' }, { immediate: true })
+watch(() => ws.displayedStoreId, () => { nextTick(reportViewport) })
+
+async function bookmarkCurrent() {
+  const t = ws.activeTab
+  if (!t || t.url === 'about:blank') { ws.toast('当前页无法收藏', 'info'); return }
+  const res = await window.shopilot.bookmark.create({ storeId: ws.displayedStoreId, url: t.url, title: t.title || t.url })
+  if (res.ok) { ws.toast('已收藏', 'success'); ws.refreshBookmarks() }
+}
+
+async function delBookmark(id: string) {
+  await window.shopilot.bookmark.delete(id)
+  ws.refreshBookmarks()
+}
+
+function openWindow() {
+  if (ws.activeTab) window.shopilot.browser.openWindow(ws.displayedStoreId!, ws.activeTab.id)
+}
+
+// ---------- 环境面板：代理 + 指纹（§8.1 / §13 / §16） ----------
+interface ProxyLite { id: string; type: string; host: string; port: number; label: string | null; status: string; hasCredential: boolean; lastLatencyMs: number | null }
+const proxies = ref<ProxyLite[]>([])
+const proxyBindId = ref('')
+const envBindingNote = ref('')
+const lastProxyAuth = ref<{ at: number; username: string; proxyId: string } | null>(null)
+const testingIds = ref<string[]>([])
+const verifyItems = ref<Array<{ field: string; expected: any; actual: any; state: string }>>([])
+const verifying = ref(false)
+const np = reactive({ label: '', type: 'http', host: '', port: null as number | null, user: '', pass: '' })
+
+async function refreshEnv() {
+  const pl = await window.shopilot.proxy.list()
+  if (pl.ok) proxies.value = pl.data
+  const sid = ws.displayedStoreId
+  if (!sid) return
+  const st = await window.shopilot.session.status(sid)
+  if (st.ok) {
+    const b = st.data.binding
+    proxyBindId.value = b && b.mode === 'bound' ? (b.proxyId || '') : ''
+    envBindingNote.value = b && b.mode === 'bound' ? '当前：绑定代理' : '当前：直连'
+    lastProxyAuth.value = st.data.lastProxyAuth || null
+  }
+}
+
+async function applyBind() {
+  const sid = ws.displayedStoreId
+  if (!sid) return
+  const res = await window.shopilot.proxy.bind(sid, proxyBindId.value || null)
+  if (res.ok) {
+    ws.toast(proxyBindId.value ? '已绑定代理，对打开中的店铺即时生效' : '已切回直连', 'success')
+    refreshEnv()
+  } else ws.toast('绑定失败: ' + res.error.message, 'error')
+}
+
+async function testProxy(p: ProxyLite) {
+  testingIds.value = [...testingIds.value, p.id]
+  const res = await window.shopilot.proxy.test({ type: p.type, host: p.host, port: p.port }, p.id)
+  testingIds.value = testingIds.value.filter(x => x !== p.id)
+  if (res.ok && res.data.ok) ws.toast(`代理可达，延迟 ${res.data.latencyMs} ms`, 'success')
+  else ws.toast('代理不可达: ' + (res.ok ? res.data.errorCode : res.error.message), 'error')
+  refreshEnv()
+}
+
+async function addProxy() {
+  const draft = { type: np.type, host: np.host.trim(), port: Number(np.port), label: np.label.trim() || undefined }
+  const res = await window.shopilot.proxy.create(draft, np.user || undefined, np.pass || undefined)
+  if (res.ok) {
+    ws.toast('代理已保存（凭据经本机加密存储，不回显）', 'success')
+    np.label = ''; np.host = ''; np.port = null; np.user = ''; np.pass = ''
+    refreshEnv()
+  } else ws.toast('保存失败: ' + res.error.message, 'error')
+}
+
+async function removeProxy(id: string) {
+  if (!window.confirm('删除该代理？绑定它的店铺会回退直连。')) return
+  await window.shopilot.proxy.delete(id)
+  if (proxyBindId.value === id) proxyBindId.value = ''
+  refreshEnv()
+}
+
+async function verifyEnv() {
+  const sid = ws.displayedStoreId
+  if (!sid) return
+  verifying.value = true
+  const res = await window.shopilot.profile.verify(sid)
+  verifying.value = false
+  if (res.ok) {
+    verifyItems.value = res.data.items
+    const bad = res.data.items.filter((i: any) => i.state !== 'verified').length
+    ws.toast(bad === 0 ? '环境指纹全部字段实测一致' : `${bad} 个字段未验证（需浏览器打开该店铺页面）`, bad === 0 ? 'success' : 'info')
+  } else ws.toast('验证失败: ' + res.error.message, 'error')
+}
+
+function clip(v: any): string {
+  const s = v == null ? '—' : String(v)
+  return s.length > 46 ? s.slice(0, 43) + '…' : s
+}
+
+// ---------- 会话包 / Cookie 查看器（§6.3 / §10.2） ----------
+const cookies = ref<any[]>([])
+const cookiesTotal = ref(0)
+const ckSearch = ref('')
+const secBusy = ref(false)
+
+async function refreshCookies() {
+  const sid = ws.displayedStoreId
+  if (!sid) { cookies.value = []; cookiesTotal.value = 0; return }
+  const res = await window.shopilot.session.cookies(sid, ckSearch.value || undefined)
+  if (res.ok) { cookies.value = res.data.items; cookiesTotal.value = res.data.total }
+}
+
+async function exportSession() {
+  const sid = ws.displayedStoreId
+  if (!sid) return
+  secBusy.value = true
+  const res = await window.shopilot.session.export(sid)
+  secBusy.value = false
+  if (res.ok) ws.toast(`会话包已导出（${res.data.cookieCount} 条 Cookie，有效期至 ${new Date(res.data.expiresAt).toLocaleDateString()}）`, 'success')
+  else if (res.error.code !== 'SESSION_CANCELLED') ws.toast('导出失败: ' + res.error.message, 'error')
+  if (res.ok) refreshCookies()
+}
+
+async function importSession() {
+  const sid = ws.displayedStoreId
+  if (!sid) return
+  secBusy.value = true
+  const res = await window.shopilot.session.import(sid, '', true)
+  secBusy.value = false
+  if (res.ok) ws.toast(`会话已导入：${res.data.imported} 条 Cookie 生效${res.data.failed ? `（${res.data.failed} 条失败）` : ''}${res.data.profileRestored ? '，指纹配置已随包恢复' : ''}`, 'success')
+  else if (res.error.code !== 'SESSION_CANCELLED') ws.toast('导入失败: ' + res.error.message, 'error')
+  refreshCookies()
+}
+
+async function delCookie(c: any) {
+  const sid = ws.displayedStoreId
+  if (!sid) return
+  await window.shopilot.session.deleteCookie(sid, c.name, c.domain, c.path, c.secure)
+  refreshCookies()
+}
+
+async function clearCookies() {
+  const sid = ws.displayedStoreId
+  if (!sid) return
+  if (!window.confirm(`清空「${storeName(sid)}」的全部 Cookie？该店铺的登录态将失效。`)) return
+  const res = await window.shopilot.session.clearCookies(sid)
+  if (res.ok) ws.toast('Cookie 已清空', 'success')
+  refreshCookies()
+}
+
+// ---------- 应用锁（§6.5 / §189） ----------
+const pw1 = ref(''); const pw2 = ref(''); const oldPw = ref('')
+const showChangePw = ref(false)
+const secMsg = ref(''); const secMsgOk = ref(false)
+const idleMinSel = ref(0)
+
+function say(msg: string, okf = true) { secMsg.value = msg; secMsgOk.value = okf }
+
+async function setMasterPw() {
+  const wasEnabled = ws.securityEnabled
+  const res = await window.shopilot.security.setPassword(pw1.value, wasEnabled ? oldPw.value : undefined)
+  if (res.ok) {
+    say(wasEnabled ? '主密码已更新' : '主密码已设置，可立即锁定或等待空闲自动锁定')
+    pw1.value = ''; pw2.value = ''; oldPw.value = ''; showChangePw.value = false
+    await ws.refreshSecurity()
+  } else say(res.error.message, false)
+}
+
+async function removePw() {
+  const cred = window.prompt('移除主密码需输入当前密码')
+  if (!cred) return
+  const res = await window.shopilot.security.removePassword(cred)
+  if (res.ok) { say('主密码已移除'); await ws.refreshSecurity() }
+  else say(res.error.message, false)
+}
+
+async function lockNow() {
+  const res = await window.shopilot.security.lock()
+  if (res.ok) await ws.refreshSecurity()
+  else say(res.error.message, false)
+}
+
+async function applyIdle() {
+  const res = await window.shopilot.settings.set('security.idleMinutes', idleMinSel.value)
+  if (res.ok) { say(idleMinSel.value ? `空闲 ${idleMinSel.value} 分钟自动锁定已启用` : '空闲自动锁定已关闭'); await ws.refreshSecurity() }
+}
+
+watch(() => ws.idleMinutes, (v) => { idleMinSel.value = v }, { immediate: true })
+watch(() => ws.proxyEpoch, () => { refreshEnv() })
+watch(() => ws.displayedStoreId, () => { refreshCookies(); if (ws.rightPanel === 'bookmarks') refreshEntryRoutes() })
+
+// ---------- 备份与诊断（§10.2 / §22 / §28） ----------
+const backups = ref<any[]>([])
+const busyBackup = ref(false)
+const busyDiag = ref(false)
+
+async function refreshBackups() {
+  const res = await window.shopilot.backup.list()
+  if (res.ok) backups.value = (res.data || []).slice(0, 3)
+}
+
+async function doBackup() {
+  busyBackup.value = true
+  const res = await window.shopilot.backup.create()
+  busyBackup.value = false
+  if (res.ok) { ws.toast('数据库备份完成（含校验和）', 'success'); refreshBackups() }
+  else ws.toast('备份失败: ' + res.error.message, 'error')
+}
+
+async function doRestore(id: string) {
+  if (!window.confirm('恢复将覆盖当前数据库（恢复前会自动创建安全快照）。继续？')) return
+  busyBackup.value = true
+  const res = await window.shopilot.backup.restore(id)
+  busyBackup.value = false
+  if (res.ok) { ws.toast('已恢复备份，安全快照已保留', 'success'); await ws.refreshStores() }
+  else ws.toast('恢复失败（现有数据未受影响）: ' + res.error.message, 'error')
+}
+
+async function doDiagnostics() {
+  busyDiag.value = true
+  const res = await window.shopilot.diagnostics.export()
+  busyDiag.value = false
+  if (res.ok) ws.toast('诊断包已导出：' + res.data.path, 'success')
+  else if (res.error.code !== 'SESSION_CANCELLED') ws.toast('导出失败: ' + res.error.message, 'error')
+}
+
+async function doAuditExport() {
+  const res = await window.shopilot.audit.export({ limit: 5000 })
+  if (res.ok) ws.toast(`审计日志已导出（${res.data.rows} 条）`, 'success')
+  else if (res.error.code !== 'SESSION_CANCELLED') ws.toast('导出失败: ' + res.error.message, 'error')
+}
+
+refreshBackups()
+
+watch(() => ws.displayedStoreId, () => { verifyItems.value = []; if (ws.rightPanel === 'env') refreshEnv() })
+
+// ---------- 任务面板（§4.4 预定义步骤 / §6.6 事件） ----------
+const stepTypes = ['navigate', 'waitForPage', 'waitForSelector', 'readText', 'readTable', 'screenshot', 'fillDraft', 'waitForUserConfirmation']
+const stepFieldMap: Record<string, Array<{ key: string; ph: string }>> = {
+  navigate: [{ key: 'url', ph: 'https:// 页面地址' }],
+  waitForPage: [{ key: 'urlIncludes', ph: 'URL 包含片段（留空 = 等待加载完成）' }],
+  waitForSelector: [{ key: 'selector', ph: 'CSS 选择器，如 #orders' }],
+  readText: [{ key: 'selector', ph: 'CSS 选择器' }, { key: 'metric', ph: '指标名（可选）如 unread_messages' }],
+  readTable: [{ key: 'selector', ph: '表格 CSS 选择器，如 table' }, { key: 'metric', ph: '指标名（可选）如 pending_orders' }],
+  screenshot: [],
+  fillDraft: [{ key: 'selector', ph: '输入框 CSS 选择器' }, { key: 'text', ph: '草稿文本（仅存摘要，不存原文）' }],
+  waitForUserConfirmation: [{ key: 'message', ph: '确认门禁展示文案' }]
+}
+function fieldsOf(type: string) { return stepFieldMap[type] || [] }
+
+const stepTemplates = [
+  { name: '页面快照', steps: [
+    { type: 'navigate', params: { url: '' } },
+    { type: 'waitForSelector', params: { selector: 'body' } },
+    { type: 'screenshot', params: {} }
+  ] },
+  { name: '列表计数读取', steps: [
+    { type: 'navigate', params: { url: '' } },
+    { type: 'readTable', params: { selector: 'table', metric: 'pending_orders' } }
+  ] },
+  { name: '草稿填充（带确认门禁）', steps: [
+    { type: 'navigate', params: { url: '' } },
+    { type: 'waitForUserConfirmation', params: { message: '即将向页面填入草稿文本，是否允许？' } },
+    { type: 'fillDraft', params: { selector: 'textarea#title', text: '' } }
+  ] }
+]
+
+const taskDialogOpen = ref(false)
+
+const tf = reactive({
+  name: '', storeId: '', everyMin: null as number | null,
+  steps: [] as Array<{ type: string; timeoutSec: number; retry: number; params: Record<string, string> }>
+})
+
+function openTaskDialog() {
+  tf.name = ''; tf.storeId = ws.displayedStoreId || ''; tf.everyMin = null
+  tf.steps = [{ type: 'navigate', timeoutSec: 15, retry: 0, params: { url: '' } }]
+  taskDialogOpen.value = true
+}
+
+function applyTemplate(tp: (typeof stepTemplates)[number]) {
+  tf.steps = tp.steps.map(s => ({
+    type: s.type,
+    timeoutSec: s.type === 'waitForUserConfirmation' ? 600 : 15,
+    retry: 0,
+    params: { ...s.params } as Record<string, string>
+  }))
+}
+
+async function submitTask() {
+  const steps = tf.steps.map(st => {
+    const input: Record<string, unknown> = {}
+    for (const f of fieldsOf(st.type)) {
+      const v = String(st.params[f.key] ?? '').trim()
+      if (v) input[f.key] = v
+    }
+    return {
+      type: st.type, input,
+      timeoutMs: Math.max(500, Math.min(600, (st.timeoutSec || 15)) * 1000),
+      retryLimit: Math.max(0, Math.min(5, st.retry || 0))
+    }
+  })
+  const res = await window.shopilot.task.create({
+    name: tf.name.trim(), storeScope: tf.storeId || null, steps,
+    schedule: tf.everyMin ? { everyMs: Math.max(1, tf.everyMin) * 60000 } : null
+  })
+  if (res.ok) {
+    taskDialogOpen.value = false
+    ws.toast('任务已创建', 'success')
+    await ws.refreshTasks()
+  } else ws.toast('创建失败: ' + res.error.message, 'error')
+}
+
+const detailTaskId = ref<string | null>(null)
+const detailData = reactive<Record<string, any>>({})
+
+function storeName(id: string | null) {
+  if (!id) return '未绑定店铺'
+  const s = ws.stores.find(x => x.id === id)
+  return s ? s.name : '店铺'
+}
+function statusLabel(st: string) {
+  return ({ queued: '排队中', running: '运行中', waiting_confirmation: '等待确认', paused: '已暂停', succeeded: '已成功', failed: '已失败', cancelled: '已取消' } as any)[st] || st
+}
+function liveStatus(t: any): string {
+  const rid = t.latestRun?.id
+  return (rid && ws.runLive[rid]?.status) || t.latestRun?.status || ''
+}
+function liveMessage(t: any): string {
+  const rid = t.latestRun?.id
+  if (rid && ws.runLive[rid]?.message) return ws.runLive[rid].message
+  return t.latestRun?.statusReason || t.latestRun?.errorMessage || ''
+}
+function detailRunId(t: any): string | null { return t.latestRun?.id || null }
+function resultOf(t: any, i: number) {
+  const d = detailData[t.id]
+  return d?.results?.find((r: any) => r.stepIndex === i) || null
+}
+function stepIcon(t: any, i: number): string {
+  if (resultOf(t, i)) return '✅'
+  const st = liveStatus(t)
+  const live = t.latestRun ? ws.runLive[t.latestRun.id] : null
+  const at = live?.stepIndex ?? t.latestRun?.currentStep
+  if (st === 'failed' && at === i) return '❌'
+  if ((st === 'running' || st === 'waiting_confirmation') && at === i) return '⏳'
+  if (st === 'paused' && at === i) return '⏸'
+  if (st === 'queued') return '·'
+  return '·'
+}
+function stepInputBrief(s: any): string {
+  const p = s.input || {}
+  if (s.type === 'navigate') return String(p.url || '').slice(0, 48)
+  if (s.type === 'fillDraft') return `${p.selector || ''} · ${String(p.text || '').length} 字符`
+  if (p.selector) return String(p.selector) + (p.metric ? ` → ${p.metric}` : '')
+  if (p.message) return String(p.message).slice(0, 48)
+  if (p.urlIncludes) return String(p.urlIncludes)
+  return ''
+}
+function stepResultBrief(t: any, i: number): string {
+  const r = resultOf(t, i)
+  return r ? String(r.summary || r.kind).slice(0, 60) : ''
+}
+
+async function toggleTaskDetail(t: any) {
+  if (detailTaskId.value === t.id) { detailTaskId.value = null; return }
+  detailTaskId.value = t.id
+  await loadTaskDetail(t)
+}
+async function loadTaskDetail(t: any) {
+  if (!t.latestRun?.id) { delete detailData[t.id]; return }
+  const res = await window.shopilot.task.results(t.latestRun.id)
+  if (res.ok) detailData[t.id] = res.data
+  else delete detailData[t.id]
+}
+
+async function runTask(t: any) {
+  const res = await window.shopilot.task.run(t.id)
+  if (res.ok) {
+    ws.toast(res.data.waitingForStore ? '任务已排队：店铺浏览器打开后自动开始' : '任务已入队开始', 'success')
+    await ws.refreshTasks()
+    const fresh = ws.tasks.find(x => x.id === t.id)
+    if (fresh) await loadTaskDetail(fresh)
+  } else ws.toast('运行失败: ' + res.error.message, 'error')
+}
+
+async function delTask(id: string) {
+  if (!window.confirm('删除该任务？其运行记录与结果引用将一并级联删除。')) return
+  await window.shopilot.task.delete(id)
+  if (detailTaskId.value === id) detailTaskId.value = null
+  ws.refreshTasks()
+}
+
+async function runOp(t: any, action: 'pause' | 'resume' | 'retry' | 'cancel') {
+  const rid = t.latestRun?.id
+  if (!rid) return
+  const api = window.shopilot.task
+  let res: any
+  if (action === 'pause') res = await api.pause(rid)
+  else if (action === 'resume') res = await api.resume(rid)
+  else if (action === 'retry') res = await api.resume(rid, 'retry')
+  else res = await api.cancel(rid)
+  if (!res.ok) ws.toast('操作失败: ' + res.error.message, 'error')
+  setTimeout(() => ws.refreshTasks(), 400)
+}
+
+async function confirmRun(runId: string, approved: boolean) {
+  const res = await window.shopilot.task.confirm(runId, approved)
+  if (!res.ok) ws.toast('确认失败: ' + res.error.message, 'error')
+  ws.clearConfirmation(runId)
+  setTimeout(() => ws.refreshTasks(), 400)
+}
+
+async function onCapture() {
+  if (!ws.activeTab || !ws.displayedStoreId) return
+  const res = await window.shopilot.browser.capture(ws.displayedStoreId, ws.activeTab.id, 'png')
+  if (res.ok) {
+    const a = document.createElement('a')
+    a.href = 'data:image/png;base64,' + res.data.data
+    a.download = `capture-${Date.now()}.png`
+    a.click()
+    ws.toast('已截图并保存', 'success')
+  } else ws.toast('截图失败: ' + res.error.message, 'error')
+}
+
+/**
+ * 右侧栏收起/展开（用户要求"右侧边栏可以收起"）。
+ * 收起后留 44px 窄轨：图标=各面板，点一下即展开并回到该面板；状态写入 app_settings 持久化。
+ * 两条不变量：① 有待处理的人工确认时**不允许收起**（否则门禁提示被藏起来，任务看起来又"卡住"）；
+ * ② 收起状态下若来了新的确认请求，自动临时展开并提示（不改用户偏好）。
+ */
+const panelTabs = [
+  { key: 'bookmarks', label: '收藏', icon: '★' },
+  { key: 'downloads', label: '下载', icon: '↓' },
+  { key: 'env', label: '环境', icon: '⚙' },
+  { key: 'tasks', label: '任务', icon: '☑' }
+] as Array<{ key: 'bookmarks' | 'downloads' | 'env' | 'tasks'; label: string; icon: string }>
+
+const rightPanelCollapsed = ref(false)
+// 注意：ws.confirmations 是 Record<runId, item>（对象），不是数组 —— 用 .length 会恒为 undefined，
+// 导致"待确认时禁止收起"与"来新确认自动展开"两条守卫静默失效（M3 断言当场抓到）。
+const confirmationCount = computed(() => Object.keys(ws.confirmations || {}).length)
+
+/** 中栏宽度变了 → 立刻上报原生视图 bounds（ResizeObserver 之外再兜一次，避免慢一帧） */
+function syncViewportSoon() {
+  nextTick(() => {
+    reportViewport()
+    requestAnimationFrame(reportViewport)
+    setTimeout(reportViewport, 80)
+    setTimeout(reportViewport, 250)
+  })
+}
+
+function collapsePanel() {
+  if (confirmationCount.value > 0) {
+    ws.toast('有待处理的人工确认，处理后才能收起右侧栏', 'info')
+    return
+  }
+  rightPanelCollapsed.value = true
+  window.shopilot.settings.set('ui.rightPanelCollapsed', true).catch(() => {})
+  syncViewportSoon()
+}
+
+function expandPanel(p?: 'bookmarks' | 'downloads' | 'env' | 'tasks') {
+  rightPanelCollapsed.value = false
+  if (p) switchPanel(p)
+  window.shopilot.settings.set('ui.rightPanelCollapsed', false).catch(() => {})
+  syncViewportSoon()
+}
+
+function togglePanel() {
+  if (rightPanelCollapsed.value) expandPanel()
+  else collapsePanel()
+}
+
+watch(confirmationCount, (n) => {
+  if (n > 0 && rightPanelCollapsed.value) {
+    rightPanelCollapsed.value = false
+    ws.toast('任务需要人工确认，已临时展开右侧栏', 'info')
+    syncViewportSoon()
+  }
+})
+
+function switchPanel(p: 'bookmarks' | 'downloads' | 'env' | 'tasks') {
+  ws.rightPanel = p
+  if (p === 'downloads') ws.refreshDownloads()
+  else if (p === 'env') { refreshEnv(); refreshCookies() }
+  else if (p === 'tasks') ws.refreshTasks()
+  else { ws.refreshBookmarks(); refreshEntryRoutes() }
+}
+
+/**
+ * 平台入口（§16）：按当前店铺的平台取内置适配器入口，只读展示不入库。
+ * 目前平台为国内四家（拼多多/微信小店/快手小店/抖店），非内置平台返回空列表 → 不显示该段。
+ */
+const entryRoutes = ref<any[]>([])
+const displayedPlatformName = computed(() => ws.stores.find(s => s.id === ws.displayedStoreId)?.platform || '')
+
+async function refreshEntryRoutes() {
+  const sid = ws.displayedStoreId
+  if (!sid) { entryRoutes.value = []; return }
+  const res = await window.shopilot.bookmark.entryRoutes(sid)
+  entryRoutes.value = res && res.ok ? (res.data.routes || []) : []
+}
+
+/**
+ * 店铺右键菜单：使用应用内菜单，并纳入弹层遮挡处理（店铺页面是原生层，会盖住 HTML 菜单）。
+ */
+const ctx = reactive({ open: false, x: 0, y: 0, store: null as StoreRow | null })
+const otherStores = computed(() => ws.stores.filter(s => s.id !== ctx.store?.id))
+const ctxStandalone = computed(() =>
+  !!ctx.store && isOpen(ctx.store.id) && ws.displayedStoreId === ctx.store.id && !!ws.activeTab
+)
+
+function onStoreContext(s: StoreRow, ev?: MouseEvent) {
+  ctx.store = s
+  // 菜单尺寸按内容估算后夹在窗口内，避免靠边右键时菜单跑出屏幕
+  const w = 250, h = 300
+  const x = ev ? ev.clientX : 60
+  const y = ev ? ev.clientY : 60
+  ctx.x = Math.max(8, Math.min(x, window.innerWidth - w - 8))
+  ctx.y = Math.max(8, Math.min(y, window.innerHeight - h - 8))
+  ctx.open = true
+}
+
+function closeCtx() { ctx.open = false }
+function onDocMouseDown(ev: MouseEvent) {
+  if (!ctx.open) return
+  const el = ev.target as HTMLElement | null
+  if (el && el.closest && el.closest('[data-test="store-ctx"]')) return
+  closeCtx()
+}
+function onDocKey(ev: KeyboardEvent) {
+  if (ev.key === 'Escape') closeCtx()
+  // Ctrl+Shift+B：收起/展开右侧栏（与 Ctrl+Shift+L 锁定同一套快捷键约定）
+  if (ev.ctrlKey && ev.shiftKey && (ev.key === 'B' || ev.key === 'b')) { ev.preventDefault(); togglePanel() }
+}
+
+const rename = reactive({ open: false, value: '' })
+const copycfg = reactive({ open: false, sourceId: '', sourceName: '', targets: [] as string[] })
+const confirmBox = reactive({ open: false, title: '', message: '', onOk: null as null | (() => void | Promise<void>) })
+
+async function ctxAction(kind: 'toggle' | 'standalone' | 'rename' | 'copycfg' | 'copyid' | 'trash') {
+  const s = ctx.store
+  if (!s) return
+  closeCtx()
+  if (kind === 'toggle') { await toggleStore(s.id); return }
+  if (kind === 'standalone') {
+    const tab = ws.activeTab
+    if (!tab) { ws.toast('没有可打开的标签页', 'info'); return }
+    const res = await window.shopilot.browser.openWindow(s.id, tab.id)
+    ws.toast(res.ok ? '已在独立窗口打开' : '打开失败: ' + res.error.message, res.ok ? 'success' : 'error')
+    return
+  }
+  if (kind === 'rename') { rename.value = s.name; rename.open = true; return }
+  if (kind === 'copycfg') { copycfg.sourceId = s.id; copycfg.sourceName = s.name; copycfg.targets = []; copycfg.open = true; return }
+  if (kind === 'copyid') {
+    try {
+      await navigator.clipboard.writeText(s.id)
+      ws.toast('已复制店铺 ID', 'success')
+    } catch {
+      ws.toast('复制失败：' + s.id, 'info')
+    }
+    return
+  }
+  if (kind === 'trash') {
+    confirmBox.title = '移入回收站'
+    confirmBox.message = `「${s.name}」将移入回收站，会话与环境配置保留，可在回收站恢复或彻底删除。`
+    confirmBox.onOk = async () => { await ws.moveToTrash(s.id) }
+    confirmBox.open = true
+  }
+}
+
+async function runConfirm() {
+  const fn = confirmBox.onOk
+  confirmBox.open = false
+  confirmBox.onOk = null
+  if (fn) await fn()
+}
+
+async function doRename() {
+  const s = ctx.store
+  const name = rename.value.trim()
+  if (!s || !name) return
+  const res = await window.shopilot.store.update({ storeId: s.id, patch: { name } })
+  if (res.ok) { rename.open = false; await ws.refreshStores(); ws.toast('已重命名', 'success') }
+  else ws.toast('重命名失败: ' + res.error.message, 'error')
+}
+
+async function doCopyConfig() {
+  const src = copycfg.sourceId
+  const targets = [...copycfg.targets]
+  if (!src || targets.length === 0) return
+  const res = await window.shopilot.profile.copyConfig(src, targets)
+  if (res.ok) {
+    copycfg.open = false
+    await ws.refreshStores()
+    const copied = res.data?.copied ?? 0
+    const skipped = res.data?.skipped || []
+    // 如实回报：跳过（环境已锁定/店铺不存在）绝不写成"成功"
+    if (skipped.length) {
+      const why = skipped.map((s: any) => s.reason === 'PROFILE_LOCKED' ? '环境已锁定' : '店铺不存在').join('、')
+      ws.toast(`已复制 ${copied} 个，跳过 ${skipped.length} 个（${why}）`, copied ? 'info' : 'error')
+    } else {
+      ws.toast(`已复制环境配置到 ${copied} 个店铺（不含会话与代理凭据）`, 'success')
+    }
+  } else ws.toast('复制配置失败: ' + res.error.message, 'error')
+}
+
+/**
+ * 弹层遮挡：店铺页面是原生 WebContentsView（永远画在 HTML 之上），
+ * 弹层落在视口区域内会被整块盖住（实测回收站弹窗遮挡比例 100%）→ 遮挡期间摘除挂载。
+ * 右键菜单通常落在左栏、不与视口相交，那种情况不摘除（避免每次右键中栏白闪）。
+ */
+const ctxOverlapViewport = ref(false)
+let lastObscured = false
+let overlaySyncChain: Promise<void> = Promise.resolve()
+let overlayRevision = 0
+
+function refreshOverlayOcclusion() {
+  const revision = ++overlayRevision
+  overlaySyncChain = overlaySyncChain.then(async () => {
+    await nextTick()
+    // A newer watch event has already scheduled a fresher DOM state.
+    if (revision !== overlayRevision) return
+
+    const modalOpen = !!(ws.createDialogOpen || taskDialogOpen.value || ws.trashOpen || rename.open || copycfg.open || confirmBox.open)
+    if (ctx.open && viewportEl.value) {
+      const m = document.querySelector('[data-test="store-ctx"]')?.getBoundingClientRect()
+      const v = viewportEl.value.getBoundingClientRect()
+      ctxOverlapViewport.value = !!m && !(m.right <= v.left || m.left >= v.right || m.bottom <= v.top || m.top >= v.bottom)
+    } else {
+      ctxOverlapViewport.value = false
+    }
+    const shouldHide = modalOpen || ctxOverlapViewport.value
+    if (shouldHide === lastObscured) return
+    lastObscured = shouldHide
+    await window.shopilot.browser.setViewsObscured(shouldHide)
+  }).catch(() => {})
+}
+
+watch(
+  () => [ws.createDialogOpen, taskDialogOpen.value, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open],
+  () => { refreshOverlayOcclusion() },
+  { immediate: true }
+)
+
+async function openTrash() {
+  await ws.refreshTrash()
+  ws.trashOpen = true
+}
+
+async function confirmPurge(s: StoreRow) {
+  if (window.confirm(`彻底删除「${s.name}」？此操作不可撤销，将清除其环境、下载记录与缓存。`)) {
+    await ws.purgeStore(s.id)
+  }
+}
+
+function quickCreate(p: { name: string }) { openCreateDialog(p.name) }
+
+/** 打开"新建店铺"对话框：带上所选平台的默认后台地址（避免默认平台却给空地址，用户还得自己粘） */
+function openCreateDialog(platformName?: string) {
+  const name = platformName || DEFAULT_PLATFORM
+  form.platform = name
+  form.adminUrl = ''
+  form.name = ''
+  applyPlatformDefaults(name)
+  ws.createDialogOpen = true
+}
+
+async function submitCreate() {
+  const name = form.name.trim()
+  const adminUrl = form.adminUrl.trim()
+  if (!name || !adminUrl) {
+    ws.toast('请填写店铺名称和后台地址', 'info')
+    return
+  }
+  const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean)
+  const res = await ws.createStore({ name, platform: form.platform, adminUrl, tags, notes: form.notes.trim() })
+  if (res && res.ok) {
+    Object.assign(form, { name: '', platform: DEFAULT_PLATFORM, adminUrl: '', tags: '', notes: '' })
+  }
+}
+
+function showInFolder(id: string) { window.shopilot.download.showInFolder(id) }
+
+onMounted(async () => {
+  await ws.init()
+  // Renderer reloads do not reset main-process WebContentsView state. Explicitly
+  // clear a stale overlay flag before the first viewport report; app-lock state
+  // remains authoritative in the main process and still prevents mounting.
+  lastObscured = true
+  refreshOverlayOcclusion()
+  if (ws.rightPanel === 'bookmarks') refreshEntryRoutes()
+  // 恢复上次的右栏收起状态
+  const saved = await window.shopilot.settings.get('ui.rightPanelCollapsed')
+  if (saved?.ok && saved.data?.value === true) { rightPanelCollapsed.value = true }
+  await nextTick()
+  if (viewportEl.value) {
+    resizeObserver = new ResizeObserver(() => reportViewport())
+    resizeObserver.observe(viewportEl.value)
+  }
+  window.addEventListener('resize', reportViewport)
+  window.addEventListener('mousedown', onDocMouseDown, true)
+  window.addEventListener('keydown', onDocKey)
+  reportViewport()
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  window.removeEventListener('resize', reportViewport)
+  window.removeEventListener('mousedown', onDocMouseDown, true)
+  window.removeEventListener('keydown', onDocKey)
+})
+</script>
+
+<style scoped>
+.workbench { display: flex; width: 100vw; height: 100vh; overflow: hidden; }
+
+/* 左栏 */
+.sidebar {
+  width: 304px; min-width: 304px; height: 100%;
+  background: var(--color-bg-secondary);
+  border-right: 1px solid var(--color-border);
+  display: flex; flex-direction: column;
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 16px; -webkit-app-region: drag; }
+.brand-logo {
+  width: 30px; height: 30px; border-radius: 8px;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 16px;
+}
+.brand-name { font-weight: 600; font-size: 15px; }
+
+.sidebar-tools { display: flex; gap: 8px; padding: 0 16px 10px; }
+.search-box {
+  flex: 1; display: flex; align-items: center; gap: 6px;
+  background: var(--color-bg-tertiary); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: 0 10px; height: 32px;
+}
+.search-box input { flex: 1; background: none; border: none; outline: none; color: var(--color-text-primary); font-size: 13px; }
+.search-ico { opacity: .6; font-size: 12px; }
+.btn-new {
+  width: 32px; height: 32px; border-radius: var(--radius-sm);
+  background: var(--color-primary); color: #fff; font-size: 18px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.btn-new:hover { filter: brightness(1.1); }
+
+.filter-chips { display: flex; gap: 6px; padding: 0 16px 10px; }
+.filter-platform {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 16px 10px;
+}
+.fp-header { display: flex; align-items: center; gap: 6px; width: 100%; margin-bottom: 2px; }
+.fp-label { font-size: 11px; color: var(--color-text-muted); flex-shrink: 0; }
+.fp-clear {
+  font-size: 10px; color: var(--color-primary); background: none; border: 0; cursor: pointer; padding: 0; line-height: 1; text-decoration: underline;
+}
+.fp-chip {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; padding: 2px 8px; border-radius: 20px;
+  background: var(--color-bg-tertiary); color: var(--color-text-secondary); border: 1px solid var(--color-border);
+  cursor: pointer; height: 24px; transition: background .15s, border-color .15s, color .15s;
+}
+.fp-chip:hover:not(.on) { border-color: var(--color-text-secondary); }
+.fp-chip.on { color: #fff; }
+.fp-count {
+  font-size: 10px; opacity: .7; background: rgba(255,255,255,.2); border-radius: 8px;
+  padding: 0 5px; line-height: 14px; min-width: 14px; text-align: center;
+}
+.fp-chip:not(.on) .fp-count { background: var(--color-border); color: var(--color-text-muted); }
+.fp-other-icon { font-size: 12px; }
+
+.store-list { flex: 1; overflow-y: auto; padding: 4px 10px; }
+.store-group { margin-bottom: 8px; }
+.group-title { font-size: 11px; color: var(--color-text-muted); padding: 8px 6px 4px; text-transform: uppercase; letter-spacing: .04em; }
+
+.store-card {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border-radius: var(--radius-sm); cursor: pointer; border: 1px solid transparent;
+}
+.store-card:hover { background: var(--color-bg-tertiary); }
+.store-card.active { background: var(--color-bg-tertiary); }
+.store-card.displayed { border-color: var(--color-primary); }
+.avatar {
+  width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 15px; color: #fff;
+}
+.avatar.sm { width: 28px; height: 28px; font-size: 13px; border-radius: 6px; }
+.store-meta { flex: 1; min-width: 0; }
+.store-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.store-sub { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-secondary); }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.store-action { width: 26px; height: 26px; border-radius: 6px; color: var(--color-text-secondary); font-size: 13px; opacity: 0; }
+.store-card:hover .store-action { opacity: 1; }
+.store-action:hover { background: var(--color-bg-elevated); color: var(--color-primary); }
+
+.empty-hint { color: var(--color-text-muted); font-size: 13px; text-align: center; padding: 30px 10px; line-height: 1.8; }
+.field-note { display: block; font-size: 11px; color: var(--color-text-secondary); margin-top: 4px; }
+.link { color: var(--color-primary); text-decoration: underline; }
+/* 右栏收起态：只留一条窄轨（图标=面板；徽标=有待人工确认） */
+.right-panel.collapsed { width: 44px; min-width: 44px; }
+/* 顶部 46px 避让：右上角原生窗口按钮（WCO 高 38px）压在窄轨上方 */
+.panel-rail { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 46px 0 8px; height: 100%; }
+.rail-btn {
+  position: relative; width: 30px; height: 30px; border: 0; background: none; cursor: pointer;
+  border-radius: 6px; font-size: 14px; color: var(--color-text-secondary); line-height: 1;
+}
+.rail-btn:hover { background: var(--color-bg-tertiary); color: #fff; }
+.rail-btn.on { background: var(--color-bg-tertiary); color: #fff; }
+.rail-badge { position: absolute; top: 2px; right: 2px; width: 8px; height: 8px; border-radius: 50%; background: var(--color-warning); }
+.panel-collapse {
+  flex: 0 0 30px; border: 0; background: none; cursor: pointer;
+  font-size: 15px; color: var(--color-text-secondary);
+  -webkit-app-region: no-drag;
+}
+.panel-collapse:hover { background: var(--color-bg-tertiary); color: #fff; }
+
+.sidebar-footer { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--color-border); }
+.foot-btn {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; border-radius: var(--radius-sm); font-size: 12px;
+  background: var(--color-bg-tertiary); color: var(--color-text-secondary);
+}
+.foot-btn:hover:not(:disabled) { color: var(--color-text-primary); }
+.foot-btn:disabled { opacity: .4; cursor: not-allowed; }
+.badge { background: var(--color-error); color: #fff; border-radius: 10px; padding: 0 6px; font-size: 10px; }
+
+/* 中栏 */
+.browser-col { flex: 1; display: flex; flex-direction: column; background: var(--color-bg-primary); min-width: 0; }
+.tab-strip { display: flex; align-items: center; height: 38px; background: var(--color-bg-secondary); padding: 0 8px; gap: 4px; -webkit-app-region: drag; }
+/* §17 顶部融合（titleBarStyle:'hidden'）：标签栏即标题栏拖拽区，可交互元素排除；
+   右栏收起时右上角原生窗口按钮（WCO ≈140×38）会压住标签栏右端，避让 140-44(窄轨)+8 = 104px */
+.tab, .tab-close, .tab-add { -webkit-app-region: no-drag; }
+.tab-strip.wco-avoid { padding-right: 104px; }
+.tabs { display: flex; gap: 4px; overflow-x: auto; flex: 1; height: 100%; align-items: center; }
+.tab {
+  display: flex; align-items: center; gap: 6px; max-width: 220px; min-width: 120px;
+  height: 28px; padding: 0 8px 0 10px; border-radius: 8px;
+  background: var(--color-bg-tertiary); font-size: 12px; cursor: pointer;
+}
+.tab.active { background: var(--color-bg-primary); box-shadow: inset 0 0 0 1px var(--color-border); }
+.tab.pinned { min-width: 40px; }
+.tab-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab-close { width: 16px; height: 16px; border-radius: 4px; color: var(--color-text-secondary); line-height: 1; font-size: 14px; }
+.tab-close:hover { background: rgba(255,255,255,.12); color: #fff; }
+.tab-spinner { width: 11px; height: 11px; border: 2px solid var(--color-border); border-top-color: var(--color-primary); border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.tab-add { width: 26px; height: 26px; border-radius: 6px; font-size: 17px; color: var(--color-text-secondary); }
+.tab-add:hover { background: var(--color-bg-tertiary); color: #fff; }
+
+.address-bar { display: flex; align-items: center; gap: 4px; height: 44px; padding: 0 8px; background: var(--color-bg-primary); border-bottom: 1px solid var(--color-border); }
+.nav-btn { width: 30px; height: 30px; border-radius: 6px; color: var(--color-text-secondary); font-size: 16px; display: flex; align-items: center; justify-content: center; }
+.nav-btn:hover { background: var(--color-bg-tertiary); color: #fff; }
+.url-box { flex: 1; height: 30px; background: var(--color-bg-tertiary); border: 1px solid var(--color-border); border-radius: 15px; padding: 0 14px; display: flex; align-items: center; }
+.url-box input { width: 100%; background: none; border: none; outline: none; color: var(--color-text-primary); font-size: 13px; }
+.viewport { flex: 1; position: relative; background: #fff; }
+
+/* 欢迎页 */
+/* §17 顶部融合：欢迎页空白区也可拖动窗口（右上角是原生窗口按钮 overlay） */
+.welcome { flex: 1; display: flex; align-items: center; justify-content: center; -webkit-app-region: drag; }
+.welcome-inner { text-align: center; max-width: 520px; -webkit-app-region: no-drag; }
+.welcome-logo { width: 64px; height: 64px; border-radius: 16px; margin: 0 auto 18px; background: linear-gradient(135deg,#3b82f6,#8b5cf6); display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: 700; }
+.welcome h1 { font-size: 24px; margin-bottom: 8px; }
+.welcome-desc { color: var(--color-text-secondary); margin-bottom: 24px; }
+.quick-platforms { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.qp { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 20px; background: var(--color-bg-secondary); border: 1px solid var(--color-border); font-size: 13px; }
+.qp:hover { border-color: var(--color-primary); }
+.qp-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+/* 右栏 */
+.right-panel { width: 320px; min-width: 320px; height: 100%; background: var(--color-bg-secondary); border-left: 1px solid var(--color-border); display: flex; flex-direction: column; }
+/* §17 顶部融合：面板顶行也是标题栏拖拽区；右侧 140px 留给原生窗口按钮（WCO） */
+.panel-tabs { display: flex; height: 40px; border-bottom: 1px solid var(--color-border); padding-right: 140px; -webkit-app-region: drag; }
+.ptab { flex: 1; font-size: 13px; color: var(--color-text-secondary); border-bottom: 2px solid transparent; -webkit-app-region: no-drag; }
+.ptab.on { color: #fff; border-bottom-color: var(--color-primary); }
+.panel-body { flex: 1; overflow-y: auto; padding: 8px; }
+.row-item { position: relative; padding: 8px 30px 8px 10px; border-radius: var(--radius-sm); cursor: pointer; }
+.row-item:hover { background: var(--color-bg-tertiary); }
+.row-main { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-sub { font-size: 11px; color: var(--color-text-secondary); }
+/* 行内小按钮（删除/打开目录）。原实现把"绝对定位 + opacity:0 悬停显示"写在 .row-del 基类上，
+   导致 .proxy-item / .tc-head / .tstep 里的删除按钮既不可见、又相对 .modal-mask 跑到窗口右上角。
+   现在：基类=可见的静态小按钮；仅 .row-item（列表行）保留悬停显示。 */
+.row-del { width: 22px; height: 22px; flex: 0 0 auto; border: 0; background: none; border-radius: 4px; color: var(--color-text-muted); opacity: .65; cursor: pointer; }
+.row-item .row-del { position: absolute; right: 8px; top: 10px; width: 20px; height: 20px; opacity: 0; }
+.row-item:hover .row-del { opacity: 1; }
+.row-del:hover { background: var(--color-bg-elevated); color: #fff; opacity: 1; }
+.dl-state { font-weight: 500; }
+.dl-state.completed { color: var(--color-success); }
+.dl-state.in_progress { color: var(--color-primary); }
+.dl-state.cancelled, .dl-state.interrupted { color: var(--color-error); }
+
+/* 模态 */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex;
+  align-items: center; justify-content: center; z-index: 100;
+  /* The window uses hidden title bars and app-region drag zones. A modal must
+     explicitly opt out, otherwise mouse clicks are interpreted as window drag
+     gestures and text fields never receive focus. */
+  -webkit-app-region: no-drag;
+}
+.modal, .modal * { -webkit-app-region: no-drag; }
+.modal { position: relative; z-index: 101; width: 420px; max-height: 80vh; overflow-y: auto; background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 22px; }
+.modal h2 { font-size: 17px; margin-bottom: 16px; }
+.modal label { display: block; font-size: 12px; color: var(--color-text-secondary); margin-bottom: 12px; }
+.modal input, .modal select, .modal textarea {
+  width: 100%; margin-top: 4px; padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary); border: 1px solid var(--color-border); color: #fff; font-size: 13px; outline: none;
+}
+.modal input:focus, .modal textarea:focus { border-color: var(--color-primary); }
+.platform-pick { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.platform-pick select { margin-top: 0; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.btn-primary { background: var(--color-primary); color: #fff; padding: 8px 18px; border-radius: var(--radius-sm); font-size: 13px; }
+.btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+.btn-ghost { background: var(--color-bg-tertiary); color: var(--color-text-primary); padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px; }
+.btn-danger { background: var(--color-error); color: #fff; padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13px; }
+.btn-ghost.sm, .btn-danger.sm { padding: 5px 10px; font-size: 12px; }
+
+.trash-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--color-border); }
+.trash-meta { flex: 1; font-size: 13px; }
+
+/* Toast */
+.toast-host { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }
+.toast { padding: 10px 16px; border-radius: var(--radius-sm); font-size: 13px; background: var(--color-bg-elevated); border: 1px solid var(--color-border); box-shadow: 0 8px 24px rgba(0,0,0,.4); animation: slideIn .2s ease; }
+.toast.success { border-color: var(--color-success); }
+.toast.error { border-color: var(--color-error); }
+@keyframes slideIn { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* 环境面板 - §13 / §16 */
+.env-body { display: flex; flex-direction: column; gap: 0; }
+.env-sec { padding: 12px 14px; border-bottom: 1px solid var(--color-border); }
+.env-h { font-size: 12px; font-weight: 600; color: var(--color-text-secondary); letter-spacing: .5px; margin-bottom: 10px; display: flex; align-items: center; }
+.bind-row select { width: 100%; background: var(--color-bg-tertiary); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 7px 9px; font-size: 13px; }
+.env-note { font-size: 12px; color: var(--color-text-secondary); margin-top: 8px; line-height: 1.5; }
+.env-note.ok { color: var(--color-success); }
+.proxy-item { display: flex; align-items: center; gap: 8px; padding: 7px 0; }
+.p-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.p-info { flex: 1; min-width: 0; }
+.mini-btn { background: var(--color-bg-elevated); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 4px 9px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
+.mini-btn:hover:not(:disabled) { border-color: var(--color-primary); }
+.mini-btn:disabled { opacity: .5; cursor: default; }
+.mini-btn.primary { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.proxy-add { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.proxy-add input, .add-line select, .add-line input { background: var(--color-bg-tertiary); color: var(--color-text-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 8px; font-size: 12px; width: 100%; box-sizing: border-box; }
+.add-line { display: flex; gap: 6px; }
+.add-line select { width: 74px; min-width: 74px; flex: 0 0 74px; }
+.add-line .f-host { flex: 1 1 auto; min-width: 60px; width: auto; }
+.add-line .f-port { width: 72px; min-width: 72px; flex: 0 0 72px; }
+.verify-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.v-info { flex: 1; min-width: 0; }
+
+/* 会话 / Cookie / 应用锁 / 备份诊断：只作用于这三段，
+   不要写成 .env-sec input —— 会连带改掉"添加代理"那一行的下拉/主机宽度（实测把主机输入挤到 18px 并让右栏横向溢出） */
+[data-test="session-sec"] input, [data-test="session-sec"] select,
+[data-test="lock-sec"] input, [data-test="lock-sec"] select,
+[data-test="diag-sec"] input, [data-test="diag-sec"] select {
+  background: var(--color-bg-tertiary); color: var(--color-text-primary); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); padding: 6px 8px; font-size: 12px; width: 100%; box-sizing: border-box; margin-top: 6px;
+}
+[data-test="session-sec"] .mini-btn, [data-test="lock-sec"] .mini-btn, [data-test="diag-sec"] .mini-btn { margin-top: 6px; }
+.env-sec .cf-btns .mini-btn { margin-top: 0; }
+.ck-search { margin-top: 6px; }
+.ck-item { padding: 5px 0; }
+.ck-flag { font-size: 10px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 4px; padding: 0 4px; margin-left: 5px; }
+.danger-btn { color: #fca5a5; border-color: #7f1d1d; }
+.danger-btn:hover { background: rgba(239, 68, 68, .15); }
+
+/* 任务面板 - §4.4 / §6.6 */
+.confirm-bar { background: rgba(245, 158, 11, .12); border-bottom: 1px solid var(--color-warning); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.cf-txt { font-size: 13px; color: var(--color-warning); }
+.cf-btns { display: flex; gap: 8px; }
+.tc-headsec { display: flex; align-items: center; justify-content: space-between; }
+.task-card { padding: 10px 14px; }
+.task-card.on { background: var(--color-bg-secondary); }
+.tc-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.step-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0 0 4px; }
+.s-ico { width: 18px; text-align: center; flex-shrink: 0; font-size: 12px; }
+.tc-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.log-box { margin-top: 8px; background: var(--color-bg-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 8px; max-height: 160px; overflow-y: auto; }
+.log-line { font-size: 11px; color: var(--color-text-secondary); font-family: Consolas, monospace; line-height: 1.6; word-break: break-all; }
+.modal-wide { width: 560px; max-width: 92vw; }
+
+/* 店铺右键菜单 */
+.ctx-menu {
+  position: fixed; z-index: 300; min-width: 236px; padding: 4px;
+  background: var(--color-bg-elevated); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); box-shadow: 0 10px 28px rgba(0, 0, 0, .5);
+}
+.ctx-item {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  color: var(--color-text-primary); font-size: 12.5px; padding: 7px 10px;
+  border-radius: 4px; cursor: pointer;
+}
+.ctx-item:hover:not(:disabled) { background: var(--color-bg-tertiary); }
+.ctx-item:disabled { opacity: .45; cursor: default; }
+.ctx-item.danger { color: var(--color-error); }
+.ctx-sep { height: 1px; background: var(--color-border); margin: 4px 2px; }
+.store-pick { display: flex; align-items: center; gap: 8px; padding: 5px 2px; font-size: 12.5px; cursor: pointer; }
+.store-pick input { width: auto; margin: 0; }
+.tstep { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 8px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
+/* 注意：.modal input/select{width:100%} 会覆盖这里的宽度（实测超时/重试框被撑到 496px，
+   一行撑到 ~1100px 导致整行溢出、删除按钮被挤出可视区）——此处用 .tstep 前缀提高优先级 */
+.tstep .add-line { display: flex; align-items: center; gap: 6px; }
+.tstep .t-type { width: 168px; flex: 0 0 168px; }
+.tstep .f-port2 { width: 68px; flex: 0 0 68px; }
+.tstep .f-wide { width: 100%; flex: 1 1 auto; min-width: 0; }
+.tstep .mini-lab { font-size: 11px; color: var(--color-text-secondary); flex: 0 0 auto; }
+.tstep .row-del { margin-left: auto; }.t-type { flex: 1; }
+.f-port2 { width: 68px; flex-shrink: 0; }
+.f-wide { flex: 1; }
+.tpl-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+</style>

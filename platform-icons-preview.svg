@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity=".28"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="720" fill="#111820"/>
+  <text x="72" y="82" fill="#F5F7FA" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="38" font-weight="700">平台图标预览</text>
+  <text x="72" y="122" fill="#91A0B2" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="20">品牌化候选图标 · 当前仅供确认，不会修改界面</text>
+
+  <g filter="url(#shadow)">
+    <rect x="72" y="178" width="246" height="404" rx="12" fill="#19232E" stroke="#2A3948"/>
+    <rect x="342" y="178" width="246" height="404" rx="12" fill="#19232E" stroke="#2A3948"/>
+    <rect x="612" y="178" width="246" height="404" rx="12" fill="#19232E" stroke="#2A3948"/>
+    <rect x="882" y="178" width="246" height="404" rx="12" fill="#19232E" stroke="#2A3948"/>
+  </g>
+
+  <!-- 拼多多: user-provided red geometric mark -->
+  <g transform="translate(171 242) scale(5)">
+    <rect x="1" y="1" width="22" height="22" rx="5" fill="#F20D18"/>
+    <path d="M12 4.2 20 8.7v6.8L12 20l-8-4.5V8.7L12 4.2Z" fill="#FFF"/>
+    <path d="m4.2 8.7 7.8 4.4 8-4.4M4.2 15.5l7.8-4.4 8 4.4M12 4.2v15.7M8 6.5v11.2M16 6.5v11.2" fill="none" stroke="#F20D18" stroke-width=".72" stroke-linejoin="round"/>
+    <path d="M9 9.2c.8-1 2-1.1 3-.1 1-1 2.2-.9 3 .1 1 1.3-.2 2.4-3 4.3-2.8-1.9-4-3-3-4.3Z" fill="#F20D18"/>
+  </g>
+  <text x="195" y="426" text-anchor="middle" fill="#F5F7FA" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="28" font-weight="700">拼多多</text>
+  <text x="195" y="462" text-anchor="middle" fill="#91A0B2" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="17">Pinduoduo</text>
+  <rect x="117" y="510" width="156" height="34" rx="17" fill="#E6322A" fill-opacity=".16"/>
+  <text x="195" y="533" text-anchor="middle" fill="#FF7B73" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="15">红色品牌标识</text>
+
+  <!-- 微信小店: user-provided teal mark -->
+  <g transform="translate(405 242) scale(5)">
+    <path d="M4 8.2c0-2 1.6-3.6 3.6-3.6h8.8c2 0 3.6 1.6 3.6 3.6v2H4v-2Z" fill="#00BFAE"/>
+    <path d="M4 10.2h16v2.1c0 .9-.7 1.6-1.6 1.6-.8 0-1.4-.4-1.8-1-.4.6-1.1 1-1.9 1s-1.5-.4-1.9-1c-.4.6-1.1 1-1.9 1s-1.5-.4-1.9-1c-.4.6-1.1 1-1.9 1-.8 0-1.5-.4-1.9-1-.4.6-1.1 1-1.8 1-.9 0-1.6-.7-1.6-1.6v-2.1Z" fill="#00BFAE"/>
+    <path d="M5.2 15.2c.7 3 3.4 4.8 6.8 4.8 3.4 0 6.1-1.8 6.8-4.8" fill="none" stroke="#00BFAE" stroke-width="1.65" stroke-linecap="round"/>
+  </g>
+  <text x="465" y="426" text-anchor="middle" fill="#F5F7FA" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="28" font-weight="700">微信小店</text>
+  <text x="465" y="462" text-anchor="middle" fill="#91A0B2" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="17">WeChat Store</text>
+  <rect x="387" y="510" width="156" height="34" rx="17" fill="#00BFAE" fill-opacity=".16"/>
+  <text x="465" y="533" text-anchor="middle" fill="#35D7C8" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="15">青绿色品牌图标</text>
+
+  <!-- 快手小店: user-provided orange mark -->
+  <g transform="translate(675 242) scale(5)">
+    <rect x="1" y="1" width="22" height="22" rx="5" fill="#FF5A1F"/>
+    <circle cx="9" cy="8" r="2.7" fill="none" stroke="#FFF" stroke-width="1.45"/>
+    <circle cx="14.8" cy="8" r="2.7" fill="none" stroke="#FFF" stroke-width="1.45"/>
+    <path d="M5 14.2c0-1.5 1.2-2.7 2.7-2.7h8.7c1.5 0 2.7 1.2 2.7 2.7v3.2c0 1.5-1.2 2.7-2.7 2.7H7.7C6.2 20.1 5 18.9 5 17.4v-3.2Z" fill="none" stroke="#FFF" stroke-width="1.45"/>
+  </g>
+  <text x="735" y="426" text-anchor="middle" fill="#F5F7FA" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="28" font-weight="700">快手小店</text>
+  <text x="735" y="462" text-anchor="middle" fill="#91A0B2" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="17">Kuaishou Store</text>
+  <rect x="657" y="510" width="156" height="34" rx="17" fill="#FF6A00" fill-opacity=".16"/>
+  <text x="735" y="533" text-anchor="middle" fill="#FF9B72" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="15">橙色品牌图标</text>
+
+  <!-- 抖店: user-provided official blue mark -->
+  <g transform="translate(945 242) scale(5)">
+    <path d="M4.2 16.5c-.5-3.3.3-7.8 2.4-10.7 1.1-1.5 2.8-2.3 4.7-2.3h2.1v3.2h-1.8c-1.1 0-1.9.6-2.5 1.5-1.1 1.7-1.5 4.4-1.1 6.3.3 1.4 1.4 2.2 2.7 2.2 1.4 0 2.5-.9 2.8-2.3l1.9-9h3.2l-2 9.6c-.7 3.2-3 5.1-6 5.1-3.2 0-5.9-1.5-6.4-3.6Z" fill="#075BFF"/>
+    <path d="M17.9 4.1h2.5l-2.5 12.3c-.4 2-1.7 3.5-3.6 4.2l-1.1-2.8c1-.4 1.6-1.1 1.8-2.2l2.9-11.5Z" fill="#075BFF"/>
+  </g>
+  <text x="1005" y="426" text-anchor="middle" fill="#F5F7FA" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="28" font-weight="700">抖店</text>
+  <text x="1005" y="462" text-anchor="middle" fill="#91A0B2" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="17">Douyin Store</text>
+  <rect x="927" y="510" width="156" height="34" rx="17" fill="#0A5BEA" fill-opacity=".16"/>
+  <text x="1005" y="533" text-anchor="middle" fill="#5F9BFF" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="15">蓝色品牌图标</text>
+
+  <text x="72" y="656" fill="#718197" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">说明：这是视觉方向预览。确认后我再将对应图标接入 PlatformIcon，并同步检查所有使用位置。</text>
+</svg>

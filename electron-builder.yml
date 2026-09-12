@@ -1,0 +1,48 @@
+# electron-builder 配置 - §21 发布构建（Windows x64 NSIS）
+appId: com.shopilot.desktop
+productName: ShopPilot
+copyright: Copyright © 2026 ShopPilot
+
+directories:
+  output: release
+  buildResources: build
+
+# monorepo：main 指向 apps/desktop 构建产物
+files:
+  - apps/desktop/out/**
+  - apps/desktop/resources/**
+  - package.json
+
+asar: true
+# 离线构建：直接复用本地 electron 发行目录（免再下载 electron zip）
+electronDist: node_modules/electron/dist
+# Windows 原生窗口/任务栏图标需要可从 asar 外部直接读取。
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
+# 原生模块必须解出 asar 才能被 require 加载
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**"
+  - "**/node_modules/bindings/**"
+  - "**/node_modules/file-uri-to-path/**"
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ShopPilot-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ShopPilot
+  deleteAppDataOnUninstall: false
+  artifactName: ShopPilot-Setup-${version}.${ext}

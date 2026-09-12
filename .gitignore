@@ -1,0 +1,46 @@
+node_modules
+.npm-cache/
+dist
+out
+*.log
+.DS_Store
+.vscode
+.idea
+
+# Electron
+apps/desktop/dist
+apps/desktop/out
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Test
+coverage
+playwright-report
+test-results
+
+# Build
+*.tsbuildinfo
+release/
+release-share/
+release-icon/
+
+# Local diagnostics and generated screenshots
+.dsh_probe.txt
+.dsh_probe_report.md
+_dsh_tool_probe.txt
+_probe_browser.png
+copy-export-report.txt
+m1-reg*.log
+m2-reg*.log
+m3-reg*.log
+m4-run*.log
+sec-reg*.log
+manifest*.log
+ui-*.png
+ui-*.log
+name-cdp-test*.js
+diag-window.js
+dialog-probe.js

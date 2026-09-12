@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>密码</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    background: #14161c; color: #e8eaf0; padding: 18px 20px;
+    -webkit-user-select: none; user-select: none;
+  }
+  h2 { font-size: 15px; margin-bottom: 6px; }
+  p { font-size: 12px; color: #9aa1b0; margin-bottom: 12px; line-height: 1.5; }
+  .warn { color: #d9a520; }
+  input {
+    width: 100%; padding: 8px 10px; font-size: 13px;
+    background: #1d2029; border: 1px solid #2c3040; border-radius: 6px; color: #e8eaf0;
+    margin-bottom: 8px; outline: none;
+  }
+  input:focus { border-color: #4f7cff; }
+  .hint { font-size: 11px; color: #ff6b6b; min-height: 15px; margin-bottom: 6px; }
+  .btns { display: flex; gap: 8px; justify-content: flex-end; }
+  button {
+    padding: 7px 16px; font-size: 12.5px; border-radius: 6px; border: 1px solid #2c3040;
+    background: #232735; color: #cfd4df; cursor: pointer;
+  }
+  button:hover { background: #2b3040; }
+  button.primary { background: #4f7cff; border-color: #4f7cff; color: #fff; }
+  button.primary:hover { background: #6289ff; }
+  button.danger { background: #8a3b3b; border-color: #a04545; color: #ffe3e3; }
+</style>
+</head>
+<body>
+  <h2 id="title"></h2>
+  <p id="detail"></p>
+  <p id="detail2" class="warn"></p>
+  <div id="pwBox" style="display:none">
+    <input id="pw1" type="password" placeholder="密码（至少 8 位）" autocomplete="off">
+    <input id="pw2" type="password" placeholder="再次输入确认" autocomplete="off" style="display:none">
+    <div class="hint" id="hint"></div>
+  </div>
+  <div class="btns">
+    <button id="cancel">取消</button>
+    <button id="ok" class="primary">确定</button>
+  </div>
+<script>
+  // 无 preload 特权：仅通过专用 preload 把结果交给主进程，页面不留副本
+  const q = (id) => document.getElementById(id)
+  const cfg = new URLSearchParams(location.search)
+  const mode = cfg.get('mode') || 'password'      // password | confirm
+  const requireConfirm = cfg.get('confirm') === '1'
+  const danger = cfg.get('danger') === '1'
+  q('title').textContent = cfg.get('title') || (mode === 'password' ? '设置密码' : '请确认')
+  q('detail').textContent = cfg.get('detail') || ''
+  q('detail2').textContent = cfg.get('detail2') || ''
+  if (mode === 'password') q('pwBox').style.display = ''
+  if (mode === 'confirm' && danger) { q('ok').classList.remove('primary'); q('ok').classList.add('danger') }
+  if (requireConfirm) q('pw2').style.display = ''
+  q('ok').textContent = mode === 'confirm' ? (danger ? '确认执行' : '确认') : '确定'
+  q('cancel').textContent = mode === 'confirm' ? '取消' : '取消'
+
+  function submit() {
+    if (typeof window.__pwDone !== 'function') {
+      q('hint').textContent = '安全桥未就绪：无法回传结果（请重试或联系支持）'
+      return
+    }
+    if (mode === 'confirm') { window.__pwDone(true); return }
+    const v = q('pw1').value
+    if (v.length < 8) { q('hint').textContent = '密码至少 8 位'; return }
+    if (requireConfirm && v !== q('pw2').value) { q('hint').textContent = '两次输入不一致'; return }
+    window.__pwDone(v)
+  }
+  q('ok').addEventListener('click', submit)
+  q('cancel').addEventListener('click', () => {
+    if (typeof window.__pwDone !== 'function') { q('hint').textContent = '安全桥未就绪：无法回传结果'; return }
+    window.__pwDone(null)
+  })
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submit()
+    if (e.key === 'Escape') window.__pwDone(null)
+  })
+  q('pw1').focus()
+</script>
+</body>
+</html>
