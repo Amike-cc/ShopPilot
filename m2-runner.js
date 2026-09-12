@@ -4,7 +4,7 @@
  *         （SHOPILOT_DISABLE_CDP_FP=1 避免与外部调试会话互斥）
  *  阶段2：SHOPILOT_FP_AUTOTEST=1 无外部端口进程内自检 → 时区 CDP + 注入实测值回填
  */
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -14,6 +14,18 @@ const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electro
 const PORT = '9224'
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+/**
+ * 结束应用进程树。Windows 上只 kill 主进程会留下渲染进程僵尸（实测残留 84MB renderer），
+ * 所以走 taskkill /T；非 Windows 回退 SIGKILL。
+ */
+function killTree(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  try {
+    if (process.platform === 'win32' && child.pid) execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' })
+    else child.kill('SIGKILL')
+  } catch { /* 进程可能已自行退出 */ }
+}
 
 async function waitForCDP(timeoutMs = 25000) {
   const start = Date.now()
@@ -55,7 +67,7 @@ async function stage1() {
       if (interesting.length) console.log('--- 应用代理相关日志 ---\n' + interesting.slice(-30).join('\n'))
     }
   } finally {
-    try { app.kill('SIGTERM') } catch {}
+    killTree(app)
     await sleep(1000)
   }
   return code === 0
@@ -79,7 +91,7 @@ async function stage2() {
     await sleep(500)
     if (app.exitCode !== null && !fs.existsSync(resultPath) && Date.now() - t0 > 5000) break
   }
-  try { app.kill('SIGTERM') } catch {}
+  try { killTree(app) } catch {}
 
   if (!fs.existsSync(resultPath)) {
     console.log('FAIL - 指纹自检无结果文件\n日志尾部:\n' + log.slice(-2000))

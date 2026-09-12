@@ -17,6 +17,18 @@ const userData = path.join(os.tmpdir(), 'shopilot-m1-test-' + Date.now())
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
+/**
+ * 结束应用进程树。Windows 上只 kill 主进程会留下渲染进程僵尸（实测残留 84MB renderer，
+ * 用同一调试端口再启动时会互相干扰），所以走 taskkill /T；非 Windows 回退 SIGKILL。
+ */
+function killTree(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  try {
+    if (process.platform === 'win32' && child.pid) execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' })
+    else child.kill('SIGKILL')
+  } catch { /* 进程可能已自行退出 */ }
+}
+
 async function waitForCDP(url, timeoutMs = 20000) {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
@@ -41,9 +53,11 @@ async function main() {
   ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1' } })
 
   let appLog = ''
+  // 只有"收尾前就自己退出"才算异常；收尾时被我们杀掉是正常路径，无条件报 !!! 会被误读成崩溃
+  let stopping = false
   app.stdout.on('data', d => { appLog += d.toString() })
   app.stderr.on('data', d => { appLog += d.toString() })
-  app.on('exit', (code) => { console.log('!!! 应用提前退出，code=' + code + '\n日志:\n' + appLog) })
+  app.on('exit', (code) => { if (!stopping) console.log('!!! 应用提前退出，code=' + code + '\n日志:\n' + appLog) })
 
   try {
     await waitForCDP('http://127.0.0.1:9223')
@@ -58,7 +72,8 @@ async function main() {
     console.log('\nE2E_EXIT=' + e2eCode)
     if (e2eCode !== 0) process.exitCode = 1
   } finally {
-    try { app.kill('SIGTERM') } catch {}
+    stopping = true
+    killTree(app)
     await sleep(1000)
   }
 }

@@ -230,6 +230,9 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.subscribeEvents()
       await this.refreshSecurity()
       await this.refreshStores()
+      // 回收站徽标（左栏底栏 / 收起后的窄轨角标）依赖 trashStores，必须启动就加载，
+      // 否则库里已有回收站店铺时徽标仍是空的（原先只在点开抽屉时才拉）。
+      await this.refreshTrash()
       this.ready = true
     },
 
@@ -352,7 +355,8 @@ export const useWorkspaceStore = defineStore('workspace', {
     async moveToTrash(storeId: string) {
       const res = await window.shopilot.store.deletePermanent(storeId)
       if (res.ok) {
-        await this.refreshStores()
+        // 必须同时刷新回收站列表：徽标计数来自 trashStores，只刷店铺列表会让刚移入的店铺不计数
+        await Promise.all([this.refreshStores(), this.refreshTrash()])
         this.toast('已移入回收站', 'success')
         if (this.displayedStoreId === storeId) { this.displayedStoreId = null }
       } else this.toast('移入回收站失败', 'error')

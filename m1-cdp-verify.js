@@ -578,6 +578,84 @@ async function main() {
   `)
   await sleep(600)
 
+  // ---------- 回收站徽标计数（走用户路径：界面新建 → 右键移入回收站 → 徽标必须立刻出现） ----------
+  // 徽标计数取自 ws.trashStores，而它原先只在点开回收站抽屉时才拉取，moveToTrash 后不刷新，
+  // 于是刚移入的店铺不计数（左栏收起后的窄轨角标同理）——这里把修复锁死。
+  const badgePrep = await cdp.evaluate(`
+    document.querySelector('.btn-new').click();
+    await new Promise(r => setTimeout(r, 700));
+    const name = document.querySelector('[data-test="store-name"]');
+    const url = document.querySelector('[data-test="admin-url"]');
+    if (!name || !url) return { error: '新建对话框未打开' };
+    name.value = '徽标测试店';
+    name.dispatchEvent(new Event('input', { bubbles: true }));
+    url.value = 'https://example.com/badge';
+    url.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 150));
+    const create = [...document.querySelectorAll('.modal-actions .btn-primary')].find(b => b.textContent.trim() === '创建');
+    if (!create || create.disabled) return { error: '创建按钮未启用' };
+    create.click();
+    const d = Date.now() + 8000;
+    while (Date.now() < d && ![...document.querySelectorAll('.store-card')].some(c => c.textContent.includes('徽标测试店'))) {
+      await new Promise(r => setTimeout(r, 200));
+    }
+    const footBadge = () => {
+      const b = [...document.querySelectorAll('.foot-btn')].find(x => x.textContent.includes('回收站'));
+      const n = b ? b.querySelector('.badge') : null;
+      return n ? n.textContent.trim() : '';
+    };
+    return { before: footBadge(), card: [...document.querySelectorAll('.store-card')].some(c => c.textContent.includes('徽标测试店')) };
+  `)
+  check('徽标前置：界面新建的店铺已出现在列表、回收站徽标为空', badgePrep.card === true && badgePrep.before === '', JSON.stringify(badgePrep))
+
+  const badgeAfter = await cdp.evaluate(`
+    const footBadge = () => {
+      const b = [...document.querySelectorAll('.foot-btn')].find(x => x.textContent.includes('回收站'));
+      const n = b ? b.querySelector('.badge') : null;
+      return n ? n.textContent.trim() : '';
+    };
+    const card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('徽标测试店'));
+    if (!card) return { error: '未找到徽标测试店卡片' };
+    const r = card.getBoundingClientRect();
+    card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: Math.round(r.left + 40), clientY: Math.round(r.top + 20) }));
+    await new Promise(r => setTimeout(r, 700));
+    const trash = document.querySelector('[data-test="ctx-trash"]');
+    if (!trash) return { error: '右键菜单无移入回收站' };
+    trash.click();
+    await new Promise(r => setTimeout(r, 600));
+    const ok = document.querySelector('[data-test="confirm-ok"]');
+    if (!ok) return { error: '二次确认未出现' };
+    ok.click();
+    await new Promise(r => setTimeout(r, 1800));
+    return {
+      after: footBadge(),
+      cardGone: ![...document.querySelectorAll('.store-card')].some(c => c.textContent.includes('徽标测试店')),
+      confirmClosed: !document.querySelector('[data-test="confirm-ok"]')
+    };
+  `)
+  check('移入回收站后底部徽标立刻显示计数 1（无需先点开回收站）',
+    badgeAfter.cardGone === true && badgeAfter.confirmClosed === true && badgeAfter.after === '1', JSON.stringify(badgeAfter))
+
+  const railBadge = await cdp.evaluate(`
+    document.querySelector('[data-test="sidebar-collapse"]').click();
+    await new Promise(r => setTimeout(r, 900));
+    const out = { railShown: !!document.querySelector('.sidebar-rail'), railBadge: !!document.querySelector('[data-test="rail-trash-badge"]') };
+    document.querySelector('[data-test="sidebar-expand"]').click();
+    await new Promise(r => setTimeout(r, 900));
+    return out;
+  `)
+  check('左栏收起时窄轨回收站角标同步显示（收起后仍能看出回收站有内容）',
+    railBadge.railShown === true && railBadge.railBadge === true, JSON.stringify(railBadge))
+
+  // 清掉本段测试数据（按名字精确匹配，避免误伤其他用例的店铺）
+  await cdp.evaluate(`
+    const list = await window.shopilot.store.trashList();
+    for (const s of (list.data || [])) {
+      if (s.name === '徽标测试店') await window.shopilot.store.purge(s.id);
+    }
+    return true;
+  `)
+
   await cdp.evaluate(`return await window.shopilot.browser.close(${JSON.stringify(panelPrep.storeId)});`)
   await cdp.evaluate(`return await window.shopilot.store.deletePermanent(${JSON.stringify(panelPrep.storeId)});`)
   await cdp.evaluate(`return await window.shopilot.store.purge(${JSON.stringify(panelPrep.storeId)});`)

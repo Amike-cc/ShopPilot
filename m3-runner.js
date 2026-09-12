@@ -3,7 +3,7 @@
  * 启动应用（独立临时 userData + 远程调试端口 + 禁 CDP 指纹避免冲突），
  * 跑 m3-cdp-verify.js（内含本地测试站点），失败时输出任务引擎相关日志。
  */
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -13,6 +13,18 @@ const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electro
 const PORT = process.env.SHOPILOT_CDP_PORT || '9225'
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+/**
+ * 结束应用进程树。Windows 上只 kill 主进程会留下渲染进程僵尸（实测残留 84MB renderer），
+ * 所以走 taskkill /T；非 Windows 回退 SIGKILL。
+ */
+function killTree(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  try {
+    if (process.platform === 'win32' && child.pid) execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' })
+    else child.kill('SIGKILL')
+  } catch { /* 进程可能已自行退出 */ }
+}
 
 async function waitForCDP(timeoutMs = 30000) {
   const start = Date.now()
@@ -56,7 +68,7 @@ async function main() {
   } catch (e) {
     console.error('RUNNER_FAIL', e)
   } finally {
-    try { app.kill('SIGTERM') } catch {}
+    killTree(app)
     await sleep(1000)
   }
   console.log('\nM3 套件: ' + (code === 0 ? 'PASS' : 'FAIL'))

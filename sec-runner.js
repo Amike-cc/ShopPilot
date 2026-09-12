@@ -2,7 +2,7 @@
  * 安全能力验收运行器：会话包 / Cookie / 应用锁 / 代理巡检（端口 9226）
  * 注入对话框测试钩子（SHOPILOT_TEST_PASSWORD / AUTOCONFIRM）与 userData 路径供明文扫描。
  */
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -12,6 +12,18 @@ const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electro
 const PORT = process.env.SHOPILOT_CDP_PORT || '9226'
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+/**
+ * 结束应用进程树。Windows 上只 kill 主进程会留下渲染进程僵尸（实测残留 84MB renderer），
+ * 所以走 taskkill /T；非 Windows 回退 SIGKILL。
+ */
+function killTree(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  try {
+    if (process.platform === 'win32' && child.pid) execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' })
+    else child.kill('SIGKILL')
+  } catch { /* 进程可能已自行退出 */ }
+}
 
 async function waitForCDP(timeoutMs = 30000) {
   const start = Date.now()
@@ -60,7 +72,7 @@ async function main() {
   } catch (e) {
     console.error('RUNNER_FAIL', e)
   } finally {
-    try { app.kill('SIGTERM') } catch {}
+    killTree(app)
     await sleep(1000)
   }
   console.log('\n安全套件: ' + (code === 0 ? 'PASS' : 'FAIL'))
