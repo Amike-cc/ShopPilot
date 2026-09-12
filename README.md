@@ -59,6 +59,13 @@ start-shoppilot.cmd                           # 同上（快捷方式）
 
 数据目录：`%APPDATA%\shopilot\`（shopilot.db / stores / backups / logs）。安装版数据在用户 AppData，卸载不删除。
 
+### 发布新版本（一条命令，EXE 自动上传 GitHub）
+
+1. 改 `package.json` 版本号（如 `0.1.1`；预发布用 `0.1.1-beta.1`，自动走 beta 通道）
+2. `pnpm release:full` —— 打包 → 生成 `release.json` 清单 → 创建 GitHub Release 并上传 **安装包 EXE + blockmap + latest.yml/beta.yml**（幂等：同 tag 复用、同名资产先删后传；凭据走本机 Git Credential Manager，不落盘）
+
+发布后老版本用户经「↻ 更新」即可发现并升级（stable 用户只见正式版；beta 通道见预发布版，已实测隔离）。每个版本的 EXE 都作为 **GitHub Release 资产**永久可下载——不提交进 git 历史：GitHub 单文件 100MB 硬上限（当前安装包已 81.7MB，随依赖增长必然突破），且二进制入库会使仓库历史永久膨胀、克隆变慢，故 `release/` 保持不入 git。
+
 ## 验收（可复跑）
 
 ```powershell
