@@ -4,9 +4,9 @@
 
 ## 项目状态
 
-**版本**: v0.1.0 · **构建标签**: `INTERNAL_BUILD`（未做代码签名，§21.5）  
+**版本**: v0.1.1 · **构建标签**: `INTERNAL_BUILD`（未做代码签名，§21.5）  
 **里程碑**: M0 技术验证 ✅ · M1 工作台核心 ✅ · M2 环境/代理/备份 ✅ · M3 任务辅助 ✅ · M4 发布工程 ✅ · 自动更新（§21）✅  
-**验收**: 258 项断言全通过（M1 80 + M2 29+8 + M3 59 + 安全 44 + M4 13 + 更新链路 16 + 单测 9），全部由脚本驱动真实应用取证，可复跑。
+**验收**: 本版（0.1.1）构建复跑通过：M1 90 + 安全 44 + 更新链路 16 + 单测 9 + M4 13 阶段（含 19/3/4 分项）；M2 29+8 与 M3 59 是 0.1.0 构建上的结果，本版未复跑（改动未触及那两条代码路径）。全部由脚本驱动真实应用取证，可复跑。
 
 ## 文档索引
 
@@ -15,7 +15,7 @@
 | [DEVELOPMENT_SPEC.md](./DEVELOPMENT_SPEC.md) | 开发设计文档（架构 / 数据模型 / IPC 契约 / 里程碑 / 验收标准） |
 | [FUNCTIONAL_SPEC.md](./FUNCTIONAL_SPEC.md) | 功能规格（MVP 9 项功能集） |
 | [STATUS_REPORT.md](./STATUS_REPORT.md) | 开发状态与验收明细（含已知边界如实声明） |
-| [RELEASE_NOTES.md](./RELEASE_NOTES.md) | 0.1.0 变更说明与回滚方式 |
+| [RELEASE_NOTES.md](./RELEASE_NOTES.md) | 0.1.1 变更说明与回滚方式 |
 | [INSTALL.md](./INSTALL.md) | 受限环境依赖安装说明 |
 | [REVIEW.md](./REVIEW.md) | 早期审查报告（历史存档） |
 
@@ -83,7 +83,7 @@ pwsh -File run-acceptance.ps1   # 以上全部串行 + 打包 + 清单（一键�
 
 ## 已知边界（如实声明，详见 STATUS_REPORT.md）
 
-- 未做代码签名：`INTERNAL_BUILD`；自动更新仅 SHA-512 哈希校验、无签名校验。Release v0.1.0 已发布于 GitHub Releases（仓库 public，打包态在线检查链路已实测）。
+- 未做代码签名：`INTERNAL_BUILD`；自动更新仅 SHA-512 哈希校验、无签名校验。Release v0.1.1 已发布于 GitHub Releases（仓库 public，打包态在线检查链路已实测）。
 - 会话导出包仅含 Cookie + 环境配置（不含 localStorage/IndexedDB）；跨机登录态需重登或经加密包导入（DPAPI 边界）。
 - 代理不可用不自动切换；任务引擎全局串行（并发=1）；跨进程原地恢复不支持。
 - 备份跨机恢复的登录态路径需在第二台真机人工复核；设计稿像素级人工核对待做。

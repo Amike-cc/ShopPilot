@@ -13,7 +13,10 @@ const os = require('os')
 
 const root = __dirname
 const RELEASE = path.join(root, 'release')
-const SETUP = path.join(RELEASE, 'ShopPilot-Setup-0.1.0.exe')
+// 从 package.json 取版本，不要硬编码——本项目每发一版都会改 version，
+// 写死文件名会让 m4 在每次版本变更后直接找不到安装包而崩溃（实测 0.1.0 → 0.1.1 即踩到）
+const VERSION = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
+const SETUP = path.join(RELEASE, `ShopPilot-Setup-${VERSION}.exe`)
 const UNPACKED = path.join(RELEASE, 'win-unpacked', 'ShopPilot.exe')
 const SKIP_INSTALL = process.argv.includes('--skip-install')
 

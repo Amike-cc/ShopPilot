@@ -1,8 +1,18 @@
-# ShopPilot 0.1.0 变更说明（M0–M4）
+# ShopPilot 0.1.1 变更说明（M0–M4）
 
 > **构建标签：INTERNAL_BUILD** —— 本包未做代码签名，按 DEVELOPMENT_SPEC §21.5 不得标记为 RELEASE。可用于内部试用与验收，正式对外发布前需补签名证书与验收记录。
 
-## 本次新增能力
+## 本次更新（0.1.1）
+
+- **安全修复（随安装包发布）**：升级 `electron-updater` 6.6.2 → 6.8.9，其依赖的 `builder-util-runtime` 由 9.3.1 升到 **9.7.0**，修掉 CVE-2026-54673 —— 自动更新在遇到跨域重定向时会泄露 `PRIVATE-TOKEN` 与大小写变体的 `Authorization` 头。
+  - 只升包不够：electron-builder 24 打包时按 `node_modules` 文件系统扁平化收集生产依赖，实测即使锁文件已全树解析为 9.7.0，它仍会从根目录那份遗留实体目录抄走旧的 9.2.4。已在 `pnpm-workspace.yaml` 用 `overrides` + `publicHoistPattern` 强制全树统一。
+  - **以安装包为准复核**：解包 `app.asar` 实测 `electron-updater 6.8.9` + `builder-util-runtime 9.7.0`，单一版本无冲突。
+- **左侧栏可收起/展开（用户要求）**：左栏收起为 **44px 窄轨**（保留 新建 / 回收站（带待办角标）/ 更新 / 展开 四个入口），展开态品牌行右侧新增 `‹` 收起按钮，`Ctrl+Shift+E` 随时切换，状态写入 `app_settings.ui.leftSidebarCollapsed` 并在启动时恢复。收起后中栏原生 `WebContentsView` 同步变宽（店铺页 `window.innerWidth` 实测 776→1036）。与右栏不同：左栏不设门禁（人工确认提示在右栏，收起左栏不会把它藏住）。
+- **修复：回收站徽标计数不同步**：`trashStores` 原先只在点开回收站抽屉时才拉取，移入回收站后不刷新，导致「🗑 回收站」徽标（及左栏收起后的窄轨角标）漏显示；启动时也不加载，库里已有回收站店铺同样看不到。现 `init()` 与 `moveToTrash` 都刷新。
+- **仓库清理**：移除 npm 时期遗留且内容过期的 `package-lock.json`（它连 electron-updater 都没记），并加入 `.gitignore`。
+- **测试基建**：验收运行器与探针脚本统一改为结束整个进程树（原先只 kill 主进程，在 Windows 上会残留渲染进程僵尸）。
+
+## 能力总览（M0–M4）
 
 ### 会话与 Cookie
 - **会话导出/导入加密包**：导出经 scrypt（N=16384, r=8, p=1）+ AES-256-GCM 加密的 `.shopilot` 包，内含 Cookie 清单与店铺环境指纹配置；包携带有效期（默认 30 天），过期包一律拒绝导入。
@@ -42,7 +52,7 @@
 
 ## 安装
 
-1. 运行 `ShopPilot-Setup-0.1.0.exe`，按向导安装（无需管理员权限，默认按用户安装）。
+1. 运行 `ShopPilot-Setup-0.1.1.exe`，按向导安装（无需管理员权限，默认按用户安装）。
 2. 首次启动自动初始化数据库与默认环境。
 3. 卸载：控制面板或安装目录内 `Uninstall ShopPilot.exe`；用户数据默认保留（可用系统应用数据目录手动清理）。
 
@@ -52,7 +62,7 @@
 - 任务引擎为**全局串行队列（并发=1）**；跨进程原地恢复不支持；人工确认节点默认 60 分钟超时。
 - 截图步骤要求店铺浏览器处于可见视口，否则如实报 `CAPTURE_EMPTY` 失败。
 - 安装包未做代码签名（无证书），Windows 可能提示"未知发布者"；自动更新仅做 SHA-512 哈希校验、无签名校验（INTERNAL_BUILD 边界）。
-- 自动更新内容托管于 GitHub Releases（**v0.1.0 已发布**：安装包 + blockmap + `latest.yml`，`node publish-release.js` 幂等上传）；仓库已设为 **public**，打包态匿名在线检查实测通过（同版本如实返回"已是最新"）。启动自动检查默认关闭，可在"↻ 更新"对话框开启。
+- 自动更新内容托管于 GitHub Releases（**v0.1.1 已发布**：安装包 + blockmap + `latest.yml`，`node publish-release.js` 幂等上传；发新版本前先改 `package.json` 的 version 再跑 `pnpm run release:full`）；仓库已设为 **public**，打包态匿名在线检查实测通过（同版本如实返回"已是最新"）。启动自动检查默认关闭，可在"↻ 更新"对话框开启。
 
 ## 回滚
 
