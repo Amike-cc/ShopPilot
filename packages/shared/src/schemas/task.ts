@@ -11,7 +11,13 @@ export const TASK_STEP_TYPES = [
   'readTable',
   'screenshot',
   'fillDraft',
-  'waitForUserConfirmation'
+  'waitForUserConfirmation',
+  // 以下四类会对页面产生副作用（点击/写入）：全部走固定注入脚本 + Zod 校验参数，
+  // 仍不提供任何"执行任意代码"的入口；提交类动作必须在其前放置 waitForUserConfirmation 门禁。
+  'click',
+  'clickByText',
+  'clickAll',
+  'setInput'
 ] as const
 
 export type TaskStepType = (typeof TASK_STEP_TYPES)[number]

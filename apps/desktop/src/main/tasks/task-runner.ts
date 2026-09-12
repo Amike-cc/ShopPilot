@@ -318,12 +318,15 @@ function classifyError(e: any): string {
   if (msg.includes('TASK_SELECTOR_CHANGED')) return 'TASK_SELECTOR_CHANGED'
   if (msg.includes('NAVIGATION_BLOCKED')) return 'NAVIGATION_BLOCKED'
   if (msg.includes('TASK_CONFIRMATION_REQUIRED')) return 'TASK_CONFIRMATION_REQUIRED'
+  if (msg.includes('TASK_TARGET_DISABLED')) return 'TASK_TARGET_DISABLED'
   return 'INTERNAL_ERROR'
 }
 
 // ---------- 步骤执行器（全部预定义，无任意代码路径） ----------
 
-interface StepOutput { kind: StepResultKind | 'confirm'; payload: unknown; artifact?: { path: string; sha256: string } }
+// kind 与 store 侧 insertStepResult 的联合一致：副作用步骤返回 executed 并带明细
+// （executed 也是"已成功"的凭据，succeededStepIndexes 只按 step_index 去重）
+interface StepOutput { kind: StepResultKind | 'confirm' | 'executed'; payload: unknown; artifact?: { path: string; sha256: string } }
 
 function wcOrThrow(run: RunHandle): Electron.WebContents {
   const wc = run.tabId ? getTabWebContents(run.storeId, run.tabId) : null
@@ -498,6 +501,136 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       if (answer === 'deny') { run.deniedByConfirm = true; return { kind: 'confirm', payload: { approved: false, message } } }
       transition(run, 'running', '用户确认通过')
       return { kind: 'confirm', payload: { approved: true, message } }
+    }
+    // ---------- 副作用步骤（点击/写入）：固定注入脚本 + Zod 校验参数，仍无任意代码入口 ----------
+    case 'click': {
+      const wc = wcOrThrow(run)
+      const sel = String(input.selector)
+      await waitForSelector(wc, sel, run, step.timeoutMs)
+      guardSignals(run)
+      const res = await withTimeout(() => wc.executeJavaScript(`(() => {
+        const el = document.querySelector(${JSON.stringify(sel)});
+        if (!el) return { ok: false, reason: 'NOT_FOUND' };
+        let dis = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
+        let p = el.parentElement;
+        for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
+          if (/disabled/i.test(String(p.className || ''))) dis = true;
+        }
+        if (dis) return { ok: false, reason: 'DISABLED' };
+        const target = el.closest('button, a, label, [role="button"]') || el;
+        target.click();
+        return { ok: true, text: String(target.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40) };
+      })()`), run, step.timeoutMs, 'click')
+      if (!res || !res.ok) throw new Error(res && res.reason === 'DISABLED'
+        ? `TASK_TARGET_DISABLED: 目标为禁用态，平台不允许该操作 ${sel}`
+        : `TASK_SELECTOR_CHANGED: 未找到可点击元素 ${sel}`)
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'click', selector: sel, clickedText: res.text || null } }
+    }
+    case 'clickByText': {
+      // 平台页面没有稳定选择器，只能按"元素自身的直接文本"点；
+      // 取文本最短的命中项（最具体的那个），再向上找可点击祖先
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      guardSignals(run)
+      const res = await withTimeout(() => wc.executeJavaScript(`(() => {
+        const needle = ${JSON.stringify(needle)};
+        const cands = [];
+        for (const el of document.querySelectorAll('*')) {
+          const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+          if (!own.includes(needle)) continue;
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) continue;
+          cands.push({ el, len: own.length });
+        }
+        if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
+        cands.sort((a, b) => a.len - b.len);
+        const hit = cands[0].el;
+        let dis = hit.disabled === true || hit.getAttribute('aria-disabled') === 'true';
+        let p = hit.parentElement;
+        for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
+          if (/disabled/i.test(String(p.className || ''))) dis = true;
+        }
+        if (dis) return { ok: false, reason: 'DISABLED' };
+        const target = hit.closest('button, a, label, [role="button"], [class*="btn"]') || hit;
+        target.click();
+        return { ok: true, matched: needle, clickedText: String(target.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length };
+      })()`), run, step.timeoutMs, 'clickByText')
+      if (!res || !res.ok) throw new Error(res && res.reason === 'DISABLED'
+        ? `TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`
+        : `TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'clickByText', matched: needle, clickedText: res.clickedText, candidates: res.candidates } }
+    }
+    case 'clickAll': {
+      // 批量点击并跳过不可用项：达人选人时"已发过消息"的行复选框是 disabled，必须跳过而不是硬点；
+      // 同时受平台单次上限约束（max 已由 Zod 限到 40）。点击之间留间隔，避免与框架重渲染打架。
+      const wc = wcOrThrow(run)
+      const sel = input.selector ? String(input.selector) : ''
+      const txt = input.text ? String(input.text) : ''
+      const max = Number(input.max)
+      guardSignals(run)
+      const res = await withTimeout(() => wc.executeJavaScript(`(async () => {
+        const SEL = ${JSON.stringify(sel)}, TXT = ${JSON.stringify(txt)}, MAX = ${max};
+        let els = [];
+        if (SEL) els = Array.from(document.querySelectorAll(SEL));
+        else {
+          for (const el of document.querySelectorAll('*')) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (own.includes(TXT)) els.push(el);
+          }
+        }
+        const clicked = [];
+        let skippedDisabled = 0, skippedInvisible = 0;
+        for (const el of els) {
+          if (clicked.length >= MAX) break;
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) { skippedInvisible++; continue }
+          let dis = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
+          let p = el.parentElement;
+          for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
+            if (/disabled/i.test(String(p.className || ''))) dis = true;
+          }
+          if (dis) { skippedDisabled++; continue }
+          const target = el.closest('label, [class*="checkbox"]') || el;
+          target.click();
+          const rowText = String((el.closest('tr') || el.parentElement || el).innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 30);
+          clicked.push(rowText);
+          await new Promise(r => setTimeout(r, 150));
+        }
+        return { ok: true, clicked: clicked.length, skippedDisabled, skippedInvisible, total: els.length, samples: clicked.slice(0, 5) };
+      })()`), run, step.timeoutMs, 'clickAll')
+      if (!res || !res.ok) throw new Error(`TASK_SELECTOR_CHANGED: 批量点击未执行（${sel || txt}）`)
+      if (res.clicked === 0) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 没有可用的目标（匹配 ${res.total} 项，其中 ${res.skippedDisabled} 项禁用、${res.skippedInvisible} 项不可见）`)
+      }
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'clickAll', target: sel || txt, clicked: res.clicked, skippedDisabled: res.skippedDisabled, skippedInvisible: res.skippedInvisible, samples: res.samples } }
+    }
+    case 'setInput': {
+      const wc = wcOrThrow(run)
+      const sel = String(input.selector)
+      await waitForSelector(wc, sel, run, step.timeoutMs)
+      guardSignals(run)
+      // 受控组件必须用原生 value setter + 派发 input 事件，直接赋 .value 不会更新框架状态
+      const okFilled = await withTimeout(() => wc.executeJavaScript(`(() => {
+        const el = document.querySelector(${JSON.stringify(sel)});
+        if (!el) return false;
+        const text = ${JSON.stringify(String(input.text ?? ''))};
+        if (el.isContentEditable) { el.textContent = text; }
+        else {
+          const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(el, text); else el.value = text;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()`), run, step.timeoutMs, 'setInput')
+      if (!okFilled) throw new Error(`TASK_SELECTOR_CHANGED: 未找到输入目标 ${sel}`)
+      guardSignals(run)
+      // §4.5：payload 只存摘要与长度，绝不存写入的完整文本
+      return { kind: 'executed', payload: { action: 'setInput', selector: sel, length: String(input.text ?? '').length } }
     }
     default:
       throw new Error(`TASK_INVALID_STEP: 未知步骤类型 ${String(step.type)}`)

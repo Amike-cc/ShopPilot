@@ -72,10 +72,50 @@ function startSite() {
     <script>setTimeout(() => { const d = document.createElement('div'); d.id = 'late-item'; d.textContent = '迟到元素'; document.getElementById('slot').appendChild(d); }, 1500);</script>
     </body></html>`
   const BLANK = `<!doctype html><html><head><title>空白页-M3</title></head><body><h1 id="hello">你好 M3</h1></body></html>`
+  // 副作用步骤（click/clickByText/clickAll/setInput）的验证页：
+  // - #echo 只有真正收到 input 事件才更新 → 用于验证 setInput 是否按受控组件方式派发事件
+  // - .pick 共 5 个：A/B/C 可用、D 用 disabled 属性禁用、E 用"祖先带 disabled 类"禁用
+  //   → 用于验证 clickAll 跳过禁用项而不是硬点
+  // - #sent-count 只在点了 #confirm-send 后 +1 → 用于验证门禁拒绝时提交步骤确实没执行
+  const INVITE = `<!doctype html><html><head><title>邀约页-M3</title></head><body>
+    <h1 id="invite-title">达人邀约</h1>
+    <button id="open-drawer">批量邀约带货</button>
+    <div id="drawer" style="display:none">
+      <textarea id="script-box"></textarea>
+      <div id="echo">空</div>
+      <button id="confirm-send">确认发送</button>
+    </div>
+    <div id="picked-count">0</div>
+    <div id="sent-count">0</div>
+    <div class="row"><input type="checkbox" class="pick"><span>达人A</span></div>
+    <div class="row"><input type="checkbox" class="pick"><span>达人B</span></div>
+    <div class="row"><input type="checkbox" class="pick"><span>达人C</span></div>
+    <div class="row"><input type="checkbox" class="pick" disabled><span>达人D</span></div>
+    <div class="row auxo-checkbox-disabled"><input type="checkbox" class="pick"><span>达人E</span></div>
+    <script>
+      document.getElementById('script-box').addEventListener('input', function (e) {
+        document.getElementById('echo').textContent = e.target.value;
+      });
+      var picks = Array.prototype.slice.call(document.querySelectorAll('.pick'));
+      var render = function () {
+        document.getElementById('picked-count').textContent = String(picks.filter(function (p) { return p.checked }).length);
+      };
+      picks.forEach(function (p) { p.addEventListener('change', render) });
+      render();
+      document.getElementById('open-drawer').addEventListener('click', function () {
+        document.getElementById('drawer').style.display = 'block';
+      });
+      document.getElementById('confirm-send').addEventListener('click', function () {
+        var n = document.getElementById('sent-count');
+        n.textContent = String(Number(n.textContent) + 1);
+      });
+    </script>
+    </body></html>`
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     if (req.url.startsWith('/orders')) res.end(ORDERS)
     else if (req.url.startsWith('/blank')) res.end(BLANK)
+    else if (req.url.startsWith('/invite')) res.end(INVITE)
     else res.end('<html><body>404</body></html>')
   })
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port })))
@@ -207,7 +247,8 @@ async function main() {
   const rid1 = run1.data.runId
 
   const done1 = await pollRun(rid1, d => d.run.status === 'waiting_confirmation', 30000)
-  check('推进至确认门禁 waiting_confirmation（含 1.5s 迟到元素等待）', !!done1 && done1.run.status === 'waiting_confirmation', done1?.run.status)
+  check('推进至确认门禁 waiting_confirmation（含 1.5s 迟到元素等待）', !!done1 && done1.run.status === 'waiting_confirmation',
+    done1?.run.status + (done1?.run.errorCode ? ' / ' + done1.run.errorCode + ': ' + String(done1.run.errorMessage || '').slice(0, 80) : '') + ' / step=' + done1?.run.currentStep)
 
   const autoExpanded = await cdp.evaluate(`
     await new Promise(r => setTimeout(r, 800));
@@ -234,20 +275,21 @@ async function main() {
   const uiCards = await cdp.evaluate(`return document.querySelectorAll('.task-card').length;`)
   check('UI 任务面板渲染（tab 存在 + 任务卡片）', tabOn && uiCards >= 1, 'cards=' + uiCards)
 
-  // 二级页签：任务列表 / 达人邀约（后者本版为占位，如实写明不可用）——切走再切回，任务列表必须完好
+  // 二级页签：任务列表 / 达人邀约——切走再切回，任务列表必须完好
   const subTabs = await cdp.evaluate(`
     const inv = document.querySelector('[data-test="task-tab-invite"]');
     const tl = document.querySelector('[data-test="task-tab-tasks"]');
     if (!inv || !tl) return { error: 'NO_SUB_TABS' };
     const before = document.querySelectorAll('.task-card').length;
     inv.click();
-    await new Promise(r => setTimeout(r, 400));
-    const ph = document.querySelector('[data-test="invite-placeholder"]');
+    await new Promise(r => setTimeout(r, 500));
+    const panel = document.querySelector('[data-test="invite-panel"]');
     const out = {
       before,
-      placeholder: !!ph,
-      placeholderText: ph ? ph.textContent.replace(/\\s+/g, ' ').trim().slice(0, 60) : null,
-      cardsWhileInvite: document.querySelectorAll('.task-card').length
+      panel: !!panel,
+      startBtn: !!document.querySelector('[data-test="invite-start"]'),
+      text: panel ? panel.textContent.replace(/\\s+/g, ' ').trim().slice(0, 120) : null,
+      overflowX: panel ? panel.scrollWidth > panel.clientWidth + 2 : null
     };
     tl.click();
     await new Promise(r => setTimeout(r, 400));
@@ -256,11 +298,14 @@ async function main() {
     return out;
   `)
   check('任务面板有「任务列表 / 达人邀约」二级页签，切走再切回后任务列表完好',
-    subTabs.placeholder === true && subTabs.after === subTabs.before && subTabs.newTaskBtnBack === true,
+    subTabs.panel === true && subTabs.after === subTabs.before && subTabs.newTaskBtnBack === true,
     JSON.stringify(subTabs))
-  check('达人邀约页如实标注未开发（占位而非假功能）',
-    typeof subTabs.placeholderText === 'string' && /开发中/.test(subTabs.placeholderText),
-    JSON.stringify(subTabs.placeholderText))
+  // 当前店铺是拼多多 → 面板必须"明确拒绝"而不是猜测式实现
+  check('达人邀约：店铺平台未实现时明确拒绝（如实列出已支持平台，且不给「开始邀约」）',
+    /暂不支持/.test(subTabs.text || '') && /抖店/.test(subTabs.text || '') && subTabs.startBtn === false,
+    JSON.stringify(subTabs.text))
+
+  // 换一个抖店店铺 → 面板应给出完整可配置表单，并守住"空话术不得启动"
 
   // 新建任务对话框布局：步骤行的超时/重试框曾被 .modal input{width:100%} 撑到 496px，
   // 整行溢出到 ~1100px（删除按钮与参数被挤出可视区）——这里固定量测，防回归。
@@ -451,6 +496,113 @@ async function main() {
     !fillRow.includes('草稿内容秘密文本') && fillRow.includes('"length":8') && fillR.some(r => r.stepIndex === 1 && r.payload?.filled === true),
     JSON.stringify(fillR?.find(x => x.stepIndex === 1)?.payload))
 
+  // ---------- 6b. 副作用步骤：click / clickByText / clickAll / setInput ----------
+  // 白名单仍然封闭：接受固定参数、拒绝缺参与多余字段（尤其不许夹带代码）
+  const invZod = [
+    ['click 正例', { type: 'click', input: { selector: '#open-drawer' } }, true],
+    ['click 缺 selector', { type: 'click', input: {} }, false],
+    ['clickByText 正例', { type: 'clickByText', input: { text: '批量邀约带货' } }, true],
+    ['clickByText 空文本', { type: 'clickByText', input: { text: '' } }, false],
+    ['clickAll 正例（selector + max）', { type: 'clickAll', input: { selector: '.pick', max: 10 } }, true],
+    ['clickAll 缺 selector/text', { type: 'clickAll', input: { max: 10 } }, false],
+    ['clickAll 超出平台单次上限 41', { type: 'clickAll', input: { selector: '.pick', max: 41 } }, false],
+    ['setInput 正例', { type: 'setInput', input: { selector: '#script-box', text: '厂家货源' } }, true],
+    ['setInput 夹带 js 字段被拒（strict）', { type: 'setInput', input: { selector: '#script-box', text: 'x', js: 'alert(1)' } }, false]
+  ]
+  for (const [label, step, shouldOk] of invZod) {
+    const r = await api.taskCreate({ name: 'zod-' + label, steps: [step] })
+    check('新步骤白名单：' + label + (shouldOk ? ' → 通过' : ' → 被拒'),
+      r.ok === shouldOk, r.ok ? '' : (r.error?.code + ' ' + String(r.error?.message || '').slice(0, 44)))
+    if (r.ok) await api.taskDelete(r.data.id)
+  }
+
+  // 行为验证：打开抽屉 → 写入话术 → 批量勾选（跳过禁用）→ 门禁 → 提交
+  const invTask = await api.taskCreate({
+    name: '邀约副作用演示',
+    steps: [
+      { type: 'navigate', input: { url: BASE + '/invite' } },
+      { type: 'click', input: { selector: '#open-drawer' } },
+      { type: 'setInput', input: { selector: '#script-box', text: '厂家货源' } },
+      { type: 'readText', input: { selector: '#echo' } },
+      { type: 'clickAll', input: { selector: '.pick', max: 10 } },
+      { type: 'readText', input: { selector: '#picked-count' } },
+      { type: 'waitForUserConfirmation', input: { message: '确认向 3 位达人发送邀约？' } },
+      { type: 'click', input: { selector: '#confirm-send' } },
+      { type: 'readText', input: { selector: '#sent-count' } }
+    ]
+  })
+  check('clickAll 默认超时注入 120s（批量点击要等框架重渲染）',
+    invTask.ok && invTask.data.steps[4].timeoutMs === 120000, 't4=' + invTask.data?.steps?.[4]?.timeoutMs)
+  const invRun1 = await api.taskRun(invTask.data.id, sid1)
+  const invRid1 = invRun1.data.runId
+  await pollRun(invRid1, d => d.run.status === 'waiting_confirmation', 45000)
+  const invResA = (await api.taskResults(invRid1)).data
+  const invPick = i => (invResA?.results || []).find(r => r.stepIndex === i)?.payload
+  check('setInput 触发框架 input 事件（受控输入回显 = 写入文本）',
+    invPick(3)?.text === '厂家货源', JSON.stringify(invPick(3)))
+  check('clickAll 跳过禁用项：勾选 3 位、跳过 2 位（含 disabled 属性与祖先禁用两种）',
+    invPick(4)?.clicked === 3 && invPick(4)?.skippedDisabled === 2,
+    JSON.stringify(invPick(4)))
+  check('页面上勾选计数确为 3（点击真的生效）', invPick(5)?.text === '3', JSON.stringify(invPick(5)))
+  await api.taskConfirm(invRid1, true)
+  const invFin1 = await pollRun(invRid1, d => TERMINAL(d.run.status), 30000)
+  const invResB = (await api.taskResults(invRid1)).data
+  const invPick2 = i => (invResB?.results || []).find(r => r.stepIndex === i)?.payload
+  check('门禁通过后提交步骤被执行（页面计数 +1）',
+    invFin1?.run.status === 'succeeded' && invPick2(8)?.text === '1',
+    invFin1?.run.status + ' / ' + JSON.stringify(invPick2(8)))
+  check('click 结果落库为 executed（带点击到的文案）',
+    invPick2(7)?.action === 'click' && invPick2(7)?.clickedText === '确认发送', JSON.stringify(invPick2(7)))
+
+  // 门禁拒绝：提交步骤必须"绝不继续"
+  const invDenyTask = await api.taskCreate({
+    name: '邀约门禁拒绝演示',
+    steps: [
+      { type: 'navigate', input: { url: BASE + '/invite' } },
+      { type: 'click', input: { selector: '#open-drawer' } },
+      { type: 'waitForUserConfirmation', input: { message: '确认发送？' } },
+      { type: 'click', input: { selector: '#confirm-send' } }
+    ]
+  })
+  const invRun2 = await api.taskRun(invDenyTask.data.id, sid1)
+  const invRid2 = invRun2.data.runId
+  await pollRun(invRid2, d => d.run.status === 'waiting_confirmation', 45000)
+  await api.taskConfirm(invRid2, false)
+  const invFin2 = await pollRun(invRid2, d => d.run.status === 'cancelled', 20000)
+  const invResC = (await api.taskResults(invRid2)).data
+  check('门禁拒绝 → cancelled，且提交步骤没有任何结果行（证明未执行）',
+    invFin2?.run.status === 'cancelled' && !(invResC?.results || []).some(r => r.stepIndex === 3),
+    invFin2?.run.status + ' / rows=' + JSON.stringify((invResC?.results || []).map(r => r.stepIndex + ':' + r.kind)))
+
+  // 失败路径：目标缺失 / 目标禁用 / 副作用步骤拒绝恢复
+  const invFailTask = await api.taskCreate({
+    name: '点击目标缺失', steps: [
+      { type: 'navigate', input: { url: BASE + '/invite' } },
+      { type: 'click', input: { selector: '#missing-btn' }, timeoutMs: 2000 }
+    ]
+  })
+  const invRun3 = await api.taskRun(invFailTask.data.id, sid1)
+  const invRid3 = invRun3.data.runId
+  const invFin3 = await pollRun(invRid3, d => d.run.status === 'failed', 25000)
+  check('点击目标缺失 → failed（TASK_SELECTOR_CHANGED）',
+    invFin3?.run.status === 'failed' && invFin3?.run.errorCode === 'TASK_SELECTOR_CHANGED', invFin3?.run.errorCode)
+  const invRetry3 = await api.taskResume(invRid3, 'retry')
+  check('点击属副作用步骤 → 拒绝"从失败恢复"（TASK_BAD_STATE）',
+    !invRetry3.ok && invRetry3.error?.code === 'TASK_BAD_STATE', invRetry3.error?.message?.slice(0, 40))
+
+  const invDisTask = await api.taskCreate({
+    name: '点击禁用目标', steps: [
+      { type: 'navigate', input: { url: BASE + '/invite' } },
+      { type: 'click', input: { selector: '.pick[disabled]' }, timeoutMs: 3000 }
+    ]
+  })
+  const invRun4 = await api.taskRun(invDisTask.data.id, sid1)
+  const invRid4 = invRun4.data.runId
+  const invFin4 = await pollRun(invRid4, d => d.run.status === 'failed', 25000)
+  check('点击禁用元素 → failed（TASK_TARGET_DISABLED，不静默忽略）',
+    invFin4?.run.status === 'failed' && invFin4?.run.errorCode === 'TASK_TARGET_DISABLED',
+    invFin4?.run.errorCode + ' / ' + String(invFin4?.run.errorMessage || '').slice(0, 40))
+
   // ---------- 7. 暂停 / 继续 / 取消 + 非法迁移 ----------
   const slowTask = await api.taskCreate({
     name: '长等待演示', steps: [
@@ -516,10 +668,68 @@ async function main() {
   const gone = await api.taskResults(rid3)
   check('runs/结果随任务级联删除', !gone.ok && gone.error?.code === 'TASK_NOT_FOUND')
 
+  // ---------- 9b. 达人邀约（抖店）面板：完整可配置 + 空话术不得启动 ----------
+  // 放在这里做（而不是插在主流程中间）：要切店铺/重载页面，避免干扰其他用例的 UI 状态
+  const sInvite = await api.storeCreate({ name: 'M3抖店邀约', platform: '抖店', adminUrl: BASE + '/invite' })
+  const sidInvite = sInvite.data.id
+  await openStoreViaUI('M3抖店邀约')
+  const invitePanel = await cdp.evaluate(`
+    let card = null;
+    for (let i = 0; i < 4; i++) {
+      if (document.querySelector('.viewport')) break;
+      card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('M3抖店邀约'));
+      if (!card) break;
+      card.querySelector('.store-action').click();
+      await new Promise(r => setTimeout(r, 3200));
+    }
+    // 右栏可能是收起态（只剩窄轨）：先经窄轨的"任务"图标展开，否则没有页签可点
+    if (document.querySelector('.panel-rail')) {
+      const rail = document.querySelector('[data-test="rail-tasks"]');
+      if (rail) rail.click();
+      await new Promise(r => setTimeout(r, 800));
+    }
+    const t = [...document.querySelectorAll('.ptab')].find(b => b.textContent.trim() === '任务');
+    if (t) t.click();
+    await new Promise(r => setTimeout(r, 700));
+    const inv = document.querySelector('[data-test="task-tab-invite"]');
+    if (inv) inv.click();
+    await new Promise(r => setTimeout(r, 600));
+    const panel = document.querySelector('[data-test="invite-panel"]');
+    const btn = document.querySelector('[data-test="invite-start"]');
+    const out = {
+      viewport: !!document.querySelector('.viewport'),
+      displayedCard: (document.querySelector('.store-card.displayed') || {}).textContent ? document.querySelector('.store-card.displayed').textContent.replace(/\\s+/g, ' ').trim().slice(0, 30) : null,
+      panelText: panel ? panel.textContent.replace(/\\s+/g, ' ').trim().slice(0, 60) : null,
+      panel: !!panel,
+      categoryOptions: [...document.querySelectorAll('[data-test="invite-category"] option')].length,
+      chips: panel ? panel.querySelectorAll('.inv-chip').length : 0,
+      countInput: !!document.querySelector('[data-test="invite-count"]'),
+      scriptBox: !!document.querySelector('[data-test="invite-script"]'),
+      disabledNoScript: btn ? btn.disabled : null,
+      overflowX: panel ? panel.scrollWidth > panel.clientWidth + 2 : null
+    };
+    if (out.scriptBox) {
+      const ta = document.querySelector('[data-test="invite-script"]');
+      ta.value = '您好，我们是工厂店，想邀请您合作带货，可给专属高佣与免费寄样。';
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 300));
+      out.enabledAfterScript = !document.querySelector('[data-test="invite-start"]').disabled;
+    }
+    return out;
+  `)
+  check('达人邀约（抖店）：类目 22 项 + 等级/权益 chip 11 个 + 数量/话术齐备、无横向溢出',
+    invitePanel.viewport === true && invitePanel.panel === true && invitePanel.categoryOptions === 23 &&
+    invitePanel.chips === 11 && invitePanel.countInput === true && invitePanel.scriptBox === true &&
+    invitePanel.overflowX === false,
+    JSON.stringify(invitePanel))
+  check('达人邀约：空话术时「开始邀约」禁用，填写话术后才可用（防误发空消息）',
+    invitePanel.disabledNoScript === true && invitePanel.enabledAfterScript === true,
+    JSON.stringify({ 空话术: invitePanel.disabledNoScript, 填后: invitePanel.enabledAfterScript }))
+
   // ---------- 10. 清理 ----------
   const all = (await api.taskList()).data || []
   for (const t of all) await api.taskDelete(t.id)
-  for (const sid of [sid1, sid2]) {
+  for (const sid of [sid1, sid2, sidInvite]) {
     await call(`window.shopilot.browser.close(${JSON.stringify(sid)})`)
     await api.storeDeletePerm(sid)
   }

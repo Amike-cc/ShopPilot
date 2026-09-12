@@ -96,7 +96,11 @@
 - 1s tick；`schedule.everyMs`（≥60s 强制）；首见不追赶（now+everyMs 起算，无惊群补发）；`last_fired_at` 落库；**店铺浏览器未开 → 保持排队 + `TASK_SCHEDULED_FIRED` 事件提示，绝不静默拉起**；打开浏览器即唤醒排队项（验收：queuedWaiting=true → 未拉起 → 打开后自动至 succeeded）。
 
 ### IPC 与 UI
-- **面板二级页签**：任务面板顶部有「任务列表 / 达人邀约」两个页签（`data-test=task-tab-tasks / task-tab-invite`）。「达人邀约」本版为**占位**（`invite-placeholder`），界面如实标注"开发中，当前版本尚不可用"，并列出规划中的能力与**为什么先占位**：现有 8 种步骤类型没有任何点击/提交能力，真正"点下邀请按钮"需先扩展步骤类型并在主进程白名单登记；各平台邀约页多为登录后可见，地址应由「设置 → 配置」确认后填入而非程序猜测。不写任何数据、不做假功能。
+- **面板二级页签：任务列表 / 达人邀约**（`data-test=task-tab-tasks / task-tab-invite`）。
+- **达人邀约（当前只做抖店）**：面板按「当前店铺的平台」匹配平台档案（`packages/shared/src/constants/invite.ts`）——**只注册了抖店一份档案**，其余平台明确显示"当前店铺的平台暂不支持"，不做猜测式实现。配置项：主推类目（22 项）、达人等级（LV0–LV6）、本批数量（≤40）、邀约话术（≤150 字）、专属权益（4 项可勾）；「开始邀约」由配置生成受策展任务（navigate → waitForPage → clickByText 选类目/等级 → clickByText 搜索 → waitForSelector 行复选框 → clickAll 勾选 → clickByText 开抽屉 → setInput 填话术 → clickByText 勾权益 → **waitForUserConfirmation 门禁** → clickByText 确认发送）。空话术时按钮禁用（防误发空消息）；联系方式与推荐商品由平台抽屉要求，**本应用不保存手机号/微信号**。
+- **任务引擎新增 4 种副作用步骤**：`click`（选择器点击；禁用态报新错误码 `TASK_TARGET_DISABLED`，不静默忽略）、`clickByText`（按元素自身文本点击，第三方平台无稳定选择器时的兜底，取文本最短命中项）、`clickAll`（批量点击并**跳过禁用项**，上限 ≤40；对应平台"已发过消息的达人不可重复邀约"这类限制）、`setInput`（原生 value setter + 派发 `input`/`change`，受控组件才生效）。四者均入 `NON_RESUMABLE_TYPES`（不可从失败恢复重试），参数仍是 Zod `.strict()` 白名单、实现为固定注入脚本——**没有新增任何"执行任意代码"的入口**；payload 只存摘要与长度，不存写入原文。
+  - **门禁不变量**：提交步骤前必放 `waitForUserConfirmation`；用户拒绝 → run 置 `cancelled` 且后续步骤**没有任何结果行**（M3 断言 `rows=["0:executed","1:executed","2:confirm"]` 即证）。
+  - 平台口径（2026-09-13 抖店精选联盟实测）：单次勾选上限 40、话术 ≤150 字、推荐商品 ≤5 个；额度按「店铺类型 × 达人等级」下发（实测本店仅 LV0–LV3 有额度）；页面改版致文案失配时如实报 `TASK_SELECTOR_CHANGED`。已发过消息的达人行复选框为 disabled——`clickAll` 跳过并在结果里回报跳过数量。
 - 通道：`task:create/list/run/pause/resume(mode=continue|retry)/cancel/confirm/results/delete` + `snapshot:list` + 事件 `TASK_PROGRESS / TASK_CONFIRMATION_REQUIRED / TASK_SCHEDULED_FIRED`；调试通道 `task:create:fire`（手动触发调度，测试用）。
 - 右栏**任务**标签页：任务卡片（店铺/调度/实时状态 chip/进度日志流 ≤80 行）、步骤明细（✅❌⏳⏸ 图标+结果摘要）、运行控制（暂停/继续/从失败恢复/取消）、顶部黄色**人工确认条**（允许/拒绝按钮）、新建任务对话框（3 个快速模板 + 步骤增删/超时/重试参数）。
 - 启动归档：进程重启遗留非终态 run 统一 `failed（进程重启，运行中断）`；跨进程原地恢复明确不支持并给出如实提示（M4+ 可议）。
@@ -190,6 +194,7 @@
 
 ## 已知边界（如实声明）
 
+- **验收环境边界**：`screenshot` 步骤要求店铺视图真的处于可见/可渲染状态。若桌面上有另一个 Electron 实例或最大化窗口压在前面，`capturePage` 会如实失败（`CAPTURE_EMPTY`／CDP 报 `Current display surface not available for capture`），m3 会因此在"推进至确认门禁"这条上前置失败。**跑验收前请先关掉其它 Electron 实例**（今天实测：忘记关就会 10/82，关掉即 82/82）。这是环境敏感而非产品缺陷，但会误导排查，故记在此。
 - **会话包内容边界**：包内只有 Cookie（明文清单，容器级口令加密）+ 环境指纹配置 + 店铺元信息；**localStorage/IndexedDB 不在包内**（异机导入后部分站点可能要求二次验证）。包头明文暴露来源店铺名/平台/有效期（供导入前确认来源），Cookie 与指纹在密文内。
 - **应用锁边界**：主密码用于应用锁与 KDF，**不重加密 Chromium profile**（§10.2/§633）；锁定隐藏视图 + 门禁业务 IPC，属"防顺手查看"级别，已解锁进程内存中的会话仍由操作系统用户隔离保护。
 - **代理**：规范红线——不可用时不自动切换、不静默降级，仅检测 + 如实展示（无自动故障转移能力）。

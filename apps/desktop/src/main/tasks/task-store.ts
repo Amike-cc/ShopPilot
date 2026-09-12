@@ -33,11 +33,27 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   readTable: z.object({ selector, metric: z.string().min(1).max(60).optional() }).strict(),
   screenshot: z.object({}).strict(),
   fillDraft: z.object({ selector, text: z.string().max(20000) }).strict(),
-  waitForUserConfirmation: z.object({ message: z.string().min(1).max(500) }).strict()
+  waitForUserConfirmation: z.object({ message: z.string().min(1).max(500) }).strict(),
+  // 副作用步骤（点击/写入）：参数仍然只有选择器与文本，无任何代码入口
+  click: z.object({ selector }).strict(),
+  clickByText: z.object({ text: z.string().min(1).max(200) }).strict(),
+  clickAll: z.object({
+    selector: selector.optional(),
+    text: z.string().min(1).max(200).optional(),
+    // 平台对单次批量操作有上限（达人选人上限 40），这里做硬约束
+    max: z.number().int().min(1).max(40)
+  }).strict().refine((v) => !!v.selector !== !!v.text, { message: 'selector 与 text 必须二选一' }),
+  setInput: z.object({ selector, text: z.string().max(2000) }).strict()
 }
 
-/** 副作用步骤不可进入"从失败恢复"的重试范围 - §9.2 */
-export const NON_RESUMABLE_TYPES: ReadonlySet<string> = new Set(['fillDraft', 'waitForUserConfirmation'])
+/** 副作用步骤不可进入"从失败恢复"的重试范围 - §9.2（重试会重复点击/重复写入） */
+export const NON_RESUMABLE_TYPES: ReadonlySet<string> = new Set([
+  'fillDraft', 'waitForUserConfirmation',
+  'click', 'clickByText', 'clickAll', 'setInput'
+])
+
+/** 非"确认门禁"类步骤的默认超时；批量点击要处理多行框架重渲染，给更长默认值 */
+const DEFAULT_STEP_TIMEOUT: Record<string, number> = { waitForUserConfirmation: 3600000, clickAll: 120000 }
 
 export const taskCreateSchema = z.object({
   name: z.string().min(1).max(80),
@@ -123,7 +139,7 @@ export function createTask(input: TaskCreateInput): TaskView {
         throw new Error(`TASK_INVALID_STEP:step ${i + 1} ${s.type}: ${out.error.issues.map(x => x.message).join('; ')}`)
       }
       insStep.run(newId('tstep'), taskId, i, s.type, JSON.stringify(out.data),
-        s.timeoutMs ?? (s.type === 'waitForUserConfirmation' ? 3600000 : 15000), s.retryLimit ?? 0)
+        s.timeoutMs ?? (DEFAULT_STEP_TIMEOUT[s.type] ?? 15000), s.retryLimit ?? 0)
     })
   })()
 

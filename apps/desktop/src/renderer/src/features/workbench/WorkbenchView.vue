@@ -417,25 +417,87 @@
         </div>
         </template>
 
-        <!-- 达人邀约：本版为占位（按用户要求"先占位、后期开发"），如实写明不可用与原因 -->
-        <div v-else class="sub-pane" data-test="invite-placeholder">
-          <div class="empty-hint" style="padding:16px 10px">
-            达人邀约功能 <b>开发中</b>，当前版本尚不可用
-          </div>
-          <div class="env-sec">
-            <div class="env-h">规划中的能力</div>
+        <!-- 达人邀约：按店铺平台匹配平台档案；本版只有抖店，其余平台明确拒绝 -->
+        <div v-else class="sub-pane" data-test="invite-panel">
+          <div class="env-sec" v-if="!inviteProfile">
+            <div class="env-h">达人邀约</div>
+            <div class="empty-hint" style="padding:14px 8px">
+              当前店铺的平台<b>暂不支持</b>达人邀约
+            </div>
             <div class="env-note">
-              ① 从店铺所在平台进入「达人邀约 / 联盟」页；<br>
-              ② 读取待邀约与已邀约列表（只读，可截图留档）；<br>
-              ③ 发送邀约对平台有副作用，必须经<b>人工确认门禁</b>逐步放行，不做无人值守批量发送。
+              本版已实现的平台：<b>{{ INVITE_SUPPORTED_PLATFORMS.join('、') }}</b>。其余平台未实测，不做猜测式实现——后续按平台逐个补齐（每加一家只需新增一份平台档案）。
+              <template v-if="!ws.displayedStoreId"><br>请先打开一个店铺。</template>
             </div>
           </div>
+
+          <template v-else>
           <div class="env-sec">
-            <div class="env-h">为什么先占位</div>
+            <div class="env-h">达人邀约 · {{ inviteProfile.platform }}
+              <button class="mini-btn" style="margin-left:auto" data-test="invite-open-page" @click="openInvitePage">打开达人广场</button>
+            </div>
             <div class="env-note">
-              现有任务引擎只有 8 种预定义步骤（navigate / waitForPage / waitForSelector / readText / readTable / screenshot / fillDraft / waitForUserConfirmation），<b>没有任何点击或表单提交能力</b>，所以"真正点下邀请按钮"要先扩展步骤类型并在主进程白名单登记。另外各平台邀约页多为登录后可见，地址应由「设置 → 配置」确认后填入，而不是程序猜测。
+              可邀约的是"未发过消息"的达人——平台对已邀约过的行会禁用复选框，执行时<b>跳过并如实回报</b>跳过数量。
+            </div>
+
+            <label class="inv-row">主推类目
+              <select v-model="invite.category" data-test="invite-category">
+                <option value="">不筛选（全部）</option>
+                <option v-for="c in inviteProfile.categories" :key="c" :value="c">{{ c }}</option>
+              </select>
+            </label>
+
+            <div class="inv-row inv-block">达人等级
+              <span class="inv-chips">
+                <label
+                  v-for="lv in inviteProfile.levels" :key="lv"
+                  class="inv-chip" :class="{ on: invite.levels.includes(lv) }"
+                >
+                  <input type="checkbox" :value="lv" v-model="invite.levels" :data-test="'invite-level-' + lv" />{{ lv }}
+                </label>
+              </span>
+            </div>
+            <div class="env-note">
+              额度按「店铺类型 × 达人等级」下发：实测本店只有 <b>{{ inviteProfile.levelsWithQuotaHint.join(' / ') }}</b> 有额度，其余为 0（邀约按钮会变禁用态）。额度随经营情况变化，请自行确认。
+            </div>
+
+            <label class="inv-row">本批数量
+              <input type="number" min="1" :max="inviteProfile.maxBatch" v-model.number="invite.count" class="inv-num" data-test="invite-count" />
+              <span class="row-sub">上限 {{ inviteProfile.maxBatch }} 位（平台限制）</span>
+            </label>
+
+            <label class="inv-row inv-block">邀约话术
+              <textarea v-model="invite.script" :maxlength="inviteProfile.scriptMaxLen" rows="3" data-test="invite-script"
+                placeholder="您好，我们是……想邀请您合作带货：给专属高佣与免费寄样，提供现成素材，发货售后我们全包。"></textarea>
+              <span class="row-sub">{{ invite.script.length }}/{{ inviteProfile.scriptMaxLen }}</span>
+            </label>
+
+            <div class="inv-row inv-block">专属权益（可多选）
+              <span class="inv-chips">
+                <label
+                  v-for="b in inviteProfile.benefits" :key="b"
+                  class="inv-chip" :class="{ on: invite.benefits.includes(b) }"
+                >
+                  <input type="checkbox" :value="b" v-model="invite.benefits" :data-test="'invite-benefit-' + b" />{{ b }}
+                </label>
+              </span>
+            </div>
+
+            <div class="cf-btns" style="margin-top:10px">
+              <button class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
+            </div>
+            <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
+          </div>
+
+          <div class="env-sec">
+            <div class="env-h">执行说明</div>
+            <div class="env-note">
+              点「开始邀约」会创建一个受策展任务：进入达人广场 → 选类目与等级 → 搜索 → 勾选前 N 位可邀约达人 → 打开邀约抽屉 → 填话术 → 勾权益 → <b>停下等你确认</b> → 才会点「确认发送」。<b>拒绝即整单取消，绝不继续</b>。
+            </div>
+            <div class="env-note">
+              联系方式（手机号/微信号）与专属推荐商品由平台在抽屉里要求填写：联系方式请在平台侧填好（<b>本应用不保存你的手机号/微信号</b>），商品用平台的"推荐商品"即可。发送不可撤回，并消耗店铺邀约额度。
             </div>
           </div>
+          </template>
         </div>
       </div>
       </template>
@@ -688,6 +750,7 @@
 import { reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import PlatformIcon from '../../components/PlatformIcon.vue'
+import { inviteProfileFor, INVITE_SUPPORTED_PLATFORMS } from '@shared/constants/invite'
 
 const ws = useWorkspaceStore()
 const viewportEl = ref<HTMLElement | null>(null)
@@ -1222,6 +1285,88 @@ const stepTemplates = [
 const taskDialogOpen = ref(false)
 /** 任务面板的二级页签：任务列表 / 达人邀约（后者本版为占位） */
 const taskTab = ref<'tasks' | 'invite'>('tasks')
+
+// ---------- 达人邀约：按「当前店铺的平台」匹配平台档案（本版只有抖店） ----------
+const inviteProfile = computed(() => {
+  const s = ws.stores.find(x => x.id === ws.displayedStoreId)
+  return inviteProfileFor(s?.platform)
+})
+const invite = reactive({
+  category: '' as string,
+  levels: [] as string[],
+  count: 5,
+  script: '',
+  benefits: [] as string[]
+})
+// 店铺/平台变化时把可选项重置为该平台档案的默认值（脚本保留，避免用户输入被清掉）
+watch(inviteProfile, (p) => {
+  invite.category = p ? (p.categories[2] || p.categories[0] || '') : ''
+  invite.levels = p ? [...p.levelsWithQuotaHint] : []
+  invite.benefits = []
+  if (p) invite.count = Math.max(1, Math.min(invite.count || 5, p.maxBatch))
+}, { immediate: true })
+
+const inviteReady = computed(() => {
+  const p = inviteProfile.value
+  return !!p && !!ws.displayedStoreId &&
+    invite.levels.length > 0 &&
+    invite.count >= 1 && invite.count <= p.maxBatch &&
+    invite.script.trim().length > 0
+})
+
+/** 打开达人广场：带上登录态让用户确认页面 / 填写平台侧联系方式 */
+function openInvitePage() { if (inviteProfile.value) ws.navigate(inviteProfile.value.pageUrl) }
+
+/**
+ * 由配置生成步骤序列。要点：
+ * - 平台无稳定 data-test，筛选与提交靠文案点击（clickByText）；
+ * - 行复选框用 tbody 限定，避免点到表头的"全选"；
+ * - clickAll 会跳过平台禁用（已邀约过）的行，上限取用户设定值（≤平台上限）；
+ * - 「确认发送」前必须放 waitForUserConfirmation：拒绝则整单取消，绝不继续。
+ */
+function buildInviteSteps() {
+  const p = inviteProfile.value
+  if (!p) return []
+  const steps: Array<{ type: string; input: Record<string, unknown>; timeoutMs?: number }> = [
+    { type: 'navigate', input: { url: p.pageUrl }, timeoutMs: 45000 },
+    { type: 'waitForPage', input: { urlIncludes: 'daren-square' }, timeoutMs: 45000 }
+  ]
+  if (invite.category) steps.push({ type: 'clickByText', input: { text: invite.category } })
+  steps.push({ type: 'clickByText', input: { text: p.texts.levelTrigger } })
+  for (const lv of invite.levels) steps.push({ type: 'clickByText', input: { text: lv } })
+  steps.push({ type: 'clickByText', input: { text: p.texts.search } })
+  steps.push({ type: 'waitForSelector', input: { selector: p.rowCheckboxSelector }, timeoutMs: 30000 })
+  steps.push({ type: 'clickAll', input: { selector: p.rowCheckboxSelector, max: invite.count }, timeoutMs: 120000 })
+  steps.push({ type: 'clickByText', input: { text: p.texts.batchInvite } })
+  steps.push({ type: 'waitForSelector', input: { selector: p.scriptSelector }, timeoutMs: 20000 })
+  steps.push({ type: 'setInput', input: { selector: p.scriptSelector, text: invite.script.trim() } })
+  for (const b of invite.benefits) steps.push({ type: 'clickByText', input: { text: b } })
+  steps.push({
+    type: 'waitForUserConfirmation',
+    input: {
+      message: `【达人邀约·${p.platform}】类目 ${invite.category || '全部'}｜等级 ${invite.levels.join('/')}｜最多 ${invite.count} 位｜权益 ${invite.benefits.join('、') || '无'}｜话术：${invite.script.trim()}`
+    },
+    timeoutMs: 1800000
+  })
+  steps.push({ type: 'clickByText', input: { text: p.texts.confirmSend } })
+  return steps
+}
+
+async function startInvite() {
+  const p = inviteProfile.value
+  if (!p || !inviteReady.value) return
+  const created = await window.shopilot.task.create({
+    name: `达人邀约 · ${p.platform} · ${invite.category || '全部'} · 最多 ${invite.count} 位`,
+    storeScope: ws.displayedStoreId,
+    steps: buildInviteSteps()
+  })
+  if (!created.ok) { ws.toast('创建邀约任务失败: ' + created.error.message, 'error'); return }
+  const started = await window.shopilot.task.run(created.data.id)
+  if (!started.ok) { ws.toast('启动邀约任务失败: ' + started.error.message, 'error'); return }
+  ws.toast('邀约任务已启动：点「确认发送」前会先请你确认', 'success')
+  taskTab.value = 'tasks'
+  await ws.refreshTasks()
+}
 
 const tf = reactive({
   name: '', storeId: '', everyMin: null as number | null,
@@ -2007,6 +2152,30 @@ onBeforeUnmount(() => {
 .stab.on { color: #fff; border-bottom-color: var(--color-primary); }
 .settings-modal { width: 520px; }
 .sub-pane { display: flex; flex-direction: column; }
+/* 达人邀约面板：全部按 [data-test="invite-panel"] 作用域限定，
+   避免历史上"通用 .env-sec input 撑爆布局"那类连带影响（右栏只有 320px 宽） */
+[data-test="invite-panel"] .inv-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; color: var(--color-text-secondary); }
+[data-test="invite-panel"] .inv-block { flex-direction: column; align-items: stretch; gap: 4px; }
+[data-test="invite-panel"] select,
+[data-test="invite-panel"] textarea,
+[data-test="invite-panel"] .inv-num {
+  box-sizing: border-box; background: var(--color-bg-tertiary); color: var(--color-text-primary);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  padding: 5px 7px; font-size: 12px; outline: none;
+}
+[data-test="invite-panel"] select:focus,
+[data-test="invite-panel"] textarea:focus,
+[data-test="invite-panel"] .inv-num:focus { border-color: var(--color-primary); }
+[data-test="invite-panel"] select { flex: 1 1 auto; min-width: 0; }
+[data-test="invite-panel"] textarea { width: 100%; resize: vertical; font-family: inherit; }
+[data-test="invite-panel"] .inv-num { width: 64px; flex: 0 0 64px; }
+[data-test="invite-panel"] .inv-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+[data-test="invite-panel"] .inv-chip {
+  display: flex; align-items: center; gap: 3px; font-size: 11px; padding: 2px 7px;
+  border: 1px solid var(--color-border); border-radius: 20px; cursor: pointer;
+}
+[data-test="invite-panel"] .inv-chip.on { border-color: var(--color-primary); color: #fff; }
+[data-test="invite-panel"] .inv-chip input { width: auto; margin: 0; flex: 0 0 auto; }
 /* 平台首页地址配置行：名称 + 自适应输入 + 恢复默认。宽度按容器算，
    不要写通用 .env-sec input（历史上那条规则把"添加代理"的输入挤到 18px 并让右栏横向溢出） */
 .plat-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
