@@ -109,6 +109,11 @@ export const ERROR_CODES = {
     message: '应用已锁定',
     retryable: false
   },
+  UPDATE_ERROR: {
+    code: 'UPDATE_ERROR',
+    message: '更新检查、下载或安装失败',
+    retryable: true
+  },
   INVALID_ARGUMENT: {
     code: 'INVALID_ARGUMENT',
     message: '参数不合法',

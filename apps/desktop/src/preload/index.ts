@@ -168,6 +168,14 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.WINDOW_SET_TITLEBAR_OVERLAY, opts)
   },
 
+  // 软件更新
+  update: {
+    status: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_STATUS),
+    check: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_CHECK),
+    download: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_DOWNLOAD),
+    install: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_INSTALL)
+  },
+
   // 事件监听
   on: (channel: string, callback: (...args: any[]) => void): void => {
     // 只允许白名单事件

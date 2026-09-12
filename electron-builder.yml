@@ -46,3 +46,9 @@ nsis:
   shortcutName: ShopPilot
   deleteAppDataOnUninstall: false
   artifactName: ShopPilot-Setup-${version}.${ext}
+
+publish:
+  provider: github
+  owner: Amike-cc
+  repo: ShopPilot
+  releaseType: release

@@ -15,6 +15,7 @@ export type AuditAction =
   | 'backup.create' | 'backup.restore'
   | 'task.create' | 'task.delete' | 'task.run' | 'task.pause' | 'task.resume'
   | 'task.retry' | 'task.cancel' | 'task.confirm'
+  | 'update.check' | 'update.download' | 'update.install'
   | 'diagnostics.export' | 'audit.export'
 
 export type AuditResult = 'success' | 'failure'

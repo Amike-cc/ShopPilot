@@ -125,6 +125,12 @@ export const IPC_CHANNELS = {
   // 窗口装饰 - §17（titleBarStyle:'hidden' 融合顶栏：右上角原生窗口按钮
   // overlay 颜色需随 UI 状态切换 —— 欢迎页/工作台/应用锁三种底色）
   WINDOW_SET_TITLEBAR_OVERLAY: 'window:setTitlebarOverlay'
+  ,
+  // 软件更新
+  UPDATE_STATUS: 'update:status',
+  UPDATE_CHECK: 'update:check',
+  UPDATE_DOWNLOAD: 'update:download',
+  UPDATE_INSTALL: 'update:install'
 } as const
 
 /**
@@ -143,5 +149,7 @@ export const EVENT_CHANNELS = {
   TASK_SCHEDULED_FIRED: 'task:scheduledFired',
   TASK_CONFIRMATION_REQUIRED: 'task:confirmationRequired',
   SECURITY_LOCKED: 'security:locked',
-  BACKUP_COMPLETED: 'backup:completed'
+  BACKUP_COMPLETED: 'backup:completed',
+  UPDATE_STATUS_CHANGED: 'update:statusChanged',
+  UPDATE_PROGRESS: 'update:progress'
 } as const

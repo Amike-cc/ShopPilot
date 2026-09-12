@@ -39,6 +39,8 @@ m3-reg*.log
 m4-run*.log
 sec-reg*.log
 manifest*.log
+update-run*.log
+acceptance-run*.log
 ui-*.png
 ui-*.log
 name-cdp-test*.js

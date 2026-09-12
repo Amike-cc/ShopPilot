@@ -129,6 +129,12 @@ declare global {
       windowChrome: {
         setTitlebarOverlay: (opts: { color?: string; symbolColor?: string }) => Promise<IPCResult>
       }
+      update: {
+        status: () => Promise<IPCResult>
+        check: () => Promise<IPCResult>
+        download: () => Promise<IPCResult>
+        install: () => Promise<IPCResult>
+      }
       on: (channel: string, callback: (...args: any[]) => void) => void
       off: (channel: string, callback: (...args: any[]) => void) => void
     }

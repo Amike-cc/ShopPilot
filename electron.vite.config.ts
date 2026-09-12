@@ -6,7 +6,10 @@ const desktopRoot = resolve('apps/desktop')
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // electron-updater 必须内联打包：electron-builder 24 + pnpm 的依赖收集会漏掉
+    // 它的部分叶子依赖（tiny-typed-emitter / lodash.escaperegexp / lodash.isequal），
+    // 导致打包态主进程 require 即崩（asar 内 MODULE_NOT_FOUND，dev 态符号链接正常）。
+    plugins: [externalizeDepsPlugin({ exclude: ['electron-updater'] })],
     resolve: {
       alias: {
         '@shared': resolve('packages/shared/src')

@@ -5,6 +5,7 @@
       <div class="brand">
         <div class="brand-logo">商</div>
         <div class="brand-name">ShopPilot</div>
+        <button class="brand-update" data-test="update-open-btn" title="检查更新" @click="openUpdateDialog">↻ 更新</button>
       </div>
 
       <div class="sidebar-tools">
@@ -544,6 +545,38 @@
       </div>
     </div>
 
+    <!-- 软件更新 -->
+    <div v-if="updateOpen" class="modal-mask" data-test="update-dialog" @click.self="updateOpen = false">
+      <div class="modal update-modal">
+        <h2>软件更新</h2>
+        <div class="update-version">当前版本 v{{ updateStatus.currentVersion }}</div>
+        <div class="update-channel-row">
+          <label>更新通道</label>
+          <select data-test="update-channel" v-model="updateChannel" @change="saveUpdateChannel">
+            <option value="stable">稳定版 stable</option>
+            <option value="beta">测试版 beta</option>
+          </select>
+          <label class="update-autocheck" title="开启后每次启动延迟自动检查一次更新">
+            <input type="checkbox" data-test="update-autocheck" v-model="updateAutoCheck" @change="saveUpdateAutoCheck">启动时自动检查
+          </label>
+        </div>
+        <div v-if="updateStatus.state === 'checking'" class="update-message" data-test="update-message">正在检查更新…</div>
+        <div v-else-if="updateStatus.state === 'available'" class="update-message" data-test="update-message">发现新版本 v{{ updateStatus.version }}</div>
+        <div v-else-if="updateStatus.state === 'downloading'" class="update-message" data-test="update-message">正在下载 v{{ updateStatus.version }}（{{ Math.round(updateStatus.percent || 0) }}%）</div>
+        <div v-else-if="updateStatus.state === 'downloaded'" class="update-message success-text" data-test="update-message">更新已下载并通过 SHA-512 校验，重启后安装</div>
+        <div v-else-if="updateStatus.state === 'not-available'" class="update-message" data-test="update-message">当前已是最新版本</div>
+        <div v-else-if="updateStatus.state === 'error'" class="update-message error-text" data-test="update-message">{{ updateStatus.error }}</div>
+        <div v-else class="update-message" data-test="update-message">检查 GitHub Releases 上的新版本；下载完成校验哈希后重启安装，安装失败保留旧版本。</div>
+        <div v-if="updateStatus.state === 'downloading'" class="update-progress"><span :style="{ width: (updateStatus.percent || 0) + '%' }"></span></div>
+        <div class="modal-actions">
+          <button class="btn-ghost" @click="updateOpen = false">关闭</button>
+          <button v-if="['idle','not-available','error'].includes(updateStatus.state)" class="btn-primary" data-test="update-check-btn" @click="checkUpdate">检查更新</button>
+          <button v-if="updateStatus.state === 'available'" class="btn-primary" data-test="update-download-btn" @click="downloadUpdate">下载更新</button>
+          <button v-if="updateStatus.state === 'downloaded'" class="btn-primary" data-test="update-install-btn" @click="installUpdate">重启并安装</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Toast -->
     <div class="toast-host">
       <div v-for="t in ws.toasts" :key="t.id" :class="['toast', t.kind]">{{ t.text }}</div>
@@ -601,6 +634,50 @@ const quickPlatforms = (window.shopilot.platforms || []) as PlatformDef[]
 const DEFAULT_PLATFORM = quickPlatforms[0]?.name || '拼多多'
 
 const form = reactive({ name: '', platform: DEFAULT_PLATFORM, adminUrl: '', tags: '', notes: '' })
+
+type UpdateState = 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+const updateOpen = ref(false)
+const updateStatus = reactive<{ state: UpdateState; currentVersion: string; version?: string; percent?: number; error?: string }>({ state: 'idle', currentVersion: '0.1.0' })
+/** 更新通道与启动自动检查（§21 双通道）：持久化在 app_settings，主进程检查时读取 */
+const updateChannel = ref<string>('stable')
+const updateAutoCheck = ref(false)
+let updateEventHandler: ((payload: any) => void) | null = null
+
+function applyUpdateStatus(payload: any) {
+  if (!payload) return
+  Object.assign(updateStatus, payload)
+}
+async function openUpdateDialog() {
+  updateOpen.value = true
+  const [ch, ac, res] = await Promise.all([
+    window.shopilot.settings.get('update.channel'),
+    window.shopilot.settings.get('update.autoCheck'),
+    window.shopilot.update.status()
+  ])
+  if (ch.ok && (ch.data?.value === 'stable' || ch.data?.value === 'beta')) updateChannel.value = ch.data.value
+  if (ac.ok) updateAutoCheck.value = ac.data?.value === true
+  if (res.ok) applyUpdateStatus(res.data)
+}
+async function saveUpdateChannel() {
+  await window.shopilot.settings.set('update.channel', updateChannel.value === 'beta' ? 'beta' : 'stable')
+  const res = await window.shopilot.update.status()
+  if (res.ok) applyUpdateStatus(res.data)
+}
+async function saveUpdateAutoCheck() {
+  await window.shopilot.settings.set('update.autoCheck', updateAutoCheck.value === true)
+}
+async function checkUpdate() {
+  updateStatus.state = 'checking'
+  const res = await window.shopilot.update.check()
+  if (res.ok) applyUpdateStatus(res.data)
+  else { updateStatus.state = 'error'; updateStatus.error = res.error.message }
+}
+async function downloadUpdate() {
+  const res = await window.shopilot.update.download()
+  if (res.ok) applyUpdateStatus(res.data)
+  else { updateStatus.state = 'error'; updateStatus.error = res.error.message }
+}
+async function installUpdate() { await window.shopilot.update.install() }
 
 /** 选中平台后自动填入该平台默认后台地址（仅当地址为空或仍是别的平台的默认值时，不覆盖用户手填） */
 function applyPlatformDefaults(name: string) {
@@ -1301,7 +1378,7 @@ function refreshOverlayOcclusion() {
     // A newer watch event has already scheduled a fresher DOM state.
     if (revision !== overlayRevision) return
 
-    const modalOpen = !!(ws.createDialogOpen || taskDialogOpen.value || ws.trashOpen || rename.open || copycfg.open || confirmBox.open)
+    const modalOpen = !!(ws.createDialogOpen || taskDialogOpen.value || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || updateOpen.value)
     if (ctx.open && viewportEl.value) {
       const m = document.querySelector('[data-test="store-ctx"]')?.getBoundingClientRect()
       const v = viewportEl.value.getBoundingClientRect()
@@ -1317,7 +1394,7 @@ function refreshOverlayOcclusion() {
 }
 
 watch(
-  () => [ws.createDialogOpen, taskDialogOpen.value, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open],
+  () => [ws.createDialogOpen, taskDialogOpen.value, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, updateOpen.value],
   () => { refreshOverlayOcclusion() },
   { immediate: true }
 )
@@ -1362,6 +1439,9 @@ async function submitCreate() {
 function showInFolder(id: string) { window.shopilot.download.showInFolder(id) }
 
 onMounted(async () => {
+  updateEventHandler = (payload: any) => applyUpdateStatus(payload)
+  window.shopilot.on('update:statusChanged', updateEventHandler)
+  window.shopilot.on('update:progress', updateEventHandler)
   await ws.init()
   // Renderer reloads do not reset main-process WebContentsView state. Explicitly
   // clear a stale overlay flag before the first viewport report; app-lock state
@@ -1388,6 +1468,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', reportViewport)
   window.removeEventListener('mousedown', onDocMouseDown, true)
   window.removeEventListener('keydown', onDocKey)
+  if (updateEventHandler) {
+    window.shopilot.off('update:statusChanged', updateEventHandler)
+    window.shopilot.off('update:progress', updateEventHandler)
+  }
 })
 </script>
 
@@ -1409,6 +1493,8 @@ onBeforeUnmount(() => {
   font-weight: 700; font-size: 16px;
 }
 .brand-name { font-weight: 600; font-size: 15px; }
+.brand-update { margin-left: auto; padding: 4px 7px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg-tertiary); color: var(--color-text-secondary); font-size: 11px; cursor: pointer; -webkit-app-region: no-drag; }
+.brand-update:hover { color: #fff; border-color: var(--color-primary); }
 
 .sidebar-tools { display: flex; gap: 8px; padding: 0 16px 10px; }
 .search-box {
@@ -1660,6 +1746,16 @@ onBeforeUnmount(() => {
 .log-box { margin-top: 8px; background: var(--color-bg-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 8px; max-height: 160px; overflow-y: auto; }
 .log-line { font-size: 11px; color: var(--color-text-secondary); font-family: Consolas, monospace; line-height: 1.6; word-break: break-all; }
 .modal-wide { width: 560px; max-width: 92vw; }
+.update-modal { width: 390px; }
+.update-version { color: var(--color-text-secondary); font-size: 12px; margin: -8px 0 14px; }
+.update-message { min-height: 34px; font-size: 13px; line-height: 1.6; }
+.success-text { color: var(--color-success); }
+.error-text { color: var(--color-error); }
+.update-progress { height: 6px; border-radius: 3px; background: var(--color-bg-tertiary); overflow: hidden; margin: 8px 0 14px; }
+.update-progress span { display: block; height: 100%; background: var(--color-primary); transition: width .2s ease; }
+.update-channel-row { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 12px; color: var(--color-text-secondary); }
+.update-channel-row select { width: 138px; }
+.update-autocheck { display: flex; align-items: center; gap: 4px; margin-left: auto; white-space: nowrap; cursor: pointer; }
 
 /* 店铺右键菜单 */
 .ctx-menu {
