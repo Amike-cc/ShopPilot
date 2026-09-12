@@ -1,11 +1,23 @@
 <template>
   <div class="workbench">
-    <!-- 左栏：店铺侧边栏 - §8.2 StoreSidebar -->
-    <aside class="sidebar">
+    <!-- 左栏：店铺侧边栏 - §8.2 StoreSidebar（可收起为窄轨：新建/回收站/更新仍可达） -->
+    <aside class="sidebar" :class="{ collapsed: leftSidebarCollapsed }" data-test="sidebar">
+      <div class="sidebar-rail" v-if="leftSidebarCollapsed">
+        <button class="rail-btn" data-test="sidebar-expand" title="展开左侧栏（Ctrl+Shift+E）" @click="expandSidebar()">›</button>
+        <button class="rail-btn" data-test="rail-new" title="新建店铺" @click="openCreateDialog()">+</button>
+        <button class="rail-btn" data-test="rail-trash" title="回收站" @click="openTrash">
+          🗑
+          <span v-if="ws.trashStores.length" class="rail-badge" data-test="rail-trash-badge"></span>
+        </button>
+        <button class="rail-btn" data-test="rail-update" title="检查更新" @click="openUpdateDialog">↻</button>
+      </div>
+
+      <template v-else>
       <div class="brand">
         <div class="brand-logo">商</div>
         <div class="brand-name">ShopPilot</div>
         <button class="brand-update" data-test="update-open-btn" title="检查更新" @click="openUpdateDialog">↻ 更新</button>
+        <button class="sidebar-collapse" data-test="sidebar-collapse" title="收起左侧栏（Ctrl+Shift+E）" @click="collapseSidebar()">‹</button>
       </div>
 
       <div class="sidebar-tools">
@@ -90,6 +102,7 @@
         <button class="foot-btn" @click="openTrash">🗑 回收站<span v-if="ws.trashStores.length" class="badge">{{ ws.trashStores.length }}</span></button>
         <button class="foot-btn" @click="onCapture" :disabled="!ws.activeTab" title="截图当前页">📸 截图</button>
       </div>
+      </template>
     </aside>
 
     <!-- 中栏：浏览器视口 - §8.2 BrowserViewport -->
@@ -1227,6 +1240,30 @@ function togglePanel() {
   else collapsePanel()
 }
 
+/**
+ * 左栏收起/展开（用户要求"左侧边栏可以收起和展开"），与右栏同一套约定：
+ * 收起留 44px 窄轨（新建/回收站/更新仍可达），状态写入 app_settings 持久化，Ctrl+Shift+E 切换。
+ * 与右栏不同：左栏不设门禁——人工确认门禁提示在右栏，收起左栏不会藏住它。
+ */
+const leftSidebarCollapsed = ref(false)
+
+function collapseSidebar() {
+  leftSidebarCollapsed.value = true
+  window.shopilot.settings.set('ui.leftSidebarCollapsed', true).catch(() => {})
+  syncViewportSoon()
+}
+
+function expandSidebar() {
+  leftSidebarCollapsed.value = false
+  window.shopilot.settings.set('ui.leftSidebarCollapsed', false).catch(() => {})
+  syncViewportSoon()
+}
+
+function toggleSidebar() {
+  if (leftSidebarCollapsed.value) expandSidebar()
+  else collapseSidebar()
+}
+
 watch(confirmationCount, (n) => {
   if (n > 0 && rightPanelCollapsed.value) {
     rightPanelCollapsed.value = false
@@ -1288,6 +1325,8 @@ function onDocKey(ev: KeyboardEvent) {
   if (ev.key === 'Escape') closeCtx()
   // Ctrl+Shift+B：收起/展开右侧栏（与 Ctrl+Shift+L 锁定同一套快捷键约定）
   if (ev.ctrlKey && ev.shiftKey && (ev.key === 'B' || ev.key === 'b')) { ev.preventDefault(); togglePanel() }
+  // Ctrl+Shift+E：收起/展开左侧栏
+  if (ev.ctrlKey && ev.shiftKey && (ev.key === 'E' || ev.key === 'e')) { ev.preventDefault(); toggleSidebar() }
 }
 
 const rename = reactive({ open: false, value: '' })
@@ -1452,6 +1491,9 @@ onMounted(async () => {
   // 恢复上次的右栏收起状态
   const saved = await window.shopilot.settings.get('ui.rightPanelCollapsed')
   if (saved?.ok && saved.data?.value === true) { rightPanelCollapsed.value = true }
+  // 恢复上次的左栏收起状态
+  const savedLeft = await window.shopilot.settings.get('ui.leftSidebarCollapsed')
+  if (savedLeft?.ok && savedLeft.data?.value === true) { leftSidebarCollapsed.value = true }
   await nextTick()
   if (viewportEl.value) {
     resizeObserver = new ResizeObserver(() => reportViewport())
@@ -1495,6 +1537,20 @@ onBeforeUnmount(() => {
 .brand-name { font-weight: 600; font-size: 15px; }
 .brand-update { margin-left: auto; padding: 4px 7px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg-tertiary); color: var(--color-text-secondary); font-size: 11px; cursor: pointer; -webkit-app-region: no-drag; }
 .brand-update:hover { color: #fff; border-color: var(--color-primary); }
+.sidebar-collapse {
+  width: 26px; height: 26px; flex: 0 0 auto; border: 0; background: none;
+  border-radius: 6px; font-size: 15px; line-height: 1; color: var(--color-text-secondary);
+  -webkit-app-region: no-drag;
+}
+.sidebar-collapse:hover { background: var(--color-bg-tertiary); color: #fff; }
+
+/* 左栏收起态：留一条窄轨（新建/回收站/更新仍可达；顶部留拖拽区，按钮自身 no-drag） */
+.sidebar.collapsed { width: 44px; min-width: 44px; }
+.sidebar-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 16px 0 8px; height: 100%; -webkit-app-region: drag;
+}
+.sidebar-rail .rail-btn { -webkit-app-region: no-drag; }
 
 .sidebar-tools { display: flex; gap: 8px; padding: 0 16px 10px; }
 .search-box {

@@ -518,6 +518,66 @@ async function main() {
     pBack.panel === 320 && pBack.setting === false && viewBack.innerWidth === pBack.viewport,
     JSON.stringify({ panel: pBack.panel, setting: pBack.setting, innerWidth: viewBack.innerWidth, viewport: pBack.viewport }))
 
+  // ---------- 左侧栏收起/展开（用户要求"左侧边栏可以收起和展开"） ----------
+  // 与右栏同样以店铺页自身 innerWidth 为证：收起左栏后中栏原生视图必须真的变宽，不能只有 HTML 布局在动。
+  const sidebarRect = () => cdp.evaluate(`
+    const sb = document.querySelector('[data-test="sidebar"]');
+    const vp = document.querySelector('.viewport');
+    const r = el => el ? Math.round(el.getBoundingClientRect().width) : null;
+    return {
+      sidebar: r(sb), viewport: r(vp), rail: !!document.querySelector('.sidebar-rail'),
+      collapseBtn: !!document.querySelector('[data-test="sidebar-collapse"]'),
+      setting: (await window.shopilot.settings.get('ui.leftSidebarCollapsed')).data.value
+    };
+  `)
+
+  const sExpanded = await sidebarRect()
+  const viewLExpanded = await storeView()
+  check('左栏展开态基线：304px、有收起按钮、店铺页宽度=中栏宽度',
+    sExpanded.sidebar === 304 && sExpanded.collapseBtn === true && sExpanded.viewport === viewLExpanded.innerWidth,
+    JSON.stringify({ sidebar: sExpanded.sidebar, collapseBtn: sExpanded.collapseBtn, viewport: sExpanded.viewport, innerWidth: viewLExpanded.innerWidth }))
+
+  await cdp.evaluate(`document.querySelector('[data-test="sidebar-collapse"]').click(); return true;`)
+  await sleep(1200)
+  const sCollapsed = await sidebarRect()
+  const viewLCollapsed = await storeView()
+  check('点收起 → 左栏 44px 窄轨，中栏变宽 ≥250px',
+    sCollapsed.sidebar === 44 && sCollapsed.rail === true && (sCollapsed.viewport - sExpanded.viewport) >= 250,
+    JSON.stringify({ sidebar: sCollapsed.sidebar, rail: sCollapsed.rail, viewport: sExpanded.viewport + '→' + sCollapsed.viewport }))
+  check('收起左栏后原生视图（店铺页）真的跟着变宽',
+    viewLCollapsed.innerWidth === sCollapsed.viewport && (viewLCollapsed.innerWidth - viewLExpanded.innerWidth) >= 250,
+    JSON.stringify({ before: viewLExpanded.innerWidth, after: viewLCollapsed.innerWidth }))
+  check('左栏收起状态写入设置 ui.leftSidebarCollapsed=true', sCollapsed.setting === true, String(sCollapsed.setting))
+
+  await cdp.evaluate(`document.querySelector('[data-test="sidebar-expand"]').click(); return true;`)
+  await sleep(1200)
+  const sExpandedBack = await sidebarRect()
+  const viewLBack = await storeView()
+  check('窄轨展开按钮恢复 304px 且店铺页宽度回到中栏宽度、设置写回 false',
+    sExpandedBack.sidebar === 304 && sExpandedBack.rail === false && sExpandedBack.setting === false && viewLBack.innerWidth === sExpandedBack.viewport,
+    JSON.stringify({ sidebar: sExpandedBack.sidebar, rail: sExpandedBack.rail, setting: sExpandedBack.setting, innerWidth: viewLBack.innerWidth, viewport: sExpandedBack.viewport }))
+
+  await cdp.evaluate(`
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'E', ctrlKey: true, shiftKey: true, bubbles: true }));
+    return true;
+  `)
+  await sleep(900)
+  const sHotkey = await sidebarRect()
+  check('快捷键 Ctrl+Shift+E 收起左栏', sHotkey.sidebar === 44 && sHotkey.rail === true, JSON.stringify(sHotkey))
+
+  // 收起态下"新建/回收站/更新"仍可达（窄轨不要变成死胡同），随后恢复展开态收尾
+  const railBtns = await cdp.evaluate(`
+    return ['rail-new', 'rail-trash', 'rail-update', 'sidebar-expand']
+      .map(k => !!document.querySelector('[data-test="' + k + '"]'));
+  `)
+  check('左栏窄轨保留 新建/回收站/更新/展开 入口', railBtns.every(Boolean), JSON.stringify(railBtns))
+  await sleep(200)
+  await cdp.evaluate(`
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'E', ctrlKey: true, shiftKey: true, bubbles: true }));
+    return true;
+  `)
+  await sleep(600)
+
   await cdp.evaluate(`return await window.shopilot.browser.close(${JSON.stringify(panelPrep.storeId)});`)
   await cdp.evaluate(`return await window.shopilot.store.deletePermanent(${JSON.stringify(panelPrep.storeId)});`)
   await cdp.evaluate(`return await window.shopilot.store.purge(${JSON.stringify(panelPrep.storeId)});`)
