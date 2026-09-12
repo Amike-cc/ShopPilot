@@ -52,7 +52,7 @@
 - 任务引擎为**全局串行队列（并发=1）**；跨进程原地恢复不支持；人工确认节点默认 60 分钟超时。
 - 截图步骤要求店铺浏览器处于可见视口，否则如实报 `CAPTURE_EMPTY` 失败。
 - 安装包未做代码签名（无证书），Windows 可能提示"未知发布者"；自动更新仅做 SHA-512 哈希校验、无签名校验（INTERNAL_BUILD 边界）。
-- 自动更新内容托管于 GitHub Releases（**v0.1.0 已发布**：安装包 + blockmap + `latest.yml`，`node publish-release.js` 幂等上传）；**仓库当前为 private，打包态匿名"检查更新"实测返回 404 并如实报错**——需将仓库公开、改用公开 feed 仓库或内部镜像（`SHOPPILOT_UPDATE_FEED`）后线上更新才生效。启动自动检查默认关闭，可在"↻ 更新"对话框开启。
+- 自动更新内容托管于 GitHub Releases（**v0.1.0 已发布**：安装包 + blockmap + `latest.yml`，`node publish-release.js` 幂等上传）；仓库已设为 **public**，打包态匿名在线检查实测通过（同版本如实返回"已是最新"）。启动自动检查默认关闭，可在"↻ 更新"对话框开启。
 
 ## 回滚
 
