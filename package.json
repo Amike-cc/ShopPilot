@@ -12,6 +12,7 @@
     "dist": "electron-vite build && electron-builder --win --x64",
     "dist:dir": "electron-vite build && electron-builder --win --x64 --dir",
     "release:manifest": "node release-manifest.js",
+    "release:publish": "node publish-release.js",
     "lint": "eslint .",
     "test": "vitest",
     "test:e2e": "playwright test"

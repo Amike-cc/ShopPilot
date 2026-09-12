@@ -59,7 +59,7 @@ const manifest = {
   releaseNotesFile: fs.existsSync(notesPath) ? 'RELEASE_NOTES.md' : null,
   rollback: '保留上一版本安装包：卸载当前版本 → 安装旧版；数据库 schema 仅升不降，回退前先备份 userData。',
   knownBoundaries: [
-    '未做代码签名，构建标记 INTERNAL_BUILD；自动更新经 GitHub Releases（Amike-cc/ShopPilot）分发，更新包仅做 SHA-512 哈希校验、无签名校验；仓库尚未发布 Release 时"检查更新"会如实报错',
+    '未做代码签名，构建标记 INTERNAL_BUILD；自动更新经 GitHub Releases（Amike-cc/ShopPilot，v0.1.0 已发布）分发，更新包仅做 SHA-512 哈希校验、无签名校验；仓库当前为 private，打包态匿名检查更新返回 404 并如实报错——线上更新需仓库公开、公开 feed 仓库或内部镜像（SHOPPILOT_UPDATE_FEED）三选一',
     '启动自动检查更新默认关闭（设置键 update.autoCheck），可在"↻ 更新"对话框开启并选择 stable/beta 通道',
     '备份包跨机恢复覆盖元数据/配置/标签索引；登录态需在目标机重新登录或经会话导出加密包导入（DPAPI 边界，§10.2）',
     '会话导出包含 Cookie 明文清单（容器级口令加密）；localStorage/IndexedDB 不在包内；包头明文含来源店铺名/平台/有效期',

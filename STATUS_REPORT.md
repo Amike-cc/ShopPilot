@@ -175,14 +175,15 @@
 - **双通道（§21 建议）**：设置键 `update.channel`（stable/beta），主进程检查时读取并映射 `autoUpdater.channel`（latest/beta）；`update.autoCheck`（默认关闭）开启后打包态启动 8s 延迟自动检查一次。
 - **审计与事件**：`update.check` / `update.download` / `update.install` 全部落审计（含失败原因 JSON）；渲染层经 `update:statusChanged` / `update:progress` 白名单事件实时更新进度条。锁定态下更新通道同受 `APP_LOCKED` 门禁。
 - **验收（`update-runner.js`，16 项全过）**：本地 HTTP feed 伪装 9.9.9 版本驱动 `release/win-unpacked` 真实安装包——初始状态/对话框与通道 UI/install 守卫/发现新版本/80MB 下载+SHA-512 校验/pending 缓存落盘/安装按钮出现/审计 check+download success/同版本 not-available/beta 通道生效/feed 500 如实报错+审计 failure/重启后 autoCheck 自动检查。不执行 `quitAndInstall`（会真装伪装版本），安装器行为由 M4 NSIS 阶段覆盖。
-- **边界（如实）**：无代码签名证书 → 仅哈希校验、无签名校验（INTERNAL_BUILD）；GitHub 仓库未发布 Release 时"检查更新"如实报错（需发布 `latest.yml`+安装包+blockmap 才有可更新内容）；开发态（非打包）不执行在线检查并如实提示。
+- **边界（如实）**：无代码签名证书 → 仅哈希校验、无签名校验（INTERNAL_BUILD）；开发态（非打包）不执行在线检查并如实提示。
+- **线上发布（2026-09-12）**：GitHub Release **v0.1.0 已发布**（`ShopPilot-Setup-0.1.0.exe` 85,660,479B + `.blockmap` + `latest.yml`，`node publish-release.js` 幂等上传，凭据复用本机 Git Credential Manager，不落盘）。打包态**无 feed 覆盖实测在线检查**：`feedSource=github` 回显正确，`update:check` 返回 `state=error`——**仓库为 private，匿名访问 `releases.atom` 被 GitHub 404 拒绝**（错误如实展示，不静默）。线上更新生效需三选一：① 仓库转 public；② 另建公开 feed 仓库存放产物（改 `publish.owner/repo`）；③ 内部镜像 `SHOPPILOT_UPDATE_FEED=<url>`（generic feed 已支持并经 update-runner 全链路验证）。
 
 ## 已知边界（如实声明）
 
 - **会话包内容边界**：包内只有 Cookie（明文清单，容器级口令加密）+ 环境指纹配置 + 店铺元信息；**localStorage/IndexedDB 不在包内**（异机导入后部分站点可能要求二次验证）。包头明文暴露来源店铺名/平台/有效期（供导入前确认来源），Cookie 与指纹在密文内。
 - **应用锁边界**：主密码用于应用锁与 KDF，**不重加密 Chromium profile**（§10.2/§633）；锁定隐藏视图 + 门禁业务 IPC，属"防顺手查看"级别，已解锁进程内存中的会话仍由操作系统用户隔离保护。
 - **代理**：规范红线——不可用时不自动切换、不静默降级，仅检测 + 如实展示（无自动故障转移能力）。
-- **发布**：无代码签名证书 → 构建标记 `INTERNAL_BUILD`；自动更新已实现（GitHub Releases + stable/beta 双通道，SHA-512 哈希校验），但仓库未发布 Release 前检查更新会如实报错，且无签名校验；崩溃报告上传通道未实现（默认关闭，符合 §22 默认关闭要求，仅本地落盘）。
+- **发布**：无代码签名证书 → 构建标记 `INTERNAL_BUILD`；自动更新已实现并上线（GitHub Release v0.1.0 已发布 + stable/beta 双通道，SHA-512 哈希校验，无签名校验）；**仓库当前为 private，匿名"检查更新"实测 404 如实报错**——线上更新需仓库公开/公开 feed 仓库/内部镜像三选一（见"自动更新"节）；崩溃报告上传通道未实现（默认关闭，符合 §22 默认关闭要求，仅本地落盘）。
 - 拖拽排序未接 UI（店铺顺序调整目前走 `store:reorder` 接口）。
 - 任务引擎边界：全局串行队列（并发=1）；确认门禁默认 60 分钟超时（期间队列停驻属预期语义）；截图需该店视口正在渲染；跨进程原地恢复不支持；步骤间无参数传递（后续步骤读前序结果需 M4 表达式能力）。
 - **渲染层重载后中栏回到欢迎页**：主进程侧店铺页面仍在（数据无损失），但工作台不会自动恢复"正在显示哪个店铺"，需在左栏重新点开；仅在开发态 HMR 或渲染进程崩溃恢复时可见。

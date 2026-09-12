@@ -76,7 +76,7 @@ pwsh -File run-acceptance.ps1   # 以上全部串行 + 打包 + 清单（一键�
 
 ## 已知边界（如实声明，详见 STATUS_REPORT.md）
 
-- 未做代码签名：`INTERNAL_BUILD`；自动更新仅 SHA-512 哈希校验，无签名校验；GitHub 仓库未发布 Release 时"检查更新"如实报错。
+- 未做代码签名：`INTERNAL_BUILD`；自动更新仅 SHA-512 哈希校验、无签名校验。Release v0.1.0 已发布于 GitHub Releases；**仓库为 private 时匿名"检查更新"如实报 404**（公开仓库、公开 feed 仓库或内部镜像 `SHOPPILOT_UPDATE_FEED` 三选一后生效）。
 - 会话导出包仅含 Cookie + 环境配置（不含 localStorage/IndexedDB）；跨机登录态需重登或经加密包导入（DPAPI 边界）。
 - 代理不可用不自动切换；任务引擎全局串行（并发=1）；跨进程原地恢复不支持。
 - 备份跨机恢复的登录态路径需在第二台真机人工复核；设计稿像素级人工核对待做。
