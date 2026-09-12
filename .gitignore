@@ -1,5 +1,9 @@
 node_modules
 .npm-cache/
+# 依赖锁：本项目用 pnpm（pnpm-workspace.yaml + pnpm-lock.yaml）。
+# package-lock.json 是 npm 时期遗留物，内容已过期（连 electron-updater 都没记），
+# 却会被 Dependabot 一并扫描，使依赖告警数量凭空翻倍并误导依赖审计，故不再入库。
+package-lock.json
 dist
 out
 *.log

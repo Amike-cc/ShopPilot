@@ -6,3 +6,17 @@ allowBuilds:
   electron: true
   esbuild: true
   vue-demi: true
+# 安全修复（pnpm ≥10.6 起 overrides 放在本文件，不再读 package.json 的 pnpm 字段）：
+# electron-updater 6.8.9 依赖 builder-util-runtime 9.7.0（修复 CVE-2026-54673 跨域重定向泄露
+# PRIVATE-TOKEN / Authorization）。但 electron-builder 24 在 pnpm 布局下会扁平化依赖树，
+# 把根目录那份来自 devDependencies 的 builder-util-runtime 9.2.4 复制进安装包（实测 asar 内
+# 只有一份 9.2.4），导致运行时加载到旧的漏洞版本。此处强制全树统一到 9.7.0。
+overrides:
+  builder-util-runtime: 9.7.0
+
+# electron-builder 24 打包时是**按 node_modules 文件系统扁平化收集**生产依赖的（实测：
+# 即使 pnpm-lock.yaml 已全树解析为 9.7.0，它仍从 node_modules 根目录那份实体目录抄走了 9.2.4）。
+# 本仓库 node_modules 是 npm 时代遗留的混合树（414 个实体目录 + 18 个 pnpm 链接），
+# 所以显式让 pnpm 把 builder-util-runtime 公开提升到根目录并保持与 overrides 一致。
+publicHoistPattern:
+  - builder-util-runtime
