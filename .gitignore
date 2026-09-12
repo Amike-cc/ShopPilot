@@ -10,6 +10,8 @@ out
 .DS_Store
 .vscode
 .idea
+# 本地 agent/IDE 状态（如规划模式的 plan-*.md），不属于项目源码
+.zcode/
 
 # Electron
 apps/desktop/dist

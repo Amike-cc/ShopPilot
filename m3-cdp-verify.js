@@ -234,6 +234,34 @@ async function main() {
   const uiCards = await cdp.evaluate(`return document.querySelectorAll('.task-card').length;`)
   check('UI 任务面板渲染（tab 存在 + 任务卡片）', tabOn && uiCards >= 1, 'cards=' + uiCards)
 
+  // 二级页签：任务列表 / 达人邀约（后者本版为占位，如实写明不可用）——切走再切回，任务列表必须完好
+  const subTabs = await cdp.evaluate(`
+    const inv = document.querySelector('[data-test="task-tab-invite"]');
+    const tl = document.querySelector('[data-test="task-tab-tasks"]');
+    if (!inv || !tl) return { error: 'NO_SUB_TABS' };
+    const before = document.querySelectorAll('.task-card').length;
+    inv.click();
+    await new Promise(r => setTimeout(r, 400));
+    const ph = document.querySelector('[data-test="invite-placeholder"]');
+    const out = {
+      before,
+      placeholder: !!ph,
+      placeholderText: ph ? ph.textContent.replace(/\\s+/g, ' ').trim().slice(0, 60) : null,
+      cardsWhileInvite: document.querySelectorAll('.task-card').length
+    };
+    tl.click();
+    await new Promise(r => setTimeout(r, 400));
+    out.after = document.querySelectorAll('.task-card').length;
+    out.newTaskBtnBack = !![...document.querySelectorAll('.right-panel button')].find(b => (b.textContent || '').includes('新建任务'));
+    return out;
+  `)
+  check('任务面板有「任务列表 / 达人邀约」二级页签，切走再切回后任务列表完好',
+    subTabs.placeholder === true && subTabs.after === subTabs.before && subTabs.newTaskBtnBack === true,
+    JSON.stringify(subTabs))
+  check('达人邀约页如实标注未开发（占位而非假功能）',
+    typeof subTabs.placeholderText === 'string' && /开发中/.test(subTabs.placeholderText),
+    JSON.stringify(subTabs.placeholderText))
+
   // 新建任务对话框布局：步骤行的超时/重试框曾被 .modal input{width:100%} 撑到 496px，
   // 整行溢出到 ~1100px（删除按钮与参数被挤出可视区）——这里固定量测，防回归。
   const dialogLayout = await cdp.evaluate(`

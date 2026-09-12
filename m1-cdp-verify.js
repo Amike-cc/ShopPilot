@@ -565,12 +565,12 @@ async function main() {
   const sHotkey = await sidebarRect()
   check('快捷键 Ctrl+Shift+E 收起左栏', sHotkey.sidebar === 44 && sHotkey.rail === true, JSON.stringify(sHotkey))
 
-  // 收起态下"新建/回收站/更新"仍可达（窄轨不要变成死胡同），随后恢复展开态收尾
+  // 收起态下"新建/回收站/设置"仍可达（窄轨不要变成死胡同），随后恢复展开态收尾
   const railBtns = await cdp.evaluate(`
-    return ['rail-new', 'rail-trash', 'rail-update', 'sidebar-expand']
+    return ['rail-new', 'rail-trash', 'rail-settings', 'sidebar-expand']
       .map(k => !!document.querySelector('[data-test="' + k + '"]'));
   `)
-  check('左栏窄轨保留 新建/回收站/更新/展开 入口', railBtns.every(Boolean), JSON.stringify(railBtns))
+  check('左栏窄轨保留 新建/回收站/设置/展开 入口', railBtns.every(Boolean), JSON.stringify(railBtns))
   await sleep(200)
   await cdp.evaluate(`
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'E', ctrlKey: true, shiftKey: true, bubbles: true }));
@@ -715,6 +715,127 @@ async function main() {
     homeTest.before === 'about:blank' &&
     String(homeTest.after || '').startsWith('http://127.0.0.1:' + PANEL_SITE_PORT),
     JSON.stringify(homeTest))
+
+  // ---------- 设置弹窗：配置（各平台首页地址）/ 关于软件（软件信息 + 更新） ----------
+  const settingsEntry = await cdp.evaluate(`
+    return {
+      foot: !!document.querySelector('[data-test="settings-open-btn"]'),
+      oldUpdateBtnGone: !document.querySelector('[data-test="update-open-btn"]')
+    };
+  `)
+  check('左栏底栏有「设置」入口，且原品牌行的「↻ 更新」按钮已移除',
+    settingsEntry.foot === true && settingsEntry.oldUpdateBtnGone === true, JSON.stringify(settingsEntry))
+
+  const settingsUi = await cdp.evaluate(`
+    document.querySelector('[data-test="settings-open-btn"]').click();
+    await new Promise(r => setTimeout(r, 700));
+    const rows = [...document.querySelectorAll('[data-test="platform-home-row"]')];
+    const inputs = rows.map(r => r.querySelector('input'));
+    const out = {
+      open: !!document.querySelector('[data-test="settings-dialog"]'),
+      configTabOn: !!document.querySelector('[data-test="settings-config"]'),
+      rows: rows.length,
+      names: rows.map(r => (r.querySelector('.plat-name') || r).textContent.trim()),
+      placeholders: inputs.map(i => i.placeholder),
+      valuesEmpty: inputs.every(i => i.value === '')
+    };
+    const modal = document.querySelector('[data-test="settings-dialog"] .modal');
+    out.overflowX = modal ? modal.scrollWidth > modal.clientWidth + 2 : null;
+    document.querySelector('[data-test="settings-tab-about"]').click();
+    await new Promise(r => setTimeout(r, 700));
+    const modal2 = document.querySelector('[data-test="settings-dialog"] .modal');
+    out.aboutOverflowX = modal2 ? modal2.scrollWidth > modal2.clientWidth + 2 : null;
+    out.about = {
+      pane: !!document.querySelector('[data-test="settings-about"]'),
+      version: (document.querySelector('[data-test="about-version"]') || {}).textContent ? document.querySelector('[data-test="about-version"]').textContent.trim() : null,
+      updateNode: !!document.querySelector('[data-test="update-dialog"]'),
+      channel: document.querySelector('[data-test="update-channel"]') ? document.querySelector('[data-test="update-channel"]').value : null,
+      autocheck: document.querySelector('[data-test="update-autocheck"]') ? document.querySelector('[data-test="update-autocheck"]').checked : null,
+      message: !!document.querySelector('[data-test="update-message"]')
+    };
+    document.querySelector('[data-test="settings-tab-config"]').click();
+    await new Promise(r => setTimeout(r, 300));
+    document.querySelector('[data-test="settings-dialog"] .btn-ghost').click();
+    await new Promise(r => setTimeout(r, 300));
+    out.closedByCancel = !document.querySelector('[data-test="settings-dialog"]');
+    return out;
+  `)
+  check('设置弹窗：配置页列出四个平台、输入框默认空（占位符=平台默认地址）',
+    settingsUi.open === true && settingsUi.configTabOn === true && settingsUi.rows === 4 &&
+    settingsUi.names.join(',') === '拼多多,微信小店,快手小店,抖店' &&
+    settingsUi.placeholders.indexOf('https://mms.pinduoduo.com') >= 0 && settingsUi.valuesEmpty === true,
+    JSON.stringify(settingsUi))
+  check('「关于软件」页含版本号与更新区块（选择器沿用原更新对话框）',
+    settingsUi.about && settingsUi.about.pane === true && /^v\d/.test(settingsUi.about.version || '') &&
+    settingsUi.about.updateNode === true && settingsUi.about.channel === 'stable' &&
+    settingsUi.about.autocheck === false && settingsUi.about.message === true,
+    JSON.stringify(settingsUi.about))
+  check('设置弹窗无横向溢出（配置页与关于软件页都算）、可取消关闭',
+    settingsUi.overflowX === false && settingsUi.aboutOverflowX === false && settingsUi.closedByCancel === true,
+    JSON.stringify({ config: settingsUi.overflowX, about: settingsUi.aboutOverflowX, closed: settingsUi.closedByCancel }))
+
+  // 配置「拼多多」首页并保存 → 写库；首页按钮改用它（配置值优先级最高，压过店铺自己的后台地址）
+  const overrideHome = await cdp.evaluate(`
+    const target = ${JSON.stringify(panelSiteUrl.replace(/\/$/, '') + '/from-settings')};
+    document.querySelector('[data-test="settings-open-btn"]').click();
+    await new Promise(r => setTimeout(r, 600));
+    const inp = document.querySelector('[data-test="home-url-拼多多"]');
+    if (!inp) return { error: '没有拼多多的地址输入框' };
+    inp.value = target;
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 150));
+    document.querySelector('[data-test="settings-save"]').click();
+    await new Promise(r => setTimeout(r, 900));
+    const saved = (await window.shopilot.settings.get('platform.homeUrls')).data?.value || {};
+    const btn = document.querySelector('[data-test="nav-home"]');
+    return { target, saved, closed: !document.querySelector('[data-test="settings-dialog"]'), btnTitle: btn ? btn.title : null };
+  `)
+  check('配置平台首页并保存：写入 app_settings.platform.homeUrls 且弹窗关闭',
+    overrideHome.saved && overrideHome.saved['拼多多'] === overrideHome.target && overrideHome.closed === true,
+    JSON.stringify(overrideHome))
+  check('配置值优先级最高：即便店铺自己填了后台地址，首页按钮也走配置值',
+    overrideHome.btnTitle === '店铺首页：' + overrideHome.target,
+    JSON.stringify({ title: overrideHome.btnTitle, target: overrideHome.target }))
+
+  // 刷新后仍生效（持久化 + 启动时重新加载）
+  await cdp.evaluate(`location.reload(); return true;`)
+  await sleep(3800)
+  const homeAfterReload = await cdp.evaluate(`
+    let card = null, tries = 0;
+    for (; tries < 4; tries++) {
+      if (document.querySelector('.viewport')) break;
+      card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('首页测试店'));
+      if (!card) break;
+      card.querySelector('.store-action').click();
+      await new Promise(r => setTimeout(r, 3200));
+    }
+    const saved = (await window.shopilot.settings.get('platform.homeUrls')).data?.value || {};
+    const btn = document.querySelector('[data-test="nav-home"]');
+    return { tries, saved, btnTitle: btn ? btn.title : null };
+  `)
+  check('刷新后配置仍生效（持久化并随启动重新加载）',
+    homeAfterReload.saved['拼多多'] === overrideHome.target &&
+    homeAfterReload.btnTitle === '店铺首页：' + overrideHome.target,
+    JSON.stringify(homeAfterReload))
+
+  // 恢复默认 → 清掉覆盖值，首页按钮回落到店铺自己的后台地址
+  const restoreHome = await cdp.evaluate(`
+    document.querySelector('[data-test="settings-open-btn"]').click();
+    await new Promise(r => setTimeout(r, 600));
+    const inp = document.querySelector('[data-test="home-url-拼多多"]');
+    inp.value = '';
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 150));
+    document.querySelector('[data-test="settings-save"]').click();
+    await new Promise(r => setTimeout(r, 900));
+    const saved = (await window.shopilot.settings.get('platform.homeUrls')).data?.value || {};
+    const btn = document.querySelector('[data-test="nav-home"]');
+    return { saved, btnTitle: btn ? btn.title : null, closed: !document.querySelector('[data-test="settings-dialog"]') };
+  `)
+  check('清空平台首页后覆盖值被移除，首页按钮回落到店铺自己的后台地址',
+    !restoreHome.saved['拼多多'] && restoreHome.closed === true && restoreHome.btnTitle === '店铺首页：' + panelSiteUrl,
+    JSON.stringify(restoreHome))
+
 
   // 清理本段测试数据
   if (homeTest.storeId) {

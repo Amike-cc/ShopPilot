@@ -77,11 +77,11 @@ async function attachApp(port, retries = 40) {
       await c.ready
       const ok = await c.ev(`
         for (let i = 0; i < 60; i++) {
-          if (window.shopilot && document.querySelector('[data-test="update-open-btn"]')) return true
+          if (window.shopilot && document.querySelector('[data-test="settings-open-btn"]')) return true
           await new Promise(r => setTimeout(r, 500))
         }
         return false`, 40000)
-      if (!ok) { c.close(); throw new Error('update-open-btn not ready') }
+      if (!ok) { c.close(); throw new Error('settings-open-btn not ready') }
       return c
     } catch (e) { lastErr = e; await sleep(1000) }
   }
@@ -168,10 +168,12 @@ async function main() {
     record('pending 缓存落盘且尺寸与 beta.yml 一致', pendOk, pendOk ? { file: path.basename(pendFile), size: fs.statSync(pendFile).size } : { exists: fs.existsSync(pendFile), expectSize })
 
     const uiBtn = await c.ev(`
-      document.querySelector('[data-test="update-open-btn"]').click()
-      await new Promise(r => setTimeout(r, 500))
+      document.querySelector('[data-test="settings-open-btn"]').click()
+      await new Promise(r => setTimeout(r, 400))
+      document.querySelector('[data-test="settings-tab-about"]').click()
+      await new Promise(r => setTimeout(r, 700))
       return !!document.querySelector('[data-test="update-install-btn"]')`)
-    record('打开对话框后出现"重启并安装"按钮（演练不点击，避免交互式向导）', uiBtn === true, { installBtn: uiBtn })
+    record('打开设置-关于软件后出现"重启并安装"按钮（演练不点击，避免交互式向导）', uiBtn === true, { installBtn: uiBtn })
 
     const a1 = await c.ev(`const r = await window.shopilot.audit.query({ filter: { action: 'update.check' } }); return r.ok ? r.data : []`)
     record('审计含 update.check success', Array.isArray(a1) && a1.some(a => a.result === 'success'), { rows: Array.isArray(a1) ? a1.length : -1 })

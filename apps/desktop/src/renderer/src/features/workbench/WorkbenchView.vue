@@ -1,6 +1,6 @@
 <template>
   <div class="workbench">
-    <!-- 左栏：店铺侧边栏 - §8.2 StoreSidebar（可收起为窄轨：新建/回收站/更新仍可达） -->
+    <!-- 左栏：店铺侧边栏 - §8.2 StoreSidebar（可收起为窄轨：新建/回收站/设置仍可达） -->
     <aside class="sidebar" :class="{ collapsed: leftSidebarCollapsed }" data-test="sidebar">
       <div class="sidebar-rail" v-if="leftSidebarCollapsed">
         <button class="rail-btn" data-test="sidebar-expand" title="展开左侧栏（Ctrl+Shift+E）" @click="expandSidebar()">›</button>
@@ -9,14 +9,13 @@
           🗑
           <span v-if="ws.trashStores.length" class="rail-badge" data-test="rail-trash-badge"></span>
         </button>
-        <button class="rail-btn" data-test="rail-update" title="检查更新" @click="openUpdateDialog">↻</button>
+        <button class="rail-btn" data-test="rail-settings" title="设置（含软件更新）" @click="openSettings()">⚙</button>
       </div>
 
       <template v-else>
       <div class="brand">
         <div class="brand-logo">商</div>
         <div class="brand-name">ShopPilot</div>
-        <button class="brand-update" data-test="update-open-btn" title="检查更新" @click="openUpdateDialog">↻ 更新</button>
         <button class="sidebar-collapse" data-test="sidebar-collapse" title="收起左侧栏（Ctrl+Shift+E）" @click="collapseSidebar()">‹</button>
       </div>
 
@@ -101,6 +100,7 @@
       <div class="sidebar-footer">
         <button class="foot-btn" @click="openTrash">🗑 回收站<span v-if="ws.trashStores.length" class="badge">{{ ws.trashStores.length }}</span></button>
         <button class="foot-btn" @click="onCapture" :disabled="!ws.activeTab" title="截图当前页">📸 截图</button>
+        <button class="foot-btn" data-test="settings-open-btn" @click="openSettings()" title="设置（含软件更新）">⚙ 设置</button>
       </div>
       </template>
     </aside>
@@ -364,8 +364,14 @@
         </div>
       </div>
 
-      <!-- 任务面板 - §4.4 / §6.6 -->
+      <!-- 任务面板 - §4.4 / §6.6（二级页签：任务列表 / 达人邀约） -->
       <div class="panel-body env-body" v-else>
+        <div class="sub-tabs">
+          <button :class="['stab', { on: taskTab === 'tasks' }]" data-test="task-tab-tasks" @click="taskTab = 'tasks'">任务列表</button>
+          <button :class="['stab', { on: taskTab === 'invite' }]" data-test="task-tab-invite" @click="taskTab = 'invite'">达人邀约</button>
+        </div>
+
+        <template v-if="taskTab === 'tasks'">
         <div class="env-sec tc-headsec">
           <div class="env-h" style="margin:0">任务列表</div>
           <button class="mini-btn primary" @click="openTaskDialog">+ 新建任务</button>
@@ -408,6 +414,28 @@
               </div>
             </div>
           </template>
+        </div>
+        </template>
+
+        <!-- 达人邀约：本版为占位（按用户要求"先占位、后期开发"），如实写明不可用与原因 -->
+        <div v-else class="sub-pane" data-test="invite-placeholder">
+          <div class="empty-hint" style="padding:16px 10px">
+            达人邀约功能 <b>开发中</b>，当前版本尚不可用
+          </div>
+          <div class="env-sec">
+            <div class="env-h">规划中的能力</div>
+            <div class="env-note">
+              ① 从店铺所在平台进入「达人邀约 / 联盟」页；<br>
+              ② 读取待邀约与已邀约列表（只读，可截图留档）；<br>
+              ③ 发送邀约对平台有副作用，必须经<b>人工确认门禁</b>逐步放行，不做无人值守批量发送。
+            </div>
+          </div>
+          <div class="env-sec">
+            <div class="env-h">为什么先占位</div>
+            <div class="env-note">
+              现有任务引擎只有 8 种预定义步骤（navigate / waitForPage / waitForSelector / readText / readTable / screenshot / fillDraft / waitForUserConfirmation），<b>没有任何点击或表单提交能力</b>，所以"真正点下邀请按钮"要先扩展步骤类型并在主进程白名单登记。另外各平台邀约页多为登录后可见，地址应由「设置 → 配置」确认后填入，而不是程序猜测。
+            </div>
+          </div>
         </div>
       </div>
       </template>
@@ -566,34 +594,85 @@
       </div>
     </div>
 
-    <!-- 软件更新 -->
-    <div v-if="updateOpen" class="modal-mask" data-test="update-dialog" @click.self="updateOpen = false">
-      <div class="modal update-modal">
-        <h2>软件更新</h2>
-        <div class="update-version">当前版本 v{{ updateStatus.currentVersion }}</div>
-        <div class="update-channel-row">
-          <label>更新通道</label>
-          <select data-test="update-channel" v-model="updateChannel" @change="saveUpdateChannel">
-            <option value="stable">稳定版 stable</option>
-            <option value="beta">测试版 beta</option>
-          </select>
-          <label class="update-autocheck" title="开启后每次启动延迟自动检查一次更新">
-            <input type="checkbox" data-test="update-autocheck" v-model="updateAutoCheck" @change="saveUpdateAutoCheck">启动时自动检查
-          </label>
+    <!-- 设置：配置（各平台首页地址）/ 关于软件（软件信息 + 更新） -->
+    <div v-if="settingsOpen" class="modal-mask" data-test="settings-dialog" @click.self="settingsOpen = false">
+      <div class="modal modal-wide settings-modal">
+        <h2>设置</h2>
+        <div class="sub-tabs">
+          <button :class="['stab', { on: settingsTab === 'config' }]" data-test="settings-tab-config" @click="openSettingsTab('config')">配置</button>
+          <button :class="['stab', { on: settingsTab === 'about' }]" data-test="settings-tab-about" @click="openSettingsTab('about')">关于软件</button>
         </div>
-        <div v-if="updateStatus.state === 'checking'" class="update-message" data-test="update-message">正在检查更新…</div>
-        <div v-else-if="updateStatus.state === 'available'" class="update-message" data-test="update-message">发现新版本 v{{ updateStatus.version }}</div>
-        <div v-else-if="updateStatus.state === 'downloading'" class="update-message" data-test="update-message">正在下载 v{{ updateStatus.version }}（{{ Math.round(updateStatus.percent || 0) }}%）</div>
-        <div v-else-if="updateStatus.state === 'downloaded'" class="update-message success-text" data-test="update-message">更新已下载并通过 SHA-512 校验，重启后安装</div>
-        <div v-else-if="updateStatus.state === 'not-available'" class="update-message" data-test="update-message">当前已是最新版本</div>
-        <div v-else-if="updateStatus.state === 'error'" class="update-message error-text" data-test="update-message">{{ updateStatus.error }}</div>
-        <div v-else class="update-message" data-test="update-message">检查 GitHub Releases 上的新版本；下载完成校验哈希后重启安装，安装失败保留旧版本。</div>
-        <div v-if="updateStatus.state === 'downloading'" class="update-progress"><span :style="{ width: (updateStatus.percent || 0) + '%' }"></span></div>
+
+        <!-- 配置：每个平台的首页地址 -->
+        <div v-if="settingsTab === 'config'" class="sub-pane" data-test="settings-config">
+          <div class="env-note">为每个平台设置「首页」地址。地址栏左上角的 ⌂ 首页按钮会跳到它；留空表示使用平台默认地址。</div>
+          <div v-for="p in quickPlatforms" :key="p.name" class="plat-row" data-test="platform-home-row">
+            <span class="plat-name"><PlatformIcon :name="p.name" :size="14" />{{ p.name }}</span>
+            <input
+              v-model="homeUrlDraft[p.name]"
+              :placeholder="p.adminUrl"
+              :data-test="'home-url-' + p.name"
+              spellcheck="false"
+            />
+            <button class="mini-btn" :disabled="!homeUrlDraft[p.name]" @click="resetPlatformHome(p.name)">恢复默认</button>
+          </div>
+          <div class="env-note">只做格式校验（须以 http:// 或 https:// 开头），不联网探测可达性——填错了首页就打不开，请自行确认。</div>
+        </div>
+
+        <!-- 关于软件：软件信息 + 更新 -->
+        <div v-else class="sub-pane" data-test="settings-about">
+          <div class="about-head">
+            <div class="brand-logo about-logo">商</div>
+            <div>
+              <div class="about-name">ShopPilot</div>
+              <div class="row-sub">电商店铺浏览器工作台</div>
+            </div>
+          </div>
+          <div class="about-row"><span>版本</span><b data-test="about-version">v{{ updateStatus.currentVersion || '—' }}</b></div>
+          <div class="about-row"><span>构建标签</span><b>INTERNAL_BUILD</b></div>
+          <div class="about-row">
+            <span>仓库</span>
+            <b class="about-repo">github.com/Amike-cc/ShopPilot
+              <button class="mini-btn" @click="copyRepoUrl">复制</button>
+            </b>
+          </div>
+          <div class="env-note">未做代码签名，按 §21.5 只能标记 INTERNAL_BUILD；自动更新仅做 SHA-512 哈希校验、无签名校验。</div>
+
+          <div class="env-h" style="margin-top:14px">软件更新</div>
+          <!-- 更新区块：内部 data-test 与原对话框保持一致，验收脚本只需改"怎么进来" -->
+          <div data-test="update-dialog">
+            <div class="update-channel-row">
+              <label>更新通道</label>
+              <select data-test="update-channel" v-model="updateChannel" @change="saveUpdateChannel">
+                <option value="stable">稳定版 stable</option>
+                <option value="beta">测试版 beta</option>
+              </select>
+            </div>
+            <label class="update-autocheck" title="开启后每次启动延迟自动检查一次更新">
+              <input type="checkbox" data-test="update-autocheck" v-model="updateAutoCheck" @change="saveUpdateAutoCheck">启动时自动检查
+            </label>
+            <div v-if="updateStatus.state === 'checking'" class="update-message" data-test="update-message">正在检查更新…</div>
+            <div v-else-if="updateStatus.state === 'available'" class="update-message" data-test="update-message">发现新版本 v{{ updateStatus.version }}</div>
+            <div v-else-if="updateStatus.state === 'downloading'" class="update-message" data-test="update-message">正在下载 v{{ updateStatus.version }}（{{ Math.round(updateStatus.percent || 0) }}%）</div>
+            <div v-else-if="updateStatus.state === 'downloaded'" class="update-message success-text" data-test="update-message">更新已下载并通过 SHA-512 校验，重启后安装</div>
+            <div v-else-if="updateStatus.state === 'not-available'" class="update-message" data-test="update-message">当前已是最新版本</div>
+            <div v-else-if="updateStatus.state === 'error'" class="update-message error-text" data-test="update-message">{{ updateStatus.error }}</div>
+            <div v-else class="update-message" data-test="update-message">检查 GitHub Releases 上的新版本；下载完成校验哈希后重启安装，安装失败保留旧版本。</div>
+            <div v-if="updateStatus.state === 'downloading'" class="update-progress"><span :style="{ width: (updateStatus.percent || 0) + '%' }"></span></div>
+            <div class="cf-btns" style="margin-top:8px">
+              <button v-if="['idle','not-available','error'].includes(updateStatus.state)" class="mini-btn primary" data-test="update-check-btn" @click="checkUpdate">检查更新</button>
+              <button v-if="updateStatus.state === 'available'" class="mini-btn primary" data-test="update-download-btn" @click="downloadUpdate">下载更新</button>
+              <button v-if="updateStatus.state === 'downloaded'" class="mini-btn primary" data-test="update-install-btn" @click="installUpdate">重启并安装</button>
+            </div>
+          </div>
+        </div>
+
         <div class="modal-actions">
-          <button class="btn-ghost" @click="updateOpen = false">关闭</button>
-          <button v-if="['idle','not-available','error'].includes(updateStatus.state)" class="btn-primary" data-test="update-check-btn" @click="checkUpdate">检查更新</button>
-          <button v-if="updateStatus.state === 'available'" class="btn-primary" data-test="update-download-btn" @click="downloadUpdate">下载更新</button>
-          <button v-if="updateStatus.state === 'downloaded'" class="btn-primary" data-test="update-install-btn" @click="installUpdate">重启并安装</button>
+          <template v-if="settingsTab === 'config'">
+            <button class="btn-ghost" @click="settingsOpen = false">取消</button>
+            <button class="btn-primary" data-test="settings-save" @click="saveSettingsConfig">保存</button>
+          </template>
+          <button v-else class="btn-ghost" @click="settingsOpen = false">关闭</button>
         </div>
       </div>
     </div>
@@ -654,15 +733,102 @@ interface PlatformDef { name: string; color: string; adminUrl: string; entryRout
 const quickPlatforms = (window.shopilot.platforms || []) as PlatformDef[]
 const DEFAULT_PLATFORM = quickPlatforms[0]?.name || '拼多多'
 
+// ── 设置：平台首页地址（持久化在 app_settings.platform.homeUrls） ──
 /**
- * 首页按钮的目标地址：优先该店铺自己的后台地址（新建时按所选平台自动填入，用户可改），
- * 为空时回退到平台目录里该平台的默认后台地址。这样"首页"对国内四家平台各自指向正确的后台首页，
- * 同时不会无视用户手改过的地址。
+ * 平台首页地址覆盖表：{ 平台名: 地址 }。空/缺省表示用平台目录里的默认地址。
+ * 用户可在「设置 → 配置」里为每个平台指定首页；按用户选择，**配置值优先级最高**，
+ * 即无论店铺自己填了什么后台地址，首页按钮都走这里配的地址。
+ */
+const platformHomeUrls = ref<Record<string, string>>({})
+/** 设置弹窗内"配置"页的草稿（保存前的编辑态，避免直接改到生效值） */
+const homeUrlDraft = reactive<Record<string, string>>({})
+const settingsOpen = ref(false)
+const settingsTab = ref<'config' | 'about'>('config')
+
+/** 某平台的实际首页地址：配置值 → 平台目录默认 */
+function platformHome(platformName: string): string {
+  const configured = (platformHomeUrls.value[platformName] || '').trim()
+  if (configured) return configured
+  return quickPlatforms.find(p => p.name === platformName)?.adminUrl || ''
+}
+
+async function loadPlatformHomeUrls() {
+  const res = await window.shopilot.settings.get('platform.homeUrls')
+  const v = res.ok ? res.data?.value : null
+  platformHomeUrls.value = v && typeof v === 'object' ? v : {}
+}
+
+function openSettings(tab: 'config' | 'about' = 'config') {
+  settingsOpen.value = true
+  settingsTab.value = tab
+  for (const p of quickPlatforms) homeUrlDraft[p.name] = platformHomeUrls.value[p.name] || ''
+  if (tab === 'about') void refreshUpdatePanel()
+}
+
+/** 打开"关于软件"页时刷新版本与更新状态（进入设置弹窗时调用） */
+async function refreshUpdatePanel() {
+  const [ch, ac, res] = await Promise.all([
+    window.shopilot.settings.get('update.channel'),
+    window.shopilot.settings.get('update.autoCheck'),
+    window.shopilot.update.status()
+  ])
+  if (ch.ok && (ch.data?.value === 'stable' || ch.data?.value === 'beta')) updateChannel.value = ch.data.value
+  if (ac.ok) updateAutoCheck.value = ac.data?.value === true
+  if (res.ok) applyUpdateStatus(res.data)
+}
+
+/**
+ * 保存平台首页地址。只接受 http(s) 开头或留空（留空 = 回退平台默认）；
+ * 这里不做可达性探测——与仓库"不猜测地址"的红线一致，配错了首页就打不开，由用户自己判断。
+ */
+async function savePlatformHomeUrls(): Promise<boolean> {
+  const next: Record<string, string> = {}
+  for (const p of quickPlatforms) {
+    const v = (homeUrlDraft[p.name] || '').trim()
+    if (!v) continue
+    if (!/^https?:\/\//i.test(v)) {
+      ws.toast(`「${p.name}」的首页地址需以 http:// 或 https:// 开头`, 'error')
+      return false
+    }
+    next[p.name] = v
+  }
+  const res = await window.shopilot.settings.set('platform.homeUrls', next)
+  if (!res.ok) { ws.toast('保存失败: ' + res.error.message, 'error'); return false }
+  platformHomeUrls.value = next
+  ws.toast('平台首页地址已保存', 'success')
+  return true
+}
+
+/** 单个平台恢复默认（清空覆盖值，仅改草稿，仍需点保存） */
+function resetPlatformHome(name: string) {
+  homeUrlDraft[name] = ''
+}
+
+/** 保存设置里的平台首页地址；成功则关闭弹窗 */
+async function saveSettingsConfig() {
+  if (await savePlatformHomeUrls()) settingsOpen.value = false
+}
+
+/** 复制仓库地址（不跳转外链：渲染层不做外部导航，避免被导航拦截策略挡住） */
+async function copyRepoUrl() {
+  try {
+    await navigator.clipboard.writeText('https://github.com/Amike-cc/ShopPilot')
+    ws.toast('已复制仓库地址', 'success')
+  } catch {
+    ws.toast('复制失败：github.com/Amike-cc/ShopPilot', 'info')
+  }
+}
+
+/**
+ * 首页按钮的目标地址，按优先级：**设置里配置的平台首页 → 店铺自己的后台地址 → 平台目录默认 → 空**。
+ * 配置值优先级最高是用户明确选择的（配了就以它为准）；未配置时仍尊重店铺自己填的后台地址，
+ * 否则"每个店铺可定制后台地址"对四家平台就形同失效了。
  */
 const homeUrl = computed(() => {
   const s = ws.stores.find(x => x.id === ws.displayedStoreId)
   if (!s) return ''
-  return (s.adminUrl || quickPlatforms.find(p => p.name === s.platform)?.adminUrl || '').trim()
+  const configured = (platformHomeUrls.value[s.platform] || '').trim()
+  return configured || (s.adminUrl || '').trim() || platformHome(s.platform)
 })
 
 /** 回到店铺首页；无活动标签页时 ws.navigate 会新建一个 */
@@ -673,8 +839,7 @@ function goHome() {
 const form = reactive({ name: '', platform: DEFAULT_PLATFORM, adminUrl: '', tags: '', notes: '' })
 
 type UpdateState = 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
-const updateOpen = ref(false)
-const updateStatus = reactive<{ state: UpdateState; currentVersion: string; version?: string; percent?: number; error?: string }>({ state: 'idle', currentVersion: '0.1.0' })
+const updateStatus = reactive<{ state: UpdateState; currentVersion: string; version?: string; percent?: number; error?: string }>({ state: 'idle', currentVersion: '' })
 /** 更新通道与启动自动检查（§21 双通道）：持久化在 app_settings，主进程检查时读取 */
 const updateChannel = ref<string>('stable')
 const updateAutoCheck = ref(false)
@@ -684,17 +849,11 @@ function applyUpdateStatus(payload: any) {
   if (!payload) return
   Object.assign(updateStatus, payload)
 }
-async function openUpdateDialog() {
-  updateOpen.value = true
-  const [ch, ac, res] = await Promise.all([
-    window.shopilot.settings.get('update.channel'),
-    window.shopilot.settings.get('update.autoCheck'),
-    window.shopilot.update.status()
-  ])
-  if (ch.ok && (ch.data?.value === 'stable' || ch.data?.value === 'beta')) updateChannel.value = ch.data.value
-  if (ac.ok) updateAutoCheck.value = ac.data?.value === true
-  if (res.ok) applyUpdateStatus(res.data)
+async function openSettingsTab(tab: 'config' | 'about') {
+  settingsTab.value = tab
+  if (tab === 'about') await refreshUpdatePanel()
 }
+
 async function saveUpdateChannel() {
   await window.shopilot.settings.set('update.channel', updateChannel.value === 'beta' ? 'beta' : 'stable')
   const res = await window.shopilot.update.status()
@@ -716,13 +875,16 @@ async function downloadUpdate() {
 }
 async function installUpdate() { await window.shopilot.update.install() }
 
-/** 选中平台后自动填入该平台默认后台地址（仅当地址为空或仍是别的平台的默认值时，不覆盖用户手填） */
+/**
+ * 选中平台后自动填入该平台的后台地址（仅当地址为空或仍是别的平台的默认值时，不覆盖用户手填）。
+ * 取「设置 → 配置」里配的平台首页地址，其次平台目录默认——保持与首页按钮同一套地址来源。
+ */
 function applyPlatformDefaults(name: string) {
-  const def = quickPlatforms.find(p => p.name === name)
-  if (!def) return
+  if (!quickPlatforms.some(p => p.name === name)) return
+  const target = platformHome(name)
   const cur = (form.adminUrl || '').trim()
-  const isOtherPlatformDefault = quickPlatforms.some(p => p.name !== name && p.adminUrl === cur)
-  if (!cur || isOtherPlatformDefault) form.adminUrl = def.adminUrl
+  const isOtherPlatformDefault = quickPlatforms.some(p => p.name !== name && platformHome(p.name) === cur)
+  if (!cur || isOtherPlatformDefault) form.adminUrl = target
 }
 function onPlatformChange() { applyPlatformDefaults(form.platform) }
 
@@ -1058,6 +1220,8 @@ const stepTemplates = [
 ]
 
 const taskDialogOpen = ref(false)
+/** 任务面板的二级页签：任务列表 / 达人邀约（后者本版为占位） */
+const taskTab = ref<'tasks' | 'invite'>('tasks')
 
 const tf = reactive({
   name: '', storeId: '', everyMin: null as number | null,
@@ -1441,7 +1605,7 @@ function refreshOverlayOcclusion() {
     // A newer watch event has already scheduled a fresher DOM state.
     if (revision !== overlayRevision) return
 
-    const modalOpen = !!(ws.createDialogOpen || taskDialogOpen.value || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || updateOpen.value)
+    const modalOpen = !!(ws.createDialogOpen || taskDialogOpen.value || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value)
     if (ctx.open && viewportEl.value) {
       const m = document.querySelector('[data-test="store-ctx"]')?.getBoundingClientRect()
       const v = viewportEl.value.getBoundingClientRect()
@@ -1457,7 +1621,7 @@ function refreshOverlayOcclusion() {
 }
 
 watch(
-  () => [ws.createDialogOpen, taskDialogOpen.value, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, updateOpen.value],
+  () => [ws.createDialogOpen, taskDialogOpen.value, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value],
   () => { refreshOverlayOcclusion() },
   { immediate: true }
 )
@@ -1512,6 +1676,8 @@ onMounted(async () => {
   lastObscured = true
   refreshOverlayOcclusion()
   if (ws.rightPanel === 'bookmarks') refreshEntryRoutes()
+  // 恢复「设置 → 配置」里的平台首页地址（影响首页按钮与新建店铺的默认后台地址）
+  await loadPlatformHomeUrls()
   // 恢复上次的右栏收起状态
   const saved = await window.shopilot.settings.get('ui.rightPanelCollapsed')
   if (saved?.ok && saved.data?.value === true) { rightPanelCollapsed.value = true }
@@ -1559,9 +1725,10 @@ onBeforeUnmount(() => {
   font-weight: 700; font-size: 16px;
 }
 .brand-name { font-weight: 600; font-size: 15px; }
-.brand-update { margin-left: auto; padding: 4px 7px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg-tertiary); color: var(--color-text-secondary); font-size: 11px; cursor: pointer; -webkit-app-region: no-drag; }
-.brand-update:hover { color: #fff; border-color: var(--color-primary); }
+/* 更新入口已搬进「设置 → 关于软件」，品牌行只留 logo/名称/收起按钮；
+   margin-left:auto 从原 .brand-update 挪到这里，收起按钮才会留在右端 */
 .sidebar-collapse {
+  margin-left: auto;
   width: 26px; height: 26px; flex: 0 0 auto; border: 0; background: none;
   border-radius: 6px; font-size: 15px; line-height: 1; color: var(--color-text-secondary);
   -webkit-app-region: no-drag;
@@ -1829,15 +1996,49 @@ onBeforeUnmount(() => {
 .log-line { font-size: 11px; color: var(--color-text-secondary); font-family: Consolas, monospace; line-height: 1.6; word-break: break-all; }
 .modal-wide { width: 560px; max-width: 92vw; }
 .update-modal { width: 390px; }
+/* 设置弹窗 + 任务面板二级页签共用的页签条。刻意不复用 .panel-tabs：
+   那是右栏一级页签，带 padding-right:140px 给原生窗口按钮避让，装在弹窗/面板里会右侧留白诡异 */
+.sub-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--color-border); margin-bottom: 10px; }
+.stab {
+  padding: 6px 12px; font-size: 13px; color: var(--color-text-secondary);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.stab:hover { color: var(--color-text-primary); }
+.stab.on { color: #fff; border-bottom-color: var(--color-primary); }
+.settings-modal { width: 520px; }
+.sub-pane { display: flex; flex-direction: column; }
+/* 平台首页地址配置行：名称 + 自适应输入 + 恢复默认。宽度按容器算，
+   不要写通用 .env-sec input（历史上那条规则把"添加代理"的输入挤到 18px 并让右栏横向溢出） */
+.plat-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.plat-name { display: flex; align-items: center; gap: 5px; width: 96px; flex: 0 0 96px; font-size: 12.5px; }
+.plat-row input {
+  flex: 1 1 auto; min-width: 0; box-sizing: border-box;
+  background: var(--color-bg-tertiary); color: var(--color-text-primary);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  padding: 6px 8px; font-size: 12px; outline: none;
+}
+.plat-row input:focus { border-color: var(--color-primary); }
+.about-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.about-logo { width: 40px; height: 40px; font-size: 20px; border-radius: 10px; }
+.about-name { font-size: 15px; font-weight: 600; }
+.about-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; padding: 4px 0; }
+.about-row > span { width: 62px; flex: 0 0 62px; color: var(--color-text-secondary); }
+.about-repo { display: flex; align-items: center; gap: 8px; font-weight: 400; color: var(--color-text-primary); }
 .update-version { color: var(--color-text-secondary); font-size: 12px; margin: -8px 0 14px; }
 .update-message { min-height: 34px; font-size: 13px; line-height: 1.6; }
 .success-text { color: var(--color-success); }
 .error-text { color: var(--color-error); }
 .update-progress { height: 6px; border-radius: 3px; background: var(--color-bg-tertiary); overflow: hidden; margin: 8px 0 14px; }
 .update-progress span { display: block; height: 100%; background: var(--color-primary); transition: width .2s ease; }
-.update-channel-row { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 12px; color: var(--color-text-secondary); }
+/* 通道一行、自动检查独立成行。原先两者挤在一个不换行的 flex 行里：
+   "启动时自动检查"被压缩后 nowrap 文本溢出 84px（旧更新对话框就有，只是没人量过）。
+   实测 flex-wrap:wrap 也压不住（auto margin + nowrap 的组合），改成两行结构最稳。 */
+.update-channel-row { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 12px; color: var(--color-text-secondary); }
 .update-channel-row select { width: 138px; }
-.update-autocheck { display: flex; align-items: center; gap: 4px; margin-left: auto; white-space: nowrap; cursor: pointer; }
+.update-autocheck { display: flex; align-items: center; gap: 4px; margin: 0 0 12px; font-size: 12px; color: var(--color-text-secondary); white-space: nowrap; cursor: pointer; }
+/* .modal input{width:100%} 会连复选框一起撑成整行宽：实测复选框 474px + 文字 84px = 558px，
+   把设置弹窗顶出横向滚动条（旧更新对话框同样中招，只是没人量过）。与 .store-pick input 同一处修正。 */
+.update-autocheck input[type="checkbox"] { width: auto; margin: 0; flex: 0 0 auto; }
 
 /* 店铺右键菜单 */
 .ctx-menu {

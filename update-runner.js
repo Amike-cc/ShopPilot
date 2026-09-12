@@ -97,14 +97,14 @@ async function attachApp(retries = 30) {
       if (!page) throw new Error('no page target yet')
       const c = new Cdp(page.webSocketDebuggerUrl)
       await c.ready
-      // 等 UI 真正就绪（更新入口按钮出现），而非仅 readyState
+      // 等 UI 真正就绪（设置入口出现），而非仅 readyState
       const ok = await c.ev(`
         for (let i = 0; i < 60; i++) {
-          if (window.shopilot && document.querySelector('[data-test="update-open-btn"]')) return true
+          if (window.shopilot && document.querySelector('[data-test="settings-open-btn"]')) return true
           await new Promise(r => setTimeout(r, 500))
         }
         return false`, 40000)
-      if (!ok) { c.close(); throw new Error('update-open-btn not ready') }
+      if (!ok) { c.close(); throw new Error('settings-open-btn not ready') }
       return c
     } catch (e) { lastErr = e; await sleep(1000) }
   }
@@ -172,13 +172,15 @@ async function main() {
     record('初始 update:status 可用', s0 && !s0.ipcError && s0.currentVersion === APP_VERSION, s0 && { state: s0.state, currentVersion: s0.currentVersion, feedSource: s0.feedSource, channel: s0.channel })
     record('feed 覆盖生效（env-override）', s0 && s0.feedSource === 'env-override', s0 && s0.feedSource)
 
-    // 2. UI 对话框可打开、通道默认 stable
+    // 2. 更新界面可打开（已搬进「设置 → 关于软件」）、通道默认 stable
     const ui = await c.ev(`
-      document.querySelector('[data-test="update-open-btn"]').click()
+      document.querySelector('[data-test="settings-open-btn"]').click()
       await new Promise(r => setTimeout(r, 400))
+      document.querySelector('[data-test="settings-tab-about"]').click()
+      await new Promise(r => setTimeout(r, 600))
       const dlg = document.querySelector('[data-test="update-dialog"]')
       return { open: !!dlg, channel: document.querySelector('[data-test="update-channel"]')?.value, autocheck: document.querySelector('[data-test="update-autocheck"]')?.checked, message: document.querySelector('[data-test="update-message"]')?.textContent?.trim() }`)
-    record('更新对话框可打开且含通道选择', ui.open && ui.channel === 'stable' && ui.autocheck === false, ui)
+    record('更新界面可打开且含通道选择', ui.open && ui.channel === 'stable' && ui.autocheck === false, ui)
 
     // 3. 未下载时点击"重启并安装"被守卫拒绝
     const guard = await c.ev(`const r = await window.shopilot.update.install(); return r.ok ? r.data : { ipcError: r.error }`)
