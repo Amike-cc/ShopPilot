@@ -656,6 +656,73 @@ async function main() {
     return true;
   `)
 
+  // ---------- 首页按钮（浏览器左上角）----------
+  // 自建一家"后台地址已知"的店铺来测：前面几个用例会重命名/复制配置，
+  // 此刻"显示的是哪家店、它的后台地址是什么"并不可控（实测踩到过）。
+  const homeTest = await cdp.evaluate(`
+    document.querySelector('.btn-new').click();
+    await new Promise(r => setTimeout(r, 700));
+    const nameEl = document.querySelector('[data-test="store-name"]');
+    const urlEl = document.querySelector('[data-test="admin-url"]');
+    if (!nameEl || !urlEl) return { error: '新建对话框未打开' };
+    nameEl.value = '首页测试店';
+    nameEl.dispatchEvent(new Event('input', { bubbles: true }));
+    urlEl.value = ${JSON.stringify(panelSiteUrl)};
+    urlEl.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 150));
+    const create = [...document.querySelectorAll('.modal-actions .btn-primary')].find(b => b.textContent.trim() === '创建');
+    if (!create || create.disabled) return { error: '创建按钮未启用' };
+    create.click();
+    const deadline = Date.now() + 8000;
+    let card = null;
+    while (Date.now() < deadline) {
+      card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('首页测试店'));
+      if (card) break;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    if (!card) return { error: '卡片未出现' };
+    card.querySelector('.store-action').click();   // 打开并显示该店铺
+    await new Promise(r => setTimeout(r, 3800));
+
+    const row = ((await window.shopilot.store.list()).data || []).find(s => s.name === '首页测试店');
+    if (!row) return { error: '库中未找到该店铺' };
+    const btn = document.querySelector('[data-test="nav-home"]');
+    if (!btn) return { error: '没有首页按钮' };
+    const disp = document.querySelector('.store-card.displayed');
+    const out = {
+      storeId: row.id, dbAdminUrl: row.adminUrl,
+      displayedName: disp ? (disp.querySelector('.store-name') || disp).textContent.trim() : null,
+      title: btn.title, disabled: btn.disabled,
+      isLeftmost: document.querySelector('.address-bar .nav-btn') === btn
+    };
+    // 先把该店活动标签页导到 about:blank，再点首页，确认导航回后台地址
+    // （用 activeTabId：tab.list 的 tabs[0] 是默认页，不是当前活动页）
+    const l0 = await window.shopilot.browser.tab.list(row.id);
+    const tid = l0.data?.activeTabId || (l0.data?.tabs || [])[0]?.id;
+    if (!tid) { out.error = 'NO_TAB'; return out; }
+    await window.shopilot.browser.navigate(row.id, tid, 'about:blank');
+    await new Promise(r => setTimeout(r, 900));
+    out.before = ((await window.shopilot.browser.tab.list(row.id)).data?.tabs || []).find(t => t.id === tid)?.url || '';
+    btn.click();
+    await new Promise(r => setTimeout(r, 2600));
+    out.after = ((await window.shopilot.browser.tab.list(row.id)).data?.tabs || []).find(t => t.id === tid)?.url || '';
+    return out;
+  `)
+  check('首页按钮位于地址栏最左、目标=该店铺后台地址，点击后导航过去',
+    homeTest.disabled === false && homeTest.isLeftmost === true &&
+    homeTest.displayedName === '首页测试店' &&
+    homeTest.title === '店铺首页：' + panelSiteUrl &&
+    homeTest.before === 'about:blank' &&
+    String(homeTest.after || '').startsWith('http://127.0.0.1:' + PANEL_SITE_PORT),
+    JSON.stringify(homeTest))
+
+  // 清理本段测试数据
+  if (homeTest.storeId) {
+    await cdp.evaluate(`return await window.shopilot.browser.close(${JSON.stringify(homeTest.storeId)});`)
+    await cdp.evaluate(`return await window.shopilot.store.deletePermanent(${JSON.stringify(homeTest.storeId)});`)
+    await cdp.evaluate(`return await window.shopilot.store.purge(${JSON.stringify(homeTest.storeId)});`)
+  }
+
   await cdp.evaluate(`return await window.shopilot.browser.close(${JSON.stringify(panelPrep.storeId)});`)
   await cdp.evaluate(`return await window.shopilot.store.deletePermanent(${JSON.stringify(panelPrep.storeId)});`)
   await cdp.evaluate(`return await window.shopilot.store.purge(${JSON.stringify(panelPrep.storeId)});`)
@@ -760,6 +827,14 @@ async function main() {
     uiRoutes2.displayedIsWx === true && uiRoutes2.count >= 3 && (uiRoutes2.titles || []).includes('订单管理') &&
     /微信小店/.test(uiRoutes2.head || '') && uiRoutes2.note === true,
     JSON.stringify(uiRoutes2))
+
+  // 首页按钮按平台适配：微信小店店铺的首页应指向该平台的后台地址（不点，避免依赖外网）
+  const homeTarget = await cdp.evaluate(`
+    const btn = document.querySelector('[data-test="nav-home"]');
+    return btn ? { disabled: btn.disabled, title: btn.title } : { err: 'NO_HOME_BTN' };
+  `)
+  check('首页按钮按平台适配：微信小店店铺指向 store.weixin.qq.com',
+    homeTarget.disabled === false && /store\.weixin\.qq\.com/.test(homeTarget.title || ''), JSON.stringify(homeTarget))
 
   // 清理：关闭浏览器并彻底删除两个测试店铺（保持 M1 可重复执行）
   await cdp.evaluate(`return await window.shopilot.browser.close(${JSON.stringify(wxId)});`)

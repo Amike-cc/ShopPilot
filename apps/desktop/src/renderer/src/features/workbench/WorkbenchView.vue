@@ -127,6 +127,14 @@
 
         <!-- 地址栏 -->
         <div class="address-bar">
+          <!-- 首页（左上角）：回到该店铺所在平台的后台首页，见 homeUrl -->
+          <button
+            class="nav-btn"
+            data-test="nav-home"
+            :disabled="!homeUrl"
+            :title="homeUrl ? '店铺首页：' + homeUrl : '未配置后台地址'"
+            @click="goHome"
+          >⌂</button>
           <button class="nav-btn" @click="ws.tabControl('back')" title="后退">‹</button>
           <button class="nav-btn" @click="ws.tabControl('forward')" title="前进">›</button>
           <button class="nav-btn" @click="ws.tabControl('reload')" title="刷新">⟳</button>
@@ -645,6 +653,22 @@ let resizeObserver: ResizeObserver | null = null
 interface PlatformDef { name: string; color: string; adminUrl: string; entryRoutes: Array<{ title: string; url: string }> }
 const quickPlatforms = (window.shopilot.platforms || []) as PlatformDef[]
 const DEFAULT_PLATFORM = quickPlatforms[0]?.name || '拼多多'
+
+/**
+ * 首页按钮的目标地址：优先该店铺自己的后台地址（新建时按所选平台自动填入，用户可改），
+ * 为空时回退到平台目录里该平台的默认后台地址。这样"首页"对国内四家平台各自指向正确的后台首页，
+ * 同时不会无视用户手改过的地址。
+ */
+const homeUrl = computed(() => {
+  const s = ws.stores.find(x => x.id === ws.displayedStoreId)
+  if (!s) return ''
+  return (s.adminUrl || quickPlatforms.find(p => p.name === s.platform)?.adminUrl || '').trim()
+})
+
+/** 回到店铺首页；无活动标签页时 ws.navigate 会新建一个 */
+function goHome() {
+  if (homeUrl.value) ws.navigate(homeUrl.value)
+}
 
 const form = reactive({ name: '', platform: DEFAULT_PLATFORM, adminUrl: '', tags: '', notes: '' })
 
@@ -1673,6 +1697,8 @@ onBeforeUnmount(() => {
 .address-bar { display: flex; align-items: center; gap: 4px; height: 44px; padding: 0 8px; background: var(--color-bg-primary); border-bottom: 1px solid var(--color-border); }
 .nav-btn { width: 30px; height: 30px; border-radius: 6px; color: var(--color-text-secondary); font-size: 16px; display: flex; align-items: center; justify-content: center; }
 .nav-btn:hover { background: var(--color-bg-tertiary); color: #fff; }
+.nav-btn:disabled { opacity: .35; cursor: default; }
+.nav-btn:disabled:hover { background: none; color: var(--color-text-secondary); }
 .url-box { flex: 1; height: 30px; background: var(--color-bg-tertiary); border: 1px solid var(--color-border); border-radius: 15px; padding: 0 14px; display: flex; align-items: center; }
 .url-box input { width: 100%; background: none; border: none; outline: none; color: var(--color-text-primary); font-size: 13px; }
 .viewport { flex: 1; position: relative; background: #fff; }
