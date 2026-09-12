@@ -67,5 +67,27 @@ export function credentialRefs(proxyId: string): { usernameRef: string; password
   return { usernameRef: keyFor(proxyId, 'u'), passwordRef: keyFor(proxyId, 'p') }
 }
 
+// ---------- 大模型 API Key（同样经 safeStorage 加密，仅主进程可解密，绝不回传渲染层） ----------
+
+/** 单一 AI Key 的存储键；已在 diagnostics 的 SETTING_DENY 中排除，不会进诊断包 */
+export const AI_KEY_SETTING = 'ai_cred.key'
+
+export function saveAiKey(key: string): void {
+  putSetting(AI_KEY_SETTING, key ? encrypt(key) : '')
+}
+
+export function getAiKey(): string | null {
+  return decrypt(getSetting(AI_KEY_SETTING))
+}
+
+export function hasAiKey(): boolean {
+  const k = getAiKey()
+  return !!(k && k.trim())
+}
+
+export function deleteAiKey(): void {
+  getDatabase().prepare('DELETE FROM app_settings WHERE key = ?').run(AI_KEY_SETTING)
+}
+
 // 保持 app 导入有效（文档性引用：safeStorage 需在 app.whenReady 后调用）
 void app

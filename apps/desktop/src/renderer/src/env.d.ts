@@ -135,6 +135,14 @@ declare global {
         download: () => Promise<IPCResult>
         install: () => Promise<IPCResult>
       }
+      /** 大模型（AI）配置 - §4.4：Key 只在主进程，configGet 仅返回 hasKey */
+      ai: {
+        configGet: () => Promise<IPCResult>
+        configSet: (input: { endpoint?: string; model?: string; timeoutMs?: number }) => Promise<IPCResult>
+        setKey: (key: string) => Promise<IPCResult>
+        clearKey: () => Promise<IPCResult>
+        test: () => Promise<IPCResult>
+      }
       on: (channel: string, callback: (...args: any[]) => void) => void
       off: (channel: string, callback: (...args: any[]) => void) => void
     }

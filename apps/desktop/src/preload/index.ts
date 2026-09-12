@@ -176,6 +176,17 @@ const api = {
     install: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_INSTALL)
   },
 
+  // 大模型（AI）配置 - §4.4：Key 只在主进程 safeStorage，IPC 仅回"是否已配置"
+  ai: {
+    configGet: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_CONFIG_GET),
+    configSet: (input: { endpoint?: string, model?: string, timeoutMs?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_CONFIG_SET, input),
+    setKey: (key: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_KEY_SET, { key }),
+    clearKey: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_KEY_CLEAR),
+    test: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_TEST),
+    listModels: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_MODELS_LIST)
+  },
+
   // 事件监听
   on: (channel: string, callback: (...args: any[]) => void): void => {
     // 只允许白名单事件

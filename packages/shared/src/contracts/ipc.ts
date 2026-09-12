@@ -130,7 +130,17 @@ export const IPC_CHANNELS = {
   UPDATE_STATUS: 'update:status',
   UPDATE_CHECK: 'update:check',
   UPDATE_DOWNLOAD: 'update:download',
-  UPDATE_INSTALL: 'update:install'
+  UPDATE_INSTALL: 'update:install',
+
+  // 大模型（AI）配置 - §4.4
+  // Key 经 safeStorage 加密只存主进程，IPC 一律只回"是否已配置"，绝不回传 Key 本身
+  AI_CONFIG_GET: 'ai:config:get',
+  AI_CONFIG_SET: 'ai:config:set',
+  AI_KEY_SET: 'ai:key:set',
+  AI_KEY_CLEAR: 'ai:key:clear',
+  AI_TEST: 'ai:test',
+  // 拉取可用模型（只读 GET /models，地址由 /chat/completions 推导）
+  AI_MODELS_LIST: 'ai:models:list'
 } as const
 
 /**

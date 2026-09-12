@@ -34,6 +34,13 @@ export interface InviteProfile {
   rowCheckboxSelector: string
   /** 邀约抽屉里的话术输入框 */
   scriptSelector: string
+  /**
+   * 邀约抽屉里「推荐商品」区域的读取源（用于 AI 生成话术时参考商品）。
+   * 留空 = 运行时从话术框向上找最近的「固定定位浮层」（抽屉本体）再读其可见文本；
+   * 找不到浮层就如实报 AI_EMPTY_SOURCE 失败——绝不把整页噪音当商品信息喂给模型。
+   * 之所以不写死选择器：实测抽屉用哈希类名、结构随版本变，写死等于猜测（平台适配层红线）。
+   */
+  goodsSourceSelector: string
   /** 需按文案点击的入口/按钮 */
   texts: {
     levelTrigger: string
@@ -60,6 +67,8 @@ const DOUDIAN: InviteProfile = {
   benefits: ['专属高佣', '免费申样', '视频素材支持', '优质视频投放'],
   rowCheckboxSelector: 'tbody input[type=checkbox]',
   scriptSelector: 'textarea',
+  // 留空 = 运行时用「话术框最近的固定定位浮层」当商品来源（见接口注释：不写死哈希类名）
+  goodsSourceSelector: '',
   texts: {
     levelTrigger: '达人等级',
     search: '搜索',

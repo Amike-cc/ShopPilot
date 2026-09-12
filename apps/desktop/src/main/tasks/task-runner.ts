@@ -20,6 +20,7 @@ import type {
 import * as TaskStore from './task-store'
 import { NON_RESUMABLE_TYPES } from './task-store'
 import { writeAudit } from '../services/audit-logger'
+import { generateInviteScript } from '../services/ai-client'
 import { isAppLocked } from '../services/security-manager'
 import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened } from '../browser/window-manager'
 import { getDatabase } from '../db/database'
@@ -319,6 +320,12 @@ function classifyError(e: any): string {
   if (msg.includes('NAVIGATION_BLOCKED')) return 'NAVIGATION_BLOCKED'
   if (msg.includes('TASK_CONFIRMATION_REQUIRED')) return 'TASK_CONFIRMATION_REQUIRED'
   if (msg.includes('TASK_TARGET_DISABLED')) return 'TASK_TARGET_DISABLED'
+  // AI 相关的固定错误码：如实透出，便于界面区分"没配 Key / 地址不合法 / 超时 / 请求失败"
+  if (msg.includes('AI_NOT_CONFIGURED')) return 'AI_NOT_CONFIGURED'
+  if (msg.includes('AI_BAD_ENDPOINT')) return 'AI_BAD_ENDPOINT'
+  if (msg.includes('AI_EMPTY_SOURCE') || msg.includes('AI_EMPTY_OUTPUT')) return 'AI_EMPTY_OUTPUT'
+  if (msg.includes('AI_TIMEOUT')) return 'AI_TIMEOUT'
+  if (msg.includes('AI_REQUEST_FAILED')) return 'AI_REQUEST_FAILED'
   return 'INTERNAL_ERROR'
 }
 
@@ -417,7 +424,11 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       await waitForSelector(wc, String(input.selector), run, step.timeoutMs)
       const text = await wc.executeJavaScript(`(() => {
         const el = document.querySelector(${JSON.stringify(String(input.selector))});
-        return el ? String(el.innerText || el.textContent || '').trim().slice(0, 100000) : null;
+        if (!el) return null;
+        // 表单控件读 value：textarea 的 textContent 是"默认值"，用 setInput/aiGenerate 写入后并不会变，
+        // 照 innerText||textContent 读会拿到空串（实测），留档就失真了
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') return String(el.value ?? '').trim().slice(0, 100000);
+        return String(el.innerText || el.textContent || '').trim().slice(0, 100000);
       })()`)
       if (text == null) throw new Error(`TASK_SELECTOR_CHANGED: 未找到元素 ${String(input.selector)}`)
       if (input.metric) {
@@ -631,6 +642,89 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       guardSignals(run)
       // §4.5：payload 只存摘要与长度，绝不存写入的完整文本
       return { kind: 'executed', payload: { action: 'setInput', selector: sel, length: String(input.text ?? '').length } }
+    }
+    case 'aiGenerate': {
+      // 从页面读"商品信息" → 主进程调大模型生成话术 → 写回页面输入框（受控组件方式）
+      // 未配置 AI / 接口不可用时如实失败（AI_NOT_CONFIGURED 等），绝不静默跳过或写假话术
+      const wc = wcOrThrow(run)
+      const srcSel = input.sourceSelector ? String(input.sourceSelector) : ''
+      const sel = String(input.selector)
+      if (srcSel) await waitForSelector(wc, srcSel, run, step.timeoutMs)
+      guardSignals(run)
+      // srcSel 留空 = 平台的"商品区"定位不到稳定选择器时的如实降级：从写入目标（话术框）向上
+      // 找最近的固定定位浮层（邀约抽屉），只读抽屉文本；找不到就报 AI_EMPTY_SOURCE，
+      // 绝不把整页噪音（达人列表、菜单）当商品信息喂给模型
+      const src = await withTimeout(() => wc.executeJavaScript(`(() => {
+        const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+        ${srcSel
+          ? `const el = document.querySelector(${JSON.stringify(srcSel)});
+             return el ? { how: 'selector', text: clean(el.innerText || el.textContent).slice(0, 2000) } : { how: 'none', text: '' };`
+          : `let node = document.querySelector(${JSON.stringify(sel)});
+             while (node && node !== document.body) {
+               const cs = getComputedStyle(node);
+               if (cs.position === 'fixed') {
+                 const r = node.getBoundingClientRect();
+                 if (r.width >= innerWidth * 0.2 && r.height >= innerHeight * 0.2) {
+                   const t = clean(node.innerText || node.textContent).slice(0, 2000);
+                   if (t) return { how: 'drawer', text: t };
+                 }
+               }
+               node = node.parentElement;
+             }
+             return { how: 'none', text: '' };`}
+      })()`), run, step.timeoutMs, 'aiGenerate 读取商品信息')
+      if (!src || src.how === 'none') {
+        throw new Error(srcSel
+          ? `TASK_SELECTOR_CHANGED: 未找到商品信息来源 ${srcSel}`
+          : 'AI_EMPTY_SOURCE: 未能在邀约抽屉里读到商品信息（话术框所在的浮层没找到）')
+      }
+      const goods = String(src.text || '')
+      if (!goods) throw new Error(`AI_EMPTY_SOURCE: 商品信息来源文本为空（${srcSel || 'drawer'}）`)
+      guardSignals(run)
+
+      let generated: { script: string; model: string; sourceChars: number }
+      try {
+        generated = await withTimeout(
+          () => generateInviteScript({
+            goodsText: goods,
+            maxLen: Number(input.maxLen),
+            instruction: input.instruction ? String(input.instruction) : undefined
+          }),
+          run, step.timeoutMs, 'aiGenerate 调用大模型'
+        )
+        writeAudit('ai.generate', 'success', { storeId: run.storeId, requestId: run.runId })
+      } catch (e: any) {
+        writeAudit('ai.generate', 'failure', { storeId: run.storeId, requestId: run.runId })
+        throw e
+      }
+      guardSignals(run)
+
+      const okWrote = await withTimeout(() => wc.executeJavaScript(`(() => {
+        const el = document.querySelector(${JSON.stringify(sel)});
+        if (!el) return false;
+        const text = ${JSON.stringify(generated.script)};
+        if (el.isContentEditable) { el.textContent = text; }
+        else {
+          const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(el, text); else el.value = text;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()`), run, step.timeoutMs, 'aiGenerate 写入')
+      if (!okWrote) throw new Error(`TASK_SELECTOR_CHANGED: 未找到写入目标 ${sel}`)
+      guardSignals(run)
+      // §4.5：payload 只存摘要（模型名/长度/来源字符数/前 40 字预览）；
+      // 完整话术由紧随其后的 readText 步骤落库，便于事后审计"到底发了什么"
+      return {
+        kind: 'executed',
+        payload: {
+          action: 'aiGenerate', model: generated.model, length: generated.script.length,
+          sourceChars: generated.sourceChars, sourceHow: src.how,
+          sourceSelector: srcSel || null, preview: generated.script.slice(0, 40)
+        }
+      }
     }
     default:
       throw new Error(`TASK_INVALID_STEP: 未知步骤类型 ${String(step.type)}`)

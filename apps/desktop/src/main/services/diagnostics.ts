@@ -100,7 +100,7 @@ export function zipList(buf: Buffer): Array<{ name: string; size: number }> {
 // ---------- 诊断包 ----------
 
 const SETTING_WHITELIST_PREFIX = ['ui.', 'proxy.', 'task.', 'security.idleMinutes', 'app.']
-const SETTING_DENY = ['security.master', 'proxy_cred.']
+const SETTING_DENY = ['security.master', 'proxy_cred.', 'ai_cred.']
 
 function jdata(obj: unknown): Buffer {
   return Buffer.from(JSON.stringify(obj, null, 2), 'utf8')

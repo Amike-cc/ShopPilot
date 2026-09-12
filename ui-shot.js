@@ -174,7 +174,7 @@ async function main() {
           for (const d of defs) await window.shopilot.store.create(d);
           return true;
         `)
-        await cdp.evaluate(`location.reload(); return true;`)
+        await cdp.evaluate(`setTimeout(() => location.reload(), 30); return true;`)
         await sleep(3500)
         console.log('已播种 3 家探针店铺（临时库）')
       }

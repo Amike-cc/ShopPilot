@@ -178,9 +178,13 @@ CDP attach 与脚本注入属于受控运行时行为：目标仅限本应用创
 - clickByText（按元素自身文本点击；第三方平台页面无稳定选择器时的兜底，取文本最短命中项）
 - clickAll（批量点击并**跳过禁用项**，上限 ≤40；用于"勾选可邀约达人"这类平台有限制的批量操作）
 - setInput（写输入框/文本域并按受控组件方式派发 `input`/`change` 事件）
+- aiGenerate（从 `sourceSelector` 读商品信息 → **主进程**调大模型生成话术 → 用同样的受控组件方式写入 `selector`；
+  `sourceSelector` 允许留空 = 运行时改用"写入目标最近的固定定位浮层"（邀约抽屉）当来源，找不到就报 `AI_EMPTY_OUTPUT` 失败，不拿整页文本充数；
+  payload 只存摘要——模型名/长度/来源字符数/来源路径/前 40 字预览，**完整话术由紧随其后的 `readText` 落库**）
 
-后四类对页面有副作用：一律进 `NON_RESUMABLE_TYPES`（不可"从失败恢复"重试，避免重复点击/重复提交），
-参数仍是 Zod `.strict()` 白名单（只有选择器与文本，无任何代码入口），实现为**固定注入脚本 + `JSON.stringify` 引用的已校验参数**。
+最后五类对页面有副作用：一律进 `NON_RESUMABLE_TYPES`（不可"从失败恢复"重试，避免重复点击/重复提交），
+参数仍是 Zod `.strict()` 白名单（只有选择器、文本与数值，无任何代码入口），实现为**固定注入脚本 + `JSON.stringify` 引用的已校验参数**。
+`readText` 读表单控件（input/textarea）时取的是当前 `value` 而非 `textContent`——否则 `setInput`/`aiGenerate` 写入后留档会拿到空串。
 承载"提交"语义的步骤（如点「确认发送」）必须在其前一步放置 `waitForUserConfirmation`：用户拒绝 → run 置 `cancelled` 且**后续步骤一律不执行**。
 每一步有超时、重试次数、目标 URL、输入摘要和结果。除上述"人工确认门禁"外，提交类动作不作为无人值守步骤提供。
 

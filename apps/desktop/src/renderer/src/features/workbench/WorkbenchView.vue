@@ -465,11 +465,31 @@
               <span class="row-sub">上限 {{ inviteProfile.maxBatch }} 位（平台限制）</span>
             </label>
 
+            <div class="inv-row inv-block">话术来源
+              <span class="inv-chips">
+                <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
+                  <input type="radio" value="manual" v-model="invite.scriptMode" data-test="invite-script-mode-manual" />手填
+                </label>
+                <label class="inv-chip" :class="{ on: invite.scriptMode === 'ai' }">
+                  <input type="radio" value="ai" v-model="invite.scriptMode" data-test="invite-script-mode-ai" />AI 生成
+                </label>
+              </span>
+            </div>
+
             <label class="inv-row inv-block">邀约话术
-              <textarea v-model="invite.script" :maxlength="inviteProfile.scriptMaxLen" rows="3" data-test="invite-script"
-                placeholder="您好，我们是……想邀请您合作带货：给专属高佣与免费寄样，提供现成素材，发货售后我们全包。"></textarea>
-              <span class="row-sub">{{ invite.script.length }}/{{ inviteProfile.scriptMaxLen }}</span>
+              <textarea v-model="invite.script" :readonly="invite.scriptMode === 'ai'" :maxlength="inviteProfile.scriptMaxLen" rows="3" data-test="invite-script"
+                :placeholder="invite.scriptMode === 'ai'
+                  ? '不用填：执行到邀约抽屉后，AI 读取平台推荐商品现场生成并写入这个框'
+                  : '您好，我们是……想邀请您合作带货：给专属高佣与免费寄样，提供现成素材，发货售后我们全包。'"></textarea>
+              <span class="row-sub" v-if="invite.scriptMode === 'manual'">{{ invite.script.length }}/{{ inviteProfile.scriptMaxLen }}</span>
+              <span class="row-sub" v-else>AI 生成 · 不超过 {{ inviteProfile.scriptMaxLen }} 字 · 发送前会停下让你核对</span>
             </label>
+            <div class="env-note" v-if="invite.scriptMode === 'ai' && !aiReady">
+              <b>AI 未配置</b>：请到「设置 → AI 配置」填写接口地址、模型名与 API Key（可先点「测试连接」验证）。
+            </div>
+            <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
+              AI 会在打开邀约抽屉后读取该抽屉里的商品信息生成话术；<b>生成的原文会落库留档</b>，且放行前会停下让你核对。
+            </div>
 
             <div class="inv-row inv-block">专属权益（可多选）
               <span class="inv-chips">
@@ -491,7 +511,7 @@
           <div class="env-sec">
             <div class="env-h">执行说明</div>
             <div class="env-note">
-              点「开始邀约」会创建一个受策展任务：进入达人广场 → 选类目与等级 → 搜索 → 勾选前 N 位可邀约达人 → 打开邀约抽屉 → 填话术 → 勾权益 → <b>停下等你确认</b> → 才会点「确认发送」。<b>拒绝即整单取消，绝不继续</b>。
+              点「开始邀约」会创建一个受策展任务：进入达人广场 → 选类目与等级 → 搜索 → 勾选前 N 位可邀约达人 → 打开邀约抽屉 → 填话术（手填或 AI 生成）→ 勾权益 → <b>停下等你确认</b> → 才会点「确认发送」。<b>拒绝即整单取消，绝不继续</b>。
             </div>
             <div class="env-note">
               联系方式（手机号/微信号）与专属推荐商品由平台在抽屉里要求填写：联系方式请在平台侧填好（<b>本应用不保存你的手机号/微信号</b>），商品用平台的"推荐商品"即可。发送不可撤回，并消耗店铺邀约额度。
@@ -656,12 +676,14 @@
       </div>
     </div>
 
-    <!-- 设置：配置（各平台首页地址）/ 关于软件（软件信息 + 更新） -->
+    <!-- 设置：配置（各平台首页地址）/ 达人广场 / AI 配置 / 关于软件（软件信息 + 更新） -->
     <div v-if="settingsOpen" class="modal-mask" data-test="settings-dialog" @click.self="settingsOpen = false">
       <div class="modal modal-wide settings-modal">
         <h2>设置</h2>
         <div class="sub-tabs">
           <button :class="['stab', { on: settingsTab === 'config' }]" data-test="settings-tab-config" @click="openSettingsTab('config')">配置</button>
+          <button :class="['stab', { on: settingsTab === 'square' }]" data-test="settings-tab-square" @click="openSettingsTab('square')">达人广场</button>
+          <button :class="['stab', { on: settingsTab === 'ai' }]" data-test="settings-tab-ai" @click="openSettingsTab('ai')">AI 配置</button>
           <button :class="['stab', { on: settingsTab === 'about' }]" data-test="settings-tab-about" @click="openSettingsTab('about')">关于软件</button>
         </div>
 
@@ -679,6 +701,61 @@
             <button class="mini-btn" :disabled="!homeUrlDraft[p.name]" @click="resetPlatformHome(p.name)">恢复默认</button>
           </div>
           <div class="env-note">只做格式校验（须以 http:// 或 https:// 开头），不联网探测可达性——填错了首页就打不开，请自行确认。</div>
+        </div>
+
+        <!-- 达人广场（独立页签）：按平台覆盖内置默认地址 -->
+        <div v-else-if="settingsTab === 'square'" class="sub-pane" data-test="settings-square">
+          <div class="env-note">达人邀约进入的页面地址。留空 = 用内置默认（已实测的抖店地址）；换成别的地址后，流程会按新地址的末段等待页面就绪。</div>
+          <div v-for="p in inviteProfiles" :key="p.platform" class="plat-row" data-test="square-url-row">
+            <span class="plat-name"><PlatformIcon :name="p.platform" :size="14" />{{ p.platform }}</span>
+            <input
+              v-model="squareUrlDraft[p.platform]"
+              :placeholder="p.pageUrl"
+              :data-test="'square-url-' + p.platform"
+              spellcheck="false"
+            />
+            <button class="mini-btn" :disabled="!squareUrlDraft[p.platform]" @click="resetSquareUrl(p.platform)">恢复默认</button>
+          </div>
+          <div class="env-note">当前已支持达人邀约的平台：<b>{{ INVITE_SUPPORTED_PLATFORMS.join('、') }}</b>（其余平台未实测，面板会明确拒绝而不是猜测）。</div>
+          <div class="env-note">只做格式校验，不联网探测可达性。</div>
+        </div>
+
+        <!-- AI 配置（独立页签）：Key 经系统加密存储，不回显 -->
+        <div v-else-if="settingsTab === 'ai'" class="sub-pane" data-test="settings-ai">
+          <div class="env-note">用于「达人邀约」里按平台推荐商品自动生成邀约话术。走 <b>OpenAI 兼容</b>的 /chat/completions 协议（DeepSeek、通义、Kimi、智谱、OpenAI 等均可）。</div>
+          <label class="plat-row">接口地址
+            <input v-model="aiDraft.endpoint" data-test="ai-endpoint" spellcheck="false" :placeholder="DEFAULT_AI_ENDPOINT" />
+          </label>
+          <label class="plat-row">模型名
+            <input v-model="aiDraft.model" data-test="ai-model" spellcheck="false" :placeholder="DEFAULT_AI_MODEL" />
+          </label>
+          <label class="plat-row">超时(ms)
+            <input v-model.number="aiDraft.timeoutMs" type="number" :min="AI_TIMEOUT_MIN_MS" :max="AI_TIMEOUT_MAX_MS" data-test="ai-timeout" class="inv-num" />
+          </label>
+          <label class="plat-row">API Key
+            <input v-model="aiKeyDraft" type="password" data-test="ai-key" autocomplete="new-password"
+              :placeholder="aiConfig.hasKey ? '已配置（留空则不改动）' : '粘贴你的 API Key'" />
+          </label>
+          <div class="cf-btns" style="margin-top:8px">
+            <button class="mini-btn" data-test="ai-models-btn" :disabled="aiModelsLoading" @click="fetchAiModels">{{ aiModelsLoading ? '获取中…' : '获取可用模型' }}</button>
+            <button class="mini-btn primary" data-test="ai-test" :disabled="aiTesting" @click="testAi">{{ aiTesting ? '测试中…' : '测试连接' }}</button>
+            <button class="mini-btn danger-btn" v-if="aiConfig.hasKey" data-test="ai-key-clear" @click="clearAiKey">清除 Key</button>
+          </div>
+          <div class="plat-row" v-if="aiModels.length">
+            <span class="plat-name" style="width:auto;flex:0 0 auto">可选模型</span>
+            <select data-test="ai-model-pick" :value="aiDraft.model" @change="pickAiModel(($event.target as HTMLSelectElement).value)">
+              <option value="">— 选择后填入上方模型名 —</option>
+              <option v-for="m in aiModels" :key="m" :value="m">{{ m }}</option>
+            </select>
+            <span class="row-sub">{{ aiModels.length }} 个</span>
+          </div>
+          <div class="env-note" :class="{ ok: aiMsgOk }" v-if="aiMsg" data-test="ai-msg">{{ aiMsg }}</div>
+          <div class="env-note">
+            Key 经系统 safeStorage（Windows DPAPI）加密存储、<b>只在主进程使用，界面永不回显</b>，也不会进诊断包。
+            AI 请求由主进程<b>直连出网，不走店铺代理</b>；接口地址须为 https://（仅本机 127.0.0.1/localhost 允许 http://）。
+            非敏感项（接口地址 / 模型名 / 超时）随「保存」写入，Key 点「保存」时一并写入（留空表示不改）。
+            「获取可用模型」是只读请求 <b>/models</b>（由接口地址推导），拉不到就如实报错、不编造候选。
+          </div>
         </div>
 
         <!-- 关于软件：软件信息 + 更新 -->
@@ -730,7 +807,7 @@
         </div>
 
         <div class="modal-actions">
-          <template v-if="settingsTab === 'config'">
+          <template v-if="settingsTab !== 'about'">
             <button class="btn-ghost" @click="settingsOpen = false">取消</button>
             <button class="btn-primary" data-test="settings-save" @click="saveSettingsConfig">保存</button>
           </template>
@@ -750,7 +827,11 @@
 import { reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import PlatformIcon from '../../components/PlatformIcon.vue'
-import { inviteProfileFor, INVITE_SUPPORTED_PLATFORMS } from '@shared/constants/invite'
+import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS } from '@shared/constants/invite'
+import {
+  DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
+  AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, INVITE_SQUARE_URLS_SETTING
+} from '@shared/constants/ai'
 
 const ws = useWorkspaceStore()
 const viewportEl = ref<HTMLElement | null>(null)
@@ -806,7 +887,7 @@ const platformHomeUrls = ref<Record<string, string>>({})
 /** 设置弹窗内"配置"页的草稿（保存前的编辑态，避免直接改到生效值） */
 const homeUrlDraft = reactive<Record<string, string>>({})
 const settingsOpen = ref(false)
-const settingsTab = ref<'config' | 'about'>('config')
+const settingsTab = ref<'config' | 'square' | 'ai' | 'about'>('config')
 
 /** 某平台的实际首页地址：配置值 → 平台目录默认 */
 function platformHome(platformName: string): string {
@@ -821,10 +902,137 @@ async function loadPlatformHomeUrls() {
   platformHomeUrls.value = v && typeof v === 'object' ? v : {}
 }
 
-function openSettings(tab: 'config' | 'about' = 'config') {
+// ---------- 设置：达人广场地址（按平台覆盖内置默认）----------
+const inviteProfiles = computed(() => Object.values(INVITE_PROFILES))
+const squareUrls = ref<Record<string, string>>({})
+const squareUrlDraft = reactive<Record<string, string>>({})
+
+/** 某平台实际使用的达人广场地址：配置值 → 平台档案内置默认 */
+function squareUrlFor(platformName: string): string {
+  const configured = (squareUrls.value[platformName] || '').trim()
+  if (configured) return configured
+  return INVITE_PROFILES[platformName]?.pageUrl || ''
+}
+
+async function loadSquareUrls() {
+  const res = await window.shopilot.settings.get(INVITE_SQUARE_URLS_SETTING)
+  const v = res.ok ? res.data?.value : null
+  squareUrls.value = v && typeof v === 'object' ? v : {}
+}
+
+/** 存覆盖表；只做格式校验（http/https），不联网探测——与平台首页地址同一红线 */
+async function saveSquareUrls(): Promise<boolean> {
+  const next: Record<string, string> = {}
+  for (const p of inviteProfiles.value) {
+    const v = (squareUrlDraft[p.platform] || '').trim()
+    if (!v) continue
+    if (!/^https?:\/\//i.test(v)) {
+      ws.toast(`「${p.platform}」的达人广场地址需以 http:// 或 https:// 开头`, 'error')
+      return false
+    }
+    next[p.platform] = v
+  }
+  const res = await window.shopilot.settings.set(INVITE_SQUARE_URLS_SETTING, next)
+  if (!res.ok) { ws.toast('保存达人广场地址失败: ' + res.error.message, 'error'); return false }
+  squareUrls.value = next
+  return true
+}
+
+function resetSquareUrl(platformName: string) { squareUrlDraft[platformName] = '' }
+
+// ---------- 设置：AI 配置（大模型）----------
+const aiConfig = ref<{ endpoint: string; model: string; timeoutMs: number; hasKey: boolean }>({
+  endpoint: DEFAULT_AI_ENDPOINT, model: DEFAULT_AI_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS, hasKey: false
+})
+const aiDraft = reactive({ endpoint: '', model: '', timeoutMs: DEFAULT_AI_TIMEOUT_MS })
+const aiKeyDraft = ref('')
+const aiMsg = ref('')
+const aiMsgOk = ref(false)
+const aiTesting = ref(false)
+/** 「获取可用模型」拉回来的模型名（只读接口；失败时保持为空并如实报错，不编造候选） */
+const aiModels = ref<string[]>([])
+const aiModelsLoading = ref(false)
+
+async function loadAiConfig() {
+  const res = await window.shopilot.ai.configGet()
+  if (!res.ok) return
+  aiConfig.value = res.data
+  aiDraft.endpoint = res.data.endpoint
+  aiDraft.model = res.data.model
+  aiDraft.timeoutMs = res.data.timeoutMs
+}
+
+/** 保存 AI 非敏感项；Key 留空表示不改动（避免误清空） */
+async function saveAiConfig(): Promise<boolean> {
+  const res = await window.shopilot.ai.configSet({
+    endpoint: aiDraft.endpoint.trim(),
+    model: aiDraft.model.trim(),
+    timeoutMs: Number(aiDraft.timeoutMs) || DEFAULT_AI_TIMEOUT_MS
+  })
+  if (!res.ok) { ws.toast('保存 AI 配置失败: ' + res.error.message, 'error'); return false }
+  aiConfig.value = res.data
+  const key = aiKeyDraft.value.trim()
+  if (key) {
+    const kr = await window.shopilot.ai.setKey(key)
+    if (!kr.ok) { ws.toast('保存 API Key 失败: ' + kr.error.message, 'error'); return false }
+    aiKeyDraft.value = ''
+    aiConfig.value = { ...aiConfig.value, hasKey: kr.data.hasKey }
+  }
+  return true
+}
+
+async function testAi() {
+  aiTesting.value = true
+  aiMsg.value = ''
+  // 先落盘再测，避免"测的是旧配置"
+  if (!(await saveAiConfig())) { aiTesting.value = false; return }
+  const res = await window.shopilot.ai.test()
+  aiTesting.value = false
+  if (res.ok) { aiMsgOk.value = true; aiMsg.value = `连接成功：模型 ${res.data.model}，${res.data.elapsedMs}ms` }
+  else { aiMsgOk.value = false; aiMsg.value = `连接失败（${res.error.code}）：${res.error.message}` }
+}
+
+/**
+ * 获取可用模型：只读 GET /models（地址由接口地址推导）。
+ * 先落盘再拉取，避免"拿旧地址去请求"；失败只如实报错，不保留/编造任何候选模型。
+ */
+async function fetchAiModels() {
+  aiModelsLoading.value = true
+  aiMsg.value = ''
+  if (!(await saveAiConfig())) { aiModelsLoading.value = false; return }
+  const res = await window.shopilot.ai.listModels()
+  aiModelsLoading.value = false
+  if (res.ok) {
+    aiModels.value = res.data.models
+    aiMsgOk.value = true
+    aiMsg.value = `已获取 ${res.data.models.length} 个可用模型（${res.data.elapsedMs}ms），在下拉里选一个即填入模型名`
+  } else {
+    aiModels.value = []
+    aiMsgOk.value = false
+    aiMsg.value = `获取模型失败（${res.error.code}）：${res.error.message}`
+  }
+}
+
+/** 选中下拉项 → 只把模型名填进输入框（仍需点「保存」才生效） */
+function pickAiModel(name: string) {
+  if (name) aiDraft.model = name
+}
+
+// 接口地址一改，之前拉到的模型列表就不再对应当前端点了：立即清空，避免误选
+watch(() => aiDraft.endpoint, () => { aiModels.value = [] })
+
+async function clearAiKey() {
+  const res = await window.shopilot.ai.clearKey()
+  if (res.ok) { aiConfig.value = { ...aiConfig.value, hasKey: false }; aiMsgOk.value = true; aiMsg.value = 'API Key 已清除' }
+  else { aiMsgOk.value = false; aiMsg.value = '清除失败: ' + res.error.message }
+}
+
+function openSettings(tab: 'config' | 'square' | 'ai' | 'about' = 'config') {
   settingsOpen.value = true
   settingsTab.value = tab
   for (const p of quickPlatforms) homeUrlDraft[p.name] = platformHomeUrls.value[p.name] || ''
+  for (const p of inviteProfiles.value) squareUrlDraft[p.platform] = squareUrls.value[p.platform] || ''
+  void loadAiConfig()
   if (tab === 'about') void refreshUpdatePanel()
 }
 
@@ -867,9 +1075,22 @@ function resetPlatformHome(name: string) {
   homeUrlDraft[name] = ''
 }
 
-/** 保存设置里的平台首页地址；成功则关闭弹窗 */
+/** 保存当前页签自己的配置；校验/写入失败就留在弹窗里，成功才关闭 */
 async function saveSettingsConfig() {
-  if (await savePlatformHomeUrls()) settingsOpen.value = false
+  const tab = settingsTab.value
+  if (tab === 'config') {
+    if (!(await savePlatformHomeUrls())) return
+  } else if (tab === 'square') {
+    if (!(await saveSquareUrls())) return
+    ws.toast('达人广场地址已保存', 'success')
+  } else if (tab === 'ai') {
+    if (!(await saveAiConfig())) return
+    ws.toast('AI 配置已保存', 'success')
+  } else {
+    settingsOpen.value = false
+    return
+  }
+  settingsOpen.value = false
 }
 
 /** 复制仓库地址（不跳转外链：渲染层不做外部导航，避免被导航拦截策略挡住） */
@@ -912,7 +1133,7 @@ function applyUpdateStatus(payload: any) {
   if (!payload) return
   Object.assign(updateStatus, payload)
 }
-async function openSettingsTab(tab: 'config' | 'about') {
+async function openSettingsTab(tab: 'config' | 'square' | 'ai' | 'about') {
   settingsTab.value = tab
   if (tab === 'about') await refreshUpdatePanel()
 }
@@ -1296,7 +1517,9 @@ const invite = reactive({
   levels: [] as string[],
   count: 5,
   script: '',
-  benefits: [] as string[]
+  benefits: [] as string[],
+  /** 话术来源：手填 / AI 按平台推荐商品生成（AI 模式下话术框只读，由任务运行时写入） */
+  scriptMode: 'manual' as 'manual' | 'ai'
 })
 // 店铺/平台变化时把可选项重置为该平台档案的默认值（脚本保留，避免用户输入被清掉）
 watch(inviteProfile, (p) => {
@@ -1306,30 +1529,48 @@ watch(inviteProfile, (p) => {
   if (p) invite.count = Math.max(1, Math.min(invite.count || 5, p.maxBatch))
 }, { immediate: true })
 
+/** AI 是否可用（接口地址/模型名有值 + 主进程已存 Key）——AI 模式下用它当"开始邀约"的前置条件 */
+const aiReady = computed(() => !!aiConfig.value.endpoint && !!aiConfig.value.model && aiConfig.value.hasKey)
+
 const inviteReady = computed(() => {
   const p = inviteProfile.value
   return !!p && !!ws.displayedStoreId &&
     invite.levels.length > 0 &&
     invite.count >= 1 && invite.count <= p.maxBatch &&
-    invite.script.trim().length > 0
+    (invite.scriptMode === 'ai' ? aiReady.value : invite.script.trim().length > 0)
 })
 
+/** 从达人广场地址取末段路径作为 waitForPage 的就绪判据（换成自定义地址也要能用，不能写死 daren-square） */
+function urlPathHint(url: string): string {
+  try {
+    const u = new URL(url)
+    const seg = u.pathname.split('/').filter(Boolean)
+    return seg[seg.length - 1] || u.hostname
+  } catch {
+    return url
+  }
+}
+
 /** 打开达人广场：带上登录态让用户确认页面 / 填写平台侧联系方式 */
-function openInvitePage() { if (inviteProfile.value) ws.navigate(inviteProfile.value.pageUrl) }
+function openInvitePage() {
+  const p = inviteProfile.value
+  if (p) ws.navigate(squareUrlFor(p.platform))
+}
 
 /**
  * 由配置生成步骤序列。要点：
  * - 平台无稳定 data-test，筛选与提交靠文案点击（clickByText）；
  * - 行复选框用 tbody 限定，避免点到表头的"全选"；
  * - clickAll 会跳过平台禁用（已邀约过）的行，上限取用户设定值（≤平台上限）；
+ * - 话术两种来源：手填 → setInput；AI → aiGenerate（读抽屉商品区）+ readText 留档；
  * - 「确认发送」前必须放 waitForUserConfirmation：拒绝则整单取消，绝不继续。
  */
 function buildInviteSteps() {
   const p = inviteProfile.value
   if (!p) return []
   const steps: Array<{ type: string; input: Record<string, unknown>; timeoutMs?: number }> = [
-    { type: 'navigate', input: { url: p.pageUrl }, timeoutMs: 45000 },
-    { type: 'waitForPage', input: { urlIncludes: 'daren-square' }, timeoutMs: 45000 }
+    { type: 'navigate', input: { url: squareUrlFor(p.platform) }, timeoutMs: 45000 },
+    { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrlFor(p.platform)) }, timeoutMs: 45000 }
   ]
   if (invite.category) steps.push({ type: 'clickByText', input: { text: invite.category } })
   steps.push({ type: 'clickByText', input: { text: p.texts.levelTrigger } })
@@ -1339,12 +1580,29 @@ function buildInviteSteps() {
   steps.push({ type: 'clickAll', input: { selector: p.rowCheckboxSelector, max: invite.count }, timeoutMs: 120000 })
   steps.push({ type: 'clickByText', input: { text: p.texts.batchInvite } })
   steps.push({ type: 'waitForSelector', input: { selector: p.scriptSelector }, timeoutMs: 20000 })
-  steps.push({ type: 'setInput', input: { selector: p.scriptSelector, text: invite.script.trim() } })
+  if (invite.scriptMode === 'ai') {
+    steps.push({
+      type: 'aiGenerate',
+      input: {
+        selector: p.scriptSelector,
+        sourceSelector: p.goodsSourceSelector || '',
+        maxLen: p.scriptMaxLen
+      },
+      timeoutMs: 90000
+    })
+    // aiGenerate 的 payload 只有摘要（模型/长度/预览），完整话术靠 readText 落库——事后能查出"到底发了什么"
+    steps.push({ type: 'readText', input: { selector: p.scriptSelector, metric: 'invite.script' }, timeoutMs: 15000 })
+  } else {
+    steps.push({ type: 'setInput', input: { selector: p.scriptSelector, text: invite.script.trim() } })
+  }
   for (const b of invite.benefits) steps.push({ type: 'clickByText', input: { text: b } })
   steps.push({
     type: 'waitForUserConfirmation',
     input: {
-      message: `【达人邀约·${p.platform}】类目 ${invite.category || '全部'}｜等级 ${invite.levels.join('/')}｜最多 ${invite.count} 位｜权益 ${invite.benefits.join('、') || '无'}｜话术：${invite.script.trim()}`
+      message: `【达人邀约·${p.platform}】类目 ${invite.category || '全部'}｜等级 ${invite.levels.join('/')}｜最多 ${invite.count} 位｜权益 ${invite.benefits.join('、') || '无'}｜话术：` +
+        (invite.scriptMode === 'ai'
+          ? '由 AI 按平台推荐商品生成，请在页面「邀约话术」框里核对后再放行'
+          : invite.script.trim())
     },
     timeoutMs: 1800000
   })
@@ -1823,6 +2081,10 @@ onMounted(async () => {
   if (ws.rightPanel === 'bookmarks') refreshEntryRoutes()
   // 恢复「设置 → 配置」里的平台首页地址（影响首页按钮与新建店铺的默认后台地址）
   await loadPlatformHomeUrls()
+  // 达人广场地址覆盖表（邀约面板与设置都用它）
+  await loadSquareUrls()
+  // AI 配置（只回 hasKey，Key 本身永不回渲染层）：邀约面板的"AI 生成"要据此判断能不能开始
+  await loadAiConfig()
   // 恢复上次的右栏收起状态
   const saved = await window.shopilot.settings.get('ui.rightPanelCollapsed')
   if (saved?.ok && saved.data?.value === true) { rightPanelCollapsed.value = true }
@@ -2187,6 +2449,10 @@ onBeforeUnmount(() => {
   padding: 6px 8px; font-size: 12px; outline: none;
 }
 .plat-row input:focus { border-color: var(--color-primary); }
+/* AI 页签的超时是数字框，不该像地址那样占满整行（候选 .inv-num 只作用在邀约面板里） */
+[data-test="settings-ai"] .inv-num { flex: 0 0 96px; width: 96px; }
+/* 模型下拉与输入框同一行：允许收缩，否则 .modal select{width:100%} 会把行撑出横向溢出 */
+[data-test="settings-ai"] .plat-row select { flex: 1 1 auto; min-width: 0; }
 .about-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .about-logo { width: 40px; height: 40px; font-size: 20px; border-radius: 10px; }
 .about-name { font-size: 15px; font-weight: 600; }

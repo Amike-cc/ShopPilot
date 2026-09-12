@@ -8,11 +8,30 @@ const http = require('http')
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
+const { execSync } = require('child_process')
 
 const CDP_PORT = process.env.SHOPILOT_CDP_PORT || '9225'
 const CDP_BASE = `http://127.0.0.1:${CDP_PORT}`
+const APP_PID = process.env.SHOPILOT_APP_PID
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+/**
+ * 把被测窗口拉回前台后再做截图类断言。
+ * 被其他窗口遮挡时 Chromium 不会继续合成，WebContentsView.capturePage 一直返回空图
+ * （报 CAPTURE_EMPTY）。只影响本验收脚本，产品行为不变。
+ */
+function refocusApp() {
+  if (process.platform !== 'win32' || !APP_PID) return
+  try {
+    execSync(
+      `powershell -NoProfile -Command "$w = New-Object -ComObject WScript.Shell; ` +
+      `for ($i = 0; $i -lt 20; $i++) { if ($w.AppActivate(${APP_PID})) { break }; Start-Sleep -Milliseconds 300 }"`,
+      { stdio: 'ignore', timeout: 20000 }
+    )
+  } catch { /* 激活失败就照常继续：会在断言里如实暴露 */ }
+}
+
 function finishEarly(results) {
   const passed = results.filter(r => r.ok).length
   console.log(`\n通过 ${passed}/${results.length}（主线任务无法启动，提前终止）`)
@@ -45,11 +64,16 @@ class CDPSession {
       this.ws.send(JSON.stringify({ id, method, params }))
     })
   }
-  async evaluate(fnBody) {
+  async evaluate(fnBody, timeoutMs = 45000) {
     await this.ready
-    const r = await this.send('Runtime.evaluate', {
-      expression: `(async () => { ${fnBody} })()`, awaitPromise: true, returnByValue: true
-    })
+    // 给每次求值加超时：页面若被弹窗/导航卡住，Promise 会永不 settle，验收脚本会静默挂死
+    // （实测踩过：日志停在某一行不动，只能靠人工判断）。超时后如实抛错，定位到具体那一步。
+    const r = await Promise.race([
+      this.send('Runtime.evaluate', {
+        expression: `(async () => { ${fnBody} })()`, awaitPromise: true, returnByValue: true
+      }),
+      new Promise((_res, rej) => setTimeout(() => rej(new Error(`页面求值超时（${timeoutMs}ms）：${String(fnBody).replace(/\s+/g, ' ').trim().slice(0, 120)}`)), timeoutMs))
+    ])
     if (r.exceptionDetails) throw new Error('页面异常: ' + JSON.stringify(r.exceptionDetails.exception?.description || r.exceptionDetails.text))
     return r.result.value
   }
@@ -77,16 +101,26 @@ function startSite() {
   // - .pick 共 5 个：A/B/C 可用、D 用 disabled 属性禁用、E 用"祖先带 disabled 类"禁用
   //   → 用于验证 clickAll 跳过禁用项而不是硬点
   // - #sent-count 只在点了 #confirm-send 后 +1 → 用于验证门禁拒绝时提交步骤确实没执行
+  // - #drawer 用 position:fixed（真实抽屉的形态）→ 用于验证 aiGenerate 在 sourceSelector 留空时
+  //   能沿话术框向上找到"固定定位浮层"读商品信息；抽屉未打开（display:none，尺寸为 0）时如实失败
   const INVITE = `<!doctype html><html><head><title>邀约页-M3</title></head><body>
     <h1 id="invite-title">达人邀约</h1>
     <button id="open-drawer">批量邀约带货</button>
-    <div id="drawer" style="display:none">
+    <div id="drawer" style="display:none;position:fixed;top:0;right:0;width:52%;height:100%;background:#fff;overflow:auto">
+      <div id="drawer-goods">
+        <div>植绒小灯笼串挂饰 新年春节喜庆装饰 到手价 ¥5.8 全部达人佣金 25%</div>
+        <div>新款千元通用红包袋 春节创意福利 到手价 ¥4.99 全部达人佣金 25%</div>
+      </div>
       <textarea id="script-box"></textarea>
       <div id="echo">空</div>
       <button id="confirm-send">确认发送</button>
     </div>
     <div id="picked-count">0</div>
     <div id="sent-count">0</div>
+    <div id="goods">
+      <div>植绒小灯笼串挂饰 新年春节喜庆装饰 到手价 ¥5.8 全部达人佣金 25%</div>
+      <div>新款千元通用红包袋 春节创意福利 到手价 ¥4.99 全部达人佣金 25%</div>
+    </div>
     <div class="row"><input type="checkbox" class="pick"><span>达人A</span></div>
     <div class="row"><input type="checkbox" class="pick"><span>达人B</span></div>
     <div class="row"><input type="checkbox" class="pick"><span>达人C</span></div>
@@ -111,10 +145,26 @@ function startSite() {
       });
     </script>
     </body></html>`
+  // AI 生成步骤用的假端点：OpenAI 兼容 /chat/completions，返回固定话术（不发真实网络请求）
+  const AI_REPLY = JSON.stringify({
+    id: 'chatcmpl-m3fake', object: 'chat.completion', model: 'm3-fake-model',
+    choices: [{ index: 0, message: { role: 'assistant', content: '您好，我们是工厂店，主营个护家清，客单 20-50 元、复购稳定，想邀请您合作带货，可给专属高佣与免费寄样。' }, finish_reason: 'stop' }]
+  })
+  // 「获取可用模型」的假端点：OpenAI 兼容 GET /models
+  const AI_MODELS = JSON.stringify({
+    object: 'list',
+    data: [
+      { id: 'm3-fake-model', object: 'model' },
+      { id: 'm3-fake-lite', object: 'model' },
+      { id: 'm3-fake-pro', object: 'model' }
+    ]
+  })
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     if (req.url.startsWith('/orders')) res.end(ORDERS)
     else if (req.url.startsWith('/blank')) res.end(BLANK)
+    else if (req.url.startsWith('/ai/chat/completions')) res.end(AI_REPLY)
+    else if (req.url.startsWith('/ai/models')) res.end(AI_MODELS)
     else if (req.url.startsWith('/invite')) res.end(INVITE)
     else res.end('<html><body>404</body></html>')
   })
@@ -154,6 +204,12 @@ async function main() {
     browserOpen: (sid) => call(`window.shopilot.browser.open(${JSON.stringify(sid)})`),
     sessionStatus: (sid) => call(`window.shopilot.session.status(${JSON.stringify(sid)})`),
     auditQuery: (limit) => call(`window.shopilot.audit.query({ limit: ${limit || 300} })`),
+    aiConfigGet: () => call('window.shopilot.ai.configGet()'),
+    aiConfigSet: (input) => call(`window.shopilot.ai.configSet(${JSON.stringify(input)})`),
+    aiKeySet: (key) => call(`window.shopilot.ai.setKey(${JSON.stringify(key)})`),
+    aiKeyClear: () => call('window.shopilot.ai.clearKey()'),
+    aiTest: () => call('window.shopilot.ai.test()'),
+    aiListModels: () => call('window.shopilot.ai.listModels()'),
     storeList: () => call('window.shopilot.store.list()'),
     storeDeletePerm: (sid) => call(`window.shopilot.store.deletePermanent(${JSON.stringify(sid)})`),
     storePurge: (sid) => call(`window.shopilot.store.purge(${JSON.stringify(sid)})`),
@@ -193,6 +249,26 @@ async function main() {
   const noSelector = await api.taskCreate({ name: 'x', steps: [{ type: 'readText', input: { nope: 1 } }] })
   check('步骤参数缺失/多余被拒（strict schema）', !noSelector.ok && noSelector.error?.code === 'TASK_INVALID_STEP')
 
+  // 步骤超时上限必须覆盖"人工确认门禁"的默认值（1 小时）——曾写死 10 分钟，
+  // 导致把门禁 timeoutMs 设成 30 分钟的「达人邀约」任务在创建阶段就被拒（实测 too_big）
+  const gate30 = await api.taskCreate({ name: '门禁30分钟', steps: [
+    { type: 'waitForUserConfirmation', input: { message: '确认？' }, timeoutMs: 1800000 }
+  ]})
+  check('门禁 30 分钟超时可创建（上限覆盖确认门禁语义）', gate30.ok, String(gate30.error?.message || '').slice(0, 80))
+  if (gate30.ok) await api.taskDelete(gate30.data.id)
+  const gateTooLong = await api.taskCreate({ name: '门禁超上限', steps: [
+    { type: 'waitForUserConfirmation', input: { message: '确认？' }, timeoutMs: 3600001 }
+  ]})
+  check('超过 1 小时的步骤超时仍被拒（上限不是无界）',
+    !gateTooLong.ok && gateTooLong.error?.code === 'TASK_INVALID_STEP', gateTooLong.error?.code)
+  const gateDefault = await api.taskCreate({ name: '门禁默认', steps: [
+    { type: 'waitForUserConfirmation', input: { message: '确认？' } }
+  ]})
+  check('门禁默认超时注入 60 分钟（且落在 schema 上限内）',
+    gateDefault.ok && gateDefault.data.steps[0].timeoutMs === 3600000,
+    't=' + gateDefault.data?.steps?.[0]?.timeoutMs)
+  if (gateDefault.ok) await api.taskDelete(gateDefault.data.id)
+
   // ---------- 3. 主线读取任务 ----------
   const mainTask = await api.taskCreate({
     name: '订单中心巡检',
@@ -227,6 +303,8 @@ async function main() {
 
   const s1 = await api.storeCreate({ name: 'M3店铺一', platform: '拼多多', adminUrl: BASE + '/orders' })
   const sid1 = s1.data.id
+  refocusApp()
+  await sleep(800)
   const opened1 = await openStoreViaUI('M3店铺一')
   check('UI 点击店铺 ▶ 打开（渲染 viewport 真实路径）', opened1)
   await sleep(1500) // viewport 上报 + 默认标签文档提交
@@ -603,6 +681,190 @@ async function main() {
     invFin4?.run.status === 'failed' && invFin4?.run.errorCode === 'TASK_TARGET_DISABLED',
     invFin4?.run.errorCode + ' / ' + String(invFin4?.run.errorMessage || '').slice(0, 40))
 
+  // ---------- 6c. AI 生成步骤（打本地假 AI 端点，不发真实网络请求） ----------
+  const invAiZod = [
+    ['正例', { type: 'aiGenerate', input: { selector: '#script-box', sourceSelector: '#goods', maxLen: 120 } }, true],
+    ['缺 sourceSelector', { type: 'aiGenerate', input: { selector: '#script-box', maxLen: 120 } }, false],
+    ['sourceSelector 留空（合法：运行时用抽屉浮层当来源）', { type: 'aiGenerate', input: { selector: '#script-box', sourceSelector: '', maxLen: 120 } }, true],
+    ['maxLen 超范围', { type: 'aiGenerate', input: { selector: '#script-box', sourceSelector: '#goods', maxLen: 999 } }, false],
+    ['夹带 code 字段（strict）', { type: 'aiGenerate', input: { selector: '#script-box', sourceSelector: '#goods', maxLen: 120, code: 'x' } }, false]
+  ]
+  for (const [label, step, shouldOk] of invAiZod) {
+    const r = await api.taskCreate({ name: 'zod-ai-' + label, steps: [step] })
+    check('AI 步骤白名单：' + label + (shouldOk ? ' → 通过' : ' → 被拒'),
+      r.ok === shouldOk, r.ok ? '' : String(r.error?.message || '').slice(0, 44))
+    if (r.ok) await api.taskDelete(r.data.id)
+  }
+
+  // ① 未配置 Key：必须如实失败，绝不写假话术
+  const noKeyTask = await api.taskCreate({ name: '未配置AI', steps: [
+    { type: 'navigate', input: { url: BASE + '/invite' } },
+    { type: 'aiGenerate', input: { selector: '#script-box', sourceSelector: '#goods', maxLen: 120 } }
+  ]})
+  const runNoKey = await api.taskRun(noKeyTask.data.id, sid1)
+  const finNoKey = await pollRun(runNoKey.data.runId, d => d.run.status === 'failed', 25000)
+  check('未配置 AI Key 时 aiGenerate 如实失败（AI_NOT_CONFIGURED），不写假话术',
+    finNoKey?.run.status === 'failed' && finNoKey?.run.errorCode === 'AI_NOT_CONFIGURED',
+    finNoKey?.run.errorCode + ' / ' + String(finNoKey?.run.errorMessage || '').slice(0, 36))
+
+  // ② 配置本地假端点 + Key → 生成并写入；Key 全程不回显
+  const aiCfg = await api.aiConfigSet({ endpoint: BASE + '/ai/chat/completions', model: 'm3-fake-model', timeoutMs: 15000 })
+  check('AI 配置可保存，且 configGet 只给 hasKey、不含任何 Key 字段',
+    aiCfg.ok && aiCfg.data.endpoint === BASE + '/ai/chat/completions' && aiCfg.data.hasKey === false && !('key' in aiCfg.data),
+    JSON.stringify({ ep: aiCfg.data?.endpoint, hasKey: aiCfg.data?.hasKey, fields: Object.keys(aiCfg.data || {}).join(',') }))
+  const aiKey = await api.aiKeySet('m3-test-key-1234')
+  check('保存 Key 后仅 hasKey=true（无明文回显）',
+    aiKey.ok && aiKey.data.hasKey === true && !('key' in aiKey.data), JSON.stringify(aiKey.data))
+  const aiTest = await api.aiTest()
+  check('「测试连接」打本地假端点成功并回报模型名与耗时',
+    aiTest.ok && aiTest.data.model === 'm3-fake-model' && typeof aiTest.data.elapsedMs === 'number',
+    JSON.stringify(aiTest.data || aiTest.error))
+
+  // ②b. 获取可用模型（只读 GET /models）：如实返回列表；推不出地址时明确报错，不编造候选
+  const modelsOk = await api.aiListModels()
+  check('「获取可用模型」打本地假端点返回列表（去重排序，不含任何编造项）',
+    modelsOk.ok && JSON.stringify(modelsOk.data.models) === JSON.stringify(['m3-fake-lite', 'm3-fake-model', 'm3-fake-pro']),
+    JSON.stringify(modelsOk.data || modelsOk.error))
+  const modelsBadEp = await api.aiConfigSet({ endpoint: BASE + '/ai/not-a-completions-path', model: 'm3-fake-model', timeoutMs: 15000 })
+  const modelsBad = await api.aiListModels()
+  check('接口地址推不出 /models 时明确报 AI_BAD_ENDPOINT（不猜地址）',
+    modelsBadEp.ok && !modelsBad.ok && modelsBad.error.code === 'AI_BAD_ENDPOINT',
+    modelsBad.error?.code + ' / ' + String(modelsBad.error?.message || '').slice(0, 40))
+  await api.aiConfigSet({ endpoint: BASE + '/ai/chat/completions', model: 'm3-fake-model', timeoutMs: 15000 })
+  // 未配置 Key 时必须如实失败
+  const keyBackup = 'm3-test-key-1234'
+  await api.aiKeyClear()
+  const modelsNoKey = await api.aiListModels()
+  check('未配置 Key 时「获取可用模型」如实失败（AI_NOT_CONFIGURED）',
+    !modelsNoKey.ok && modelsNoKey.error.code === 'AI_NOT_CONFIGURED', modelsNoKey.error?.code)
+  await api.aiKeySet(keyBackup)
+
+  // UI 侧：设置 → AI 配置页的「获取可用模型」按钮 + 下拉选中即填入模型名
+  const modelsUi = await cdp.evaluate(`
+    document.querySelector('[data-test="settings-open-btn"]').click();
+    await new Promise(r => setTimeout(r, 600));
+    document.querySelector('[data-test="settings-tab-ai"]').click();
+    await new Promise(r => setTimeout(r, 400));
+    const btn = document.querySelector('[data-test="ai-models-btn"]');
+    const out = { btn: !!btn };
+    if (btn) {
+      btn.click();
+      await new Promise(r => setTimeout(r, 1800));
+      const sel = document.querySelector('[data-test="ai-model-pick"]');
+      out.options = sel ? [...sel.options].map(o => o.value).filter(Boolean) : null;
+      out.msg = (document.querySelector('[data-test="ai-msg"]') || {}).textContent || null;
+      if (sel) {
+        sel.value = 'm3-fake-pro';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 200));
+        out.modelAfterPick = document.querySelector('[data-test="ai-model"]').value;
+        // 改接口地址 → 旧候选立即作废，避免误选
+        const ep = document.querySelector('[data-test="ai-endpoint"]');
+        ep.value = ep.value + 'x';
+        ep.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 250));
+        out.pickGoneAfterEndpointChange = !document.querySelector('[data-test="ai-model-pick"]');
+        ep.value = ep.value.slice(0, -1);
+        ep.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      const panel = document.querySelector('[data-test="settings-ai"]');
+      out.overflowX = panel ? panel.scrollWidth > panel.clientWidth + 2 : null;
+    }
+    document.querySelector('[data-test="settings-dialog"] .btn-ghost').click();
+    await new Promise(r => setTimeout(r, 250));
+    out.closed = !document.querySelector('[data-test="settings-dialog"]');
+    return out;
+  `)
+  check('设置 → AI 配置：「获取可用模型」拉回候选并在下拉里可选，选中即填入模型名',
+    modelsUi.btn === true && Array.isArray(modelsUi.options) && modelsUi.options.length === 3 &&
+    modelsUi.options.includes('m3-fake-pro') && modelsUi.modelAfterPick === 'm3-fake-pro' &&
+    modelsUi.pickGoneAfterEndpointChange === true && modelsUi.overflowX === false,
+    JSON.stringify(modelsUi))
+  check('「获取可用模型」所在页签仍可取消关闭（候选未保存也不落库）',
+    modelsUi.closed === true, String(modelsUi.closed))
+  const aiAudit2 = await api.auditQuery(300)
+  check('获取模型写审计（ai.models success/failure）',
+    aiAudit2.ok && (aiAudit2.data || []).some(a => a.action === 'ai.models'),
+    'ai.models 行=' + (aiAudit2.data || []).filter(a => a.action === 'ai.models').length)
+
+  const genTask = await api.taskCreate({ name: 'AI生成话术', steps: [
+    { type: 'navigate', input: { url: BASE + '/invite' } },
+    { type: 'aiGenerate', input: { selector: '#script-box', sourceSelector: '#goods', maxLen: 120 } },
+    { type: 'readText', input: { selector: '#script-box' } }
+  ]})
+  check('aiGenerate 默认超时 90s（要等模型返回）', genTask.ok && genTask.data.steps[1].timeoutMs === 90000, 't1=' + genTask.data?.steps?.[1]?.timeoutMs)
+  const runGen = await api.taskRun(genTask.data.id, sid1)
+  const finGen = await pollRun(runGen.data.runId, d => TERMINAL(d.run.status), 30000)
+  const genRes = (await api.taskResults(runGen.data.runId)).data
+  const genPayload = (genRes?.results || []).find(r => r.stepIndex === 1)?.payload
+  const genRead = (genRes?.results || []).find(r => r.stepIndex === 2)?.payload
+  check('aiGenerate 按商品信息生成话术并写入目标输入框（长度受限）',
+    finGen?.run.status === 'succeeded' && typeof genRead?.text === 'string' && genRead.text.length > 10 && genRead.text.length <= 120,
+    finGen?.run.status + ' / len=' + (genRead?.text || '').length)
+  check('aiGenerate payload 只存摘要（模型/长度/来源字符数/预览），不存全文',
+    genPayload?.action === 'aiGenerate' && genPayload?.model === 'm3-fake-model' && genPayload?.sourceChars > 0 &&
+    genPayload?.length === genRead?.text.length && !JSON.stringify(genPayload).includes(String(genRead?.text || '@@')),
+    JSON.stringify({ model: genPayload?.model, len: genPayload?.length, src: genPayload?.sourceChars, preview: String(genPayload?.preview || '').slice(0, 14) + '…' }))
+  const aiAudit = await api.auditQuery(300)
+  check('AI 生成写审计（ai.generate success）',
+    aiAudit.ok && (aiAudit.data || []).some(a => a.action === 'ai.generate' && a.result === 'success'),
+    'ai 审计行=' + (aiAudit.data || []).filter(a => String(a.action).startsWith('ai.')).length)
+
+  // ③ AI 步骤同样是副作用步骤
+  const genFail = await api.taskCreate({ name: 'AI生成失败', steps: [
+    { type: 'navigate', input: { url: BASE + '/invite' } },
+    { type: 'aiGenerate', input: { selector: '#script-box', sourceSelector: '#missing-goods', maxLen: 120 }, timeoutMs: 3000 }
+  ]})
+  const runGenFail = await api.taskRun(genFail.data.id, sid1)
+  const finGenFail = await pollRun(runGenFail.data.runId, d => d.run.status === 'failed', 25000)
+  check('aiGenerate 读不到商品来源 → failed（TASK_SELECTOR_CHANGED）',
+    finGenFail?.run.status === 'failed' && finGenFail?.run.errorCode === 'TASK_SELECTOR_CHANGED', finGenFail?.run.errorCode)
+  const retryGen = await api.taskResume(runGenFail.data.runId, 'retry')
+  check('aiGenerate 属副作用步骤 → 拒绝"从失败恢复"（TASK_BAD_STATE）',
+    !retryGen.ok && retryGen.error?.code === 'TASK_BAD_STATE', retryGen.error?.message?.slice(0, 36))
+
+  // ④ sourceSelector 留空 → 沿话术框向上找"固定定位浮层"（抽屉）读商品信息
+  const drawerTask = await api.taskCreate({ name: 'AI抽屉降级', steps: [
+    { type: 'navigate', input: { url: BASE + '/invite' } },
+    { type: 'click', input: { selector: '#open-drawer' } },
+    { type: 'aiGenerate', input: { selector: '#script-box', sourceSelector: '', maxLen: 120 } },
+    { type: 'readText', input: { selector: '#script-box' } }
+  ]})
+  const runDrawer = await api.taskRun(drawerTask.data.id, sid1)
+  const finDrawer = await pollRun(runDrawer.data.runId, d => TERMINAL(d.run.status), 30000)
+  const drawerRes = (await api.taskResults(runDrawer.data.runId)).data
+  const drawerStep = (drawerRes?.results || []).find(r => r.stepIndex === 2)?.payload
+  const drawerRead = (drawerRes?.results || []).find(r => r.stepIndex === 3)?.payload
+  check('aiGenerate 留空 sourceSelector → 用抽屉浮层文本生成并写入（payload 如实标注来源）',
+    finDrawer?.run.status === 'succeeded' && drawerStep?.sourceHow === 'drawer' && drawerStep?.sourceChars > 0 &&
+    typeof drawerRead?.text === 'string' && drawerRead.text.length > 10,
+    finDrawer?.run.status + ' / how=' + drawerStep?.sourceHow + ' / src=' + drawerStep?.sourceChars + ' / len=' + (drawerRead?.text || '').length)
+
+  const noDrawerTask = await api.taskCreate({ name: 'AI抽屉未打开', steps: [
+    { type: 'navigate', input: { url: BASE + '/invite' } },
+    { type: 'aiGenerate', input: { selector: '#script-box', sourceSelector: '', maxLen: 120 }, timeoutMs: 5000 }
+  ]})
+  const runNoDrawer = noDrawerTask.ok ? await api.taskRun(noDrawerTask.data.id, sid1) : null
+  const finNoDrawer = runNoDrawer?.ok ? await pollRun(runNoDrawer.data.runId, d => d.run.status === 'failed', 25000) : null
+  check('抽屉未打开（无固定定位浮层）→ 如实失败（AI_EMPTY_OUTPUT），不把整页噪音喂给模型',
+    finNoDrawer?.run.status === 'failed' && finNoDrawer?.run.errorCode === 'AI_EMPTY_OUTPUT',
+    (finNoDrawer?.run.errorCode || 'null') + ' / ' + String(finNoDrawer?.run.errorMessage || '').slice(0, 44) +
+    ' / create=' + (noDrawerTask.ok ? 'ok' : JSON.stringify(noDrawerTask.error)) +
+    ' / run=' + (runNoDrawer ? (runNoDrawer.ok ? 'ok' : JSON.stringify(runNoDrawer.error)) : 'skipped'))
+
+  // ⑤ readText 读表单控件取 value：setInput/aiGenerate 写入后留档必须拿到"真正发出去的话术"
+  const valueRead = await api.taskCreate({ name: 'AI话术留档', steps: [
+    { type: 'navigate', input: { url: BASE + '/invite' } },
+    { type: 'setInput', input: { selector: '#script-box', text: '留档验证话术' } },
+    { type: 'readText', input: { selector: '#script-box' } }
+  ]})
+  const runValue = await api.taskRun(valueRead.data.id, sid1)
+  await pollRun(runValue.data.runId, d => TERMINAL(d.run.status), 25000)
+  const valueRes = (await api.taskResults(runValue.data.runId)).data
+  const valueReadPayload = (valueRes?.results || []).find(r => r.stepIndex === 2)?.payload
+  check('readText 读 textarea 取的是当前 value（写入后留档不落空）',
+    valueReadPayload?.text === '留档验证话术', JSON.stringify(valueReadPayload))
+
   // ---------- 7. 暂停 / 继续 / 取消 + 非法迁移 ----------
   const slowTask = await api.taskCreate({
     name: '长等待演示', steps: [
@@ -672,7 +934,10 @@ async function main() {
   // 放在这里做（而不是插在主流程中间）：要切店铺/重载页面，避免干扰其他用例的 UI 状态
   const sInvite = await api.storeCreate({ name: 'M3抖店邀约', platform: '抖店', adminUrl: BASE + '/invite' })
   const sidInvite = sInvite.data.id
+  await api.aiKeyClear() // 面板的 AI 门禁要可判定：先确保主进程侧就是"未配置"
+  console.log('… 9b: 打开抖店店铺并进入「任务 → 达人邀约」（含页面重载）')
   await openStoreViaUI('M3抖店邀约')
+  console.log('… 9b: 页面就绪，开始面板断言')
   const invitePanel = await cdp.evaluate(`
     let card = null;
     for (let i = 0; i < 4; i++) {
@@ -705,6 +970,8 @@ async function main() {
       chips: panel ? panel.querySelectorAll('.inv-chip').length : 0,
       countInput: !!document.querySelector('[data-test="invite-count"]'),
       scriptBox: !!document.querySelector('[data-test="invite-script"]'),
+      scriptModeManual: !!document.querySelector('[data-test="invite-script-mode-manual"]'),
+      scriptModeAi: !!document.querySelector('[data-test="invite-script-mode-ai"]'),
       disabledNoScript: btn ? btn.disabled : null,
       overflowX: panel ? panel.scrollWidth > panel.clientWidth + 2 : null
     };
@@ -714,17 +981,57 @@ async function main() {
       ta.dispatchEvent(new Event('input', { bubbles: true }));
       await new Promise(r => setTimeout(r, 300));
       out.enabledAfterScript = !document.querySelector('[data-test="invite-start"]').disabled;
+      // AI 模式：话术框只读（由任务运行时写入），此时本机未配 Key → 开始按钮应重新禁用并明确提示
+      document.querySelector('[data-test="invite-script-mode-ai"]').click();
+      await new Promise(r => setTimeout(r, 300));
+      out.aiMode = {
+        readonly: ta.readOnly,
+        disabled: document.querySelector('[data-test="invite-start"]').disabled,
+        hint: panel.textContent.includes('AI 未配置')
+      };
+      // 配好 Key（走设置页保存的真实路径）→ 回到面板，AI 模式应可用
+      await window.shopilot.ai.setKey('m3-test-key-1234');
+      if (document.querySelector('.sidebar-rail')) {
+        const ex = document.querySelector('[data-test="sidebar-expand"]');
+        if (ex) ex.click();
+        await new Promise(r => setTimeout(r, 500));
+      }
+      document.querySelector('[data-test="settings-open-btn"]').click();
+      await new Promise(r => setTimeout(r, 700));
+      document.querySelector('[data-test="settings-tab-ai"]').click();
+      await new Promise(r => setTimeout(r, 500));
+      document.querySelector('[data-test="settings-dialog"] .btn-ghost').click();
+      await new Promise(r => setTimeout(r, 400));
+      document.querySelector('[data-test="invite-script-mode-ai"]').click();
+      await new Promise(r => setTimeout(r, 300));
+      out.aiModeReady = {
+        disabled: document.querySelector('[data-test="invite-start"]').disabled,
+        readonly: ta.readOnly,
+        hintGone: !panel.textContent.includes('AI 未配置')
+      };
+      document.querySelector('[data-test="invite-script-mode-manual"]').click();
+      await new Promise(r => setTimeout(r, 250));
+      await window.shopilot.ai.clearKey();
     }
     return out;
   `)
-  check('达人邀约（抖店）：类目 22 项 + 等级/权益 chip 11 个 + 数量/话术齐备、无横向溢出',
+  console.log('… 9b: 面板断言完成')
+  check('达人邀约（抖店）：类目 22 项 + 等级/权益/话术来源 chip 13 个 + 数量/话术齐备、无横向溢出',
     invitePanel.viewport === true && invitePanel.panel === true && invitePanel.categoryOptions === 23 &&
-    invitePanel.chips === 11 && invitePanel.countInput === true && invitePanel.scriptBox === true &&
+    invitePanel.chips === 13 && invitePanel.countInput === true && invitePanel.scriptBox === true &&
+    invitePanel.scriptModeManual === true && invitePanel.scriptModeAi === true &&
     invitePanel.overflowX === false,
     JSON.stringify(invitePanel))
   check('达人邀约：空话术时「开始邀约」禁用，填写话术后才可用（防误发空消息）',
     invitePanel.disabledNoScript === true && invitePanel.enabledAfterScript === true,
     JSON.stringify({ 空话术: invitePanel.disabledNoScript, 填后: invitePanel.enabledAfterScript }))
+  check('达人邀约：「AI 生成」模式下话术框只读；未配置 AI 时开始按钮禁用并明确提示',
+    invitePanel.aiMode?.readonly === true && invitePanel.aiMode?.disabled === true && invitePanel.aiMode?.hint === true,
+    JSON.stringify(invitePanel.aiMode))
+  check('达人邀约：配好 Key 后回到面板，AI 模式可用（按钮解禁、提示消失）',
+    invitePanel.aiModeReady?.disabled === false && invitePanel.aiModeReady?.readonly === true &&
+    invitePanel.aiModeReady?.hintGone === true,
+    JSON.stringify(invitePanel.aiModeReady))
 
   // ---------- 10. 清理 ----------
   const all = (await api.taskList()).data || []

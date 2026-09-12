@@ -43,17 +43,29 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     // 平台对单次批量操作有上限（达人选人上限 40），这里做硬约束
     max: z.number().int().min(1).max(40)
   }).strict().refine((v) => !!v.selector !== !!v.text, { message: 'selector 与 text 必须二选一' }),
-  setInput: z.object({ selector, text: z.string().max(2000) }).strict()
+  setInput: z.object({ selector, text: z.string().max(2000) }).strict(),
+  // AI 生成：从 sourceSelector 读商品信息 → 主进程调大模型 → 写入 selector（参数仍只有选择器与文本/数值）
+  // sourceSelector 允许留空 = 运行时改用「写入目标最近的固定定位浮层」（邀约抽屉）当来源，找不到就如实失败
+  aiGenerate: z.object({
+    selector,
+    sourceSelector: z.string().max(500),
+    maxLen: z.number().int().min(20).max(300),
+    instruction: z.string().max(300).optional()
+  }).strict()
 }
 
 /** 副作用步骤不可进入"从失败恢复"的重试范围 - §9.2（重试会重复点击/重复写入） */
 export const NON_RESUMABLE_TYPES: ReadonlySet<string> = new Set([
   'fillDraft', 'waitForUserConfirmation',
-  'click', 'clickByText', 'clickAll', 'setInput'
+  'click', 'clickByText', 'clickAll', 'setInput', 'aiGenerate'
 ])
 
-/** 非"确认门禁"类步骤的默认超时；批量点击要处理多行框架重渲染，给更长默认值 */
-const DEFAULT_STEP_TIMEOUT: Record<string, number> = { waitForUserConfirmation: 3600000, clickAll: 120000 }
+/** 非"确认门禁"类步骤的默认超时；批量点击要等框架重渲染、AI 生成要等模型返回，给更长默认值 */
+const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
+  waitForUserConfirmation: 3600000,
+  clickAll: 120000,
+  aiGenerate: 90000
+}
 
 export const taskCreateSchema = z.object({
   name: z.string().min(1).max(80),
@@ -61,7 +73,9 @@ export const taskCreateSchema = z.object({
   steps: z.array(z.object({
     type: z.enum(TASK_STEP_TYPES as unknown as [string, ...string[]]),
     input: z.record(z.unknown()).optional(),
-    timeoutMs: z.number().int().min(500).max(600000).optional(),
+    // 上限必须覆盖人工确认门禁的默认超时（1 小时）：曾写死 10 分钟，导致"达人邀约"这类
+    // 把门禁 timeoutMs 设成 30 分钟的任务在创建阶段就被拒（实测报 steps[N].timeoutMs too_big）
+    timeoutMs: z.number().int().min(500).max(3600000).optional(),
     retryLimit: z.number().int().min(0).max(5).optional()
   })).min(1).max(30),
   schedule: z.object({ everyMs: z.number().int().min(60000).max(30 * 86400000) }).nullish()

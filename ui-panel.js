@@ -110,7 +110,7 @@ async function main() {
       return { storeId: s.id, tabId: tid, tabCount: (after.data?.tabs || []).length };
     `)
     console.log('准备:', JSON.stringify(prep))
-    await cdp.evaluate(`location.reload(); return true;`)
+    await cdp.evaluate(`setTimeout(() => location.reload(), 30); return true;`)
     await sleep(3500)
     await cdp.evaluate(`
       const card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('面板探针店'));
@@ -184,7 +184,7 @@ async function main() {
     console.log(JSON.stringify(m3))
 
     // 4) 持久化：重载后仍是收起
-    await cdp.evaluate(`location.reload(); return true;`)
+    await cdp.evaluate(`setTimeout(() => location.reload(), 30); return true;`)
     await sleep(3500)
     await cdp.evaluate(`
       const card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('面板探针店'));

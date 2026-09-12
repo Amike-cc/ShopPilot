@@ -17,7 +17,10 @@ export const TASK_STEP_TYPES = [
   'click',
   'clickByText',
   'clickAll',
-  'setInput'
+  'setInput',
+  // 调用主进程大模型按"读取到的商品信息"生成文本并写入目标（达人邀约话术）；
+  // 属于副作用步骤：需 AI 已配置，未配置时如实报 AI_NOT_CONFIGURED，不静默跳过
+  'aiGenerate'
 ] as const
 
 export type TaskStepType = (typeof TASK_STEP_TYPES)[number]

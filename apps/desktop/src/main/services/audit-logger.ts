@@ -16,6 +16,7 @@ export type AuditAction =
   | 'task.create' | 'task.delete' | 'task.run' | 'task.pause' | 'task.resume'
   | 'task.retry' | 'task.cancel' | 'task.confirm'
   | 'update.check' | 'update.download' | 'update.install'
+  | 'ai.keySet' | 'ai.keyClear' | 'ai.test' | 'ai.generate'
   | 'diagnostics.export' | 'audit.export'
 
 export type AuditResult = 'success' | 'failure'

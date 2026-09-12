@@ -51,10 +51,14 @@ class CDPSession {
       this.ws.send(JSON.stringify({ id, method, params }))
     })
   }
-  async evaluate(fnBody) {
+  async evaluate(fnBody, timeoutMs = 60000) {
     await this.ready
     const expression = `(async () => { ${fnBody} })()`
-    const r = await this.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
+    // 给每次求值加超时：页面若被弹窗/导航卡住，Promise 会永不 settle，验收脚本静默挂死（实测踩过）
+    const r = await Promise.race([
+      this.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }),
+      new Promise((_res, rej) => setTimeout(() => rej(new Error(`页面求值超时（${timeoutMs}ms）：${String(fnBody).replace(/\s+/g, ' ').trim().slice(0, 120)}`)), timeoutMs))
+    ])
     if (r.exceptionDetails) throw new Error('页面异常: ' + JSON.stringify(r.exceptionDetails.exception?.description || r.exceptionDetails.text))
     return r.result.value
   }
@@ -797,8 +801,8 @@ async function main() {
     overrideHome.btnTitle === '店铺首页：' + overrideHome.target,
     JSON.stringify({ title: overrideHome.btnTitle, target: overrideHome.target }))
 
-  // 刷新后仍生效（持久化 + 启动时重新加载）
-  await cdp.evaluate(`location.reload(); return true;`)
+  // 刷新后仍生效（持久化 + 启动时重新加载）。重载延后 30ms，避免和 CDP 响应赛跑丢响应
+  await cdp.evaluate(`setTimeout(() => location.reload(), 30); return true;`)
   await sleep(3800)
   const homeAfterReload = await cdp.evaluate(`
     let card = null, tries = 0;
@@ -835,6 +839,213 @@ async function main() {
   check('清空平台首页后覆盖值被移除，首页按钮回落到店铺自己的后台地址',
     !restoreHome.saved['拼多多'] && restoreHome.closed === true && restoreHome.btnTitle === '店铺首页：' + panelSiteUrl,
     JSON.stringify(restoreHome))
+
+  // ---------- 设置：达人广场 / AI 配置 均为独立页签（用户要求） ----------
+  const settingsTabs = await cdp.evaluate(`
+    document.querySelector('[data-test="settings-open-btn"]').click();
+    await new Promise(r => setTimeout(r, 700));
+    const out = { tabs: [...document.querySelectorAll('.sub-tabs .stab')].map(b => b.textContent.trim()) };
+    document.querySelector('[data-test="settings-tab-square"]').click();
+    await new Promise(r => setTimeout(r, 350));
+    const sq = document.querySelector('[data-test="settings-square"]');
+    const sqRows = [...document.querySelectorAll('[data-test="square-url-row"]')];
+    out.square = {
+      pane: !!sq,
+      configUnmounted: !document.querySelector('[data-test="settings-config"]'),
+      aboutUnmounted: !document.querySelector('[data-test="settings-about"]'),
+      rows: sqRows.length,
+      names: sqRows.map(r => r.querySelector('.plat-name').textContent.trim()),
+      placeholder: sqRows[0] ? sqRows[0].querySelector('input').placeholder : null,
+      hasSave: !!document.querySelector('[data-test="settings-save"]'),
+      overflowX: sq ? sq.scrollWidth > sq.clientWidth + 2 : null
+    };
+    document.querySelector('[data-test="settings-tab-ai"]').click();
+    await new Promise(r => setTimeout(r, 400));
+    const ai = document.querySelector('[data-test="settings-ai"]');
+    const ep = document.querySelector('[data-test="ai-endpoint"]');
+    const keyInput = document.querySelector('[data-test="ai-key"]');
+    out.ai = {
+      pane: !!ai,
+      squareUnmounted: !document.querySelector('[data-test="settings-square"]'),
+      endpoint: ep ? ep.value : null,
+      endpointPh: ep ? ep.placeholder : null,
+      model: document.querySelector('[data-test="ai-model"]') ? document.querySelector('[data-test="ai-model"]').value : null,
+      keyType: keyInput ? keyInput.type : null,
+      keyValue: keyInput ? keyInput.value : null,
+      testBtn: !!document.querySelector('[data-test="ai-test"]'),
+      hasSave: !!document.querySelector('[data-test="settings-save"]'),
+      overflowX: ai ? ai.scrollWidth > ai.clientWidth + 2 : null
+    };
+    // Key 存进去后也绝不回显（safeStorage 密文更不许出现在 DOM 里）
+    const setK = await window.shopilot.ai.setKey('m1-secret-key-9999');
+    out.keySaved = setK.ok && setK.data.hasKey === true && !('key' in setK.data);
+    document.querySelector('[data-test="settings-dialog"] .btn-ghost').click();
+    await new Promise(r => setTimeout(r, 250));
+    document.querySelector('[data-test="settings-open-btn"]').click();
+    await new Promise(r => setTimeout(r, 700));
+    document.querySelector('[data-test="settings-tab-ai"]').click();
+    await new Promise(r => setTimeout(r, 400));
+    const key2 = document.querySelector('[data-test="ai-key"]');
+    out.afterKey = {
+      value: key2 ? key2.value : null,
+      placeholder: key2 ? key2.placeholder : null,
+      domLeak: document.body.innerHTML.includes('m1-secret-key-9999') || document.body.innerHTML.includes('enc:'),
+      clearBtn: !!document.querySelector('[data-test="ai-key-clear"]')
+    };
+    const clr = await window.shopilot.ai.clearKey();
+    out.keyCleared = clr.ok && clr.data.hasKey === false;
+    return out;
+  `)
+  check('设置弹窗有四个独立页签（配置 / 达人广场 / AI 配置 / 关于软件）',
+    settingsTabs.tabs.join(',') === '配置,达人广场,AI 配置,关于软件', JSON.stringify(settingsTabs.tabs))
+  check('「达人广场」是独立页签：只列已支持平台、占位符=内置实测地址、无横向溢出',
+    settingsTabs.square?.pane === true && settingsTabs.square.configUnmounted === true &&
+    settingsTabs.square.aboutUnmounted === true && settingsTabs.square.rows === 1 &&
+    settingsTabs.square.names.join(',') === '抖店' &&
+    settingsTabs.square.placeholder === 'https://buyin.jinritemai.com/dashboard/servicehall/daren-square' &&
+    settingsTabs.square.hasSave === true && settingsTabs.square.overflowX === false,
+    JSON.stringify(settingsTabs.square))
+  check('「AI 配置」是独立页签：默认端点/模型回填、Key 为密码框且不显示明文、无横向溢出',
+    settingsTabs.ai?.pane === true && settingsTabs.ai.squareUnmounted === true &&
+    settingsTabs.ai.endpoint === 'https://api.deepseek.com/v1/chat/completions' &&
+    settingsTabs.ai.model === 'deepseek-chat' && settingsTabs.ai.keyType === 'password' &&
+    settingsTabs.ai.keyValue === '' && settingsTabs.ai.testBtn === true && settingsTabs.ai.overflowX === false,
+    JSON.stringify(settingsTabs.ai))
+  check('API Key 保存后仍不回显：输入框留空、DOM 里无明文也无 enc: 密文，可清除',
+    settingsTabs.keySaved === true && settingsTabs.afterKey?.value === '' &&
+    settingsTabs.afterKey?.placeholder.includes('已配置') === true &&
+    settingsTabs.afterKey?.domLeak === false && settingsTabs.afterKey?.clearBtn === true &&
+    settingsTabs.keyCleared === true,
+    JSON.stringify(settingsTabs.afterKey))
+
+  // 达人广场地址覆盖 → 邀约面板据此生成任务（navigate 用覆盖地址，waitForPage 的 urlIncludes 同步派生末段）
+  const squareSetup = await cdp.evaluate(`
+    const target = ${JSON.stringify(panelSiteUrl.replace(/\/$/, '') + '/daren-square')};
+    document.querySelector('[data-test="settings-open-btn"]').click();
+    await new Promise(r => setTimeout(r, 600));
+    document.querySelector('[data-test="settings-tab-square"]').click();
+    await new Promise(r => setTimeout(r, 300));
+    const inp = document.querySelector('[data-test="square-url-抖店"]');
+    if (!inp) return { error: '没有抖店的达人广场地址输入框' };
+    inp.value = target;
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 150));
+    document.querySelector('[data-test="settings-save"]').click();
+    await new Promise(r => setTimeout(r, 900));
+    const saved = (await window.shopilot.settings.get('invite.squareUrls')).data?.value || {};
+    const closed = !document.querySelector('[data-test="settings-dialog"]');
+    // 建一个抖店店铺（指向本地站点）并打开。注意：IPC 直接建出的店铺不会出现在渲染层侧栏，
+    // 必须重载一次页面才会进列表（仓库既有结论，见下方"平台入口"用例）——所以先返回，重载后再走 UI。
+    const created = await window.shopilot.store.create({ name: '邀约面板测试店', platform: '抖店', adminUrl: ${JSON.stringify(panelSiteUrl)} });
+    const sid = created.data.id;
+    await window.shopilot.browser.open(sid);
+    await new Promise(r => setTimeout(r, 1500));
+    return { target, saved, closed, sid };
+  `)
+  // 重载用"延后 30ms"的写法：直接在求值里 location.reload() 会和 CDP 响应赛跑，
+  // 页面先卸载就会丢响应，Promise 永不 settle → 验收脚本静默挂死（实测踩到，日志停在一行不动）
+  await cdp.evaluate(`setTimeout(() => location.reload(), 30); return true;`)
+  await sleep(3800)
+  const squareOverride = await cdp.evaluate(`
+    const target = ${JSON.stringify(panelSiteUrl.replace(/\/$/, '') + '/daren-square')};
+    const sid = ${JSON.stringify(squareSetup.sid)};
+    // 左栏可能还是收起态（窄轨里没有店铺卡）：先展开再找卡片 → 显示该店铺 → 切到「任务 → 达人邀约」
+    if (document.querySelector('.sidebar-rail')) {
+      const ex = document.querySelector('[data-test="sidebar-expand"]');
+      if (ex) ex.click();
+      await new Promise(r => setTimeout(r, 700));
+    }
+    let displayed = false;
+    let cardFound = false;
+    for (let i = 0; i < 6 && !displayed; i++) {
+      const card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('邀约面板测试店'));
+      if (card) { cardFound = true; card.querySelector('.store-action').click(); await new Promise(r => setTimeout(r, 2400)); }
+      const shown = document.querySelector('.store-card.displayed');
+      displayed = !!shown && shown.textContent.includes('邀约面板测试店');
+    }
+    const expand = document.querySelector('[data-test="panel-expand"]');
+    if (expand) { expand.click(); await new Promise(r => setTimeout(r, 600)); }
+    const ptab = [...document.querySelectorAll('.ptab')].find(b => b.textContent.trim() === '任务');
+    if (ptab) ptab.click();
+    await new Promise(r => setTimeout(r, 700));
+    const invTab = document.querySelector('[data-test="task-tab-invite"]');
+    if (invTab) invTab.click();
+    await new Promise(r => setTimeout(r, 500));
+    const panelEl = document.querySelector('[data-test="invite-panel"]');
+    const scriptBox = document.querySelector('[data-test="invite-script"]');
+    const startBtn = document.querySelector('[data-test="invite-start"]');
+    const aiRadio = document.querySelector('[data-test="invite-script-mode-ai"]');
+    const out = {
+      target, saved: ${JSON.stringify(squareSetup.saved)}, closed: ${JSON.stringify(squareSetup.closed)},
+      displayed, cardFound,
+      panel: !!panelEl, hasAiRadio: !!aiRadio,
+      panelHead: panelEl ? panelEl.textContent.replace(/\\s+/g, ' ').trim().slice(0, 40) : null
+    };
+    if (aiRadio && scriptBox && startBtn) {
+      // AI 开关：未配置 Key 时选「AI 生成」→ 话术框只读 + 开始按钮禁用 + 明确提示
+      aiRadio.click();
+      await new Promise(r => setTimeout(r, 300));
+      out.aiGate = {
+        readonly: scriptBox.readOnly,
+        startDisabled: startBtn.disabled,
+        hint: panelEl.textContent.includes('AI 未配置')
+      };
+      document.querySelector('[data-test="invite-script-mode-manual"]').click();
+      await new Promise(r => setTimeout(r, 250));
+
+      // 手填话术 → 开始邀约：只验证生成的任务步骤（不真的发邀约，随后取消）
+      scriptBox.value = '厂家直供，诚邀合作带货';
+      scriptBox.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 400));
+      // levels/count 等来自异步 watch，等一下按钮真的可用再点（否则点了也没反应，会误判成"没生成任务"）
+      for (let w = 0; w < 20 && startBtn.disabled; w++) await new Promise(r => setTimeout(r, 150));
+      out.readyBeforeClick = !startBtn.disabled;
+      out.scriptLen = scriptBox.value.length;
+      out.manualChecked = document.querySelector('[data-test="invite-script-mode-manual"]').checked;
+      out.levels = document.querySelectorAll('[data-test="invite-panel"] .inv-chip.on').length;
+      if (!startBtn.disabled) {
+        startBtn.click();
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      const list = await window.shopilot.task.list();
+      const newest = list.ok && list.data.length ? list.data[0] : null;
+      const steps = newest ? newest.steps : [];
+      out.taskCount = list.ok ? list.data.length : -1;
+      out.toasts = [...document.querySelectorAll('.toast')].map(t => t.textContent.trim()).slice(-3);
+      if (newest && newest.latestRun) await window.shopilot.task.cancel(newest.latestRun.id);
+      await new Promise(r => setTimeout(r, 800));
+      out.taskName = newest ? newest.name : null;
+      out.navUrl = steps[0] ? steps[0].input.url : null;
+      out.urlIncludes = steps[1] ? steps[1].input.urlIncludes : null;
+      out.hasAiStep = steps.some(s => s.type === 'aiGenerate');
+      out.hasSetInput = steps.some(s => s.type === 'setInput');
+      out.gateType = steps[steps.length - 2] ? steps[steps.length - 2].type : null;
+    }
+    await window.shopilot.browser.close(sid);
+    await window.shopilot.store.deletePermanent(sid);
+    await window.shopilot.store.purge(sid);
+    return out;
+  `)
+  check('达人广场地址可覆盖并持久化（写入 app_settings.invite.squareUrls）',
+    squareOverride.closed === true && squareOverride.saved?.['抖店'] === squareOverride.target,
+    JSON.stringify({ saved: squareOverride.saved, closed: squareOverride.closed, error: squareOverride.error }))
+  check('覆盖后的达人广场地址驱动邀约任务：navigate=覆盖地址、urlIncludes 同步派生为末段路径',
+    squareOverride.panel === true && squareOverride.navUrl === squareOverride.target &&
+    squareOverride.urlIncludes === 'daren-square' &&
+    squareOverride.hasSetInput === true && squareOverride.hasAiStep === false &&
+    squareOverride.gateType === 'waitForUserConfirmation',
+    JSON.stringify({ nav: squareOverride.navUrl, inc: squareOverride.urlIncludes, gate: squareOverride.gateType, panel: squareOverride.panel, displayed: squareOverride.displayed, cardFound: squareOverride.cardFound, ready: squareOverride.readyBeforeClick, scriptLen: squareOverride.scriptLen, manual: squareOverride.manualChecked, levels: squareOverride.levels, taskCount: squareOverride.taskCount, toasts: squareOverride.toasts, head: squareOverride.panelHead }))
+  check('邀约面板「话术来源」：手填/AI 二选一；未配置 AI 时选 AI → 话术框只读、开始按钮禁用并明确提示',
+    squareOverride.aiGate?.readonly === true && squareOverride.aiGate?.startDisabled === true &&
+    squareOverride.aiGate?.hint === true,
+    JSON.stringify(squareOverride.aiGate))
+
+  // 恢复达人广场默认地址（避免影响后续用例）
+  const squareRestore = await cdp.evaluate(`
+    await window.shopilot.settings.set('invite.squareUrls', {});
+    return (await window.shopilot.settings.get('invite.squareUrls')).data?.value || {};
+  `)
+  check('达人广场覆盖可恢复默认（清空覆盖表）', Object.keys(squareRestore).length === 0, JSON.stringify(squareRestore))
 
 
   // 清理本段测试数据

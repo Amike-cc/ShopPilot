@@ -31,9 +31,13 @@ class CDPSession {
     const id = ++this.id
     return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.ws.send(JSON.stringify({ id, method, params })) })
   }
-  async evaluate(fnBody) {
+  async evaluate(fnBody, timeoutMs = 45000) {
     await this.ready
-    const r = await this.send('Runtime.evaluate', { expression: `(async () => { ${fnBody} })()`, awaitPromise: true, returnByValue: true })
+    // 给每次求值加超时：页面若被弹窗/导航卡住，Promise 会永不 settle，验收脚本静默挂死（实测踩过）
+    const r = await Promise.race([
+      this.send('Runtime.evaluate', { expression: `(async () => { ${fnBody} })()`, awaitPromise: true, returnByValue: true }),
+      new Promise((_res, rej) => setTimeout(() => rej(new Error(`页面求值超时（${timeoutMs}ms）：${String(fnBody).replace(/\s+/g, ' ').trim().slice(0, 120)}`)), timeoutMs))
+    ])
     if (r.exceptionDetails) throw new Error('页面异常: ' + JSON.stringify(r.exceptionDetails.exception?.description || r.exceptionDetails.text))
     return r.result.value
   }
