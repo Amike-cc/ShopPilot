@@ -46,3 +46,5 @@ ui-*.log
 name-cdp-test*.js
 diag-window.js
 dialog-probe.js
+
+update-online-drill.log

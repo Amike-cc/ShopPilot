@@ -177,6 +177,7 @@
 - **验收（`update-runner.js`，16 项全过）**：本地 HTTP feed 伪装 9.9.9 版本驱动 `release/win-unpacked` 真实安装包——初始状态/对话框与通道 UI/install 守卫/发现新版本/80MB 下载+SHA-512 校验/pending 缓存落盘/安装按钮出现/审计 check+download success/同版本 not-available/beta 通道生效/feed 500 如实报错+审计 failure/重启后 autoCheck 自动检查。不执行 `quitAndInstall`（会真装伪装版本），安装器行为由 M4 NSIS 阶段覆盖。
 - **边界（如实）**：无代码签名证书 → 仅哈希校验、无签名校验（INTERNAL_BUILD）；开发态（非打包）不执行在线检查并如实提示。
 - **线上发布（2026-09-12）**：GitHub Release **v0.1.0 已发布**（`ShopPilot-Setup-0.1.0.exe` 85,660,479B + `.blockmap` + `latest.yml`，`node publish-release.js` 幂等上传，凭据复用本机 Git Credential Manager，不落盘）；仓库经用户决定由 private 转为 **public**。打包态**无 feed 覆盖实测在线链路**：`feedSource=github` 回显正确，`update:check` 匿名解析 GitHub Releases 返回 `not-available`（同版本如实，`name-cdp-test-ghfeed.js` 探针）；转 public 前曾实测 private 仓库匿名访问 404 且错误如实展示、不静默。
+- **真实线上更新演练（2026-09-12，`update-online-drill.js` 12/12 通过）**：发布 `v0.1.1-beta.1` prerelease（exe + blockmap + `beta.yml`）后，用 0.1.0 打包版走**真实公网 GitHub 链路**：① stable 通道检查 → `not-available`（**prerelease 隔离**，GitHub `/releases/latest` 语义，实测确认）；② 切 beta 通道 → 发现 `0.1.1-beta.1`；③ **真实下载 85,660,524B（20s）→ SHA-512 校验通过 → pending 落盘（尺寸与 beta.yml 一致）→ 进度事件 → "重启并安装"按钮出现 → 审计落库**；④ 对下载产物 `/S` 静默安装 → 安装版 `currentVersion=0.1.1-beta.1`（**真实升级成功**）；⑤ 升级后 beta 复查 → `not-available`（版本闭环）；⑥ 静默卸载无残留。演练毕删除该 prerelease（release+tag 均 204）并恢复 0.1.0 现场（产物、版本号、`releases/latest` 均已验证复原）。注：产品内"重启并安装"走 `quitAndInstall(false,true)` 带交互向导，无人值守演练以同一 NSIS 安装包的 `/S` 静默安装等效替代。首轮演练曾暴露 2 处**脚本自身**缺陷（未先打开对话框即断言按钮；NSIS 卸载异步空壳目录），修脚本后复跑全绿——非产品缺陷，如实记录。
 
 ## 已知边界（如实声明）
 

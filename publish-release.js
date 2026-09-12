@@ -16,11 +16,16 @@ const OWNER = 'Amike-cc'
 const REPO = 'ShopPilot'
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
 const TAG = `v${VERSION}`
+// 预发布版本（如 0.1.1-beta.1）：electron-builder 按首个预发布段命名通道文件（beta.yml），
+// GitHub Release 标记 prerelease=true，stable 通道的客户端不会看到（allowPrerelease=false）
+const PRERELEASE = VERSION.includes('-')
+const CHANNEL = PRERELEASE ? VERSION.split('-')[1].split('.')[0] : 'latest'
+const YML_NAME = `${CHANNEL}.yml`
 const REL_DIR = path.join(ROOT, 'release')
 const ASSETS = [
   { name: `ShopPilot-Setup-${VERSION}.exe`, ct: 'application/octet-stream' },
   { name: `ShopPilot-Setup-${VERSION}.exe.blockmap`, ct: 'application/octet-stream' },
-  { name: 'latest.yml', ct: 'text/yaml' }
+  { name: YML_NAME, ct: 'text/yaml' }
 ]
 
 function getToken() {
@@ -67,7 +72,7 @@ async function api(url, token, opts = {}) {
   try {
     rel = await api(`${base}/releases`, token, {
       method: 'POST',
-      body: JSON.stringify({ tag_name: TAG, name, body: notes, draft: false, prerelease: false, make_latest: 'true' })
+      body: JSON.stringify({ tag_name: TAG, name, body: notes, draft: false, prerelease: PRERELEASE, make_latest: PRERELEASE ? 'false' : 'true' })
     })
     console.log(`release created id=${rel.id} tag=${rel.tag_name}`)
   } catch (e) {
@@ -75,7 +80,7 @@ async function api(url, token, opts = {}) {
     rel = await api(`${base}/releases/tags/${TAG}`, token)
     rel = await api(`${base}/releases/${rel.id}`, token, {
       method: 'PATCH',
-      body: JSON.stringify({ name, body: notes, draft: false, prerelease: false, make_latest: 'true' })
+      body: JSON.stringify({ name, body: notes, draft: false, prerelease: PRERELEASE, make_latest: PRERELEASE ? 'false' : 'true' })
     })
     console.log(`reuse release id=${rel.id} tag=${rel.tag_name}`)
   }
@@ -108,7 +113,8 @@ async function api(url, token, opts = {}) {
   console.log(JSON.stringify({
     url: final.html_url,
     tag: final.tag_name,
-    makeLatest: true,
+    prerelease: final.prerelease,
+    channelFile: YML_NAME,
     assets: final.assets.map(a => ({ name: a.name, size: a.size }))
   }, null, 2))
   console.log('GH_RELEASE_PUBLISHED')
