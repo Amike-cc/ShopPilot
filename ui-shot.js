@@ -1,17 +1,67 @@
 /**
- * 界面自查（带截图）：起一次带调试端口的实例，切到"环境"面板，输出布局度量并截图。
- * 用法：node ui-shot.js [面板名(env|bookmarks|downloads|tasks)]
- * 说明：不传 --user-data-dir，沿用真实数据目录，便于复现用户看到的样子。
+ * 界面自查（带截图）：起一次带调试端口的实例，切到指定面板，输出布局度量并截图。
+ * 用法：node ui-shot.js [面板名(env|bookmarks|downloads|tasks|open|ctx|trash)] [--real]
+ *
+ * 数据隔离：默认使用 os.tmpdir() 下的临时 userData，并在库里没有店铺时自动播种 3 家探针店铺
+ * （后台地址指向脚本自起的本地站点，保证离线可跑、页面能真正加载），**绝不触碰真实数据**。
+ * 这不是洁癖——本脚本的 ctx 模式会重命名店铺、复制环境配置，原先沿用真实数据目录时跑一次
+ * 就会改用户真实的店铺名与环境指纹（实测真实库 248 个文件的大小/mtime 全部被改）。
+ * 确需复现"用户实际看到的样子"时显式加 --real（--real 下不播种、不自起站点，但 ctx 模式
+ * 仍会改真实数据，请自行确认后再用）。
  */
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
+const http = require('http')
 
 const root = __dirname
 const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
 const PORT = 9230
-const panel = (process.argv[2] || 'env').trim()
+const SITE_PORT = 61611
+const argv = process.argv.slice(2)
+const REAL = argv.includes('--real')
+const panel = (argv.find(a => !a.startsWith('--')) || 'env').trim()
+const userData = REAL ? null : path.join(os.tmpdir(), 'shopilot-ui-shot-' + Date.now())
 const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+/** 结束应用进程树。只 kill 主进程在 Windows 上会留下渲染进程僵尸（实测残留 84MB renderer） */
+function killTree(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  try {
+    if (process.platform === 'win32' && child.pid) execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' })
+    else child.kill('SIGKILL')
+  } catch { /* 进程可能已自行退出 */ }
+}
+
+/**
+ * 清理上次运行遗留的临时库。被强杀（如任务管理器 / kill -9）时收尾钩子不会执行，
+ * 目录会一直留在 %TEMP%；启动时顺手剪掉，避免反复跑越堆越多。
+ */
+function pruneStaleProfiles() {
+  const tdir = os.tmpdir()
+  let names = []
+  try { names = fs.readdirSync(tdir) } catch { return }
+  for (const n of names) {
+    if (!n.startsWith('shopilot-ui-shot-')) continue
+    const full = path.join(tdir, n)
+    if (full === userData) continue
+    try { fs.rmSync(full, { recursive: true, force: true }) } catch { /* 仍在被占用就留着 */ }
+  }
+}
+
+let cleaned = false
+let appRef = null
+let siteServer = null
+function cleanup() {
+  if (cleaned) return
+  cleaned = true
+  killTree(appRef)
+  if (siteServer) { try { siteServer.close() } catch { /* ignore */ } }
+  if (userData) { try { fs.rmSync(userData, { recursive: true, force: true }) } catch { /* 文件仍被占用则留待系统清理 */ } }
+}
+process.on('SIGINT', () => { cleanup(); process.exit(0) })
+process.on('SIGTERM', () => { cleanup(); process.exit(0) })
 
 async function targets() { return (await fetch(`http://127.0.0.1:${PORT}/json`)).json() }
 
@@ -72,13 +122,30 @@ class CDP {
 }
 
 async function main() {
-  const app = spawn(electronExe, [root, '--no-sandbox', `--remote-debugging-port=${PORT}`], {
+  if (userData) {
+    pruneStaleProfiles()
+    fs.mkdirSync(userData, { recursive: true })
+    // 自起本地站点：探针店铺的后台地址指向它，页面一定能加载（外网页面会因加载失败/多 target
+    // 让 ctx 模式的"店铺页可见性"判据失真——那不是产品问题，是探针取错了 target）
+    siteServer = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end('<!doctype html><html><head><title>probe-site</title></head><body><h1 id="probe">probe</h1></body></html>')
+    })
+    await new Promise((res, rej) => { siteServer.once('error', rej); siteServer.listen(SITE_PORT, '127.0.0.1', res) })
+  }
+  const args = [root, '--no-sandbox', `--remote-debugging-port=${PORT}`]
+  if (userData) args.push('--user-data-dir=' + userData)
+  const app = spawn(electronExe, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, NODE_ENV: 'production' }
   })
+  appRef = app
   let procLog = ''
   app.stdout.on('data', d => { procLog += d.toString() })
   app.stderr.on('data', d => { procLog += d.toString() })
+  console.log(REAL
+    ? '⚠ --real：使用真实数据目录，ctx 模式会重命名真实店铺并复制其环境配置'
+    : '数据隔离：临时 userData ' + userData + '（Ctrl+C 结束并清理）')
 
   try {
     if (!await waitCDP()) { console.log('CDP 未就绪\n' + procLog.slice(-1500)); return }
@@ -91,6 +158,27 @@ async function main() {
     await cdp.send('Runtime.enable').catch(() => {})
     await cdp.evaluate(`const d=Date.now()+15000; while(!window.shopilot && Date.now()<d) await new Promise(r=>setTimeout(r,100)); return !!window.shopilot;`)
     await sleep(1200)
+
+    // 隔离模式下空库自播种：env/open/ctx/trash 各模式都需要店铺，否则探针只能空转。
+    // ctx 模式要 ≥2 家（源+目标），故播种 3 家；--real 下绝不播种，避免往真实库里塞假店铺。
+    if (userData) {
+      const existing = await cdp.evaluate(`return (((await window.shopilot.store.list()).data) || []).length;`)
+      if (existing === 0) {
+        await cdp.evaluate(`
+          const site = ${JSON.stringify(`http://127.0.0.1:${SITE_PORT}/`)};
+          const defs = [
+            { name: '探针店铺A', platform: '拼多多', adminUrl: site },
+            { name: '探针店铺B', platform: '微信小店', adminUrl: site },
+            { name: '探针店铺C', platform: '抖店', adminUrl: site }
+          ];
+          for (const d of defs) await window.shopilot.store.create(d);
+          return true;
+        `)
+        await cdp.evaluate(`location.reload(); return true;`)
+        await sleep(3500)
+        console.log('已播种 3 家探针店铺（临时库）')
+      }
+    }
 
     // 选一个店铺 → 打开浏览器（▶）→ 切到目标面板
     const picked = await cdp.evaluate(`
@@ -135,7 +223,6 @@ async function main() {
         console.log('\n=== 主进程日志尾部 ===\n' + tail)
       }
       cdp.close()
-      console.log('\n（应用保持运行，端口 9230）')
       return
     }
 
@@ -285,7 +372,6 @@ async function main() {
       console.log('\n=== Esc 关闭 ===\n' + JSON.stringify(esc) + '  关闭后可见性=' + visAfter)
       if (cdp.console.length) console.log('\n=== 渲染层报错 ===\n' + cdp.console.slice(-8).join('\n'))
       cdp.close()
-      console.log('\n（应用保持运行，端口 9230）')
       return
     }
 
@@ -374,7 +460,6 @@ async function main() {
       if (cdp.console.length) console.log('\n=== 渲染层报错 ===\n' + cdp.console.slice(-8).join('\n'))
       console.log('\n截图: ui-trash-open.png / ui-trash-closed.png')
       cdp.close()
-      console.log('\n（应用保持运行，端口 9230）')
       return
     }
 
@@ -444,8 +529,8 @@ async function main() {
     console.log('UI_SHOT_ERROR ' + e.message)
     if (procLog) console.log(procLog.slice(-800))
   } finally {
-    // 不退出应用：留给用户继续操作
-    console.log('\n（应用保持运行，端口 9230）')
+    // 不退出应用：留给用户继续操作（截图/目视）。Ctrl+C 会结束应用并清掉临时库。
+    console.log('\n（应用保持运行，端口 ' + PORT + (userData ? '；临时库 ' + userData + '，Ctrl+C 结束应用并清理' : '；⚠ 真实数据目录') + '）')
   }
 }
 
