@@ -11,7 +11,7 @@
  * 用法：node ui-view-geometry.js
  *      set SHOPILOT_HOLD=1 && node ui-view-geometry.js   （结束后保留窗口，供截图核对）
  */
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -24,6 +24,15 @@ const SITE_PORT = 61601
 const userData = path.join(os.tmpdir(), 'shopilot-viewgeom-' + Date.now())
 const HOLD = process.env.SHOPILOT_HOLD === '1'
 const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+/** 结束应用进程树。只 kill 主进程在 Windows 上会留下渲染进程僵尸（实测残留 90MB renderer） */
+function killTree(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  try {
+    if (process.platform === 'win32' && child.pid) execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' })
+    else child.kill('SIGKILL')
+  } catch { /* 进程可能已自行退出 */ }
+}
 
 class CDP {
   constructor(wsUrl) {
@@ -266,7 +275,7 @@ async function main() {
     process.exitCode = 1
   } finally {
     if (!HOLD) {
-      try { app.kill('SIGTERM') } catch {}
+      killTree(app)
       site.close()
       await sleep(800)
       try { fs.rmSync(userData, { recursive: true, force: true }) } catch {}

@@ -3,7 +3,7 @@
  * 为什么单独跑：m1 断言证明了宽度与原生视图同步，但量不出"布局有没有崩"（品牌行溢出、窄轨按钮跑位）。
  * 用法：node ui-leftbar.js
  */
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -13,6 +13,15 @@ const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electro
 const PORT = 9231
 const userData = path.join(os.tmpdir(), 'shopilot-leftbar-' + Date.now())
 const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+/** 结束应用进程树。只 kill 主进程在 Windows 上会留下渲染进程僵尸（实测残留 90MB renderer） */
+function killTree(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  try {
+    if (process.platform === 'win32' && child.pid) execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' })
+    else child.kill('SIGKILL')
+  } catch { /* 进程可能已自行退出 */ }
+}
 
 class CDP {
   constructor(wsUrl) {
@@ -140,7 +149,7 @@ async function main() {
     console.log('UI_LEFTBAR_ERROR ' + e.message)
     if (procLog) console.log(procLog.slice(-800))
   } finally {
-    try { app.kill('SIGTERM') } catch {}
+    killTree(app)
     await sleep(800)
     try { fs.rmSync(userData, { recursive: true, force: true }) } catch {}
   }
