@@ -85,22 +85,21 @@ let waitingLoggedAt = 0
       if (!seenLogin) { seenLogin = true; rec.event = 'SESSION_START' }
       lastOkAt = ts
       waitingLoggedAt = 0
+      log({ ts, ...rec })
     } else if (seenLogin) {
       // 曾登录过 → 这次失效：记 KICKED（lastOkAt 给出最后一次有效时间）
       rec.event = 'KICKED'
       rec.lastOkAt = lastOkAt
       seenLogin = false
+      log({ ts, ...rec })
     } else {
       // 还没登录：等待扫码期间不刷屏——30 分钟最多记一条 waiting
       const now = Date.now()
       if (now - waitingLoggedAt > 30 * 60 * 1000) {
         waitingLoggedAt = now
-        rec = { ts, event: 'waiting-login', detail: rec.detail || rec.state }
-      } else {
-        rec = null
+        log({ ts, event: 'waiting-login', detail: rec.detail || rec.state })
       }
     }
-    if (rec) log(rec)
     await new Promise(r => setTimeout(r, seenLogin ? INTERVAL_MS : WAIT_MS))
   }
 })().catch(e => { console.error('probe fatal', e); process.exit(1) })

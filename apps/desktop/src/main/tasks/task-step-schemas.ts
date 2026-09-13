@@ -37,7 +37,11 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     selector: selector.optional(),
     text: z.string().min(1).max(200).optional(),
     // 平台对单次批量操作有上限（达人选人上限 40），这里做硬约束
-    max: z.number().int().min(1).max(40)
+    max: z.number().int().min(1).max(40),
+    // scroll=true：点完当前可点的行后向下滚动列表继续选（虚拟滚动/滚动加载的列表，如抖店广场）
+    scroll: z.boolean().optional(),
+    // 滚动续选的最大轮数（防止无进展时空转）
+    maxRounds: z.number().int().min(1).max(60).optional()
   }).strict().refine((v) => !!v.selector !== !!v.text, { message: 'selector 与 text 必须二选一' }),
   setInput: z.object({ selector, text: z.string().max(2000) }).strict(),
   // AI 生成：从 sourceSelector 读商品信息 → 主进程调大模型 → 写入 selector（参数仍只有选择器与文本/数值）

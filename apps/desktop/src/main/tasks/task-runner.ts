@@ -336,6 +336,8 @@ function classifyError(e: any): string {
   if (msg.includes('TASK_INPUT_NOT_APPLIED')) return 'TASK_INPUT_NOT_APPLIED'
   // 额度预检不过（微信今日剩余不足 / 抖店确认发送禁用等）
   if (msg.includes('TASK_QUOTA_EXCEEDED')) return 'TASK_QUOTA_EXCEEDED'
+  // 广场可选达人不足（要 40 位但池子里只有更少）——发送前中止，别发错数量
+  if (msg.includes('TASK_SELECTION_SHORTFALL')) return 'TASK_SELECTION_SHORTFALL'
   // 店铺浏览器/任务标签页被关闭（此前落进 INTERNAL_ERROR，看不出真实原因）
   if (msg.includes('BROWSER_CLOSED')) return 'BROWSER_CLOSED'
   // AI 相关的固定错误码：如实透出，便于界面区分"没配 Key / 地址不合法 / 超时 / 请求失败"
@@ -793,13 +795,55 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
     case 'clickAll': {
       // 批量点击并跳过不可用项：达人选人时"已发过消息"的行复选框是 disabled，必须跳过而不是硬点；
       // 同时受平台单次上限约束（max 已由 Zod 限到 40）。点击之间留间隔，避免与框架重渲染打架。
+      //
+      // 2026-09-13 真店实测修三个问题（抖店达人广场"要勾 40 位却只勾中 1 位/勾不满"）：
+      //  ① **轮询等待表格渲染**：此步骤原为单发——筛选后表格尚未排完版时行高为 0，会被判"不可见"
+      //     全部跳过（实测 15 项里 14 项被跳过、只点中 1 项）。现在每轮先等到有"可点的新行"再点；
+      //  ② **滚动续选**（input.scroll=true）：广场列表是虚拟滚动（.auxo-table-body，无分页），
+      //     一屏只渲染 ~19 行，装不下 40 位；点完当前窗口向下滚动、等新行渲染再继续。
+      //     注意容器带 `scroll-behavior: smooth`，赋完 scrollTop 立刻读回还是旧值，必须强制
+      //     auto 并等位置落定——否则"有没有滚动"恒判 false，续选一轮就退出（实测踩过）；
+      //  ③ **勾选数必须与页面自认一致**：虚拟列表会回收行节点，某些行"表格模型已选中但复选框
+      //     渲染还没同步"，照 DOM 的 checked 判断就会把已选行点反选（实测点 40 次、页面只认 35）。
+      //     现在按行的 data-row-key 去重（同一行只碰一次），每点一次回读页面自己的
+      //     「已选择 N 位达人」，没让计数增加就再点一次纠正；并把页面计数当作权威值，
+      //     勾不满就在发送前如实失败（TASK_SELECTION_SHORTFALL），绝不按错的位数发出去。
       const wc = wcOrThrow(run)
       const sel = input.selector ? String(input.selector) : ''
       const txt = input.text ? String(input.text) : ''
       const max = Number(input.max)
-      guardSignals(run)
-      const res = await withTimeout(() => wc.executeJavaScript(`(async () => {
-        const SEL = ${JSON.stringify(sel)}, TXT = ${JSON.stringify(txt)}, MAX = ${max};
+      const scroll = !!input.scroll
+      const maxRounds = input.maxRounds == null ? 25 : Number(input.maxRounds)
+      const deadline = Date.now() + step.timeoutMs
+      // 页面自己的权威计数（抖店广场："已选择 N 位达人"；没有则为 null → 退回按点击数判断）
+      const counterExpr = `(() => {
+        const re = /\\u5df2\\u9009\\u62e9\\s*(\\d+)\\s*\\u4f4d\\u8fbe\\u4eba/;
+        for (const el of document.querySelectorAll('div,span,p,b,strong,em')) {
+          const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+          if (t.length > 40) continue;
+          const m = re.exec(t);
+          if (m) return Number(m[1]);
+        }
+        return null;
+      })()`
+      const initialSelected: number | null = await wc.executeJavaScript(counterExpr).catch(() => null)
+      let pageSelected: number | null = initialSelected
+      let counterKnown = typeof initialSelected === 'number'
+      const seenKeys: string[] = []
+      const batchExpr = (seen: string[], limit: number) => `(async () => {
+        const SEL = ${JSON.stringify(sel)}, TXT = ${JSON.stringify(txt)}, LIMIT = ${limit};
+        const seen = new Set(${JSON.stringify(seen)});
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const read = () => { try {
+          const re = /\\u5df2\\u9009\\u62e9\\s*(\\d+)\\s*\\u4f4d\\u8fbe\\u4eba/;
+          for (const el of document.querySelectorAll('div,span,p,b,strong,em')) {
+            const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+            if (t.length > 40) continue;
+            const m = re.exec(t);
+            if (m) return Number(m[1]);
+          }
+          return null;
+        } catch { return null } };
         let els = [];
         if (SEL) els = Array.from(document.querySelectorAll(SEL));
         else {
@@ -808,10 +852,16 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
             if (own.includes(TXT)) els.push(el);
           }
         }
-        const clicked = [];
-        let skippedDisabled = 0, skippedInvisible = 0;
+        const clicked = [], seenNew = [];
+        let skippedDisabled = 0, skippedInvisible = 0, skippedChecked = 0, retried = 0, corrected = 0;
         for (const el of els) {
-          if (clicked.length >= MAX) break;
+          if (clicked.length >= LIMIT) break;
+          const row = el.closest('tr') || el.parentElement;
+          // 行 key 是去重的锚：虚拟列表重渲染后同一行只点一次，避免把已选行点反选
+          const key = (row && row.getAttribute && row.getAttribute('data-row-key')) ||
+            String((row || el).innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
+          if (!key) continue;
+          if (seen.has(key)) { skippedChecked++; continue }
           const r = el.getBoundingClientRect();
           if (!(r.width > 0 && r.height > 0)) { skippedInvisible++; continue }
           let dis = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
@@ -820,20 +870,158 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
             if (/disabled/i.test(String(p.className || ''))) dis = true;
           }
           if (dis) { skippedDisabled++; continue }
-          const target = el.closest('label, [class*="checkbox"]') || el;
-          target.click();
-          const rowText = String((el.closest('tr') || el.parentElement || el).innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 30);
-          clicked.push(rowText);
-          await new Promise(r => setTimeout(r, 150));
+          seen.add(key); seenNew.push(key);
+          const label = el.closest('label, [class*="checkbox"]') || el;
+          const before = read();
+          label.click();
+          await sleep(240);
+          let after = read();
+          let didRetry = false;
+          // 页面计数没涨 = 这次没选上（或被反选）→ 再点一次纠正，然后如实记录结果
+          if (before != null && after != null && after <= before) {
+            didRetry = true; retried++;
+            label.click();
+            await sleep(240);
+            after = read();
+            if (after != null && after > before) corrected++;
+          }
+          clicked.push({
+            key: key.slice(0, 40),
+            name: String((row || el).innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 24),
+            delta: (before != null && after != null) ? after - before : null,
+            retried: didRetry
+          });
         }
-        return { ok: true, clicked: clicked.length, skippedDisabled, skippedInvisible, total: els.length, samples: clicked.slice(0, 5) };
-      })()`), run, step.timeoutMs, 'clickAll')
-      if (!res || !res.ok) throw new Error(`TASK_SELECTOR_CHANGED: 批量点击未执行（${sel || txt}）`)
-      if (res.clicked === 0) {
-        throw new Error(`TASK_SELECTOR_CHANGED: 没有可用的目标（匹配 ${res.total} 项，其中 ${res.skippedDisabled} 项禁用、${res.skippedInvisible} 项不可见）`)
+        return { ok: true, clicked, seenNew, skippedDisabled, skippedInvisible, skippedChecked, retried, corrected, total: els.length, pageSelected: read() };
+      })()`
+      // 滚动：从首个目标元素向上找可滚动祖先，向下滚一屏的 95%。
+      // 必须先强制 scroll-behavior:auto，否则 smooth 动画期间读到的是旧 scrollTop，"滚没滚"永远判 false。
+      const scrollExpr = `(async () => {
+        const SEL = ${JSON.stringify(sel)}, TXT = ${JSON.stringify(txt)};
+        let first = null;
+        if (SEL) first = document.querySelector(SEL);
+        else {
+          for (const el of document.querySelectorAll('*')) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (own.includes(TXT)) { first = el; break }
+          }
+        }
+        let box = null;
+        if (first) {
+          let node = first;
+          while (node && node !== document.body) {
+            if (node.scrollHeight > node.clientHeight + 20 && node.clientHeight > 120) { box = node; break }
+            node = node.parentElement;
+          }
+        }
+        if (!box) box = document.querySelector('.auxo-table-body, [class*="table-body"]');
+        if (!box) return { moved: false, reason: 'NO_SCROLLER' };
+        const before = Math.round(box.scrollTop);
+        const maxTop = Math.max(0, box.scrollHeight - box.clientHeight);
+        box.style.scrollBehavior = 'auto';
+        const target = Math.min(maxTop, before + Math.floor(box.clientHeight * 0.95));
+        box.scrollTop = target;
+        let settle = -1;
+        for (let i = 0; i < 20; i++) {
+          await new Promise(r => setTimeout(r, 80));
+          const now = Math.round(box.scrollTop);
+          if (Math.abs(now - target) <= 2) { settle = now; break }
+          if (now === settle) break
+          settle = now;
+        }
+        const at = Math.round(box.scrollTop);
+        return { moved: at > before + 5, before, scrollTop: at, maxTop: Math.round(maxTop), scrollHeight: box.scrollHeight, clientHeight: box.clientHeight, atBottom: at >= maxTop - 3 };
+      })()`
+      const probeExpr = (seen: string[]) => `(() => {
+        const SEL = ${JSON.stringify(sel)}, TXT = ${JSON.stringify(txt)};
+        const seen = new Set(${JSON.stringify(seen)});
+        let els = [];
+        if (SEL) els = Array.from(document.querySelectorAll(SEL));
+        else {
+          for (const el of document.querySelectorAll('*')) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (own.includes(TXT)) els.push(el);
+          }
+        }
+        let vis = 0, usable = 0;
+        for (const el of els) {
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) continue;
+          vis++;
+          const row = el.closest('tr') || el.parentElement;
+          const key = (row && row.getAttribute && row.getAttribute('data-row-key')) ||
+            String((row || el).innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
+          let dis = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
+          let p = el.parentElement;
+          for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) if (/disabled/i.test(String(p.className || ''))) dis = true;
+          if (!dis && !seen.has(key)) usable++;
+        }
+        return { total: els.length, vis, usable };
+      })()`
+
+      let totalClicked = 0, skippedDisabled = 0, skippedInvisible = 0, skippedChecked = 0, retried = 0, corrected = 0
+      const samples: string[] = []
+      let rounds = 0, scrolled = 0, stalls = 0
+      let lastScrollHeight = 0
+      let exhausted = false
+      /** 权威进度：页面有计数就信页面，没有才退回数自己的点击数 */
+      const progress = () => (counterKnown ? (pageSelected ?? 0) - (initialSelected ?? 0) : totalClicked)
+      for (let round = 0; round < maxRounds; round++) {
+        guardSignals(run)
+        rounds++
+        // 等表格把行渲染出来：出现"可点的新行"就开工；可见数稳定且没有新行则不再空等
+        let lastVisible = -1
+        for (;;) {
+          guardSignals(run)
+          const probe: any = await wc.executeJavaScript(probeExpr(seenKeys)).catch(() => ({ total: 0, vis: 0, usable: 0 }))
+          if (probe.usable > 0) break
+          if (Date.now() >= deadline) break
+          if (probe.vis === lastVisible && probe.vis > 0) break
+          lastVisible = probe.vis
+          await new Promise(r => setTimeout(r, 300))
+        }
+        const limit = Math.max(1, max - progress() + 5)
+        const res: any = await withTimeout(() => wc.executeJavaScript(batchExpr(seenKeys, limit)), run, step.timeoutMs, 'clickAll')
+        if (!res || !res.ok) throw new Error(`TASK_SELECTOR_CHANGED: 批量点击未执行（${sel || txt}）`)
+        seenKeys.push(...(res.seenNew || []))
+        totalClicked += (res.clicked || []).length
+        skippedDisabled = Math.max(skippedDisabled, res.skippedDisabled)
+        skippedInvisible = Math.max(skippedInvisible, res.skippedInvisible)
+        skippedChecked += res.skippedChecked || 0
+        retried += res.retried || 0
+        corrected += res.corrected || 0
+        for (const c of res.clicked || []) if (samples.length < 8) samples.push(c.name)
+        if (typeof res.pageSelected === 'number') { pageSelected = res.pageSelected; counterKnown = true }
+        if (progress() >= max) break
+        if (Date.now() >= deadline) break
+        if (!scroll) { exhausted = true; break }
+        const sc: any = await wc.executeJavaScript(scrollExpr).catch(() => ({ moved: false }))
+        if (!sc || !sc.moved) {
+          // 不一定真到底：虚拟列表/懒加载会在滚到底后再追加内容。等一会儿看高度有没有长，
+          // 长了说明还有货、继续；连着几次都不长才算池子真的完了（不空转、也不早退）。
+          await new Promise(r => setTimeout(r, 1500))
+          const h: number = await wc.executeJavaScript(`(() => { const b = document.querySelector('.auxo-table-body, [class*="table-body"]'); return b ? b.scrollHeight : 0 })()`).catch(() => 0)
+          const grew = h > lastScrollHeight + 50
+          lastScrollHeight = Math.max(lastScrollHeight, h)
+          if (!grew) { stalls++; if (stalls >= 3) { exhausted = true; break } } else stalls = 0
+          const after: any = await wc.executeJavaScript(probeExpr(seenKeys)).catch(() => ({ usable: 0 }))
+          if (!after || after.usable === 0) { exhausted = true; break }
+          continue
+        }
+        scrolled++
+        lastScrollHeight = Math.max(lastScrollHeight, Number(sc.scrollHeight) || 0)
+        await new Promise(r => setTimeout(r, 700)) // 等虚拟列表把新行渲染出来
       }
       guardSignals(run)
-      return { kind: 'executed', payload: { action: 'clickAll', target: sel || txt, clicked: res.clicked, skippedDisabled: res.skippedDisabled, skippedInvisible: res.skippedInvisible, samples: res.samples } }
+      const selected = progress()
+      if (totalClicked === 0 && selected <= 0) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 没有可用的目标（可见 ${skippedInvisible} 项不可见、${skippedDisabled} 项禁用，共 ${rounds} 轮）`)
+      }
+      // 勾不满就必须在门禁之前如实失败：用户要的是 max 位，少勾还照发就是发错数量
+      if (selected < max) {
+        throw new Error(`TASK_SELECTION_SHORTFALL: 本次只勾中 ${selected} 位（要求 ${max} 位；${exhausted ? '当前筛选下的可选达人已全部勾完' : '扫描未完成'}，其中 ${skippedDisabled} 位已邀约/禁用）。请减少本批数量或调整筛选项后重试`)
+      }
+      return { kind: 'executed', payload: { action: 'clickAll', target: sel || txt, clicked: totalClicked, pageSelected, initialSelected, selected, skippedDisabled, skippedInvisible, skippedChecked, retried, corrected, rounds, scrolled, requested: max, exhausted, samples } }
     }
     case 'setInput': {
       const wc = wcOrThrow(run)

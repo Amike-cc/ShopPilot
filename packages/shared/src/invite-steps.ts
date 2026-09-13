@@ -67,7 +67,11 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   for (const lv of opts.levels) steps.push({ type: 'clickByText', input: { text: lv } })
   steps.push({ type: 'clickByText', input: { text: p.texts.search } })
   steps.push({ type: 'waitForSelector', input: { selector: p.rowCheckboxSelector }, timeoutMs: 30000 })
-  steps.push({ type: 'clickAll', input: { selector: p.rowCheckboxSelector, max: opts.count }, timeoutMs: 120000 })
+  // scroll=true：抖店广场列表在固定容器里滚动加载（无分页），一屏放不下上限 40 行——
+  // 点完当前可点的行后向下滚动、等新行渲染再继续（实测修掉"要勾 40 位却只勾中 1 位"）。
+  // maxRounds 给到 40：实测整表约 60 行、容器每次滚 ~95% 视口，够把 46 个可选行扫完；
+  // 池子提前扫空时 clickAll 自己会停（不空转）。
+  steps.push({ type: 'clickAll', input: { selector: p.rowCheckboxSelector, max: opts.count, scroll: true, maxRounds: 40 }, timeoutMs: 240000 })
   steps.push({ type: 'clickByText', input: { text: p.texts.batchInvite } })
   steps.push({ type: 'waitForSelector', input: { selector: p.scriptSelector }, timeoutMs: 30000 })
   // 额度先行：抖店不展示剩余额度数字，额度用尽/平台限制表现为抽屉「确认发送」禁用——

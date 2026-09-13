@@ -94,6 +94,11 @@ export const ERROR_CODES = {
     message: '可邀约额度不足或平台限制该操作',
     retryable: false
   },
+  TASK_SELECTION_SHORTFALL: {
+    code: 'TASK_SELECTION_SHORTFALL',
+    message: '可勾选的达人数量不足（少于本次要求），已在发送前中止',
+    retryable: false
+  },
   BROWSER_CLOSED: {
     code: 'BROWSER_CLOSED',
     message: '店铺浏览器或任务标签页已被关闭（运行中止）',
