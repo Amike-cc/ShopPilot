@@ -377,7 +377,7 @@
           <button class="mini-btn primary" @click="openTaskDialog">+ 新建任务</button>
         </div>
 
-        <div v-if="storeTasks.length === 0" class="empty-hint">{{ ws.displayedStoreId ? '当前店铺暂无任务。' : '没有未绑定店铺的任务。' }}任务只能由预定义读取型步骤组成，提交类动作必须经人工确认节点</div>
+        <div v-if="storeTasks.length === 0" class="empty-hint">{{ ws.displayedStoreId ? '当前店铺暂无任务（达人邀约是独立功能，运行记录见「达人邀约」页签）。' : '没有未绑定店铺的任务。' }}任务只能由预定义读取型步骤组成，提交类动作必须经人工确认节点</div>
         <div v-for="t in storeTasks" :key="t.id" class="env-sec task-card" :class="{ on: detailTaskId === t.id }">
           <div class="tc-head" @click="toggleTaskDetail(t)">
             <div class="p-info">
@@ -577,10 +577,47 @@
           </div>
 
           <div class="env-sec">
+            <div class="env-h">邀约记录<span class="row-sub" v-if="inviteHistory.length"> · 近 {{ inviteHistory.length }} 次</span></div>
+            <div class="env-note">达人邀约是独立功能，邀约运行不出现在「任务列表」；这里保留本店铺的邀约运行明细（步骤结果、门禁日志、截图工件）。</div>
+            <div v-if="!inviteHistory.length" class="empty-hint" style="padding:8px 4px">本店铺还没有邀约记录</div>
+            <div v-for="t in inviteHistory" :key="t.id" class="task-card" :class="{ on: detailTaskId === t.id }" data-test="invite-history-card">
+              <div class="tc-head" @click="toggleTaskDetail(t)">
+                <div class="p-info">
+                  <div class="row-main">{{ t.name.replace('达人邀约 · ', '') }}</div>
+                  <div class="row-sub">
+                    {{ runTimeLabel(t) }} · {{ t.steps.length }} 步<template v-if="liveStatus(t)"> · {{ statusLabel(liveStatus(t)) }}</template>
+                  </div>
+                </div>
+                <button class="mini-btn" v-if="['running','paused','queued','waiting_confirmation'].includes(liveStatus(t))" @click.stop="runOp(t, 'cancel')" data-test="invite-history-stop">停止</button>
+                <button class="row-del" title="删除记录" @click.stop="delTask(t.id)">×</button>
+              </div>
+              <template v-if="detailTaskId === t.id">
+                <div class="step-row" v-for="(s, i) in t.steps" :key="i">
+                  <span class="s-ico">{{ stepIcon(t, i) }}</span>
+                  <div class="p-info">
+                    <div class="row-main">{{ i + 1 }}. {{ s.type }}<span class="row-sub"> · {{ s.timeoutMs / 1000 }}s</span></div>
+                    <div class="row-sub">{{ stepInputBrief(s) }}<template v-if="stepResultBrief(t, i)"> ⇒ {{ stepResultBrief(t, i) }}</template></div>
+                  </div>
+                </div>
+                <div class="tc-btns" v-if="detailRunId(t)">
+                  <button class="mini-btn" v-if="liveStatus(t) === 'failed'" @click="runOp(t, 'retry')" title="跳过已成功步骤，副作用步骤不可恢复">从失败步骤继续</button>
+                  <button class="mini-btn" @click="loadTaskDetail(t)">刷新</button>
+                </div>
+                <div class="row-sub" v-if="liveMessage(t)" style="padding:2px 0">{{ liveMessage(t) }}</div>
+                <div class="log-box" v-if="ws.taskLogs[detailRunId(t)]?.length">
+                  <div class="log-line" v-for="(l, i) in ws.taskLogs[detailRunId(t)]" :key="i">
+                    {{ new Date(l.at || Date.now()).toLocaleTimeString() }} [{{ l.phase }}]{{ l.stepType ? ' ' + l.stepType : '' }} {{ l.message || '' }}
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="env-sec">
             <div class="env-h">执行说明</div>
             <template v-if="inviteProfile.flow === 'batch-list'">
               <div class="env-note">
-                点「开始邀约」会创建一个受策展任务：进入达人广场 → 选类目与等级 → 搜索 → 勾选前 N 位可邀约达人 → 打开邀约抽屉 → <b>先检测可邀约额度</b>（抖店不展示剩余数字，以抽屉「确认发送」是否可用来判定，不足/受限时如实失败）→ 填话术（手填或 AI 生成）→ 勾权益 → <b>停下等你确认</b> → 才会点「确认发送」。<b>拒绝即整单取消，绝不继续</b>。
+                点「开始邀约」会启动一次受策展的邀约运行（<b>独立功能，不进任务列表</b>；运行明细见下方「邀约记录」）：进入达人广场 → 选类目与等级 → 搜索 → 勾选前 N 位可邀约达人 → 打开邀约抽屉 → <b>先检测可邀约额度</b>（抖店不展示剩余数字，以抽屉「确认发送」是否可用来判定，不足/受限时如实失败）→ 填话术（手填或 AI 生成）→ 勾权益 → <b>停下等你确认</b> → 才会点「确认发送」。<b>拒绝即整单取消，绝不继续</b>。
               </div>
               <div class="env-note">
                 邀约进行中面板会出现「停止邀约」，随时可中止运行。联系方式（手机号/微信号）与专属推荐商品由平台在抽屉里要求填写：联系方式请在平台侧填好（<b>本应用不保存你的手机号/微信号</b>），商品用平台的"推荐商品"即可。发送不可撤回，并消耗店铺邀约额度。频繁自动操作可能触发平台风控验证（如出现验证码请在页面上手动完成后重试）。
@@ -588,10 +625,10 @@
             </template>
             <template v-else>
               <div class="env-note">
-                点「开始邀约」会创建一个受策展任务：自建标签页镜像你打开的邀约页 → <b>先检测可邀约额度</b>（读取页面「今日剩余N次」，为 0 时如实失败）→ 填联系方式与合作说明（手填，或 AI 按邀约商品生成）→ 确保邀约商品（页面已有则不动）→ <b>停下等你核对</b> → 才会点「发送邀约」，并在平台「确认发送邀约」弹窗上点「确认」。<b>拒绝即整单取消，绝不发送</b>。发送不可撤回，并消耗店铺邀约额度。
+                点「开始邀约」会启动一次受策展的邀约运行（<b>独立功能，不进任务列表</b>；运行明细见下方「邀约记录」）：自建标签页镜像你打开的邀约页 → <b>先检测可邀约额度</b>（读取页面「今日剩余N次」，为 0 时如实失败）→ 填联系方式与合作说明（手填，或 AI 按邀约商品生成）→ 确保邀约商品（页面已有则不动）→ <b>停下等你核对</b> → 才会点「发送邀约」，并在平台「确认发送邀约」弹窗上点「确认」。<b>拒绝即整单取消，绝不发送</b>。发送不可撤回，并消耗店铺邀约额度。
               </div>
               <div class="env-note">
-                选人由你人工完成（达人详情页 URL 带每人专属 token，软件不猜测、不代选）。任务会<b>把运行标签页切到前台</b>供你核对；邀约进行中面板会出现「停止邀约」；发送成功后会自动截图留档（任务详情可查）。
+                选人由你人工完成（达人详情页 URL 带每人专属 token，软件不猜测、不代选）。运行会<b>把运行标签页切到前台</b>供你核对；邀约进行中面板会出现「停止邀约」；发送成功后会自动截图留档（「邀约记录」里可查）。
               </div>
             </template>
           </div>
@@ -1552,9 +1589,27 @@ refreshBackups()
 watch(() => ws.displayedStoreId, () => { verifyItems.value = []; detailTaskId.value = null; if (ws.rightPanel === 'env') refreshEnv() })
 
 // ---------- 任务面板（§4.4 预定义步骤 / §6.6 事件） ----------
-/** 任务功能对应每个店铺：任务列表只显示当前显示店铺的任务（引擎侧仍存全量，仅界面按店铺隔离）；
+/** 任务功能对应每个店铺：任务列表只显示当前显示店铺的任务（引擎侧仍存全量，仅界面按店铺隔离）。
+ *  达人邀约是独立功能——邀约运行（名称前缀「达人邀约 ·」）不进任务列表，只在邀约面板的「邀约记录」里展示；
  *  未打开店铺时显示历史遗留的"未绑定店铺"任务（新任务一律绑定店铺） */
-const storeTasks = computed(() => ws.tasks.filter(t => t.storeScope === ws.displayedStoreId))
+const INVITE_TASK_PREFIX = '达人邀约 ·'
+const storeTasks = computed(() => ws.tasks.filter(t =>
+  t.storeScope === ws.displayedStoreId && !t.name.startsWith(INVITE_TASK_PREFIX)
+))
+/** 本店铺的邀约运行记录（独立于任务列表，按最新在前取近 5 次） */
+const inviteHistory = computed(() => {
+  const sid = ws.displayedStoreId
+  if (!sid) return []
+  return ws.tasks.filter(t => t.storeScope === sid && t.name.startsWith(INVITE_TASK_PREFIX)).slice(0, 5)
+})
+/** 邀约记录行的时间标签：取最近一次运行的结束/开始/创建时间 */
+function runTimeLabel(t: any): string {
+  const run = t.latestRun
+  const ts = run?.finishedAt || run?.startedAt || t.createdAt
+  if (!ts) return ''
+  const d = new Date(ts)
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 const stepTypes = ['navigate', 'waitForPage', 'waitForSelector', 'readText', 'readTable', 'screenshot', 'fillDraft', 'waitForUserConfirmation']
 const stepFieldMap: Record<string, Array<{ key: string; ph: string }>> = {
   navigate: [{ key: 'url', ph: 'https:// 页面地址' }],

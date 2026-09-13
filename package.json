@@ -1,6 +1,6 @@
 {
   "name": "shopilot",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "ShopPilot - 电商店铺浏览器工作台",
   "private": true,
   "main": "apps/desktop/out/main/index.js",
