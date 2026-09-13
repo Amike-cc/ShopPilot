@@ -76,6 +76,14 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     text: z.string().min(1).max(200),
     deep: z.boolean().optional(),
     hint: z.string().max(200).optional()
+  }).strict(),
+  // 按标签文案读指标值（读型步骤）：标签 → 最近"多出一小段文本"的祖先 → 那段文本即值
+  readLabelValue: z.object({
+    label: z.string().min(1).max(60),
+    metric: z.string().min(1).max(60).optional(),
+    deep: z.boolean().optional(),
+    /** 值的最大长度（超过视为爬到了容器层级，如实失败而不是取噪音），默认 40 */
+    maxValueLen: z.number().int().min(1).max(200).optional()
   }).strict()
 }
 
@@ -97,7 +105,8 @@ export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
   waitForText: 30000,
   ensureRows: 120000,
   requireQuota: 30000,
-  requireEnabled: 20000
+  requireEnabled: 20000,
+  readLabelValue: 25000
 }
 
 export const taskCreateSchema = z.object({

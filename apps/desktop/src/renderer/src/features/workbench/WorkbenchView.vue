@@ -673,6 +673,27 @@
         </div>
         <div v-else class="empty-hint">还没有店铺</div>
 
+        <div class="env-h">经营指标<span class="row-sub"> · 销量 / 订单 / 销售额 / 退款金额 / 退款订单数（任务从各平台后台页面读取，每店每指标取最新）</span>
+          <button class="mini-btn" style="margin-left:auto" data-test="datacenter-collect" :disabled="dcCollecting" @click="collectBusinessData()">采集经营数据</button>
+        </div>
+        <table class="dc-table" v-if="bizRows.length">
+          <thead><tr><th>店铺</th><th>平台</th><th v-for="m in BIZ_METRICS" :key="m.key">{{ m.label }}</th><th>采集时间</th></tr></thead>
+          <tbody>
+            <tr v-for="r in bizRows" :key="r.storeId">
+              <td>{{ r.storeName }}</td>
+              <td class="row-sub">{{ r.platform }}</td>
+              <td v-for="m in BIZ_METRICS" :key="m.key" :class="{ 'dc-val': r.values[m.key] != null }">
+                {{ bizValue(m.key, r.values[m.key]) }}
+              </td>
+              <td class="row-sub">{{ r.lastAt ? new Date(r.lastAt).toLocaleString() : '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="empty-hint">还没有店铺</div>
+        <div class="env-note" v-if="!BUSINESS_SUPPORTED_PLATFORMS.length">
+          经营指标的页面锚点<b>尚未实测</b>：本应用没有平台官方 API，只能从各平台后台页面读取（走任务的「指标快照」机制）。实测一个平台登记一个——未登记的平台不会拿猜测的选择器去试。已登记：<b>暂无</b>。
+        </div>
+
         <div class="env-h">指标快照<span class="row-sub"> · 任务 readText/readTable 步骤按「指标名」落库；每店每指标取最新一条</span></div>
         <table class="dc-table" v-if="dc.snapshots.length">
           <thead><tr><th>店铺</th><th>指标</th><th>值</th><th>采集时间</th></tr></thead>
@@ -1031,6 +1052,8 @@ import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS } from '@shared/constants/invite'
 import { buildInviteSteps } from '@shared/invite-steps'
+import { BIZ_METRICS, businessProfileFor, BUSINESS_SUPPORTED_PLATFORMS } from '@shared/constants/business'
+import { buildBusinessCollectSteps } from '@shared/business-steps'
 import {
   DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
   AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, INVITE_SQUARE_URLS_SETTING
@@ -2227,6 +2250,23 @@ async function doCopyConfig() {
  */
 const dataCenterOpen = ref(false)
 const dcLoading = ref(false)
+const dcCollecting = ref(false)
+
+/** 经营指标矩阵：按店铺汇总五个指标的最新快照值（值从 store_snapshots 的 biz.* 指标名来） */
+const bizRows = computed(() => {
+  const byStore = new Map<string, { storeId: string; storeName: string; platform: string; values: Record<string, unknown>; lastAt: number }>()
+  for (const s of ws.stores) {
+    byStore.set(s.id, { storeId: s.id, storeName: s.name, platform: s.platform, values: {}, lastAt: 0 })
+  }
+  for (const snap of dc.snapshots as any[]) {
+    if (!String(snap.metric || '').startsWith('biz.')) continue
+    const hit = [...byStore.values()].find(r => r.storeName === snap.storeName)
+    if (!hit) continue
+    hit.values[snap.metric] = snap.value
+    if (snap.capturedAt > hit.lastAt) hit.lastAt = snap.capturedAt
+  }
+  return [...byStore.values()]
+})
 const dc = reactive<any>({
   generatedAt: 0,
   totals: { stores: 0, online: 0, archived: 0, trash: 0, platforms: 0, snapshots: 0, tasks: 0 },
@@ -2252,6 +2292,55 @@ async function loadDataCenter() {
     }
   } finally {
     dcLoading.value = false
+  }
+}
+
+/** 经营指标单元格显示：金额类补 ¥ 前缀；没有值如实显示"未采集" */
+function bizValue(key: string, v: unknown): string {
+  if (v == null || v === '') return '未采集'
+  const money = key === 'biz.gmv' || key === 'biz.refundAmount'
+  return money && typeof v === 'number' ? '¥' + v : String(v)
+}
+
+/**
+ * 采集经营数据：为每个「平台已实测」的店铺各创建一个只读采集任务并立即运行
+ * （navigate 经营数据页 → 每个指标一条 readText，值落 store_snapshots）。
+ * 未实测平台不猜锚点，如实跳过并说明；需要店铺浏览器已打开（引擎不静默拉起，§4.4）。
+ */
+async function collectBusinessData() {
+  const supported = ws.stores.filter(s => !!businessProfileFor(s.platform))
+  if (!supported.length) {
+    ws.toast('还没有已实测经营指标锚点的平台——需要先在真实登录态后台实测页面锚点（不猜选择器）', 'error')
+    return
+  }
+  dcCollecting.value = true
+  let created = 0
+  const skipped: string[] = []
+  try {
+    for (const s of supported) {
+      const profile = businessProfileFor(s.platform)!
+      const steps = buildBusinessCollectSteps(profile)
+      const res = await window.shopilot.task.create({
+        name: `经营数据采集 · ${s.platform} · ${new Date().toLocaleDateString()}`,
+        storeScope: s.id,
+        steps
+      })
+      if (!res.ok) { skipped.push(`${s.name}（创建失败）`); continue }
+      const run = await window.shopilot.task.run(res.data.id)
+      if (!run.ok) { skipped.push(`${s.name}（启动失败）`); continue }
+      created++
+    }
+    await ws.refreshTasks()
+    const notOpen = supported.filter(s => !ws.openStoreIds.includes(s.id)).length
+    ws.toast(
+      `已启动 ${created} 个采集任务` +
+      (notOpen ? `（其中 ${notOpen} 家店铺浏览器未打开，会排队等待，不静默拉起）` : '') +
+      (skipped.length ? `；跳过：${skipped.join('、')}` : ''),
+      created ? 'success' : 'error'
+    )
+    await loadDataCenter()
+  } finally {
+    dcCollecting.value = false
   }
 }
 

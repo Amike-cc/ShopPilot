@@ -1171,6 +1171,68 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
         await new Promise(r => setTimeout(r, 300))
       }
     }
+    case 'readLabelValue': {
+      // 按标签文案读指标值：找可见元素（自有文本 === label）→ 向上找最近"文本比 label 只多一小段"
+      // 的祖先 → 多出来的那段就是值。卡片类名普遍带构建哈希（快手 kpro-data / 微信 weui 实测），
+      // 以文案为锚才能在平台改版时"要么读对、要么如实报错"，而不是读到别的数字。
+      const wc = wcOrThrow(run)
+      const label = String(input.label)
+      const deep = !!input.deep
+      const maxLen = input.maxValueLen == null ? 40 : Number(input.maxValueLen)
+      const deadline = Date.now() + step.timeoutMs
+      let res: any = null
+      for (;;) {
+        guardSignals(run)
+        res = await wc.executeJavaScript(`(() => {
+          ${deep ? ENUM_DEEP_FN : ''}
+          ${VISIBLE_JS}
+          const label = ${JSON.stringify(label)};
+          const MAX = ${maxLen};
+          const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+          const cands = [];
+          for (const el of scope) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (!own.includes(label)) continue;
+            if (!__visible(el)) continue;
+            cands.push({ el, len: own.length });
+          }
+          if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
+          cands.sort((a, b) => a.len - b.len);
+          let node = cands[0].el;
+          // 向上找"比标签只多出一小段文本"的最近祖先（= 指标卡片本体）
+          for (let i = 0; i < 6 && node && node !== document.body; i++) {
+            const txt = String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (txt.length > label.length) {
+              const value = txt.replace(label, '').trim();
+              if (value && value.length <= MAX) return { ok: true, value, cardText: txt.slice(0, 60) };
+              if (value && value.length > MAX) return { ok: false, reason: 'VALUE_TOO_LONG', cardText: txt.slice(0, 80) };
+            }
+            node = node.parentElement;
+          }
+          return { ok: false, reason: 'NO_VALUE_SIBLING' };
+        })()`).catch(() => ({ ok: false, reason: 'ERR' }))
+        if (res && res.ok) break
+        if (Date.now() >= deadline) {
+          throw new Error(res && res.reason === 'VALUE_TOO_LONG'
+            ? `TASK_SELECTOR_CHANGED: 「${label}」向上找到的容器文本过长（${String(res.cardText).slice(0, 60)}）——页面结构已改，未取到单值`
+            : `TASK_SELECTOR_CHANGED: 页面上读不到「${label}」对应的值（${res && res.reason}）`)
+        }
+        await new Promise(r => setTimeout(r, 300))
+      }
+      guardSignals(run)
+      // 卡片文本常带"较上期/比上周 X%"等对比噪音（实测快手指标卡）：只取开头的"数字（可带货币
+      // 符号与万/亿）"作为指标值，其余丢弃——绝不把对比数字当成指标值。
+      const raw = String(res.value)
+      const m = /^[¥￥$€]?\s*[\d,]+(?:\.\d+)?\s*(?:万|亿)?/.exec(raw)
+      const shown = (m ? m[0] : raw).replace(/\s+/g, '').slice(0, 40)
+      let num = parseFloat(shown.replace(/[^\d.]/g, ''))
+      if (Number.isFinite(num) && shown.includes('亿')) num *= 1e8
+      else if (Number.isFinite(num) && shown.includes('万')) num *= 1e4
+      if (input.metric) {
+        TaskStore.insertSnapshot(run.storeId, String(input.metric), Number.isFinite(num) ? num : shown, run.runId)
+      }
+      return { kind: 'text', payload: { text: shown, rawText: raw.slice(0, 60), label, cardText: res.cardText, metric: input.metric || null } }
+    }
     default:
       throw new Error(`TASK_INVALID_STEP: 未知步骤类型 ${String(step.type)}`)
   }

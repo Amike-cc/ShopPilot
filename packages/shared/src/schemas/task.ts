@@ -39,7 +39,12 @@ export const TASK_STEP_TYPES = [
   'requireQuota',
   // 可用性预检：找文案为 text 的可见按钮，若处于禁用态（额度用尽/平台限制）如实报
   // TASK_QUOTA_EXCEEDED——用于抖店抽屉「确认发送」（抖店不在页面展示剩余额度数字）
-  'requireEnabled'
+  'requireEnabled',
+  // 按标签文案读取指标值（数据中心用）：页面上的指标卡片类名普遍带构建哈希（实测快手
+  // kpro-data、微信 weui 均如此），写死哈希选择器会随版本失效；而标签文案（如「成交金额」）
+  // 是平台对外的稳定表达。本步骤以文案为锚：找到该标签元素后向上找"只多出这一小段文本"
+  // 的最近祖先，取多出来的那段作为值；超过长度阈值就如实失败，绝不从整页噪音里猜数字。
+  'readLabelValue'
 ] as const
 
 export type TaskStepType = (typeof TASK_STEP_TYPES)[number]
