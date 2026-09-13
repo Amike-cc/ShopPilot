@@ -1251,6 +1251,32 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       guardSignals(run)
       return { kind: 'executed', payload: { action: 'waitMs', ms: total } }
     }
+    case 'waitForGone': {
+      // 等元素消失或不可见（提交类动作的结果校验）：抽屉没关就说明提交没被平台接受，
+      // 如实失败——绝不以"点过了"代替"发出去了"。
+      const wc = wcOrThrow(run)
+      const sel = String(input.selector)
+      const deep = !!input.deep
+      const goneExpr = `(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${VISIBLE_JS}
+        const el = ${deep
+          ? `__enumDeep().find(e => { try { return e.matches(${JSON.stringify(sel)}) } catch { return false } }) || null`
+          : `document.querySelector(${JSON.stringify(sel)})`};
+        if (!el) return true;
+        return !__visible(el);
+      })()`
+      await withTimeout(async () => {
+        for (;;) {
+          guardSignals(run)
+          const gone = await wc.executeJavaScript(goneExpr).catch(() => false)
+          if (gone) return
+          await new Promise(r => setTimeout(r, 300))
+        }
+      }, run, step.timeoutMs, `等待元素消失 ${sel}`)
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'waitForGone', selector: sel } }
+    }
     default:
       throw new Error(`TASK_INVALID_STEP: 未知步骤类型 ${String(step.type)}`)
   }

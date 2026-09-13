@@ -86,7 +86,9 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     maxValueLen: z.number().int().min(1).max(200).optional()
   }).strict(),
   // 显式等待（读型步骤，上限 2 分钟）：等 SPA 按新筛选条件刷新数据
-  waitMs: z.object({ ms: z.number().int().min(100).max(120000) }).strict()
+  waitMs: z.object({ ms: z.number().int().min(100).max(120000) }).strict(),
+  // 等元素消失/不可见（读型步骤）：提交后校验结果（如邀约抽屉应关闭）
+  waitForGone: z.object({ selector, deep: z.boolean().optional() }).strict()
 }
 
 /** 副作用步骤不可进入"从失败恢复"的重试范围 - §9.2（重试会重复点击/重复写入） */
@@ -109,7 +111,8 @@ export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
   requireQuota: 30000,
   requireEnabled: 20000,
   readLabelValue: 25000,
-  waitMs: 120000
+  waitMs: 120000,
+  waitForGone: 30000
 }
 
 export const taskCreateSchema = z.object({

@@ -136,6 +136,9 @@ describe('抖店（batch-list）步骤构造', () => {
     expect(types.indexOf('waitForUserConfirmation')).toBeLessThan(types.lastIndexOf('clickByText'))
     const gate = steps.find(s => s.type === 'waitForUserConfirmation')!
     expect(String(gate.input.message)).toContain('类目 生鲜')
+    // 发送后必须校验结果（抽屉关闭）并截图留档
+    expect(types.indexOf('waitForGone')).toBeGreaterThan(types.lastIndexOf('clickByText'))
+    expect(types[types.length - 1]).toBe('screenshot')
     // 不应出现微信专属步骤
     for (const t of ['mirrorTabUrl', 'typeText', 'ensureRows', 'requireQuota']) expect(types).not.toContain(t)
   })

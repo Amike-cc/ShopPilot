@@ -47,7 +47,10 @@ export const TASK_STEP_TYPES = [
   'readLabelValue',
   // 显式等待（读型步骤）：SPA 点了周期/筛选后要重新取数，数值原地刷新而不是新增元素，
   // 「等元素出现」类判据会立刻命中旧值（实测快手周期切换踩过）——只能显式等页面刷完。
-  'waitMs'
+  'waitMs',
+  // 等元素消失/不可见（读型步骤）：提交类动作后的**结果校验**——例如点击"确认发送"后
+  // 邀约抽屉应当关闭；抽屉还在就说明提交没被接受，如实失败而不是把"点了"当"发了"
+  'waitForGone'
 ] as const
 
 export type TaskStepType = (typeof TASK_STEP_TYPES)[number]

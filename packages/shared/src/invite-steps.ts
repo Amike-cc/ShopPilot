@@ -101,6 +101,11 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
     timeoutMs: 1800000
   })
   steps.push({ type: 'clickByText', input: { text: p.texts.confirmSend } })
+  // 发送后的结果校验：邀约抽屉应关闭；没关说明平台没接受这次提交，如实失败
+  // （避免"点了确认发送"被当成"已经发出去了"）
+  steps.push({ type: 'waitForGone', input: { selector: p.scriptSelector }, timeoutMs: 30000 })
+  // 截图留档：发送结果（达人侧邀约记录/行状态）事后可查
+  steps.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
   return steps
 }
 
