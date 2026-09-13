@@ -15,11 +15,20 @@ import { getDatabase } from '../db/database'
 import { getAiKey, hasAiKey } from './credential-store'
 import { logMain } from './logger'
 
-export { DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS } from '@shared/constants/ai'
-import { DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS } from '@shared/constants/ai'
+export {
+  DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
+  AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, normalizeAiEndpoint, modelsUrlFromChat
+} from '@shared/constants/ai'
+import {
+  DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
+  AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, normalizeAiEndpoint, modelsUrlFromChat
+} from '@shared/constants/ai'
 
 export interface AiConfig {
+  /** 用户填写的原始地址（可能是"基础地址"，如 https://api.xxx.com/v1） */
   endpoint: string
+  /** 规范化后**实际请求**的补全地址（界面据此展示"实际请求地址"） */
+  resolvedEndpoint: string
   model: string
   timeoutMs: number
   /** 仅告知"是否已配置"，绝不回传 Key 本身 */
@@ -48,7 +57,8 @@ export function getAiConfig(): AiConfig {
   const timeoutMs = Number.isFinite(rawTimeout)
     ? Math.min(Math.max(Math.round(rawTimeout), AI_TIMEOUT_MIN_MS), AI_TIMEOUT_MAX_MS)
     : DEFAULT_AI_TIMEOUT_MS
-  return { endpoint, model, timeoutMs, hasKey: hasAiKey() }
+  // 中转站/自建网关常只给"基础地址"：统一规范化后再用（拼接规则见 shared/constants/ai.ts）
+  return { endpoint, resolvedEndpoint: normalizeAiEndpoint(endpoint), model, timeoutMs, hasKey: hasAiKey() }
 }
 
 function assertEndpointUsable(endpoint: string): void {
@@ -66,14 +76,14 @@ export async function chatComplete(opts: { system: string; user: string; maxToke
   const cfg = getAiConfig()
   const key = getAiKey()
   if (!key || !key.trim()) throw new AiError('AI_NOT_CONFIGURED', '未配置大模型 API Key（设置 → AI 配置）')
-  assertEndpointUsable(cfg.endpoint)
+  assertEndpointUsable(cfg.resolvedEndpoint)
 
   const timeoutMs = opts.timeoutMs ?? cfg.timeoutMs
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(), timeoutMs)
   const t0 = Date.now()
   try {
-    const res = await fetch(cfg.endpoint, {
+    const res = await fetch(cfg.resolvedEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify({
@@ -132,12 +142,9 @@ export async function testAiConnection(): Promise<{ ok: true; model: string; ela
  * 只在能明确推导时返回——推不出来就如实报错，不猜、不拼一个可能打不通的地址。
  */
 export function modelsUrlFor(endpoint: string): string {
-  const ep = String(endpoint || '').trim().replace(/\/+$/, '')
-  // 必须分成两条正则：合并成 /(chat\/completions|completions)$/ 时，(.*) 贪婪会把
-  // "…/ai/chat/completions" 截成 "…/ai/chat" + "/completions"，推出错误的 …/ai/chat/models
-  const m = /^(.*)\/chat\/completions$/i.exec(ep) || /^(.*)\/completions$/i.exec(ep)
-  if (!m) throw new AiError('AI_BAD_ENDPOINT', '接口地址须以 /chat/completions 结尾，才能推出 /models 地址')
-  return `${m[1]}/models`
+  const url = modelsUrlFromChat(endpoint)
+  if (!url) throw new AiError('AI_BAD_ENDPOINT', '接口地址无法推导出 /models 地址（请填基础地址或完整的 /chat/completions 地址）')
+  return url
 }
 
 /**
@@ -149,7 +156,7 @@ export async function listModels(): Promise<{ models: string[]; elapsedMs: numbe
   const cfg = getAiConfig()
   const key = getAiKey()
   if (!key || !key.trim()) throw new AiError('AI_NOT_CONFIGURED', '未配置大模型 API Key（设置 → AI 配置）')
-  assertEndpointUsable(cfg.endpoint)
+  assertEndpointUsable(cfg.resolvedEndpoint)
   const url = modelsUrlFor(cfg.endpoint)
 
   const ac = new AbortController()

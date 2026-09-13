@@ -3,8 +3,10 @@
  * 用法：node verify-anchor-algo.js <urlPart> <label1> <label2> ...
  */
 const PORT = process.env.SHOPILOT_CDP_PORT || '9250'
-const urlPart = process.argv[2] || 'syt.kwaixiaodian'
-const labels = process.argv.slice(3)
+const DEEP = process.argv.includes('--deep')
+const argv = process.argv.slice(2).filter(a => a !== '--deep')
+const urlPart = argv[0] || 'syt.kwaixiaodian'
+const labels = argv.slice(1)
 async function j(p) { const r = await fetch(`http://127.0.0.1:${PORT}${p}`); return r.json() }
 async function targets() { const l = await j('/json/list'); return l.filter(t => t.type === 'page') }
 function connect(t) {
@@ -30,11 +32,19 @@ async function main() {
   const out = await c.ev(`(() => {
     const clean = s => String(s || '').replace(/\\s+/g, ' ').trim()
     const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+    const DEEP = ${DEEP ? 'true' : 'false'}
+    const all = () => {
+      const out = []
+      const walk = root => { for (const el of root.querySelectorAll('*')) { out.push(el); if (el.shadowRoot) walk(el.shadowRoot) } }
+      walk(document)
+      return out
+    }
+    const scope = DEEP ? all() : [...document.querySelectorAll('*')]
     const LABELS = ${JSON.stringify(labels.length ? labels : ['成交金额', '成交订单数', '退款金额（支付日）', '退款订单数（支付日）'])}
     const res = []
     for (const label of LABELS) {
       const cands = []
-      for (const el of document.querySelectorAll('*')) {
+      for (const el of scope) {
         const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
         if (!own.includes(label)) continue
         if (!visible(el)) continue
@@ -51,11 +61,11 @@ async function main() {
           if (v && v.length <= 40) { value = v; cardText = txt.slice(0, 60); why = 'ok'; break }
           if (v && v.length > 40) { why = 'VALUE_TOO_LONG:' + txt.slice(0, 40); break }
         }
-        node = node.parentElement
+        node = node.parentElement || (node.getRootNode && node.getRootNode().host)
       }
       res.push({ label, candidates: cands.length, value, cardText, why })
     }
-    return JSON.stringify({ url: location.href.slice(0, 70), res }, null, 1)
+    return JSON.stringify({ url: location.href.slice(0, 70), deep: DEEP, res }, null, 1)
   })()`)
   console.log(out)
   c.close()

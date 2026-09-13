@@ -53,6 +53,8 @@ export interface BusinessProfile {
    * 数字口径混乱比没有数字更糟——所以周期必须显式固定并在界面如实标注。
    */
   periodText?: string
+  /** 周期控件在 ShadowRoot 内时需要穿透点击（微信小店整页在 shadow 里） */
+  periodDeep?: boolean
   /** 点完周期后等待页面重新取数的毫秒数（默认 6000；实测快手需要 ~3-5s 刷完） */
   periodSettleMs?: number
   /** 实测日期（YYYY-MM-DD），供界面如实展示"哪天测的" */
@@ -85,8 +87,27 @@ const KUAISHOU: BusinessProfile = {
   note: '口径：近7日；销量取「成交件数」；退款金额取「退款金额(退款日)」、退款订单数取「成交退款订单数」。'
 }
 
+const WEIXIN: BusinessProfile = {
+  platform: '微信小店',
+  // 后台首页的「经营数据」区（整页在 <micro-app shadowdom> 的 ShadowRoot 内 → 全部需要 deep）
+  pageUrl: 'https://store.weixin.qq.com/shop/home',
+  urlMarker: 'shop/home',
+  // 实测首页默认口径为「今天」，统一改点「近7天」（文案是"近7天"，与快手的"近7日"不同——实测为准）
+  periodText: '近7天',
+  periodDeep: true,
+  periodSettleMs: 6000,
+  measuredAt: '2026-09-13',
+  metrics: [
+    { key: 'biz.gmv', anchorText: '成交金额', deep: true },
+    { key: 'biz.orders', anchorText: '成交订单数', deep: true },
+    { key: 'biz.refundAmount', anchorText: '成交退款金额', deep: true }
+  ],
+  note: '口径：近7天；退款金额取「成交退款金额」。销量与退款订单数：本店「店铺数据 → 交易统计」页渲染为空（无数据/权限），未采集——不猜别的口径。'
+}
+
 export const BUSINESS_PROFILES: Readonly<Record<string, BusinessProfile>> = {
-  [KUAISHOU.platform]: KUAISHOU
+  [KUAISHOU.platform]: KUAISHOU,
+  [WEIXIN.platform]: WEIXIN
 }
 
 export function businessProfileFor(platformName: string | null | undefined): BusinessProfile | null {

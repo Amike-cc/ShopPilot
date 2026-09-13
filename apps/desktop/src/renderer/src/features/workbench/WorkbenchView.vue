@@ -948,10 +948,23 @@
 
         <!-- AI 配置（独立页签）：Key 经系统加密存储，不回显 -->
         <div v-else-if="settingsTab === 'ai'" class="sub-pane" data-test="settings-ai">
-          <div class="env-note">用于「达人邀约」里按平台推荐商品自动生成邀约话术。走 <b>OpenAI 兼容</b>的 /chat/completions 协议（DeepSeek、通义、Kimi、智谱、OpenAI 等均可）。</div>
-          <label class="plat-row">接口地址
-            <input v-model="aiDraft.endpoint" data-test="ai-endpoint" spellcheck="false" :placeholder="DEFAULT_AI_ENDPOINT" />
+          <div class="env-note">用于「达人邀约」里按平台推荐商品自动生成邀约话术。走 <b>OpenAI 兼容</b>的 /chat/completions 协议：各家中转站、聚合网关、自建网关都能接。</div>
+          <label class="plat-row">服务商
+            <select v-model="aiProviderKey" data-test="ai-provider" @change="applyAiPreset(aiProviderKey)">
+              <option v-for="p in AI_PROVIDER_PRESETS" :key="p.key" :value="p.key">{{ p.label }}</option>
+              <option value="__custom__">自定义（下方手填地址与模型名）</option>
+            </select>
           </label>
+          <label class="plat-row">接口地址
+            <input v-model="aiDraft.endpoint" data-test="ai-endpoint" spellcheck="false"
+              :placeholder="DEFAULT_AI_ENDPOINT"
+              @input="aiProviderKey = '__custom__'" />
+          </label>
+          <div class="env-note" v-if="aiResolvedEndpoint" data-test="ai-resolved">
+            实际请求：<code>{{ aiResolvedEndpoint }}</code>
+            <template v-if="aiModelsUrl"><br>模型列表：<code>{{ aiModelsUrl }}</code></template>
+          </div>
+          <div class="env-note" v-else>可填<b>基础地址</b>（如 <code>https://api.xxx.com/v1</code>，中转站通常给这个）或<b>完整补全地址</b>（以 <code>/chat/completions</code> 结尾）——基础地址会按 OpenAI 通行约定自动补全为实际请求地址。</div>
           <label class="plat-row">模型名
             <input v-model="aiDraft.model" data-test="ai-model" spellcheck="false" :placeholder="DEFAULT_AI_MODEL" />
           </label>
@@ -980,7 +993,8 @@
             Key 经系统 safeStorage（Windows DPAPI）加密存储、<b>只在主进程使用，界面永不回显</b>，也不会进诊断包。
             AI 请求由主进程<b>直连出网，不走店铺代理</b>；接口地址须为 https://（仅本机 127.0.0.1/localhost 允许 http://）。
             非敏感项（接口地址 / 模型名 / 超时）随「保存」写入，Key 点「保存」时一并写入（留空表示不改）。
-            「获取可用模型」是只读请求 <b>/models</b>（由接口地址推导），拉不到就如实报错、不编造候选。
+            「获取可用模型」是只读请求 <b>/models</b>（由接口地址推导，见上方"模型列表"），拉不到就如实报错、不编造候选。
+            预设只是便捷预填，各家的模型名与可用性以你的账号为准。
           </div>
         </div>
 
@@ -1059,7 +1073,8 @@ import { BIZ_METRICS, businessProfileFor, BUSINESS_SUPPORTED_PLATFORMS } from '@
 import { buildBusinessCollectSteps } from '@shared/business-steps'
 import {
   DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
-  AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, INVITE_SQUARE_URLS_SETTING
+  AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, INVITE_SQUARE_URLS_SETTING,
+  AI_PROVIDER_PRESETS, normalizeAiEndpoint, modelsUrlFromChat
 } from '@shared/constants/ai'
 
 const ws = useWorkspaceStore()
@@ -1170,7 +1185,7 @@ async function saveSquareUrls(): Promise<boolean> {
 function resetSquareUrl(platformName: string) { squareUrlDraft[platformName] = '' }
 
 // ---------- 设置：AI 配置（大模型）----------
-const aiConfig = ref<{ endpoint: string; model: string; timeoutMs: number; hasKey: boolean }>({
+const aiConfig = ref<{ endpoint: string; resolvedEndpoint?: string; model: string; timeoutMs: number; hasKey: boolean }>({
   endpoint: DEFAULT_AI_ENDPOINT, model: DEFAULT_AI_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS, hasKey: false
 })
 const aiDraft = reactive({ endpoint: '', model: '', timeoutMs: DEFAULT_AI_TIMEOUT_MS })
@@ -1181,6 +1196,30 @@ const aiTesting = ref(false)
 /** 「获取可用模型」拉回来的模型名（只读接口；失败时保持为空并如实报错，不编造候选） */
 const aiModels = ref<string[]>([])
 const aiModelsLoading = ref(false)
+/** 服务商预设（含中转站/自定义）：只是便捷预填，选完仍可任意改地址与模型名 */
+const aiProviderKey = ref('__custom__')
+
+/** 规范化后的实际请求地址（与主进程同一套规则，界面据此让用户看清"到底请求哪"） */
+const aiResolvedEndpoint = computed(() => normalizeAiEndpoint(aiDraft.endpoint))
+/** 由实际请求地址推导的模型列表地址（推不出来就不显示，不猜） */
+const aiModelsUrl = computed(() => modelsUrlFromChat(aiDraft.endpoint) || '')
+
+/** 选中预设：填基础地址 + 常见模型名；「自定义」只切标记，不动用户已填内容 */
+function applyAiPreset(key: string) {
+  const p = AI_PROVIDER_PRESETS.find(x => x.key === key)
+  if (!p || !p.baseUrl) return
+  aiDraft.endpoint = p.baseUrl
+  if (p.models.length && !p.models.includes(aiDraft.model)) aiDraft.model = p.models[0]
+  aiModels.value = []
+  aiMsg.value = ''
+}
+
+/** 载入配置后按地址反查所属预设（只为下拉显示正确，不改用户数据） */
+function matchPresetFor(endpoint: string): string {
+  const norm = normalizeAiEndpoint(endpoint)
+  const hit = AI_PROVIDER_PRESETS.find(p => p.baseUrl && normalizeAiEndpoint(p.baseUrl) === norm)
+  return hit ? hit.key : '__custom__'
+}
 
 async function loadAiConfig() {
   const res = await window.shopilot.ai.configGet()
@@ -1189,6 +1228,7 @@ async function loadAiConfig() {
   aiDraft.endpoint = res.data.endpoint
   aiDraft.model = res.data.model
   aiDraft.timeoutMs = res.data.timeoutMs
+  aiProviderKey.value = matchPresetFor(res.data.endpoint)
 }
 
 /** 保存 AI 非敏感项；Key 留空表示不改动（避免误清空） */
