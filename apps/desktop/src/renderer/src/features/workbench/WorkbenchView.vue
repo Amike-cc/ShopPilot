@@ -1764,7 +1764,8 @@ const invite = reactive({
   /** 跨平台不共话术：切到不同平台的店铺时清空脚本（抖店/微信的话术口径不同） */
   platformKey: ''
 })
-// 店铺/平台变化时把可选项重置为该平台档案的默认值（脚本/联系人保留，避免用户输入被清掉）
+// 店铺/平台变化时把可选项重置为该平台档案的默认值，随后**合并该平台保存过的配置**
+// （用户要求：主推类目/达人等级/数量/话术要能记住，不能每次重启都重置）
 watch(inviteProfile, (p) => {
   if (!p) return
   if (invite.platformKey !== p.platform) {
@@ -1783,7 +1784,69 @@ watch(inviteProfile, (p) => {
     invite.count = 1
     invite.productCount = Math.max(1, Math.min(invite.productCount || 1, p.maxProducts))
   }
+  void loadInviteConfig(p)
 }, { immediate: true })
+
+// ---------- 邀约配置持久化（按平台各存一份到 settings 表） ----------
+const INVITE_CFG_KEY = (platform: string) => `invite.config.${platform}`
+/** 已完成"读取→合并"的平台：此后的变更才回写，防止启动时的默认值把存档覆盖掉 */
+const inviteCfgLoaded = new Set<string>()
+
+function inviteCfgFields(flow: 'batch-list' | 'assist-form'): readonly string[] {
+  return flow === 'batch-list'
+    ? ['category', 'levels', 'count', 'script', 'scriptMode', 'benefits']
+    : ['contact', 'wechat', 'phone', 'script', 'scriptMode', 'productCount']
+}
+
+async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFor>>) {
+  const key = p.platform
+  try {
+    const res = await window.shopilot.settings.get(INVITE_CFG_KEY(key))
+    // 等待期间用户切走了店铺/平台 → 丢弃，避免把 A 平台的配置灌进 B 平台
+    if (inviteProfile.value?.platform !== key) return
+    // settings.get 的返回是 { key, value } 包装，配置本体在 .value 里（漏拆包装=永远读不到存档）
+    const raw = res.ok && res.data && typeof res.data === 'object' ? (res.data as Record<string, unknown>).value : null
+    const saved = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
+    if (saved) {
+      const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : null)
+      if (p.flow === 'batch-list') {
+        const cat = str(saved.category, 40)
+        if (cat !== null && (cat === '' || p.categories.includes(cat))) invite.category = cat
+        if (Array.isArray(saved.levels)) invite.levels = saved.levels.filter((x): x is string => typeof x === 'string' && p.levels.includes(x))
+        if (typeof saved.count === 'number' && Number.isFinite(saved.count)) invite.count = Math.max(1, Math.min(Math.round(saved.count), p.maxBatch))
+        const sc = str(saved.script, p.scriptMaxLen)
+        if (sc !== null) invite.script = sc
+        if (saved.scriptMode === 'ai' || saved.scriptMode === 'manual') invite.scriptMode = saved.scriptMode
+        if (Array.isArray(saved.benefits)) invite.benefits = saved.benefits.filter((x): x is string => typeof x === 'string' && p.benefits.includes(x))
+      } else {
+        const c = str(saved.contact, 60); if (c !== null) invite.contact = c
+        const w = str(saved.wechat, 60); if (w !== null) invite.wechat = w
+        const ph = str(saved.phone, 40); if (ph !== null) invite.phone = ph
+        const sc = str(saved.script, p.scriptMaxLen); if (sc !== null) invite.script = sc
+        if (saved.scriptMode === 'ai' || saved.scriptMode === 'manual') invite.scriptMode = saved.scriptMode
+        if (typeof saved.productCount === 'number' && Number.isFinite(saved.productCount)) invite.productCount = Math.max(1, Math.min(Math.round(saved.productCount), p.maxProducts))
+      }
+    }
+  } catch { /* 读不到就按默认值走，不阻塞面板 */ }
+  inviteCfgLoaded.add(key)
+}
+
+let inviteSaveTimer: ReturnType<typeof setTimeout> | null = null
+watch(invite, () => {
+  const p = inviteProfile.value
+  if (!p || !inviteCfgLoaded.has(p.platform)) return
+  if (inviteSaveTimer) clearTimeout(inviteSaveTimer)
+  // 防抖 500ms：打字/连点等级时不要每敲一键就写一次库
+  inviteSaveTimer = setTimeout(() => {
+    const cur = inviteProfile.value
+    if (!cur || cur.platform !== p.platform) return
+    const snapshot: Record<string, unknown> = {}
+    for (const f of inviteCfgFields(cur.flow)) snapshot[f] = (invite as any)[f]
+    // 必须转纯对象再过 IPC：快照里的 levels/benefits 是 Vue 响应式 Proxy，
+    // Electron 结构化克隆不认（真机实测抛 "An object could not be cloned"，写入静默失败）
+    void window.shopilot.settings.set(INVITE_CFG_KEY(cur.platform), JSON.parse(JSON.stringify(snapshot)))
+  }, 500)
+}, { deep: true })
 
 /** AI 是否可用（接口地址/模型名有值 + 主进程已存 Key）——AI 模式下用它当"开始邀约"的前置条件 */
 const aiReady = computed(() => !!aiConfig.value.endpoint && !!aiConfig.value.model && aiConfig.value.hasKey)
@@ -1862,7 +1925,9 @@ async function startInvite() {
   if (!created.ok) { ws.toast('创建邀约任务失败: ' + created.error.message, 'error'); return }
   const started = await window.shopilot.task.run(created.data.id)
   if (!started.ok) { ws.toast('启动邀约任务失败: ' + started.error.message, 'error'); return }
-  ws.toast('邀约任务已启动：点「发送」前会先停下让你确认', 'success')
+  ws.toast(p.flow === 'batch-list'
+    ? '邀约任务已启动：将连续开批（每批勾满后直接发送），直到额度用完或可选达人不足'
+    : '邀约任务已启动：点「发送」前会先停下让你确认', 'success')
   // 留在邀约面板：进行中状态与「停止邀约」按钮就地可见（任务详情在「任务列表」页签可查）
   await ws.refreshTasks()
 }

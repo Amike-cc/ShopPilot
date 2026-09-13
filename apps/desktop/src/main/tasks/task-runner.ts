@@ -18,7 +18,7 @@ import type {
   StepResultKind, TaskConfirmationEvent, TaskScheduledFiredEvent
 } from '@shared/schemas/task'
 import * as TaskStore from './task-store'
-import { NON_RESUMABLE_TYPES } from './task-store'
+import { NON_RESUMABLE_TYPES, DEFAULT_STEP_TIMEOUT } from './task-store'
 import { writeAudit } from '../services/audit-logger'
 import { logMain } from '../services/logger'
 import { generateInviteScript } from '../services/ai-client'
@@ -877,7 +877,12 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       // 说明：本步骤不套 withTimeout——单轮耗时由嵌套步骤各自的超时约束，整体时长由 maxRounds 封顶；
       // 嵌套步骤不单独落库（只发进度事件），整轮的汇总写进本步骤的 payload，界面/日志能看明白跑到第几轮。
       const nestedRaw = Array.isArray(input.steps) ? input.steps : []
-      const nested = nestedRaw as TaskStepDef[]
+      // 运行时兜底补超时：早于创建侧修复建的任务，嵌套步骤可能没有 timeoutMs
+      // （undefined → withTimeout(NaN)，真店实测报「clickByText 超过 NaNms」）
+      const nested = (nestedRaw as TaskStepDef[]).map(c => ({
+        ...c,
+        timeoutMs: Number(c?.timeoutMs) > 0 ? Number(c.timeoutMs) : (DEFAULT_STEP_TIMEOUT[c.type] ?? 15000)
+      }))
       if (!nested.length) throw new Error('TASK_INVALID_STEP: loop 缺少 steps')
       const maxRounds = Number(input.maxRounds)
       const stopOn: string[] = Array.isArray(input.stopOn) ? input.stopOn.map(String) : []

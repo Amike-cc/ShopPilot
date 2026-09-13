@@ -69,22 +69,24 @@ function summarizeResult(kind: string, payload: any, artifact?: { path?: string 
 // ---------- CRUD ----------
 
 /**
- * 逐步校验步骤输入（白名单，§5.6）。loop 是复合作步骤：嵌套步骤必须递归校验，
- * 否则"循环体里塞一个未登记的类型/字段"就绕过了白名单。
- * label 用于把错误定位到具体子步骤（如 3.2）。
+ * 逐步校验步骤（白名单，§5.6），返回**完整步骤**{ type, input, timeoutMs, retryLimit? }。
+ * loop 是复合作步骤：嵌套步骤递归校验（否则"循环体里塞未登记类型"就绕过了白名单），
+ * 并补默认 timeoutMs——嵌套步骤此前漏补，运行时拿到 undefined → withTimeout(NaN)
+ * （真店实测报「clickByText 超过 NaNms」）。label 把错误定位到具体子步骤（如 3.2）。
  */
-function validateStepInput(s: { type: string; input?: unknown }, label: string): any {
+function validateStepInput(s: { type: string; input?: unknown; timeoutMs?: number; retryLimit?: number }, label: string): any {
   const schema = stepInputSchemas[s.type]
   if (!schema) throw new Error(`TASK_INVALID_STEP:step ${label} ${s.type}: 未登记的步骤类型`)
   const out = schema.safeParse(s.input ?? {})
   if (!out.success) {
     throw new Error(`TASK_INVALID_STEP:step ${label} ${s.type}: ${out.error.issues.map(x => x.message).join('; ')}`)
   }
-  const data = out.data as any
-  if (s.type === 'loop' && Array.isArray(data?.steps)) {
-    data.steps.forEach((child: any, k: number) => validateStepInput(child, `${label}.${k + 1}`))
+  const input = out.data as any
+  const timeoutMs = s.timeoutMs ?? (DEFAULT_STEP_TIMEOUT[s.type] ?? 15000)
+  if (s.type === 'loop' && Array.isArray(input?.steps)) {
+    input.steps = input.steps.map((child: any, k: number) => validateStepInput(child, `${label}.${k + 1}`))
   }
-  return data
+  return { type: s.type, input, timeoutMs, ...(s.retryLimit != null ? { retryLimit: s.retryLimit } : {}) }
 }
 
 export function createTask(input: TaskCreateInput): TaskView {
@@ -104,8 +106,8 @@ export function createTask(input: TaskCreateInput): TaskView {
     )
     parsed.steps.forEach((s, i) => {
       const checked = validateStepInput(s, String(i + 1))
-      insStep.run(newId('tstep'), taskId, i, s.type, JSON.stringify(checked),
-        s.timeoutMs ?? (DEFAULT_STEP_TIMEOUT[s.type] ?? 15000), s.retryLimit ?? 0)
+      insStep.run(newId('tstep'), taskId, i, checked.type, JSON.stringify(checked.input),
+        checked.timeoutMs, checked.retryLimit ?? 0)
     })
   })()
 
