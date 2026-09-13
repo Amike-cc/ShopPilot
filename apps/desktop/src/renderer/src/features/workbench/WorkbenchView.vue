@@ -373,12 +373,12 @@
 
         <template v-if="taskTab === 'tasks'">
         <div class="env-sec tc-headsec">
-          <div class="env-h" style="margin:0">任务列表</div>
+          <div class="env-h" style="margin:0">任务列表<span class="row-sub" v-if="ws.displayedStoreId"> · {{ storeName(ws.displayedStoreId) }}</span><span class="row-sub" v-else> · 未打开店铺（仅列历史未绑定任务）</span></div>
           <button class="mini-btn primary" @click="openTaskDialog">+ 新建任务</button>
         </div>
 
-        <div v-if="ws.tasks.length === 0" class="empty-hint">暂无任务。任务只能由预定义读取型步骤组成，提交类动作必须经人工确认节点</div>
-        <div v-for="t in ws.tasks" :key="t.id" class="env-sec task-card" :class="{ on: detailTaskId === t.id }">
+        <div v-if="storeTasks.length === 0" class="empty-hint">{{ ws.displayedStoreId ? '当前店铺暂无任务。' : '没有未绑定店铺的任务。' }}任务只能由预定义读取型步骤组成，提交类动作必须经人工确认节点</div>
+        <div v-for="t in storeTasks" :key="t.id" class="env-sec task-card" :class="{ on: detailTaskId === t.id }">
           <div class="tc-head" @click="toggleTaskDetail(t)">
             <div class="p-info">
               <div class="row-main">{{ t.name }}</div>
@@ -626,10 +626,10 @@
         <div class="row-sub" style="margin-bottom:8px">任务只能由预定义步骤组成；提交类动作不提供无人值守路径，一律经「人工确认」节点。</div>
         <label>名称<input v-model="tf.name" placeholder="例如：订单概览巡检" /></label>
         <label>绑定店铺
-          <select v-model="tf.storeId">
-            <option value="">（不绑定，每次运行时选择）</option>
+          <select v-model="tf.storeId" v-if="!ws.displayedStoreId">
             <option v-for="s in ws.stores" :key="s.id" :value="s.id">{{ s.name }}</option>
           </select>
+          <input v-else :value="storeName(ws.displayedStoreId)" disabled title="任务功能对应每个店铺：从店铺面板创建的任务绑定当前店铺" />
         </label>
         <label>定时（分钟，留空 = 仅手动）<input v-model.number="tf.everyMin" type="number" min="1" placeholder="例如 60" /></label>
 
@@ -1541,9 +1541,12 @@ async function doAuditExport() {
 
 refreshBackups()
 
-watch(() => ws.displayedStoreId, () => { verifyItems.value = []; if (ws.rightPanel === 'env') refreshEnv() })
+watch(() => ws.displayedStoreId, () => { verifyItems.value = []; detailTaskId.value = null; if (ws.rightPanel === 'env') refreshEnv() })
 
 // ---------- 任务面板（§4.4 预定义步骤 / §6.6 事件） ----------
+/** 任务功能对应每个店铺：任务列表只显示当前显示店铺的任务（引擎侧仍存全量，仅界面按店铺隔离）；
+ *  未打开店铺时显示历史遗留的"未绑定店铺"任务（新任务一律绑定店铺） */
+const storeTasks = computed(() => ws.tasks.filter(t => t.storeScope === ws.displayedStoreId))
 const stepTypes = ['navigate', 'waitForPage', 'waitForSelector', 'readText', 'readTable', 'screenshot', 'fillDraft', 'waitForUserConfirmation']
 const stepFieldMap: Record<string, Array<{ key: string; ph: string }>> = {
   navigate: [{ key: 'url', ph: 'https:// 页面地址' }],
@@ -1677,7 +1680,7 @@ const tf = reactive({
 })
 
 function openTaskDialog() {
-  tf.name = ''; tf.storeId = ws.displayedStoreId || ''; tf.everyMin = null
+  tf.name = ''; tf.storeId = ws.displayedStoreId || ws.stores[0]?.id || ''; tf.everyMin = null
   tf.steps = [{ type: 'navigate', timeoutSec: 15, retry: 0, params: { url: '' } }]
   taskDialogOpen.value = true
 }
