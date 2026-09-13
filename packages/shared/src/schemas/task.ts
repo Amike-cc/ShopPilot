@@ -44,7 +44,10 @@ export const TASK_STEP_TYPES = [
   // kpro-data、微信 weui 均如此），写死哈希选择器会随版本失效；而标签文案（如「成交金额」）
   // 是平台对外的稳定表达。本步骤以文案为锚：找到该标签元素后向上找"只多出这一小段文本"
   // 的最近祖先，取多出来的那段作为值；超过长度阈值就如实失败，绝不从整页噪音里猜数字。
-  'readLabelValue'
+  'readLabelValue',
+  // 显式等待（读型步骤）：SPA 点了周期/筛选后要重新取数，数值原地刷新而不是新增元素，
+  // 「等元素出现」类判据会立刻命中旧值（实测快手周期切换踩过）——只能显式等页面刷完。
+  'waitMs'
 ] as const
 
 export type TaskStepType = (typeof TASK_STEP_TYPES)[number]

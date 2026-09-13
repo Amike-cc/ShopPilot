@@ -1233,6 +1233,18 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       }
       return { kind: 'text', payload: { text: shown, rawText: raw.slice(0, 60), label, cardText: res.cardText, metric: input.metric || null } }
     }
+    case 'waitMs': {
+      // 显式等待：SPA 按新周期/筛选重新取数时，数值是原地刷新（元素早就在），
+      // 任何"等元素出现"的判据都会立刻命中旧值——只能显式等。分段 sleep 以支持暂停/取消。
+      const total = Number(input.ms)
+      const deadline = Date.now() + total
+      while (Date.now() < deadline) {
+        guardSignals(run)
+        await new Promise(r => setTimeout(r, Math.min(300, Math.max(50, deadline - Date.now()))))
+      }
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'waitMs', ms: total } }
+    }
     default:
       throw new Error(`TASK_INVALID_STEP: 未知步骤类型 ${String(step.type)}`)
   }

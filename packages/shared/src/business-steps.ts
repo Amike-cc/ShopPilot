@@ -20,6 +20,13 @@ export function buildBusinessCollectSteps(p: BusinessProfile): BizStepDraft[] {
     { type: 'navigate', input: { url: p.pageUrl }, timeoutMs: 45000 },
     { type: 'waitForPage', input: { urlIncludes: p.urlMarker }, timeoutMs: 45000 }
   ]
+  // 统一统计口径（实测控制项文案）：不固定周期的话各页默认周期不同，数字口径会混乱
+  if (p.periodText) {
+    steps.push({ type: 'clickByText', input: { text: p.periodText }, timeoutMs: 20000 })
+    // 点完周期页面要重新取数：数值原地刷新，读取步骤会立刻命中旧值（实测快手踩过），
+    // 因此显式等页面刷完再读
+    steps.push({ type: 'waitMs', input: { ms: p.periodSettleMs || 6000 } })
+  }
   for (const m of p.metrics) {
     steps.push({
       type: 'readLabelValue',

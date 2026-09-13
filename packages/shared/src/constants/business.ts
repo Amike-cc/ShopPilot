@@ -47,6 +47,14 @@ export interface BusinessProfile {
   pageUrl: string
   /** waitForPage 就绪判据（URL 片段） */
   urlMarker: string
+  /**
+   * 采集前先点击该文案，统一统计口径（实测的控制项文案，如「近7日」）。
+   * 不固定周期的话，各页默认周期不同（实测快手商品总览默认"昨日"为 0、交易页默认近7日有值），
+   * 数字口径混乱比没有数字更糟——所以周期必须显式固定并在界面如实标注。
+   */
+  periodText?: string
+  /** 点完周期后等待页面重新取数的毫秒数（默认 6000；实测快手需要 ~3-5s 刷完） */
+  periodSettleMs?: number
   /** 实测日期（YYYY-MM-DD），供界面如实展示"哪天测的" */
   measuredAt: string
   /** 该页面能读到的指标（读不到的指标不要登记，界面会显示"未采集"） */
@@ -61,17 +69,20 @@ export interface BusinessProfile {
  */
 const KUAISHOU: BusinessProfile = {
   platform: '快手小店',
-  // 生意通 → 交易（全店成交分析 / 全店退款分析）。实测可直接导航到达，读一次覆盖多指标。
-  pageUrl: 'https://syt.kwaixiaodian.com/zones/tradeManagement/dealAnalysis',
-  urlMarker: 'dealAnalysis',
+  // 生意通 → 商品 → 商品总览：一页覆盖全部五个指标（交易页无"成交件数"，故选用本页）
+  pageUrl: 'https://syt.kwaixiaodian.com/zones/goodsManagement/goods_overview',
+  urlMarker: 'goods_overview',
+  // 实测该页默认周期为"昨日"（多为 0）；统一点「近7日」后与交易页口径一致
+  periodText: '近7日',
   measuredAt: '2026-09-13',
   metrics: [
     { key: 'biz.gmv', anchorText: '成交金额' },
     { key: 'biz.orders', anchorText: '成交订单数' },
-    { key: 'biz.refundAmount', anchorText: '退款金额（支付日）' },
-    { key: 'biz.refundOrders', anchorText: '退款订单数（支付日）' }
+    { key: 'biz.units', anchorText: '成交件数' },
+    { key: 'biz.refundAmount', anchorText: '退款金额(退款日)' },
+    { key: 'biz.refundOrders', anchorText: '成交退款订单数' }
   ],
-  note: '销量在本页未找到对应标签（生意通交易页只有成交金额/成交订单数/成交人数等）——留空不猜。'
+  note: '口径：近7日；销量取「成交件数」；退款金额取「退款金额(退款日)」、退款订单数取「成交退款订单数」。'
 }
 
 export const BUSINESS_PROFILES: Readonly<Record<string, BusinessProfile>> = {

@@ -690,6 +690,9 @@
           </tbody>
         </table>
         <div v-else class="empty-hint">还没有店铺</div>
+        <div class="env-note" v-if="bizNotes.length">
+          <div v-for="(n, i) in bizNotes" :key="i">口径 · {{ n }}</div>
+        </div>
         <div class="env-note" v-if="!BUSINESS_SUPPORTED_PLATFORMS.length">
           经营指标的页面锚点<b>尚未实测</b>：本应用没有平台官方 API，只能从各平台后台页面读取（走任务的「指标快照」机制）。实测一个平台登记一个——未登记的平台不会拿猜测的选择器去试。已登记：<b>暂无</b>。
         </div>
@@ -2302,6 +2305,15 @@ function bizValue(key: string, v: unknown): string {
   return money && typeof v === 'number' ? '¥' + v : String(v)
 }
 
+/** 经营指标口径说明（来自各平台实测档案的 note）：界面如实展示，避免"数字没有口径" */
+const bizNotes = computed(() => {
+  const plats = new Set(ws.stores.map(s => s.platform))
+  return [...plats]
+    .map(p => businessProfileFor(p))
+    .filter((p): p is NonNullable<typeof p> => !!p && !!p.note)
+    .map(p => `${p.platform}（实测 ${p.measuredAt}）：${p.note}`)
+})
+
 /**
  * 采集经营数据：为每个「平台已实测」的店铺各创建一个只读采集任务并立即运行
  * （navigate 经营数据页 → 每个指标一条 readText，值落 store_snapshots）。
@@ -2315,6 +2327,7 @@ async function collectBusinessData() {
   }
   dcCollecting.value = true
   let created = 0
+  const runIds: string[] = []
   const skipped: string[] = []
   try {
     for (const s of supported) {
@@ -2328,6 +2341,7 @@ async function collectBusinessData() {
       if (!res.ok) { skipped.push(`${s.name}（创建失败）`); continue }
       const run = await window.shopilot.task.run(res.data.id)
       if (!run.ok) { skipped.push(`${s.name}（启动失败）`); continue }
+      if (run.data?.runId) runIds.push(run.data.runId)
       created++
     }
     await ws.refreshTasks()
@@ -2338,6 +2352,22 @@ async function collectBusinessData() {
       (skipped.length ? `；跳过：${skipped.join('、')}` : ''),
       created ? 'success' : 'error'
     )
+    // 采集要跑十几秒到一分钟：等运行结束后再刷新数据中心的数字，避免界面停在旧值上
+    if (runIds.length) {
+      const deadline = Date.now() + 180000
+      for (;;) {
+        await new Promise(r => setTimeout(r, 3000))
+        const list = await window.shopilot.task.list()
+        const all = list.ok ? (list.data.tasks || list.data) : []
+        const done = runIds.every(id => {
+          const t = all.find((x: any) => x.latestRun?.id === id)
+          const st = t?.latestRun?.status
+          return st && ['succeeded', 'failed', 'cancelled'].includes(st)
+        })
+        if (done || Date.now() > deadline) break
+      }
+      await ws.refreshTasks()
+    }
     await loadDataCenter()
   } finally {
     dcCollecting.value = false
