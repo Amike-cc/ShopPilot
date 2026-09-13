@@ -49,6 +49,8 @@ const queue: RunHandle[] = []
 const live = new Map<string, RunHandle>()
 let current: RunHandle | null = null
 let keepAliveTimer: NodeJS.Timeout | null = null
+/** 每个店铺的任务运行标签页（复用以防标签页/渲染进程堆积；浏览器关闭后 id 失效自动重建） */
+const runTabByStore = new Map<string, string>()
 
 /** §9.2 任务状态机（含 A1 修订的失败恢复迁移） */
 const TRANSITIONS: Record<string, string[]> = {
@@ -240,10 +242,18 @@ async function execute(run: RunHandle): Promise<void> {
     else if (run.resumeKind === 'continue') transition(run, 'running', '用户恢复执行')
     else transition(run, 'running', '从失败步骤恢复，跳过已完成步骤')
 
-    // 每 run 独立标签页，不干扰用户正在看的页面
+    // 任务运行标签页：**按店铺复用**（此前每个 run 新建一个、从不回收——实测一天下来
+    // 堆了 10 个渲染进程、约 1.5GB 内存）。复用不影响步骤正确性：抖店流程第 1 步就是
+    // navigate、微信流程第 1 步是 mirrorTabUrl，都会把页面重新加载到目标地址。
     if (!run.tabId || !getTabWebContents(run.storeId, run.tabId)) {
-      const firstNavigate = run.steps.find(s => s.type === 'navigate')
-      run.tabId = createTab(run.storeId, (firstNavigate?.input as any)?.url || 'about:blank')
+      const reusedId = runTabByStore.get(run.storeId)
+      if (reusedId && getTabWebContents(run.storeId, reusedId)) {
+        run.tabId = reusedId
+      } else {
+        const firstNavigate = run.steps.find(s => s.type === 'navigate')
+        run.tabId = createTab(run.storeId, (firstNavigate?.input as any)?.url || 'about:blank')
+        runTabByStore.set(run.storeId, run.tabId)
+      }
     }
 
     const doneSet = run.skipDone ? TaskStore.succeededStepIndexes(run.runId) : new Set<number>()

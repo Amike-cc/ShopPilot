@@ -3,7 +3,7 @@
  * Electron 主进程入口
  */
 
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { join } from 'path'
 import { writeFileSync, existsSync } from 'fs'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
@@ -72,6 +72,37 @@ async function runFingerprintAutotest(): Promise<void> {
 }
 
 let mainWindow: BrowserWindow | null = null
+
+/** 主窗口崩溃自动恢复的有界窗口（防崩溃-重载死循环） */
+const MAIN_RELOAD_MAX = 3
+const MAIN_RELOAD_WINDOW_MS = 5 * 60 * 1000
+let mainReloadCount = 0
+let mainReloadWindowStart = 0
+
+/**
+ * 崩溃类日志的限流：同类异常密集重复（如管道断开引发的异常风暴）时只记前若干条 +
+ * 一条汇总，避免日志自身把磁盘与 CPU 打满。绝不在这里抛错——处理器抛错会变成新的
+ * uncaughtException（2026-09-13 实测过 8 秒 1.1 万条递归）。
+ */
+const CRASH_LOG_MAX_PER_WINDOW = 20
+const CRASH_LOG_WINDOW_MS = 10000
+let crashLogCount = 0
+let crashLogWindowStart = 0
+function logCrash(kind: string, detail: string): void {
+  try {
+    const now = Date.now()
+    if (now - crashLogWindowStart > CRASH_LOG_WINDOW_MS) {
+      crashLogWindowStart = now
+      crashLogCount = 0
+    }
+    crashLogCount++
+    if (crashLogCount <= CRASH_LOG_MAX_PER_WINDOW) {
+      logMain('error', `${kind}: ${detail}`)
+    } else if (crashLogCount === CRASH_LOG_MAX_PER_WINDOW + 1) {
+      logMain('error', `${kind}: 同类异常在 ${CRASH_LOG_WINDOW_MS / 1000}s 内已超 ${CRASH_LOG_MAX_PER_WINDOW} 次，本窗口内后续同类不再逐条记录（防日志风暴）`)
+    }
+  } catch { /* 崩溃日志本身绝不能再抛 */ }
+}
 
 /**
  * 顶部与 UI 一体化（§17）：
@@ -156,8 +187,36 @@ function createWindow(): void {
   mainWindow.webContents.on('console-message', (_ev, level, message) => {
     if (level >= 2) logMain(level === 3 ? 'error' : 'warn', 'renderer: ' + String(message).slice(0, 400))
   })
+
+  // 主窗口渲染进程崩溃：白屏=用户眼里的"闪退"。有界自动恢复（5 分钟内最多 3 次），
+  // 超过则明确弹窗告知，不做无限重载（避免崩溃-重载死循环把 CPU 打满）
   mainWindow.webContents.on('render-process-gone', (_ev, details) => {
     logMain('error', `renderer gone reason=${details.reason} exitCode=${details.exitCode}`)
+    if (details.reason === 'clean-exit') return
+    const now = Date.now()
+    if (now - mainReloadWindowStart > MAIN_RELOAD_WINDOW_MS) {
+      mainReloadWindowStart = now
+      mainReloadCount = 0
+    }
+    mainReloadCount++
+    if (mainReloadCount <= MAIN_RELOAD_MAX) {
+      logMain('warn', `主窗口渲染进程异常，自动重载（${mainReloadCount}/${MAIN_RELOAD_MAX}）`)
+      try { mainWindow?.webContents.reload() } catch { /* ignore */ }
+      return
+    }
+    logMain('error', `主窗口渲染进程连续异常 ${mainReloadCount} 次（窗口 ${MAIN_RELOAD_WINDOW_MS / 1000}s 内），停止自动重载`)
+    try {
+      dialog.showErrorBox('ShopPilot 界面异常',
+        `界面进程在短时间内反复崩溃（${mainReloadCount} 次），已停止自动恢复。\n请关闭并重新打开 ShopPilot；若反复出现，请到「设置 → 关于软件」导出诊断。`)
+    } catch { /* ignore */ }
+  })
+
+  // 无响应（"卡死"）留痕：这类问题事后只能靠日志定位，主进程必须记录下来
+  mainWindow.webContents.on('unresponsive', () => {
+    logMain('error', 'main window unresponsive（界面无响应）')
+  })
+  mainWindow.webContents.on('responsive', () => {
+    logMain('info', 'main window responsive（界面恢复响应）')
   })
 }
 
@@ -263,11 +322,13 @@ app.on('before-quit', () => {
   closeDatabase()
 })
 
-// 处理未捕获的异常 - §22：崩溃日志落盘（脱敏），诊断包可追溯
+// 处理未捕获的异常 - §22：崩溃日志落盘（脱敏），诊断包可追溯。
+// 注意：这两个处理器内部绝不能再抛（历史上 logMain 的 console 写入在管道断开时抛 EPIPE，
+// 导致"处理器记错误 → 又抛新错误 → 再进处理器"的递归风暴，实测 8 秒 1.1 万条异常、CPU 打满）。
 process.on('uncaughtException', (error) => {
-  logMain('error', 'uncaughtException: ' + (error?.stack || String(error)))
+  logCrash('uncaughtException', String(error?.stack || error))
 })
 
 process.on('unhandledRejection', (reason) => {
-  logMain('error', 'unhandledRejection: ' + String((reason as any)?.stack || reason))
+  logCrash('unhandledRejection', String((reason as any)?.stack || reason))
 })

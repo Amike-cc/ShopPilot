@@ -55,6 +55,10 @@ function generateTabId(): string {
   return `tab_${randomBytes(16).toString('hex')}`
 }
 
+/** 标签页崩溃自动重载的节流表（tabId → 上次自动重载时间），防崩溃-重载死循环 */
+const TAB_RELOAD_MIN_INTERVAL_MS = 5 * 60 * 1000
+const tabReloadGuard = new Map<string, number>()
+
 /** §8.2：注入宿主（主）窗口 */
 export function setBrowserHostWindow(win: BrowserWindow): void {
   hostWindow = win
@@ -313,8 +317,28 @@ export function createTab(storeId: string, url?: string): string {
     if (displayedStoreId === storeId) emit(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, { storeId, tabId, isLoading: false })
   })
 
+  // 渲染进程崩溃：留痕（此前只发了个 toast，日志里查不到，无法事后定位）+ 有界自动重载。
+  // 同一标签页 5 分钟内最多自动重载一次，避免"崩溃-重载"死循环把 CPU 打满。
   view.webContents.on('render-process-gone', (_e, details) => {
+    logMain('error', `store tab renderer gone store=${storeId} tab=${tabId} reason=${details.reason} exitCode=${details.exitCode} url=${String(tab.url).slice(0, 120)}`)
     emit(EVENT_CHANNELS.BROWSER_CRASHED, { storeId, tabId, reason: details.reason })
+    if (details.reason === 'clean-exit') return
+    const now = Date.now()
+    if (now - (tabReloadGuard.get(tabId) || 0) < TAB_RELOAD_MIN_INTERVAL_MS) {
+      logMain('warn', `store tab ${tabId} 短时间内再次崩溃，跳过自动重载（防重载死循环）`)
+      return
+    }
+    tabReloadGuard.set(tabId, now)
+    logMain('warn', `store tab ${tabId} 自动重载恢复`)
+    try { view.webContents.reload() } catch { /* ignore */ }
+  })
+
+  // 无响应（"卡死"）留痕：店铺页面卡住时用户只看到转圈，日志必须留下证据
+  view.webContents.on('unresponsive', () => {
+    logMain('error', `store tab unresponsive store=${storeId} tab=${tabId} url=${String(tab.url).slice(0, 120)}`)
+  })
+  view.webContents.on('responsive', () => {
+    logMain('info', `store tab responsive store=${storeId} tab=${tabId}`)
   })
 
   state.tabs.set(tabId, tab)
@@ -367,6 +391,7 @@ export function closeTab(storeId: string, tabId: string): void {
 
   if (mountedView === tab.webContentsView) detachMounted()
   try { unregisterFingerprintTarget(storeId, tabId) } catch { /* ignore */ }
+  tabReloadGuard.delete(tabId)
   try {
     if (tab.webContentsView && !tab.webContentsView.webContents.isDestroyed()) {
       tab.webContentsView.webContents.close()
