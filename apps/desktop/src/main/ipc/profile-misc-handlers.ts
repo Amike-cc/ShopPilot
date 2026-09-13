@@ -131,19 +131,36 @@ export function registerProfileAndMiscHandlers(): void {
         tasks: (db.prepare('SELECT COUNT(*) c FROM tasks').get() as any).c
       }
 
-      // 每店每指标的最新一条快照（rowid 最大 = 最近写入）
-      const snapshots = db.prepare(`
-        SELECT s.name AS storeName, s.platform AS platform, sn.metric, sn.value_json, sn.captured_at
-        FROM store_snapshots sn
-        JOIN stores s ON s.id = sn.store_id
-        WHERE sn.rowid IN (SELECT MAX(rowid) FROM store_snapshots GROUP BY store_id, metric)
-        ORDER BY sn.captured_at DESC
-        LIMIT 200
-      `).all().map((r: any) => ({
-        storeName: r.storeName, platform: r.platform, metric: r.metric,
-        value: (() => { try { return JSON.parse(r.value_json) } catch { return r.value_json } })(),
-        capturedAt: r.captured_at
-      }))
+      // 每店每指标的最新一条 + **上一条**（用于数据中心显示"较上次采集的增减"）
+      const snapRows = db.prepare(`
+        SELECT storeName, platform, metric, value_json, captured_at, rn FROM (
+          SELECT s.name AS storeName, s.platform AS platform, sn.metric AS metric,
+                 sn.value_json AS value_json, sn.captured_at AS captured_at,
+                 ROW_NUMBER() OVER (PARTITION BY sn.store_id, sn.metric ORDER BY sn.rowid DESC) AS rn
+          FROM store_snapshots sn
+          JOIN stores s ON s.id = sn.store_id
+        ) WHERE rn <= 2
+        ORDER BY storeName, metric, rn
+        LIMIT 600
+      `).all() as any[]
+      const parseVal = (json: any) => { try { return JSON.parse(json) } catch { return json } }
+      const snapMap = new Map<string, any>()
+      const snapshots: any[] = []
+      for (const r of snapRows) {
+        const key = r.storeName + '\u0000' + r.metric
+        if (r.rn === 1) {
+          const item = {
+            storeName: r.storeName, platform: r.platform, metric: r.metric,
+            value: parseVal(r.value_json), capturedAt: r.captured_at,
+            prevValue: null as unknown
+          }
+          snapMap.set(key, item)
+          snapshots.push(item)
+        } else {
+          const item = snapMap.get(key)
+          if (item) item.prevValue = parseVal(r.value_json)
+        }
+      }
 
       // 邀约运行（任务名前缀「达人邀约 ·」）：状态分布 + 最近若干条
       const inviteWhere = "t.name LIKE '达人邀约 ·%'"

@@ -94,6 +94,11 @@ export const ERROR_CODES = {
     message: '可邀约额度不足或平台限制该操作',
     retryable: false
   },
+  BROWSER_CLOSED: {
+    code: 'BROWSER_CLOSED',
+    message: '店铺浏览器或任务标签页已被关闭（运行中止）',
+    retryable: true
+  },
   TASK_NOT_FOUND: {
     code: 'TASK_NOT_FOUND',
     message: '任务或运行记录不存在',

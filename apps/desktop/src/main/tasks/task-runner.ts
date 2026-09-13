@@ -336,6 +336,8 @@ function classifyError(e: any): string {
   if (msg.includes('TASK_INPUT_NOT_APPLIED')) return 'TASK_INPUT_NOT_APPLIED'
   // 额度预检不过（微信今日剩余不足 / 抖店确认发送禁用等）
   if (msg.includes('TASK_QUOTA_EXCEEDED')) return 'TASK_QUOTA_EXCEEDED'
+  // 店铺浏览器/任务标签页被关闭（此前落进 INTERNAL_ERROR，看不出真实原因）
+  if (msg.includes('BROWSER_CLOSED')) return 'BROWSER_CLOSED'
   // AI 相关的固定错误码：如实透出，便于界面区分"没配 Key / 地址不合法 / 超时 / 请求失败"
   if (msg.includes('AI_NOT_CONFIGURED')) return 'AI_NOT_CONFIGURED'
   if (msg.includes('AI_BAD_ENDPOINT')) return 'AI_BAD_ENDPOINT'

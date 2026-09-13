@@ -684,8 +684,21 @@
               <td class="row-sub">{{ r.platform }}</td>
               <td v-for="m in BIZ_METRICS" :key="m.key" :class="{ 'dc-val': r.values[m.key] != null }">
                 {{ bizValue(m.key, r.values[m.key]) }}
+                <span
+                  v-if="bizDelta(m.key, r.values[m.key], r.prevs[m.key])"
+                  class="dc-delta"
+                  :class="{ up: bizDelta(m.key, r.values[m.key], r.prevs[m.key])!.dir === 'up', down: bizDelta(m.key, r.values[m.key], r.prevs[m.key])!.dir === 'down' }"
+                >{{ bizDelta(m.key, r.values[m.key], r.prevs[m.key])!.dir === 'up' ? '▲' : bizDelta(m.key, r.values[m.key], r.prevs[m.key])!.dir === 'down' ? '▼' : '' }}{{ bizDelta(m.key, r.values[m.key], r.prevs[m.key])!.text }}</span>
               </td>
-              <td class="row-sub">{{ r.lastAt ? new Date(r.lastAt).toLocaleString() : '-' }}</td>
+              <td class="row-sub">{{ r.lastAt ? new Date(r.lastAt).toLocaleString() : '—' }}</td>
+            </tr>
+            <tr class="dc-total" v-if="bizTotals.contributors">
+              <td>合计</td>
+              <td class="row-sub">已采集 {{ bizTotals.contributors }} 家</td>
+              <td v-for="m in BIZ_METRICS" :key="m.key" class="dc-val">
+                {{ bizTotals.sums[m.key] != null ? bizValue(m.key, bizTotals.sums[m.key]) : '—' }}
+              </td>
+              <td class="row-sub">各平台自报口径</td>
             </tr>
           </tbody>
         </table>
@@ -2295,21 +2308,59 @@ const dataCenterOpen = ref(false)
 const dcLoading = ref(false)
 const dcCollecting = ref(false)
 
-/** 经营指标矩阵：按店铺汇总五个指标的最新快照值（值从 store_snapshots 的 biz.* 指标名来） */
+/** 经营指标矩阵：按店铺汇总五个指标的最新快照值（值从 store_snapshots 的 biz.* 指标名来），
+ *  并带上"上一次采集值"用于显示增减 */
 const bizRows = computed(() => {
-  const byStore = new Map<string, { storeId: string; storeName: string; platform: string; values: Record<string, unknown>; lastAt: number }>()
+  const byStore = new Map<string, { storeId: string; storeName: string; platform: string; values: Record<string, unknown>; prevs: Record<string, unknown>; lastAt: number }>()
   for (const s of ws.stores) {
-    byStore.set(s.id, { storeId: s.id, storeName: s.name, platform: s.platform, values: {}, lastAt: 0 })
+    byStore.set(s.id, { storeId: s.id, storeName: s.name, platform: s.platform, values: {}, prevs: {}, lastAt: 0 })
   }
   for (const snap of dc.snapshots as any[]) {
     if (!String(snap.metric || '').startsWith('biz.')) continue
     const hit = [...byStore.values()].find(r => r.storeName === snap.storeName)
     if (!hit) continue
     hit.values[snap.metric] = snap.value
+    if (snap.prevValue != null) hit.prevs[snap.metric] = snap.prevValue
     if (snap.capturedAt > hit.lastAt) hit.lastAt = snap.capturedAt
   }
   return [...byStore.values()]
 })
+
+/** 合计行：只对**已采集到的数值**求和，并如实标注参与合计的店铺数（不做任何估算补齐） */
+const bizTotals = computed(() => {
+  const sums: Record<string, number> = {}
+  let contributors = 0
+  for (const r of bizRows.value) {
+    let has = false
+    for (const m of BIZ_METRICS) {
+      const v = r.values[m.key]
+      if (typeof v === 'number' && Number.isFinite(v)) { sums[m.key] = (sums[m.key] || 0) + v; has = true }
+    }
+    if (has) contributors++
+  }
+  return { sums, contributors }
+})
+
+/** 经营指标单元格显示：金额类补 ¥ 与千分位；没有值如实显示"—"（未采集） */
+function bizValue(key: string, v: unknown): string {
+  if (v == null || v === '') return '—'
+  const money = key === 'biz.gmv' || key === 'biz.refundAmount'
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const s = v.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+    return money ? '¥' + s : s
+  }
+  return String(v)
+}
+
+/** 与上一次采集相比的增减（delta 文本 + 方向），供界面显示 ▲/▼ */
+function bizDelta(key: string, v: unknown, prev: unknown): { text: string; dir: 'up' | 'down' | 'flat' } | null {
+  if (typeof v !== 'number' || typeof prev !== 'number') return null
+  const d = v - prev
+  if (!Number.isFinite(d) || d === 0) return { text: '持平', dir: 'flat' }
+  const money = key === 'biz.gmv' || key === 'biz.refundAmount'
+  const abs = Math.abs(d).toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+  return { text: (d > 0 ? '+' : '-') + (money ? '¥' : '') + abs, dir: d > 0 ? 'up' : 'down' }
+}
 const dc = reactive<any>({
   generatedAt: 0,
   totals: { stores: 0, online: 0, archived: 0, trash: 0, platforms: 0, snapshots: 0, tasks: 0 },
@@ -2338,13 +2389,6 @@ async function loadDataCenter() {
   }
 }
 
-/** 经营指标单元格显示：金额类补 ¥ 前缀；没有值如实显示"未采集" */
-function bizValue(key: string, v: unknown): string {
-  if (v == null || v === '') return '未采集'
-  const money = key === 'biz.gmv' || key === 'biz.refundAmount'
-  return money && typeof v === 'number' ? '¥' + v : String(v)
-}
-
 /** 经营指标口径说明（来自各平台实测档案的 note）：界面如实展示，避免"数字没有口径" */
 const bizNotes = computed(() => {
   const plats = new Set(ws.stores.map(s => s.platform))
@@ -2353,7 +2397,6 @@ const bizNotes = computed(() => {
     .filter((p): p is NonNullable<typeof p> => !!p && !!p.note)
     .map(p => `${p.platform}（实测 ${p.measuredAt}）：${p.note}`)
 })
-
 /**
  * 采集经营数据：为每个「平台已实测」的店铺各创建一个只读采集任务并立即运行
  * （navigate 经营数据页 → 每个指标一条 readText，值落 store_snapshots）。
@@ -2861,6 +2904,10 @@ onBeforeUnmount(() => {
 .dc-table td { padding: 5px 6px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
 .dc-val { font-weight: 600; color: #fff; }
 .dc-bad { color: #ff7875; }
+.dc-total td { border-top: 1px solid var(--color-border); font-weight: 600; }
+.dc-delta { margin-left: 4px; font-size: 10px; font-weight: 400; color: var(--color-text-secondary); }
+.dc-delta.up { color: #4ade80; }
+.dc-delta.down { color: #ff7875; }
 .update-modal { width: 390px; }
 /* 设置弹窗 + 任务面板二级页签共用的页签条。刻意不复用 .panel-tabs：
    那是右栏一级页签，带 padding-right:140px 给原生窗口按钮避让，装在弹窗/面板里会右侧留白诡异 */
