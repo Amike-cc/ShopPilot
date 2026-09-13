@@ -684,6 +684,7 @@
               <td class="row-sub">{{ r.platform }}</td>
               <td v-for="m in BIZ_METRICS" :key="m.key" :class="{ 'dc-val': r.values[m.key] != null }">
                 {{ bizValue(m.key, r.values[m.key]) }}
+                <span v-if="r.manual[m.key]" class="dc-manual" title="手动录入（该平台数字不可自动读取）">手动</span>
                 <span
                   v-if="bizDelta(m.key, r.values[m.key], r.prevs[m.key])"
                   class="dc-delta"
@@ -706,6 +707,23 @@
         <div class="env-note" v-if="bizNotes.length">
           <div v-for="(n, i) in bizNotes" :key="i">口径 · {{ n }}</div>
         </div>
+
+        <!-- 手动录入：平台用反抓取字体渲染数字时（实测拼多多），由用户看页面自行录入 -->
+        <div class="dc-manual-form">
+          <span class="row-sub">手动录入</span>
+          <select v-model="manualDraft.storeId" data-test="dc-manual-store">
+            <option v-for="s in ws.stores" :key="s.id" :value="s.id">{{ s.name }}</option>
+          </select>
+          <select v-model="manualDraft.metric" data-test="dc-manual-metric">
+            <option v-for="m in BIZ_METRICS" :key="m.key" :value="m.key">{{ m.label }}</option>
+          </select>
+          <input v-model.number="manualDraft.value" type="number" min="0" step="0.01" placeholder="值" class="inv-num" data-test="dc-manual-value" />
+          <button class="mini-btn" :disabled="!manualReady" data-test="dc-manual-save" @click="saveManualMetric">录入</button>
+        </div>
+        <div class="env-note">
+          个别平台（实测<b>拼多多</b>）把数字用<b>反抓取字体的私有区码位</b>渲染——页面 DOM 与接口 JSON 里都不是数字字符，自动读取必须持续对抗平台的反自动化措施，本应用<b>不做这种绕过</b>。这类平台请你自己看后台把数字录进来：录入值会标注「<b>手动</b>」来源，并同样计入合计，绝不与自动采集的数字混淆。
+        </div>
+
         <div class="env-note" v-if="!BUSINESS_SUPPORTED_PLATFORMS.length">
           经营指标的页面锚点<b>尚未实测</b>：本应用没有平台官方 API，只能从各平台后台页面读取（走任务的「指标快照」机制）。实测一个平台登记一个——未登记的平台不会拿猜测的选择器去试。已登记：<b>暂无</b>。
         </div>
@@ -2311,20 +2329,37 @@ const dcCollecting = ref(false)
 /** 经营指标矩阵：按店铺汇总五个指标的最新快照值（值从 store_snapshots 的 biz.* 指标名来），
  *  并带上"上一次采集值"用于显示增减 */
 const bizRows = computed(() => {
-  const byStore = new Map<string, { storeId: string; storeName: string; platform: string; values: Record<string, unknown>; prevs: Record<string, unknown>; lastAt: number }>()
+  const byStore = new Map<string, { storeId: string; storeName: string; platform: string; values: Record<string, unknown>; prevs: Record<string, unknown>; manual: Record<string, boolean>; lastAt: number }>()
   for (const s of ws.stores) {
-    byStore.set(s.id, { storeId: s.id, storeName: s.name, platform: s.platform, values: {}, prevs: {}, lastAt: 0 })
+    byStore.set(s.id, { storeId: s.id, storeName: s.name, platform: s.platform, values: {}, prevs: {}, manual: {}, lastAt: 0 })
   }
   for (const snap of dc.snapshots as any[]) {
     if (!String(snap.metric || '').startsWith('biz.')) continue
     const hit = [...byStore.values()].find(r => r.storeName === snap.storeName)
     if (!hit) continue
     hit.values[snap.metric] = snap.value
+    if (snap.manual) hit.manual[snap.metric] = true
     if (snap.prevValue != null) hit.prevs[snap.metric] = snap.prevValue
     if (snap.capturedAt > hit.lastAt) hit.lastAt = snap.capturedAt
   }
   return [...byStore.values()]
 })
+
+/** 手动录入草稿（平台反抓取导致无法自动读取时使用；来源会如实标注"手动"） */
+const manualDraft = reactive({ storeId: '', metric: 'biz.orders' as string, value: null as number | null })
+const manualReady = computed(() =>
+  !!manualDraft.storeId && !!manualDraft.metric &&
+  manualDraft.value != null && Number.isFinite(Number(manualDraft.value)) && Number(manualDraft.value) >= 0
+)
+
+async function saveManualMetric() {
+  if (!manualReady.value) return
+  const res = await window.shopilot.overview.manualMetric(manualDraft.storeId, manualDraft.metric, Number(manualDraft.value))
+  if (!res.ok) { ws.toast('录入失败: ' + res.error.message, 'error'); return }
+  ws.toast('已录入（来源：手动）', 'success')
+  manualDraft.value = null
+  await loadDataCenter()
+}
 
 /** 合计行：只对**已采集到的数值**求和，并如实标注参与合计的店铺数（不做任何估算补齐） */
 const bizTotals = computed(() => {
@@ -2372,6 +2407,8 @@ const dc = reactive<any>({
 
 function openDataCenter() {
   dataCenterOpen.value = true
+  // 手动录入默认选中"当前显示的店铺"，减少一步选择
+  if (!manualDraft.storeId) manualDraft.storeId = ws.displayedStoreId || ws.stores[0]?.id || ''
   void loadDataCenter()
 }
 
@@ -2914,6 +2951,18 @@ onBeforeUnmount(() => {
 .dc-delta { margin-left: 4px; font-size: 10px; font-weight: 400; color: var(--color-text-secondary); }
 .dc-delta.up { color: #4ade80; }
 .dc-delta.down { color: #ff7875; }
+.dc-manual {
+  margin-left: 4px; font-size: 10px; font-weight: 400; padding: 1px 4px; border-radius: 6px;
+  background: rgba(250, 173, 20, .16); color: #faad14; border: 1px solid rgba(250, 173, 20, .35);
+}
+.dc-manual-form {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 8px 0 6px; padding: 8px; border: 1px dashed var(--color-border); border-radius: var(--radius-sm);
+}
+.dc-manual-form select, .dc-manual-form input {
+  background: var(--color-bg-tertiary); color: var(--color-text-primary);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 4px 6px; font-size: 12px;
+}
 .update-modal { width: 390px; }
 /* 设置弹窗 + 任务面板二级页签共用的页签条。刻意不复用 .panel-tabs：
    那是右栏一级页签，带 padding-right:140px 给原生窗口按钮避让，装在弹窗/面板里会右侧留白诡异 */

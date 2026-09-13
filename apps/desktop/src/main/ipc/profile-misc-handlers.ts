@@ -7,6 +7,8 @@ import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as ProfileManager from '../stores/profile-manager'
+import * as StoreManager from '../stores/store-manager'
+import * as TaskStore from '../tasks/task-store'
 import { verifyStoreFingerprint } from '../browser/fingerprint-injector'
 import { getDatabase } from '../db/database'
 import { writeAudit, queryAudit } from '../services/audit-logger'
@@ -133,9 +135,10 @@ export function registerProfileAndMiscHandlers(): void {
 
       // 每店每指标的最新一条 + **上一条**（用于数据中心显示"较上次采集的增减"）
       const snapRows = db.prepare(`
-        SELECT storeName, platform, metric, value_json, captured_at, rn FROM (
+        SELECT storeName, platform, metric, value_json, captured_at, source_run_id, rn FROM (
           SELECT s.name AS storeName, s.platform AS platform, sn.metric AS metric,
                  sn.value_json AS value_json, sn.captured_at AS captured_at,
+                 sn.source_run_id AS source_run_id,
                  ROW_NUMBER() OVER (PARTITION BY sn.store_id, sn.metric ORDER BY sn.rowid DESC) AS rn
           FROM store_snapshots sn
           JOIN stores s ON s.id = sn.store_id
@@ -152,6 +155,8 @@ export function registerProfileAndMiscHandlers(): void {
           const item = {
             storeName: r.storeName, platform: r.platform, metric: r.metric,
             value: parseVal(r.value_json), capturedAt: r.captured_at,
+            // 来源：无关联运行 = 手动录入（界面据此标记，绝不与自动采集的数字混淆）
+            manual: !r.source_run_id,
             prevValue: null as unknown
           }
           snapMap.set(key, item)
@@ -192,6 +197,31 @@ export function registerProfileAndMiscHandlers(): void {
         invite: { byStatus: inviteByStatus, recent: inviteRecent },
         runs: { byStatus: runsByStatus, recentIssues }
       }, requestId)
+    } catch (err: any) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+    }
+  })
+
+  /**
+   * overview:manualMetric - 手动录入经营指标。
+   * 存在的理由：个别平台（实测拼多多）把数字用**反抓取字体的私有区码位**渲染，DOM 与接口
+   * 里都不是数字字符，自动读取必须持续对抗平台的反自动化措施——本应用不做这种绕过，
+   * 改为让用户自己看页面录入。录入值同样落 store_snapshots（source_run_id 留空 = 手动来源），
+   * 界面会明确标注"手动"，绝不与自动采集的数字混淆。
+   */
+  ipcMain.handle(IPC_CHANNELS.OVERVIEW_MANUAL_METRIC, async (_e: IpcMainInvokeEvent, input: { storeId: string; metric: string; value: number }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const storeId = String(input?.storeId || '')
+      const metric = String(input?.metric || '')
+      const value = Number(input?.value)
+      const store = storeId ? StoreManager.getStore(storeId) : null
+      if (!store) return error(ERROR_CODES.STORE_NOT_FOUND.code, '店铺不存在或已删除', requestId)
+      if (!/^biz\.[a-zA-Z]+$/.test(metric)) return error(ERROR_CODES.INVALID_ARGUMENT.code, '指标名不合法（仅允许 biz.* 经营指标）', requestId)
+      if (!Number.isFinite(value) || value < 0 || value > 1e12) return error(ERROR_CODES.INVALID_ARGUMENT.code, '指标值不合法（需为 0 ～ 1e12 的数字）', requestId)
+      TaskStore.insertSnapshot(storeId, metric, value, null)
+      writeAudit('task.create', 'success', { storeId, requestId: JSON.stringify({ kind: 'manual_metric', metric, value }) })
+      return success({ storeId, metric, value, manual: true }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }

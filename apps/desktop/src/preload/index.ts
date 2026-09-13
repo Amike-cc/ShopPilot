@@ -88,7 +88,10 @@ const api = {
   overview: {
     stats: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_STATS),
     /** 数据中心：所有店铺的汇总数据（只读） */
-    datacenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_DATACENTER)
+    datacenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_DATACENTER),
+    /** 手动录入经营指标（平台反抓取导致无法自动读取时，由用户看页面录入） */
+    manualMetric: (storeId: string, metric: string, value: number): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_MANUAL_METRIC, { storeId, metric, value })
   },
   settings: {
     get: (key: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET, { key }),
