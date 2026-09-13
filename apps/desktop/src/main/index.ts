@@ -3,7 +3,7 @@
  * Electron 主进程入口
  */
 
-import { app, BrowserWindow, dialog } from 'electron'
+import { app, BrowserWindow, dialog, crashReporter } from 'electron'
 import { join } from 'path'
 import { writeFileSync, existsSync } from 'fs'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
@@ -179,6 +179,11 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+  // 窗口被关闭是"应用静默退出"最常见的原因（Windows 上 window-all-closed 即退出）：
+  // 记下是谁关的、是否在退出流程中，事后可判
+  mainWindow.on('close', () => {
+    logMain('warn', 'main window: close 事件（窗口即将关闭）')
+  })
 
   // §8.2 主窗口作为店铺浏览器的宿主（WebContentsView 内嵌）
   setBrowserHostWindow(mainWindow)
@@ -227,6 +232,14 @@ async function initialize(): Promise<void> {
   try {
     // 初始化数据库
     logMain('info', `启动 version=${app.getVersion()} electron=${process.versions.electron} chrome=${process.versions.chrome}`)
+    // 本地崩溃转储（不上传）：主进程/子进程原生崩溃时落 .dmp，供事后定位。
+    // §21.5 的口径是"崩溃报告上传默认关闭"，本项只写本机、不做任何上传。
+    try {
+      crashReporter.start({ uploadToServer: false, compress: false })
+      logMain('info', `crashReporter started（本地转储目录 ${app.getPath('crashDumps')}）`)
+    } catch (e: any) {
+      logMain('warn', 'crashReporter 启动失败: ' + String(e?.message || e))
+    }
     console.log('Initializing database...')
     initDatabase()
     console.log('Database initialized successfully')
@@ -310,16 +323,30 @@ app.whenReady().then(async () => {
 
 // 所有窗口关闭时
 app.on('window-all-closed', () => {
-  // macOS 除外，其他平台关闭所有窗口时退出应用
+  logMain('warn', 'app lifecycle: window-all-closed（全部窗口已关闭，将退出应用）')
+  // macOS 除外，其他窗口关闭所有窗口时退出应用
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
 
-// 应用退出前清理
+// 退出路径留痕（2026-09-13 实测过一次"进程无声消失"：无错误日志、无事件日志、无转储，
+// 事后无法判断是窗口被关、主动退出还是被外部结束——这三条日志就是为这种场景加的）
 app.on('before-quit', () => {
+  logMain('warn', 'app lifecycle: before-quit（准备退出）')
   console.log('Closing database connection...')
   closeDatabase()
+})
+app.on('will-quit', () => {
+  try { logMain('warn', 'app lifecycle: will-quit（即将退出）') } catch { /* 退出路径不抛错 */ }
+})
+app.on('quit', (_e, exitCode) => {
+  try { logMain('warn', `app lifecycle: quit exitCode=${exitCode}`) } catch { /* ignore */ }
+})
+// 被外部强制结束（任务管理器 / Stop-Process 等）时，Node 仍会走 exit：
+// 同步写一行日志，便于区分"被外部杀"与"自然退出"
+process.on('exit', (code) => {
+  try { logMain('warn', `process exit code=${code}（进程结束）`) } catch { /* ignore */ }
 })
 
 // 处理未捕获的异常 - §22：崩溃日志落盘（脱敏），诊断包可追溯。
