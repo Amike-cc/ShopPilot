@@ -47,6 +47,7 @@ const page = `<!DOCTYPE html>
  .quota{margin:8px 0;color:#c00}
 </style></head><body>
 <h3>达人广场（仿真 · 仅用于验证引擎）</h3>
+<div id="filterArea">
 <div class="row">主推类目
   <span class="quick-filter-button-enums">
     <a class="auxo-btn auxo-btn-tertiary" data-cat="玩具乐器"><span class="auxo-space-item"><span>玩具乐器</span></span></a>
@@ -62,6 +63,16 @@ const page = `<!DOCTYPE html>
     <span class="lv" data-lv="LV1">LV1</span>
   </span>
 </div>
+</div>
+<script>
+// ?late=1：前 4 秒隐藏筛选区——用于验证 clickByText 的 within 作用域会轮询等待
+// （0.4.5 修的缺陷：导航刚完成时筛选区未渲染，曾因"立即报 SCOPE_NOT_FOUND"而整单失败）
+if (location.search.includes('late=1')) {
+  const fa = document.getElementById('filterArea')
+  fa.style.display = 'none'
+  setTimeout(() => { fa.style.display = '' }, 4000)
+}
+</script>
 <div class="row">
   <input id="kw" placeholder="搜达人昵称" />
   <button id="search">搜索</button>

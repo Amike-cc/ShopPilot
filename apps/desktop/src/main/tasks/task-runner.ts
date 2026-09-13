@@ -255,6 +255,10 @@ async function execute(run: RunHandle): Promise<void> {
         runTabByStore.set(run.storeId, run.tabId)
       }
     }
+    // 运行标签页带到前台（activateTab 已在 mirrorTabUrl 里做过，navigate 流程此前漏了）：
+    // 复用的标签页若不是店铺窗口的当前页，视图视口是 0——getBoundingClientRect 全为 0，
+    // 可见性判定与点击都会失真（实测"点开始邀约"首轮就失败的帮凶之一）
+    try { activateTab(run.storeId, run.tabId) } catch { /* 视图未挂载等情况不阻塞流程 */ }
 
     const doneSet = run.skipDone ? TaskStore.succeededStepIndexes(run.runId) : new Set<number>()
 
@@ -785,6 +789,7 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
       guardSignals(run)
       const deadline = Date.now() + step.timeoutMs
+      let sawScopeMiss = false
       let hit: Awaited<ReturnType<typeof findTextTarget>> | null = null
       if (input.mode === 'real') {
         for (;;) {
@@ -794,10 +799,14 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
           if (hit.reason === 'DISABLED') {
             throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`)
           }
-          if (hit.reason === 'SCOPE_NOT_FOUND') {
-            throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${needle}」的限定范围（${JSON.stringify(within)}）`)
-          }
+          // SCOPE_NOT_FOUND 不能立即失败：导航刚完成时筛选区往往还没渲染出来
+          // （实测真店"点开始邀约"就折在这里——第一步点类目时 .quick-filter-button-enums 还不存在）。
+          // 与"没找到元素"一样在超时内轮询等待，超时仍没有才算真的找不到。
+          sawScopeMiss = sawScopeMiss || hit.reason === 'SCOPE_NOT_FOUND'
           if (Date.now() >= deadline) {
+            if (sawScopeMiss) {
+              throw new Error(`TASK_SELECTOR_CHANGED: 超时内未出现「${needle}」的限定范围（${JSON.stringify(within)}）`)
+            }
             throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
           }
           await new Promise(r => setTimeout(r, 300))
@@ -847,10 +856,12 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
         if (res && res.reason === 'DISABLED') {
           throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`)
         }
-        if (res && res.reason === 'SCOPE_NOT_FOUND') {
-          throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${needle}」的限定范围（${JSON.stringify(within)}）`)
-        }
+        // SCOPE_NOT_FOUND 同样轮询等待（导航刚完成时筛选区可能还没渲染，见 mode:'real' 分支的说明）
+        sawScopeMiss = sawScopeMiss || (res && res.reason === 'SCOPE_NOT_FOUND')
         if (Date.now() >= deadline) {
+          if (sawScopeMiss) {
+            throw new Error(`TASK_SELECTOR_CHANGED: 超时内未出现「${needle}」的限定范围（${JSON.stringify(within)}）`)
+          }
           throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
         }
         await new Promise(r => setTimeout(r, 300))
