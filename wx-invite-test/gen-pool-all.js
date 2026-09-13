@@ -1,0 +1,5 @@
+const fs = require('fs')
+let s = fs.readFileSync('wx-invite-test/probe-pool.js', 'utf8')
+s = s.replace("for (const lv of ['LV0', 'LV1', 'LV2', 'LV3']) {", "for (const lv of ['LV0', 'LV1', 'LV2', 'LV3', 'LV4', 'LV5', 'LV6']) {")
+fs.writeFileSync('wx-invite-test/probe-pool-all.js', s)
+console.log('written probe-pool-all.js')

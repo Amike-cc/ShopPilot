@@ -405,89 +405,105 @@
               <button class="mini-btn" style="margin-left:auto" data-test="invite-open-page" @click="openInvitePage">打开达人广场</button>
             </div>
 
-            <!-- batch-list（抖店）：广场筛选 → 逐个勾 40 位 → 批量聊通抽屉 → 直接发送（无二次确认门禁） -->
+            <!-- batch-list（抖店）：广场筛选 → 逐个勾 40 位 → 批量邀约带货 → 直接发送（无二次确认门禁） -->
             <template v-if="inviteProfile.flow === 'batch-list'">
-            <div class="env-note">
-              可邀约的是"未发过消息"的达人——平台对已邀约过的行会禁用复选框，执行时<b>跳过并如实回报</b>跳过数量。
-              勾人是<b>一个一个点</b>（不点表头全选），一屏不够就向下滚动加载更多达人再继续。
-            </div>
-            <div class="env-note">
-              点「开始邀约」后会<b>连续开批</b>：每批勾 {{ invite.count }} 位 → 批量邀约带货 → 确认发送；一批发完自动开下一批，
-              <b>直到邀约额度用完</b>（平台「确认发送」变禁用）或当天该口径下可选达人不足 {{ invite.count }} 位为止，然后自动停止。
-              <b>抖店不再弹二次确认</b>——发送即真实发出（额度不足的批次不会发出去）。
-            </div>
+            <div class="inv-card">
+              <div class="inv-card-h">① 选人范围<span class="row-sub">对应广场筛选项 · 每轮都会重新应用</span></div>
 
-            <label class="inv-row">主推类目
-              <select v-model="invite.category" data-test="invite-category">
-                <option value="">不筛选（全部）</option>
-                <option v-for="c in inviteProfile.categories" :key="c" :value="c">{{ c }}</option>
-              </select>
-            </label>
-
-            <div class="inv-row inv-block">达人等级
-              <span class="inv-chips">
-                <label
-                  v-for="lv in inviteProfile.levels" :key="lv"
-                  class="inv-chip" :class="{ on: invite.levels.includes(lv) }"
-                >
-                  <input type="checkbox" :value="lv" v-model="invite.levels" :data-test="'invite-level-' + lv" />{{ lv }}
+              <div class="inv-grid2">
+                <label class="inv-row inv-col">主推类目
+                  <select v-model="invite.category" data-test="invite-category">
+                    <option value="">不筛选（全部）</option>
+                    <option v-for="c in inviteProfile.categories" :key="c" :value="c">{{ c }}</option>
+                  </select>
                 </label>
-              </span>
-            </div>
-            <div class="env-note">
-              额度按「店铺类型 × 达人等级」下发：实测本店只有 <b>{{ inviteProfile.levelsWithQuotaHint.join(' / ') }}</b> 有额度，其余为 0（邀约按钮会变禁用态）。额度随经营情况变化，请自行确认。
-            </div>
-
-            <label class="inv-row">本批数量
-              <input type="number" min="1" :max="inviteProfile.maxBatch" v-model.number="invite.count" class="inv-num" data-test="invite-count" />
-              <span class="row-sub">上限 {{ inviteProfile.maxBatch }} 位（平台限制）</span>
-            </label>
-
-            <div class="inv-row inv-block">话术来源
-              <span class="inv-chips">
-                <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
-                  <input type="radio" value="manual" v-model="invite.scriptMode" data-test="invite-script-mode-manual" />手填
+                <label class="inv-row inv-col">二级类目
+                  <select v-model="invite.subcategory" data-test="invite-subcategory" :disabled="!invite.category">
+                    <option value="">不限</option>
+                    <option v-for="s in subCategoryOptions" :key="s" :value="s">{{ s }}</option>
+                  </select>
                 </label>
-                <label class="inv-chip" :class="{ on: invite.scriptMode === 'ai' }">
-                  <input type="radio" value="ai" v-model="invite.scriptMode" data-test="invite-script-mode-ai" />AI 生成
-                </label>
-              </span>
+              </div>
+              <div class="env-note" style="margin-top:4px">
+                选二级后按「一级/二级」精确筛选（如 个护家清/家清纸品）；二级名以平台级联实测为准，个别过长名称平台侧有截断，执行时按包含匹配。
+              </div>
+
+              <div class="inv-row inv-block">达人等级
+                <span class="inv-chips">
+                  <label
+                    v-for="lv in inviteProfile.levels" :key="lv"
+                    class="inv-chip" :class="{ on: invite.levels.includes(lv) }"
+                  >
+                    <input type="checkbox" :value="lv" v-model="invite.levels" :data-test="'invite-level-' + lv" />{{ lv }}
+                  </label>
+                </span>
+              </div>
+              <div class="env-note">
+                额度按「店铺类型 × 达人等级」下发：实测本店只有 <b>{{ inviteProfile.levelsWithQuotaHint.join(' / ') }}</b> 有额度，其余为 0（邀约按钮会变禁用态）。额度随经营情况变化，请自行确认。
+              </div>
+
+              <label class="inv-row">本批数量
+                <input type="number" min="1" :max="inviteProfile.maxBatch" v-model.number="invite.count" class="inv-num" data-test="invite-count" />
+                <span class="row-sub">上限 {{ inviteProfile.maxBatch }} 位（平台限制）</span>
+              </label>
             </div>
 
-            <label class="inv-row inv-block">邀约话术
-              <textarea v-model="invite.script" :readonly="invite.scriptMode === 'ai'" :maxlength="inviteProfile.scriptMaxLen" rows="3" data-test="invite-script"
-                :placeholder="invite.scriptMode === 'ai'
-                  ? '不用填：执行到邀约抽屉后，AI 读取平台推荐商品现场生成并写入这个框'
-                  : '您好，我们是……想邀请您合作带货：给专属高佣与免费寄样，提供现成素材，发货售后我们全包。'"></textarea>
-              <span class="row-sub" v-if="invite.scriptMode === 'manual'">{{ invite.script.length }}/{{ inviteProfile.scriptMaxLen }}</span>
-              <span class="row-sub" v-else>AI 生成 · 不超过 {{ inviteProfile.scriptMaxLen }} 字 · 发送前会停下让你核对</span>
-            </label>
-            <div class="env-note" v-if="invite.scriptMode === 'ai' && !aiReady">
-              <b>AI 未配置</b>：请到「设置 → AI 配置」填写接口地址、模型名与 API Key（可先点「测试连接」验证）。
-            </div>
-            <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
-              AI 会在打开邀约抽屉后读取该抽屉里的商品信息生成话术；<b>生成的原文会落库留档</b>，且放行前会停下让你核对。
+            <div class="inv-card">
+              <div class="inv-card-h">② 邀约内容</div>
+              <div class="inv-row inv-block">话术来源
+                <span class="inv-chips">
+                  <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
+                    <input type="radio" value="manual" v-model="invite.scriptMode" data-test="invite-script-mode-manual" />手填
+                  </label>
+                  <label class="inv-chip" :class="{ on: invite.scriptMode === 'ai' }">
+                    <input type="radio" value="ai" v-model="invite.scriptMode" data-test="invite-script-mode-ai" />AI 生成
+                  </label>
+                </span>
+              </div>
+              <label class="inv-row inv-block">邀约话术
+                <textarea v-model="invite.script" :readonly="invite.scriptMode === 'ai'" :maxlength="inviteProfile.scriptMaxLen" rows="3" data-test="invite-script"
+                  :placeholder="invite.scriptMode === 'ai'
+                    ? '不用填：执行到邀约抽屉后，AI 读取平台推荐商品现场生成并写入这个框'
+                    : '您好，我们是……想邀请您合作带货：给专属高佣与免费寄样，提供现成素材，发货售后我们全包。'"></textarea>
+                <span class="row-sub" v-if="invite.scriptMode === 'manual'">{{ invite.script.length }}/{{ inviteProfile.scriptMaxLen }}</span>
+                <span class="row-sub" v-else>AI 生成 · 不超过 {{ inviteProfile.scriptMaxLen }} 字</span>
+              </label>
+              <div class="env-note" v-if="invite.scriptMode === 'ai' && !aiReady">
+                <b>AI 未配置</b>：请到「设置 → AI 配置」填写接口地址、模型名与 API Key（可先点「测试连接」验证）。
+              </div>
+              <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
+                AI 会在打开邀约抽屉后读取该抽屉里的商品信息生成话术；<b>生成的原文会落库留档</b>。
+              </div>
+              <div class="inv-row inv-block">专属权益（可多选）
+                <span class="inv-chips">
+                  <label
+                    v-for="b in inviteProfile.benefits" :key="b"
+                    class="inv-chip" :class="{ on: invite.benefits.includes(b) }"
+                  >
+                    <input type="checkbox" :value="b" v-model="invite.benefits" :data-test="'invite-benefit-' + b" />{{ b }}
+                  </label>
+                </span>
+              </div>
             </div>
 
-            <div class="inv-row inv-block">专属权益（可多选）
-              <span class="inv-chips">
-                <label
-                  v-for="b in inviteProfile.benefits" :key="b"
-                  class="inv-chip" :class="{ on: invite.benefits.includes(b) }"
-                >
-                  <input type="checkbox" :value="b" v-model="invite.benefits" :data-test="'invite-benefit-' + b" />{{ b }}
-                </label>
-              </span>
+            <div class="inv-card">
+              <div class="inv-card-h">③ 运行</div>
+              <div class="cf-btns">
+                <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
+                <template v-else>
+                  <span class="row-sub" style="align-self:center">邀约进行中 · {{ statusLabel(inviteRun.status) }}</span>
+                  <button class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
+                </template>
+              </div>
+              <div class="env-note">
+                可邀约的是"未发过消息"的达人（已邀约行平台会禁用复选框，执行时<b>跳过并如实回报</b>）。勾人是<b>一个一个点</b>（不点表头全选），一屏不够就向下滚动加载更多。
+              </div>
+              <div class="env-note">
+                点「开始邀约」后<b>连续开批</b>：每批勾 {{ invite.count }} 位 → 批量邀约带货 → 确认发送；一批发完自动开下一批，
+                <b>直到额度用完</b>或可选达人不足 {{ invite.count }} 位为止，然后自动停止。<b>抖店不再弹二次确认</b>——发送即真实发出。
+              </div>
+              <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
             </div>
-
-            <div class="cf-btns" style="margin-top:10px">
-              <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
-              <template v-else>
-                <span class="row-sub" style="align-self:center">邀约进行中 · {{ statusLabel(inviteRun.status) }}</span>
-                <button class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
-              </template>
-            </div>
-            <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
             </template>
 
             <!-- assist-form（微信小店）：人工选人进邀约页，引擎代填表单+门禁后发送 -->
@@ -499,55 +515,62 @@
               ③ 填完<b>停下让你核对</b>，确认后才会点「发送邀约」。每次运行邀约 1 位，{{ inviteProfile.dailyQuotaHint }}。
             </div>
 
-            <label class="inv-row">邀约联系人
-              <input type="text" v-model="invite.contact" maxlength="30" data-test="invite-contact" placeholder="商家侧联系人（必填）" />
-            </label>
-            <label class="inv-row">微信号
-              <input type="text" v-model="invite.wechat" maxlength="30" data-test="invite-wechat" placeholder="与手机号至少填一个" />
-            </label>
-            <label class="inv-row">手机号码
-              <input type="text" v-model="invite.phone" maxlength="11" data-test="invite-phone" placeholder="与微信号至少填一个" />
-            </label>
-
-            <div class="inv-row inv-block">话术来源
-              <span class="inv-chips">
-                <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
-                  <input type="radio" value="manual" v-model="invite.scriptMode" data-test="invite-script-mode-manual" />手填
-                </label>
-                <label class="inv-chip" :class="{ on: invite.scriptMode === 'ai' }">
-                  <input type="radio" value="ai" v-model="invite.scriptMode" data-test="invite-script-mode-ai" />AI 生成
-                </label>
-              </span>
+            <div class="inv-card">
+              <div class="inv-card-h">① 联系方式</div>
+              <label class="inv-row">邀约联系人
+                <input type="text" v-model="invite.contact" maxlength="30" data-test="invite-contact" placeholder="商家侧联系人（必填）" />
+              </label>
+              <label class="inv-row">微信号
+                <input type="text" v-model="invite.wechat" maxlength="30" data-test="invite-wechat" placeholder="与手机号至少填一个" />
+              </label>
+              <label class="inv-row">手机号码
+                <input type="text" v-model="invite.phone" maxlength="11" data-test="invite-phone" placeholder="与微信号至少填一个" />
+              </label>
             </div>
 
-            <label class="inv-row inv-block">合作说明（邀约话术）
-              <textarea v-model="invite.script" :readonly="invite.scriptMode === 'ai'" :maxlength="inviteProfile.scriptMaxLen" rows="3" data-test="invite-script"
-                :placeholder="invite.scriptMode === 'ai'
-                  ? '不用填：执行到邀约页后，AI 读取邀约商品信息现场生成并写入这个框'
-                  : '您好，我们是……想邀请您合作带货：给专属高佣与免费寄样，提供现成素材，发货售后我们全包。'"></textarea>
-              <span class="row-sub" v-if="invite.scriptMode === 'manual'">{{ invite.script.length }}/{{ inviteProfile.scriptMaxLen }}</span>
-              <span class="row-sub" v-else>AI 生成 · 不超过 {{ inviteProfile.scriptMaxLen }} 字 · 发送前会停下让你核对</span>
-            </label>
-            <div class="env-note" v-if="invite.scriptMode === 'ai' && !aiReady">
-              <b>AI 未配置</b>：请到「设置 → AI 配置」填写接口地址、模型名与 API Key（可先点「测试连接」验证）。
-            </div>
-            <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
-              AI 会在邀约页读取邀约商品信息生成话术；<b>生成的原文会落库留档</b>，且放行前会停下让你核对。
+            <div class="inv-card">
+              <div class="inv-card-h">② 邀约内容</div>
+              <div class="inv-row inv-block">话术来源
+                <span class="inv-chips">
+                  <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
+                    <input type="radio" value="manual" v-model="invite.scriptMode" data-test="invite-script-mode-manual" />手填
+                  </label>
+                  <label class="inv-chip" :class="{ on: invite.scriptMode === 'ai' }">
+                    <input type="radio" value="ai" v-model="invite.scriptMode" data-test="invite-script-mode-ai" />AI 生成
+                  </label>
+                </span>
+              </div>
+              <label class="inv-row inv-block">合作说明（邀约话术）
+                <textarea v-model="invite.script" :readonly="invite.scriptMode === 'ai'" :maxlength="inviteProfile.scriptMaxLen" rows="3" data-test="invite-script"
+                  :placeholder="invite.scriptMode === 'ai'
+                    ? '不用填：执行到邀约页后，AI 读取邀约商品信息现场生成并写入这个框'
+                    : '您好，我们是……想邀请您合作带货：给专属高佣与免费寄样，提供现成素材，发货售后我们全包。'"></textarea>
+                <span class="row-sub" v-if="invite.scriptMode === 'manual'">{{ invite.script.length }}/{{ inviteProfile.scriptMaxLen }}</span>
+                <span class="row-sub" v-else>AI 生成 · 不超过 {{ inviteProfile.scriptMaxLen }} 字</span>
+              </label>
+              <div class="env-note" v-if="invite.scriptMode === 'ai' && !aiReady">
+                <b>AI 未配置</b>：请到「设置 → AI 配置」填写接口地址、模型名与 API Key（可先点「测试连接」验证）。
+              </div>
+              <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
+                AI 会在邀约页读取邀约商品信息生成话术；<b>生成的原文会落库留档</b>，且放行前会停下让你核对。
+              </div>
+              <label class="inv-row">添加商品数量
+                <input type="number" min="1" :max="inviteProfile.maxProducts" v-model.number="invite.productCount" class="inv-num" data-test="invite-product-count" />
+                <span class="row-sub">页面已有商品则原样不动；没有才自动添加，最多 {{ inviteProfile.maxProducts }} 个</span>
+              </label>
             </div>
 
-            <label class="inv-row">添加商品数量
-              <input type="number" min="1" :max="inviteProfile.maxProducts" v-model.number="invite.productCount" class="inv-num" data-test="invite-product-count" />
-              <span class="row-sub">页面已有商品则原样不动；没有才自动添加，最多 {{ inviteProfile.maxProducts }} 个</span>
-            </label>
-
-            <div class="cf-btns" style="margin-top:10px">
-              <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
-              <template v-else>
-                <span class="row-sub" style="align-self:center">邀约进行中 · {{ statusLabel(inviteRun.status) }}</span>
-                <button class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
-              </template>
+            <div class="inv-card">
+              <div class="inv-card-h">③ 运行</div>
+              <div class="cf-btns">
+                <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
+                <template v-else>
+                  <span class="row-sub" style="align-self:center">邀约进行中 · {{ statusLabel(inviteRun.status) }}</span>
+                  <button class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
+                </template>
+              </div>
+              <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
             </div>
-            <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
             </template>
           </div>
 
@@ -1042,7 +1065,7 @@
 import { reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import PlatformIcon from '../../components/PlatformIcon.vue'
-import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS } from '@shared/constants/invite'
+import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile } from '@shared/constants/invite'
 import { buildInviteSteps } from '@shared/invite-steps'
 import { BIZ_METRICS, businessProfileFor, BUSINESS_SUPPORTED_PLATFORMS } from '@shared/constants/business'
 import { buildBusinessCollectSteps } from '@shared/business-steps'
@@ -1750,6 +1773,8 @@ const inviteProfile = computed(() => {
 })
 const invite = reactive({
   category: '' as string,
+  /** 二级类目（'' = 不限子类，即整个一级）；仅 category 非空时可选 */
+  subcategory: '' as string,
   levels: [] as string[],
   count: 5,
   script: '',
@@ -1764,6 +1789,16 @@ const invite = reactive({
   /** 跨平台不共话术：切到不同平台的店铺时清空脚本（抖店/微信的话术口径不同） */
   platformKey: ''
 })
+/** 当前一级类目的二级选项（categoryTree 实测；category 为空或无子类 → 空数组） */
+const subCategoryOptions = computed(() => {
+  const p = inviteProfile.value
+  if (!p || !isBatchProfile(p) || !invite.category) return []
+  return p.categoryTree.find(c => c.name === invite.category)?.children ?? []
+})
+// 一级变化时二级跟随：已选二级不在新一级的子类里就回到「不限」
+watch(() => invite.category, () => {
+  if (invite.subcategory && !subCategoryOptions.value.includes(invite.subcategory)) invite.subcategory = ''
+})
 // 店铺/平台变化时把可选项重置为该平台档案的默认值，随后**合并该平台保存过的配置**
 // （用户要求：主推类目/达人等级/数量/话术要能记住，不能每次重启都重置）
 watch(inviteProfile, (p) => {
@@ -1775,6 +1810,7 @@ watch(inviteProfile, (p) => {
   }
   if (p.flow === 'batch-list') {
     invite.category = p.categories[2] || p.categories[0] || ''
+    invite.subcategory = ''
     invite.levels = [...p.levelsWithQuotaHint]
     invite.benefits = []
     invite.count = Math.max(1, Math.min(invite.count || 5, p.maxBatch))
@@ -1794,7 +1830,7 @@ const inviteCfgLoaded = new Set<string>()
 
 function inviteCfgFields(flow: 'batch-list' | 'assist-form'): readonly string[] {
   return flow === 'batch-list'
-    ? ['category', 'levels', 'count', 'script', 'scriptMode', 'benefits']
+    ? ['category', 'subcategory', 'levels', 'count', 'script', 'scriptMode', 'benefits']
     : ['contact', 'wechat', 'phone', 'script', 'scriptMode', 'productCount']
 }
 
@@ -1812,6 +1848,10 @@ async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFo
       if (p.flow === 'batch-list') {
         const cat = str(saved.category, 40)
         if (cat !== null && (cat === '' || p.categories.includes(cat))) invite.category = cat
+        const sub = str(saved.subcategory, 40)
+        const kids = cat ? (p.categoryTree.find(c => c.name === cat)?.children ?? []) : []
+        // 二级只在属于该一级的子类列表时才恢复，否则回「不限」
+        if (sub !== null && (sub === '' || kids.includes(sub))) invite.subcategory = sub
         if (Array.isArray(saved.levels)) invite.levels = saved.levels.filter((x): x is string => typeof x === 'string' && p.levels.includes(x))
         if (typeof saved.count === 'number' && Number.isFinite(saved.count)) invite.count = Math.max(1, Math.min(Math.round(saved.count), p.maxBatch))
         const sc = str(saved.script, p.scriptMaxLen)
@@ -1908,7 +1948,7 @@ async function startInvite() {
   const steps = p.flow === 'batch-list'
     ? buildInviteSteps(p, {
         batch: {
-          category: invite.category, levels: invite.levels, count: invite.count,
+          category: invite.category, subcategory: invite.subcategory, levels: invite.levels, count: invite.count,
           script: invite.script, scriptMode: invite.scriptMode, benefits: invite.benefits
         }
       }, squareUrl)
@@ -1919,7 +1959,7 @@ async function startInvite() {
         }
       }, squareUrl)
   const name = p.flow === 'batch-list'
-    ? `达人邀约 · ${p.platform} · ${invite.category || '全部'} · 最多 ${invite.count} 位`
+    ? `达人邀约 · ${p.platform} · ${invite.category ? invite.category + (invite.subcategory ? '/' + invite.subcategory : '') : '全部'} · 最多 ${invite.count} 位`
     : `达人邀约 · ${p.platform} · 辅助填单 · ${invite.contact.trim() || '未命名'}`
   const created = await window.shopilot.task.create({ name, storeScope: ws.displayedStoreId, steps })
   if (!created.ok) { ws.toast('创建邀约任务失败: ' + created.error.message, 'error'); return }
@@ -2918,6 +2958,12 @@ onBeforeUnmount(() => {
 .stab.on { color: #fff; border-bottom-color: var(--color-primary); }
 .settings-modal { width: 520px; }
 .sub-pane { display: flex; flex-direction: column; }
+/* 邀约面板分区卡片：① 选人范围/联系方式 ② 邀约内容 ③ 运行 */
+.inv-card { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 8px 9px; margin: 0 0 8px; }
+.inv-card-h { display: flex; align-items: baseline; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.inv-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.inv-col { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
+.inv-col select { width: 100%; }
 /* 任务面板的二级页签：内容区自己的页签行（不参与标题栏拖拽、不占 WCO 那 140px 留白） */
 .sub-tabs { display: flex; align-items: center; gap: 4px; margin: 0 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--color-border); }
 .sub-tabs .stab { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 3px 9px; border-radius: var(--radius-sm); color: var(--color-text-secondary); }

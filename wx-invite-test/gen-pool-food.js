@@ -1,0 +1,5 @@
+const fs = require('fs')
+let s = fs.readFileSync('wx-invite-test/probe-pool.js', 'utf8')
+s = s.replace("'\\u4e2a\\u62a4\\u5bb6\\u6e05'", "'\\u98df\\u54c1\\u996e\\u6599'")
+fs.writeFileSync('wx-invite-test/probe-pool-food.js', s)
+console.log('written probe-pool-food.js')

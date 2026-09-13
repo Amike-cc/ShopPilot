@@ -34,6 +34,12 @@ export interface InviteProfileBase {
   scriptMaxLen: number
 }
 
+/** 主推类目树的一个一级类目（children = 平台级联里的二级子类，空数组 = 无子类） */
+export interface CategoryNode {
+  name: string
+  children: readonly string[]
+}
+
 /**
  * 批量勾选流档案（抖店）。
  * 字段说明沿用实测注释；选择器只依赖 tbody/checkbox 这类稳定结构，
@@ -47,6 +53,13 @@ export interface BatchInviteProfile extends InviteProfileBase {
   maxProducts: number
   /** 主推类目（实测可点击项） */
   categories: readonly string[]
+  /**
+   * 主推类目树（一级 → 二级子类）。二级取自平台级联弹层的逐个实测（2026-09-14，
+   * 弹层懒创建：一页只点一个 chip 才能读到对的子类，见 wx-invite-test/category-tree.json）。
+   * 平台对二级的交互：点一级 chip 展开子类级联，**点二级项即生效**（「已筛选」显示 一级/二级/…）。
+   * 子类名可能被平台截断（如"摩托车/电动车/自行..."），流程按"包含匹配"点击，不做全等假设。
+   */
+  categoryTree: readonly CategoryNode[]
   /** 达人等级可选项 */
   levels: readonly string[]
   /** 实测有邀约额度的等级（仅作提示：额度按"店铺类型 × 等级"下发，会随经营情况变化） */
@@ -157,6 +170,31 @@ const DOUDIAN: BatchInviteProfile = {
     '母婴宠物', '鲜花园艺', '本地生活', '食品饮料', '3C数码家电', '图书教育',
     '鞋靴箱包', '虚拟充值', '运动户外', '钟表配饰', '珠宝文玩', '医疗健康',
     '酒类', '滋补保健', '原料包装', '餐饮外卖'
+  ],
+  // 二级子类为平台级联逐个实测（2026-09-14）；「不限」由流程隐式提供（子类留空 = 整个一级）
+  categoryTree: [
+    { name: '玩具乐器', children: ['玩具', '乐器及配件'] },
+    { name: '服饰内衣', children: ['服装'] },
+    { name: '个护家清', children: ['个人护理', '家清纸品'] },
+    { name: '智能家居', children: ['五金/工具', '电子/电工', '家具', '家装灯饰光源', '家装建材', '居家日用', '汽车用品', '整车及配件', '摩托车/电动车/自行...', '餐饮厨具'] },
+    { name: '生鲜', children: ['水果蔬菜', '海鲜水产', '肉禽蛋品', '冷冻/冷藏制品'] },
+    { name: '美妆', children: ['彩妆香水'] },
+    { name: '母婴宠物', children: ['宠物生活', '母婴用品'] },
+    { name: '鲜花园艺', children: ['农资园艺'] },
+    { name: '本地生活', children: ['文娱', '通讯充值', '本地生活服务', '教育培训'] },
+    { name: '食品饮料', children: ['休闲食品', '水饮冲调', '粮油干货/方便速食'] },
+    { name: '3C数码家电', children: ['元器件', '办公设备及耗材', '电器', '3C数码及配件'] },
+    { name: '图书教育', children: ['文教文化用品', '书籍/杂志/报纸'] },
+    { name: '鞋靴箱包', children: ['鞋靴', '箱包'] },
+    { name: '虚拟充值', children: ['有价券'] },
+    { name: '运动户外', children: ['运动休闲用品', '户外装备'] },
+    { name: '钟表配饰', children: ['钟表眼镜', '时尚饰品'] },
+    { name: '珠宝文玩', children: ['文玩收藏', '民俗工艺/非遗', '黄金珠宝玉石', '工艺品'] },
+    { name: '医疗健康', children: ['医疗器械及保健用品', '药品'] },
+    { name: '酒类', children: ['酒类'] },
+    { name: '滋补保健', children: ['传统滋补', '营养保健/特医食品'] },
+    { name: '原料包装', children: ['工业品'] },
+    { name: '餐饮外卖', children: [] }
   ],
   levels: ['LV0', 'LV1', 'LV2', 'LV3', 'LV4', 'LV5', 'LV6'],
   levelsWithQuotaHint: ['LV0', 'LV1', 'LV2', 'LV3'],

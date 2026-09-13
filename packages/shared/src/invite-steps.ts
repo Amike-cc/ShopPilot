@@ -27,7 +27,10 @@ export interface StepDraft {
 export const BATCH_LOOP_MAX_ROUNDS = 20
 
 export interface BatchInviteOptions {
+  /** 一级主推类目（'' = 不筛选） */
   category: string
+  /** 二级子类（'' = 不限子类，即整个一级）；仅 category 非空时有效 */
+  subcategory?: string
   levels: string[]
   count: number
   script: string
@@ -75,18 +78,26 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   if (opts.category) {
     // ① 点类目 chip：限定在"类目快捷选项行"里——类目名在达人卡片的类目文案里也有，
     //    不限范围可能点到卡片上（实测就是筛选静默失效的原因之一）；
-    // ② 点级联弹层里的「不限」叶子：限定在弹层内——等级下拉里也有同名"不限"；
-    // ③ chip 只是展开子类，必须点叶子筛选才生效。
+    // ② 点级联弹层里的二级项：限定在弹层内——等级下拉里也有同名"不限"。
+    //    选了二级 → 点该二级项（实测点二级即生效，「已筛选」显示 一级/二级/…）；
+    //    只选一级 → 点「不限」（不限子类 = 整个一级）。二级名可能被平台截断，按包含匹配。
+    const sub = (opts.subcategory || '').trim()
     round.push({ type: 'clickByText', input: { text: opts.category, within: { selector: p.categoryChipScope } }, timeoutMs: 20000 })
-    round.push({ type: 'clickByText', input: { text: p.texts.categoryAnyLeaf, within: { selector: p.categoryPopoverSelector } }, timeoutMs: 20000 })
+    // 级联项必须用受信任鼠标点击（mode:'real'）：有下级的二级项吃合成 click 时只展开下一列、
+    // 不选中（真机实测「休闲食品」点了没反应、「已筛选」里 主推类目： 后面是空的）；
+    // 真实鼠标点在文字上=用户操作，二级直接生效（实测 家清纸品 → 主推类目：个护家清/家清纸品/…）
+    round.push({ type: 'clickByText', input: { text: sub || p.texts.categoryAnyLeaf, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
   }
   round.push({ type: 'clickByText', input: { text: p.texts.levelTrigger } })
   for (const lv of opts.levels) round.push({ type: 'clickByText', input: { text: lv } })
   round.push({ type: 'clickByText', input: { text: p.texts.search } })
   round.push({ type: 'waitForSelector', input: { selector: p.rowCheckboxSelector }, timeoutMs: 30000 })
-  // 类目生效校验：在「已筛选」标签行里必须能看到所选类目（否则宁可现在失败，也别把错类目的人邀了）
+  // 类目生效校验：在「已筛选」标签行里必须能看到所选类目（选了二级时连同二级名一起校验，
+  // 实测标签形如 `主推类目：个护家清/家清纸品/…`）——否则宁可现在失败，也别把错类目的人邀了
   if (opts.category) {
     round.push({ type: 'waitForText', input: { text: opts.category, within: { text: p.texts.filteredMarker, climb: 1 } }, timeoutMs: 25000 })
+    const sub = (opts.subcategory || '').trim()
+    if (sub) round.push({ type: 'waitForText', input: { text: sub, within: { text: p.texts.filteredMarker, climb: 1 } }, timeoutMs: 25000 })
   }
   // scroll=true：抖店广场列表在固定容器里滚动加载（无分页），一屏放不下 40 位——
   // 点完当前可点的行后向下滚动、等新行渲染再继续（实测修掉"要勾 40 位却只勾中 1 位"）。
@@ -123,7 +134,7 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   return [{
     type: 'loop',
     input: {
-      label: `${opts.category || '全部'} · ${opts.levels.join('/')} · 每批 ${opts.count} 位`,
+      label: `${opts.category ? opts.category + (opts.subcategory ? '/' + opts.subcategory : '') : '全部'} · ${opts.levels.join('/')} · 每批 ${opts.count} 位`,
       maxRounds: BATCH_LOOP_MAX_ROUNDS,
       stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL'],
       steps: round

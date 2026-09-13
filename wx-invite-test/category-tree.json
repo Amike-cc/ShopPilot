@@ -1,0 +1,415 @@
+{
+ "count": 22,
+ "tree": [
+  {
+   "name": "玩具乐器",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "玩具",
+     "expand": true
+    },
+    {
+     "name": "乐器及配件",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "服饰内衣",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "服装",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "个护家清",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "个人护理",
+     "expand": true
+    },
+    {
+     "name": "家清纸品",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "智能家居",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "五金/工具",
+     "expand": true
+    },
+    {
+     "name": "电子/电工",
+     "expand": true
+    },
+    {
+     "name": "家具",
+     "expand": true
+    },
+    {
+     "name": "家装灯饰光源",
+     "expand": true
+    },
+    {
+     "name": "家装建材",
+     "expand": true
+    },
+    {
+     "name": "居家日用",
+     "expand": true
+    },
+    {
+     "name": "汽车用品",
+     "expand": true
+    },
+    {
+     "name": "整车及配件",
+     "expand": true
+    },
+    {
+     "name": "摩托车/电动车/自行...",
+     "expand": true
+    },
+    {
+     "name": "餐饮厨具",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "生鲜",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "水果蔬菜",
+     "expand": true
+    },
+    {
+     "name": "海鲜水产",
+     "expand": true
+    },
+    {
+     "name": "肉禽蛋品",
+     "expand": true
+    },
+    {
+     "name": "冷冻/冷藏制品",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "美妆",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "彩妆香水",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "母婴宠物",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "宠物生活",
+     "expand": true
+    },
+    {
+     "name": "母婴用品",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "鲜花园艺",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "农资园艺",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "本地生活",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "文娱",
+     "expand": true
+    },
+    {
+     "name": "通讯充值",
+     "expand": true
+    },
+    {
+     "name": "本地生活服务",
+     "expand": true
+    },
+    {
+     "name": "教育培训",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "食品饮料",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "休闲食品",
+     "expand": true
+    },
+    {
+     "name": "水饮冲调",
+     "expand": true
+    },
+    {
+     "name": "粮油干货/方便速食",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "3C数码家电",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "元器件",
+     "expand": true
+    },
+    {
+     "name": "办公设备及耗材",
+     "expand": true
+    },
+    {
+     "name": "电器",
+     "expand": true
+    },
+    {
+     "name": "3C数码及配件",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "图书教育",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "文教文化用品",
+     "expand": true
+    },
+    {
+     "name": "书籍/杂志/报纸",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "鞋靴箱包",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "鞋靴",
+     "expand": true
+    },
+    {
+     "name": "箱包",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "虚拟充值",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "有价券",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "运动户外",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "运动休闲用品",
+     "expand": true
+    },
+    {
+     "name": "户外装备",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "钟表配饰",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "钟表眼镜",
+     "expand": true
+    },
+    {
+     "name": "时尚饰品",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "珠宝文玩",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "文玩收藏",
+     "expand": true
+    },
+    {
+     "name": "民俗工艺/非遗",
+     "expand": true
+    },
+    {
+     "name": "黄金珠宝玉石",
+     "expand": true
+    },
+    {
+     "name": "工艺品",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "医疗健康",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "医疗器械及保健用品",
+     "expand": true
+    },
+    {
+     "name": "药品",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "酒类",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "酒类",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "滋补保健",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "传统滋补",
+     "expand": true
+    },
+    {
+     "name": "营养保健/特医食品",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "原料包装",
+   "children": [
+    {
+     "name": "不限",
+     "expand": false
+    },
+    {
+     "name": "工业品",
+     "expand": true
+    }
+   ]
+  },
+  {
+   "name": "餐饮外卖",
+   "children": [
+    {
+     "name": "暂无数据",
+     "expand": false
+    }
+   ]
+  }
+ ]
+}

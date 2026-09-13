@@ -19,6 +19,13 @@ describe('达人邀约平台档案', () => {
       expect(p.maxProducts).toBe(5)
       expect(p.rowCheckboxSelector).toBe('tbody input[type=checkbox]')
       expect(p.texts.batchInvite).toBe('批量邀约带货')
+      // 二级类目树（2026-09-14 平台级联逐个实测）
+      expect(p.categoryTree.length).toBe(22)
+      const ge = p.categoryTree.find(c => c.name === '个护家清')!
+      expect(ge.children).toContain('个人护理')
+      expect(ge.children).toContain('家清纸品')
+      // categories 与树的一级一一对应
+      expect(p.categories).toEqual(p.categoryTree.map(c => c.name))
     }
   })
 
@@ -148,12 +155,12 @@ describe('抖店（batch-list）步骤构造', () => {
     expect(taskCreateSchema.safeParse({ name: '达人邀约 · 抖店', storeScope: 'store_x', steps }).success).toBe(true)
   })
 
-  it('一轮内部顺序：广场 → 类目(chip+级联叶子+校验) → 等级 → 搜索 → 逐个勾选 → 抽屉 → 额度预检 → 话术 → 确认发送 → 抽屉关闭校验 → 截图', () => {
+  it('一轮内部顺序：广场 → 类目(chip+级联项+校验) → 等级 → 搜索 → 逐个勾选 → 抽屉 → 额度预检 → 话术 → 确认发送 → 抽屉关闭校验 → 截图', () => {
     const round = roundSteps(build())
     const types = round.map(s => s.type)
     expect(types[0]).toBe('navigate')
 
-    // 类目：必须两步 + 一步校验（只点 chip 筛选不生效，这是实测修掉的缺陷）
+    // 类目：chip + 级联项 + 校验（只点 chip 筛选不生效，这是实测修掉的缺陷）
     const catChip = round.find(s => s.type === 'clickByText' && String(s.input.text) === '生鲜')!
     expect(catChip.input.within).toEqual({ selector: DD.categoryChipScope })
     const catLeaf = round.find(s => s.type === 'clickByText' && String(s.input.text) === '不限')!
@@ -184,6 +191,32 @@ describe('抖店（batch-list）步骤构造', () => {
 
     // 不应出现微信专属步骤
     for (const t of ['mirrorTabUrl', 'typeText', 'ensureRows', 'requireQuota']) expect(types).not.toContain(t)
+  })
+
+  it('二级类目：选了二级就点二级项并连带校验；不选则点「不限」', () => {
+    // 选二级：级联里点的是二级名（不是「不限」），且「已筛选」要同时校验一级与二级
+    const round = roundSteps(build({ category: '个护家清', subcategory: '家清纸品' }))
+    const texts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(texts).toContain('个护家清')
+    expect(texts).toContain('家清纸品')
+    expect(texts).not.toContain('不限')
+    const verifies = round.filter(s => s.type === 'waitForText').map(s => String(s.input.text))
+    expect(verifies).toEqual(['个护家清', '家清纸品'])
+    // loop 标签带上二级
+    expect(String(build({ category: '个护家清', subcategory: '家清纸品' })[0].input.label)).toContain('个护家清/家清纸品')
+
+    // 二级留空 → 点「不限」（整个一级）
+    const round2 = roundSteps(build({ category: '个护家清', subcategory: '' }))
+    const texts2 = round2.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(texts2).toContain('不限')
+    expect(texts2).not.toContain('家清纸品')
+    expect(round2.filter(s => s.type === 'waitForText')).toHaveLength(1)
+
+    // 一级不筛 → 不生成类目相关步骤（不猜、不多点）
+    const round3 = roundSteps(build({ category: '', subcategory: '' }))
+    const types3 = round3.map(s => s.type)
+    expect(types3).not.toContain('waitForText')
+    expect(round3.some(s => s.type === 'clickByText' && String(s.input.text) === '不限')).toBe(false)
   })
 
   it('不选类目时不生成类目相关步骤（不猜、不多点）', () => {
