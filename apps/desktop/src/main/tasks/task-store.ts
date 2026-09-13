@@ -68,6 +68,25 @@ function summarizeResult(kind: string, payload: any, artifact?: { path?: string 
 
 // ---------- CRUD ----------
 
+/**
+ * 逐步校验步骤输入（白名单，§5.6）。loop 是复合作步骤：嵌套步骤必须递归校验，
+ * 否则"循环体里塞一个未登记的类型/字段"就绕过了白名单。
+ * label 用于把错误定位到具体子步骤（如 3.2）。
+ */
+function validateStepInput(s: { type: string; input?: unknown }, label: string): any {
+  const schema = stepInputSchemas[s.type]
+  if (!schema) throw new Error(`TASK_INVALID_STEP:step ${label} ${s.type}: 未登记的步骤类型`)
+  const out = schema.safeParse(s.input ?? {})
+  if (!out.success) {
+    throw new Error(`TASK_INVALID_STEP:step ${label} ${s.type}: ${out.error.issues.map(x => x.message).join('; ')}`)
+  }
+  const data = out.data as any
+  if (s.type === 'loop' && Array.isArray(data?.steps)) {
+    data.steps.forEach((child: any, k: number) => validateStepInput(child, `${label}.${k + 1}`))
+  }
+  return data
+}
+
 export function createTask(input: TaskCreateInput): TaskView {
   const parsed = taskCreateSchema.parse(input) // 抛错由 handler 转 TASK_INVALID_STEP
   const db = getDatabase()
@@ -84,12 +103,8 @@ export function createTask(input: TaskCreateInput): TaskView {
       'INSERT INTO task_steps (id, task_id, step_index, type, input_json, timeout_ms, retry_limit) VALUES (?,?,?,?,?,?,?)'
     )
     parsed.steps.forEach((s, i) => {
-      const schema = stepInputSchemas[s.type]
-      const out = schema.safeParse(s.input ?? {})
-      if (!out.success) {
-        throw new Error(`TASK_INVALID_STEP:step ${i + 1} ${s.type}: ${out.error.issues.map(x => x.message).join('; ')}`)
-      }
-      insStep.run(newId('tstep'), taskId, i, s.type, JSON.stringify(out.data),
+      const checked = validateStepInput(s, String(i + 1))
+      insStep.run(newId('tstep'), taskId, i, s.type, JSON.stringify(checked),
         s.timeoutMs ?? (DEFAULT_STEP_TIMEOUT[s.type] ?? 15000), s.retryLimit ?? 0)
     })
   })()

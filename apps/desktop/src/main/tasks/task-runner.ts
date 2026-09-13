@@ -443,23 +443,74 @@ const VISIBLE_JS = `
 `
 
 /** 按自有文本定位可见目标（取最短命中），滚动到可见并返回真实点击坐标 */
+/**
+ * 候选排序：先按"自身文本最短"（最具体的那个），长度相同的再优先"看起来可点的标签"。
+ * 实测动机：容器元素常常和里面的按钮拥有**同样的自身文本**（如 <div>达人等级
+ * <button>达人等级</button></div>），只按长度排会先命中容器——点容器是个空操作，
+ * 后续步骤就找不到本该出现的元素（仿真站点验证时踩到）。
+ */
+const PICK_SORT_FN = `
+  const __clickableScore = (el) => {
+    const tag = el.tagName;
+    if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'LABEL' || tag === 'SELECT') return 0;
+    if (el.getAttribute && (el.getAttribute('role') === 'button' || el.getAttribute('role') === 'tab')) return 0;
+    if (/btn|button|chip|tab|option|item|link/i.test(String(el.className || ''))) return 1;
+    return 2;
+  };
+  const __pickBest = (cands) => {
+    cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
+    return cands[0];
+  };
+`
+
+/**
+ * 查找范围限定（clickByText / waitForText 的 within）。
+ * 实测动机（抖店广场）：类目名同时出现在筛选 chip 与达人卡片的类目文案里，
+ * "不限"在等级下拉里也有同名项——不限定范围就会点错目标，筛选静默失效。
+ */
+const SCOPE_FN = `
+  const __scopeRoot = (w) => {
+    if (!w) return null;
+    let root = null;
+    if (w.selector) root = document.querySelector(w.selector);
+    else {
+      const cands = [];
+      for (const el of document.querySelectorAll('*')) {
+        const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+        if (own === w.text || (own.includes(w.text) && own.length <= w.text.length + 12)) cands.push({ el, len: own.length });
+      }
+      if (cands.length) { cands.sort((a, b) => a.len - b.len); root = cands[0].el }
+    }
+    if (!root) return null;
+    for (let i = 0; i < (w.climb || 0); i++) { if (!root.parentElement) break; root = root.parentElement }
+    return root;
+  }
+`
+
 async function findTextTarget(
-  wc: Electron.WebContents, run: RunHandle, needle: string, deep: boolean, timeoutMs: number, label: string
+  wc: Electron.WebContents, run: RunHandle, needle: string, deep: boolean, timeoutMs: number, label: string,
+  within?: { selector?: string; text?: string; climb?: number }
 ): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number }> {
   return withTimeout(() => wc.executeJavaScript(`(() => {
     ${deep ? ENUM_DEEP_FN : ''}
     ${VISIBLE_JS}
+    ${SCOPE_FN}
+    ${PICK_SORT_FN}
     const needle = ${JSON.stringify(needle)};
+    const within = ${JSON.stringify(within || null)};
     const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+    const root = within ? __scopeRoot(within) : null;
+    if (within && !root) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
     const cands = [];
     for (const el of scope) {
       const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
       if (!own.includes(needle)) continue;
+      if (root && !root.contains(el)) continue;
       if (!__visible(el)) continue;
       cands.push({ el, len: own.length });
     }
     if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
-    cands.sort((a, b) => a.len - b.len);
+    cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
     const hit = cands[0].el;
     let dis = hit.disabled === true || hit.getAttribute('aria-disabled') === 'true';
     let p = hit.parentElement;
@@ -731,16 +782,20 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       const wc = wcOrThrow(run)
       const needle = String(input.text)
       const deep = !!input.deep
+      const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
       guardSignals(run)
       const deadline = Date.now() + step.timeoutMs
       let hit: Awaited<ReturnType<typeof findTextTarget>> | null = null
       if (input.mode === 'real') {
         for (;;) {
           guardSignals(run)
-          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText')
+          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within)
           if (hit.ok) break
           if (hit.reason === 'DISABLED') {
             throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`)
+          }
+          if (hit.reason === 'SCOPE_NOT_FOUND') {
+            throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${needle}」的限定范围（${JSON.stringify(within)}）`)
           }
           if (Date.now() >= deadline) {
             throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
@@ -756,18 +811,24 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
         guardSignals(run)
         const res = await withTimeout(() => wc.executeJavaScript(`(() => {
         ${deep ? ENUM_DEEP_FN : ''}
+        ${SCOPE_FN}
+        ${PICK_SORT_FN}
         const needle = ${JSON.stringify(needle)};
+        const within = ${JSON.stringify(within || null)};
+        const root = within ? __scopeRoot(within) : null;
+        if (within && !root) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
         const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
         const cands = [];
         for (const el of scope) {
           const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
           if (!own.includes(needle)) continue;
+          if (root && !root.contains(el)) continue;
           const r = el.getBoundingClientRect();
           if (!(r.width > 0 && r.height > 0)) continue;
           cands.push({ el, len: own.length });
         }
         if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
-        cands.sort((a, b) => a.len - b.len);
+        cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
         const hit = cands[0].el;
         let dis = hit.disabled === true || hit.getAttribute('aria-disabled') === 'true';
         let p = hit.parentElement;
@@ -786,10 +847,81 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
         if (res && res.reason === 'DISABLED') {
           throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`)
         }
+        if (res && res.reason === 'SCOPE_NOT_FOUND') {
+          throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${needle}」的限定范围（${JSON.stringify(within)}）`)
+        }
         if (Date.now() >= deadline) {
           throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
         }
         await new Promise(r => setTimeout(r, 300))
+      }
+    }
+    case 'loop': {
+      // 批次循环（复合作步骤）：把一轮完整动作重复执行到"该停了"为止。
+      // 用途：抖店达人邀约——一轮 = 进广场 → 选类目/等级 → 勾 40 位 → 批量邀约 → 确认发送，
+      // 循环到**邀约额度用完**（确认发送变禁用 → TASK_QUOTA_EXCEEDED）或**可选达人不足 40**
+      // （TASK_SELECTION_SHORTFALL）为止——这两种都算**正常收尾**（stopOn 命中即干净停止，run 仍成功）。
+      // 其它错误照常向上抛，run 如实失败（绝不吞错、也绝不把"跑了一半"报成成功）。
+      //
+      // 说明：本步骤不套 withTimeout——单轮耗时由嵌套步骤各自的超时约束，整体时长由 maxRounds 封顶；
+      // 嵌套步骤不单独落库（只发进度事件），整轮的汇总写进本步骤的 payload，界面/日志能看明白跑到第几轮。
+      const nestedRaw = Array.isArray(input.steps) ? input.steps : []
+      const nested = nestedRaw as TaskStepDef[]
+      if (!nested.length) throw new Error('TASK_INVALID_STEP: loop 缺少 steps')
+      const maxRounds = Number(input.maxRounds)
+      const stopOn: string[] = Array.isArray(input.stopOn) ? input.stopOn.map(String) : []
+      const loopLabel = input.label ? String(input.label) : `${nested.length} 步`
+      const parentIndex = run.steps.indexOf(step)
+      const summary: any[] = []
+      let completedRounds = 0
+      let stopReason: string | null = null
+      let lastArtifact: { path: string; sha256: string } | undefined
+      for (let round = 1; round <= maxRounds; round++) {
+        guardSignals(run)
+        const startedAt = Date.now()
+        let childIdx = 0
+        let childType = ''
+        try {
+          for (childIdx = 0; childIdx < nested.length; childIdx++) {
+            const child = nested[childIdx]
+            childType = child.type
+            guardSignals(run)
+            emitProgress(run, { phase: 'started', stepIndex: parentIndex, stepType: child.type, message: `第 ${round}/${maxRounds} 轮 · ${loopLabel}` })
+            const out = await execStep(run, child)
+            if (out?.artifact) lastArtifact = out.artifact
+            if (run.deniedByConfirm) break
+          }
+          if (run.deniedByConfirm) break
+          completedRounds = round
+          summary.push({ round, ok: true, ms: Date.now() - startedAt })
+          emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮完成` })
+        } catch (e: any) {
+          // 取消/暂停信号照常向上抛（由外层统一处理状态迁移）
+          if (e?.name === 'CancelSignal' || e?.name === 'PauseSignal') throw e
+          const code = classifyError(e)
+          if (stopOn.includes(code)) {
+            stopReason = code
+            summary.push({ round, ok: false, stop: code, message: String(e?.message || e).slice(0, 240), ms: Date.now() - startedAt })
+            emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮按预期停止：${code}` })
+            break
+          }
+          // 其他错误照常失败，但把"第几轮、哪个子步骤"带进消息——否则只看到子步骤报错，不知道跑到哪了
+          throw new Error(`LOOP_ROUND_FAILED: 第 ${round}/${maxRounds} 轮（子步骤 ${childIdx + 1}/${nested.length} ${childType}）失败：${String(e?.message || e)}`)
+        }
+      }
+      guardSignals(run)
+      return {
+        kind: 'executed',
+        payload: {
+          action: 'loop',
+          label: loopLabel,
+          maxRounds,
+          completedRounds,
+          stopReason,
+          stopOn,
+          rounds: summary
+        },
+        artifact: lastArtifact
       }
     }
     case 'clickAll': {
@@ -980,7 +1112,9 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
           lastVisible = probe.vis
           await new Promise(r => setTimeout(r, 300))
         }
-        const limit = Math.max(1, max - progress() + 5)
+        // 单轮点击数严格等于"还差几位"：曾给 +5 余量，结果一批勾了 45 位而不是 40 位
+        // （用户要求"一次勾 40 位"，多勾就是发错数量）；纠偏重试不额外计数，不需要余量
+        const limit = Math.max(1, max - progress())
         const res: any = await withTimeout(() => wc.executeJavaScript(batchExpr(seenKeys, limit)), run, step.timeoutMs, 'clickAll')
         if (!res || !res.ok) throw new Error(`TASK_SELECTOR_CHANGED: 批量点击未执行（${sel || txt}）`)
         seenKeys.push(...(res.seenNew || []))
@@ -1197,17 +1331,23 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       const wc = wcOrThrow(run)
       const needle = String(input.text)
       const deep = !!input.deep
+      const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
       await withTimeout(async () => {
         for (;;) {
           guardSignals(run)
           const found = await wc.executeJavaScript(`(() => {
             ${deep ? ENUM_DEEP_FN : ''}
             ${VISIBLE_JS}
+            ${SCOPE_FN}
             const needle = ${JSON.stringify(needle)};
+            const within = ${JSON.stringify(within || null)};
+            const root = within ? __scopeRoot(within) : null;
+            if (within && !root) return false;
             const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
             for (const el of scope) {
               const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
               if (!own.includes(needle)) continue;
+              if (root && !root.contains(el)) continue;
               if (__visible(el)) return true;
             }
             return false;
@@ -1387,7 +1527,7 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
             cands.push({ el, len: own.length });
           }
           if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
-          cands.sort((a, b) => a.len - b.len);
+          cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
           let node = cands[0].el;
           // 向上找"比标签只多出一小段文本"的最近祖先（= 指标卡片本体）
           for (let i = 0; i < 6 && node && node !== document.body; i++) {

@@ -58,6 +58,19 @@ export interface BatchInviteProfile extends InviteProfileBase {
   /** 邀约抽屉里的话术输入框 */
   scriptSelector: string
   /**
+   * 主推类目的「快捷选项行」容器（只在这行里点类目名）。
+   * 实测：类目名在达人卡片的类目文案里也会出现（自身文本同样是"个护家清"），
+   * 不限定范围就可能点到达人卡片上，筛选自然不生效。
+   */
+  categoryChipScope: string
+  /**
+   * 主推类目的级联弹层。实测：点类目 chip 只是展开子类级联（不限/个人护理/家清纸品…），
+   * **必须再点一个叶子项**（"不限"= 不限子类）筛选才真正生效；只点 chip 的话
+   * 「已筛选」里不会出现主推类目、列表也不会按类目过滤。
+   * 叶子项点击必须限定在这个弹层内——等级下拉里也有"不限"，不限范围会点错。
+   */
+  categoryPopoverSelector: string
+  /**
    * 邀约抽屉里「推荐商品」区域的读取源（用于 AI 生成话术时参考商品）。
    * 留空 = 运行时从话术框向上找最近的「固定定位浮层」（抽屉本体）再读其可见文本；
    * 找不到浮层就如实报 AI_EMPTY_SOURCE 失败——绝不把整页噪音当商品信息喂给模型。
@@ -70,8 +83,14 @@ export interface BatchInviteProfile extends InviteProfileBase {
     search: string
     batchInvite: string
     confirmSend: string
-    /** 抽屉内确认按钮（打开抽屉后先校验它可用=额度/平台未拦截，再填话术走门禁） */
+    /** 抽屉内确认按钮（打开抽屉后先校验它可用=额度/平台未拦截，再填话术） */
     drawerConfirm: string
+    /** 主推类目标签文案（用于把类目点击限定在类目那一行） */
+    categoryLabel: string
+    /** 类目级联里的"不限子类"叶子项（选中则覆盖整个主推类目） */
+    categoryAnyLeaf: string
+    /** 「已筛选」标签行锚点（校验筛选真的生效：该行里应出现所选类目名） */
+    filteredMarker: string
   }
   /** 额度预检提示（抖店不在页面展示剩余额度数字，额度用尽表现为按钮禁用） */
   quotaNote: string
@@ -144,6 +163,8 @@ const DOUDIAN: BatchInviteProfile = {
   benefits: ['专属高佣', '免费申样', '视频素材支持', '优质视频投放'],
   rowCheckboxSelector: 'tbody input[type=checkbox]',
   scriptSelector: 'textarea',
+  categoryChipScope: '.quick-filter-button-enums',
+  categoryPopoverSelector: '.quick-filter-cascader-popover',
   // 留空 = 运行时用「话术框最近的固定定位浮层」当商品来源（见接口注释：不写死哈希类名）
   goodsSourceSelector: '',
   texts: {
@@ -151,7 +172,10 @@ const DOUDIAN: BatchInviteProfile = {
     search: '搜索',
     batchInvite: '批量邀约带货',
     confirmSend: '确认发送',
-    drawerConfirm: '确认发送'
+    drawerConfirm: '确认发送',
+    categoryLabel: '主推类目',
+    categoryAnyLeaf: '不限',
+    filteredMarker: '已筛选'
   },
   quotaNote: '抖店不在页面展示剩余邀约额度；流程会在打开邀约抽屉后先校验「确认发送」是否可用，额度用尽/平台限制时如实失败'
 }

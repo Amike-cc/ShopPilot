@@ -119,28 +119,87 @@ describe('微信小店（assist-form）步骤构造', () => {
 })
 
 describe('抖店（batch-list）步骤构造', () => {
-  it('保持原有序列：广场 → 筛选 → 批量勾选 → 抽屉 → 额度预检 → 门禁 → 确认发送', () => {
-    const steps = buildBatchSteps(DD as any, {
-      category: '生鲜', levels: ['LV0', 'LV1'], count: 5,
-      script: '合作话术', scriptMode: 'manual', benefits: ['专属高佣']
-    }, 'https://buyin.jinritemai.com/dashboard/servicehall/daren-square')
-    const types = steps.map(s => s.type)
+  const build = (over: Partial<Parameters<typeof buildBatchSteps>[1]> = {}) => buildBatchSteps(DD as any, {
+    category: '生鲜', levels: ['LV0', 'LV1'], count: 40,
+    script: '合作话术', scriptMode: 'manual', benefits: ['专属高佣'], ...over
+  }, 'https://buyin.jinritemai.com/dashboard/servicehall/daren-square')
+
+  /** 取出 loop 里的一轮步骤（整条序列现在只有一个 loop 步骤包着一轮动作） */
+  const roundSteps = (steps: any[]) => {
+    expect(steps).toHaveLength(1)
+    expect(steps[0].type).toBe('loop')
+    return steps[0].input.steps as any[]
+  }
+
+  it('整条序列是一轮 loop（不是单次执行）：发送后继续下一轮，直到额度用完/可选不足', () => {
+    const steps = build()
+    expect(steps).toHaveLength(1)
+    const loop = steps[0]
+    expect(loop.type).toBe('loop')
+    expect(loop.input.maxRounds).toBeGreaterThan(1)
+    // stopOn 里两个"正常收尾"错误码：额度用完 + 可选达人不足
+    expect(loop.input.stopOn).toContain('TASK_QUOTA_EXCEEDED')
+    expect(loop.input.stopOn).toContain('TASK_SELECTION_SHORTFALL')
+    // 标签里带上本轮口径，界面/日志能看出循环参数
+    expect(String(loop.input.label)).toContain('生鲜')
+    expect(String(loop.input.label)).toContain('每批 40 位')
+    // loop 的 timeoutMs 不能超过引擎上限（否则任务创建阶段就被拒）
+    expect(loop.timeoutMs).toBeUndefined()
+    expect(taskCreateSchema.safeParse({ name: '达人邀约 · 抖店', storeScope: 'store_x', steps }).success).toBe(true)
+  })
+
+  it('一轮内部顺序：广场 → 类目(chip+级联叶子+校验) → 等级 → 搜索 → 逐个勾选 → 抽屉 → 额度预检 → 话术 → 确认发送 → 抽屉关闭校验 → 截图', () => {
+    const round = roundSteps(build())
+    const types = round.map(s => s.type)
     expect(types[0]).toBe('navigate')
-    expect(types).toContain('clickAll')
-    // 抽屉打开后、人工确认门禁前，先做「确认发送」可用性（额度）预检
-    const requireEnabled = steps.find(s => s.type === 'requireEnabled')!
+
+    // 类目：必须两步 + 一步校验（只点 chip 筛选不生效，这是实测修掉的缺陷）
+    const catChip = round.find(s => s.type === 'clickByText' && String(s.input.text) === '生鲜')!
+    expect(catChip.input.within).toEqual({ selector: DD.categoryChipScope })
+    const catLeaf = round.find(s => s.type === 'clickByText' && String(s.input.text) === '不限')!
+    expect(catLeaf.input.within).toEqual({ selector: DD.categoryPopoverSelector })
+    const catVerify = round.find(s => s.type === 'waitForText')!
+    expect(String(catVerify.input.text)).toBe('生鲜')
+    expect(catVerify.input.within).toEqual({ text: '已筛选', climb: 1 })
+    // 顺序：chip → 叶子；校验在列表出现之后（勾人之前）
+    expect(types.indexOf('clickByText')).toBeLessThan(types.lastIndexOf('clickByText'))
+    expect(types.indexOf('waitForText')).toBeGreaterThan(types.indexOf('waitForSelector'))
+    expect(types.indexOf('waitForText')).toBeLessThan(types.indexOf('clickAll'))
+
+    // 逐个勾选：clickAll 限定 tbody（不含表头全选），上限取用户设定值，允许滚动续选
+    const clickAll = round.find(s => s.type === 'clickAll')!
+    expect(clickAll.input).toMatchObject({ selector: 'tbody input[type=checkbox]', max: 40, scroll: true })
+
+    // 抽屉打开后、发送前先做「确认发送」可用性（额度）预检
+    const requireEnabled = round.find(s => s.type === 'requireEnabled')!
     expect(String(requireEnabled.input.text)).toBe('确认发送')
-    expect(types.indexOf('requireEnabled')).toBeGreaterThan(types.indexOf('waitForSelector'))
-    expect(types.indexOf('requireEnabled')).toBeLessThan(types.indexOf('waitForUserConfirmation'))
-    // 门禁在最后一个 clickByText（确认发送）之前
-    expect(types.indexOf('waitForUserConfirmation')).toBeLessThan(types.lastIndexOf('clickByText'))
-    const gate = steps.find(s => s.type === 'waitForUserConfirmation')!
-    expect(String(gate.input.message)).toContain('类目 生鲜')
+    expect(types.indexOf('requireEnabled')).toBeLessThan(types.lastIndexOf('clickByText'))
+
+    // **没有**人工确认门禁（用户明确要求抖店不再二次确认）
+    expect(types).not.toContain('waitForUserConfirmation')
+
     // 发送后必须校验结果（抽屉关闭）并截图留档
     expect(types.indexOf('waitForGone')).toBeGreaterThan(types.lastIndexOf('clickByText'))
     expect(types[types.length - 1]).toBe('screenshot')
+
     // 不应出现微信专属步骤
     for (const t of ['mirrorTabUrl', 'typeText', 'ensureRows', 'requireQuota']) expect(types).not.toContain(t)
+  })
+
+  it('不选类目时不生成类目相关步骤（不猜、不多点）', () => {
+    const round = roundSteps(build({ category: '' }))
+    const types = round.map(s => s.type)
+    expect(types).not.toContain('waitForText')
+    expect(round.some(s => s.type === 'clickByText' && String(s.input.text) === '不限')).toBe(false)
+  })
+
+  it('AI 模式在轮内走 aiGenerate + readText 留档（不在门禁后）', () => {
+    const round = roundSteps(build({ scriptMode: 'ai' }))
+    const types = round.map(s => s.type)
+    expect(types).toContain('aiGenerate')
+    expect(types).toContain('readText')
+    expect(types.indexOf('aiGenerate')).toBeGreaterThan(types.indexOf('requireEnabled'))
+    expect(types.indexOf('aiGenerate')).toBeLessThan(types.lastIndexOf('clickByText'))
   })
 })
 
@@ -179,6 +238,40 @@ describe('任务步骤输入 schema', () => {
     expect(stepInputSchemas.ensureRows.safeParse({ rowsSelector: 'a', max: 1 }).success).toBe(false)
     expect(stepInputSchemas.requireQuota.safeParse({ textIncludes: 'x' }).success).toBe(false)
     expect(stepInputSchemas.requireEnabled.safeParse({ text: 'x', extra: 1 }).success).toBe(false)
+  })
+
+  it('within 限定范围：selector 与 text 二选一，climb 有上限', () => {
+    expect(stepInputSchemas.clickByText.safeParse({ text: '不限', within: { selector: '.pop' } }).success).toBe(true)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '生鲜', within: { selector: '.x', text: 'y' } }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '生鲜', within: {} }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '生鲜', within: { text: '已筛选', climb: 99 } }).success).toBe(false)
+    expect(stepInputSchemas.waitForText.safeParse({ text: '生鲜', within: { text: '已筛选', climb: 1 } }).success).toBe(true)
+    expect(stepInputSchemas.waitForText.safeParse({ text: 'x', within: { selector: '.p', evil: 1 } }).success).toBe(false)
+  })
+
+  it('loop：嵌套步骤逐一过白名单（未登记类型/多余字段都被拒）', () => {
+    const ok = {
+      label: '每批 40 位',
+      maxRounds: 20,
+      stopOn: ['TASK_QUOTA_EXCEEDED'],
+      steps: [
+        { type: 'navigate', input: { url: 'https://example.com/a' } },
+        { type: 'clickByText', input: { text: '不限', within: { selector: '.pop' } } },
+        { type: 'screenshot', input: {} }
+      ]
+    }
+    expect(stepInputSchemas.loop.safeParse(ok).success).toBe(true)
+    expect(stepInputSchemas.loop.safeParse({ ...ok, maxRounds: 0 }).success).toBe(false)
+    expect(stepInputSchemas.loop.safeParse({ ...ok, stopOn: [] }).success).toBe(false)
+    expect(stepInputSchemas.loop.safeParse({ ...ok, steps: [] }).success).toBe(false)
+    expect(stepInputSchemas.loop.safeParse({ ...ok, extra: 1 }).success).toBe(false)
+    // 嵌套里塞未登记的类型：schema 会拒（类型枚举来自 TASK_STEP_TYPES）
+    expect(stepInputSchemas.loop.safeParse({
+      ...ok, steps: [{ type: 'runArbitraryJs', input: {} }]
+    }).success).toBe(false)
+    expect(stepInputSchemas.loop.safeParse({
+      ...ok, steps: [{ type: 'navigate', input: { url: 'https://example.com' }, evil: 1 }]
+    }).success).toBe(false)
   })
 
   it('taskCreateSchema 接受完整微信邀约任务', () => {

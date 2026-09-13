@@ -50,7 +50,10 @@ export const TASK_STEP_TYPES = [
   'waitMs',
   // 等元素消失/不可见（读型步骤）：提交类动作后的**结果校验**——例如点击"确认发送"后
   // 邀约抽屉应当关闭；抽屉还在就说明提交没被接受，如实失败而不是把"点了"当"发了"
-  'waitForGone'
+  'waitForGone',
+  // 批次循环（复合作步骤）：把一轮完整动作重复执行，直到命中 stopOn 里的错误码（干净停止，
+  // 例如"邀约额度用完""可选达人不足"）或达到 maxRounds。嵌套步骤同样每个都走白名单校验。
+  'loop'
 ] as const
 
 export type TaskStepType = (typeof TASK_STEP_TYPES)[number]

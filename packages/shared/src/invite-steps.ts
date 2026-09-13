@@ -19,6 +19,13 @@ export interface StepDraft {
   timeoutMs?: number
 }
 
+/**
+ * 抖店批量邀约的批次上限（安全阀）。
+ * 真实停止条件是"额度用完"或"可选达人不足 40 位"（loop 的 stopOn），
+ * 这里只是防止平台状态异常时无限循环：20 批 × 40 位 = 最多 800 位/次运行。
+ */
+export const BATCH_LOOP_MAX_ROUNDS = 20
+
 export interface BatchInviteOptions {
   category: string
   levels: string[]
@@ -52,34 +59,46 @@ export function urlPathHint(url: string): string {
 /**
  * 批量勾选流（抖店）。要点：
  * - 平台无稳定 data-test，筛选与提交靠文案点击（clickByText）；
- * - 行复选框用 tbody 限定，避免点到表头的"全选"；
- * - clickAll 会跳过平台禁用（已邀约过）的行，上限取用户设定值（≤平台上限）；
- * - 话术两种来源：手填 → setInput；AI → aiGenerate（读抽屉商品区）+ readText 留档；
- * - 「确认发送」前必须放 waitForUserConfirmation：拒绝则整单取消，绝不继续。
+ * - 行复选框用 tbody 限定，避免点到表头的"全选"；勾选是**逐个点**（clickAll 不碰表头全选）；
+ * - 主推类目是「chip + 级联叶子」两步（实测只点 chip 筛选不生效，详见 constants/invite.ts 注释），
+ *   点完还要校验「已筛选」里真的出现该类目——平台改版时宁可在勾人前失败；
+ * - 一轮 = 筛选 → 逐个勾 count 位 → 批量邀约带货 → 额度预检 → 填话术 → 确认发送 → 抽屉关闭校验；
+ * - 一轮外面套 loop：**循环到额度用完或可选达人不足 40 位为止**（stopOn 命中=干净停止，不算失败）；
+ * - 平台侧无"发送前人工确认"步骤（用户明确要求抖店不再二次确认）：额度预检 + 发送后抽屉关闭校验
+ *   两道判据替代它——额度不足不发，抽屉没关就如实失败，绝不把"点了"当"发出去了"。
  */
 export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions, squareUrl: string): StepDraft[] {
-  const steps: StepDraft[] = [
+  const round: StepDraft[] = [
     { type: 'navigate', input: { url: squareUrl }, timeoutMs: 45000 },
     { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrl) }, timeoutMs: 45000 }
   ]
-  if (opts.category) steps.push({ type: 'clickByText', input: { text: opts.category } })
-  steps.push({ type: 'clickByText', input: { text: p.texts.levelTrigger } })
-  for (const lv of opts.levels) steps.push({ type: 'clickByText', input: { text: lv } })
-  steps.push({ type: 'clickByText', input: { text: p.texts.search } })
-  steps.push({ type: 'waitForSelector', input: { selector: p.rowCheckboxSelector }, timeoutMs: 30000 })
-  // scroll=true：抖店广场列表在固定容器里滚动加载（无分页），一屏放不下上限 40 行——
+  if (opts.category) {
+    // ① 点类目 chip：限定在"类目快捷选项行"里——类目名在达人卡片的类目文案里也有，
+    //    不限范围可能点到卡片上（实测就是筛选静默失效的原因之一）；
+    // ② 点级联弹层里的「不限」叶子：限定在弹层内——等级下拉里也有同名"不限"；
+    // ③ chip 只是展开子类，必须点叶子筛选才生效。
+    round.push({ type: 'clickByText', input: { text: opts.category, within: { selector: p.categoryChipScope } }, timeoutMs: 20000 })
+    round.push({ type: 'clickByText', input: { text: p.texts.categoryAnyLeaf, within: { selector: p.categoryPopoverSelector } }, timeoutMs: 20000 })
+  }
+  round.push({ type: 'clickByText', input: { text: p.texts.levelTrigger } })
+  for (const lv of opts.levels) round.push({ type: 'clickByText', input: { text: lv } })
+  round.push({ type: 'clickByText', input: { text: p.texts.search } })
+  round.push({ type: 'waitForSelector', input: { selector: p.rowCheckboxSelector }, timeoutMs: 30000 })
+  // 类目生效校验：在「已筛选」标签行里必须能看到所选类目（否则宁可现在失败，也别把错类目的人邀了）
+  if (opts.category) {
+    round.push({ type: 'waitForText', input: { text: opts.category, within: { text: p.texts.filteredMarker, climb: 1 } }, timeoutMs: 25000 })
+  }
+  // scroll=true：抖店广场列表在固定容器里滚动加载（无分页），一屏放不下 40 位——
   // 点完当前可点的行后向下滚动、等新行渲染再继续（实测修掉"要勾 40 位却只勾中 1 位"）。
-  // maxRounds 给到 40：实测整表约 60 行、容器每次滚 ~95% 视口，够把 46 个可选行扫完；
-  // 池子提前扫空时 clickAll 自己会停（不空转）。
-  steps.push({ type: 'clickAll', input: { selector: p.rowCheckboxSelector, max: opts.count, scroll: true, maxRounds: 40 }, timeoutMs: 240000 })
-  steps.push({ type: 'clickByText', input: { text: p.texts.batchInvite } })
-  steps.push({ type: 'waitForSelector', input: { selector: p.scriptSelector }, timeoutMs: 30000 })
+  round.push({ type: 'clickAll', input: { selector: p.rowCheckboxSelector, max: opts.count, scroll: true, maxRounds: 40 }, timeoutMs: 240000 })
+  round.push({ type: 'clickByText', input: { text: p.texts.batchInvite } })
+  round.push({ type: 'waitForSelector', input: { selector: p.scriptSelector }, timeoutMs: 30000 })
   // 额度先行：抖店不展示剩余额度数字，额度用尽/平台限制表现为抽屉「确认发送」禁用——
-  // 填话术与人工确认之前先校验可用性，额度不足快速如实失败（TASK_QUOTA_EXCEEDED），
-  // 不浪费一轮人工确认，更不会把无效邀约送去发送
-  steps.push({ type: 'requireEnabled', input: { text: p.texts.drawerConfirm, hint: p.quotaNote }, timeoutMs: 30000 })
+  // 填话术之前先校验可用性，额度不足立即如实失败（TASK_QUOTA_EXCEEDED），
+  // 在 loop 里这个错误码 = "额度用完"，会被当成**正常收尾**
+  round.push({ type: 'requireEnabled', input: { text: p.texts.drawerConfirm, hint: p.quotaNote }, timeoutMs: 30000 })
   if (opts.scriptMode === 'ai') {
-    steps.push({
+    round.push({
       type: 'aiGenerate',
       input: {
         selector: p.scriptSelector,
@@ -89,28 +108,27 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
       timeoutMs: 90000
     })
     // aiGenerate 的 payload 只有摘要（模型/长度/预览），完整话术靠 readText 落库——事后能查出"到底发了什么"
-    steps.push({ type: 'readText', input: { selector: p.scriptSelector, metric: 'invite.script' }, timeoutMs: 15000 })
+    round.push({ type: 'readText', input: { selector: p.scriptSelector, metric: 'invite.script' }, timeoutMs: 15000 })
   } else {
-    steps.push({ type: 'setInput', input: { selector: p.scriptSelector, text: opts.script.trim() } })
+    round.push({ type: 'setInput', input: { selector: p.scriptSelector, text: opts.script.trim() } })
   }
-  for (const b of opts.benefits) steps.push({ type: 'clickByText', input: { text: b } })
-  steps.push({
-    type: 'waitForUserConfirmation',
-    input: {
-      message: `【达人邀约·${p.platform}】类目 ${opts.category || '全部'}｜等级 ${opts.levels.join('/')}｜最多 ${opts.count} 位｜权益 ${opts.benefits.join('、') || '无'}｜话术：` +
-        (opts.scriptMode === 'ai'
-          ? '由 AI 按平台推荐商品生成，请在页面「邀约话术」框里核对后再放行'
-          : opts.script.trim())
-    },
-    timeoutMs: 1800000
-  })
-  steps.push({ type: 'clickByText', input: { text: p.texts.confirmSend } })
+  for (const b of opts.benefits) round.push({ type: 'clickByText', input: { text: b } })
+  round.push({ type: 'clickByText', input: { text: p.texts.confirmSend } })
   // 发送后的结果校验：邀约抽屉应关闭；没关说明平台没接受这次提交，如实失败
   // （避免"点了确认发送"被当成"已经发出去了"）
-  steps.push({ type: 'waitForGone', input: { selector: p.scriptSelector }, timeoutMs: 30000 })
-  // 截图留档：发送结果（达人侧邀约记录/行状态）事后可查
-  steps.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
-  return steps
+  round.push({ type: 'waitForGone', input: { selector: p.scriptSelector }, timeoutMs: 30000 })
+  // 截图留档：每轮发送后的达人侧状态（最后一轮的工件会挂在本步骤上）
+  round.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
+
+  return [{
+    type: 'loop',
+    input: {
+      label: `${opts.category || '全部'} · ${opts.levels.join('/')} · 每批 ${opts.count} 位`,
+      maxRounds: BATCH_LOOP_MAX_ROUNDS,
+      stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL'],
+      steps: round
+    }
+  }]
 }
 
 /**

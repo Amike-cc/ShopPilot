@@ -14,6 +14,30 @@ const httpUrl = z.string().url().refine(
   { message: '仅允许 http/https 导航目标' }
 )
 
+/**
+ * 查找范围限定（把点击/等待限定在页面某一块里）。
+ * 实测动机（抖店广场）：类目名在筛选 chip 和达人卡片的类目文案里都会出现，
+ * 且"不限"在等级下拉里也有同名项——不限定范围就会点错目标、筛选静默失效。
+ *   - selector：CSS 限定（如级联弹层 .quick-filter-cascader-popover）；
+ *   - text (+climb)：按"自身文本等于该文案"的元素定位，再向上爬 climb 层当范围
+ *     （如「已筛选」标签行：标签自身不含类目名，得爬到它父容器）。
+ */
+const within = z.object({
+  selector: z.string().min(1).max(300).optional(),
+  text: z.string().min(1).max(60).optional(),
+  climb: z.number().int().min(0).max(6).optional()
+}).strict().refine((v) => !!v.selector !== !!v.text, { message: 'within.selector 与 within.text 必须二选一' })
+
+/** 单步（可被 loop 嵌套，故用 lazy 自引用）；strict：多写一个字段都算错，别让拼错的键静默失效 */
+export const taskStepSchema: z.ZodType<any> = z.lazy(() => z.object({
+  type: z.enum(TASK_STEP_TYPES as unknown as [string, ...string[]]),
+  input: z.record(z.unknown()).optional(),
+  // 上限必须覆盖人工确认门禁的默认超时（1 小时）：曾写死 10 分钟，导致"达人邀约"这类
+  // 把门禁 timeoutMs 设成 30 分钟的任务在创建阶段就被拒（实测报 steps[N].timeoutMs too_big）
+  timeoutMs: z.number().int().min(500).max(3600000).optional(),
+  retryLimit: z.number().int().min(0).max(5).optional()
+}).strict())
+
 export const stepInputSchemas: Record<string, z.ZodSchema> = {
   navigate: z.object({ url: httpUrl }).strict(),
   waitForPage: z.object({ urlIncludes: z.string().max(300).optional() }).strict(),
@@ -27,11 +51,12 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   // 副作用步骤（点击/写入）：参数仍然只有选择器与文本，无任何代码入口
   click: z.object({ selector }).strict(),
   // mode:'real' = 受信任鼠标点击（定位元素中心 → 滚动可见 → sendInputEvent），
-  // 用于框架对合成 click 不响应的目标；deep 同上穿透 ShadowRoot
+  // 用于框架对合成 click 不响应的目标；deep 同上穿透 ShadowRoot；within = 限定查找范围
   clickByText: z.object({
     text: z.string().min(1).max(200),
     deep: z.boolean().optional(),
-    mode: z.enum(['js', 'real']).optional()
+    mode: z.enum(['js', 'real']).optional(),
+    within: within.optional()
   }).strict(),
   clickAll: z.object({
     selector: selector.optional(),
@@ -57,7 +82,7 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   // ---------- 微信小店（assist-form）----------
   mirrorTabUrl: z.object({ urlIncludes: z.string().min(1).max(300) }).strict(),
   typeText: z.object({ selector, text: z.string().max(2000), deep: z.boolean().optional() }).strict(),
-  waitForText: z.object({ text: z.string().min(1).max(200), deep: z.boolean().optional() }).strict(),
+  waitForText: z.object({ text: z.string().min(1).max(200), deep: z.boolean().optional(), within: within.optional() }).strict(),
   ensureRows: z.object({
     rowsSelector: selector,
     checkboxSelector: selector,
@@ -92,7 +117,22 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   // 显式等待（读型步骤，上限 2 分钟）：等 SPA 按新筛选条件刷新数据
   waitMs: z.object({ ms: z.number().int().min(100).max(120000) }).strict(),
   // 等元素消失/不可见（读型步骤）：提交后校验结果（如邀约抽屉应关闭）
-  waitForGone: z.object({ selector, deep: z.boolean().optional() }).strict()
+  waitForGone: z.object({ selector, deep: z.boolean().optional() }).strict(),
+  /**
+   * 批次循环：把"一轮完整动作"（如 筛选→勾 40 位→批量邀约→确认发送）重复执行。
+   *   - stopOn：命中这些错误码即**干净停止**（本轮记入 summary、不再继续、整个 run 仍成功）。
+   *     用途："邀约额度用完"（确认发送变禁用 → TASK_QUOTA_EXCEEDED）与"可选达人不足"
+   *     （TASK_SELECTION_SHORTFALL）都算正常收尾，不是失败；
+   *   - 其它错误照常向上抛 → run 如实失败（不吞错、不假装成功）；
+   *   - 嵌套步骤逐个走白名单校验（task-store 递归校验），且整步不可恢复（会重复发送）。
+   */
+  loop: z.object({
+    label: z.string().max(60).optional(),
+    maxRounds: z.number().int().min(1).max(50),
+    stopOn: z.array(z.string().min(1).max(40)).min(1).max(8),
+    // 一轮动作的步骤数上限：抖店一轮 ≈ 17–28 步（含多等级/多权益），给到 40 步余量
+    steps: z.array(taskStepSchema).min(1).max(40)
+  }).strict()
 }
 
 /** 副作用步骤不可进入"从失败恢复"的重试范围 - §9.2（重试会重复点击/重复写入） */
@@ -100,7 +140,9 @@ export const NON_RESUMABLE_TYPES: ReadonlySet<string> = new Set([
   'fillDraft', 'waitForUserConfirmation',
   'click', 'clickByText', 'clickAll', 'setInput', 'aiGenerate',
   // 微信小店流程的副作用步骤同样不可重复执行（重复点击=重复发送风险）
-  'typeText', 'ensureRows'
+  'typeText', 'ensureRows',
+  // 循环体里通常含点击/写入（一循环就是一轮真实发送），整步不可重放
+  'loop'
 ])
 
 /** 非"确认门禁"类步骤的默认超时；批量点击要等框架重渲染、AI 生成要等模型返回，给更长默认值 */
@@ -116,19 +158,15 @@ export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
   requireEnabled: 20000,
   readLabelValue: 25000,
   waitMs: 120000,
-  waitForGone: 30000
+  waitForGone: 30000,
+  // loop 的 timeoutMs 不参与实际计时（由内部各步骤自己的超时决定）；
+  // 这里给个展示用的大值，避免界面上显示成 15s 起步的时间
+  loop: 3600000
 }
 
 export const taskCreateSchema = z.object({
   name: z.string().min(1).max(80),
   storeScope: z.string().max(80).nullish(),
-  steps: z.array(z.object({
-    type: z.enum(TASK_STEP_TYPES as unknown as [string, ...string[]]),
-    input: z.record(z.unknown()).optional(),
-    // 上限必须覆盖人工确认门禁的默认超时（1 小时）：曾写死 10 分钟，导致"达人邀约"这类
-    // 把门禁 timeoutMs 设成 30 分钟的任务在创建阶段就被拒（实测报 steps[N].timeoutMs too_big）
-    timeoutMs: z.number().int().min(500).max(3600000).optional(),
-    retryLimit: z.number().int().min(0).max(5).optional()
-  })).min(1).max(30),
+  steps: z.array(taskStepSchema).min(1).max(30),
   schedule: z.object({ everyMs: z.number().int().min(60000).max(30 * 86400000) }).nullish()
 })
