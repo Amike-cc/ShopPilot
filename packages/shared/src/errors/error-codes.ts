@@ -79,6 +79,16 @@ export const ERROR_CODES = {
     message: '页面结构已变化',
     retryable: false
   },
+  TASK_INVITE_PAGE_NOT_OPEN: {
+    code: 'TASK_INVITE_PAGE_NOT_OPEN',
+    message: '邀约表单页未打开（请先在店铺浏览器进到达人的邀约页）',
+    retryable: false
+  },
+  TASK_INPUT_NOT_APPLIED: {
+    code: 'TASK_INPUT_NOT_APPLIED',
+    message: '受信任输入写入未生效',
+    retryable: false
+  },
   TASK_NOT_FOUND: {
     code: 'TASK_NOT_FOUND',
     message: '任务或运行记录不存在',

@@ -1,26 +1,49 @@
 /**
  * 达人邀约「平台档案」（§16 平台适配层扩展）
  *
- * 当前只实现了抖店（精选联盟）。后续按平台扩展的方式：
- *   1) 在 INVITE_PROFILES 里加一份该平台的档案（页面地址、筛选文案、选择器、上限）；
- *   2) 面板按「当前店铺的平台」自动匹配档案——匹配不到就明确说"暂不支持"，不做猜测。
- * 抖店档案的每一项都是 2026-09-13 在真实登录态店铺上的实测结果，不是猜测：
- * - 达人广场与抖店共用登录态（同一 .jinritemai.com 域，无需单独登录）
- * - 主推类目 22 项实测均可点击（折叠区里的项也能点中，无需先"展开"）
- * - 达人等级 LV0–LV6 为下拉多选；单次勾选上限 40；邀约信息 ≤150 字；推荐商品 ≤5 个
- * - 已发过消息的达人：行复选框为 disabled，平台不允许重复邀约（任务侧跳过并如实回报）
+ * 【设计约定】每个平台的达人邀约功能相互独立：各平台一份档案 + 一种流程（flow），
+ * 不做跨平台抽象猜配。当前实现两种流程：
+ *   - batch-list  批量勾选流（抖店）：广场列表筛选 → 勾选 N 行 → 批量邀约抽屉 → 一道确认门禁；
+ *   - assist-form 辅助填单流（微信小店）：达人必须逐个邀约——人工在浏览器里进到某达人的
+ *     「邀请带货」表单页，引擎自建标签页镜像该页 URL，代填联系方式/话术并添加商品，
+ *     停下一道确认门禁后才点「发送邀约」。
+ *
+ * 档案里的每一项都来自真实登录态店铺的实测（2026-09-13），不是猜测：
+ * - 抖店：与达人广场共用登录态；主推类目 22 项均可点击；等级 LV0–LV6 下拉多选、单次上限 40、
+ *   话术 ≤150 字、推荐商品 ≤5 个；已邀约行复选框 disabled。
+ * - 微信小店（带货者广场）：
+ *   · 页面整体在 <micro-app shadowdom> 的 ShadowRoot 里，普通 querySelector 不可见（引擎步骤需 deep）；
+ *   · 列表行只有「详情」，进详情页后点「邀请带货」→ 同页跳转 /shop/findersquare/initiate-invite 表单页；
+ *   · 表单：邀约联系人 / 微信号 / 手机号码 / 合作说明（≤200 字，计数器 n/200）/ 邀约商品（必选，上限 30 个）；
+ *   · 「发送邀约」在必填与商品齐备前是类名禁用态；齐备后弹「确认发送邀约」确认框；
+ *   · 每日 200 次邀请额度（页面文案「今日剩余200次邀请机会」）；
+ *   · 列表 DOM 拿不到 finderUsername（token 只在详情页出现）→ 引擎无法自动拼详情页 URL，
+ *     选人必须人工完成，这正是 assist-form 流程的由来。
  *
  * 平台页面会改版：文案或结构失配时任务引擎报 TASK_SELECTOR_CHANGED，绝不静默重试或假装成功。
  */
 
-export interface InviteProfile {
+export interface InviteProfileBase {
   /** 平台名，与 stores.platform 一致 */
   platform: string
   /** 达人广场（邀约入口页） */
   pageUrl: string
-  /** 平台硬限制 */
-  maxBatch: number
+  /** 流程标识：平台邀约功能相互独立，渲染层与步骤构造按 flow 分派 */
+  flow: 'batch-list' | 'assist-form'
+  /** 邀约话术长度上限（平台限制） */
   scriptMaxLen: number
+}
+
+/**
+ * 批量勾选流档案（抖店）。
+ * 字段说明沿用实测注释；选择器只依赖 tbody/checkbox 这类稳定结构，
+ * 文案点击靠 clickByText（页面无稳定 data-test）。
+ */
+export interface BatchInviteProfile extends InviteProfileBase {
+  flow: 'batch-list'
+  /** 平台单次批量上限 */
+  maxBatch: number
+  /** 推荐商品上限 */
   maxProducts: number
   /** 主推类目（实测可点击项） */
   categories: readonly string[]
@@ -50,9 +73,57 @@ export interface InviteProfile {
   }
 }
 
-const DOUDIAN: InviteProfile = {
+/**
+ * 辅助填单流档案（微信小店）。
+ * 选择器按实测的稳定锚点：placeholder 文案（weui-desktop-form 输入控件类名共享，
+ * 只能靠 placeholder 区分）与按钮文案；全部在 ShadowRoot 内，执行时需要 deep 穿透。
+ */
+export interface AssistInviteProfile extends InviteProfileBase {
+  flow: 'assist-form'
+  /** 邀约表单页 URL 判据（mirrorTabUrl 据此找到人工打开的邀约页） */
+  inviteUrlMarker: string
+  /** 单次邀约可添加商品上限（平台弹窗上限 30；引擎单次默认只加少量，宁少勿错） */
+  maxProducts: number
+  /** 邀约表单各输入控件（placeholder 锚点） */
+  selectors: {
+    contact: string
+    wechat: string
+    phone: string
+    script: string
+    /** 邀约商品表格行（配合可见性过滤统计） */
+    goodsRows: string
+    /** 添加商品弹窗里的行复选框 label（thead 全选被排除） */
+    goodsCheckbox: string
+    /** AI 生成话术时的商品信息读取源（邀约商品表格） */
+    goodsSource: string
+  }
+  /** 需按文案点击的入口/按钮 */
+  texts: {
+    addGoods: string
+    confirmAdd: string
+    sendInvite: string
+    /** 「确认发送邀约」弹窗里的确认按钮文案（弹窗标题用 dialogMarker 等待出现） */
+    confirmSend: string
+    dialogMarker: string
+  }
+  /** 每日额度提示（实测页面文案，供界面展示；额度随经营情况变化） */
+  dailyQuotaHint: string
+}
+
+export type InviteProfile = BatchInviteProfile | AssistInviteProfile
+
+export function isBatchProfile(p: InviteProfile): p is BatchInviteProfile {
+  return p.flow === 'batch-list'
+}
+
+export function isAssistProfile(p: InviteProfile): p is AssistInviteProfile {
+  return p.flow === 'assist-form'
+}
+
+const DOUDIAN: BatchInviteProfile = {
   platform: '抖店',
   pageUrl: 'https://buyin.jinritemai.com/dashboard/servicehall/daren-square',
+  flow: 'batch-list',
   maxBatch: 40,
   scriptMaxLen: 150,
   maxProducts: 5,
@@ -77,9 +148,42 @@ const DOUDIAN: InviteProfile = {
   }
 }
 
-/** 已实现的平台档案（后续按平台扩展只需在此追加） */
+/**
+ * 微信小店（带货者广场，2026-09-13 实测）。
+ * - 输入控件锚点用 placeholder 文案；平台改版文案变了会如实报 TASK_SELECTOR_CHANGED。
+ * - 商品策略由 ensureRows 步骤内自适应：页面已有商品行 → 不动；没有 → 点「添加商品」
+ *   弹窗勾前 N 个未勾选项 → 点「确认」→ 复核行数。
+ */
+const WEIXIN: AssistInviteProfile = {
+  platform: '微信小店',
+  pageUrl: 'https://store.weixin.qq.com/shop/findersquare/find',
+  flow: 'assist-form',
+  scriptMaxLen: 200,
+  inviteUrlMarker: 'initiate-invite',
+  maxProducts: 10,
+  selectors: {
+    contact: 'input[placeholder*="邀约联系人"]',
+    wechat: 'input[placeholder*="微信号"]',
+    phone: 'input[placeholder*="手机号码"]',
+    script: 'textarea[placeholder*="合作说明"]',
+    goodsRows: 'tbody tr',
+    goodsCheckbox: 'tbody label.weui-desktop-form__check-label',
+    goodsSource: 'table'
+  },
+  texts: {
+    addGoods: '添加商品',
+    confirmAdd: '确认',
+    sendInvite: '发送邀约',
+    confirmSend: '确认',
+    dialogMarker: '确认发送邀约'
+  },
+  dailyQuotaHint: '每日 200 次邀请额度'
+}
+
+/** 已实现的平台档案（每个平台流程独立；后续按平台扩展只需在此追加） */
 export const INVITE_PROFILES: Readonly<Record<string, InviteProfile>> = {
-  [DOUDIAN.platform]: DOUDIAN
+  [DOUDIAN.platform]: DOUDIAN,
+  [WEIXIN.platform]: WEIXIN
 }
 
 /** 已支持达人邀约的平台名（供界面如实展示） */

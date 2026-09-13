@@ -203,14 +203,24 @@ function mountTab(tab: Tab | null): void {
     detachMounted()
     return
   }
+  // 渲染层从未上报过视口（直启恢复 / 窗口被遮挡时 ResizeObserver 暂停）时 viewport 可能还是 0，
+  // 0×0 视图会让页面布局塌缩、受信任点击全部落空（任务引擎实测踩过）。此时退化为整个内容区，
+  // 之后渲染层一旦上报真实 bounds（setViewportBounds）即自动纠正。
+  let bounds = viewport
+  if (bounds.width < 50 || bounds.height < 50) {
+    try {
+      const cb = hostWindow.getContentBounds()
+      bounds = { x: 0, y: 0, width: cb.width, height: cb.height }
+    } catch { /* keep viewport */ }
+  }
   if (mountedView !== tab.webContentsView) {
     detachMounted()
     hostWindow.contentView.addChildView(tab.webContentsView)
   }
   try { tab.webContentsView.setVisible(true) } catch { /* ignore */ }
   tab.webContentsView.setBounds({
-    x: viewport.x, y: viewport.y,
-    width: Math.max(viewport.width, 0), height: Math.max(viewport.height, 0)
+    x: bounds.x, y: bounds.y,
+    width: Math.max(bounds.width, 0), height: Math.max(bounds.height, 0)
   })
   mountedView = tab.webContentsView
   // Chromium updates document.visibilityState and its layout one compositor
@@ -219,8 +229,8 @@ function mountTab(tab: Tab | null): void {
     if (mountedView !== tab.webContentsView || tab.webContentsView.webContents.isDestroyed()) return
     try { tab.webContentsView.setVisible(true) } catch { /* ignore */ }
     tab.webContentsView.setBounds({
-      x: viewport.x, y: viewport.y,
-      width: Math.max(viewport.width, 0), height: Math.max(viewport.height, 0)
+      x: bounds.x, y: bounds.y,
+      width: Math.max(bounds.width, 0), height: Math.max(bounds.height, 0)
     })
   }, 0)
 }

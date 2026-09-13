@@ -435,6 +435,9 @@
             <div class="env-h">达人邀约 · {{ inviteProfile.platform }}
               <button class="mini-btn" style="margin-left:auto" data-test="invite-open-page" @click="openInvitePage">打开达人广场</button>
             </div>
+
+            <!-- batch-list（抖店）：广场筛选 → 批量勾选 → 抽屉话术（平台流程相互独立） -->
+            <template v-if="inviteProfile.flow === 'batch-list'">
             <div class="env-note">
               可邀约的是"未发过消息"的达人——平台对已邀约过的行会禁用复选框，执行时<b>跳过并如实回报</b>跳过数量。
             </div>
@@ -506,16 +509,83 @@
               <button class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
             </div>
             <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
+            </template>
+
+            <!-- assist-form（微信小店）：人工选人进邀约页，引擎代填表单+门禁后发送 -->
+            <template v-else>
+            <div class="env-note">
+              微信小店按达人<b>逐个邀约</b>（每位达人一张独立表单，平台不支持批量）：
+              ① 点「打开达人广场」→ 自己挑选达人，进其详情页点「<b>邀请带货</b>」；
+              ② 停在邀约表单页，回到这里点「开始邀约」——软件自建标签页打开同一邀约页，代填下面的联系方式与话术；
+              ③ 填完<b>停下让你核对</b>，确认后才会点「发送邀约」。每次运行邀约 1 位，{{ inviteProfile.dailyQuotaHint }}。
+            </div>
+
+            <label class="inv-row">邀约联系人
+              <input type="text" v-model="invite.contact" maxlength="30" data-test="invite-contact" placeholder="商家侧联系人（必填）" />
+            </label>
+            <label class="inv-row">微信号
+              <input type="text" v-model="invite.wechat" maxlength="30" data-test="invite-wechat" placeholder="与手机号至少填一个" />
+            </label>
+            <label class="inv-row">手机号码
+              <input type="text" v-model="invite.phone" maxlength="11" data-test="invite-phone" placeholder="与微信号至少填一个" />
+            </label>
+
+            <div class="inv-row inv-block">话术来源
+              <span class="inv-chips">
+                <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
+                  <input type="radio" value="manual" v-model="invite.scriptMode" data-test="invite-script-mode-manual" />手填
+                </label>
+                <label class="inv-chip" :class="{ on: invite.scriptMode === 'ai' }">
+                  <input type="radio" value="ai" v-model="invite.scriptMode" data-test="invite-script-mode-ai" />AI 生成
+                </label>
+              </span>
+            </div>
+
+            <label class="inv-row inv-block">合作说明（邀约话术）
+              <textarea v-model="invite.script" :readonly="invite.scriptMode === 'ai'" :maxlength="inviteProfile.scriptMaxLen" rows="3" data-test="invite-script"
+                :placeholder="invite.scriptMode === 'ai'
+                  ? '不用填：执行到邀约页后，AI 读取邀约商品信息现场生成并写入这个框'
+                  : '您好，我们是……想邀请您合作带货：给专属高佣与免费寄样，提供现成素材，发货售后我们全包。'"></textarea>
+              <span class="row-sub" v-if="invite.scriptMode === 'manual'">{{ invite.script.length }}/{{ inviteProfile.scriptMaxLen }}</span>
+              <span class="row-sub" v-else>AI 生成 · 不超过 {{ inviteProfile.scriptMaxLen }} 字 · 发送前会停下让你核对</span>
+            </label>
+            <div class="env-note" v-if="invite.scriptMode === 'ai' && !aiReady">
+              <b>AI 未配置</b>：请到「设置 → AI 配置」填写接口地址、模型名与 API Key（可先点「测试连接」验证）。
+            </div>
+            <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
+              AI 会在邀约页读取邀约商品信息生成话术；<b>生成的原文会落库留档</b>，且放行前会停下让你核对。
+            </div>
+
+            <label class="inv-row">添加商品数量
+              <input type="number" min="1" :max="inviteProfile.maxProducts" v-model.number="invite.productCount" class="inv-num" data-test="invite-product-count" />
+              <span class="row-sub">页面已有商品则原样不动；没有才自动添加，最多 {{ inviteProfile.maxProducts }} 个</span>
+            </label>
+
+            <div class="cf-btns" style="margin-top:10px">
+              <button class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
+            </div>
+            <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
+            </template>
           </div>
 
           <div class="env-sec">
             <div class="env-h">执行说明</div>
-            <div class="env-note">
-              点「开始邀约」会创建一个受策展任务：进入达人广场 → 选类目与等级 → 搜索 → 勾选前 N 位可邀约达人 → 打开邀约抽屉 → 填话术（手填或 AI 生成）→ 勾权益 → <b>停下等你确认</b> → 才会点「确认发送」。<b>拒绝即整单取消，绝不继续</b>。
-            </div>
-            <div class="env-note">
-              联系方式（手机号/微信号）与专属推荐商品由平台在抽屉里要求填写：联系方式请在平台侧填好（<b>本应用不保存你的手机号/微信号</b>），商品用平台的"推荐商品"即可。发送不可撤回，并消耗店铺邀约额度。
-            </div>
+            <template v-if="inviteProfile.flow === 'batch-list'">
+              <div class="env-note">
+                点「开始邀约」会创建一个受策展任务：进入达人广场 → 选类目与等级 → 搜索 → 勾选前 N 位可邀约达人 → 打开邀约抽屉 → 填话术（手填或 AI 生成）→ 勾权益 → <b>停下等你确认</b> → 才会点「确认发送」。<b>拒绝即整单取消，绝不继续</b>。
+              </div>
+              <div class="env-note">
+                联系方式（手机号/微信号）与专属推荐商品由平台在抽屉里要求填写：联系方式请在平台侧填好（<b>本应用不保存你的手机号/微信号</b>），商品用平台的"推荐商品"即可。发送不可撤回，并消耗店铺邀约额度。
+              </div>
+            </template>
+            <template v-else>
+              <div class="env-note">
+                点「开始邀约」会创建一个受策展任务：自建标签页镜像你打开的邀约页 → 填联系方式与合作说明（手填，或 AI 按邀约商品生成）→ 确保邀约商品（页面已有则不动）→ <b>停下等你核对</b> → 才会点「发送邀约」，并在平台「确认发送邀约」弹窗上点「确认」。<b>拒绝即整单取消，绝不发送</b>。发送不可撤回，并消耗店铺邀约额度。
+              </div>
+              <div class="env-note">
+                选人由你人工完成（达人详情页 URL 带每人专属 token，软件不猜测、不代选）。任务会<b>把运行标签页切到前台</b>供你核对；发送成功后会自动截图留档（任务详情可查）。
+              </div>
+            </template>
           </div>
           </template>
         </div>
@@ -828,6 +898,7 @@ import { reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } 
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS } from '@shared/constants/invite'
+import { buildInviteSteps } from '@shared/invite-steps'
 import {
   DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
   AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, INVITE_SQUARE_URLS_SETTING
@@ -1507,7 +1578,7 @@ const taskDialogOpen = ref(false)
 /** 任务面板的二级页签：任务列表 / 达人邀约（后者本版为占位） */
 const taskTab = ref<'tasks' | 'invite'>('tasks')
 
-// ---------- 达人邀约：按「当前店铺的平台」匹配平台档案（本版只有抖店） ----------
+// ---------- 达人邀约：按「当前店铺的平台」匹配平台档案（平台流程相互独立） ----------
 const inviteProfile = computed(() => {
   const s = ws.stores.find(x => x.id === ws.displayedStoreId)
   return inviteProfileFor(s?.platform)
@@ -1519,14 +1590,27 @@ const invite = reactive({
   script: '',
   benefits: [] as string[],
   /** 话术来源：手填 / AI 按平台推荐商品生成（AI 模式下话术框只读，由任务运行时写入） */
-  scriptMode: 'manual' as 'manual' | 'ai'
+  scriptMode: 'manual' as 'manual' | 'ai',
+  // ---- 以下为 assist-form（微信小店）专属字段 ----
+  contact: '',
+  wechat: '',
+  phone: '',
+  productCount: 1
 })
-// 店铺/平台变化时把可选项重置为该平台档案的默认值（脚本保留，避免用户输入被清掉）
+// 店铺/平台变化时把可选项重置为该平台档案的默认值（脚本/联系人保留，避免用户输入被清掉）
 watch(inviteProfile, (p) => {
-  invite.category = p ? (p.categories[2] || p.categories[0] || '') : ''
-  invite.levels = p ? [...p.levelsWithQuotaHint] : []
-  invite.benefits = []
-  if (p) invite.count = Math.max(1, Math.min(invite.count || 5, p.maxBatch))
+  if (!p) return
+  if (p.flow === 'batch-list') {
+    invite.category = p.categories[2] || p.categories[0] || ''
+    invite.levels = [...p.levelsWithQuotaHint]
+    invite.benefits = []
+    invite.count = Math.max(1, Math.min(invite.count || 5, p.maxBatch))
+  } else {
+    invite.levels = []
+    invite.benefits = []
+    invite.count = 1
+    invite.productCount = Math.max(1, Math.min(invite.productCount || 1, p.maxProducts))
+  }
 }, { immediate: true })
 
 /** AI 是否可用（接口地址/模型名有值 + 主进程已存 Key）——AI 模式下用它当"开始邀约"的前置条件 */
@@ -1534,22 +1618,19 @@ const aiReady = computed(() => !!aiConfig.value.endpoint && !!aiConfig.value.mod
 
 const inviteReady = computed(() => {
   const p = inviteProfile.value
-  return !!p && !!ws.displayedStoreId &&
-    invite.levels.length > 0 &&
-    invite.count >= 1 && invite.count <= p.maxBatch &&
-    (invite.scriptMode === 'ai' ? aiReady.value : invite.script.trim().length > 0)
-})
-
-/** 从达人广场地址取末段路径作为 waitForPage 的就绪判据（换成自定义地址也要能用，不能写死 daren-square） */
-function urlPathHint(url: string): string {
-  try {
-    const u = new URL(url)
-    const seg = u.pathname.split('/').filter(Boolean)
-    return seg[seg.length - 1] || u.hostname
-  } catch {
-    return url
+  if (!p || !ws.displayedStoreId) return false
+  const scriptOk = invite.scriptMode === 'ai' ? aiReady.value : invite.script.trim().length > 0
+  // 微信小店：联系人必填，微信号/手机号至少一个（平台用来联系商家）
+  if (p.flow === 'assist-form') {
+    return scriptOk &&
+      invite.contact.trim().length > 0 &&
+      (invite.wechat.trim().length > 0 || invite.phone.trim().length > 0) &&
+      invite.productCount >= 1 && invite.productCount <= p.maxProducts
   }
-}
+  return invite.levels.length > 0 &&
+    invite.count >= 1 && invite.count <= p.maxBatch &&
+    scriptOk
+})
 
 /** 打开达人广场：带上登录态让用户确认页面 / 填写平台侧联系方式 */
 function openInvitePage() {
@@ -1558,70 +1639,34 @@ function openInvitePage() {
 }
 
 /**
- * 由配置生成步骤序列。要点：
- * - 平台无稳定 data-test，筛选与提交靠文案点击（clickByText）；
- * - 行复选框用 tbody 限定，避免点到表头的"全选"；
- * - clickAll 会跳过平台禁用（已邀约过）的行，上限取用户设定值（≤平台上限）；
- * - 话术两种来源：手填 → setInput；AI → aiGenerate（读抽屉商品区）+ readText 留档；
- * - 「确认发送」前必须放 waitForUserConfirmation：拒绝则整单取消，绝不继续。
+ * 步骤序列构造已下沉到 shared/invite-steps.ts（渲染层与单测共用，平台流程相互独立）。
+ * 这里只负责把面板配置收拢成对应流程的 options。
  */
-function buildInviteSteps() {
-  const p = inviteProfile.value
-  if (!p) return []
-  const steps: Array<{ type: string; input: Record<string, unknown>; timeoutMs?: number }> = [
-    { type: 'navigate', input: { url: squareUrlFor(p.platform) }, timeoutMs: 45000 },
-    { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrlFor(p.platform)) }, timeoutMs: 45000 }
-  ]
-  if (invite.category) steps.push({ type: 'clickByText', input: { text: invite.category } })
-  steps.push({ type: 'clickByText', input: { text: p.texts.levelTrigger } })
-  for (const lv of invite.levels) steps.push({ type: 'clickByText', input: { text: lv } })
-  steps.push({ type: 'clickByText', input: { text: p.texts.search } })
-  steps.push({ type: 'waitForSelector', input: { selector: p.rowCheckboxSelector }, timeoutMs: 30000 })
-  steps.push({ type: 'clickAll', input: { selector: p.rowCheckboxSelector, max: invite.count }, timeoutMs: 120000 })
-  steps.push({ type: 'clickByText', input: { text: p.texts.batchInvite } })
-  steps.push({ type: 'waitForSelector', input: { selector: p.scriptSelector }, timeoutMs: 20000 })
-  if (invite.scriptMode === 'ai') {
-    steps.push({
-      type: 'aiGenerate',
-      input: {
-        selector: p.scriptSelector,
-        sourceSelector: p.goodsSourceSelector || '',
-        maxLen: p.scriptMaxLen
-      },
-      timeoutMs: 90000
-    })
-    // aiGenerate 的 payload 只有摘要（模型/长度/预览），完整话术靠 readText 落库——事后能查出"到底发了什么"
-    steps.push({ type: 'readText', input: { selector: p.scriptSelector, metric: 'invite.script' }, timeoutMs: 15000 })
-  } else {
-    steps.push({ type: 'setInput', input: { selector: p.scriptSelector, text: invite.script.trim() } })
-  }
-  for (const b of invite.benefits) steps.push({ type: 'clickByText', input: { text: b } })
-  steps.push({
-    type: 'waitForUserConfirmation',
-    input: {
-      message: `【达人邀约·${p.platform}】类目 ${invite.category || '全部'}｜等级 ${invite.levels.join('/')}｜最多 ${invite.count} 位｜权益 ${invite.benefits.join('、') || '无'}｜话术：` +
-        (invite.scriptMode === 'ai'
-          ? '由 AI 按平台推荐商品生成，请在页面「邀约话术」框里核对后再放行'
-          : invite.script.trim())
-    },
-    timeoutMs: 1800000
-  })
-  steps.push({ type: 'clickByText', input: { text: p.texts.confirmSend } })
-  return steps
-}
-
 async function startInvite() {
   const p = inviteProfile.value
   if (!p || !inviteReady.value) return
-  const created = await window.shopilot.task.create({
-    name: `达人邀约 · ${p.platform} · ${invite.category || '全部'} · 最多 ${invite.count} 位`,
-    storeScope: ws.displayedStoreId,
-    steps: buildInviteSteps()
-  })
+  const squareUrl = squareUrlFor(p.platform)
+  const steps = p.flow === 'batch-list'
+    ? buildInviteSteps(p, {
+        batch: {
+          category: invite.category, levels: invite.levels, count: invite.count,
+          script: invite.script, scriptMode: invite.scriptMode, benefits: invite.benefits
+        }
+      }, squareUrl)
+    : buildInviteSteps(p, {
+        assist: {
+          contact: invite.contact, wechat: invite.wechat, phone: invite.phone,
+          script: invite.script, scriptMode: invite.scriptMode, productCount: invite.productCount
+        }
+      }, squareUrl)
+  const name = p.flow === 'batch-list'
+    ? `达人邀约 · ${p.platform} · ${invite.category || '全部'} · 最多 ${invite.count} 位`
+    : `达人邀约 · ${p.platform} · 辅助填单 · ${invite.contact.trim() || '未命名'}`
+  const created = await window.shopilot.task.create({ name, storeScope: ws.displayedStoreId, steps })
   if (!created.ok) { ws.toast('创建邀约任务失败: ' + created.error.message, 'error'); return }
   const started = await window.shopilot.task.run(created.data.id)
   if (!started.ok) { ws.toast('启动邀约任务失败: ' + started.error.message, 'error'); return }
-  ws.toast('邀约任务已启动：点「确认发送」前会先请你确认', 'success')
+  ws.toast('邀约任务已启动：点「发送」前会先停下让你确认', 'success')
   taskTab.value = 'tasks'
   await ws.refreshTasks()
 }
@@ -2420,15 +2465,18 @@ onBeforeUnmount(() => {
 [data-test="invite-panel"] .inv-block { flex-direction: column; align-items: stretch; gap: 4px; }
 [data-test="invite-panel"] select,
 [data-test="invite-panel"] textarea,
-[data-test="invite-panel"] .inv-num {
+[data-test="invite-panel"] .inv-num,
+[data-test="invite-panel"] .inv-row > input[type="text"] {
   box-sizing: border-box; background: var(--color-bg-tertiary); color: var(--color-text-primary);
   border: 1px solid var(--color-border); border-radius: var(--radius-sm);
   padding: 5px 7px; font-size: 12px; outline: none;
 }
 [data-test="invite-panel"] select:focus,
 [data-test="invite-panel"] textarea:focus,
-[data-test="invite-panel"] .inv-num:focus { border-color: var(--color-primary); }
+[data-test="invite-panel"] .inv-num:focus,
+[data-test="invite-panel"] .inv-row > input[type="text"]:focus { border-color: var(--color-primary); }
 [data-test="invite-panel"] select { flex: 1 1 auto; min-width: 0; }
+[data-test="invite-panel"] .inv-row > input[type="text"] { flex: 1 1 auto; min-width: 0; }
 [data-test="invite-panel"] textarea { width: 100%; resize: vertical; font-family: inherit; }
 [data-test="invite-panel"] .inv-num { width: 64px; flex: 0 0 64px; }
 [data-test="invite-panel"] .inv-chips { display: flex; flex-wrap: wrap; gap: 4px; }

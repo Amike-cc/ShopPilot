@@ -20,9 +20,10 @@ import type {
 import * as TaskStore from './task-store'
 import { NON_RESUMABLE_TYPES } from './task-store'
 import { writeAudit } from '../services/audit-logger'
+import { logMain } from '../services/logger'
 import { generateInviteScript } from '../services/ai-client'
 import { isAppLocked } from '../services/security-manager'
-import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened } from '../browser/window-manager'
+import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab } from '../browser/window-manager'
 import { getDatabase } from '../db/database'
 
 interface RunHandle {
@@ -320,6 +321,9 @@ function classifyError(e: any): string {
   if (msg.includes('NAVIGATION_BLOCKED')) return 'NAVIGATION_BLOCKED'
   if (msg.includes('TASK_CONFIRMATION_REQUIRED')) return 'TASK_CONFIRMATION_REQUIRED'
   if (msg.includes('TASK_TARGET_DISABLED')) return 'TASK_TARGET_DISABLED'
+  // 微信小店（assist-form）流程专属：邀约页未打开 / 受信任写入未生效
+  if (msg.includes('TASK_INVITE_PAGE_NOT_OPEN')) return 'TASK_INVITE_PAGE_NOT_OPEN'
+  if (msg.includes('TASK_INPUT_NOT_APPLIED')) return 'TASK_INPUT_NOT_APPLIED'
   // AI 相关的固定错误码：如实透出，便于界面区分"没配 Key / 地址不合法 / 超时 / 请求失败"
   if (msg.includes('AI_NOT_CONFIGURED')) return 'AI_NOT_CONFIGURED'
   if (msg.includes('AI_BAD_ENDPOINT')) return 'AI_BAD_ENDPOINT'
@@ -369,9 +373,12 @@ async function pollUntil(run: RunHandle, cond: () => Promise<boolean> | boolean,
   }, run, timeoutMs, label)
 }
 
-/** 轮询等待选择器出现；超时抛 TASK_SELECTOR_CHANGED（区别于纯超时） */
-async function waitForSelector(wc: Electron.WebContents, sel: string, run: RunHandle, timeoutMs: number): Promise<void> {
-  const expr = `!!document.querySelector(${JSON.stringify(sel)})`
+/** 轮询等待选择器出现；超时抛 TASK_SELECTOR_CHANGED（区别于纯超时）。
+ *  deep = 穿透 ShadowRoot 查询（微信小店整页在 <micro-app shadowdom> 里，普通 querySelector 不可见） */
+async function waitForSelector(wc: Electron.WebContents, sel: string, run: RunHandle, timeoutMs: number, deep = false): Promise<void> {
+  const expr = deep
+    ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().some(el => { try { return el.matches(${JSON.stringify(sel)}) } catch { return false } }) })()`
+    : `!!document.querySelector(${JSON.stringify(sel)})`
   try {
     await withTimeout(async () => {
       for (;;) {
@@ -385,6 +392,158 @@ async function waitForSelector(wc: Electron.WebContents, sel: string, run: RunHa
     if (String(e?.message).startsWith('TASK_TIMEOUT')) throw new Error(`TASK_SELECTOR_CHANGED: 超时未出现元素 ${sel}`)
     throw e
   }
+}
+
+// ---------- ShadowRoot 穿透与受信任输入（微信小店 assist-form 流程的基础设施） ----------
+
+/**
+ * 枚举主文档与所有开放 ShadowRoot 的元素（文档序深度优先，宿主先于其 Shadow 内容）。
+ * 以字符串注入 executeJavaScript 使用；只声明注入脚本自身的常量，不碰页面全局。
+ */
+const ENUM_DEEP_FN = `
+  const __enumDeep = () => {
+    const out = []
+    const walk = (r) => {
+      for (const el of r.querySelectorAll('*')) {
+        out.push(el)
+        if (el.shadowRoot) walk(el.shadowRoot)
+      }
+    }
+    walk(document)
+    return out
+  }
+`
+
+/**
+ * 元素可见性判据（微信的弹窗节点常预渲染在 DOM 里，仅靠存在性判断会被隐藏节点骗过）。
+ */
+const VISIBLE_JS = `
+  const __visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return false;
+    const cs = getComputedStyle(el);
+    return cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0';
+  }
+`
+
+/** 按自有文本定位可见目标（取最短命中），滚动到可见并返回真实点击坐标 */
+async function findTextTarget(
+  wc: Electron.WebContents, run: RunHandle, needle: string, deep: boolean, timeoutMs: number, label: string
+): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number }> {
+  return withTimeout(() => wc.executeJavaScript(`(() => {
+    ${deep ? ENUM_DEEP_FN : ''}
+    ${VISIBLE_JS}
+    const needle = ${JSON.stringify(needle)};
+    const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+    const cands = [];
+    for (const el of scope) {
+      const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+      if (!own.includes(needle)) continue;
+      if (!__visible(el)) continue;
+      cands.push({ el, len: own.length });
+    }
+    if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
+    cands.sort((a, b) => a.len - b.len);
+    const hit = cands[0].el;
+    let dis = hit.disabled === true || hit.getAttribute('aria-disabled') === 'true';
+    let p = hit.parentElement;
+    for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
+      if (/disabled/i.test(String(p.className || ''))) dis = true;
+    }
+    if (dis) return { ok: false, reason: 'DISABLED' };
+    hit.scrollIntoView({ block: 'center' });
+    const r = hit.getBoundingClientRect();
+    return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length };
+  })()`), run, timeoutMs, label)
+}
+
+/** 在 (x,y) 发受信任鼠标点击（走浏览器输入管线，页面收到 isTrusted 事件） */
+function realClick(wc: Electron.WebContents, x: number, y: number): void {
+  wc.sendInputEvent({ type: 'mouseMove', x, y })
+  wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
+  wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
+}
+
+/**
+ * 受信任文本写入：真实点击聚焦 → Ctrl+A 全选 → Delete → insertText（IME 同管线）→ 回读校验。
+ * 微信表单不吃合成 input 事件（实测：原生 setter + dispatchEvent 后计数器/按钮状态不动），
+ * 所以 setInput 的 JS 写入路径对它无效，必须走这里。
+ * 校验不过如实抛 TASK_INPUT_NOT_APPLIED——绝不假装写入成功。
+ */
+async function trustedWrite(
+  wc: Electron.WebContents, run: RunHandle, sel: string, deep: boolean, text: string, timeoutMs: number, label: string
+): Promise<void> {
+  const findEl = deep
+    ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().find(el => { try { return el.matches(${JSON.stringify(sel)}) } catch { return false } }) || null })()`
+    : `(document.querySelector(${JSON.stringify(sel)}))`
+  const located = await withTimeout(() => wc.executeJavaScript(`(() => {
+    const el = ${findEl};
+    if (!el) return { ok: false, reason: 'NOT_FOUND' };
+    ${VISIBLE_JS}
+    if (!__visible(el)) return { ok: false, reason: 'INVISIBLE' };
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return { ok: false, reason: 'ZERO_RECT' };
+    return { ok: true, x: Math.round(r.left + Math.min(r.width / 2, Math.max(r.width - 6, 1))), y: Math.round(r.top + r.height / 2) };
+  })()`), run, timeoutMs, `${label} 定位`)
+  if (!located || !located.ok) {
+    throw new Error(`TASK_SELECTOR_CHANGED: ${label} 目标不可用（${located && located.reason || 'UNKNOWN'}）${sel}`)
+  }
+  guardSignals(run)
+
+  // 同内容重写是幂等的，允许一次整体重试吸收偶发竞态（忙机焦点/输入管线滞后）
+  let lastDiag = ''
+  for (let attempt = 0; attempt < 2; attempt++) {
+    // 点击后必须等焦点真正落到目标上再发键盘事件：忙时点击的聚焦会慢于后续按键，
+    // Ctrl+A/Delete 会打到上一个字段、insertText 落空（实测复现过）。轮询确认，兜底 JS focus。
+    // 注意 ShadowRoot 内的元素要看 getRootNode().activeElement——document.activeElement
+    // 只会返回 shadow 宿主，永远不相等（微信整页在 shadow 里，实测踩过）。
+    let focused = 'no'
+    for (let i = 0; i < 3 && focused !== 'yes'; i++) {
+      realClick(wc, located.x, located.y)
+      await new Promise(r => setTimeout(r, 220))
+      guardSignals(run)
+      focused = await wc.executeJavaScript(`(() => {
+        const el = ${findEl};
+        if (!el) return 'GONE';
+        const root = el.getRootNode ? el.getRootNode() : null;
+        const active = (root && root.activeElement) || document.activeElement;
+        return active === el ? 'yes' : 'no';
+      })()`).catch(() => 'ERR')
+    }
+    if (focused !== 'yes') {
+      const jsFocused = await wc.executeJavaScript(`(() => {
+        const el = ${findEl};
+        if (!el) return false;
+        el.focus();
+        const root = el.getRootNode ? el.getRootNode() : null;
+        const active = (root && root.activeElement) || document.activeElement;
+        return active === el;
+      })()`).catch(() => false)
+      if (!jsFocused) throw new Error(`TASK_SELECTOR_CHANGED: ${label} 无法聚焦写入目标 ${sel}`)
+    }
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'a', modifiers: ['control'] })
+    wc.sendInputEvent({ type: 'keyUp', keyCode: 'a', modifiers: ['control'] })
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Delete' })
+    wc.sendInputEvent({ type: 'keyUp', keyCode: 'Delete' })
+    // Electron 30 的类型标注是 void，实际会 resolve boolean；只对明确的 false 判失败
+    const inserted = await wc.insertText(text) as unknown
+    if (inserted === false) {
+      throw new Error(`TASK_INPUT_NOT_APPLIED: ${label} insertText 未被接受（目标可能不可编辑）${sel}`)
+    }
+    await new Promise(r => setTimeout(r, 200))
+    const chk = await withTimeout(() => wc.executeJavaScript(`(() => {
+      const el = ${findEl};
+      if (!el) return JSON.stringify({ val: null, focused: false });
+      const root = el.getRootNode ? el.getRootNode() : null;
+      const active = (root && root.activeElement) || document.activeElement;
+      return JSON.stringify({ val: el.isContentEditable ? String(el.textContent || '') : String(el.value ?? ''), focused: active === el, activeTag: active ? active.tagName + (active.id ? '#' + active.id : '') : 'none' });
+    })()`), run, timeoutMs, `${label} 回读`).then(s => JSON.parse(s)).catch(() => ({ val: null, focused: false, activeTag: 'ERR' }))
+    if (chk.val === text) { guardSignals(run); return }
+    lastDiag = `页面值 ${String(chk.val ?? '').length} 字（前20:${String(chk.val ?? '').slice(0, 20).replace(/\s+/g, ' ')}）焦点=${chk.focused ? '在目标' : '在 ' + (chk.activeTag || '?')} 期望 ${text.length} 字`
+    logMain('warn', `[task-runner] ${label} 写入校验未过（第 ${attempt + 1} 次）：${lastDiag}`)
+  }
+  throw new Error(`TASK_INPUT_NOT_APPLIED: ${label} 写入未生效（${lastDiag}）`)
 }
 
 async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput | null> {
@@ -416,14 +575,18 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
     }
     case 'waitForSelector': {
       const wc = wcOrThrow(run)
-      await waitForSelector(wc, String(input.selector), run, step.timeoutMs)
+      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, !!input.deep)
       return null
     }
     case 'readText': {
       const wc = wcOrThrow(run)
-      await waitForSelector(wc, String(input.selector), run, step.timeoutMs)
+      const deep = !!input.deep
+      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, deep)
+      const findEl = deep
+        ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().find(el => { try { return el.matches(${JSON.stringify(String(input.selector))}) } catch { return false } }) || null })()`
+        : `(document.querySelector(${JSON.stringify(String(input.selector))}))`
       const text = await wc.executeJavaScript(`(() => {
-        const el = document.querySelector(${JSON.stringify(String(input.selector))});
+        const el = ${findEl};
         if (!el) return null;
         // 表单控件读 value：textarea 的 textContent 是"默认值"，用 setInput/aiGenerate 写入后并不会变，
         // 照 innerText||textContent 读会拿到空串（实测），留档就失真了
@@ -439,9 +602,13 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
     }
     case 'readTable': {
       const wc = wcOrThrow(run)
-      await waitForSelector(wc, String(input.selector), run, step.timeoutMs)
+      const deepTable = !!input.deep
+      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, deepTable)
+      const findTable = deepTable
+        ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().find(el => { try { return el.matches(${JSON.stringify(String(input.selector))}) } catch { return false } }) || null })()`
+        : `(document.querySelector(${JSON.stringify(String(input.selector))}))`
       const rows = await wc.executeJavaScript(`(() => {
-        const el = document.querySelector(${JSON.stringify(String(input.selector))});
+        const el = ${findTable};
         if (!el) return null;
         return Array.from(el.querySelectorAll('tr')).slice(0, 2000).map(tr =>
           Array.from(tr.children).map(c => String(c.innerText || '').trim().slice(0, 500)));
@@ -540,14 +707,29 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
     }
     case 'clickByText': {
       // 平台页面没有稳定选择器，只能按"元素自身的直接文本"点；
-      // 取文本最短的命中项（最具体的那个），再向上找可点击祖先
+      // 取文本最短的命中项（最具体的那个），再向上找可点击祖先。
+      // deep = ShadowRoot 穿透；mode:'real' = 定位后发受信任鼠标点击
+      // （微信对框架托管的按钮/复选框，合成 click() 不生效或点到隐藏克隆上，实测必须真实输入）。
       const wc = wcOrThrow(run)
       const needle = String(input.text)
+      const deep = !!input.deep
       guardSignals(run)
+      if (input.mode === 'real') {
+        const hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText')
+        if (!hit.ok) throw new Error(hit.reason === 'DISABLED'
+          ? `TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`
+          : `TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
+        guardSignals(run)
+        realClick(wc, hit.x!, hit.y!)
+        guardSignals(run)
+        return { kind: 'executed', payload: { action: 'clickByText', matched: needle, clickedText: hit.clickedText, candidates: hit.candidates, mode: 'real' } }
+      }
       const res = await withTimeout(() => wc.executeJavaScript(`(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
         const needle = ${JSON.stringify(needle)};
+        const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
         const cands = [];
-        for (const el of document.querySelectorAll('*')) {
+        for (const el of scope) {
           const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
           if (!own.includes(needle)) continue;
           const r = el.getBoundingClientRect();
@@ -649,15 +831,19 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       const wc = wcOrThrow(run)
       const srcSel = input.sourceSelector ? String(input.sourceSelector) : ''
       const sel = String(input.selector)
-      if (srcSel) await waitForSelector(wc, srcSel, run, step.timeoutMs)
+      const deep = !!input.deep
+      if (srcSel) await waitForSelector(wc, srcSel, run, step.timeoutMs, deep)
       guardSignals(run)
       // srcSel 留空 = 平台的"商品区"定位不到稳定选择器时的如实降级：从写入目标（话术框）向上
       // 找最近的固定定位浮层（邀约抽屉），只读抽屉文本；找不到就报 AI_EMPTY_SOURCE，
       // 绝不把整页噪音（达人列表、菜单）当商品信息喂给模型
       const src = await withTimeout(() => wc.executeJavaScript(`(() => {
         const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+        ${deep ? ENUM_DEEP_FN : ''}
         ${srcSel
-          ? `const el = document.querySelector(${JSON.stringify(srcSel)});
+          ? `const el = ${deep
+            ? `__enumDeep().find(e => { try { return e.matches(${JSON.stringify(srcSel)}) } catch { return false } }) || null`
+            : `document.querySelector(${JSON.stringify(srcSel)})`};
              return el ? { how: 'selector', text: clean(el.innerText || el.textContent).slice(0, 2000) } : { how: 'none', text: '' };`
           : `let node = document.querySelector(${JSON.stringify(sel)});
              while (node && node !== document.body) {
@@ -699,6 +885,20 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       }
       guardSignals(run)
 
+      // deep（微信小店）= 受信任输入写入（微信表单不吃合成 input 事件）；否则保持受控组件 JS 写入
+      if (deep) {
+        await trustedWrite(wc, run, sel, true, generated.script, step.timeoutMs, 'aiGenerate 写入')
+        // §4.5：payload 只存摘要（模型名/长度/来源字符数/前 40 字预览）；
+        // 完整话术由紧随其后的 readText 步骤落库，便于事后审计"到底发了什么"
+        return {
+          kind: 'executed',
+          payload: {
+            action: 'aiGenerate', model: generated.model, length: generated.script.length,
+            sourceChars: generated.sourceChars, sourceHow: src.how,
+            sourceSelector: srcSel || null, preview: generated.script.slice(0, 40), writeMode: 'trusted'
+          }
+        }
+      }
       const okWrote = await withTimeout(() => wc.executeJavaScript(`(() => {
         const el = document.querySelector(${JSON.stringify(sel)});
         if (!el) return false;
@@ -725,6 +925,145 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
           sourceSelector: srcSel || null, preview: generated.script.slice(0, 40)
         }
       }
+    }
+    // ---------- 微信小店（assist-form 流程） ----------
+    case 'mirrorTabUrl': {
+      // 人工已在店铺浏览器进到某达人的邀约表单页（URL 含 urlIncludes）；
+      // 引擎把运行标签页导航到同一 URL——列表 DOM 拿不到 finderUsername，选人必须人工完成。
+      const marker = String(input.urlIncludes)
+      guardSignals(run)
+      const others = getStoreTabs(run.storeId).filter(t => t.id !== run.tabId)
+      let mirrored: string | null = null
+      for (const t of others) {
+        const live = getTabWebContents(run.storeId, t.id)
+        const u = live && !live.isDestroyed() ? live.getURL() : t.url
+        if (u.includes(marker)) { mirrored = u; break }
+      }
+      if (!mirrored) {
+        throw new Error(`TASK_INVITE_PAGE_NOT_OPEN: 店铺浏览器里没有已打开且 URL 含「${marker}」的页面——请先手动进到达人的邀约表单页，再运行任务`)
+      }
+      const target = mirrored
+      const wc = wcOrThrow(run)
+      await withTimeout(async () => {
+        guardSignals(run)
+        try {
+          await wc.loadURL(target)
+        } catch (e: any) {
+          if (!/ERR_ABORTED/.test(String(e?.message))) throw e
+        }
+      }, run, step.timeoutMs, 'mirrorTabUrl')
+      await pollUntil(run, () => !wcOrThrow(run).isLoading(), Math.max(step.timeoutMs, 5000), 'mirrorTabUrl 加载完成')
+      // 运行标签页带到前台：门禁阶段用户核对的就是这一页
+      try { activateTab(run.storeId, run.tabId!) } catch { /* 视图未挂载等情况不阻塞流程 */ }
+      // §4.5：payload 只存 origin+path——query 里有 finderUsername 等 token，不落库
+      let originPath = target
+      try { const u = new URL(target); originPath = u.origin + u.pathname } catch { /* 保底原样 */ }
+      return { kind: 'executed', payload: { action: 'mirrorTabUrl', url: originPath } }
+    }
+    case 'typeText': {
+      // 受信任文本写入（见 trustedWrite 注释）：点击聚焦 → Ctrl+A → Delete → insertText → 回读校验
+      const wc = wcOrThrow(run)
+      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, !!input.deep)
+      await trustedWrite(wc, run, String(input.selector), !!input.deep, String(input.text ?? ''), step.timeoutMs, 'typeText')
+      // §4.5：payload 只存摘要与长度，不存写入的完整文本
+      return { kind: 'executed', payload: { action: 'typeText', selector: String(input.selector), length: String(input.text ?? '').length } }
+    }
+    case 'waitForText': {
+      // 等「可见元素的自有文本」包含 text。waitForSelector 只查存在性，而微信的弹窗
+      // 节点常预渲染在 DOM 里（隐藏态也查得到），必须以可见文本为准。
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      const deep = !!input.deep
+      await withTimeout(async () => {
+        for (;;) {
+          guardSignals(run)
+          const found = await wc.executeJavaScript(`(() => {
+            ${deep ? ENUM_DEEP_FN : ''}
+            ${VISIBLE_JS}
+            const needle = ${JSON.stringify(needle)};
+            const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+            for (const el of scope) {
+              const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+              if (!own.includes(needle)) continue;
+              if (__visible(el)) return true;
+            }
+            return false;
+          })()`).catch(() => false)
+          if (found) return
+          await new Promise(r => setTimeout(r, 300))
+        }
+      }, run, step.timeoutMs, `等待文本「${needle}」`)
+      guardSignals(run)
+      return null
+    }
+    case 'ensureRows': {
+      // 确保"页面可见行数"≥ min：已有则原样不动（payload 报 added:0）；
+      // 没有才点 addText 入口 → 等弹窗复选框 → 勾选未选项（≤max，真实点击）→
+      // 点 confirmText → 复核行数。自适应在于避免对"已有商品"的页面重复添加。
+      const wc = wcOrThrow(run)
+      const deep = !!input.deep
+      const min = input.min == null ? 1 : Number(input.min)
+      const max = Number(input.max)
+      const countRowsExpr = `(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        const sel = ${JSON.stringify(String(input.rowsSelector))};
+        let n = 0;
+        for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+          try { if (!el.matches(sel)) continue } catch { continue }
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) continue;
+          n++;
+        }
+        return n;
+      })()`
+      guardSignals(run)
+      let present = await withTimeout(() => wc.executeJavaScript(countRowsExpr).catch(() => 0), run, step.timeoutMs, 'ensureRows 计数')
+      if (present >= min) {
+        return { kind: 'executed', payload: { action: 'ensureRows', present, added: 0 } }
+      }
+      const addHit = await findTextTarget(wc, run, String(input.addText), deep, step.timeoutMs, 'ensureRows 打开添加入口')
+      if (!addHit.ok) throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${String(input.addText)}」入口（${addHit.reason}）`)
+      realClick(wc, addHit.x!, addHit.y!)
+      await new Promise(r => setTimeout(r, 600))
+      guardSignals(run)
+      await waitForSelector(wc, String(input.checkboxSelector), run, step.timeoutMs, deep)
+      const boxes = await withTimeout(() => wc.executeJavaScript(`(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        const sel = ${JSON.stringify(String(input.checkboxSelector))};
+        const out = [];
+        for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+          try { if (!el.matches(sel)) continue } catch { continue }
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) continue;
+          const cs = getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+          const input = el.querySelector('input[type=checkbox]');
+          out.push({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), checked: input ? !!input.checked : false });
+        }
+        return out;
+      })()`), run, step.timeoutMs, 'ensureRows 找复选框')
+      let added = 0
+      for (const b of boxes) {
+        if (added >= max) break
+        if (b.checked) continue
+        guardSignals(run)
+        realClick(wc, b.x, b.y)
+        added++
+        await new Promise(r => setTimeout(r, 200))
+      }
+      if (added === 0) {
+        throw new Error('TASK_SELECTOR_CHANGED: 没有可勾选的行（弹窗内没有未选中项）——请人工确认平台是否还有可添加内容')
+      }
+      const confirmHit = await findTextTarget(wc, run, String(input.confirmText), deep, step.timeoutMs, 'ensureRows 确认')
+      if (!confirmHit.ok) throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${String(input.confirmText)}」确认按钮（${confirmHit.reason}）`)
+      realClick(wc, confirmHit.x!, confirmHit.y!)
+      await new Promise(r => setTimeout(r, 800))
+      guardSignals(run)
+      present = await withTimeout(() => wc.executeJavaScript(countRowsExpr).catch(() => 0), run, step.timeoutMs, 'ensureRows 复核')
+      if (present < min) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 确认后页面仍未见 ${min} 行（当前 ${present}）——请人工确认内容是否添加成功`)
+      }
+      return { kind: 'executed', payload: { action: 'ensureRows', present, added } }
     }
     default:
       throw new Error(`TASK_INVALID_STEP: 未知步骤类型 ${String(step.type)}`)

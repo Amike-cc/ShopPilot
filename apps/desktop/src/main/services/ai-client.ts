@@ -169,7 +169,7 @@ export async function listModels(): Promise<{ models: string[]; elapsedMs: numbe
     // OpenAI 兼容：{ data: [{ id }] }；部分网关直接给数组
     const arr = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : null
     if (!arr) throw new AiError('AI_REQUEST_FAILED', '响应里没有模型列表（期望 { data: [{ id }] }）')
-    const models = [...new Set(arr.map((x: any) => String(x?.id ?? x?.name ?? x ?? '').trim()).filter(Boolean))].sort()
+    const models = [...new Set(arr.map((x: any) => String(x?.id ?? x?.name ?? x ?? '').trim()).filter(Boolean))].sort() as string[]
     if (!models.length) throw new AiError('AI_EMPTY_OUTPUT', '接口没有返回任何可用模型')
     logMain('info', `[ai] 获取可用模型成功 count=${models.length} ${Date.now() - t0}ms`)
     return { models, elapsedMs: Date.now() - t0 }

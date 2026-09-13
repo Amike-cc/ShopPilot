@@ -14,6 +14,9 @@ export * from './constants/platforms'
 export * from './constants/invite'
 export * from './constants/ai'
 
+// 邀约步骤构造（渲染层与单测共用）
+export * from './invite-steps'
+
 // Schemas
 export * from './schemas/store'
 export * from './schemas/task'

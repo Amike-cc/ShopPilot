@@ -20,7 +20,19 @@ export const TASK_STEP_TYPES = [
   'setInput',
   // 调用主进程大模型按"读取到的商品信息"生成文本并写入目标（达人邀约话术）；
   // 属于副作用步骤：需 AI 已配置，未配置时如实报 AI_NOT_CONFIGURED，不静默跳过
-  'aiGenerate'
+  'aiGenerate',
+  // ---------- 微信小店（assist-form 流程）专用，见 shared/constants/invite.ts ----------
+  // 在店铺其他标签页里找 URL 含 urlIncludes 的页面（人工进到的邀约表单页），
+  // 把运行标签页导航过去并激活——列表 DOM 拿不到 finderUsername，选人必须人工完成
+  'mirrorTabUrl',
+  // 受信任键鼠输入（点击聚焦 → Ctrl+A → Delete → insertText）：微信表单不吃合成 input 事件
+  'typeText',
+  // 轮询等待「可见元素的自有文本」包含 text（ShadowRoot 穿透可选）；
+  // waitForSelector 只查元素存在，而微信弹窗节点常预渲染在 DOM 里，必须等"可见文本"
+  'waitForText',
+  // 确保页面可见行数 ≥ min：已有则不动；没有才点 addText 入口 → 弹窗勾选未选项（≤max）→
+  // 点 confirmText → 复核。用于"邀约商品"（页面已有商品则不重复添加）
+  'ensureRows'
 ] as const
 
 export type TaskStepType = (typeof TASK_STEP_TYPES)[number]
