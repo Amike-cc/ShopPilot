@@ -105,9 +105,22 @@ const WEIXIN: BusinessProfile = {
   note: '口径：近7天；退款金额取「成交退款金额」。销量与退款订单数：本店「店铺数据 → 交易统计」页渲染为空（无数据/权限），未采集——不猜别的口径。'
 }
 
+const DOUDIAN: BusinessProfile = {
+  platform: '抖店',
+  // 抖店后台首页：卡片上的「成交金额」（今日，带"较昨日"对比）
+  pageUrl: 'https://fxg.jinritemai.com/ffa/mshop/homepage/index',
+  urlMarker: 'mshop/homepage',
+  measuredAt: '2026-09-13',
+  metrics: [
+    { key: 'biz.gmv', anchorText: '成交金额' }
+  ],
+  note: '口径：今日成交金额（后台首页卡片）。该账号罗盘未开通，其余指标无数据页可读——销量/订单/退款金额在首页与广告文案同名（实测「销量」读到的是"销量高"这类文案），故只登记能可靠读到的这一项，不猜。'
+}
+
 export const BUSINESS_PROFILES: Readonly<Record<string, BusinessProfile>> = {
   [KUAISHOU.platform]: KUAISHOU,
-  [WEIXIN.platform]: WEIXIN
+  [WEIXIN.platform]: WEIXIN,
+  [DOUDIAN.platform]: DOUDIAN
 }
 
 export function businessProfileFor(platformName: string | null | undefined): BusinessProfile | null {

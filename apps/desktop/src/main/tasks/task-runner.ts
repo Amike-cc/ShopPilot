@@ -1226,6 +1226,10 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       // 符号与万/亿）"作为指标值，其余丢弃——绝不把对比数字当成指标值。
       const raw = String(res.value)
       const m = /^[¥￥$€]?\s*[\d,]+(?:\.\d+)?\s*(?:万|亿)?/.exec(raw)
+      // 作为"指标"落库时必须真的取到数字：取不到如实失败，绝不把 "(退款时间)" 这类文字当指标值存进数据中心
+      if (input.metric && !m) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 「${label}」旁取到的不是数值（${raw.slice(0, 40)}）——页面结构或文案已变，未落库`)
+      }
       const shown = (m ? m[0] : raw).replace(/\s+/g, '').slice(0, 40)
       let num = parseFloat(shown.replace(/[^\d.]/g, ''))
       if (Number.isFinite(num) && shown.includes('亿')) num *= 1e8

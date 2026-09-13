@@ -2538,6 +2538,12 @@ onMounted(async () => {
   updateEventHandler = (payload: any) => applyUpdateStatus(payload)
   window.shopilot.on('update:statusChanged', updateEventHandler)
   window.shopilot.on('update:progress', updateEventHandler)
+  // 采集任务可能在数据中心的等待窗口之后才跑完（例如运行排队等店铺浏览器打开）：
+  // 任何运行结束都刷新一次已打开的数据中心，避免表格停在旧数字上
+  window.shopilot.on('task:progress', (ev: any) => {
+    if (!dataCenterOpen.value) return
+    if (ev?.phase === 'finished' || ev?.phase === 'failed') void loadDataCenter()
+  })
   await ws.init()
   // Renderer reloads do not reset main-process WebContentsView state. Explicitly
   // clear a stale overlay flag before the first viewport report; app-lock state
