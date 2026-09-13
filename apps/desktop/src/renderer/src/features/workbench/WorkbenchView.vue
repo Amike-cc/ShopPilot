@@ -375,59 +375,8 @@
 
       <!-- 任务面板 - §4.4 / §6.6（二级页签：任务列表 / 达人邀约） -->
       <div class="panel-body env-body" v-else>
-        <div class="sub-tabs">
-          <button :class="['stab', { on: taskTab === 'tasks' }]" data-test="task-tab-tasks" @click="taskTab = 'tasks'">任务列表</button>
-          <button :class="['stab', { on: taskTab === 'invite' }]" data-test="task-tab-invite" @click="taskTab = 'invite'">达人邀约</button>
-        </div>
-
-        <template v-if="taskTab === 'tasks'">
-        <div class="env-sec tc-headsec">
-          <div class="env-h" style="margin:0">任务列表<span class="row-sub" v-if="ws.displayedStoreId"> · {{ storeName(ws.displayedStoreId) }}</span><span class="row-sub" v-else> · 未打开店铺（仅列历史未绑定任务）</span></div>
-          <button class="mini-btn primary" @click="openTaskDialog">+ 新建任务</button>
-        </div>
-
-        <div v-if="storeTasks.length === 0" class="empty-hint">{{ ws.displayedStoreId ? '当前店铺暂无任务（达人邀约是独立功能，运行记录见「达人邀约」页签）。' : '没有未绑定店铺的任务。' }}任务只能由预定义读取型步骤组成，提交类动作必须经人工确认节点</div>
-        <div v-for="t in storeTasks" :key="t.id" class="env-sec task-card" :class="{ on: detailTaskId === t.id }">
-          <div class="tc-head" @click="toggleTaskDetail(t)">
-            <div class="p-info">
-              <div class="row-main">{{ t.name }}</div>
-              <div class="row-sub">
-                {{ t.steps.length }} 步 · {{ storeName(t.storeScope) }}<span v-if="t.schedule"> · 每 {{ Math.round(t.schedule.everyMs / 60000) }} 分钟</span><span v-if="liveStatus(t)"> · {{ statusLabel(liveStatus(t)) }}</span>
-              </div>
-            </div>
-            <button class="mini-btn primary" title="立即运行" @click.stop="runTask(t)">▶</button>
-            <button class="row-del" title="删除任务" @click.stop="delTask(t.id)">×</button>
-          </div>
-
-          <template v-if="detailTaskId === t.id">
-            <div class="step-row" v-for="(s, i) in t.steps" :key="i">
-              <span class="s-ico">{{ stepIcon(t, i) }}</span>
-              <div class="p-info">
-                <div class="row-main">{{ i + 1 }}. {{ s.type }}<span class="row-sub"> · {{ s.timeoutMs / 1000 }}s<template v-if="s.retryLimit"> · 重试{{ s.retryLimit }}</template></span></div>
-                <div class="row-sub">{{ stepInputBrief(s) }}<template v-if="stepResultBrief(t, i)"> ⇒ {{ stepResultBrief(t, i) }}</template></div>
-              </div>
-            </div>
-
-            <div class="tc-btns" v-if="detailRunId(t)">
-              <button class="mini-btn" v-if="liveStatus(t) === 'running'" @click="runOp(t, 'pause')">暂停</button>
-              <button class="mini-btn" v-if="liveStatus(t) === 'paused'" @click="runOp(t, 'resume')">继续</button>
-              <button class="mini-btn" v-if="liveStatus(t) === 'failed'" @click="runOp(t, 'retry')" title="跳过已成功步骤，副作用步骤不可恢复">从失败步骤继续</button>
-              <button class="mini-btn" v-if="['running','paused','queued','waiting_confirmation'].includes(liveStatus(t))" @click="runOp(t, 'cancel')">取消</button>
-              <button class="mini-btn" @click="loadTaskDetail(t)">刷新</button>
-            </div>
-            <div class="row-sub" v-if="liveMessage(t)" style="padding:2px 0">{{ liveMessage(t) }}</div>
-
-            <div class="log-box" v-if="ws.taskLogs[detailRunId(t)]?.length">
-              <div class="log-line" v-for="(l, i) in ws.taskLogs[detailRunId(t)]" :key="i">
-                {{ new Date(l.at || Date.now()).toLocaleTimeString() }} [{{ l.phase }}]{{ l.stepType ? ' ' + l.stepType : '' }} {{ l.message || '' }}
-              </div>
-            </div>
-          </template>
-        </div>
-        </template>
-
         <!-- 达人邀约：按店铺平台匹配平台档案；本版只有抖店，其余平台明确拒绝 -->
-        <div v-else class="sub-pane" data-test="invite-panel">
+        <div class="sub-pane" data-test="invite-panel">
           <div class="env-sec" v-if="!inviteProfile">
             <div class="env-h">达人邀约</div>
             <div class="empty-hint" style="padding:14px 8px">
@@ -802,50 +751,6 @@
         <div class="modal-actions">
           <button class="btn-ghost" @click="ws.createDialogOpen = false">取消</button>
           <button class="btn-primary" @click="submitCreate" :disabled="!form.name.trim() || !form.adminUrl.trim()">创建</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 新建任务对话框 - §4.4 预定义步骤 -->
-    <div v-if="taskDialogOpen" class="modal-mask" @click.self="taskDialogOpen = false">
-      <div class="modal modal-wide">
-        <h2>新建读取型任务</h2>
-        <div class="row-sub" style="margin-bottom:8px">任务只能由预定义步骤组成；提交类动作不提供无人值守路径，一律经「人工确认」节点。</div>
-        <label>名称<input v-model="tf.name" placeholder="例如：订单概览巡检" /></label>
-        <label>绑定店铺
-          <select v-model="tf.storeId" v-if="!ws.displayedStoreId">
-            <option v-for="s in ws.stores" :key="s.id" :value="s.id">{{ s.name }}</option>
-          </select>
-          <input v-else :value="storeName(ws.displayedStoreId)" disabled title="任务功能对应每个店铺：从店铺面板创建的任务绑定当前店铺" />
-        </label>
-        <label>定时（分钟，留空 = 仅手动）<input v-model.number="tf.everyMin" type="number" min="1" placeholder="例如 60" /></label>
-
-        <div class="env-h">快速模板</div>
-        <div class="tpl-row">
-          <button class="mini-btn" v-for="tp in stepTemplates" :key="tp.name" @click="applyTemplate(tp)">{{ tp.name }}</button>
-        </div>
-
-        <div class="env-h" style="margin-top:12px">步骤（按顺序执行）</div>
-        <div class="tstep" v-for="(st, i) in tf.steps" :key="i">
-          <div class="add-line">
-            <select v-model="st.type" class="t-type">
-              <option v-for="ty in stepTypes" :key="ty" :value="ty">{{ ty }}</option>
-            </select>
-            <span class="mini-lab">超时</span>
-            <input v-model.number="st.timeoutSec" type="number" min="1" class="f-port2" data-test="step-timeout" title="超时（秒）" />
-            <span class="mini-lab">重试</span>
-            <input v-model.number="st.retry" type="number" min="0" max="5" class="f-port2" data-test="step-retry" title="重试次数（0–5）" />
-            <button class="row-del" data-test="step-del" title="删除该步骤" @click="tf.steps.splice(i, 1)">×</button>
-          </div>
-          <div class="add-line" v-for="f in fieldsOf(st.type)" :key="f.key">
-            <input v-model="st.params[f.key]" :placeholder="f.ph" class="f-wide" />
-          </div>
-        </div>
-        <button class="mini-btn" @click="tf.steps.push({ type: 'waitForSelector', timeoutSec: 15, retry: 0, params: {} })">+ 添加步骤</button>
-
-        <div class="modal-actions">
-          <button class="btn-ghost" @click="taskDialogOpen = false">取消</button>
-          <button class="btn-primary" @click="submitTask" :disabled="!tf.name || tf.steps.length === 0">创建任务</button>
         </div>
       </div>
     </div>
@@ -1777,10 +1682,6 @@ watch(() => ws.displayedStoreId, () => { verifyItems.value = []; detailTaskId.va
  *  达人邀约是独立功能——邀约运行（名称前缀「达人邀约 ·」）不进任务列表，只在邀约面板的「邀约记录」里展示；
  *  未打开店铺时显示历史遗留的"未绑定店铺"任务（新任务一律绑定店铺） */
 const INVITE_TASK_PREFIX = '达人邀约 ·'
-const storeTasks = computed(() => ws.tasks.filter(t =>
-  t.storeScope === ws.displayedStoreId && !t.name.startsWith(INVITE_TASK_PREFIX)
-))
-/** 本店铺的邀约运行记录（独立于任务列表，按最新在前取近 5 次） */
 const inviteHistory = computed(() => {
   const sid = ws.displayedStoreId
   if (!sid) return []
@@ -1794,40 +1695,6 @@ function runTimeLabel(t: any): string {
   const d = new Date(ts)
   return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
-const stepTypes = ['navigate', 'waitForPage', 'waitForSelector', 'readText', 'readTable', 'screenshot', 'fillDraft', 'waitForUserConfirmation']
-const stepFieldMap: Record<string, Array<{ key: string; ph: string }>> = {
-  navigate: [{ key: 'url', ph: 'https:// 页面地址' }],
-  waitForPage: [{ key: 'urlIncludes', ph: 'URL 包含片段（留空 = 等待加载完成）' }],
-  waitForSelector: [{ key: 'selector', ph: 'CSS 选择器，如 #orders' }],
-  readText: [{ key: 'selector', ph: 'CSS 选择器' }, { key: 'metric', ph: '指标名（可选）如 unread_messages' }],
-  readTable: [{ key: 'selector', ph: '表格 CSS 选择器，如 table' }, { key: 'metric', ph: '指标名（可选）如 pending_orders' }],
-  screenshot: [],
-  fillDraft: [{ key: 'selector', ph: '输入框 CSS 选择器' }, { key: 'text', ph: '草稿文本（仅存摘要，不存原文）' }],
-  waitForUserConfirmation: [{ key: 'message', ph: '确认门禁展示文案' }]
-}
-function fieldsOf(type: string) { return stepFieldMap[type] || [] }
-
-const stepTemplates = [
-  { name: '页面快照', steps: [
-    { type: 'navigate', params: { url: '' } },
-    { type: 'waitForSelector', params: { selector: 'body' } },
-    { type: 'screenshot', params: {} }
-  ] },
-  { name: '列表计数读取', steps: [
-    { type: 'navigate', params: { url: '' } },
-    { type: 'readTable', params: { selector: 'table', metric: 'pending_orders' } }
-  ] },
-  { name: '草稿填充（带确认门禁）', steps: [
-    { type: 'navigate', params: { url: '' } },
-    { type: 'waitForUserConfirmation', params: { message: '即将向页面填入草稿文本，是否允许？' } },
-    { type: 'fillDraft', params: { selector: 'textarea#title', text: '' } }
-  ] }
-]
-
-const taskDialogOpen = ref(false)
-/** 任务面板的二级页签：任务列表 / 达人邀约（后者本版为占位） */
-const taskTab = ref<'tasks' | 'invite'>('tasks')
-
 // ---------- 达人邀约：按「当前店铺的平台」匹配平台档案（平台流程相互独立） ----------
 const inviteProfile = computed(() => {
   const s = ws.stores.find(x => x.id === ws.displayedStoreId)
@@ -1957,45 +1824,6 @@ const tf = reactive({
   steps: [] as Array<{ type: string; timeoutSec: number; retry: number; params: Record<string, string> }>
 })
 
-function openTaskDialog() {
-  tf.name = ''; tf.storeId = ws.displayedStoreId || ws.stores[0]?.id || ''; tf.everyMin = null
-  tf.steps = [{ type: 'navigate', timeoutSec: 15, retry: 0, params: { url: '' } }]
-  taskDialogOpen.value = true
-}
-
-function applyTemplate(tp: (typeof stepTemplates)[number]) {
-  tf.steps = tp.steps.map(s => ({
-    type: s.type,
-    timeoutSec: s.type === 'waitForUserConfirmation' ? 600 : 15,
-    retry: 0,
-    params: { ...s.params } as Record<string, string>
-  }))
-}
-
-async function submitTask() {
-  const steps = tf.steps.map(st => {
-    const input: Record<string, unknown> = {}
-    for (const f of fieldsOf(st.type)) {
-      const v = String(st.params[f.key] ?? '').trim()
-      if (v) input[f.key] = v
-    }
-    return {
-      type: st.type, input,
-      timeoutMs: Math.max(500, Math.min(600, (st.timeoutSec || 15)) * 1000),
-      retryLimit: Math.max(0, Math.min(5, st.retry || 0))
-    }
-  })
-  const res = await window.shopilot.task.create({
-    name: tf.name.trim(), storeScope: tf.storeId || null, steps,
-    schedule: tf.everyMin ? { everyMs: Math.max(1, tf.everyMin) * 60000 } : null
-  })
-  if (res.ok) {
-    taskDialogOpen.value = false
-    ws.toast('任务已创建', 'success')
-    await ws.refreshTasks()
-  } else ws.toast('创建失败: ' + res.error.message, 'error')
-}
-
 const detailTaskId = ref<string | null>(null)
 const detailData = reactive<Record<string, any>>({})
 
@@ -2056,16 +1884,6 @@ async function loadTaskDetail(t: any) {
   const res = await window.shopilot.task.results(t.latestRun.id)
   if (res.ok) detailData[t.id] = res.data
   else delete detailData[t.id]
-}
-
-async function runTask(t: any) {
-  const res = await window.shopilot.task.run(t.id)
-  if (res.ok) {
-    ws.toast(res.data.waitingForStore ? '任务已排队：店铺浏览器打开后自动开始' : '任务已入队开始', 'success')
-    await ws.refreshTasks()
-    const fresh = ws.tasks.find(x => x.id === t.id)
-    if (fresh) await loadTaskDetail(fresh)
-  } else ws.toast('运行失败: ' + res.error.message, 'error')
 }
 
 async function delTask(id: string) {
@@ -2472,13 +2290,16 @@ async function collectBusinessData() {
       (skipped.length ? `；跳过：${skipped.join('、')}` : ''),
       created ? 'success' : 'error'
     )
-    // 采集要跑十几秒到一分钟：等运行结束后再刷新数据中心的数字，避免界面停在旧值上
+    // 采集要跑十几秒到一分钟：等运行结束后再刷新数据中心的数字，避免界面停在旧值上。
+    // 任务列表已移除——这里**逐店如实汇报结果**（含失败原因），失败不被埋在看不见的运行记录里。
     if (runIds.length) {
       const deadline = Date.now() + 180000
+      let last: any[] = []
       for (;;) {
         await new Promise(r => setTimeout(r, 3000))
         const list = await window.shopilot.task.list()
         const all = list.ok ? (list.data.tasks || list.data) : []
+        last = all.filter((x: any) => x.latestRun && runIds.includes(x.latestRun.id))
         const done = runIds.every(id => {
           const t = all.find((x: any) => x.latestRun?.id === id)
           const st = t?.latestRun?.status
@@ -2486,6 +2307,15 @@ async function collectBusinessData() {
         })
         if (done || Date.now() > deadline) break
       }
+      const parts = last.map((t: any) => {
+        const st = t.latestRun?.status
+        const name = String(t.name || '').split(' · ')[1] || t.name
+        if (st === 'succeeded') return `${name} ✓`
+        if (st === 'queued') return `${name}（排队等浏览器打开）`
+        if (st === 'failed') return `${name} ✗ ${t.latestRun?.errorCode || '失败'}${t.latestRun?.errorMessage ? '：' + String(t.latestRun.errorMessage).slice(0, 60) : ''}`
+        return `${name}（${st || '未知'}）`
+      })
+      if (parts.length) ws.toast('采集结果 —— ' + parts.join('｜'), last.every((t: any) => t.latestRun?.status === 'succeeded') ? 'success' : 'error')
       await ws.refreshTasks()
     }
     await loadDataCenter()
@@ -2511,7 +2341,7 @@ function refreshOverlayOcclusion() {
     // A newer watch event has already scheduled a fresher DOM state.
     if (revision !== overlayRevision) return
 
-    const modalOpen = !!(ws.createDialogOpen || taskDialogOpen.value || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value || dataCenterOpen.value)
+    const modalOpen = !!(ws.createDialogOpen || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value || dataCenterOpen.value)
     if (ctx.open && viewportEl.value) {
       const m = document.querySelector('[data-test="store-ctx"]')?.getBoundingClientRect()
       const v = viewportEl.value.getBoundingClientRect()
@@ -2527,7 +2357,7 @@ function refreshOverlayOcclusion() {
 }
 
 watch(
-  () => [ws.createDialogOpen, taskDialogOpen.value, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value],
+  () => [ws.createDialogOpen, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value],
   () => { refreshOverlayOcclusion() },
   { immediate: true }
 )
