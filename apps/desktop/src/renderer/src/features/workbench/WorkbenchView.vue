@@ -185,6 +185,8 @@
           {{ t.icon }}
           <span v-if="t.key === 'tasks' && confirmationCount > 0" class="rail-badge" data-test="rail-confirm-badge"></span>
         </button>
+        <!-- 数据中心（全部店铺）：与具体店铺无关，收起状态下也保留入口 -->
+        <button class="rail-btn" data-test="rail-datacenter" title="数据中心（全部店铺）" @click="openDataCenter()">📊</button>
       </div>
 
       <template v-else>
@@ -635,8 +637,95 @@
           </template>
         </div>
       </div>
+
+        <!-- 数据中心入口：单独占一行，钉在右栏底部（窗口右下角）；汇总全部店铺，与当前店铺无关 -->
+        <div class="panel-footer">
+          <button class="panel-foot-row" data-test="datacenter-open" title="数据中心：汇总展示所有店铺的数据" @click="openDataCenter()">
+            <span class="pfr-ico">📊</span>
+            <span class="pfr-txt">数据中心</span>
+            <span class="row-sub">全部店铺</span>
+          </button>
+        </div>
       </template>
     </aside>
+
+    <!-- 数据中心：汇总展示所有店铺的数据（只读；数据来自本机快照与运行记录） -->
+    <div v-if="dataCenterOpen" class="modal-mask" @click.self="dataCenterOpen = false">
+      <div class="modal modal-wide dc-modal" data-test="datacenter-modal">
+        <div class="dc-head">
+          <h2 style="margin:0">数据中心</h2>
+          <span class="row-sub">汇总所有店铺 · {{ dc.generatedAt ? new Date(dc.generatedAt).toLocaleString() : '加载中' }}<template v-if="dcLoading"> · 刷新中…</template></span>
+          <button class="mini-btn" data-test="datacenter-refresh" :disabled="dcLoading" @click="loadDataCenter()">刷新</button>
+          <button class="mini-btn" data-test="datacenter-close" @click="dataCenterOpen = false">关闭</button>
+        </div>
+
+        <div class="dc-cards">
+          <div class="dc-card"><div class="dc-num">{{ dc.totals.stores }}</div><div class="dc-label">店铺</div></div>
+          <div class="dc-card"><div class="dc-num">{{ dc.totals.online }}</div><div class="dc-label">在线</div></div>
+          <div class="dc-card"><div class="dc-num">{{ dc.totals.archived }}</div><div class="dc-label">已归档</div></div>
+          <div class="dc-card"><div class="dc-num">{{ dc.totals.trash }}</div><div class="dc-label">回收站</div></div>
+          <div class="dc-card"><div class="dc-num">{{ dc.totals.platforms }}</div><div class="dc-label">平台数</div></div>
+          <div class="dc-card"><div class="dc-num">{{ dc.totals.snapshots }}</div><div class="dc-label">指标快照</div></div>
+          <div class="dc-card"><div class="dc-num">{{ dc.totals.tasks }}</div><div class="dc-label">任务</div></div>
+        </div>
+
+        <div class="env-h">按平台</div>
+        <div class="dc-chips" v-if="dc.byPlatform.length">
+          <span class="dc-chip" v-for="p in dc.byPlatform" :key="p.platform">{{ p.platform }} · {{ p.c }}（在线 {{ p.online || 0 }}）</span>
+        </div>
+        <div v-else class="empty-hint">还没有店铺</div>
+
+        <div class="env-h">指标快照<span class="row-sub"> · 任务 readText/readTable 步骤按「指标名」落库；每店每指标取最新一条</span></div>
+        <table class="dc-table" v-if="dc.snapshots.length">
+          <thead><tr><th>店铺</th><th>指标</th><th>值</th><th>采集时间</th></tr></thead>
+          <tbody>
+            <tr v-for="(s, i) in dc.snapshots" :key="i">
+              <td>{{ s.storeName }}</td>
+              <td>{{ s.metric }}</td>
+              <td class="dc-val">{{ typeof s.value === 'object' ? JSON.stringify(s.value) : s.value }}</td>
+              <td class="row-sub">{{ new Date(s.capturedAt).toLocaleString() }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="empty-hint">还没有指标快照：在任务的 readText / readTable 步骤里填「指标名」，运行后就会汇总到这里</div>
+
+        <div class="env-h">邀约运行<span class="row-sub"> · 达人邀约独立功能的全部运行（含各店铺）</span></div>
+        <div class="dc-chips" v-if="dc.invite.byStatus.length">
+          <span class="dc-chip" v-for="s in dc.invite.byStatus" :key="s.status">{{ statusLabel(s.status) }} · {{ s.c }}</span>
+        </div>
+        <div v-else class="empty-hint">还没有邀约运行记录</div>
+        <table class="dc-table" v-if="dc.invite.recent.length">
+          <thead><tr><th>店铺</th><th>邀约</th><th>状态</th><th>结束时间</th><th>错误</th></tr></thead>
+          <tbody>
+            <tr v-for="(r, i) in dc.invite.recent" :key="i">
+              <td>{{ r.storeName || '（已删除店铺）' }}</td>
+              <td>{{ String(r.taskName || '').replace('达人邀约 · ', '') }}</td>
+              <td :class="{ 'dc-bad': ['failed','cancelled'].includes(r.status) }">{{ statusLabel(r.status) }}</td>
+              <td class="row-sub">{{ r.finished_at || r.started_at ? new Date(r.finished_at || r.started_at).toLocaleString() : '-' }}</td>
+              <td class="row-sub">{{ r.error_code || '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="env-h">任务运行（近 7 天）<span class="row-sub"> · 全部任务（邀约除外也含在内）</span></div>
+        <div class="dc-chips" v-if="dc.runs.byStatus.length">
+          <span class="dc-chip" v-for="s in dc.runs.byStatus" :key="s.status">{{ statusLabel(s.status) }} · {{ s.c }}</span>
+        </div>
+        <div v-else class="empty-hint">近 7 天没有任务运行</div>
+        <table class="dc-table" v-if="dc.runs.recentIssues.length">
+          <thead><tr><th>店铺</th><th>任务</th><th>状态</th><th>错误码</th><th>时间</th></tr></thead>
+          <tbody>
+            <tr v-for="(r, i) in dc.runs.recentIssues" :key="i">
+              <td>{{ r.storeName || '（已删除店铺）' }}</td>
+              <td>{{ String(r.taskName || '').slice(0, 40) }}</td>
+              <td class="dc-bad">{{ statusLabel(r.status) }}</td>
+              <td class="row-sub">{{ r.error_code || '-' }}</td>
+              <td class="row-sub">{{ r.finished_at ? new Date(r.finished_at).toLocaleString() : '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
 
     <!-- 新建店铺对话框 -->
     <div v-if="ws.createDialogOpen" class="modal-mask" @click.self="ws.createDialogOpen = false">
@@ -2134,6 +2223,41 @@ async function doCopyConfig() {
 }
 
 /**
+ * 数据中心：汇总所有店铺的数据（只读）。
+ * 数据全部来自本机：stores / store_snapshots（任务指标快照）/ task_runs（任务与邀约运行）。
+ * 没有数据就如实显示空状态，不做任何估算补数。
+ */
+const dataCenterOpen = ref(false)
+const dcLoading = ref(false)
+const dc = reactive<any>({
+  generatedAt: 0,
+  totals: { stores: 0, online: 0, archived: 0, trash: 0, platforms: 0, snapshots: 0, tasks: 0 },
+  byPlatform: [] as any[],
+  snapshots: [] as any[],
+  invite: { byStatus: [] as any[], recent: [] as any[] },
+  runs: { byStatus: [] as any[], recentIssues: [] as any[] }
+})
+
+function openDataCenter() {
+  dataCenterOpen.value = true
+  void loadDataCenter()
+}
+
+async function loadDataCenter() {
+  dcLoading.value = true
+  try {
+    const res = await window.shopilot.overview.datacenter()
+    if (res.ok) {
+      Object.assign(dc, res.data)
+    } else {
+      ws.toast('数据中心加载失败: ' + res.error.message, 'error')
+    }
+  } finally {
+    dcLoading.value = false
+  }
+}
+
+/**
  * 弹层遮挡：店铺页面是原生 WebContentsView（永远画在 HTML 之上），
  * 弹层落在视口区域内会被整块盖住（实测回收站弹窗遮挡比例 100%）→ 遮挡期间摘除挂载。
  * 右键菜单通常落在左栏、不与视口相交，那种情况不摘除（避免每次右键中栏白闪）。
@@ -2150,7 +2274,7 @@ function refreshOverlayOcclusion() {
     // A newer watch event has already scheduled a fresher DOM state.
     if (revision !== overlayRevision) return
 
-    const modalOpen = !!(ws.createDialogOpen || taskDialogOpen.value || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value)
+    const modalOpen = !!(ws.createDialogOpen || taskDialogOpen.value || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value || dataCenterOpen.value)
     if (ctx.open && viewportEl.value) {
       const m = document.querySelector('[data-test="store-ctx"]')?.getBoundingClientRect()
       const v = viewportEl.value.getBoundingClientRect()
@@ -2166,7 +2290,7 @@ function refreshOverlayOcclusion() {
 }
 
 watch(
-  () => [ws.createDialogOpen, taskDialogOpen.value, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value],
+  () => [ws.createDialogOpen, taskDialogOpen.value, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value],
   () => { refreshOverlayOcclusion() },
   { immediate: true }
 )
@@ -2544,6 +2668,40 @@ onBeforeUnmount(() => {
 .log-box { margin-top: 8px; background: var(--color-bg-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 8px; max-height: 160px; overflow-y: auto; }
 .log-line { font-size: 11px; color: var(--color-text-secondary); font-family: Consolas, monospace; line-height: 1.6; word-break: break-all; }
 .modal-wide { width: 560px; max-width: 92vw; }
+/* ---------- 数据中心（右栏底部入口 + 汇总弹窗） ---------- */
+.panel-footer { border-top: 1px solid var(--color-border); padding: 6px; flex: 0 0 auto; }
+.panel-foot-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 10px; border-radius: var(--radius-sm); font-size: 13px;
+  color: var(--color-text-primary); background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+}
+.panel-foot-row:hover { border-color: var(--color-primary); color: #fff; }
+.panel-foot-row .pfr-ico { font-size: 14px; }
+.panel-foot-row .pfr-txt { flex: 1 1 auto; text-align: left; }
+.dc-modal { width: 880px; max-width: 94vw; max-height: 84vh; }
+.dc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.dc-head .row-sub { flex: 1 1 auto; }
+.dc-cards { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.dc-card {
+  flex: 1 1 90px; min-width: 84px; padding: 10px 8px; text-align: center;
+  background: var(--color-bg-tertiary); border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+}
+.dc-num { font-size: 20px; font-weight: 600; color: #fff; }
+.dc-label { font-size: 11px; color: var(--color-text-secondary); margin-top: 2px; }
+.dc-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.dc-chip {
+  font-size: 11px; padding: 3px 8px; border-radius: 10px;
+  background: var(--color-bg-tertiary); border: 1px solid var(--color-border); color: var(--color-text-secondary);
+}
+.dc-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+.dc-table th {
+  text-align: left; padding: 5px 6px; color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border); font-weight: 500;
+}
+.dc-table td { padding: 5px 6px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
+.dc-val { font-weight: 600; color: #fff; }
+.dc-bad { color: #ff7875; }
 .update-modal { width: 390px; }
 /* 设置弹窗 + 任务面板二级页签共用的页签条。刻意不复用 .panel-tabs：
    那是右栏一级页签，带 padding-right:140px 给原生窗口按钮避让，装在弹窗/面板里会右侧留白诡异 */

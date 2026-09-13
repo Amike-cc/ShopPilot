@@ -106,6 +106,80 @@ export function registerProfileAndMiscHandlers(): void {
     }
   })
 
+  /**
+   * overview:datacenter - 数据中心：汇总**所有店铺**的数据（只读）。
+   * 数据来源都是本机既有表：stores / store_snapshots（任务 readText·readTable 的指标快照）/
+   * task_runs（任务与邀约运行）。不做任何估算或补数：没有数据就如实返回空数组，由界面显示空状态。
+   */
+  ipcMain.handle(IPC_CHANNELS.OVERVIEW_DATACENTER, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const db = getDatabase()
+      const weekAgo = Date.now() - 7 * 86400000
+
+      const byPlatform = db.prepare(
+        'SELECT platform, COUNT(*) c, SUM(CASE WHEN status = \'online\' THEN 1 ELSE 0 END) online FROM stores WHERE deleted_at IS NULL GROUP BY platform ORDER BY c DESC'
+      ).all() as any[]
+
+      const totals = {
+        stores: (db.prepare('SELECT COUNT(*) c FROM stores WHERE deleted_at IS NULL').get() as any).c,
+        online: (db.prepare("SELECT COUNT(*) c FROM stores WHERE deleted_at IS NULL AND status = 'online'").get() as any).c,
+        archived: (db.prepare("SELECT COUNT(*) c FROM stores WHERE deleted_at IS NULL AND status = 'archived'").get() as any).c,
+        trash: (db.prepare('SELECT COUNT(*) c FROM stores WHERE deleted_at IS NOT NULL').get() as any).c,
+        platforms: byPlatform.length,
+        snapshots: (db.prepare('SELECT COUNT(*) c FROM store_snapshots').get() as any).c,
+        tasks: (db.prepare('SELECT COUNT(*) c FROM tasks').get() as any).c
+      }
+
+      // 每店每指标的最新一条快照（rowid 最大 = 最近写入）
+      const snapshots = db.prepare(`
+        SELECT s.name AS storeName, s.platform AS platform, sn.metric, sn.value_json, sn.captured_at
+        FROM store_snapshots sn
+        JOIN stores s ON s.id = sn.store_id
+        WHERE sn.rowid IN (SELECT MAX(rowid) FROM store_snapshots GROUP BY store_id, metric)
+        ORDER BY sn.captured_at DESC
+        LIMIT 200
+      `).all().map((r: any) => ({
+        storeName: r.storeName, platform: r.platform, metric: r.metric,
+        value: (() => { try { return JSON.parse(r.value_json) } catch { return r.value_json } })(),
+        capturedAt: r.captured_at
+      }))
+
+      // 邀约运行（任务名前缀「达人邀约 ·」）：状态分布 + 最近若干条
+      const inviteWhere = "t.name LIKE '达人邀约 ·%'"
+      const inviteByStatus = db.prepare(`
+        SELECT r.status, COUNT(*) c FROM task_runs r JOIN tasks t ON t.id = r.task_id
+        WHERE ${inviteWhere} GROUP BY r.status
+      `).all() as any[]
+      const inviteRecent = db.prepare(`
+        SELECT s.name AS storeName, t.name AS taskName, r.status, r.error_code, r.status_reason, r.started_at, r.finished_at
+        FROM task_runs r JOIN tasks t ON t.id = r.task_id LEFT JOIN stores s ON s.id = r.store_id
+        WHERE ${inviteWhere} ORDER BY r.rowid DESC LIMIT 10
+      `).all() as any[]
+
+      // 任务运行（近 7 天）状态分布 + 最近失败
+      const runsByStatus = db.prepare(
+        'SELECT status, COUNT(*) c FROM task_runs WHERE started_at > ? GROUP BY status'
+      ).all(weekAgo) as any[]
+      const recentIssues = db.prepare(`
+        SELECT s.name AS storeName, t.name AS taskName, r.status, r.error_code, r.error_message, r.finished_at
+        FROM task_runs r JOIN tasks t ON t.id = r.task_id LEFT JOIN stores s ON s.id = r.store_id
+        WHERE r.status IN ('failed','cancelled') ORDER BY r.rowid DESC LIMIT 8
+      `).all() as any[]
+
+      return success({
+        generatedAt: Date.now(),
+        totals,
+        byPlatform,
+        snapshots,
+        invite: { byStatus: inviteByStatus, recent: inviteRecent },
+        runs: { byStatus: runsByStatus, recentIssues }
+      }, requestId)
+    } catch (err: any) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+    }
+  })
+
   // settings:get / settings:set
   ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, async (_e: IpcMainInvokeEvent, input: { key: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()

@@ -92,6 +92,8 @@ export const IPC_CHANNELS = {
 
   // 概览 - §6.6
   OVERVIEW_STATS: 'overview:stats',
+  // 数据中心：汇总所有店铺的数据（店铺分布 / 指标快照 / 邀约与任务运行）
+  OVERVIEW_DATACENTER: 'overview:datacenter',
 
   // 任务 - §6.4, §6.6
   TASK_CREATE: 'task:create',

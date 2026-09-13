@@ -86,7 +86,9 @@ const api = {
 
   // 概览/设置/审计 - §6.6 §6.7
   overview: {
-    stats: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_STATS)
+    stats: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_STATS),
+    /** 数据中心：所有店铺的汇总数据（只读） */
+    datacenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_DATACENTER)
   },
   settings: {
     get: (key: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET, { key }),
