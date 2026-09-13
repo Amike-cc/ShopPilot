@@ -10,6 +10,7 @@
           <span v-if="ws.trashStores.length" class="rail-badge" data-test="rail-trash-badge"></span>
         </button>
         <button class="rail-btn" data-test="rail-settings" title="设置（含软件更新）" @click="openSettings()">⚙</button>
+        <button class="rail-btn dc-rail-btn" data-test="rail-datacenter" title="数据中心（全部店铺）" @click="openDataCenter()">📊</button>
       </div>
 
       <template v-else>
@@ -95,6 +96,14 @@
             >{{ isOpen(s.id) ? '⏻' : '▶' }}</button>
           </div>
         </div>
+      </div>
+
+      <div class="sidebar-dc">
+        <button class="dc-entry-row" data-test="datacenter-open" title="数据中心：汇总展示所有店铺的数据" @click="openDataCenter()">
+          <span class="dc-ico">📊</span>
+          <span class="dc-txt">数据中心</span>
+          <span class="row-sub">全部店铺</span>
+        </button>
       </div>
 
       <div class="sidebar-footer">
@@ -185,8 +194,6 @@
           {{ t.icon }}
           <span v-if="t.key === 'tasks' && confirmationCount > 0" class="rail-badge" data-test="rail-confirm-badge"></span>
         </button>
-        <!-- 数据中心（全部店铺）：与具体店铺无关，收起状态下也保留入口 -->
-        <button class="rail-btn" data-test="rail-datacenter" title="数据中心（全部店铺）" @click="openDataCenter()">📊</button>
       </div>
 
       <template v-else>
@@ -637,15 +644,6 @@
           </template>
         </div>
       </div>
-
-        <!-- 数据中心入口：单独占一行，钉在右栏底部（窗口右下角）；汇总全部店铺，与当前店铺无关 -->
-        <div class="panel-footer">
-          <button class="panel-foot-row" data-test="datacenter-open" title="数据中心：汇总展示所有店铺的数据" @click="openDataCenter()">
-            <span class="pfr-ico">📊</span>
-            <span class="pfr-txt">数据中心</span>
-            <span class="row-sub">全部店铺</span>
-          </button>
-        </div>
       </template>
     </aside>
 
@@ -2668,17 +2666,19 @@ onBeforeUnmount(() => {
 .log-box { margin-top: 8px; background: var(--color-bg-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 8px; max-height: 160px; overflow-y: auto; }
 .log-line { font-size: 11px; color: var(--color-text-secondary); font-family: Consolas, monospace; line-height: 1.6; word-break: break-all; }
 .modal-wide { width: 560px; max-width: 92vw; }
-/* ---------- 数据中心（右栏底部入口 + 汇总弹窗） ---------- */
-.panel-footer { border-top: 1px solid var(--color-border); padding: 6px; flex: 0 0 auto; }
-.panel-foot-row {
+/* ---------- 数据中心入口（左栏底部：独立一行） ---------- */
+.sidebar-dc { padding: 8px 12px 0; border-top: 1px solid var(--color-border); }
+.dc-entry-row {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 8px 10px; border-radius: var(--radius-sm); font-size: 13px;
   color: var(--color-text-primary); background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border);
 }
-.panel-foot-row:hover { border-color: var(--color-primary); color: #fff; }
-.panel-foot-row .pfr-ico { font-size: 14px; }
-.panel-foot-row .pfr-txt { flex: 1 1 auto; text-align: left; }
+.dc-entry-row:hover { border-color: var(--color-primary); color: #fff; }
+.dc-entry-row .dc-ico { font-size: 14px; }
+.dc-entry-row .dc-txt { flex: 1 1 auto; text-align: left; }
+/* 左栏收起为窄轨时：数据中心图标钉在窄轨底部（左下角） */
+.sidebar-rail .dc-rail-btn { margin-top: auto; }
 .dc-modal { width: 880px; max-width: 94vw; max-height: 84vh; }
 .dc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .dc-head .row-sub { flex: 1 1 auto; }
