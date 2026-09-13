@@ -6,9 +6,9 @@
  *  4. 批准/拒绝 → 等终态 → 校验仿真页 sent/quota
  * 用法：node accept-flow.js approve   （或 deny）
  */
-const PORT = '9250'
-const STORE_NAME = '微信仿真店'
-const MOCK_URL = 'http://127.0.0.1:8765/wx-mock/initiate-invite?finderUsername=v2_mocktoken@finder'
+const PORT = process.env.SHOPILOT_CDP_PORT || '9250'
+const STORE_NAME = process.env.ACCEPT_STORE || '微信仿真店'
+const MOCK_URL = process.env.ACCEPT_MOCK_URL || 'http://127.0.0.1:8765/wx-mock/initiate-invite?finderUsername=v2_mocktoken@finder'
 const MODE = process.argv[2] === 'deny' ? 'deny' : 'approve'
 
 async function j(path, opts) {
@@ -91,7 +91,7 @@ async function main() {
   // 0) 前台化
   const { execSync } = require('child_process')
   try {
-    execSync(`powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name='electron.exe'\\" | Where-Object { $_.CommandLine -match 'remote-debugging-port' -and $_.CommandLine -notmatch '--type=' } | ForEach-Object { $w = New-Object -ComObject WScript.Shell; for($i=0;$i -lt 3;$i++){ if($w.AppActivate($_.ProcessId)){break}; Start-Sleep -Milliseconds 250 } }"`, { stdio: 'ignore', timeout: 15000 })
+    execSync(`powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name='electron.exe'\\" | Where-Object { $_.CommandLine -match 'remote-debugging-port=${PORT}' -and $_.CommandLine -notmatch '--type=' } | ForEach-Object { $w = New-Object -ComObject WScript.Shell; for($i=0;$i -lt 3;$i++){ if($w.AppActivate($_.ProcessId)){break}; Start-Sleep -Milliseconds 250 } }"`, { stdio: 'ignore', timeout: 15000 })
   } catch { /* 前台化失败不阻塞 */ }
 
   // 1) 主窗口：视口未就绪才点店铺卡片，等工作台视口出现

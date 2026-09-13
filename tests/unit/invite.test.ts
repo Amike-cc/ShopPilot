@@ -60,12 +60,15 @@ describe('微信小店（assist-form）步骤构造', () => {
     productCount: 1
   }
 
-  it('完整序列：镜像邀约页 → 填表 → 商品 → 门禁 → 发送 → 等弹窗 → 确认 → 截图', () => {
+  it('完整序列：镜像邀约页 → 额度预检 → 填表 → 商品 → 门禁 → 发送 → 等弹窗 → 确认 → 截图', () => {
     const steps = buildAssistSteps(WX as any, base)
     const types = steps.map(s => s.type)
     expect(types[0]).toBe('mirrorTabUrl')
     expect(steps[0].input).toEqual({ urlIncludes: 'initiate-invite' })
     expect(types[1]).toBe('waitForPage')
+    // 额度先行：镜像后立即检测「今日剩余N次」
+    expect(types[2]).toBe('requireQuota')
+    expect(steps[2].input).toEqual({ textIncludes: '今日剩余', min: 1, metric: 'invite.quota', deep: true })
     // 三个联系字段 + 话术 = 4 个 typeText，全部 deep
     const typeTexts = steps.filter(s => s.type === 'typeText')
     expect(typeTexts.length).toBe(4)
@@ -116,7 +119,7 @@ describe('微信小店（assist-form）步骤构造', () => {
 })
 
 describe('抖店（batch-list）步骤构造', () => {
-  it('保持原有序列：广场 → 筛选 → 批量勾选 → 抽屉 → 门禁 → 确认发送', () => {
+  it('保持原有序列：广场 → 筛选 → 批量勾选 → 抽屉 → 额度预检 → 门禁 → 确认发送', () => {
     const steps = buildBatchSteps(DD as any, {
       category: '生鲜', levels: ['LV0', 'LV1'], count: 5,
       script: '合作话术', scriptMode: 'manual', benefits: ['专属高佣']
@@ -124,12 +127,17 @@ describe('抖店（batch-list）步骤构造', () => {
     const types = steps.map(s => s.type)
     expect(types[0]).toBe('navigate')
     expect(types).toContain('clickAll')
+    // 抽屉打开后、人工确认门禁前，先做「确认发送」可用性（额度）预检
+    const requireEnabled = steps.find(s => s.type === 'requireEnabled')!
+    expect(String(requireEnabled.input.text)).toBe('确认发送')
+    expect(types.indexOf('requireEnabled')).toBeGreaterThan(types.indexOf('waitForSelector'))
+    expect(types.indexOf('requireEnabled')).toBeLessThan(types.indexOf('waitForUserConfirmation'))
     // 门禁在最后一个 clickByText（确认发送）之前
     expect(types.indexOf('waitForUserConfirmation')).toBeLessThan(types.lastIndexOf('clickByText'))
     const gate = steps.find(s => s.type === 'waitForUserConfirmation')!
     expect(String(gate.input.message)).toContain('类目 生鲜')
     // 不应出现微信专属步骤
-    for (const t of ['mirrorTabUrl', 'typeText', 'ensureRows']) expect(types).not.toContain(t)
+    for (const t of ['mirrorTabUrl', 'typeText', 'ensureRows', 'requireQuota']) expect(types).not.toContain(t)
   })
 })
 
@@ -158,12 +166,16 @@ describe('任务步骤输入 schema', () => {
       addText: '添加商品', confirmText: '确认', min: 1, max: 3, deep: true
     }).success).toBe(true)
     expect(stepInputSchemas.clickByText.safeParse({ text: '发送邀约', deep: true, mode: 'real' }).success).toBe(true)
+    expect(stepInputSchemas.requireQuota.safeParse({ textIncludes: '今日剩余', min: 1, metric: 'invite.quota', deep: true }).success).toBe(true)
+    expect(stepInputSchemas.requireEnabled.safeParse({ text: '确认发送', hint: '额度用尽' }).success).toBe(true)
   })
 
   it('strict 白名单：多余键与非法值被拒', () => {
     expect(stepInputSchemas.typeText.safeParse({ selector: 'a', text: 'x', evil: 'code' }).success).toBe(false)
     expect(stepInputSchemas.clickByText.safeParse({ text: 'x', mode: 'execute' }).success).toBe(false)
     expect(stepInputSchemas.ensureRows.safeParse({ rowsSelector: 'a', max: 1 }).success).toBe(false)
+    expect(stepInputSchemas.requireQuota.safeParse({ textIncludes: 'x' }).success).toBe(false)
+    expect(stepInputSchemas.requireEnabled.safeParse({ text: 'x', extra: 1 }).success).toBe(false)
   })
 
   it('taskCreateSchema 接受完整微信邀约任务', () => {

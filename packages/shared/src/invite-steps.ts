@@ -69,7 +69,11 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   steps.push({ type: 'waitForSelector', input: { selector: p.rowCheckboxSelector }, timeoutMs: 30000 })
   steps.push({ type: 'clickAll', input: { selector: p.rowCheckboxSelector, max: opts.count }, timeoutMs: 120000 })
   steps.push({ type: 'clickByText', input: { text: p.texts.batchInvite } })
-  steps.push({ type: 'waitForSelector', input: { selector: p.scriptSelector }, timeoutMs: 20000 })
+  steps.push({ type: 'waitForSelector', input: { selector: p.scriptSelector }, timeoutMs: 30000 })
+  // 额度先行：抖店不展示剩余额度数字，额度用尽/平台限制表现为抽屉「确认发送」禁用——
+  // 填话术与人工确认之前先校验可用性，额度不足快速如实失败（TASK_QUOTA_EXCEEDED），
+  // 不浪费一轮人工确认，更不会把无效邀约送去发送
+  steps.push({ type: 'requireEnabled', input: { text: p.texts.drawerConfirm, hint: p.quotaNote }, timeoutMs: 30000 })
   if (opts.scriptMode === 'ai') {
     steps.push({
       type: 'aiGenerate',
@@ -112,7 +116,10 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
 export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptions): StepDraft[] {
   const steps: StepDraft[] = [
     { type: 'mirrorTabUrl', input: { urlIncludes: p.inviteUrlMarker }, timeoutMs: 45000 },
-    { type: 'waitForPage', input: { urlIncludes: p.inviteUrlMarker }, timeoutMs: 45000 }
+    { type: 'waitForPage', input: { urlIncludes: p.inviteUrlMarker }, timeoutMs: 45000 },
+    // 额度先行：微信小店页面明示「今日剩余N次邀请机会」，数字 < min（=0）时如实失败，
+    // 不进入填表/发送流程
+    { type: 'requireQuota', input: { textIncludes: p.quota.textIncludes, min: p.quota.min, metric: 'invite.quota', deep: true }, timeoutMs: 30000 }
   ]
   const typeIn = (selector: string, text: string) =>
     steps.push({ type: 'typeText', input: { selector, text, deep: true }, timeoutMs: 30000 })

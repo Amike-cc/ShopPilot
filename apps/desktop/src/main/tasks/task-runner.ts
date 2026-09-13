@@ -324,6 +324,8 @@ function classifyError(e: any): string {
   // 微信小店（assist-form）流程专属：邀约页未打开 / 受信任写入未生效
   if (msg.includes('TASK_INVITE_PAGE_NOT_OPEN')) return 'TASK_INVITE_PAGE_NOT_OPEN'
   if (msg.includes('TASK_INPUT_NOT_APPLIED')) return 'TASK_INPUT_NOT_APPLIED'
+  // 额度预检不过（微信今日剩余不足 / 抖店确认发送禁用等）
+  if (msg.includes('TASK_QUOTA_EXCEEDED')) return 'TASK_QUOTA_EXCEEDED'
   // AI 相关的固定错误码：如实透出，便于界面区分"没配 Key / 地址不合法 / 超时 / 请求失败"
   if (msg.includes('AI_NOT_CONFIGURED')) return 'AI_NOT_CONFIGURED'
   if (msg.includes('AI_BAD_ENDPOINT')) return 'AI_BAD_ENDPOINT'
@@ -710,21 +712,35 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       // 取文本最短的命中项（最具体的那个），再向上找可点击祖先。
       // deep = ShadowRoot 穿透；mode:'real' = 定位后发受信任鼠标点击
       // （微信对框架托管的按钮/复选框，合成 click() 不生效或点到隐藏克隆上，实测必须真实输入）。
+      // 轮询式：SPA 的筛选区/按钮常在导航完成后才渲染（抖店广场实测踩过：单发点击必然撞空），
+      // 在步骤超时内每 300ms 重找一次；找到即点，禁用态立即如实失败。
       const wc = wcOrThrow(run)
       const needle = String(input.text)
       const deep = !!input.deep
       guardSignals(run)
+      const deadline = Date.now() + step.timeoutMs
+      let hit: Awaited<ReturnType<typeof findTextTarget>> | null = null
       if (input.mode === 'real') {
-        const hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText')
-        if (!hit.ok) throw new Error(hit.reason === 'DISABLED'
-          ? `TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`
-          : `TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
+        for (;;) {
+          guardSignals(run)
+          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText')
+          if (hit.ok) break
+          if (hit.reason === 'DISABLED') {
+            throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`)
+          }
+          if (Date.now() >= deadline) {
+            throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
+          }
+          await new Promise(r => setTimeout(r, 300))
+        }
         guardSignals(run)
         realClick(wc, hit.x!, hit.y!)
         guardSignals(run)
         return { kind: 'executed', payload: { action: 'clickByText', matched: needle, clickedText: hit.clickedText, candidates: hit.candidates, mode: 'real' } }
       }
-      const res = await withTimeout(() => wc.executeJavaScript(`(() => {
+      for (;;) {
+        guardSignals(run)
+        const res = await withTimeout(() => wc.executeJavaScript(`(() => {
         ${deep ? ENUM_DEEP_FN : ''}
         const needle = ${JSON.stringify(needle)};
         const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
@@ -748,12 +764,19 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
         const target = hit.closest('button, a, label, [role="button"], [class*="btn"]') || hit;
         target.click();
         return { ok: true, matched: needle, clickedText: String(target.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length };
-      })()`), run, step.timeoutMs, 'clickByText')
-      if (!res || !res.ok) throw new Error(res && res.reason === 'DISABLED'
-        ? `TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`
-        : `TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
-      guardSignals(run)
-      return { kind: 'executed', payload: { action: 'clickByText', matched: needle, clickedText: res.clickedText, candidates: res.candidates } }
+      })()`), run, Math.min(step.timeoutMs, 10000), 'clickByText')
+        if (res && res.ok) {
+          guardSignals(run)
+          return { kind: 'executed', payload: { action: 'clickByText', matched: needle, clickedText: res.clickedText, candidates: res.candidates } }
+        }
+        if (res && res.reason === 'DISABLED') {
+          throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`)
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
+        }
+        await new Promise(r => setTimeout(r, 300))
+      }
     }
     case 'clickAll': {
       // 批量点击并跳过不可用项：达人选人时"已发过消息"的行复选框是 disabled，必须跳过而不是硬点；
@@ -1064,6 +1087,79 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
         throw new Error(`TASK_SELECTOR_CHANGED: 确认后页面仍未见 ${min} 行（当前 ${present}）——请人工确认内容是否添加成功`)
       }
       return { kind: 'executed', payload: { action: 'ensureRows', present, added } }
+    }
+    case 'requireQuota': {
+      // 额度预检（读型）：可见元素自有文本含 textIncludes → 提取第一个数字 → ≥ min 放行。
+      // 微信小店「今日剩余N次邀请机会」是平台唯一明示的额度口径；optional=true 时平台
+      // 不展示额度文案也算通过（payload 如实记录），绝不猜测、不虚构额度。
+      const wc = wcOrThrow(run)
+      const marker = String(input.textIncludes)
+      const min = Number(input.min)
+      const deep = !!input.deep
+      const optional = !!input.optional
+      const deadline = Date.now() + step.timeoutMs
+      let found: string | null = null
+      for (;;) {
+        guardSignals(run)
+        found = await wc.executeJavaScript(`(() => {
+          ${deep ? ENUM_DEEP_FN : ''}
+          const marker = ${JSON.stringify(marker)};
+          for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (!own.includes(marker)) continue;
+            const r = el.getBoundingClientRect();
+            if (!(r.width > 0 && r.height > 0)) continue;
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+            return own;
+          }
+          return null;
+        })()`).catch(() => null)
+        if (found != null) break
+        if (Date.now() >= deadline) break
+        await new Promise(r => setTimeout(r, 300))
+      }
+      guardSignals(run)
+      if (found == null) {
+        if (optional) return { kind: 'executed', payload: { action: 'requireQuota', present: false, min } }
+        throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到含「${marker}」的额度文案（平台可能已改版）`)
+      }
+      const m = /\d+/.exec(found)
+      const quota = m ? parseInt(m[0], 10) : NaN
+      if (!Number.isFinite(quota)) {
+        throw new Error(`TASK_QUOTA_EXCEEDED: 额度文案「${found.slice(0, 60)}」里没有可识别的数字，无法确认可邀约额度`)
+      }
+      if (input.metric) {
+        TaskStore.insertSnapshot(run.storeId, String(input.metric), quota, run.runId)
+      }
+      if (quota < min) {
+        throw new Error(`TASK_QUOTA_EXCEEDED: 可邀约额度不足——页面显示「${found.slice(0, 60)}」（需要 ≥ ${min}），本次邀约已按你的要求在发送前中止`)
+      }
+      return { kind: 'executed', payload: { action: 'requireQuota', present: true, quota, min, text: found.slice(0, 60) } }
+    }
+    case 'requireEnabled': {
+      // 可用性预检（读型）：找文案为 text 的可见按钮，禁用态如实失败。
+      // 抖店不在页面展示剩余邀约额度数字；额度用尽/平台限制的表现是「确认发送」变禁用——
+      // 在打开抽屉后、填话术与门禁之前先校验，额度不足时快速如实失败，不浪费一轮人工确认。
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      const deep = !!input.deep
+      const hint = input.hint ? String(input.hint) : ''
+      const deadline = Date.now() + step.timeoutMs
+      for (;;) {
+        guardSignals(run)
+        const hit = await findTextTarget(wc, run, needle, deep, Math.min(step.timeoutMs, 10000), 'requireEnabled')
+        if (hit.ok) {
+          return { kind: 'executed', payload: { action: 'requireEnabled', text: needle, clickedText: hit.clickedText, candidates: hit.candidates, enabled: true } }
+        }
+        if (hit.reason === 'DISABLED') {
+          throw new Error(`TASK_QUOTA_EXCEEDED: 「${needle}」当前为禁用态——可邀约额度已用尽或平台限制该操作${hint ? '（' + hint + '）' : ''}，本次邀约在发送前中止`)
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的按钮（${hint || '平台可能已改版'}）`)
+        }
+        await new Promise(r => setTimeout(r, 300))
+      }
     }
     default:
       throw new Error(`TASK_INVALID_STEP: 未知步骤类型 ${String(step.type)}`)

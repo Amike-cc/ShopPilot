@@ -506,7 +506,11 @@
             </div>
 
             <div class="cf-btns" style="margin-top:10px">
-              <button class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
+              <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
+              <template v-else>
+                <span class="row-sub" style="align-self:center">邀约进行中 · {{ statusLabel(inviteRun.status) }}</span>
+                <button class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
+              </template>
             </div>
             <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
             </template>
@@ -562,7 +566,11 @@
             </label>
 
             <div class="cf-btns" style="margin-top:10px">
-              <button class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
+              <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
+              <template v-else>
+                <span class="row-sub" style="align-self:center">邀约进行中 · {{ statusLabel(inviteRun.status) }}</span>
+                <button class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
+              </template>
             </div>
             <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
             </template>
@@ -572,18 +580,18 @@
             <div class="env-h">执行说明</div>
             <template v-if="inviteProfile.flow === 'batch-list'">
               <div class="env-note">
-                点「开始邀约」会创建一个受策展任务：进入达人广场 → 选类目与等级 → 搜索 → 勾选前 N 位可邀约达人 → 打开邀约抽屉 → 填话术（手填或 AI 生成）→ 勾权益 → <b>停下等你确认</b> → 才会点「确认发送」。<b>拒绝即整单取消，绝不继续</b>。
+                点「开始邀约」会创建一个受策展任务：进入达人广场 → 选类目与等级 → 搜索 → 勾选前 N 位可邀约达人 → 打开邀约抽屉 → <b>先检测可邀约额度</b>（抖店不展示剩余数字，以抽屉「确认发送」是否可用来判定，不足/受限时如实失败）→ 填话术（手填或 AI 生成）→ 勾权益 → <b>停下等你确认</b> → 才会点「确认发送」。<b>拒绝即整单取消，绝不继续</b>。
               </div>
               <div class="env-note">
-                联系方式（手机号/微信号）与专属推荐商品由平台在抽屉里要求填写：联系方式请在平台侧填好（<b>本应用不保存你的手机号/微信号</b>），商品用平台的"推荐商品"即可。发送不可撤回，并消耗店铺邀约额度。
+                邀约进行中面板会出现「停止邀约」，随时可中止运行。联系方式（手机号/微信号）与专属推荐商品由平台在抽屉里要求填写：联系方式请在平台侧填好（<b>本应用不保存你的手机号/微信号</b>），商品用平台的"推荐商品"即可。发送不可撤回，并消耗店铺邀约额度。频繁自动操作可能触发平台风控验证（如出现验证码请在页面上手动完成后重试）。
               </div>
             </template>
             <template v-else>
               <div class="env-note">
-                点「开始邀约」会创建一个受策展任务：自建标签页镜像你打开的邀约页 → 填联系方式与合作说明（手填，或 AI 按邀约商品生成）→ 确保邀约商品（页面已有则不动）→ <b>停下等你核对</b> → 才会点「发送邀约」，并在平台「确认发送邀约」弹窗上点「确认」。<b>拒绝即整单取消，绝不发送</b>。发送不可撤回，并消耗店铺邀约额度。
+                点「开始邀约」会创建一个受策展任务：自建标签页镜像你打开的邀约页 → <b>先检测可邀约额度</b>（读取页面「今日剩余N次」，为 0 时如实失败）→ 填联系方式与合作说明（手填，或 AI 按邀约商品生成）→ 确保邀约商品（页面已有则不动）→ <b>停下等你核对</b> → 才会点「发送邀约」，并在平台「确认发送邀约」弹窗上点「确认」。<b>拒绝即整单取消，绝不发送</b>。发送不可撤回，并消耗店铺邀约额度。
               </div>
               <div class="env-note">
-                选人由你人工完成（达人详情页 URL 带每人专属 token，软件不猜测、不代选）。任务会<b>把运行标签页切到前台</b>供你核对；发送成功后会自动截图留档（任务详情可查）。
+                选人由你人工完成（达人详情页 URL 带每人专属 token，软件不猜测、不代选）。任务会<b>把运行标签页切到前台</b>供你核对；邀约进行中面板会出现「停止邀约」；发送成功后会自动截图留档（任务详情可查）。
               </div>
             </template>
           </div>
@@ -1598,11 +1606,18 @@ const invite = reactive({
   contact: '',
   wechat: '',
   phone: '',
-  productCount: 1
+  productCount: 1,
+  /** 跨平台不共话术：切到不同平台的店铺时清空脚本（抖店/微信的话术口径不同） */
+  platformKey: ''
 })
 // 店铺/平台变化时把可选项重置为该平台档案的默认值（脚本/联系人保留，避免用户输入被清掉）
 watch(inviteProfile, (p) => {
   if (!p) return
+  if (invite.platformKey !== p.platform) {
+    invite.script = ''
+    invite.scriptMode = 'manual'
+    invite.platformKey = p.platform
+  }
   if (p.flow === 'batch-list') {
     invite.category = p.categories[2] || p.categories[0] || ''
     invite.levels = [...p.levelsWithQuotaHint]
@@ -1645,6 +1660,30 @@ function openInvitePage() {
  * 步骤序列构造已下沉到 shared/invite-steps.ts（渲染层与单测共用，平台流程相互独立）。
  * 这里只负责把面板配置收拢成对应流程的 options。
  */
+/** 当前店铺是否有邀约任务在途（排队/运行/等确认/暂停）：有则面板显示「停止邀约」并禁用「开始」 */
+const ACTIVE_RUN_STATES = ['queued', 'running', 'waiting_confirmation', 'paused']
+const inviteRun = computed(() => {
+  const sid = ws.displayedStoreId
+  if (!sid) return null
+  for (const t of ws.tasks) {
+    if (t.storeScope !== sid || !t.name.startsWith('达人邀约 ·')) continue
+    const run = t.latestRun
+    if (!run) continue
+    const st = ws.runLive[run.id]?.status || run.status
+    if (ACTIVE_RUN_STATES.includes(st)) return { taskId: t.id, runId: run.id, status: st }
+  }
+  return null
+})
+
+async function stopInvite() {
+  const run = inviteRun.value
+  if (!run) return
+  const res = await window.shopilot.task.cancel(run.runId)
+  if (res.ok) ws.toast('已请求停止邀约，运行将尽快取消', 'info')
+  else ws.toast('停止邀约失败: ' + res.error.message, 'error')
+  await ws.refreshTasks()
+}
+
 async function startInvite() {
   const p = inviteProfile.value
   if (!p || !inviteReady.value) return
@@ -1670,7 +1709,7 @@ async function startInvite() {
   const started = await window.shopilot.task.run(created.data.id)
   if (!started.ok) { ws.toast('启动邀约任务失败: ' + started.error.message, 'error'); return }
   ws.toast('邀约任务已启动：点「发送」前会先停下让你确认', 'success')
-  taskTab.value = 'tasks'
+  // 留在邀约面板：进行中状态与「停止邀约」按钮就地可见（任务详情在「任务列表」页签可查）
   await ws.refreshTasks()
 }
 

@@ -70,7 +70,11 @@ export interface BatchInviteProfile extends InviteProfileBase {
     search: string
     batchInvite: string
     confirmSend: string
+    /** 抽屉内确认按钮（打开抽屉后先校验它可用=额度/平台未拦截，再填话术走门禁） */
+    drawerConfirm: string
   }
+  /** 额度预检提示（抖店不在页面展示剩余额度数字，额度用尽表现为按钮禁用） */
+  quotaNote: string
 }
 
 /**
@@ -108,6 +112,8 @@ export interface AssistInviteProfile extends InviteProfileBase {
   }
   /** 每日额度提示（实测页面文案，供界面展示；额度随经营情况变化） */
   dailyQuotaHint: string
+  /** 额度预检锚点：页面明示「今日剩余N次邀请机会」，取其中数字 ≥ min 才进行邀约 */
+  quota: { textIncludes: string; min: number }
 }
 
 export type InviteProfile = BatchInviteProfile | AssistInviteProfile
@@ -144,8 +150,10 @@ const DOUDIAN: BatchInviteProfile = {
     levelTrigger: '达人等级',
     search: '搜索',
     batchInvite: '批量邀约带货',
-    confirmSend: '确认发送'
-  }
+    confirmSend: '确认发送',
+    drawerConfirm: '确认发送'
+  },
+  quotaNote: '抖店不在页面展示剩余邀约额度；流程会在打开邀约抽屉后先校验「确认发送」是否可用，额度用尽/平台限制时如实失败'
 }
 
 /**
@@ -177,7 +185,8 @@ const WEIXIN: AssistInviteProfile = {
     confirmSend: '确认',
     dialogMarker: '确认发送邀约'
   },
-  dailyQuotaHint: '每日 200 次邀请额度'
+  dailyQuotaHint: '每日 200 次邀请额度',
+  quota: { textIncludes: '今日剩余', min: 1 }
 }
 
 /** 已实现的平台档案（每个平台流程独立；后续按平台扩展只需在此追加） */

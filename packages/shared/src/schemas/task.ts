@@ -32,7 +32,14 @@ export const TASK_STEP_TYPES = [
   'waitForText',
   // 确保页面可见行数 ≥ min：已有则不动；没有才点 addText 入口 → 弹窗勾选未选项（≤max）→
   // 点 confirmText → 复核。用于"邀约商品"（页面已有商品则不重复添加）
-  'ensureRows'
+  'ensureRows',
+  // 额度预检：在可见元素自有文本里找 textIncludes，提取其中数字，≥ min 才放行；
+  // 不足如实报 TASK_QUOTA_EXCEEDED（微信小店「今日剩余N次邀请机会」）。optional=true 时
+  // 平台不展示额度则放行（payload 如实记录 present:false）
+  'requireQuota',
+  // 可用性预检：找文案为 text 的可见按钮，若处于禁用态（额度用尽/平台限制）如实报
+  // TASK_QUOTA_EXCEEDED——用于抖店抽屉「确认发送」（抖店不在页面展示剩余额度数字）
+  'requireEnabled'
 ] as const
 
 export type TaskStepType = (typeof TASK_STEP_TYPES)[number]

@@ -62,6 +62,20 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     min: z.number().int().min(0).max(100).optional(),
     max: z.number().int().min(1).max(100),
     deep: z.boolean().optional()
+  }).strict(),
+  // 额度预检（读型步骤，无副作用）：文本含 textIncludes 的可见元素里提取数字 ≥ min
+  requireQuota: z.object({
+    textIncludes: z.string().min(1).max(100),
+    min: z.number().int().min(0).max(100000),
+    optional: z.boolean().optional(),
+    metric: z.string().min(1).max(60).optional(),
+    deep: z.boolean().optional()
+  }).strict(),
+  // 可用性预检（读型步骤）：文案为 text 的可见按钮若禁用则如实失败
+  requireEnabled: z.object({
+    text: z.string().min(1).max(200),
+    deep: z.boolean().optional(),
+    hint: z.string().max(200).optional()
   }).strict()
 }
 
@@ -81,7 +95,9 @@ export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
   mirrorTabUrl: 45000,
   typeText: 30000,
   waitForText: 30000,
-  ensureRows: 120000
+  ensureRows: 120000,
+  requireQuota: 30000,
+  requireEnabled: 20000
 }
 
 export const taskCreateSchema = z.object({

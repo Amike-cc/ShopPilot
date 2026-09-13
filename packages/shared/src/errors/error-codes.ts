@@ -89,6 +89,11 @@ export const ERROR_CODES = {
     message: '受信任输入写入未生效',
     retryable: false
   },
+  TASK_QUOTA_EXCEEDED: {
+    code: 'TASK_QUOTA_EXCEEDED',
+    message: '可邀约额度不足或平台限制该操作',
+    retryable: false
+  },
   TASK_NOT_FOUND: {
     code: 'TASK_NOT_FOUND',
     message: '任务或运行记录不存在',
