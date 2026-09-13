@@ -373,10 +373,21 @@
         </div>
       </div>
 
-      <!-- 任务面板 - §4.4 / §6.6（二级页签：任务列表 / 达人邀约） -->
+      <!-- 任务面板 - §4.4 / §6.6（二级页签：达人邀约 / 待开发占位）
+           二级页签刻意不用 .panel-tabs：那一行是标题栏拖拽区（还给 WCO 留了 140px），
+           内容区里的页签不该抢拖拽、也不该留白 -->
       <div class="panel-body env-body" v-else>
+        <div class="sub-tabs" data-test="task-subtabs">
+          <button
+            v-for="st in TASK_SUB_TABS" :key="st.key"
+            :class="['stab', { on: taskSubTab === st.key }]"
+            :data-test="'task-subtab-' + st.key"
+            @click="taskSubTab = st.key"
+          >{{ st.label }}<span v-if="st.pending" class="stab-dot" title="功能开发中"></span></button>
+        </div>
+
         <!-- 达人邀约：按店铺平台匹配平台档案；本版只有抖店，其余平台明确拒绝 -->
-        <div class="sub-pane" data-test="invite-panel">
+        <div class="sub-pane" v-show="taskSubTab === 'invite'" data-test="invite-panel">
           <div class="env-sec" v-if="!inviteProfile">
             <div class="env-h">达人邀约</div>
             <div class="empty-hint" style="padding:14px 8px">
@@ -591,6 +602,25 @@
             </template>
           </div>
           </template>
+        </div>
+
+        <!-- 待开发占位页签：先把信息层级占住（与达人邀约同级、同样按店铺执行），
+             确定要做哪一项后直接在这里落内容，页签结构不用再改 -->
+        <div class="sub-pane" v-show="taskSubTab === 'todo'" data-test="todo-panel">
+          <div class="env-sec">
+            <div class="env-h">待开发<span class="row-sub"> · 本页签预留</span></div>
+            <div class="empty-hint" style="padding:14px 8px">
+              这里预留给下一项任务类功能，<b>尚未开发</b>。
+            </div>
+            <div class="env-note">
+              位置与「达人邀约」同级、同样按店铺独立执行，并沿用同一套约束：走任务引擎白名单步骤、
+              发送/提交类动作<b>前置人工确认门禁</b>、结果与截图落库留档、失败如实回报。
+            </div>
+            <div class="env-note">
+              想好要做哪一项（例如：批量商品操作、消息/评论批量回复、数据定时采集等）后告诉我，
+              我按平台档案的形式接入——界面结构已经留好，不需要再动面板布局。
+            </div>
+          </div>
         </div>
       </div>
       </template>
@@ -1678,6 +1708,15 @@ refreshBackups()
 watch(() => ws.displayedStoreId, () => { verifyItems.value = []; detailTaskId.value = null; if (ws.rightPanel === 'env') refreshEnv() })
 
 // ---------- 任务面板（§4.4 预定义步骤 / §6.6 事件） ----------
+/**
+ * 任务面板的二级页签：新增任务类功能时在这里加一条即可（面板结构不用动）。
+ * pending=true 的页签是占位——只说明"位置留好了"，不代表已有能力。
+ */
+const TASK_SUB_TABS = [
+  { key: 'invite' as const, label: '达人邀约', pending: false },
+  { key: 'todo' as const, label: '待开发', pending: true }
+]
+const taskSubTab = ref<'invite' | 'todo'>('invite')
 /** 任务功能对应每个店铺：任务列表只显示当前显示店铺的任务（引擎侧仍存全量，仅界面按店铺隔离）。
  *  达人邀约是独立功能——邀约运行（名称前缀「达人邀约 ·」）不进任务列表，只在邀约面板的「邀约记录」里展示；
  *  未打开店铺时显示历史遗留的"未绑定店铺"任务（新任务一律绑定店铺） */
@@ -2805,6 +2844,12 @@ onBeforeUnmount(() => {
 .stab.on { color: #fff; border-bottom-color: var(--color-primary); }
 .settings-modal { width: 520px; }
 .sub-pane { display: flex; flex-direction: column; }
+/* 任务面板的二级页签：内容区自己的页签行（不参与标题栏拖拽、不占 WCO 那 140px 留白） */
+.sub-tabs { display: flex; align-items: center; gap: 4px; margin: 0 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--color-border); }
+.sub-tabs .stab { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 3px 9px; border-radius: var(--radius-sm); color: var(--color-text-secondary); }
+.sub-tabs .stab:hover { background: var(--color-bg-tertiary); }
+.sub-tabs .stab.on { color: #fff; background: var(--color-primary); }
+.sub-tabs .stab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-warning, #d9a441); }
 /* 达人邀约面板：全部按 [data-test="invite-panel"] 作用域限定，
    避免历史上"通用 .env-sec input 撑爆布局"那类连带影响（右栏只有 320px 宽） */
 [data-test="invite-panel"] .inv-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; color: var(--color-text-secondary); }
