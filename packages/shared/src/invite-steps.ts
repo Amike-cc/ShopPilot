@@ -244,7 +244,9 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
   return [{
     type: 'loop',
     input: {
-      label: `${contactDesc} · 逐个邀约${productIds.length ? ` · 商品ID ${productIds.join('/')}` : ''}`,
+      // label 上限 60 字（Zod）：联系人/微信/手机都可能很长，这里必须截断——
+      // 实测超限会让任务创建整单被拒，而失败提示不易察觉，表现成"点开始邀约没反应"
+      label: (`${contactDesc} · 逐个邀约${productIds.length ? ` · 商品ID ${productIds.join('/')}` : ''}`).slice(0, 60),
       maxRounds: ASSIST_LOOP_MAX_ROUNDS,
       stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL'],
       steps: round

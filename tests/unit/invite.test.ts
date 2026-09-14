@@ -376,4 +376,24 @@ describe('任务步骤输入 schema', () => {
     })
     expect(parsed.success).toBe(true)
   })
+
+  it('长联系方式也必须能建（loop.label 上限 60 字——实测超限会让创建整单被拒）', () => {
+    const steps = buildAssistSteps(WX as any, {
+      contact: '深圳市宝安区某某贸易商行客服部张经理',
+      wechat: 'wxid_very_long_account_name_001',
+      phone: '13800000000',
+      script: '话术', scriptMode: 'manual', productCount: 1,
+      productIds: ['10000687986563', '10000687986564'],
+      finderType: '直播带货者', finderCategories: ['母婴', '美妆护肤'], finderOtherFilters: ['有联系方式']
+    }, 'https://store.weixin.qq.com/shop/findersquare/find')
+    const label = String(steps[0].input.label)
+    expect(label.length).toBeLessThanOrEqual(60)
+    const parsed = taskCreateSchema.safeParse({
+      name: '达人邀约 · 微信小店 · 逐个邀约 · 长联系方式',
+      storeScope: 'store_x',
+      steps
+    })
+    if (!parsed.success) console.error(parsed.error.issues.slice(0, 5))
+    expect(parsed.success).toBe(true)
+  })
 })

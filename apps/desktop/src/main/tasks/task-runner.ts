@@ -494,7 +494,7 @@ const SCOPE_FN = `
 async function findTextTarget(
   wc: Electron.WebContents, run: RunHandle, needle: string, deep: boolean, timeoutMs: number, label: string,
   within?: { selector?: string; text?: string; climb?: number }
-): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number }> {
+): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string }> {
   return withTimeout(() => wc.executeJavaScript(`(() => {
     ${deep ? ENUM_DEEP_FN : ''}
     ${VISIBLE_JS}
@@ -524,7 +524,24 @@ async function findTextTarget(
     if (dis) return { ok: false, reason: 'DISABLED' };
     hit.scrollIntoView({ block: 'center' });
     const r = hit.getBoundingClientRect();
-    return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length };
+    // 真实鼠标点击要落在"没被遮挡"的点上：窗口较窄时平台页面会重叠（实测微信广场
+    // 「美妆护肤」/「详情」整块被别的筛选块压住，按中心点会点在浮层上、点击静默失效）。
+    // 在元素矩形内取多个采样点，用 elementFromPoint（穿 ShadowRoot）确认命中的是目标
+    // 自身/其后代/同一 label；全被遮挡则如实报 COVERED（由调用方决定重试或失败）。
+    const deepAt = (x, y) => { let el = document.elementFromPoint(x, y); while (el && el.shadowRoot) { const inner = el.shadowRoot.elementFromPoint(x, y); if (!inner || inner === el) break; el = inner } return el };
+    const labelEl = hit.closest('label') || hit.parentElement || hit;
+    const xs = [0.12, 0.3, 0.5, 0.7, 0.88].map(f => Math.round(r.left + r.width * f));
+    const ys = [0.5, 0.25, 0.75].map(f => Math.round(r.top + r.height * f));
+    for (const x of xs) {
+      for (const y of ys) {
+        const at = deepAt(x, y);
+        if (at && (at === hit || hit.contains(at) || at.contains(hit) || labelEl.contains(at) || at.contains(labelEl))) {
+          return { ok: true, x, y, clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length };
+        }
+      }
+    }
+    const blocker = deepAt(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    return { ok: false, reason: 'COVERED', coveredBy: blocker ? blocker.tagName + '.' + String(blocker.className || '').slice(0, 40) : 'unknown' };
   })()`), run, timeoutMs, label)
 }
 
@@ -792,6 +809,7 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       guardSignals(run)
       const deadline = Date.now() + step.timeoutMs
       let sawScopeMiss = false
+      let sawCoveredBy: string | null = null
       let hit: Awaited<ReturnType<typeof findTextTarget>> | null = null
       if (input.mode === 'real') {
         for (;;) {
@@ -805,7 +823,12 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
           // （实测真店"点开始邀约"就折在这里——第一步点类目时 .quick-filter-button-enums 还不存在）。
           // 与"没找到元素"一样在超时内轮询等待，超时仍没有才算真的找不到。
           sawScopeMiss = sawScopeMiss || hit.reason === 'SCOPE_NOT_FOUND'
+          // COVERED：目标被别的浮层压住（窄窗口下平台布局重叠，实测踩过）→ 超时内轮询等它露出来
+          if (hit.reason === 'COVERED') sawCoveredBy = hit.coveredBy || 'unknown'
           if (Date.now() >= deadline) {
+            if (sawCoveredBy) {
+              throw new Error(`TASK_TARGET_COVERED: 「${needle}」被「${sawCoveredBy}」遮挡，点不到——请把店铺窗口拉宽一些让页面不再重叠后重试`)
+            }
             if (sawScopeMiss) {
               throw new Error(`TASK_SELECTOR_CHANGED: 超时内未出现「${needle}」的限定范围（${JSON.stringify(within)}）`)
             }
