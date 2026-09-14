@@ -83,8 +83,15 @@ export async function restoreStoreSession(storeId: string): Promise<number> {
       try {
         // 与"导入会话包"同一套字段映射（url 由 domain+path 推出来，Electron 要求 url 合法）
         const url = `${c.secure ? 'https' : 'http'}://${String(c.domain).replace(/^\./, '')}${c.path || '/'}`
+        // **保真域作用域**：带前导点的才是"域 Cookie"（对该域及其子域生效）；
+        // 不带点的是 **host-only**（只对该主机生效，实测微信的登录凭据就是这种）。
+        // 若一律把 domain 传进去，Electron/Chromium 会把 host-only 存成域 Cookie——
+        // 作用域被悄悄放宽（凭据可能被发到子域），实测踩过。
+        // 所以：host-only 时不传 domain，让 url 决定（Chromium 就存成 host-only）。
+        const hostOnly = !String(c.domain).startsWith('.')
         await ses.cookies.set({
-          url, name: c.name, value: c.value, domain: c.domain, path: c.path || '/',
+          url, name: c.name, value: c.value, path: c.path || '/',
+          ...(hostOnly ? {} : { domain: c.domain }),
           secure: c.secure, httpOnly: c.httpOnly,
           expirationDate: undefined,
           sameSite: (c.sameSite as any) || undefined
