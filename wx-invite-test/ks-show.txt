@@ -1,0 +1,4 @@
+打开的弹层: {"invoice":true,"dc":false}
+显示店铺: 福气满满
+页面地址: https://login.kwaixiaodian.com/?biz=zone&redirect_url=https%3A%2F%2Fs.kwaixiaodian.com%2Fz
+视口: 0x0 vis=hidden

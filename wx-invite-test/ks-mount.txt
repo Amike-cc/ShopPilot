@@ -1,0 +1,12 @@
+=== 渲染层弹层状态 ===
+{"invoiceModal":false,"dataModal":false,"settings":false,"createDialog":false,"trash":false}
+
+=== 店铺视图挂载状态 ===
+null
+
+=== 显式请求恢复视图挂载 ===
+{"ok":true,"data":{"obscured":false},"requestId":"8804ca67-c98f-4418-b216-057e577ff6ec"}
+
+=== 快手页面 ===
+地址: https://login.kwaixiaodian.com/?biz=zone&redirect_url=https%3A%2F%2Fs.kwaixiaodi
+视口: 0x0 vis=hidden
