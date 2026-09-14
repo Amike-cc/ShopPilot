@@ -1,0 +1,10 @@
+=== ① 打开达人广场（未登录） ===
+调用前先确认活动页是店铺页（非广场）
+标签页: ["https://store.weixin.qq.com/shop/home","https://store.weixin.qq.com/shop/findersquare/finder-de"]
+prepareInviteSquare 返回: {"ok":true,"data":{"tabId":"tab_f7cd1031c7748bcfdf39e9f090118200","applied":true,"finderType":{"name":"直播带货者","ok":true},"categories":[{"name":"母婴","ok":true}],"otherFilters":[{"name":"有联系方式","ok":true}]},"requestId":"c21dd098-8868-485a-9234-95b17da856b0"}
+（返回 ok=true —— 可能仍处于登录态）
+
+=== ② 任务引擎在未登录时的失败信息是否可读 ===
+create: {"ok":true,"taskId":"task_3f5ed5786a0d57877993f25a"}
+run: {"ok":true}
+结果: {"status":"succeeded","code":null,"msg":null,"runId":"run_22ab6cd8cc6442aa141be6e4"}

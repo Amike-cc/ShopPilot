@@ -197,9 +197,15 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
   // 另一个实测坑：详情页刚到时按钮已在 DOM 里（waitForText 立刻通过），但 SPA 还没挂上事件——
   // 此时点击会被丢弃。固定 sleep 不可靠（实测 3s 失败 / 4s 成功），所以用 waitUrl：
   // 点击后轮询地址，没跳到表单页就重新定位再点一次，最多 4 次。
+  // missingCode：这一位达人的详情页微应用没渲染出来（按钮压根不存在）→ 交给 onCode 跳过换人，
+  // 不要与"列表到头"（TASK_SELECTION_SHORTFALL，应收工）混为一谈。
   round.push({
     type: 'clickByText',
-    input: { text: '邀请带货', deep: true, mode: 'real', waitUrl: { includes: p.inviteUrlMarker, attempts: 4 } },
+    input: {
+      text: '邀请带货', deep: true, mode: 'real',
+      missingCode: 'TASK_DAREN_PAGE_UNOPENABLE',
+      waitUrl: { includes: p.inviteUrlMarker, attempts: 4 }
+    },
     timeoutMs: 60000
   })
   round.push({ type: 'waitForPage', input: { urlIncludes: p.inviteUrlMarker }, timeoutMs: 45000 })
@@ -289,24 +295,40 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
         // 收工条件：额度用完 / 翻到最后一页也没有新候选（onCode 里点不动「下一页」时会报它）
         stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL'],
         // 本页候选都点过了 → 点「下一页」再重试；「下一页」点不动（最后一页）→ 交给 stopOn 收工
-        onCode: [{
-          code: 'TASK_PAGE_EXHAUSTED',
-          limit: 10,
-          steps: [
-            {
-              type: 'clickByText',
-              input: {
-                text: '下一页', deep: true, mode: 'real',
-                // 找不到「下一页」（页面还没渲染完）→ 也当作"没有更多候选"收工，而不是报选择器改版
-                missingCode: 'TASK_SELECTION_SHORTFALL',
-                // 最后一页按钮会置灰：那个"禁用"就是"没有更多了"，同样干净收工
-                disabledCode: 'TASK_SELECTION_SHORTFALL'
+        onCode: [
+          {
+            code: 'TASK_PAGE_EXHAUSTED',
+            limit: 10,
+            steps: [
+              {
+                type: 'clickByText',
+                input: {
+                  text: '下一页', deep: true, mode: 'real',
+                  // 找不到「下一页」（页面还没渲染完）→ 也当作"没有更多候选"收工，而不是报选择器改版
+                  missingCode: 'TASK_SELECTION_SHORTFALL',
+                  // 最后一页按钮会置灰：那个"禁用"就是"没有更多了"，同样干净收工
+                  disabledCode: 'TASK_SELECTION_SHORTFALL'
+                },
+                timeoutMs: 20000
               },
-              timeoutMs: 20000
-            },
-            { type: 'waitMs', input: { ms: 2500 }, timeoutMs: 15000 }
-          ]
-        }],
+              { type: 'waitMs', input: { ms: 2500 }, timeoutMs: 15000 }
+            ]
+          },
+          {
+            // 这一位达人打不开：实测详情页微应用的子应用 HTML 被平台拒绝（控制台
+            // `[micro-app] app findersquare: html is empty` + HTTP 403），<micro-app> 压根不挂载。
+            // 连续快速逐位邀约会触发平台限流；实测等约 1–2 分钟后同一地址又能正常打开。
+            // 所以这里**退避后重试同一位**（不消耗候选、也不会漏人），而不是跳过：
+            // limit=6 次退避仍打不开才放弃这一位（连续打不开同样会耗尽上限而停下）。
+            code: 'TASK_DAREN_PAGE_UNOPENABLE',
+            limit: 6,
+            restart: true,
+            steps: [
+              { type: 'useTab', input: { path: squarePath }, timeoutMs: 30000 },
+              { type: 'waitMs', input: { ms: 20000 }, timeoutMs: 30000 }
+            ]
+          }
+        ],
         steps: round
       }
     }

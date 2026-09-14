@@ -20,8 +20,8 @@ const ROUND = [
     timeoutMs: 40000
   },
   { type: 'waitForPage', input: { urlIncludes: 'finder-detail' }, timeoutMs: 45000 },
-  { type: 'waitMs', input: { ms: 3000 }, timeoutMs: 20000 },
-  { type: 'clickByText', input: { text: '邀请带货', deep: true, mode: 'real' }, timeoutMs: 30000 },
+  // 与修复后的产品流程一致：点击后校验地址，没跳就重试（不靠固定 sleep）
+  { type: 'clickByText', input: { text: '邀请带货', deep: true, mode: 'real', waitUrl: { includes: 'initiate-invite', attempts: 4 } }, timeoutMs: 60000 },
   { type: 'waitForPage', input: { urlIncludes: 'initiate-invite' }, timeoutMs: 45000 },
   { type: 'screenshot', input: {}, timeoutMs: 20000 },
   { type: 'useTab', input: { path: SQUARE_PATH }, timeoutMs: 30000 }

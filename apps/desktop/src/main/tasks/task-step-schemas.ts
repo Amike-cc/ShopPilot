@@ -198,7 +198,14 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
       // 恢复动作（如「点下一页」）；同样逐条走白名单校验
       steps: z.array(taskStepSchema).min(1).max(10),
       // 本轮内最多恢复几次（防止"翻页点不动"时空转）
-      limit: z.number().int().min(1).max(10).optional()
+      limit: z.number().int().min(1).max(10).optional(),
+      /**
+       * restart=true：命中后**重开本轮**（而不是重试当前子步骤）。
+       * 用途：这一位达人打不开（平台间歇性渲染失败）→ 记下他、回广场取下一位继续。
+       * limit 在 restart 语义下表示"**连续**跳过多少轮后放弃"（跨轮累计，成功一轮即清零），
+       * 防止平台整体故障时静默跳过所有人。
+       */
+      restart: z.boolean().optional()
     }).strict()).max(4).optional(),
     // 一轮动作的步骤数上限：抖店一轮 ≈ 17–28 步（含多等级/多权益），给到 40 步余量
     steps: z.array(taskStepSchema).min(1).max(40)

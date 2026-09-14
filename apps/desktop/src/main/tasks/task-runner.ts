@@ -351,6 +351,9 @@ function classifyError(e: any): string {
   // 当前分页里的候选都已处理过（微信广场每次加载都洗牌、分页 20 条/页）：
   // 由 loop 的 onCode 恢复步骤「点下一页」消化掉；翻到最后一页仍取不出 → 由 stopOn 收工
   if (msg.includes('TASK_PAGE_EXHAUSTED')) return 'TASK_PAGE_EXHAUSTED'
+  // 这一位达人的详情页打不开（微应用间歇性不渲染，「邀请带货」按钮不存在）：
+  // 由 loop 的 onCode restart 规则跳过换人（连续多位都这样才会停）
+  if (msg.includes('TASK_DAREN_PAGE_UNOPENABLE')) return 'TASK_DAREN_PAGE_UNOPENABLE'
   // 店铺浏览器/任务标签页被关闭（此前落进 INTERNAL_ERROR，看不出真实原因）
   if (msg.includes('BROWSER_CLOSED')) return 'BROWSER_CLOSED'
   // AI 相关的固定错误码：如实透出，便于界面区分"没配 Key / 地址不合法 / 超时 / 请求失败"
@@ -1105,6 +1108,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const onCode = onCodeRaw.map((o: any) => ({
         code: String(o?.code || ''),
         limit: Number(o?.limit) > 0 ? Number(o.limit) : 3,
+        restart: o?.restart === true,
         steps: (Array.isArray(o?.steps) ? o.steps : []).map((c: any) => ({
           ...c,
           timeoutMs: Number(c?.timeoutMs) > 0 ? Number(c.timeoutMs) : (DEFAULT_STEP_TIMEOUT[c?.type] ?? 15000)
@@ -1115,6 +1119,9 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const summary: any[] = []
       let completedRounds = 0
       let stopReason: string | null = null
+      /** restart 规则的**连续**跳过计数（跨轮累计，成功一轮清零）——用来识别"平台整体不可用" */
+      let skipStreak = 0
+      let skippedTotal = 0
       let lastArtifact: { path: string; sha256: string } | undefined
       roundLoop: for (let round = 1; round <= maxRounds; round++) {
         guardSignals(run)
@@ -1123,6 +1130,10 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         let childType = ''
         let recovered = 0
         const recoveryLog: string[] = []
+        // 本轮新记下的"已访问"行：**一轮整体成功才提交**。
+        // 若本轮中途回退重做（如达人详情页打不开），把这些行回滚掉——
+        // 否则那位达人会被永久记成"已邀约过"，限流恢复后也不会再被选中（等于凭空漏掉一位）。
+        const visitedSnapshot = new Set(run.visitedRows)
         try {
           for (childIdx = 0; childIdx < nested.length; childIdx++) {
             for (;;) {
@@ -1136,12 +1147,22 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
               } catch (ce: any) {
                 if (ce?.name === 'CancelSignal' || ce?.name === 'PauseSignal') throw ce
                 const hitRule = onCode.find((o: any) => o.code === classifyError(ce))
-                if (!hitRule || recovered >= hitRule.limit) throw ce
+                if (!hitRule) throw ce
+                // restart 规则：跳过这一位/这一页，重开本轮（limit 是"连续跳过上限"）
+                // 非 restart 规则：重试当前子步骤（limit 是"本轮恢复次数上限"）
+                const overLimit = hitRule.restart ? skipStreak >= hitRule.limit : recovered >= hitRule.limit
+                if (overLimit) {
+                  if (hitRule.restart) {
+                    throw new Error(`连续 ${skipStreak} 轮命中 ${hitRule.code}（累计跳过 ${skippedTotal} 位），疑似平台整体异常，停止以免静默跳过所有人：${String(ce?.message || ce)}`)
+                  }
+                  throw ce
+                }
+                if (hitRule.restart) skipStreak++
                 recovered++
-                recoveryLog.push(`第 ${round} 轮「${child.type}」命中 ${hitRule.code} → 执行恢复步骤（第 ${recovered} 次）`)
+                recoveryLog.push(`第 ${round} 轮「${child.type}」命中 ${hitRule.code} → ${hitRule.restart ? '跳过并重开本轮' : '执行恢复步骤'}（第 ${recovered} 次）`)
                 emitProgress(run, {
                   phase: 'retry', stepIndex: parentIndex, stepType: child.type,
-                  message: `第 ${round} 轮命中 ${hitRule.code} → 恢复后重试（第 ${recovered}/${hitRule.limit} 次）`
+                  message: `第 ${round} 轮命中 ${hitRule.code} → ${hitRule.restart ? `本轮回退重做（连续 ${skipStreak}/${hitRule.limit}）` : `恢复后重试（第 ${recovered}/${hitRule.limit} 次）`}`
                 })
                 for (const rs of hitRule.steps) {
                   guardSignals(run)
@@ -1166,6 +1187,14 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
                     throw re
                   }
                 }
+                if (hitRule.restart) {
+                  // 重开本轮：把子步骤游标退回起点，并**回滚本轮的"已访问"记录**——
+                  // 这样重试时还会选中同一位达人（限流恢复后能补上，不会凭空漏人）。
+                  skippedTotal++
+                  run.visitedRows = new Set(visitedSnapshot)
+                  childIdx = -1
+                  break
+                }
                 continue // 恢复完成 → 重试本轮同一个子步骤
               }
               if (out?.artifact) lastArtifact = out.artifact
@@ -1175,6 +1204,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           }
           if (run.deniedByConfirm) break
           completedRounds = round
+          skipStreak = 0 // 成功一轮 → 连续跳过计数清零（只有"连续"失败才判定平台整体异常）
           summary.push({ round, ok: true, ms: Date.now() - startedAt, ...(recoveryLog.length ? { recovered: recoveryLog } : {}) })
           emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮完成` })
         } catch (e: any) {

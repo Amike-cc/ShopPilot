@@ -125,7 +125,7 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect(round.length).toBeLessThanOrEqual(40)
   })
 
-  it('本页取不出人 → onCode 点「下一页」重试；翻不动 → 由 stopOn 收工', () => {
+  it('本页取不出人 → onCode 点「下一页」重试；单个人打不开 → 跳过换人；翻不动 → 由 stopOn 收工', () => {
     const steps = buildAssistSteps(WX as any, base, SQUARE)
     const { loop } = wxParts(steps)
     const rule = (loop.input.onCode || []).find((r: any) => r.code === 'TASK_PAGE_EXHAUSTED')!
@@ -137,6 +137,14 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect(next.input.missingCode).toBe('TASK_SELECTION_SHORTFALL')
     expect(next.input.disabledCode).toBe('TASK_SELECTION_SHORTFALL')
     expect(loop.input.stopOn).toContain('TASK_SELECTION_SHORTFALL')
+    // 单个达人详情页打不开（微应用间歇性不渲染）→ restart 跳过换人，且带连续跳过上限
+    const skip = (loop.input.onCode || []).find((r: any) => r.code === 'TASK_DAREN_PAGE_UNOPENABLE')!
+    expect(skip).toBeTruthy()
+    expect(skip.restart).toBe(true)
+    expect(skip.limit).toBeGreaterThan(1)
+    expect(skip.steps.some((s: any) => s.type === 'useTab')).toBe(true)
+    // "列表到头"（SELECTION_SHORTFALL）不能配 restart，否则永远收不了尾
+    expect((loop.input.onCode || []).some((r: any) => r.code === 'TASK_SELECTION_SHORTFALL')).toBe(false)
   })
 
   it('筛选在开头应用一次；点不到「详情」=本页取不出（翻页恢复）', () => {
@@ -167,6 +175,8 @@ describe('微信小店（assist-form）步骤构造', () => {
     // 点击可能被"SPA 还没挂事件"吃掉（实测 3s 失败 / 4s 成功）→ 用 waitUrl 轮询地址并在未跳转时重试点击
     expect(invite.input.waitUrl).toMatchObject({ includes: 'initiate-invite' })
     expect((invite.input.waitUrl as any).attempts).toBeGreaterThan(1)
+    // 这一位打不开（微应用没渲染、按钮不存在）要报专属码，才能被 onCode 跳过换人而不是整批中断
+    expect(invite.input.missingCode).toBe('TASK_DAREN_PAGE_UNOPENABLE')
     expect(texts).toContain('邀请带货')
     // 轮内仍应等待详情页/表单页
     for (const inc of ['finder-detail', 'initiate-invite']) {
