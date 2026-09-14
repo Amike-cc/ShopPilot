@@ -1,0 +1,92 @@
+{
+ "url": "https://fxg.jinritemai.com/ffa/mshop/homepage/index",
+ "deep": false,
+ "res": [
+  {
+   "label": "成交金额",
+   "candidates": 2,
+   "value": "¥29.96 构成 较昨日 71.99% 结算金额¥29.96 分析近7天成交",
+   "cardText": "成交金额 ¥29.96 构成 较昨日 71.99% 结算金额¥29.96 分析近7天成交",
+   "why": "ok"
+  },
+  {
+   "label": "支付金额",
+   "candidates": 7,
+   "value": "2500+",
+   "cardText": "支付金额 2500+",
+   "why": "ok"
+  },
+  {
+   "label": "订单数",
+   "candidates": 3,
+   "value": "成交",
+   "cardText": "成交订单数",
+   "why": "ok"
+  },
+  {
+   "label": "支付订单数",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "成交订单数",
+   "candidates": 1,
+   "value": "3 较昨日 25.00% 同行标杆值9 卖得好的商品",
+   "cardText": "成交订单数 3 较昨日 25.00% 同行标杆值9 卖得好的商品",
+   "why": "ok"
+  },
+  {
+   "label": "退款金额",
+   "candidates": 5,
+   "value": "TOP退款原因 原因分析",
+   "cardText": "TOP退款原因 原因分析 退款金额",
+   "why": "ok"
+  },
+  {
+   "label": "销量",
+   "candidates": 6,
+   "value": "高",
+   "cardText": "销量高",
+   "why": "ok"
+  },
+  {
+   "label": "成交件数",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "商品销量",
+   "candidates": 1,
+   "value": "达人精准匹配，引爆",
+   "cardText": "达人精准匹配，引爆商品销量",
+   "why": "ok"
+  },
+  {
+   "label": "订单量",
+   "candidates": 1,
+   "value": "预估挽回",
+   "cardText": "预估挽回订单量",
+   "why": "ok"
+  },
+  {
+   "label": ";",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "node",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "-e",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "const fs=require('fs');const t=fs.readFileSync('wx-invite-test/pdd-douyin-anchors.json','utf8');fs.writeFileSync('wx-invite-test/douyin-anchors.md',t);console.log('written',t.length)",
+   "value": null,
+   "why": "NOT_FOUND"
+  }
+ ]
+}

@@ -1,0 +1,39 @@
+{
+ "url": "https://fxg.jinritemai.com/ffa/mshop/homepage/index",
+ "deep": false,
+ "res": [
+  {
+   "label": "成交金额",
+   "candidates": 2,
+   "value": "¥29.96 构成 较昨日 71.99% 结算金额¥29.96 分析近7天成交",
+   "cardText": "成交金额 ¥29.96 构成 较昨日 71.99% 结算金额¥29.96 分析近7天成交",
+   "why": "ok"
+  },
+  {
+   "label": "支付金额",
+   "candidates": 7,
+   "value": "2500+",
+   "cardText": "支付金额 2500+",
+   "why": "ok"
+  },
+  {
+   "label": "支付订单数",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "退款金额",
+   "candidates": 5,
+   "value": "TOP退款原因 原因分析",
+   "cardText": "TOP退款原因 原因分析 退款金额",
+   "why": "ok"
+  },
+  {
+   "label": "销量",
+   "candidates": 6,
+   "value": "高",
+   "cardText": "销量高",
+   "why": "ok"
+  }
+ ]
+}

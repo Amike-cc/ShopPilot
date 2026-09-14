@@ -1,0 +1,10 @@
+fix(invite): 微信筛选定位避开被遮挡的点 + 校验认父级选中态
+
+真实页面测试发现：
+1) 窗口较窄时页面布局重叠——「美妆护肤」整块被另一个筛选块压住，按元素中心点会点在
+   浮层上，勾选永不生效。现在在元素矩形内取 15 个采样点，用 elementFromPoint（穿
+   ShadowRoot）确认命中目标自身/后代/同一 label 才点；全被遮挡则如实报告遮挡者。
+2) 微信类型页签的选中态是父级 LI 的 nav_current，原校验只看 label/自身 class → 误报未选中。
+   现在向上 3 层查 on|active|current|checked|selected。
+3) 结果结构改为逐项 {name, ok, reason}，applied 为整体判定，失败能说明原因。
+typecheck + 单测 35 通过。

@@ -12,6 +12,7 @@ const STORE = 'store_4eb9b43cffeee0094041894a9f1f93bf'
 const URL_FIND = 'https://store.weixin.qq.com/shop/findersquare/find'
 const CONTACT = '测试联系人'
 const WECHAT = 'test_wx_001'
+const PHONE = '13800000000'
 const SCRIPT = '您好，我们是店铺方，想邀请您合作带货：专属高佣 + 免费寄样，提供现成素材，发货售后我们全包。'
 const PRODUCT_ID = '10000687986563'
 
@@ -122,10 +123,14 @@ async function main() {
     el.dispatchEvent(new Event('input', { bubbles: true }))
     return el.value.length
   })()`
+  // 先选中微信小店店铺（邀约面板按店铺）
+  console.log('select store:', await app.ev(`(()=>{const c=[...document.querySelectorAll('.store-card')].find(e=>String(e.innerText||'').includes('微信小店测试'));if(!c)return 'no-card';c.click();return 'clicked'})()`))
+  await sleep(1500)
   const tab = await app.ev(`(()=>{const t=[...document.querySelectorAll('.ptab')].find(e=>String(e.innerText||'').trim()==='任务');if(t)t.click();return 1})()`)
   await sleep(1200)
   console.log('contact:', await app.ev(setV('[data-test=invite-contact]', CONTACT)))
   console.log('wechat :', await app.ev(setV('[data-test=invite-wechat]', WECHAT)))
+  console.log('phone  :', await app.ev(setV('[data-test=invite-phone]', PHONE)))
   console.log('script :', await app.ev(setV('[data-test=invite-script]', SCRIPT, true)))
   console.log('productIds:', await app.ev(setV('[data-test=invite-product-ids]', PRODUCT_ID, true)))
   await sleep(1000)

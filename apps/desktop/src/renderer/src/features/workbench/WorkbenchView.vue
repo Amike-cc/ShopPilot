@@ -547,11 +547,12 @@
                 <input type="text" v-model="invite.contact" maxlength="30" data-test="invite-contact" placeholder="商家侧联系人（必填）" />
               </label>
               <label class="inv-row">微信号
-                <input type="text" v-model="invite.wechat" maxlength="30" data-test="invite-wechat" placeholder="与手机号至少填一个" />
+                <input type="text" v-model="invite.wechat" maxlength="30" data-test="invite-wechat" placeholder="必填（与手机号都要填）" />
               </label>
               <label class="inv-row">手机号码
-                <input type="text" v-model="invite.phone" maxlength="11" data-test="invite-phone" placeholder="与微信号至少填一个" />
+                <input type="text" v-model="invite.phone" maxlength="11" data-test="invite-phone" placeholder="必填（11 位手机号）" />
               </label>
+              <div class="env-note">平台要求<b>微信号与手机号都填写</b>，缺一个提交会被平台拦下。</div>
             </div>
 
             <div class="inv-card">
@@ -1948,13 +1949,14 @@ const inviteReady = computed(() => {
   const p = inviteProfile.value
   if (!p || !ws.displayedStoreId) return false
   const scriptOk = invite.scriptMode === 'ai' ? aiReady.value : invite.script.trim().length > 0
-  // 微信小店：联系人必填，微信号/手机号至少一个（平台用来联系商家）；
+  // 微信小店：联系人、微信号、手机号**都要填**（用户明确要求；平台也会因缺项拦下提交）
   // 商品：指定了商品 ID 就不再要求数量合法（按 ID 添加），但最多 30 个
   if (p.flow === 'assist-form') {
     const ids = inviteProducts.value
     return scriptOk &&
       invite.contact.trim().length > 0 &&
-      (invite.wechat.trim().length > 0 || invite.phone.trim().length > 0) &&
+      invite.wechat.trim().length > 0 &&
+      invite.phone.trim().length > 0 &&
       (ids.length > 0 ? ids.length <= 30 : invite.productCount >= 1 && invite.productCount <= p.maxProducts)
   }
   return invite.levels.length > 0 &&

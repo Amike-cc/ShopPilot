@@ -1,0 +1,5 @@
+const fs = require('fs')
+const s = fs.readFileSync('packages/shared/src/constants/invite.ts', 'utf8')
+const start = s.indexOf('const WEIXIN')
+const end = s.indexOf('const INVITE_PROFILES')
+console.log(s.substring(start, end))

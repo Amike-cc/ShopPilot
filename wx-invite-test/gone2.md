@@ -1,0 +1,2 @@
+结果: {"a":{"st":"failed","err":"TASK_SELECTOR_CHANGED","msg":"TASK_SELECTOR_CHANGED: 页面上找不到文案为「添加商品」的可点击元素","steps":["0:executed","1:executed"]},"b":{"st":"failed","err":"TASK_SELECTOR_CHANGED","msg":"TASK_SELECTOR_CHANGED: 页面上找不到文案为「添加商品」的可点击元素","steps":[]}}
+WAITGONE-FAIL: A 应通过但为 {"st":"failed","err":"TASK_SELECTOR_CHANGED","msg":"TASK_SELECTOR_CHANGED: 页面上找不到文案为「添加商品」的可点击元素","steps":["0:executed","1:executed"]}

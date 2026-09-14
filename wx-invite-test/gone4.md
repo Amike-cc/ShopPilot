@@ -1,0 +1,2 @@
+结果: {"a":{"st":"succeeded","err":null,"msg":"","steps":["0:executed","1:executed","2:executed","3:executed","4:executed","5:executed"]},"b":{"st":"failed","err":"TASK_TIMEOUT","msg":"TASK_TIMEOUT: 等待元素消失 tbody label.weui-desktop-form__check-label 超过 6000ms","steps":["0:executed","1:executed"]}}
+WAITGONE-VERIFY: PASS

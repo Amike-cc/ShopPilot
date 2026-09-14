@@ -1,0 +1,50 @@
+{
+ "url": "https://fxg.jinritemai.com/ffa/mshop/homepage/index",
+ "deep": false,
+ "res": [
+  {
+   "label": "支付订单量",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "成交订单量",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "订单总数",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "退款订单数",
+   "candidates": 2,
+   "value": "(退款时间)",
+   "cardText": "退款订单数(退款时间)",
+   "why": "ok"
+  },
+  {
+   "label": "成交件数",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "支付件数",
+   "value": null,
+   "why": "NOT_FOUND"
+  },
+  {
+   "label": "退款订单",
+   "candidates": 2,
+   "value": "数(退款时间)",
+   "cardText": "退款订单数(退款时间)",
+   "why": "ok"
+  },
+  {
+   "label": "售后订单数",
+   "value": null,
+   "why": "NOT_FOUND"
+  }
+ ]
+}
