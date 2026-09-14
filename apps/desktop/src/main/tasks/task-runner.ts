@@ -840,7 +840,13 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       }
       const dir = join(app.getPath('userData'), 'stores', run.storeId, 'artifacts')
       mkdirSync(dir, { recursive: true })
-      const path = join(dir, `${run.runId}_step${step.index}.png`)
+      // 步骤定位：顶层步骤用 step.index；**循环内的嵌套步骤没有 index**（此前直接拼出
+      // "stepundefined.png"，多个轮次的截图同名互相覆盖、也看不出是哪一步）。
+      // 回退用 ctx.path（循环里传的是 `父下标.子下标`）并带上轮次，既唯一又能定位。
+      const stepTag = typeof step.index === 'number'
+        ? String(step.index)
+        : `${ctx.path ?? 'nested'}${ctx.round ? `r${ctx.round}` : ''}`
+      const path = join(dir, `${run.runId}_step${stepTag}.png`)
       writeFileSync(path, buf)
       const sha256 = createHash('sha256').update(buf).digest('hex')
       return { kind: 'screenshot', payload: null, artifact: { path, sha256 } }
