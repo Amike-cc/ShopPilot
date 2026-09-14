@@ -164,9 +164,9 @@ describe('微信小店（assist-form）步骤构造', () => {
     const invite = round.find(s => s.type === 'clickByText' && String(s.input.text) === '邀请带货')!
     expect(invite.input.followTab).toBeUndefined()
     expect(invite.input.mode).toBe('real')
-    // 点它之前要先等页面稳定（按钮已在 DOM 里但 SPA 尚未挂事件 → 点击会被丢弃）
-    const inviteIdx = round.indexOf(invite)
-    expect(round.slice(0, inviteIdx).some(s => s.type === 'waitMs')).toBe(true)
+    // 点击可能被"SPA 还没挂事件"吃掉（实测 3s 失败 / 4s 成功）→ 用 waitUrl 轮询地址并在未跳转时重试点击
+    expect(invite.input.waitUrl).toMatchObject({ includes: 'initiate-invite' })
+    expect((invite.input.waitUrl as any).attempts).toBeGreaterThan(1)
     expect(texts).toContain('邀请带货')
     // 轮内仍应等待详情页/表单页
     for (const inc of ['finder-detail', 'initiate-invite']) {
@@ -375,6 +375,15 @@ describe('任务步骤输入 schema', () => {
     // 多余键/非法值一律拒绝（不接受任何"额外行为"入口）
     expect(stepInputSchemas.clickByText.safeParse({ text: '详情', followTab: { urlIncludes: 'x', evil: 1 } }).success).toBe(false)
     expect(stepInputSchemas.clickByText.safeParse({ text: '详情', followTab: 'yes' }).success).toBe(false)
+  })
+
+  it('waitUrl（点后应同标签页跳转）：includes 必填、attempts 有上限、拒绝多余键', () => {
+    expect(stepInputSchemas.clickByText.safeParse({ text: '邀请带货', deep: true, mode: 'real', waitUrl: { includes: 'initiate-invite', attempts: 4 } }).success).toBe(true)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '邀请带货', waitUrl: { includes: 'x' } }).success).toBe(true)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '邀请带货', waitUrl: {} }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '邀请带货', waitUrl: { includes: 'x', attempts: 0 } }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '邀请带货', waitUrl: { includes: 'x', attempts: 9 } }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '邀请带货', waitUrl: { includes: 'x', evil: 1 } }).success).toBe(false)
   })
 
   it('nth：两种取值都要 mode:"real"；值只有 round / unvisited', () => {

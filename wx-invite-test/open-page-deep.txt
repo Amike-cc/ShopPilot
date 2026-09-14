@@ -1,0 +1,8 @@
+探针安装: {"navigate":"function","prepareInviteSquare":"function"}
+匹配到的按钮数: [{"tag":"BUTTON","visible":true,"display":"block","rect":[1269,98,92,26],"text":"打开达人广场"}]
+按钮坐标: [1315,111]
+捕获的点击: [{"target":"BUTTON[data-test=invite-open-page]","text":"打开达人广场","trusted":true}]
+发起的调用: [{"fn":"typeof prepareInviteSquare","t":"function"}]
+控制台事件: []
+toast: []
+标签页: ["https://store.weixin.qq.com/shop/findersquare/find","https://store.weixin.qq.com/shop/findersquare/find"]

@@ -1,0 +1,8 @@
+① tab.list 原始: {"ok":true,"keys":["tabs"],"tabs":[{"id":"tab_568fd569cb3c77a89093ee899eb40010","url":"https://store.weixin.qq.com/shop/findersquare/my-invite","orderIndex":0},{"id":"tab_d75d19d7af57d7384b949cb5b185d19e","url":"https://store.weixin.qq.com/shop/findersquare/find","orderIndex":1}]}
+② browser.open 返回: {"ok":true,"data":{"success":true},"requestId":"0dbbd7a3-5c84-40c0-b4f3-39189185b941"}
+③ 重开后 tab.list: {"tabs":[{"id":"tab_568fd569cb3c77a89093ee899eb40010","url":"https://store.weixin.qq.com/shop/findersquare/my-invite"},{"id":"tab_d75d19d7af57d7384b949cb5b185d19e","url":"https://store.weixin.qq.com/shop/findersquare/find"}]}
+④ 页面当前状态: {"url":"file:///D:/code/%E7%94%B5%E5%95%86%E6%B5%8F%E8%A7%88%E5%99%A8/apps/desktop/out/r","storeCards":4,"selectedStore":"微信小店测试\n微信小店\n⏻","webviewOrBlank":false}
+⑤ activate tab_568fd569cb… → {"ok":true,"data":{"success":true},"requestId":"441ea14c-7893-46f7-a3e0-5e905a04d2f9"}
+   → 之后 activeTabId: undefined
+⑤ activate tab_d75d19d7af… → {"ok":true,"data":{"success":true},"requestId":"b8f3912b-7e11-4fc3-88ea-b1b034383d76"}
+   → 之后 activeTabId: undefined

@@ -1,0 +1,5 @@
+面板是否在 DOM: {"open":true,"start":true,"stop":false,"panel":true,"panelVisible":true}
+[data-test=invite-open-page] → ["click"]
+   Vue 相关自有属性: ["Symbol(_vei)"]
+[data-test=invite-start] → ["click"]
+   Vue 相关自有属性: ["Symbol(_vei)"]

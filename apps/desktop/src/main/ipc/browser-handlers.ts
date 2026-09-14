@@ -151,6 +151,28 @@ export function registerBrowserHandlers(): void {
       if (loginExpired) {
         return error(ERROR_CODES.INTERNAL_ERROR.code, '微信小店登录已过期：请在店铺窗口打开 store.weixin.qq.com 扫码重新登录后再试', requestId)
       }
+      // 就绪等待：广场是 micro-app 微应用，导航回来那一刻外壳先到、**微应用还没挂载**。
+      // 此时点筛选项会被丢弃（实测「直播带货者」三次重试都落在挂载前，类目却因为排在后面反而成功——
+      // 表现成"类型没选上、类目选上了"）。等到列表真的渲染出来（出现「详情」链接）再动手。
+      const readyExpr = `(() => {
+        const out = []
+        const walk = (root) => { for (const el of root.querySelectorAll('*')) { out.push(el); if (el.shadowRoot) walk(el.shadowRoot) } }
+        walk(document)
+        const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
+        for (const el of out) {
+          if (own(el) !== '详情') continue
+          const r = el.getBoundingClientRect()
+          if (r.width > 0 && r.height > 0) return true
+        }
+        return false
+      })()`
+      const readyDeadline = Date.now() + 25000
+      for (;;) {
+        const ready = await wc.executeJavaScript(readyExpr).catch(() => false)
+        if (ready) break
+        if (Date.now() >= readyDeadline) break // 超时也继续：后续每步都会如实报"找不到/没选中"
+        await new Promise(r => setTimeout(r, 500))
+      }
       // 微应用（micro-app ShadowRoot）不吃合成 click：先定位元素坐标，再发**受信任鼠标事件**
       // （与微信表单必须 typeText 同理；实测合成 click 后筛选项勾选状态不变）
       // 注意：needle 必须注入进脚本字符串——直接引用会抛 ReferenceError，
@@ -198,6 +220,10 @@ export function registerBrowserHandlers(): void {
       // 不校验就会把"点过了"当成"筛上了"（实测 美妆护肤 点了没选上）。
       // 选中判定：最近 label 的 input.checked，或元素/父/祖父 class 带
       // on|active|current|checked|selected（微信类型页签的选中态是父 LI 的 nav_current）。
+      //
+      // 注意：**同一段文案在页面上会出现多次**（页签本身 + 表格行里的类目文本 + 筛选摘要），
+      // 只看第一个匹配元素会误判（实测「直播带货者」页签明明已选中，却因为先命中别处而报未选上）。
+      // 因此遍历**所有可见匹配元素**，任一呈现选中态即算选中。
       const stateOf = (needle: string) => wc.executeJavaScript(`(() => {
         const NEEDLE = ${JSON.stringify(needle)}
         const out = []
@@ -205,12 +231,14 @@ export function registerBrowserHandlers(): void {
         walk(document)
         const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
         const RE = /(^|[\\s_-])(on|active|current|checked|selected)([\\s_-]|$)/i
+        let found = false
         for (const el of out) {
           if (own(el) !== NEEDLE) continue
           const r = el.getBoundingClientRect()
           if (!(r.width > 0 && r.height > 0)) continue
           const cs = getComputedStyle(el)
           if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue
+          found = true
           const label = el.closest('label') || null
           const inp = label && label.querySelector('input')
           let on = !!(inp && inp.checked)
@@ -218,23 +246,24 @@ export function registerBrowserHandlers(): void {
           for (let i = 0; i < 3 && node && !on; i++, node = node.parentElement) {
             if (RE.test(String(node.className || ''))) on = true
           }
-          return JSON.stringify({ selected: on, cls: String((label || el).className || '').slice(0, 60) })
+          if (on) return JSON.stringify({ selected: true, cls: String((label || el).className || '').slice(0, 60) })
         }
-        return JSON.stringify({ selected: false, missing: true })
+        return JSON.stringify({ selected: false, ...(found ? {} : { missing: true }) })
       })()`) as Promise<string>
-      /** 点击并按回读结果校验，未选中则重试（最多 3 次）；返回是否**确认选中** */
+      /** 点击并按回读结果校验，未选中则重试（最多 4 次）；返回是否**确认选中** */
       const clickAndVerify = async (needle: string): Promise<{ ok: boolean, reason?: string }> => {
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 0; attempt < 4; attempt++) {
           const st = JSON.parse(await stateOf(needle).catch(() => '{"selected":false}'))
           if (st.selected) return { ok: true }
           const pt = JSON.parse(await locatePoint(needle).catch(() => '{"ok":false}'))
           if (!pt.ok) {
             if (pt.coveredBy) return { ok: false, reason: `被「${pt.coveredBy}」遮挡` }
-            await new Promise(r => setTimeout(r, 500))
+            // 还没渲染出来（missing）：多等一会儿再试，别把"没挂载"当成"点不动"
+            await new Promise(r => setTimeout(r, 900))
             continue
           }
           realClick(pt.x!, pt.y!)
-          await new Promise(r => setTimeout(r, 900))
+          await new Promise(r => setTimeout(r, 1100))
           const after = JSON.parse(await stateOf(needle).catch(() => '{"selected":false}'))
           if (after.selected) return { ok: true }
         }

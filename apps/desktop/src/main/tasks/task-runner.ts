@@ -993,6 +993,32 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           }
           // 没等到新标签页不当失败：也可能这次是原地跳转，交给后面的 waitForPage 判定
         }
+        // waitUrl：点击后应当发生**同标签页跳转**（SPA pushState）。按钮可能早早就在 DOM 里
+        // 但事件尚未挂上，点早了会被丢弃——固定 sleep 不可靠（微信实测 3s 失败 / 4s 成功）。
+        // 这里轮询地址是否变化，没变就重新定位再点一次，最多 attempts 次。
+        const waitUrl = input.waitUrl as { includes: string; attempts?: number } | undefined
+        if (waitUrl) {
+          const attempts = Number(waitUrl.attempts) > 0 ? Number(waitUrl.attempts) : 3
+          let done = false
+          for (let att = 1; att <= attempts && !done; att++) {
+            const until = Date.now() + Math.max(4000, Math.floor(step.timeoutMs / attempts))
+            for (;;) {
+              guardSignals(run)
+              const cur = (() => { try { return wcOrThrow(run).getURL() } catch { return '' } })()
+              if (cur.includes(waitUrl.includes)) { done = true; break }
+              if (Date.now() >= until) break
+              await new Promise(r => setTimeout(r, 300))
+            }
+            if (done) break
+            // 还没跳 → 再点一次（重新定位，避免元素重排后坐标失效）
+            guardSignals(run)
+            const again = await findTextTarget(wcOrThrow(run), run, needle, deep, step.timeoutMs, 'clickByText waitUrl', within, pick)
+            if (again.ok) { realClick(wcOrThrow(run), again.x!, again.y!) }
+          }
+          if (!done) {
+            throw new Error(`TASK_TIMEOUT: 点击「${needle}」${attempts} 次后地址仍未变为含「${waitUrl.includes}」的页面`)
+          }
+        }
         return {
           kind: 'executed',
           payload: {

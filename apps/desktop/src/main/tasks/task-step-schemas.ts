@@ -81,6 +81,16 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
       closeOld: z.boolean().optional()
     }).strict().optional(),
     /**
+     * 点击后应当发生的**同标签页跳转**：`{ includes, attempts? }`。
+     * 给了它就：点击 → 轮询当前地址是否含 includes；未出现则重新定位再点一次（最多 attempts 次，默认 3）。
+     * 用途：微信详情页「邀请带货」是 SPA 内部 pushState，按钮早早就在 DOM 里但事件尚未挂上，
+     * 点早了会被丢弃——固定 sleep 不可靠（实测 3s 失败、4s 成功），轮询+重试才是稳的。
+     */
+    waitUrl: z.object({
+      includes: z.string().min(1).max(300),
+      attempts: z.number().int().min(1).max(8).optional()
+    }).strict().optional(),
+    /**
      * nth:'round' —— 取"列表里第 N 条"（N = 当前循环轮次，1 起）。
      * nth:'unvisited' —— 取**第一条本次运行还没点过的**（按行容器文本去重，点过就记住）。
      *   微信广场实测：列表每次加载都会重新洗牌（同样地址、首行每次不同），

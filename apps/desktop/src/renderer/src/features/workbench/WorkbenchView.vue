@@ -1970,14 +1970,32 @@ async function openInvitePage() {
   if (!p) return
   const url = squareUrlFor(p.platform)
   if (p.flow === 'assist-form') {
-    const res = await window.shopilot.browser.prepareInviteSquare(ws.displayedStoreId!, {
-      url,
-      finderType: invite.finderType,
-      categories: invite.finderCategories,
-      otherFilters: invite.finderOtherFilters
-    })
-    if (!res.ok) ws.toast('打开达人广场失败: ' + res.error.message, 'error')
-    else ws.toast('达人广场已打开并应用筛选，请人工进入达人详情页', 'success')
+    try {
+      // 必须转成**纯数组**再过 IPC：finderCategories/otherFilters 是 Vue 响应式数组（Proxy），
+      // Electron 结构化克隆不认，会抛 "An object could not be cloned"，
+      // 结果是点了按钮什么都不发生、也没有任何提示（真机实测踩过，与配置持久化同一个坑）
+      const res = await window.shopilot.browser.prepareInviteSquare(ws.displayedStoreId!, {
+        url,
+        finderType: invite.finderType,
+        categories: JSON.parse(JSON.stringify(invite.finderCategories)),
+        otherFilters: JSON.parse(JSON.stringify(invite.finderOtherFilters))
+      })
+      if (!res.ok) {
+        ws.toast('打开达人广场失败: ' + res.error.message, 'error')
+      } else {
+        const applied: any = (res.data || {})
+        // 如实回报每一项筛选的落点：平台改版导致某项点不中时，用户要能立刻看出来
+        const bad: string[] = []
+        if (applied.finderType && applied.finderType.ok === false) bad.push(`类型「${applied.finderType.name}」`)
+        for (const c of (applied.categories || [])) if (c.ok === false) bad.push(`类目「${c.name}」`)
+        for (const f of (applied.otherFilters || [])) if (f.ok === false) bad.push(`其他「${f.name}」`)
+        if (bad.length) ws.toast(`达人广场已打开，但这些筛选没选上：${bad.join('、')}`, 'error')
+        else ws.toast('达人广场已打开并应用筛选', 'success')
+      }
+    } catch (e: any) {
+      // 绝不静默：处理函数里任何异常都要让用户看见（此前这个异常被吞掉，表现为"点了没反应"）
+      ws.toast('打开达人广场失败: ' + String(e?.message || e), 'error')
+    }
   } else {
     ws.navigate(url)
   }

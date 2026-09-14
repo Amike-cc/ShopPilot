@@ -1,0 +1,9 @@
+新建空白页: {"ok":true,"id":"tab_3d40dc7e0a57bd19d29e87b07fa29d10"}
+点击前标签页: ["https://store.weixin.qq.com/shop/findersquare/find","https://store.weixin.qq.com/shop/findersquare/find","about:blank"]
+面板筛选: {"type":"直播带货者","cats":["母婴"],"other":["有联系方式"]}
+
+点击「打开达人广场」…
+捕获提示: []
+点击后标签页: ["https://store.weixin.qq.com/shop/findersquare/find","https://store.weixin.qq.com/shop/findersquare/find","https://store.weixin.qq.com/shop/findersquare/find"]
+控制台异常: []
+广场页: {"expired":false,"已筛选":null,"详情数":40}
