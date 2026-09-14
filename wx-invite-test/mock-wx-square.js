@@ -21,6 +21,9 @@ const PAGE = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>微信带�
  .chip.on{border-color:#07c160;color:#07c160}
  .tags{padding:8px 20px;color:#888}
  .list{padding:12px 20px;color:#333}
+ /* 模拟真实页面在窄窗口下的"布局重叠"：一个浮层压住部分筛选项
+    —— 「美妆护肤」只被压住中心区、「生鲜」整块被压住 */
+ .cover{position:absolute;background:rgba(0,120,255,.10);border:1px dashed rgba(0,120,255,.5);z-index:5}
 </style></head>
 <body>
 <div id="stage"></div>
@@ -33,10 +36,11 @@ const picked = new Set()
 
 const host = document.getElementById('stage')
 const root = host.attachShadow({ mode: 'open' })
-root.innerHTML = '<div class="tabs" id="tabs"></div>' +
+  root.innerHTML = '<div class="tabs" id="tabs"></div>' +
   '<div class="row"><span class="row-h">带货类目</span><span id="cats"></span></div>' +
   '<div class="row"><span class="row-h">其他筛选</span><span id="others"></span></div>' +
-  '<div class="tags" id="tags"></div><div class="list" id="list"></div>'
+  '<div class="tags" id="tags"></div><div class="list" id="list"></div>' +
+  '<div id="covers"></div>'
 
 function render() {
   root.querySelector('#tabs').innerHTML = TYPES.map(t =>
@@ -62,6 +66,31 @@ function render() {
   root.querySelectorAll('#others input').forEach(cb => cb.addEventListener('change', () => {
     const o = cb.getAttribute('data-o'); if (cb.checked) picked.add(o); else picked.delete(o); render()
   }))
+  scheduleCovers()
+}
+
+/** 浮层遮挡：把「美妆护肤」的中心压住（边缘仍可点）、把「生鲜」整块压住 */
+function renderCovers() {
+  const host = root.querySelector('#covers')
+  const mk = (chipText, mode) => {
+    const chip = [...root.querySelectorAll('#cats .chip')].find(c => String(c.textContent).trim() === chipText)
+    if (!chip) return ''
+    const r = chip.getBoundingClientRect()
+    const hr = document.getElementById('stage').getBoundingClientRect()
+    let left, top, w, h
+    if (mode === 'center') { left = r.left - hr.left + r.width * 0.3; top = r.top - hr.top + r.height * 0.15; w = r.width * 0.4; h = r.height * 0.7 }
+    else { left = r.left - hr.left - 2; top = r.top - hr.top - 2; w = r.width + 4; h = r.height + 4 }
+    return '<div class="cover" data-covers="' + chipText + '" style="left:' + left + 'px;top:' + top + 'px;width:' + w + 'px;height:' + h + 'px"></div>'
+  }
+  host.innerHTML = mk('美妆护肤', 'center') + mk('生鲜', 'full')
+}
+/** 排版完成后再量坐标（render 里立刻量会拿到上一版布局，实测遮挡层会盖错位置） */
+function scheduleCovers() {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => setTimeout(renderCovers, 0))
+  } else {
+    setTimeout(renderCovers, 30)
+  }
 }
 render()
 </script>

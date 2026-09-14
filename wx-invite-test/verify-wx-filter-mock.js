@@ -64,7 +64,18 @@ async function main() {
     })
     return JSON.stringify(r)
   })()`)
-  console.log('IPC result:', res)
+  console.log('IPC result (含被遮挡的 美妆护肤):', res)
+  // 整块被遮挡的项：应如实报告遮挡者，而不是假装点成功
+  const covered = await app.ev(`(async () => {
+    const r = await window.shopilot.browser.prepareInviteSquare('${WX_STORE}', {
+      url: ${JSON.stringify(MOCK + '&t=2')},
+      finderType: '全部带货者',
+      categories: ['生鲜'],
+      otherFilters: []
+    })
+    return JSON.stringify(r)
+  })()`)
+  console.log('IPC result (整块被遮挡的 生鲜):', covered)
   app.close()
   await sleep(1500)
 

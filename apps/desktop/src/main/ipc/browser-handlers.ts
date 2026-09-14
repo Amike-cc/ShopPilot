@@ -214,7 +214,7 @@ export function registerBrowserHandlers(): void {
           const label = el.closest('label') || null
           const inp = label && label.querySelector('input')
           let on = !!(inp && inp.checked)
-          let node: Element | null = el
+          let node = el
           for (let i = 0; i < 3 && node && !on; i++, node = node.parentElement) {
             if (RE.test(String(node.className || ''))) on = true
           }
