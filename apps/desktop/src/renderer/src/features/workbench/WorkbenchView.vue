@@ -748,6 +748,13 @@
           <b>注意</b>：合计金额混有 {{ invoiceTotal.currencyNote }}；不同平台的金额口径（含税/不含税、阈值金额与账单金额）以各自页面为准。
           <template v-if="invoiceTotal.unparsed">另有 {{ invoiceTotal.unparsed }} 条金额无法解析为数字，<b>未计入</b>合计。</template>
         </div>
+        <!-- 按开票方向分开的合计（实测同页不同方向数据不同，分开算才不会互相串） -->
+        <div v-if="invoiceTotal.dirs.length" class="inv-dirs" data-test="invoice-dir-totals">
+          <span class="inv-dir" v-for="d in invoiceTotal.dirs" :key="d.name">
+            <i>{{ d.name }}</i>{{ d.count }} 条 · {{ d.amountText }}
+            <em v-if="d.unparsed">（{{ d.unparsed }} 条金额未解析）</em>
+          </span>
+        </div>
 
         <!-- 工具栏：搜索 + 只看有数据的 + 排序 -->
         <div class="inv-toolbar" data-test="invoice-toolbar">
@@ -783,7 +790,7 @@
             <span v-if="r.capturedAt" class="row-sub">· 采集于 {{ new Date(r.capturedAt).toLocaleString() }}</span>
             <span v-if="r.manual" class="inv-vtag">手动</span>
             <span class="row-sub" style="margin-left:auto">
-              {{ r.supported ? `待开票 ${r.items.length} 条` : '未支持抓取' }}
+              {{ r.supported ? `待开票 ${r.count} 条` : '未支持抓取' }}
             </span>
             <button class="mini-btn" data-test="invoice-open-store" @click="openInvoiceFor(r)">
               {{ r.supported ? '打开发票页' : '打开后台' }}
@@ -792,31 +799,46 @@
 
           <div v-if="!r.supported" class="env-note" style="margin:0">{{ r.unsupportedReason }}</div>
           <template v-else>
-            <div v-if="!r.items.length" class="env-note" style="margin:0">
+            <div v-if="!r.count" class="env-note" style="margin:0">
               还没有采集到数据——点上方「抓取待开票信息」开始。
               <template v-if="r.lastFail">
                 上次采集失败：<b>{{ r.lastFail.message || r.lastFail.code }}</b><template v-if="r.lastFail.at">（{{ new Date(r.lastFail.at).toLocaleString() }}）</template>
               </template>
+              <template v-if="r.loginRequired">
+                <button class="mini-btn" data-test="invoice-relogin" style="margin-left:6px" @click="openInvoiceFor(r)">去登录</button>
+              </template>
             </div>
-            <div v-else class="inv-table-wrap">
-              <table class="inv-table" data-test="invoice-table">
-                <thead>
-                  <tr>
-                    <th v-for="c in invoice.columns" :key="c.key">{{ c.label }}</th>
-                    <th v-if="r.hasExtras">其他信息</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(it, i) in r.items" :key="i">
-                    <td v-for="c in invoice.columns" :key="c.key" :class="{ 'inv-cell-strong': c.key === 'amount' }">
-                      {{ cleanCell(it.cells[c.key]) || '—' }}
-                    </td>
-                    <td v-if="r.hasExtras" class="inv-cell-extra" :title="extrasFull(it)">
-                      {{ extrasBrief(it) }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+            <!-- 按开票方向分组：每个方向一张小表（实测同页不同方向数据不同，混在一起会看不清） -->
+            <div v-for="sec in r.sections" :key="sec.metricKey" class="inv-sec" data-test="invoice-section">
+              <div class="inv-sec-h">
+                <span class="inv-sec-name">{{ sec.name }}</span>
+                <span class="row-sub">{{ sec.items.length }} 条</span>
+                <span v-if="sec.measuredRows && sec.items.length < sec.measuredRows" class="inv-vtag" :title="`首次实测该方向有 ${sec.measuredRows} 条，本次抓到 ${sec.items.length} 条`">
+                  比实测少（实测 {{ sec.measuredRows }}）
+                </span>
+                <span v-if="sec.capturedAt" class="row-sub" style="margin-left:auto">采集于 {{ new Date(sec.capturedAt).toLocaleString() }}</span>
+              </div>
+              <div v-if="!sec.items.length" class="env-note" style="margin:0">该方向当前没有记录</div>
+              <div v-else class="inv-table-wrap">
+                <table class="inv-table" data-test="invoice-table">
+                  <thead>
+                    <tr>
+                      <th v-for="c in invoice.columns" :key="c.key">{{ c.label }}</th>
+                      <th v-if="r.hasExtras">其他信息</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(it, i) in sec.items" :key="i">
+                      <td v-for="c in invoice.columns" :key="c.key" :class="{ 'inv-cell-strong': c.key === 'amount' }">
+                        {{ cleanCell(it.cells[c.key]) || '—' }}
+                      </td>
+                      <td v-if="r.hasExtras" class="inv-cell-extra" :title="extrasFull(it)">
+                        {{ extrasBrief(it) }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
             <div v-if="r.note" class="env-note" style="margin:6px 0 0">{{ r.note }}</div>
           </template>
@@ -2604,37 +2626,40 @@ const invoiceRows = computed(() => {
   const cat = (window.shopilot.platforms || []) as Array<PlatformDef>
   const byStore = new Map(invoice.rows.map((r: any) => [r.storeId, r]))
   const q = invoiceQuery.value.trim().toLowerCase()
+  const sortItems = (items: any[]) => {
+    if (invoiceSort.value === 'none' || items.length < 2) return items
+    const dir = invoiceSort.value === 'amountDesc' ? -1 : 1
+    const parsed = items.map((it: any) => parseAmount(it.cells?.amount))
+    const idx = items.map((_, i) => i)
+    idx.sort((a, b) => {
+      const pa = parsed[a], pb = parsed[b]
+      if (pa == null && pb == null) return 0
+      if (pa == null) return 1
+      if (pb == null) return -1
+      return (pa - pb) * dir
+    })
+    return idx.map(i => items[i])
+  }
+  // 行内搜索：店铺/平台/方向 命中则整组保留；否则只留命中的行
+  const filterSections = (storeName: string, platform: string, sections: any[]) => {
+    if (!q) return sections.map(sec => ({ ...sec, items: sortItems(sec.items) }))
+    const storeHit = (storeName + ' ' + platform).toLowerCase().includes(q)
+    return sections.map(sec => {
+      if (storeHit || sec.name.toLowerCase().includes(q)) return { ...sec, items: sortItems(sec.items) }
+      const items = sec.items.filter((it: any) => {
+        const text = [
+          ...Object.values(it.cells || {}),
+          ...(it.extras || []).map((x: any) => `${x.label} ${x.value}`)
+        ].map(v => cleanCell(v)).join(' ').toLowerCase()
+        return text.includes(q)
+      })
+      return { ...sec, items: sortItems(items) }
+    })
+  }
   return ws.stores.map(s => {
     const got: any = byStore.get(s.id) || {}
-    let items = Array.isArray(got.items) ? got.items : []
-    // 行内搜索命中范围：店铺名/平台（命中则整店保留）或 任一单元格/额外列文本（命中则只留该行）
-    let storeMatched = false
-    if (q) {
-      storeMatched = (s.name + ' ' + s.platform).toLowerCase().includes(q)
-      if (!storeMatched) {
-        items = items.filter((it: any) => {
-          const text = [
-            ...Object.values(it.cells || {}),
-            ...(it.extras || []).map((x: any) => `${x.label} ${x.value}`)
-          ].map(v => cleanCell(v)).join(' ').toLowerCase()
-          return text.includes(q)
-        })
-      }
-    }
-    // 行内排序：按解析出的金额；解析不出的排在最后（不是当 0 排最前）
-    if (invoiceSort.value !== 'none' && items.length > 1) {
-      const dir = invoiceSort.value === 'amountDesc' ? -1 : 1
-      const parsed = items.map((it: any) => parseAmount(it.cells?.amount))
-      const idx = items.map((_, i) => i)
-      idx.sort((a, b) => {
-        const pa = parsed[a], pb = parsed[b]
-        if (pa == null && pb == null) return 0
-        if (pa == null) return 1
-        if (pb == null) return -1
-        return (pa - pb) * dir
-      })
-      items = idx.map(i => items[i])
-    }
+    const sections = Array.isArray(got.sections) ? got.sections : []
+    const visible = filterSections(s.name, s.platform, sections)
     return {
       storeId: s.id,
       storeName: s.name,
@@ -2646,22 +2671,24 @@ const invoiceRows = computed(() => {
       manual: !!got.manual,
       note: got.note || null,
       lastFail: got.lastFail || null,
-      items,
-      // 有"其他信息"列（该平台多出来的列）时表格多一列
-      hasExtras: items.some((it: any) => Array.isArray(it.extras) && it.extras.length > 0)
+      loginRequired: !!got.loginRequired,
+      sections: visible,
+      // 该店全部方向的条数合计（筛选后）
+      count: visible.reduce((a: number, x: any) => a + x.items.length, 0),
+      hasExtras: visible.some((x: any) => x.items.some((it: any) => Array.isArray(it.extras) && it.extras.length > 0))
     }
   })
 })
 
 /** 「只看有数据的」筛选（搜索与排序已在 invoiceRows 里做过） */
 const visibleInvoiceRows = computed(() =>
-  invoiceOnlyWithData.value ? invoiceRows.value.filter(r => r.items.length > 0) : invoiceRows.value
+  invoiceOnlyWithData.value ? invoiceRows.value.filter(r => r.count > 0) : invoiceRows.value
 )
 
 /**
- * 跨店铺合计。金额口径如实处理：
+ * 跨店铺合计（含**按方向**分开的合计）。金额口径如实处理：
  *  - 解析不出的**不计入**，并把条数报出来（界面注明），避免"合计比实际小"却看不出来；
- *  - 同时出现过 ¥ 与 ￥ 时提示一下；不同平台口径以各自页面为准（不做汇率/含税换算）。
+ *  - 同时出现过 ¥ 与 ￥ 时提示一下；不同平台/方向口径以各自页面为准（不做汇率/含税换算）。
  */
 const invoiceTotal = computed(() => {
   let count = 0
@@ -2670,24 +2697,35 @@ const invoiceTotal = computed(() => {
   let overdue = 0
   let stores = 0
   const symbols = new Set<string>()
+  // 按方向汇总（方向名跨平台合并，如各家的「给平台开票」）
+  const byDirection = new Map<string, { name: string; count: number; amount: number; unparsed: number }>()
   for (const r of invoiceRows.value) {
     if (!r.supported) continue
-    if (r.items.length) stores++
-    for (const it of r.items) {
-      count++
-      const a = parseAmount(it.cells?.amount)
-      if (a == null) unparsed++
-      else amount += a
-      const s = cleanCell(it.cells?.amount)
-      const sym = /[¥￥$€]/.exec(s)
-      if (sym) symbols.add(sym[0])
-      const dl = cleanCell(it.cells?.deadline) + ' ' + cleanCell(it.cells?.status) + ' ' + cleanCell(it.cells?.id)
-      if (/逾期|过期|即将|待开票|未开票/.test(dl)) overdue++
+    if (r.count) stores++
+    for (const sec of r.sections) {
+      const dir = byDirection.get(sec.name) || { name: sec.name, count: 0, amount: 0, unparsed: 0 }
+      for (const it of sec.items) {
+        count++
+        dir.count++
+        const a = parseAmount(it.cells?.amount)
+        if (a == null) { unparsed++; dir.unparsed++ }
+        else { amount += a; dir.amount += a }
+        const s = cleanCell(it.cells?.amount)
+        const sym = /[¥￥$€]/.exec(s)
+        if (sym) symbols.add(sym[0])
+        const dl = cleanCell(it.cells?.deadline) + ' ' + cleanCell(it.cells?.status) + ' ' + cleanCell(it.cells?.id)
+        if (/逾期|过期|即将|待开票|未开票|待处理/.test(dl)) overdue++
+      }
+      byDirection.set(sec.name, dir)
     }
   }
   const symList = [...symbols]
+  const dirs = [...byDirection.values()]
+    .filter(d => d.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .map(d => ({ ...d, amountText: '¥' + fmtAmount(d.amount) }))
   return {
-    count, amount, stores, unparsed, overdue,
+    count, amount, stores, unparsed, overdue, dirs,
     amountText: count ? (symList.includes('￥') && !symList.includes('¥') ? '￥' : '¥') + fmtAmount(amount) : '—',
     aliasWarning: symList.length > 1 || (amount > 0 && unparsed > 0),
     currencyNote: symList.length > 1 ? `¥ 与 ￥ 两种符号（同一币种，仅符号不同）` : `无法解析的金额`
@@ -3496,6 +3534,19 @@ onBeforeUnmount(() => {
   box-sizing: border-box; background: var(--color-bg-tertiary); color: var(--color-text-primary);
   border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 4px 6px; font-size: 12px;
 }
+/* 按开票方向的合计条：一行一个小胶囊，方向名浅色、数字加粗 */
+.inv-dirs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.inv-dir {
+  display: inline-flex; align-items: baseline; gap: 5px; font-size: 11px;
+  padding: 3px 8px; border: 1px solid var(--color-border); border-radius: 20px;
+  background: var(--color-bg-tertiary); color: var(--color-text-primary);
+}
+.inv-dir > i { font-style: normal; color: var(--color-text-secondary); }
+.inv-dir > em { font-style: normal; color: #d9a441; }
+/* 方向分组（一个方向一张表） */
+.inv-sec { margin-top: 8px; }
+.inv-sec-h { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 12px; }
+.inv-sec-name { font-weight: 600; color: var(--color-text-primary); flex: 0 0 auto; white-space: nowrap; }
 .inv-row-card {
   border: 1px solid var(--color-border); border-radius: var(--radius-sm);
   padding: 8px 10px; margin-bottom: 8px;

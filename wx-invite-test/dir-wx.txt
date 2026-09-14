@@ -1,0 +1,51 @@
+店铺 微信小店测试（微信小店） 起始页 https://store.weixin.qq.com/shop/bill/home
+
+=== 页面上的「方向级」入口 ===
+[
+ {
+  "文案": "申请平台开票",
+  "tag": "SPAN",
+  "位置": [
+   184,
+   167
+  ],
+  "href": null
+ },
+ {
+  "文案": "给买家开票",
+  "tag": "SPAN",
+  "位置": [
+   326,
+   167
+  ],
+  "href": null
+ },
+ {
+  "文案": "给平台开票",
+  "tag": "SPAN",
+  "位置": [
+   451,
+   167
+  ],
+  "href": null
+ },
+ {
+  "文案": "收佣金发票",
+  "tag": "SPAN",
+  "位置": [
+   576,
+   167
+  ],
+  "href": null
+ }
+]
+
+=== 逐个点击方向入口，记录 URL ===
+「申请平台开票」 → URL 未变  https://store.weixin.qq.com/shop/bill/home
+     表头: ["账单号","账单日期","账单类型","可开金额","账单信息"]
+「给买家开票」 → URL 未变  https://store.weixin.qq.com/shop/bill/home
+     表头: ["账单号","账单日期","账单类型","可开金额","账单信息"]
+「给平台开票」 → URL 未变  https://store.weixin.qq.com/shop/bill/home
+     表头: ["账单号","账单日期","账单类型","可开金额","账单信息"]
+「收佣金发票」 → URL 未变  https://store.weixin.qq.com/shop/bill/home
+     表头: ["账单号","账单日期","账单类型","可开金额","账单信息"]

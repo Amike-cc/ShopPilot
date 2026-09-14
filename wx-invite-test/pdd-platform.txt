@@ -1,0 +1,60 @@
+目标页面: https://mms.pinduoduo.com/invoice/center 
+
+=== 点开侧栏「发票管理」菜单 ===
+["SPAN","A","LI","UL"]
+订单开票  <SPAN.nav-item-text> y=66
+发票管理  <SPAN.nav-item-text> y=1729
+各地区个人申请代开发票指引  <SPAN.> y=158
+自动开票系统入驻流程  <A.> y=202
+正品发票操作指南  <A.> y=202
+普通订单开票  <A.> y=202
+发票违规课程  <A.> y=202
+店铺开票数据  <SPAN.NormalInvoiceDaily_title__qOqy-> y=252
+正品发票7日内开票率  <DIV.elli_outerWrapper_5-189-0 elli_lineClamp> y=302
+正品发票7日内未开票数  <DIV.elli_outerWrapper_5-189-0 elli_lineClamp> y=302
+正品发票平均开票时长(时)  <DIV.elli_outerWrapper_5-189-0 elli_lineClamp> y=303
+普通发票10日开票率  <DIV.elli_outerWrapper_5-189-0 elli_lineClamp> y=302
+普通发票10日内未开票数  <DIV.elli_outerWrapper_5-189-0 elli_lineClamp> y=302
+普通发票平均开票时长(时)  <DIV.elli_outerWrapper_5-189-0 elli_lineClamp> y=303
+开票列表  <DIV.InvoicingList_title__2dMG7> y=448
+全部待开票  <DIV.MmsUiQuickFilter___content___2dnQe2-162-> y=497
+逾期未开票  <DIV.MmsUiQuickFilter___content___2dnQe2-162-> y=497
+24小时内需开票  <DIV.MmsUiQuickFilter___content___2dnQe2-162-> y=497
+3天内需开票  <DIV.MmsUiQuickFilter___content___2dnQe2-162-> y=497
+催开票  <DIV.MmsUiQuickFilter___content___2dnQe2-162-> y=497
+是否正品发票  <DIV.Grid_col_5-189-0 > y=619
+开票方式  <DIV.Grid_col_5-189-0 > y=619
+发票种类  <DIV.Grid_col_5-189-0 > y=663
+请选择发票种类  <DIV.IPT_mirror_5-189-0> y=657
+剩余开票时间  <DIV.Grid_col_5-189-0 > y=663
+待开票  <DIV.TAB_capsuleLabel_5-189-0 TAB_active_5-18> y=780
+开票成功  <DIV.TAB_capsuleLabel_5-189-0 TAB_top_5-189-0> y=780
+开票失败  <DIV.TAB_capsuleLabel_5-189-0 TAB_top_5-189-0> y=780
+暂不开票  <DIV.TAB_capsuleLabel_5-189-0 TAB_top_5-189-0> y=780
+批量开票  <SPAN.> y=776
+自助开票  <SPAN.> y=776
+发票金额  <SPAN.> y=826
+发票类型  <SPAN.> y=826
+发票抬头  <SPAN.> y=826
+发票邮寄地址  <SPAN.> y=826
+承诺开票时间  <SPAN.> y=826
+录入发票  <SPAN.> y=889
+批量自动开票  <SPAN.> y=1156
+第1步 下载发票信息模板  <DIV.outerWrapper-1-3-1 outerWrapper-d6-1-3-8> y=78
+第2步 上传已填写的发票信息  <DIV.outerWrapper-1-3-1 outerWrapper-d7-1-3-9> y=174
+上传发票信息  <SPAN.> y=340
+第3步 上传发票文件  <DIV.outerWrapper-1-3-1 outerWrapper-d17-1-3-> y=396
+上传发票文件  <SPAN.> y=472
+确认开票  <SPAN.> y=86
+
+--- 试地址 https://mms.pinduoduo.com/invoice/platform
+    {"url":"/invoice/center","正文片段":"商家后台 您可输入关键词搜索功能/订单/服务/课程/规则/帮助 登记经营地址 1 跨境/社区团购 跨境电商卖家招募 TEMU半托管电商卖家招募 签约入驻 社区团购商家入驻 有生鲜商品货源？入驻社区团购，坐拥亿级流量 签约入驻 网格仓/服务站招募 有仓储配送资源？报名网格站，盘活线下资源 前往报名 客户端 手机App 随","表头":[["订单号","订单状态","售后状态","申请时间","发票金额","开票方式","发票种类","发票类型","抬头类型","发票抬头","企业税号","其他信息","发票邮寄地址","承诺开票时间","操作"],[]]}
+
+--- 试地址 https://mms.pinduoduo.com/invoice/subsidy
+    {"url":"/invoice/center","正文片段":"商家后台 您可输入关键词搜索功能/订单/服务/课程/规则/帮助 登记经营地址 1 跨境/社区团购 跨境电商卖家招募 TEMU半托管电商卖家招募 签约入驻 社区团购商家入驻 有生鲜商品货源？入驻社区团购，坐拥亿级流量 签约入驻 网格仓/服务站招募 有仓储配送资源？报名网格站，盘活线下资源 前往报名 客户端 手机App 随","表头":[["订单号","订单状态","售后状态","申请时间","发票金额","开票方式","发票种类","发票类型","抬头类型","发票抬头","企业税号","其他信息","发票邮寄地址","承诺开票时间","操作"],[]]}
+
+--- 试地址 https://mms.pinduoduo.com/cashier/finance/invoice
+    {"url":"/main/invoice","正文片段":"资金中心对账中心发票管理银行卡管理 返回商家后台 慕么美 退出 发票管理 申请发票 申请记录 提交发票 提交记录 开票信息管理发票常见问题 因近期对发票系统进行维护，维护期间发票账单可能延迟推送，烦请您耐心等待。期间如您的发票申请无法发起，可等系统恢复后再发起申请。如您近期已申请的发票反馈开票失败，亦可等系统恢复后再重","表头":[]}
+
+--- 试地址 https://mms.pinduoduo.com/invoice/list
+    {"url":"/invoice/center","正文片段":"商家后台 您可输入关键词搜索功能/订单/服务/课程/规则/帮助 登记经营地址 1 跨境/社区团购 跨境电商卖家招募 TEMU半托管电商卖家招募 签约入驻 社区团购商家入驻 有生鲜商品货源？入驻社区团购，坐拥亿级流量 签约入驻 网格仓/服务站招募 有仓储配送资源？报名网格站，盘活线下资源 前往报名 客户端 手机App 随","表头":[["订单号","订单状态","售后状态","申请时间","发票金额","开票方式","发票种类","发票类型","抬头类型","发票抬头","企业税号","其他信息","发票邮寄地址","承诺开票时间","操作"],[]]}

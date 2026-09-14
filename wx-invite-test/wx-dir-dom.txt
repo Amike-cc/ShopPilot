@@ -1,0 +1,61 @@
+=== 4 个方向入口的 DOM 结构 ===
+[
+ {
+  "label": "申请平台开票",
+  "链": [
+   "SPAN.cursor-pointer.text-[#0AB8A6].font-medium",
+   "DIV.flex.items-center.h-[56px].mt-[32px].bg-white.rounded-[12px]",
+   "DIV.handle-deposit-block.mb-[16px]",
+   "DIV.windows-system"
+  ],
+  "y": 167,
+  "cls": "cursor-pointer text-[#0AB8A6] font-medium",
+  "父cls": "flex items-center h-[56px] mt-[32px] bg-white rounded-[12px]"
+ },
+ {
+  "label": "给买家开票",
+  "链": [
+   "SPAN.cursor-pointer.ml-[40px]",
+   "DIV.flex.items-center.h-[56px].mt-[32px].bg-white.rounded-[12px]",
+   "DIV.handle-deposit-block.mb-[16px]",
+   "DIV.windows-system"
+  ],
+  "y": 167,
+  "cls": "cursor-pointer ml-[40px]",
+  "父cls": "flex items-center h-[56px] mt-[32px] bg-white rounded-[12px]"
+ },
+ {
+  "label": "给平台开票",
+  "链": [
+   "SPAN.cursor-pointer.ml-[40px]",
+   "DIV.flex.items-center.h-[56px].mt-[32px].bg-white.rounded-[12px]",
+   "DIV.handle-deposit-block.mb-[16px]",
+   "DIV.windows-system"
+  ],
+  "y": 167,
+  "cls": "cursor-pointer ml-[40px]",
+  "父cls": "flex items-center h-[56px] mt-[32px] bg-white rounded-[12px]"
+ },
+ {
+  "label": "收佣金发票",
+  "链": [
+   "SPAN.cursor-pointer.ml-[40px]",
+   "DIV.flex.items-center.h-[56px].mt-[32px].bg-white.rounded-[12px]",
+   "DIV.handle-deposit-block.mb-[16px]",
+   "DIV.windows-system"
+  ],
+  "y": 167,
+  "cls": "cursor-pointer ml-[40px]",
+  "父cls": "flex items-center h-[56px] mt-[32px] bg-white rounded-[12px]"
+ }
+]
+
+=== 用 JS 依次点击（el.click() + 祖先），对比表格首行 ===
+「给买家开票」 JS点击=["SPAN","DIV","DIV","DIV"]
+   {"表头区":[],"含给买家":false}
+「给平台开票」 JS点击=["SPAN","DIV","DIV","DIV"]
+   {"表头区":["账单号\t账单日期\t账单类型\t可开金额\t账单信息\t处理状态\t操作",""],"含给买家":false}
+「收佣金发票」 JS点击=["SPAN","DIV","DIV","DIV"]
+   {"表头区":[],"含给买家":false}
+「申请平台开票」 JS点击=["SPAN","DIV","DIV","DIV"]
+   {"表头区":["\t账单号\t账单日期\t账单类型\t可开金额\t账单信息\t","\t"],"含给买家":false}

@@ -1,0 +1,696 @@
+发票采集任务: [
+ {
+  "name": "发票采集 · 抖店 · 2026/9/14",
+  "status": "failed",
+  "code": "INTERNAL_ERROR",
+  "msg": "TASK_TARGET_COVERED: 「给消费者开票」被「unknown」遮挡，点不到——请把店铺窗口拉宽一些让页面不再重叠后重试",
+  "runId": "run_22b851bd990384acde01381b",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable",
+   "clickByText",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 微信小店 · 2026/9/14",
+  "status": "failed",
+  "code": "INTERNAL_ERROR",
+  "msg": "TASK_TARGET_COVERED: 「给平台开票」被「unknown」遮挡，点不到——请把店铺窗口拉宽一些让页面不再重叠后重试",
+  "runId": "run_498272f761029c0d57ec06f9",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable",
+   "clickByText",
+   "waitMs",
+   "readTable",
+   "clickByText",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 拼多多 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_7203a72408b9b6ef4b4bc508",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 快手小店 · 2026/9/14",
+  "status": "failed",
+  "code": "TASK_TIMEOUT",
+  "msg": "TASK_TIMEOUT: waitForPage 超过 45000ms",
+  "runId": "run_d8bd4647709185e3c21634b3",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 抖店 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_c51f1e773877c2c43a4e0cc4",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 微信小店 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_fcb21a800e945dfb82b47aea",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 拼多多 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_856f21f47bba7ff8f2089173",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 快手小店 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_171408fd76aca84c4250a9a4",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 抖店 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_e715b1f0aac16472fb539f52",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 微信小店 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_1c451eca6a8f2bd4e9d4a295",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 拼多多 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_e7cdbd06de642ff1331a987b",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 抖店 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_0bc9ce50b56913ae9674829b",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 微信小店 · 2026/9/14",
+  "status": "failed",
+  "code": "INTERNAL_ERROR",
+  "msg": "TASK_TARGET_COVERED: 「可开票」被「unknown」遮挡，点不到——请把店铺窗口拉宽一些让页面不再重叠后重试",
+  "runId": "run_94c865a59450bb271e435a8f",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "clickByText",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 拼多多 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_7494d2cd7d22c2223113499a",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 抖店 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_f914e574ca7efdc648bd4066",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 微信小店 · 2026/9/14",
+  "status": "failed",
+  "code": "INTERNAL_ERROR",
+  "msg": "TASK_TARGET_COVERED: 「可开票」被「unknown」遮挡，点不到——请把店铺窗口拉宽一些让页面不再重叠后重试",
+  "runId": "run_59897ac8b6b8b43c1071459e",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "clickByText",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 拼多多 · 2026/9/14",
+  "status": "succeeded",
+  "code": null,
+  "msg": null,
+  "runId": "run_d343b9ac0607c4a1f26960ef",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ }
+]
+
+[发票采集 · 抖店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 2,
+  "metric": "invoice.toPlatform",
+  "preview": "2 行 × 6 列"
+ }
+]
+
+[发票采集 · 微信小店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 6,
+  "metric": "invoice.applyPlatform",
+  "preview": "6 行 × 7 列"
+ }
+]
+
+[发票采集 · 拼多多 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 4,
+  "metric": "invoice.toBuyer",
+  "preview": "4 行 × 16 列"
+ }
+]
+
+[发票采集 · 快手小店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ }
+]
+
+[发票采集 · 抖店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 2,
+  "metric": "invoice.rows",
+  "preview": "2 行 × 6 列"
+ }
+]
+
+[发票采集 · 微信小店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 6,
+  "metric": "invoice.rows",
+  "preview": "6 行 × 7 列"
+ }
+]
+
+[发票采集 · 拼多多 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 4,
+  "metric": "invoice.rows",
+  "preview": "4 行 × 16 列"
+ }
+]
+
+[发票采集 · 快手小店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 7,
+  "metric": "invoice.rows",
+  "preview": "7 行 × 11 列"
+ }
+]
+
+[发票采集 · 抖店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 2,
+  "metric": "invoice.rows",
+  "preview": "2 行 × 6 列"
+ }
+]
+
+[发票采集 · 微信小店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 6,
+  "metric": "invoice.rows",
+  "preview": "6 行 × 7 列"
+ }
+]
+
+[发票采集 · 拼多多 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 4,
+  "metric": "invoice.rows",
+  "preview": "4 行 × 16 列"
+ }
+]
+
+[发票采集 · 抖店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 2,
+  "metric": "invoice.rows",
+  "preview": "2 行 × 6 列"
+ }
+]
+
+[发票采集 · 微信小店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ }
+]
+
+[发票采集 · 拼多多 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 1,
+  "metric": "invoice.rows",
+  "preview": "1 行 × 16 列"
+ }
+]
+
+[发票采集 · 抖店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 2,
+  "metric": "invoice.rows",
+  "preview": "2 行 × 6 列"
+ }
+]
+
+[发票采集 · 微信小店 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ }
+]
+
+[发票采集 · 拼多多 · 2026/9/14] 步骤结果:
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "action": "navigate",
+  "preview": "已执行"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "action": "waitForPage",
+  "preview": "已执行"
+ },
+ {
+  "idx": 2,
+  "kind": "executed",
+  "action": "waitMs",
+  "preview": "已执行"
+ },
+ {
+  "idx": 3,
+  "kind": "table",
+  "action": null,
+  "rows": 1,
+  "metric": "invoice.rows",
+  "preview": "1 行 × 16 列"
+ }
+]

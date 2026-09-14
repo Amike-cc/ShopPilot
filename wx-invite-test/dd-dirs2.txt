@@ -1,0 +1,23 @@
+目标页面: https://fxg.jinritemai.com/ffa/m-invoice/merchant-invoice 
+
+=== 页面上疑似方向/页签的元素 ===
+多样化推广方式，灵活佣金设置  <P.index_layerDesc__2IEK7>  y=62 w=256
+消费者权益  <A.style_title__JM1dH>  y=-380 w=60
+申请关店  <A.style_title__JM1dH>  y=28 w=48
+账单管理  <A.style_title__JM1dH>  y=52 w=48
+发票管理  <A.style_title__JM1dH style_titleHighLight__2ab7H>  y=80 w=48
+我给平台开票  <SPAN.>  y=102 w=108
+给消费者开票  <SPAN.>  y=102 w=108
+平台给我开票  <SPAN.>  y=102 w=108
+达人给我开票  <SPAN.>  y=102 w=108
+账单名称  <TH.>  y=360 w=196
+账单类型  <TH.>  y=360 w=196
+账单总额  <TH.amountCell-HS_VeH>  y=360 w=140
+平台补贴（2026/08）  <DIV.billNameText-pwHzRo>  y=426 w=164
+平台补贴  <TD.>  y=409 w=196
+
+===== 「平台给我开票」（点击 ["SPAN","DIV","DIV","DIV"]）=====
+{"表数":1,"数据表":[{"ths":["账单名称","账单类型","开票方主体","账单金额","操作"],"firstRow":[["","账单名称","账单类型","开票方主体","账单金额","","操作"]],"rows":38}],"全部表头":[["账单名称","账单类型","开票方主体","账单金额","操作"]]}
+
+===== 「达人给我开票」（点击 ["SPAN","DIV","DIV","DIV"]）=====
+{"表数":0,"数据表":[],"全部表头":[]}

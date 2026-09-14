@@ -21,10 +21,11 @@ import { randomUUID } from 'crypto'
 /**
  * 汇总各店铺的待开票信息（发票中心与导出共用这一份取数逻辑）。
  *
- * 数据来源：采集任务在发票页 readTable(keepRows) 落下的快照（metric = invoice.rows）。
- * 把**原始表行**按该平台实测的表头映射到统一列（见 shared/constants/invoice.ts）；
- * 映射不到的列不丢，放进 extras——平台加列不会让数据消失。
- * 没有快照的店铺如实返回空 items（界面显示"还没采集"），绝不估算或伪造。
+ * 数据来源：采集任务在发票页 readTable(keepRows) 落下的快照。
+ * **按开票方向分开**：每个方向一条独立指标（invoice.applyPlatform / invoice.toPlatform / invoice.toBuyer…），
+ * 因为实测同一页的「申请平台开票」与「给平台开票」是不同数据，混在一起会漏记录。
+ * 表头按该方向的实测映射转成统一列；映射不到的列不丢，放进 extras。
+ * 没有快照的方向如实返回空 items（界面显示"还没采集"），绝不估算或伪造。
  */
 function collectInvoiceRows(): any[] {
   const db = getDatabase()
@@ -32,43 +33,49 @@ function collectInvoiceRows(): any[] {
     `SELECT id, name, platform, status, admin_url FROM stores WHERE deleted_at IS NULL ORDER BY platform, name`
   ).all() as any[]
 
-  // 每店取 invoice.rows 的**最新一条**（含采集时间与来源运行）
+  // 每店**每指标**取最新一条（指标名形如 invoice.<方向>）
   const snapRows = db.prepare(`
-    SELECT store_id, value_json, captured_at, source_run_id FROM (
-      SELECT store_id, value_json, captured_at, source_run_id,
-             ROW_NUMBER() OVER (PARTITION BY store_id ORDER BY rowid DESC) AS rn
-      FROM store_snapshots WHERE metric = 'invoice.rows'
+    SELECT store_id, metric, value_json, captured_at, source_run_id FROM (
+      SELECT store_id, metric, value_json, captured_at, source_run_id,
+             ROW_NUMBER() OVER (PARTITION BY store_id, metric ORDER BY rowid DESC) AS rn
+      FROM store_snapshots WHERE metric LIKE 'invoice.%'
     ) WHERE rn = 1
   `).all() as any[]
-  const snapByStore = new Map<string, any>()
+  // storeId -> metric -> snapshot
+  const snapByStore = new Map<string, Map<string, any>>()
   for (const r of snapRows) {
     let v: any = r.value_json
     try { v = JSON.parse(r.value_json) } catch { /* 保底原样 */ }
-    snapByStore.set(r.store_id, { value: v, capturedAt: r.captured_at, manual: !r.source_run_id })
+    if (!snapByStore.has(r.store_id)) snapByStore.set(r.store_id, new Map())
+    snapByStore.get(r.store_id)!.set(r.metric, { value: v, capturedAt: r.captured_at, manual: !r.source_run_id })
   }
 
-  // 采集失败信息：取该店铺最近一次「发票采集 ·」任务的失败原因，好让界面如实说明
-  const failRows = db.prepare(`
-    SELECT s.id AS storeId, r.error_code, r.error_message, r.finished_at FROM task_runs r
+  // 采集失败信息：取该店铺**最近一次**「发票采集 ·」运行，只有它确实是失败时才回报。
+  //
+  // 为什么不能直接筛 status='failed'：那样会把**早已被后续成功覆盖**的旧失败一直挂在界面上
+  // （实测：微信/抖店这次采集已经成功抓到数据，界面却还显示上一次的 TASK_TARGET_COVERED，
+  // 看起来像"现在也坏了"）。取最近一次运行再看它的状态，才是如实描述"当前状态"。
+  const lastRunRows = db.prepare(`
+    SELECT s.id AS storeId, r.status, r.error_code, r.error_message, r.finished_at FROM task_runs r
     JOIN tasks t ON t.id = r.task_id
     JOIN stores s ON s.id = r.store_id
-    WHERE t.name LIKE '发票采集 ·%' AND r.status = 'failed'
+    WHERE t.name LIKE '发票采集 ·%'
     ORDER BY r.rowid DESC
   `).all() as any[]
   const failByStore = new Map<string, any>()
-  for (const f of failRows) if (!failByStore.has(f.storeId)) failByStore.set(f.storeId, f)
+  for (const f of lastRunRows) {
+    if (failByStore.has(f.storeId)) continue
+    failByStore.set(f.storeId, f.status === 'failed' ? f : null)   // 最近一次不是失败 → 不留旧失败
+  }
+  for (const [k, v] of [...failByStore]) if (!v) failByStore.delete(k)
 
-  return stores.map(s => {
-    const profile = invoiceProfileFor(s.platform)
-    const snap = snapByStore.get(s.id) || null
-    const raw: any[] = Array.isArray(snap?.value) ? snap.value : []
-    // 第一行是表头（readTable 把 thead 的 tr 也读进来）
+  /** 把某个方向的原始表行映射成 {cells, extras} */
+  const mapSection = (headerMap: Record<string, InvoiceColumnKey>, raw: any[]) => {
     const header: string[] = raw.length ? raw[0].map((x: any) => String(x ?? '').trim()) : []
-    // 表头文案 → 统一列 key（用实测的 headerMap；找不到的列保留为额外列）
     const colOf = new Map<number, InvoiceColumnKey>()
     const extraIdx: number[] = []
     header.forEach((h, i) => {
-      const k = profile?.headerMap?.[h]
+      const k = headerMap[h]
       if (k) colOf.set(i, k)
       else if (h) extraIdx.push(i)
     })
@@ -82,7 +89,54 @@ function collectInvoiceRows(): any[] {
           .filter(x => x.value && x.value !== '-')
         return { cells, extras }
       })
+    return { header, items }
+  }
+
+  return stores.map(s => {
+    const profile = invoiceProfileFor(s.platform)
+    const snaps = snapByStore.get(s.id) || new Map<string, any>()
+    // 按档案登记的方向逐个取（没档案的平台给空数组，界面如实说明）
+    const sections = (profile?.sections || []).map(sec => {
+      const name = sec.name
+      const metricKey = sec.metricKey
+      const base = { name, metricKey, measuredRows: sec.measuredRows }
+      // labels 模式：该方向不是表格，值分散在 `<metricKey>.<列key>` 的快照里 → 拼成一行。
+      // 一个标签都没读到时才视作"没采集"（有部分值也如实展示，缺的列留空）。
+      if (sec.labels?.length) {
+        const cells: Partial<Record<InvoiceColumnKey, string>> = {}
+        let capturedAt: number | null = null
+        let manual = false
+        for (const l of sec.labels) {
+          const snap = snaps.get(`${metricKey}.${l.key}`)
+          if (!snap) continue
+          const v = typeof snap.value === 'string' ? snap.value : String(snap.value ?? '')
+          if (v) cells[l.key] = v
+          if (snap.capturedAt && (!capturedAt || snap.capturedAt > capturedAt)) capturedAt = snap.capturedAt
+          manual = manual || !!snap.manual
+        }
+        const hasAny = Object.keys(cells).length > 0
+        return {
+          ...base,
+          capturedAt,
+          manual,
+          header: [],
+          items: hasAny ? [{ cells, extras: [] }] : []
+        }
+      }
+      const snap = snaps.get(metricKey) || null
+      const raw: any[] = Array.isArray(snap?.value) ? snap.value : []
+      const { header, items } = mapSection(sec.headerMap, raw)
+      return {
+        ...base,
+        capturedAt: snap?.capturedAt || null,
+        manual: snap ? !!snap.manual : false,
+        header,
+        items
+      }
+    })
     const fail = failByStore.get(s.id) || null
+    // 该店所有方向的最新采集时间（用于头部展示）
+    const capturedAt = sections.reduce((acc: number | null, x: any) => (x.capturedAt && (!acc || x.capturedAt > acc) ? x.capturedAt : acc), null)
     return {
       storeId: s.id,
       storeName: s.name,
@@ -94,12 +148,14 @@ function collectInvoiceRows(): any[] {
       pageUrl: profile?.pageUrl || null,
       adminUrl: s.admin_url || null,
       note: profile?.note || null,
-      capturedAt: snap?.capturedAt || null,
-      manual: snap ? !!snap.manual : false,
-      header,
-      items,
+      capturedAt,
+      manual: sections.some((x: any) => x.manual),
+      sections,
       // 最近一次采集失败的原因（界面在"没有数据"时如实展示，而不是只说"暂无"）
-      lastFail: fail ? { code: fail.error_code || null, message: String(fail.error_message || '').slice(0, 240), at: fail.finished_at || null } : null
+      lastFail: fail ? { code: fail.error_code || null, message: String(fail.error_message || '').slice(0, 240), at: fail.finished_at || null } : null,
+      // 登录态失效是可以由用户自己解决的一件事 → 单独标出来，界面直接给「去登录」，
+      // 而不是让用户对着一句"超时"猜。
+      loginRequired: fail ? String(fail.error_code || '').includes('LOGIN_REQUIRED') : false
     }
   })
 }
@@ -226,12 +282,15 @@ export function registerProfileAndMiscHandlers(): void {
     try {
       const rows = collectInvoiceRows()
       const dataRows = rows.flatMap((r: any) =>
-        (r.items || []).map((it: any) => ({
-          店铺: r.storeName,
-          平台: r.platform,
-          ...Object.fromEntries(INVOICE_COLUMNS.map(c => [c.label, it.cells?.[c.key] ?? ''])),
-          其他信息: (it.extras || []).map((x: any) => `${x.label}：${x.value}`).join('；')
-        }))
+        (r.sections || []).flatMap((sec: any) =>
+          (sec.items || []).map((it: any) => ({
+            店铺: r.storeName,
+            平台: r.platform,
+            开票方向: sec.name,
+            ...Object.fromEntries(INVOICE_COLUMNS.map(c => [c.label, it.cells?.[c.key] ?? ''])),
+            其他信息: (it.extras || []).map((x: any) => `${x.label}：${x.value}`).join('；')
+          }))
+        )
       )
       if (!dataRows.length) {
         return error(ERROR_CODES.INVALID_ARGUMENT.code, '当前没有可导出的待开票数据（先点「抓取待开票信息」）', requestId)

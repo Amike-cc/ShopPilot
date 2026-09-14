@@ -47,13 +47,28 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   // keepRows：把整表行数组落快照（发票中心要展示"待开票信息"的内容）；默认只落行数
   // pickByHeader：页面上有多张表时，挑表内含该文案的那一张（实测微信发票中心有 2 张日历表）
   // mergeHeaderTable：表头与数据分属两个 <table> 时（实测拼多多），把表头表的下一张也读进来
+  // expectHeaders：表头必须包含这些列名，否则如实失败（发票中心按开票方向校验：
+  //   页内切方向没生效时会读到上一个方向的表，必须失败而不是错报）
   readTable: z.object({
     selector,
     metric: z.string().min(1).max(60).optional(),
     deep: z.boolean().optional(),
     keepRows: z.boolean().optional(),
     pickByHeader: z.string().min(1).max(60).optional(),
-    mergeHeaderTable: z.boolean().optional()
+    mergeHeaderTable: z.boolean().optional(),
+    expectHeaders: z.array(z.string().min(1).max(60)).max(20).optional(),
+    /**
+     * 读到含这些列名的表就不采信（那是**别的开票方向**的表：页内切页签没生效，
+     * 而本方向自己恰好没有表——不给判据就会把上一个方向的数据重复报成本方向的）。
+     */
+    rejectHeaders: z.array(z.string().min(1).max(60)).max(20).optional(),
+    /**
+     * 该表**本来就可能没有**（发票页某些开票方向就是空的：实测微信「给买家开票」
+     * 整页没有账单表、抖店「给消费者开票」结构未验）。
+     * 给了它：挑不到表/表头不符不报错，改落一条**空快照**（如实 0 条），
+     * 界面显示"0 条"而不是"采集失败"。
+     */
+    emptyOk: z.boolean().optional()
   }).strict(),
   screenshot: z.object({}).strict(),
   fillDraft: z.object({ selector, text: z.string().max(20000) }).strict(),
@@ -107,7 +122,17 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      *   所以"第 N 条"并不能保证换人；"还没点过的第一条"才是不会重复邀约同一人的判据。
      *   当前页全都点过 = 该页取不出（配 missingCode 让 loop 翻页后重试）。
      */
-    nth: z.enum(['round', 'unvisited']).optional()
+    nth: z.enum(['round', 'unvisited']).optional(),
+    /**
+     * 窗口视图未挂载（渲染层弹层遮挡 → 原生视图被摘除 → 页面视口 0×0）时，
+     * 是否允许降级为 JS 点击。
+     *
+     * 只给**纯页内状态切换**的点击开（切页签、切筛选）：那种点击点了之后页面自己重渲染，
+     * 不依赖浏览器输入管线。默认 false = 如实报 TASK_VIEW_DETACHED。
+     * 依赖框架真实输入的按钮（微信邀约表单）**绝不能**开：JS 合成 click 对它们不生效，
+     * 开了会静默点空、把根因推到后面几步才暴露。
+     */
+    allowJsWhenDetached: z.boolean().optional()
   }).strict().refine((v) => !v.nth || v.mode === 'real', { message: 'nth 仅支持 mode:"real"（需要真实鼠标点击）' }),
   clickAll: z.object({
     selector: selector.optional(),
@@ -173,7 +198,12 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     metric: z.string().min(1).max(60).optional(),
     deep: z.boolean().optional(),
     /** 值的最大长度（超过视为爬到了容器层级，如实失败而不是取噪音），默认 40 */
-    maxValueLen: z.number().int().min(1).max(200).optional()
+    maxValueLen: z.number().int().min(1).max(200).optional(),
+    /**
+     * 该标签的值本来就不是数字（公司名 / "2026年05/06月"这类文本）→ 原样取用文本，
+     * 不做数值抽取。默认 false = 必须取到数字（数据中心指标卡那种场景）。
+     */
+    allowText: z.boolean().optional()
   }).strict(),
   // 显式等待（读型步骤，上限 2 分钟）：等 SPA 按新筛选条件刷新数据
   waitMs: z.object({ ms: z.number().int().min(100).max(120000) }).strict(),

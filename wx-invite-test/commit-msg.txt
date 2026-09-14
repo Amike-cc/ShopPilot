@@ -1,0 +1,23 @@
+fix(invoice): 发票中心「两个方向都抓」——修掉让多方向采集全盘失效的视图摘除缺陷
+
+核心缺陷：发票中心从弹层里发起采集，而弹层一打开就会把店铺原生 WebContentsView
+摘除，页面视口变成 0×0——受信任鼠标物理上到不了页面。于是每个方向切换都报
+TASK_TARGET_COVERED/unknown，把人往"窗口太窄"上引，实际与窗口宽度无关。
+实测确认视图摘除时页面脚本照常工作（JS 多级点击 3s 内切出对方数据）。
+
+- 新增 TASK_VIEW_DETACHED：视口退化且步骤未声明降级时立刻如实报错，
+  不再白等超时给含糊的"找不到元素"（覆盖 typeText/ensureRows/ensureRowsById）
+- 新增 clickByText.allowJsWhenDetached（默认 false）：只给纯页内状态切换开
+  （切页签/切筛选）；依赖框架真实输入的按钮绝不开启，避免静默点空
+- sections[] 多方向 + 独立指标名；pageUrl（方向在另一个站点）；
+  labels[]（方向是"标签+值"卡片）；expectHeaders/rejectHeaders（挡住
+  上一个方向的表被重复上报）；emptyOk（实测 0 条的方向落空快照而非判失败）
+- 抖店按实测改正为四个方向（原登记的"给消费者开票"表头是猜的，已换实测列名）
+- 修正 readLabelValue：新增 allowText，公司名与「2026年05/06月」不再被
+  数值抽取截断或判失败
+- 修正 readTable：清洗重复表头行与「暂无数据」占位行（TABLE_ROW_CLEAN_FN
+  由引擎注入，单测执行同一份源码）
+- 失败原因取最近一次运行（不再挂着早已被成功覆盖的旧失败）；
+  登录态失效改报 TASK_LOGIN_REQUIRED 并在界面给「去登录」
+
+真机实测 23/23 通过；单测 73 项通过。发布 0.4.25。

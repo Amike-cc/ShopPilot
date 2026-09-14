@@ -1,0 +1,21 @@
+店铺 福气满满（快手小店）→ 导航到 https://s.kwaixiaodian.com/zone/fund/tax-bill/subsidy
+落地 URL: https://login.kwaixiaodian.com/?biz=zone&redirect_url=https%3A%2F%2Fs.kwaixiaodian.com%2Fzone%2Ffund%2Ftax-bill%2Fsubsid
+
+=== 结构 ===
+{
+ "标题": "快手小店",
+ "微应用数": 0,
+ "table数": 0,
+ "table表头": [],
+ "表列头th合计": [],
+ "状态文案": [],
+ "按钮": [
+  "快手小店商家"
+ ]
+}
+
+=== 表格数据行（前 6）===
+[]
+
+=== 页面主文本（前 900 字）===
+"window.__CDN_DISPATCH__={\"kwaishop-web-dev\":[\"p4-ec.eckwai.com\",\"p2-ec.eckwai.com\"]} | window.kfxEnv={\"channelId\":\"\",\"version\":\"31059477\",\"appId\":\"7fa7703208\"} | var _CDN_HOST_ = 'https://p4-ec.eckwai.com'; | 快手小店 | window.ESLOGGER_RADAR_KEY=\"\";\nwindow.ESLOGGER_REALM=\"seller\";\nwindow.ESLOGGER_SUBREALM=\"login\";\nwindow.ESLOGGER_PROJECT_NAME=\"kwaishop-seller-login-pc\";\nwindow.ESLOGGER_WEB_VERSION=\"20260805150340\"; | 我是店主 | 快手商家账号登录 | 我是员工 | 快手商家子账号登录 | 密码登录 | 短信登录 | 扫码登录 | 打开  APP | 快手小店商家 | 点击左上角侧边栏 扫一扫 | 登录即代表同意\n         和 | 用户协议 | 隐私政策 | 没有账号？ | 免费注册开店 | 网安备案 | | | 蜀ICP备19035576号-2 | | | 增值电信业务经营许可证：川B2-20200036 | www.kwaixiaodian.com 2019-现在 @ All rights Reserved | 要实现此站点的全部功能，必须启用JavaScript。 这里是\n          <a href=\"https://www.enablejavascript.io/cn\">\n            如何在网页浏览器中启用JavaScript的说明</a\n          >."

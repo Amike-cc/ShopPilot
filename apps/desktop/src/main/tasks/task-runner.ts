@@ -13,6 +13,7 @@ import { createHash } from 'crypto'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import { TABLE_ROW_CLEAN_FN } from '@shared/constants/invoice'
 import type {
   TaskStepDef, TaskProgressEvent, TaskProgressPhase,
   StepResultKind, TaskConfirmationEvent, TaskScheduledFiredEvent
@@ -354,6 +355,10 @@ function classifyError(e: any): string {
   // 这一位达人的详情页打不开（微应用间歇性不渲染，「邀请带货」按钮不存在）：
   // 由 loop 的 onCode restart 规则跳过换人（连续多位都这样才会停）
   if (msg.includes('TASK_DAREN_PAGE_UNOPENABLE')) return 'TASK_DAREN_PAGE_UNOPENABLE'
+  // 店铺视图当时未挂载（弹层遮挡导致摘除）：需要真实落点的步骤无法进行，明确报出来
+  if (msg.includes('TASK_VIEW_DETACHED')) return 'TASK_VIEW_DETACHED'
+  // 页面被重定向到登录页（登录态失效）：用户能自己解决，必须与"页面慢/改版"区分开
+  if (msg.includes('TASK_LOGIN_REQUIRED')) return 'TASK_LOGIN_REQUIRED'
   // 店铺浏览器/任务标签页被关闭（此前落进 INTERNAL_ERROR，看不出真实原因）
   if (msg.includes('BROWSER_CLOSED')) return 'BROWSER_CLOSED'
   // AI 相关的固定错误码：如实透出，便于界面区分"没配 Key / 地址不合法 / 超时 / 请求失败"
@@ -513,8 +518,10 @@ const SCOPE_FN = `
 async function findTextTarget(
   wc: Electron.WebContents, run: RunHandle, needle: string, deep: boolean, timeoutMs: number, label: string,
   within?: { selector?: string; text?: string; climb?: number },
-  pick?: { roundIdx?: number; visited?: string[]; dedupNs?: string }
-): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string; rowKey?: string; picked?: string }> {
+  pick?: { roundIdx?: number; visited?: string[]; dedupNs?: string },
+  /** 视图未挂载时是否允许降级为 JS 点击（见下方视口退化分支）。默认 false = 如实报 VIEW_DETACHED */
+  allowJsWhenDetached = false
+): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string; rowKey?: string; picked?: string; viaBlocker?: string; transport?: 'trusted-mouse' | 'js-fallback' }> {
   return withTimeout(() => wc.executeJavaScript(`(() => {
     ${deep ? ENUM_DEEP_FN : ''}
     ${VISIBLE_JS}
@@ -591,6 +598,33 @@ async function findTextTarget(
       if (/disabled/i.test(String(p.className || ''))) dis = true;
     }
     if (dis) return { ok: false, reason: 'DISABLED' };
+    // 视口退化的兜底：WebContentsView 从窗口 contentView 上摘下来（渲染层打开弹层时
+    // setBrowserViewsObscured(true) 会摘）之后，页面文档视口变成 0×0——元素还在、也还有
+    // 尺寸，但坐标全在视口外，elementFromPoint 一律 null，受信任鼠标**物理上到不了**。
+    // 实测：发票中心的采集任务就是在自己的弹层打开期间跑的（采集按钮就在弹层里），
+    // 「给平台开票」「可开票」「给消费者开票」这些页签切换全部报 TASK_TARGET_COVERED/unknown，
+    // 一个方向都切不过去——不是页面点不到，是"视图没挂载"被误报成了"被遮挡"。
+    // 而页面脚本本身照常工作（实测 JS 多级点击 3s 内就把对方数据切出来了：表头多出
+    // 「处理状态/操作」、行数 5 → 2）。
+    // 是否降级由步骤显式声明（allowJsWhenDetached）：JS 点击对**框架托管的按钮**可能无效
+    // （微信邀约实测合成 click 不生效），所以不能全局兜底——没声明的步骤如实报 VIEW_DETACHED，
+    // 由调用方立刻抛出，而不是白等到超时再给一句含糊的"找不到元素"。
+    if (window.innerWidth < 50 || window.innerHeight < 50) {
+      if (!${allowJsWhenDetached ? 'true' : 'false'}) {
+        return { ok: false, reason: 'VIEW_DETACHED', coveredBy: window.innerWidth + 'x' + window.innerHeight };
+      }
+      const chain = [];
+      let n = hit;
+      for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
+        try { n.click(); chain.push(n.tagName) } catch { chain.push('err') }
+      }
+      return {
+        ok: true, x: 0, y: 0, transport: 'js-fallback',
+        clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40),
+        candidates: cands.length, picked, rowKey,
+        viaBlocker: 'JS降级(' + chain.join('>') + ')'
+      };
+    }
     hit.scrollIntoView({ block: 'center' });
     const r = hit.getBoundingClientRect();
     // 真实鼠标点击要落在"没被遮挡"的点上：窗口较窄时平台页面会重叠（实测微信广场
@@ -648,6 +682,33 @@ function realClick(wc: Electron.WebContents, x: number, y: number): void {
 }
 
 /**
+ * 落点点击：正常走受信任鼠标；`transport === 'js-fallback'` 表示视图当时没挂载
+ * （见 findTextTarget 里的视口退化分支）——那种情况下点击**已经由 JS 多级点击完成**，
+ * 这里不能再发鼠标事件：坐标此时毫无意义，硬发只会点到视口外的随机位置。
+ */
+function performHitClick(
+  wc: Electron.WebContents,
+  hit: { x?: number; y?: number; transport?: 'trusted-mouse' | 'js-fallback' }
+): void {
+  if (hit.transport === 'js-fallback') return
+  realClick(wc, hit.x!, hit.y!)
+}
+
+/**
+ * 需要真实落点的步骤在开跑前先确认视图已挂载。
+ *
+ * 为什么必须显式查：WebContentsView 被摘除后页面视口变成 0×0，但 getBoundingClientRect
+ * 仍然返回（可能已经塌缩的）数值——于是坐标点击会"看起来发出去了、实际什么都没点到"，
+ * 直到若干步之后才以别的错误码失败，根因完全看不出来。宁可这里立刻如实报出。
+ */
+async function assertViewMounted(wc: Electron.WebContents, label: string): Promise<void> {
+  const vp = await wc.executeJavaScript('({ w: innerWidth, h: innerHeight })').catch(() => null)
+  if (vp && (vp.w < 50 || vp.h < 50)) {
+    throw new Error(`TASK_VIEW_DETACHED: ${label} 需要真实落点，但店铺视图当前未挂载（页面视口 ${vp.w}×${vp.h}）——请关闭遮挡它的弹层后重试`)
+  }
+}
+
+/**
  * 跟随新标签页（点击后平台用 window.open 打开目标页时使用）。
  *
  * 真店实测（微信小店达人广场「详情」）：点击不改变当前页地址，而是在店铺窗口里
@@ -701,6 +762,11 @@ async function trustedWrite(
     throw new Error(`TASK_SELECTOR_CHANGED: ${label} 目标不可用（${located && located.reason || 'UNKNOWN'}）${sel}`)
   }
   guardSignals(run)
+
+  // 受信任输入**必须**有真实落点：视图被摘（弹层遮挡）时页面视口是 0×0，
+  // 坐标点击与键盘事件都到不了页面。这里提前如实失败，别让它点两轮再来一句含糊的
+  // "写入未生效"——否则排查时看不出根因是"视图没挂载"。
+  await assertViewMounted(wc, label)
 
   // 同内容重写是幂等的，允许一次整体重试吸收偶发竞态（忙机焦点/输入管线滞后）
   let lastDiag = ''
@@ -778,7 +844,19 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
     case 'waitForPage': {
       const wc = wcOrThrow(run)
       if (input.urlIncludes) {
-        await pollUntil(run, () => String(wc.getURL()).includes(String(input.urlIncludes)), step.timeoutMs, 'waitForPage')
+        const want = String(input.urlIncludes)
+        try {
+          await pollUntil(run, () => String(wc.getURL()).includes(want), step.timeoutMs, 'waitForPage')
+        } catch (e: any) {
+          // 登录跳转要说清楚：被重定向到登录页时，URL 永远不会变成目标地址，
+          // 直接报"超过 45000ms"会让人以为是页面慢/改版（实测快手未登录踩过）。
+          // 这是用户能自己解决的一件事，错误信息必须指出它。
+          const cur = (() => { try { return String(wcOrThrow(run).getURL()) } catch { return '' } })()
+          if (/login|passport|signin|sso/i.test(cur)) {
+            throw new Error(`TASK_LOGIN_REQUIRED: 等待「${want}」超时——页面被重定向到登录页（${cur.slice(0, 120)}），该店铺登录态已失效，请重新登录后重试`)
+          }
+          throw e
+        }
       } else {
         await pollUntil(run, () => !wc.isLoading(), step.timeoutMs, 'waitForPage 加载完成')
       }
@@ -814,7 +892,22 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
     case 'readTable': {
       const wc = wcOrThrow(run)
       const deepTable = !!input.deep
-      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, deepTable)
+      const emptyOkEarly = input.emptyOk === true
+      if (emptyOkEarly) {
+        // 允许空的读取：给页面一段**有界**的时间把表渲染出来，但等不到也不报错
+        // （交给下面的 emptyOk 落 0 条）。不能用 waitForSelector——它会一直等到步骤超时，
+        // 每个空方向白等 30s（微信/抖店各有一个空方向，实测很可观）。
+        const until = Date.now() + Math.min(step.timeoutMs, 12000)
+        for (;;) {
+          const found = await wc.executeJavaScript(deepTable
+            ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().some(el => { try { return el.matches(${JSON.stringify(String(input.selector))}) } catch { return false } }) })()`
+            : `!!document.querySelector(${JSON.stringify(String(input.selector))})`).catch(() => false)
+          if (found || Date.now() >= until) break
+          await new Promise(r => setTimeout(r, 300))
+        }
+      } else {
+        await waitForSelector(wc, String(input.selector), run, step.timeoutMs, deepTable)
+      }
       const findTable = deepTable
         ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().filter(el => { try { return el.matches(${JSON.stringify(String(input.selector))}) } catch { return false } }) })()`
         : `(Array.from(document.querySelectorAll(${JSON.stringify(String(input.selector))})))`
@@ -826,7 +919,29 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       // 否则只能读到一行表头、数据行数为 0（实测踩过）。
       const pick = input.pickByHeader ? String(input.pickByHeader) : ''
       const mergeHeader = !!input.mergeHeaderTable
+      // expectHeaders：读到的表头必须包含这些列名（发票中心按方向校验用）。
+      // 页内切方向没生效时，这里会读到上一个方向的表 —— 必须如实失败，
+      // 而不是把上一个方向的数据当成本方向的上报（那是最危险的静默错误）。
+      const expectHeaders: string[] = Array.isArray(input.expectHeaders) ? input.expectHeaders.map(String) : []
+      // rejectHeaders：读到含这些列名的表**不采信**，按"该方向没数据"处理。
+      // 用途：切页签失败时页面上留着上一个方向的表，而该方向自己恰好没有表
+      // （实测微信「给买家开票」整页无表）——不挡掉就会把上一个方向的数据当成它的上报，
+      // 界面里出现两份一模一样、却挂不同方向名的记录。与 emptyOk 配套：这是"不是我的表"，不是报错。
+      const rejectHeaders: string[] = Array.isArray(input.rejectHeaders) ? input.rejectHeaders.map(String) : []
+      // emptyOk：该方向**本来就可能没有数据**（实测微信「给买家开票」整页没有账单表、
+      // 抖店「给消费者开票」结构未验）——此时"挑不到表"不是页面改版，而是"这个方向就是空的"。
+      // 没有它就会把一个正常的空方向报成 TASK_SELECTOR_CHANGED，让整轮采集失败。
+      // 给了它就落一条空快照（如实 0 条），界面显示"0 条"而不是"采集失败"。
+      const emptyOk = input.emptyOk === true
+      const emptyResult = (why: string) => {
+        if (input.metric) {
+          // 空方向也要落快照：否则界面上这个方向没有采集时间，看起来像"从没抓过"
+          TaskStore.insertSnapshot(run.storeId, String(input.metric), input.keepRows ? [] : 0, run.runId)
+        }
+        return { kind: 'table' as const, payload: { rows: [], rowCount: 0, metric: input.metric || null, empty: why } }
+      }
       const rows = await wc.executeJavaScript(`(() => {
+        ${TABLE_ROW_CLEAN_FN}
         const tables = ${findTable};
         if (!tables || !tables.length) return null;
         let target = tables[0];
@@ -844,13 +959,42 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         const grab = (t) => Array.from(t.querySelectorAll('tr')).map(tr =>
           Array.from(tr.children).map(c => String(c.innerText || '').trim().slice(0, 500)));
         const out = grab(target);
+        // 表头校验：在表头行（前 3 行里挑）中找期望列名
+        const EXPECT = ${JSON.stringify(expectHeaders)};
+        const REJECT = ${JSON.stringify(rejectHeaders)};
+        if (EXPECT.length || REJECT.length) {
+          const headText = out.slice(0, 3).map(r => r.join('\\u0000')).join('\\u0000');
+          // REJECT：这张表带着**别的方向**的特征列 → 不是本方向的表（切页签没生效）。
+          // 优先于 EXPECT 判定：本方向可能压根没有自己的列名可期待（空方向）。
+          const foreign = REJECT.filter(h => headText.includes(h));
+          if (foreign.length) return 'FOREIGN_TABLE:' + foreign.join('、');
+          const missing = EXPECT.filter(h => !headText.includes(h));
+          if (missing.length) return 'HEAD_MISS:' + missing.join('、');
+        }
         if (body) out.push(...grab(body));
-        return out.slice(0, 2000);
+        // 清洗"不是数据的数据行"（重复表头行 / 「暂无数据」占位行）——实现见
+        // shared/constants/invoice.ts 的 TABLE_ROW_CLEAN_FN（与单测共用同一份源码）。
+        const cleaned = __cleanRows(out);
+        return cleaned.map(r => r.map(c => String(c).slice(0, 500))).slice(0, 2000);
       })()`)
+      if (typeof rows === 'string' && rows.startsWith('FOREIGN_TABLE:')) {
+        // 读到的是别的方向的表：本方向没有数据（不是"改版"）——只有当步骤允许空时才这么判，
+        // 否则就是真出问题了（说明页面结构和档案不一致），如实失败更安全。
+        if (emptyOk) return emptyResult(`页面上是另一方向（含「${rows.slice('FOREIGN_TABLE:'.length)}」列）的表，本方向没有自己的数据`)
+        throw new Error(`TASK_SELECTOR_CHANGED: 读到的表格属于别的开票方向（含「${rows.slice('FOREIGN_TABLE:'.length)}」列）——页内切页签没生效`)
+      }
       if (rows === 'PICK_MISS') {
+        if (emptyOk) return emptyResult(`页面上没有表头含「${pick}」的表格`)
         throw new Error(`TASK_SELECTOR_CHANGED: 页面上没有表头含「${pick}」的表格（发票页可能改版或未加载完）`)
       }
-      if (!rows) throw new Error(`TASK_SELECTOR_CHANGED: 未找到表格 ${String(input.selector)}`)
+      if (typeof rows === 'string' && rows.startsWith('HEAD_MISS:')) {
+        if (emptyOk) return emptyResult(`表头缺少期望列「${rows.slice('HEAD_MISS:'.length)}」`)
+        throw new Error(`TASK_SELECTOR_CHANGED: 表格表头缺少期望列「${rows.slice('HEAD_MISS:'.length)}」——页内切页签可能没生效，或平台改版`)
+      }
+      if (!rows) {
+        if (emptyOk) return emptyResult('页面上没有该选择器的表格')
+        throw new Error(`TASK_SELECTOR_CHANGED: 未找到表格 ${String(input.selector)}`)
+      }
       if (input.metric) {
         // keepRows：把整表行数组落快照（发票中心要展示"待开票信息"的内容，不只是一个行数）；
         // 默认仍只落行数，保持既有行为不变（概览页/环境面板看的是"采集到几行"）
@@ -980,6 +1124,11 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         ? { roundIdx, visited: unvisited ? Array.from(run.visitedRows) : [], dedupNs }
         : undefined
       guardSignals(run)
+      // allowJsWhenDetached：视图未挂载时降级为 JS 点击（不是"被遮挡"）。
+      // 只有**纯页内状态切换**的点击才该开它——切页签就是典型：点了之后页面自己重渲染，
+      // 不依赖浏览器输入管线。而依赖框架真实输入的按钮（微信邀约表单）绝不能开，
+      // 开了会静默点空、后面步骤再以"写入未生效"失败，根因反而更难查。
+      const allowJsWhenDetached = input.allowJsWhenDetached === true
       const deadline = Date.now() + step.timeoutMs
       let sawScopeMiss = false
       let sawCoveredBy: string | null = null
@@ -987,10 +1136,15 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       if (input.mode === 'real') {
         for (;;) {
           guardSignals(run)
-          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, pick)
+          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, pick, allowJsWhenDetached)
           if (hit.ok) break
           if (hit.reason === 'DISABLED') {
             throw new Error(`${disabledCode}: 「${needle}」当前为禁用态${disabledCode === 'TASK_TARGET_DISABLED' ? '（平台限制该操作）' : ''}`)
+          }
+          // 视图未挂载且步骤没允许降级：立刻如实失败，别白等到超时
+          // （此时 elementFromPoint 恒为 null，再轮询一万次也还是 null）
+          if (hit.reason === 'VIEW_DETACHED') {
+            throw new Error(`TASK_VIEW_DETACHED: 点「${needle}」需要真实落点，但店铺视图当前未挂载（视口 ${hit.coveredBy}）——请关闭遮挡它的弹层后重试`)
           }
           // ALL_VISITED：列表已渲染、候选都在，只是本页每一条都已处理过 → 立刻交给上层翻页，
           // 不必空等到超时（实测每个"本页取尽"都白等 30s，几十轮下来很可观）
@@ -1018,7 +1172,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         const follow = input.followTab as { urlIncludes?: string; closeOld?: boolean } | undefined
         const beforeTabIds = follow ? new Set(getStoreTabs(run.storeId).map(t => t.id)) : null
         if (unvisited && hit.rowKey) run.visitedRows.add(hit.rowKey)
-        realClick(wc, hit.x!, hit.y!)
+        performHitClick(wc, hit)
         guardSignals(run)
         if (follow && beforeTabIds) {
           const openedId = await followOpenedTab(run, beforeTabIds, follow.urlIncludes, step.timeoutMs)
@@ -1053,8 +1207,8 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             if (done) break
             // 还没跳 → 再点一次（重新定位，避免元素重排后坐标失效）
             guardSignals(run)
-            const again = await findTextTarget(wcOrThrow(run), run, needle, deep, step.timeoutMs, 'clickByText waitUrl', within, pick)
-            if (again.ok) { realClick(wcOrThrow(run), again.x!, again.y!) }
+            const again = await findTextTarget(wcOrThrow(run), run, needle, deep, step.timeoutMs, 'clickByText waitUrl', within, pick, allowJsWhenDetached)
+            if (again.ok) { performHitClick(wcOrThrow(run), again) }
           }
           if (!done) {
             throw new Error(`TASK_TIMEOUT: 点击「${needle}」${attempts} 次后地址仍未变为含「${waitUrl.includes}」的页面`)
@@ -1065,6 +1219,9 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           payload: {
             action: 'clickByText', matched: needle, clickedText: hit.clickedText,
             candidates: hit.candidates, mode: 'real',
+            // 视图当时没挂载 → 只能降级为 JS 点击。如实记下来：这种点击对
+            // "未接收合成事件"的框架按钮可能不生效，排查时一眼能看出走了哪条路。
+            transport: hit.transport ?? 'trusted-mouse',
             ...(hit.rowKey ? { picked: hit.picked ?? 'best', rowKey: hit.rowKey } : {}),
             ...(follow ? { followedTab: run.tabId } : {})
           }
@@ -1750,6 +1907,8 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       // 没有才点 addText 入口 → 等弹窗复选框 → 勾选未选项（≤max，真实点击）→
       // 点 confirmText → 复核行数。自适应在于避免对"已有商品"的页面重复添加。
       const wc = wcOrThrow(run)
+      // 勾选/确认都是坐标点击，视图没挂载时全落空 → 先如实查挂载状态
+      await assertViewMounted(wc, 'ensureRows 勾选')
       const deep = !!input.deep
       const min = input.min == null ? 1 : Number(input.min)
       const max = Number(input.max)
@@ -1818,6 +1977,8 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       // 按商品ID在邀约商品弹窗中逐项搜索并勾选（微信小店流程：用户指定ID，系统代填）。
       // 与 ensureRows 不同：不是"勾前N个未选项"，而是"找到匹配 ID 的行并勾上"。
       const wc = wcOrThrow(run)
+      // 同上：这一步全靠坐标点击（入口/搜索框/复选框），视图没挂载就全落空
+      await assertViewMounted(wc, 'ensureRowsById 勾选')
       const deep = !!input.deep
       const ids = Array.isArray(input.productIds) ? input.productIds.map(String) : []
       if (!ids.length) throw new Error('TASK_INVALID_STEP: ensureRowsById 缺少 productIds')
@@ -2005,6 +2166,15 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       // 卡片文本常带"较上期/比上周 X%"等对比噪音（实测快手指标卡）：只取开头的"数字（可带货币
       // 符号与万/亿）"作为指标值，其余丢弃——绝不把对比数字当成指标值。
       const raw = String(res.value)
+      // allowText：该标签的值**本来就不是数字**（实测发票中心的「收票主体」是公司名、
+      // 「账单日期」是"2026年05/06/07/08月"）——不加这个开关，数值抽取会把"2026年…"截成
+      // "2026"、把公司名直接判成"不是数值"而失败（实测拼多多给平台开票踩过）。
+      if (input.allowText === true) {
+        const text = raw.replace(/\s+/g, ' ').trim().slice(0, maxLen)
+        if (!text) throw new Error(`TASK_SELECTOR_CHANGED: 「${label}」旁没读到内容（${res.reason || 'EMPTY'}）`)
+        if (input.metric) TaskStore.insertSnapshot(run.storeId, String(input.metric), text, run.runId)
+        return { kind: 'text', payload: { text, rawText: raw.slice(0, 60), label, cardText: res.cardText, metric: input.metric || null } }
+      }
       const m = /^[¥￥$€]?\s*[\d,]+(?:\.\d+)?\s*(?:万|亿)?/.exec(raw)
       // 作为"指标"落库时必须真的取到数字：取不到如实失败，绝不把 "(退款时间)" 这类文字当指标值存进数据中心
       if (input.metric && !m) {
