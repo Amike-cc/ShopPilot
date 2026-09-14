@@ -65,6 +65,12 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      */
     missingCode: z.string().min(1).max(40).optional(),
     /**
+     * 目标处于禁用态时用的错误码（默认 TASK_TARGET_DISABLED）。
+     * 用途：翻页按钮在最后一页会被平台置灰——那个禁用不是"平台限制操作"，
+     * 而是"没有更多了"，交给它 TASK_SELECTION_SHORTFALL 就能干净收工。
+     */
+    disabledCode: z.string().min(1).max(40).optional(),
+    /**
      * 点完可能在新标签页打开时用（微信达人广场实测：「详情」是 window.open，
      * 页面本身不跳转）。给了它就等新标签页出现、把本次运行切到新标签页上继续，
      * 并默认关掉旧的运行标签页（否则每个候选都留一个标签页）。
@@ -75,11 +81,13 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
       closeOld: z.boolean().optional()
     }).strict().optional(),
     /**
-     * nth:'round' —— 取"列表里第 N 条"（N = 当前循环轮次，1 起），逐轮换目标。
-     * 微信邀约实测需要：每轮都点第一条详情会对同一位达人重复发邀约。
-     * 按行容器去重后计数，条数不够 = 没有下一个候选（配 missingCode 干净收尾）。
+     * nth:'round' —— 取"列表里第 N 条"（N = 当前循环轮次，1 起）。
+     * nth:'unvisited' —— 取**第一条本次运行还没点过的**（按行容器文本去重，点过就记住）。
+     *   微信广场实测：列表每次加载都会重新洗牌（同样地址、首行每次不同），
+     *   所以"第 N 条"并不能保证换人；"还没点过的第一条"才是不会重复邀约同一人的判据。
+     *   当前页全都点过 = 该页取不出（配 missingCode 让 loop 翻页后重试）。
      */
-    nth: z.enum(['round']).optional()
+    nth: z.enum(['round', 'unvisited']).optional()
   }).strict().refine((v) => !v.nth || v.mode === 'real', { message: 'nth 仅支持 mode:"real"（需要真实鼠标点击）' }),
   clickAll: z.object({
     selector: selector.optional(),
@@ -151,11 +159,23 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   waitMs: z.object({ ms: z.number().int().min(100).max(120000) }).strict(),
   // 等元素消失/不可见（读型步骤）：提交后校验结果（如邀约抽屉应关闭）
   waitForGone: z.object({ selector, deep: z.boolean().optional() }).strict(),
+  // 切到已打开的某个标签页（不导航）：微信邀约逐轮换人时回到"一直活着的"广场页——
+  // 重载会重置分页与筛选（平台翻页是内部状态、URL 不变）。path 按 pathname 精确匹配，
+  // urlIncludes 按子串匹配（path 更稳妥，避免 '/find' 前缀误命中 '/finder-detail'）。
+  useTab: z.object({
+    path: z.string().min(1).max(300).optional(),
+    urlIncludes: z.string().min(1).max(300).optional(),
+    // 默认关掉切换前的运行标签页（详情/表单页用完即关，否则轮次一多窗口堆满）
+    closeCurrent: z.boolean().optional()
+  }).strict().refine((v) => !!v.path !== !!v.urlIncludes, { message: 'useTab 的 path 与 urlIncludes 必须二选一' }),
   /**
    * 批次循环：把"一轮完整动作"（如 筛选→勾 40 位→批量邀约→确认发送）重复执行。
    *   - stopOn：命中这些错误码即**干净停止**（本轮记入 summary、不再继续、整个 run 仍成功）。
    *     用途："邀约额度用完"（确认发送变禁用 → TASK_QUOTA_EXCEEDED）与"可选达人不足"
    *     （TASK_SELECTION_SHORTFALL）都算正常收尾，不是失败；
+   *   - onCode：命中这些错误码时**先跑恢复步骤、再把本轮同一个子步骤重跑**（最多 recoverLimit 次）。
+   *     用途：微信广场"本页达人都已邀约过"（TASK_PAGE_EXHAUSTED）→ 点「下一页」→ 重试取人；
+   *     与 stopOn 的区别：stopOn 是收工，onCode 是"换个条件继续干"；
    *   - 其它错误照常向上抛 → run 如实失败（不吞错、不假装成功）；
    *   - 嵌套步骤逐个走白名单校验（task-store 递归校验），且整步不可恢复（会重复发送）。
    */
@@ -163,6 +183,13 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     label: z.string().max(60).optional(),
     maxRounds: z.number().int().min(1).max(50),
     stopOn: z.array(z.string().min(1).max(40)).min(1).max(8),
+    onCode: z.array(z.object({
+      code: z.string().min(1).max(40),
+      // 恢复动作（如「点下一页」）；同样逐条走白名单校验
+      steps: z.array(taskStepSchema).min(1).max(10),
+      // 本轮内最多恢复几次（防止"翻页点不动"时空转）
+      limit: z.number().int().min(1).max(10).optional()
+    }).strict()).max(4).optional(),
     // 一轮动作的步骤数上限：抖店一轮 ≈ 17–28 步（含多等级/多权益），给到 40 步余量
     steps: z.array(taskStepSchema).min(1).max(40)
   }).strict()
@@ -174,6 +201,8 @@ export const NON_RESUMABLE_TYPES: ReadonlySet<string> = new Set([
   'click', 'clickByText', 'clickAll', 'setInput', 'aiGenerate',
   // 微信小店流程的副作用步骤同样不可重复执行（重复点击=重复发送风险）
   'typeText', 'ensureRows', 'ensureRowsById',
+  // 切标签页是运行态操作（tabId 会被改写），重放没有意义
+  'useTab',
   // 循环体里通常含点击/写入（一循环就是一轮真实发送），整步不可重放
   'loop'
 ])
@@ -193,6 +222,7 @@ export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
   readLabelValue: 25000,
   waitMs: 120000,
   waitForGone: 30000,
+  useTab: 30000,
   // loop 的 timeoutMs 不参与实际计时（由内部各步骤自己的超时决定）；
   // 这里给个展示用的大值，避免界面上显示成 15s 起步的时间
   loop: 3600000

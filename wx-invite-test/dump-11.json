@@ -1,0 +1,14 @@
+[
+ {
+  "idx": 0,
+  "kind": "executed",
+  "done": true,
+  "stepType": "navigate"
+ },
+ {
+  "idx": 1,
+  "kind": "executed",
+  "done": true,
+  "stepType": "waitForPage"
+ }
+]

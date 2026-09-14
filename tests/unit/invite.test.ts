@@ -73,27 +73,34 @@ describe('微信小店（assist-form）步骤构造', () => {
     productCount: 1
   }
 
-  // 微信现在和抖店一样：整条序列是一个 loop（一轮=一个达人），**无人工确认门禁**，
-  // 循环到额度用完或列表里没有更多达人（stopOn）为止
+  // 微信：广场只开一次（分页/筛选是页面内部状态，重载会丢；列表每次加载还会洗牌），
+  // 之后是 loop（一轮=一个达人），**无人工确认门禁**，循环到额度用完或翻不动为止
+  const wxParts = (steps: any[]) => {
+    const opening = steps.slice(0, -1)
+    expect(steps[steps.length - 1].type).toBe('loop')
+    return { opening, loop: steps[steps.length - 1] }
+  }
   const wxRound = (steps: any[]) => {
-    expect(steps).toHaveLength(1)
-    expect(steps[0].type).toBe('loop')
-    return steps[0].input.steps as any[]
+    const { loop } = wxParts(steps)
+    return loop.input.steps as any[]
   }
 
-  it('整条序列是一个 loop：一轮=一个达人（进广场→详情→邀请带货→表单→发送→校验）', () => {
+  it('广场只导航+筛选一次；一轮=一个达人（回广场→详情→邀请带货→表单→发送→校验→回广场）', () => {
     const steps = buildAssistSteps(WX as any, base, 'https://store.weixin.qq.com/shop/findersquare/find')
-    expect(steps).toHaveLength(1)
-    const loop = steps[0]
+    const { opening, loop } = wxParts(steps)
+    // 开头只导航一次（不再每轮重载：重载会重置分页/筛选，且候选顺序重新洗牌）
+    expect(opening[0].type).toBe('navigate')
+    expect(opening.some(s => s.type === 'waitForPage')).toBe(true)
     expect(loop.type).toBe('loop')
     expect(loop.input.stopOn).toContain('TASK_QUOTA_EXCEEDED')
     expect(loop.input.stopOn).toContain('TASK_SELECTION_SHORTFALL')
     expect(loop.input.maxRounds).toBeGreaterThan(1)
     const round = wxRound(steps)
     const types = round.map(s => s.type)
-    // 一轮以"进广场"开始（不再依赖人工镜像的邀约页）
-    expect(types[0]).toBe('navigate')
-    expect(types).toContain('waitForPage')
+    // 一轮开头先切回"一直活着的"广场标签页；轮内不再有 navigate
+    expect(types[0]).toBe('useTab')
+    expect(types[types.length - 1]).toBe('useTab')
+    expect(types).not.toContain('navigate')
     // 额度预检在轮内（额度为 0 → 干净停止）
     expect(types).toContain('requireQuota')
     const quota = round.find(s => s.type === 'requireQuota')!
@@ -113,40 +120,56 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect(round[sendIdx + 1]).toMatchObject({ type: 'waitForText', input: { text: '确认发送邀约', deep: true } })
     expect(round[sendIdx + 2]).toMatchObject({ type: 'clickByText', input: { text: '确认', deep: true, mode: 'real' } })
     expect(round[sendIdx + 3].type).toBe('waitForGone')
-    expect(types[types.length - 1]).toBe('screenshot')
+    expect(types).toContain('screenshot')
     // 一轮步骤数在 loop 的 40 步上限内
     expect(round.length).toBeLessThanOrEqual(40)
   })
 
-  it('筛选参数进轮内：类型/类目/其他筛选每轮重新应用；点不到「详情」=没有下一个达人（干净停止）', () => {
+  it('本页取不出人 → onCode 点「下一页」重试；翻不动 → 由 stopOn 收工', () => {
+    const steps = buildAssistSteps(WX as any, base, SQUARE)
+    const { loop } = wxParts(steps)
+    const rule = (loop.input.onCode || []).find((r: any) => r.code === 'TASK_PAGE_EXHAUSTED')!
+    expect(rule).toBeTruthy()
+    expect(rule.limit).toBeGreaterThan(1)
+    expect(rule.steps.some((s: any) => s.type === 'clickByText' && s.input.text === '下一页')).toBe(true)
+    // 「下一页」点不到 / 末页置灰 → 都报 SELECTION_SHORTFALL → 命中 stopOn，正常收尾
+    const next = rule.steps.find((s: any) => s.type === 'clickByText' && s.input.text === '下一页')!
+    expect(next.input.missingCode).toBe('TASK_SELECTION_SHORTFALL')
+    expect(next.input.disabledCode).toBe('TASK_SELECTION_SHORTFALL')
+    expect(loop.input.stopOn).toContain('TASK_SELECTION_SHORTFALL')
+  })
+
+  it('筛选在开头应用一次；点不到「详情」=本页取不出（翻页恢复）', () => {
     const steps = buildAssistSteps(WX as any, {
       ...base, finderType: '直播带货者', finderCategories: ['母婴'], finderOtherFilters: ['有联系方式']
     }, 'https://store.weixin.qq.com/shop/findersquare/find')
+    const { opening } = wxParts(steps)
+    const openTexts = opening.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(openTexts).toContain('直播带货者')
+    expect(openTexts).toContain('母婴')
+    expect(openTexts).toContain('有联系方式')
     const round = wxRound(steps)
     const texts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
-    expect(texts).toContain('直播带货者')
-    expect(texts).toContain('母婴')
-    expect(texts).toContain('有联系方式')
-    // 进达人详情：点不到就按 SELECTION_SHORTFALL 收尾（loop 视为正常停止）
+    // 进达人详情：取不出就按 PAGE_EXHAUSTED 交给 onCode 翻页（而不是直接收工）
     const detail = round.find(s => s.type === 'clickByText' && String(s.input.text) === '详情')!
-    expect(detail.input.missingCode).toBe('TASK_SELECTION_SHORTFALL')
+    expect(detail.input.missingCode).toBe('TASK_PAGE_EXHAUSTED')
     // 平台点「详情」是 window.open 开新标签页（页面本身不跳转）→ 必须带 followTab，
     // 否则引擎留在旧标签页等 finder-detail，整轮超时失败（2026-09-14 真店实测）
-    expect(detail.input.followTab).toMatchObject({ urlIncludes: 'finder-detail' })
-    // 每轮换一条：否则每轮都点第一条 → 同一份邀约重复发给同一位达人
-    expect(detail.input.nth).toBe('round')
+    // 详情点击：广场必须留着（分页/筛选是页面内部状态，关了就得重载 → 分页丢、名单重洗）
+    expect(detail.input.followTab).toMatchObject({ urlIncludes: 'finder-detail', closeOld: false })
+    // 选人靠"还没点过的第一条"：列表每次加载都会洗牌，"第几条"保证不了换人
+    expect(detail.input.nth).toBe('unvisited')
     const invite = round.find(s => s.type === 'clickByText' && String(s.input.text) === '邀请带货')!
     expect(invite.input.followTab).toMatchObject({ urlIncludes: 'initiate-invite' })
     expect(texts).toContain('邀请带货')
-    // 也应在轮内等待详情页/表单页
+    // 轮内仍应等待详情页/表单页
     for (const inc of ['finder-detail', 'initiate-invite']) {
       expect(round.some(s => s.type === 'waitForPage' && String(s.input.urlIncludes) === inc)).toBe(true)
     }
     // 不传筛选时不该出现这些点击
-    const round2 = wxRound(buildAssistSteps(WX as any, base, 'https://store.weixin.qq.com/shop/findersquare/find'))
-    const texts2 = round2.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
-    expect(texts2).not.toContain('直播带货者')
-    expect(texts2).toContain('详情')
+    const step2 = buildAssistSteps(WX as any, base, SQUARE)
+    const openTexts2 = wxParts(step2).opening.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(openTexts2).not.toContain('直播带货者')
   })
 
   it('邀约商品：填了商品ID走 ensureRowsById（按ID指定），没填走 ensureRows（按数量）', () => {
@@ -302,7 +325,9 @@ describe('buildInviteSteps 分派与 urlPathHint', () => {
     expect(() => buildInviteSteps(WX, {}, 'https://x')).toThrow('assist')
     expect(() => buildInviteSteps(DD, {}, 'https://x')).toThrow('batch')
     const steps = buildInviteSteps(WX, { assist: { contact: 'a', wechat: 'wx', phone: '13800000000', script: 'b', scriptMode: 'manual', productCount: 1 } }, 'https://x')
-    expect(steps[0].type).toBe('loop')
+    // 微信：先开广场（navigate 一次），随后才是 loop（每轮一个达人）
+    expect(steps[0].type).toBe('navigate')
+    expect(steps[steps.length - 1].type).toBe('loop')
   })
   it('urlPathHint 取末段路径', () => {
     expect(urlPathHint('https://store.weixin.qq.com/shop/findersquare/find')).toBe('find')
@@ -346,12 +371,38 @@ describe('任务步骤输入 schema', () => {
     expect(stepInputSchemas.clickByText.safeParse({ text: '详情', followTab: 'yes' }).success).toBe(false)
   })
 
-  it('nth:"round"（每轮换一条）：必须配 mode:"real"，值只有 round', () => {
+  it('nth：两种取值都要 mode:"real"；值只有 round / unvisited', () => {
     expect(stepInputSchemas.clickByText.safeParse({ text: '详情', deep: true, mode: 'real', nth: 'round' }).success).toBe(true)
-    // 没有真实鼠标点击就没有"第几条"可言 → 拒绝
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', deep: true, mode: 'real', nth: 'unvisited' }).success).toBe(true)
+    // 没有真实鼠标点击就没有"第几条/哪一条"可言 → 拒绝
     expect(stepInputSchemas.clickByText.safeParse({ text: '详情', nth: 'round' }).success).toBe(false)
-    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', mode: 'js', nth: 'round' }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', nth: 'unvisited' }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', mode: 'js', nth: 'unvisited' }).success).toBe(false)
     expect(stepInputSchemas.clickByText.safeParse({ text: '详情', mode: 'real', nth: 'first' }).success).toBe(false)
+  })
+
+  it('disabledCode：禁用态可指定错误码（翻页按钮末页置灰 = 没有更多，不是平台限制）', () => {
+    expect(stepInputSchemas.clickByText.safeParse({ text: '下一页', deep: true, mode: 'real', disabledCode: 'TASK_SELECTION_SHORTFALL' }).success).toBe(true)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '下一页', disabledCode: 'x'.repeat(41) }).success).toBe(false)
+  })
+
+  it('useTab：path 与 urlIncludes 二选一；拒绝多余键', () => {    expect(stepInputSchemas.useTab.safeParse({ path: '/shop/findersquare/find' }).success).toBe(true)
+    expect(stepInputSchemas.useTab.safeParse({ urlIncludes: 'findersquare/find', closeCurrent: false }).success).toBe(true)
+    expect(stepInputSchemas.useTab.safeParse({ path: '/a', urlIncludes: 'b' }).success).toBe(false)
+    expect(stepInputSchemas.useTab.safeParse({}).success).toBe(false)
+    expect(stepInputSchemas.useTab.safeParse({ path: '/a', evil: 1 }).success).toBe(false)
+  })
+
+  it('loop.onCode：恢复步骤同样走白名单（未登记类型/超量被拒）', () => {
+    const okRule = { code: 'TASK_PAGE_EXHAUSTED', limit: 3, steps: [{ type: 'clickByText', input: { text: '下一页', deep: true, mode: 'real' } }] }
+    const base = { label: 'x', maxRounds: 2, stopOn: ['TASK_QUOTA_EXCEEDED'], steps: [{ type: 'navigate', input: { url: 'https://a.b/c' } }] }
+    expect(stepInputSchemas.loop.safeParse({ ...base, onCode: [okRule] }).success).toBe(true)
+    // 恢复步骤里的未登记类型 → 整条被拒
+    expect(stepInputSchemas.loop.safeParse({ ...base, onCode: [{ ...okRule, steps: [{ type: 'runArbitraryCode', input: {} }] }] }).success).toBe(false)
+    // 恢复步骤里的多余字段 → 被拒
+    expect(stepInputSchemas.loop.safeParse({ ...base, onCode: [{ ...okRule, steps: [{ type: 'screenshot', input: {}, evil: 1 }] }] }).success).toBe(false)
+    // 规则本身的多余键 → 被拒
+    expect(stepInputSchemas.loop.safeParse({ ...base, onCode: [{ ...okRule, evil: 1 }] }).success).toBe(false)
   })
 
   it('within 限定范围：selector 与 text 二选一，climb 有上限', () => {

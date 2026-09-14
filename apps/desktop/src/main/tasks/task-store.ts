@@ -85,6 +85,15 @@ function validateStepInput(s: { type: string; input?: unknown; timeoutMs?: numbe
   const timeoutMs = s.timeoutMs ?? (DEFAULT_STEP_TIMEOUT[s.type] ?? 15000)
   if (s.type === 'loop' && Array.isArray(input?.steps)) {
     input.steps = input.steps.map((child: any, k: number) => validateStepInput(child, `${label}.${k + 1}`))
+    // onCode 的恢复步骤同样是"会被执行的步骤"，必须一起过白名单（否则循环恢复里塞未登记类型就绕过了校验）
+    if (Array.isArray(input?.onCode)) {
+      input.onCode = input.onCode.map((rule: any, r: number) => ({
+        ...rule,
+        ...(Array.isArray(rule?.steps)
+          ? { steps: rule.steps.map((child: any, k: number) => validateStepInput(child, `${label}.r${r + 1}.${k + 1}`)) }
+          : {})
+      }))
+    }
   }
   return { type: s.type, input, timeoutMs, ...(s.retryLimit != null ? { retryLimit: s.retryLimit } : {}) }
 }

@@ -55,7 +55,11 @@ export const TASK_STEP_TYPES = [
   'waitForGone',
   // 批次循环（复合作步骤）：把一轮完整动作重复执行，直到命中 stopOn 里的错误码（干净停止，
   // 例如"邀约额度用完""可选达人不足"）或达到 maxRounds。嵌套步骤同样每个都走白名单校验。
-  'loop'
+  'loop',
+  // 切到"已经打开的某个标签页"上继续（不导航、不重载）：微信邀约逐轮换人时必须回到
+  // 那个**一直活着**的广场页——重载会重置分页与筛选，而平台的翻页是内部状态（URL 不变）。
+  // 默认关闭当前运行标签页，避免详情/表单页越堆越多。
+  'useTab'
 ] as const
 
 export type TaskStepType = (typeof TASK_STEP_TYPES)[number]

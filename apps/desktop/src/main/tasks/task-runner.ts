@@ -43,6 +43,12 @@ interface RunHandle {
   pendingConfirm: ((answer: 'approve' | 'deny' | 'cancel' | 'timeout') => void) | null
   tabId: string | null
   startedOnce: boolean
+  /**
+   * nth:'unvisited' 的去重集合：键 = `${步骤下标}:${行容器文本}`。
+   * 微信广场每次加载都重新洗牌，"第几条"不能保证换人；这个集合保证同一位达人不会被重复邀约。
+   * 只活在本次运行内（loop 整步不可恢复，重启后的行为不受影响）。
+   */
+  visitedRows: Set<string>
 }
 
 const queue: RunHandle[] = []
@@ -112,7 +118,7 @@ export function enqueueRun(taskId: string, opts: { reason: string; storeId?: str
     steps: task.steps, startFrom: 0, skipDone: false, resumeKind: 'new',
     status: 'queued', reason: opts.reason,
     cancelRequested: false, pauseRequested: false, deniedByConfirm: false,
-    pendingConfirm: null, tabId: null, startedOnce: false
+    pendingConfirm: null, tabId: null, startedOnce: false, visitedRows: new Set()
   }
   live.set(run.id, handle)
   queue.push(handle)
@@ -342,6 +348,9 @@ function classifyError(e: any): string {
   if (msg.includes('TASK_QUOTA_EXCEEDED')) return 'TASK_QUOTA_EXCEEDED'
   // 广场可选达人不足（要 40 位但池子里只有更少）——发送前中止，别发错数量
   if (msg.includes('TASK_SELECTION_SHORTFALL')) return 'TASK_SELECTION_SHORTFALL'
+  // 当前分页里的候选都已处理过（微信广场每次加载都洗牌、分页 20 条/页）：
+  // 由 loop 的 onCode 恢复步骤「点下一页」消化掉；翻到最后一页仍取不出 → 由 stopOn 收工
+  if (msg.includes('TASK_PAGE_EXHAUSTED')) return 'TASK_PAGE_EXHAUSTED'
   // 店铺浏览器/任务标签页被关闭（此前落进 INTERNAL_ERROR，看不出真实原因）
   if (msg.includes('BROWSER_CLOSED')) return 'BROWSER_CLOSED'
   // AI 相关的固定错误码：如实透出，便于界面区分"没配 Key / 地址不合法 / 超时 / 请求失败"
@@ -364,7 +373,7 @@ interface StepOutput { kind: StepResultKind | 'confirm' | 'executed'; payload: u
  * 用途：clickByText 的 nth:'round' —— 微信广场每轮点"第 N 条详情"，
  * 否则每轮都点第一位达人，会对同一个人重复发邀约。
  */
-interface StepContext { round?: number }
+interface StepContext { round?: number; path?: string }
 
 function wcOrThrow(run: RunHandle): Electron.WebContents {
   const wc = run.tabId ? getTabWebContents(run.storeId, run.tabId) : null
@@ -500,8 +509,9 @@ const SCOPE_FN = `
 
 async function findTextTarget(
   wc: Electron.WebContents, run: RunHandle, needle: string, deep: boolean, timeoutMs: number, label: string,
-  within?: { selector?: string; text?: string; climb?: number }, roundIdx?: number
-): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string }> {
+  within?: { selector?: string; text?: string; climb?: number },
+  pick?: { roundIdx?: number; visited?: string[]; dedupNs?: string }
+): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string; rowKey?: string; picked?: string }> {
   return withTimeout(() => wc.executeJavaScript(`(() => {
     ${deep ? ENUM_DEEP_FN : ''}
     ${VISIBLE_JS}
@@ -509,7 +519,9 @@ async function findTextTarget(
     ${PICK_SORT_FN}
     const needle = ${JSON.stringify(needle)};
     const within = ${JSON.stringify(within || null)};
-    const roundIdx = ${roundIdx == null ? 'null' : JSON.stringify(roundIdx)};
+    const roundIdx = ${pick && pick.roundIdx != null ? JSON.stringify(pick.roundIdx) : 'null'};
+    const visited = new Set(${JSON.stringify((pick && pick.visited) || [])});
+    const dedupNs = ${JSON.stringify((pick && pick.dedupNs) || '')};
     const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
     const root = within ? __scopeRoot(within) : null;
     if (within && !root) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
@@ -523,34 +535,56 @@ async function findTextTarget(
     }
     if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
     cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
-    // nth:'round' —— 按"列表条目"去重后取第 roundIdx 条（0 起）。
-    // 微信广场每轮要换个达人：只在 candidate 里按下标取会取到同一行的多个副本
-    // （横向滚动时平台会复制右侧固定列），所以按行容器文本去重后再取第 N 条。
-    // 条数不够 = 列表里没有下一个候选 → NOT_FOUND（调用方按 missingCode 干净收尾）。
+    // 按"列表条目"（行容器文本）去重后取目标：
+    //  - nth:'round'     → 第 roundIdx 条（0 起；条数不够 = 没有下一个候选）
+    //  - nth:'unvisited' → 第一条本次运行还没点过的（微信广场每次加载都洗牌，靠"第几条"不能保证换人）；
+    //                      本页全点过 = 该页取不出，调用方按 missingCode 报错后翻页重试
     let hit = cands[0].el;
     let picked = 'best';
-    if (roundIdx != null) {
+    let rowKey = null;
+    if (roundIdx != null || visited.size >= 0 && dedupNs) {
       const rowOf = (el) => el.closest('tr, li, [data-row-key], [class*="card"], [class*="dorami"]') || el.parentElement || el;
       const keyOf = (el) => {
         const row = rowOf(el);
-        const t = String((row && row.innerText) || el.innerText || '').replace(/\\s+/g, ' ').trim();
-        return t.slice(0, 300);
+        return String((row && row.innerText) || el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 200);
       };
       const seen = new Set();
       const entries = [];
       for (const c of cands) {
         const k = keyOf(c.el);
-        if (seen.has(k)) continue;
+        if (!k || seen.has(k)) continue;
         seen.add(k);
-        entries.push(c.el);
+        entries.push({ el: c.el, key: k });
       }
-      if (roundIdx >= entries.length) return { ok: false, reason: 'NOT_FOUND' };
-      hit = entries[roundIdx];
-      picked = 'round' + roundIdx;
+      // 表格横向滚动时平台会复制一份"固定列镜像"，镜像里那个链接的**自身容器只有链接文字**
+      // （实测微信广场：滚动区是 <tr>，镜像那份的容器文本就是"详情"两个字）。
+      // 它不是一条独立候选——真行永远带着达人信息。不过滤掉的话会被当成"第 6 条"，
+      // 于是同一页里对第一位达人重复邀约（实测踩过）。
+      if (entries.length > 1) {
+        const rich = entries.filter(e => e.key !== needle);
+        if (rich.length) entries.length = 0, entries.push(...rich);
+      }
+      if (roundIdx != null) {
+        if (roundIdx >= entries.length) return { ok: false, reason: 'NOT_FOUND' };
+        hit = entries[roundIdx].el;
+        rowKey = dedupNs + ':' + entries[roundIdx].key;
+        picked = 'round' + roundIdx;
+      } else {
+        const avail = entries.filter(e => !visited.has(dedupNs + ':' + e.key));
+        // 有候选但全都处理过 → 与"一个候选都没有（列表还没渲染/真没了）"区分开：
+        // 前者可以立刻判定该翻页，后者必须继续等（否则冷加载时会被误判成"本页取尽"而跳页）
+        if (!avail.length) return { ok: false, reason: entries.length ? 'ALL_VISITED' : 'NOT_FOUND' };
+        hit = avail[0].el;
+        rowKey = dedupNs + ':' + avail[0].key;
+        picked = 'unvisited';
+      }
     }
     let dis = hit.disabled === true || hit.getAttribute('aria-disabled') === 'true';
-    let p = hit.parentElement;
-    for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
+    // 从**元素自身**开始查禁用类：平台普遍用 class 表达禁用（实测微信：「发送邀约」在字段齐备前
+    // 是 weui-desktop-btn_disabled，没有 disabled 属性；末页的「下一页」同理）——
+    // 只查父级会漏掉按钮自己，于是把"点不动的按钮"当成可点，点击静默无效（实测踩过）。
+    let p = hit;
+    for (let i = 0; i < 4 && p && !dis; i++, p = p.parentElement) {
       if (/disabled/i.test(String(p.className || ''))) dis = true;
     }
     if (dis) return { ok: false, reason: 'DISABLED' };
@@ -568,7 +602,7 @@ async function findTextTarget(
       for (const y of ys) {
         const at = deepAt(x, y);
         if (at && (at === hit || hit.contains(at) || at.contains(hit) || labelEl.contains(at) || at.contains(labelEl))) {
-          return { ok: true, x, y, clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, picked };
+          return { ok: true, x, y, clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, picked, rowKey };
         }
       }
     }
@@ -582,7 +616,7 @@ async function findTextTarget(
         const tag = anc.tagName;
         const interactive = tag === 'A' || tag === 'BUTTON' || tag === 'LABEL' || anc.getAttribute('role') === 'button';
         if (interactive && rowOf(anc) === rowOf(hit)) {
-          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag, picked };
+          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag, picked, rowKey };
         }
       }
       // 固定列副本：表格比视口宽时平台把右侧「操作」列复制成 position:fixed 的镜像
@@ -595,7 +629,7 @@ async function findTextTarget(
         const tag = same.tagName;
         const interactive = tag === 'A' || tag === 'BUTTON' || tag === 'LABEL' || same.getAttribute('role') === 'button';
         if (interactive && ownOf(same) === ownOf(hit)) {
-          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(same.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag + '(同文本副本)', picked };
+          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(same.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag + '(同文本副本)', picked, rowKey };
         }
       }
     }
@@ -892,8 +926,18 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
       // 找不到目标时的错误码（默认 TASK_SELECTOR_CHANGED）；批量循环里用它区分"页面改版"与"没有下一个候选"
       const missingCode = input.missingCode ? String(input.missingCode) : 'TASK_SELECTOR_CHANGED'
-      // nth:'round' —— 循环里每轮取"第 N 条"（N = 当前轮次），逐轮换个目标（微信邀约不能重复邀同一人）
+      // 禁用态的错误码（默认 TASK_TARGET_DISABLED）：翻页按钮在最后一页会置灰——
+      // 那不是"平台限制操作"，而是"没有更多了"，用 disabledCode 让它如实收工
+      const disabledCode = input.disabledCode ? String(input.disabledCode) : 'TASK_TARGET_DISABLED'
+      // nth:'round' —— 循环里每轮取"第 N 条"（N = 当前轮次）
+      // nth:'unvisited' —— 取"第一条本次运行还没点过的"（微信广场每次加载都洗牌，"第几条"不可靠）
       const roundIdx = input.nth === 'round' ? Math.max(0, (ctx.round ?? 1) - 1) : undefined
+      const unvisited = input.nth === 'unvisited'
+      // 去重命名空间：同一步骤在每次运行时独立记忆（不跨运行，避免恢复执行时的历史干扰）
+      const dedupNs = unvisited ? `${run.runId}:${ctx.path ?? String(step.index ?? 0)}` : ''
+      const pick = (roundIdx != null || unvisited)
+        ? { roundIdx, visited: unvisited ? Array.from(run.visitedRows) : [], dedupNs }
+        : undefined
       guardSignals(run)
       const deadline = Date.now() + step.timeoutMs
       let sawScopeMiss = false
@@ -902,10 +946,15 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       if (input.mode === 'real') {
         for (;;) {
           guardSignals(run)
-          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, roundIdx)
+          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, pick)
           if (hit.ok) break
           if (hit.reason === 'DISABLED') {
-            throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`)
+            throw new Error(`${disabledCode}: 「${needle}」当前为禁用态${disabledCode === 'TASK_TARGET_DISABLED' ? '（平台限制该操作）' : ''}`)
+          }
+          // ALL_VISITED：列表已渲染、候选都在，只是本页每一条都已处理过 → 立刻交给上层翻页，
+          // 不必空等到超时（实测每个"本页取尽"都白等 30s，几十轮下来很可观）
+          if (hit.reason === 'ALL_VISITED') {
+            throw new Error(`${missingCode}: 当前页的候选都已处理过（没有新的「${needle}」可点）`)
           }
           // SCOPE_NOT_FOUND 不能立即失败：导航刚完成时筛选区往往还没渲染出来
           // （实测真店"点开始邀约"就折在这里——第一步点类目时 .quick-filter-button-enums 还不存在）。
@@ -927,6 +976,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         guardSignals(run)
         const follow = input.followTab as { urlIncludes?: string; closeOld?: boolean } | undefined
         const beforeTabIds = follow ? new Set(getStoreTabs(run.storeId).map(t => t.id)) : null
+        if (unvisited && hit.rowKey) run.visitedRows.add(hit.rowKey)
         realClick(wc, hit.x!, hit.y!)
         guardSignals(run)
         if (follow && beforeTabIds) {
@@ -947,7 +997,9 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           kind: 'executed',
           payload: {
             action: 'clickByText', matched: needle, clickedText: hit.clickedText,
-            candidates: hit.candidates, mode: 'real', ...(follow ? { followedTab: run.tabId } : {})
+            candidates: hit.candidates, mode: 'real',
+            ...(hit.rowKey ? { picked: hit.picked ?? 'best', rowKey: hit.rowKey } : {}),
+            ...(follow ? { followedTab: run.tabId } : {})
           }
         }
       }
@@ -1021,30 +1073,83 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       if (!nested.length) throw new Error('TASK_INVALID_STEP: loop 缺少 steps')
       const maxRounds = Number(input.maxRounds)
       const stopOn: string[] = Array.isArray(input.stopOn) ? input.stopOn.map(String) : []
+      // onCode：命中错误码先跑恢复步骤、再重试本轮同一个子步骤（实测场景：微信广场"本页达人都已
+      // 邀约过" → 点「下一页」→ 重试取人）。与 stopOn 的区别：stopOn 是收工，onCode 是换个条件继续。
+      const onCodeRaw = Array.isArray(input.onCode) ? input.onCode : []
+      const onCode = onCodeRaw.map((o: any) => ({
+        code: String(o?.code || ''),
+        limit: Number(o?.limit) > 0 ? Number(o.limit) : 3,
+        steps: (Array.isArray(o?.steps) ? o.steps : []).map((c: any) => ({
+          ...c,
+          timeoutMs: Number(c?.timeoutMs) > 0 ? Number(c.timeoutMs) : (DEFAULT_STEP_TIMEOUT[c?.type] ?? 15000)
+        })) as TaskStepDef[]
+      })).filter((o: any) => o.code && o.steps.length)
       const loopLabel = input.label ? String(input.label) : `${nested.length} 步`
       const parentIndex = run.steps.indexOf(step)
       const summary: any[] = []
       let completedRounds = 0
       let stopReason: string | null = null
       let lastArtifact: { path: string; sha256: string } | undefined
-      for (let round = 1; round <= maxRounds; round++) {
+      roundLoop: for (let round = 1; round <= maxRounds; round++) {
         guardSignals(run)
         const startedAt = Date.now()
         let childIdx = 0
         let childType = ''
+        let recovered = 0
+        const recoveryLog: string[] = []
         try {
           for (childIdx = 0; childIdx < nested.length; childIdx++) {
-            const child = nested[childIdx]
-            childType = child.type
-            guardSignals(run)
-            emitProgress(run, { phase: 'started', stepIndex: parentIndex, stepType: child.type, message: `第 ${round}/${maxRounds} 轮 · ${loopLabel}` })
-            const out = await execStep(run, child, { round })
-            if (out?.artifact) lastArtifact = out.artifact
+            for (;;) {
+              const child = nested[childIdx]
+              childType = child.type
+              guardSignals(run)
+              emitProgress(run, { phase: 'started', stepIndex: parentIndex, stepType: child.type, message: `第 ${round}/${maxRounds} 轮 · ${loopLabel}` })
+              let out: StepOutput | null = null
+              try {
+                out = await execStep(run, child, { round, path: `${parentIndex}.${childIdx}` })
+              } catch (ce: any) {
+                if (ce?.name === 'CancelSignal' || ce?.name === 'PauseSignal') throw ce
+                const hitRule = onCode.find((o: any) => o.code === classifyError(ce))
+                if (!hitRule || recovered >= hitRule.limit) throw ce
+                recovered++
+                recoveryLog.push(`第 ${round} 轮「${child.type}」命中 ${hitRule.code} → 执行恢复步骤（第 ${recovered} 次）`)
+                emitProgress(run, {
+                  phase: 'retry', stepIndex: parentIndex, stepType: child.type,
+                  message: `第 ${round} 轮命中 ${hitRule.code} → 恢复后重试（第 ${recovered}/${hitRule.limit} 次）`
+                })
+                for (const rs of hitRule.steps) {
+                  guardSignals(run)
+                  try {
+                    const rout = await execStep(run, rs, { round })
+                    if (rout?.artifact) lastArtifact = rout.artifact
+                  } catch (re: any) {
+                    if (re?.name === 'CancelSignal' || re?.name === 'PauseSignal') throw re
+                    // 恢复步骤自己失败：若是"预期收工"的码（如末页「下一页」置灰 → SELECTION_SHORTFALL），
+                    // 就按收敛尾；否则如实抛出（绝不把恢复失败吞成"继续跑"）
+                    const rcode = classifyError(re)
+                    if (stopOn.includes(rcode)) {
+                      stopReason = rcode
+                      summary.push({
+                        round, ok: false, stop: rcode, ms: Date.now() - startedAt,
+                        message: `恢复步骤（${rs.type}）失败，按预期收尾：${String(re?.message || re)}`.slice(0, 240),
+                        ...(recoveryLog.length ? { recovered: recoveryLog } : {})
+                      })
+                      emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮按预期停止：${rcode}` })
+                      break roundLoop
+                    }
+                    throw re
+                  }
+                }
+                continue // 恢复完成 → 重试本轮同一个子步骤
+              }
+              if (out?.artifact) lastArtifact = out.artifact
+              break
+            }
             if (run.deniedByConfirm) break
           }
           if (run.deniedByConfirm) break
           completedRounds = round
-          summary.push({ round, ok: true, ms: Date.now() - startedAt })
+          summary.push({ round, ok: true, ms: Date.now() - startedAt, ...(recoveryLog.length ? { recovered: recoveryLog } : {}) })
           emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮完成` })
         } catch (e: any) {
           // 取消/暂停信号照常向上抛（由外层统一处理状态迁移）
@@ -1052,7 +1157,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           const code = classifyError(e)
           if (stopOn.includes(code)) {
             stopReason = code
-            summary.push({ round, ok: false, stop: code, message: String(e?.message || e).slice(0, 240), ms: Date.now() - startedAt })
+            summary.push({ round, ok: false, stop: code, message: String(e?.message || e).slice(0, 240), ms: Date.now() - startedAt, ...(recoveryLog.length ? { recovered: recoveryLog } : {}) })
             emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮按预期停止：${code}` })
             break
           }
@@ -1070,6 +1175,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           completedRounds,
           stopReason,
           stopOn,
+          ...(onCode.length ? { onCode: onCode.map((o: any) => o.code) } : {}),
           rounds: summary
         },
         artifact: lastArtifact
@@ -1467,6 +1573,41 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       let originPath = target
       try { const u = new URL(target); originPath = u.origin + u.pathname } catch { /* 保底原样 */ }
       return { kind: 'executed', payload: { action: 'mirrorTabUrl', url: originPath } }
+    }
+    case 'useTab': {
+      // 切到"已经打开的某个标签页"上继续（不导航、不重载）：微信邀约逐轮换人时必须回到
+      // 那个一直活着的广场页——重载会重置分页与筛选（平台翻页是内部状态，URL 不变）。
+      const pathWant = input.path ? String(input.path) : null
+      const incWant = input.urlIncludes ? String(input.urlIncludes) : null
+      guardSignals(run)
+      const candidates = getStoreTabs(run.storeId).map(t => {
+        const wc = getTabWebContents(run.storeId, t.id)
+        const live = wc && !wc.isDestroyed() ? wc.getURL() : ''
+        return { id: t.id, url: live || String(t.url || '') }
+      })
+      const matchOf = (c: { id: string; url: string }) => {
+        let u: URL
+        try { u = new URL(c.url) } catch { return false }
+        if (pathWant) return u.pathname === pathWant || u.pathname.endsWith(pathWant)
+        return c.url.includes(incWant!)
+      }
+      const target = candidates.find(matchOf)
+      if (!target) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 店铺里没有已打开且地址${pathWant ? `为 ${pathWant}` : `含 ${incWant}`} 的标签页（useTab 只切换、不新建）`)
+      }
+      const oldTabId = run.tabId
+      run.tabId = target.id
+      runTabByStore.set(run.storeId, target.id)
+      try { activateTab(run.storeId, target.id) } catch { /* 视图未挂载不阻塞流程 */ }
+      if (input.closeCurrent !== false && oldTabId && oldTabId !== target.id) {
+        // 详情/邀约表单页用完即关：否则每轮留一个标签页（实测一轮下来攒了 7 个 finder-detail）
+        try { closeTab(run.storeId, oldTabId) } catch { /* 已关闭/未挂载都无妨 */ }
+      }
+      guardSignals(run)
+      // §4.5：payload 只存 origin+path（query 里可能含 token）
+      let shown = target.url
+      try { const u = new URL(target.url); shown = u.origin + u.pathname } catch { /* 保底原样 */ }
+      return { kind: 'executed', payload: { action: 'useTab', tabId: target.id, url: shown } }
     }
     case 'typeText': {
       // 受信任文本写入（见 trustedWrite 注释）：点击聚焦 → Ctrl+A → Delete → insertText → 回读校验

@@ -153,33 +153,42 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
 
 /**
  * 逐个邀约流（微信小店）。一轮 = 一个达人：
- * - 进广场 → 重新应用筛选 → 点第一个达人的「详情」→ 详情页点「邀请带货」→ 落到邀约表单页；
+ * - **广场页只开一次、一直留着**：平台的翻页是内部状态（URL 不变），而且每次加载列表都会
+ *   重新洗牌——所以不能每轮重载（重载=分页与筛选全丢、候选顺序重新排）。改为一开始导航
+ *   一次、应用一次筛选，之后每轮用 useTab 切回这个活着的广场页；
+ * - 选人用 `nth:'unvisited'`（第一条本次运行还没点过的），而不是"第 N 条"——列表会洗牌，
+ *   "第几条"无法保证换人，"还没点过的"才能保证不重复邀约同一位达人；
+ * - 本页候选都点过 → clickByText 报 TASK_PAGE_EXHAUSTED（missingCode），loop 的 onCode
+ *   先点「下一页」再重试；翻到最后一页仍取不出 → onCode 里也修不好 → 由 stopOn 收工；
+ * - 点「详情」是 window.open 开新标签页 → followTab 跟过去；一轮结束用 useTab 回到广场并
+ *   关掉详情/表单页（否则每轮留一个标签页）；
  * - 表单写入用 typeText（受信任键鼠输入）：微信表单不吃合成 input 事件，setInput 无效；
  * - 额度先行：页面明示「今日剩余N次邀请机会」，为 0 时 requireQuota 如实失败 → 循环**正常收尾**；
  * - 商品：填了商品ID走 ensureRowsById（按 ID 指定），否则 ensureRows 按数量自适应；
  * - **没有人工确认门禁**（用户明确要求）：点「发送邀约」→ 等平台「确认发送邀约」弹窗 → 点「确认」即真实发出；
- * - 结果校验：发送成功后平台会清空表单里的商品行 → waitForGone 复核，没清空就如实失败；
- * - 一轮外面套 loop：**循环到额度用完或没有更多可邀约达人**为止（stopOn 命中=干净停止），
- *   「详情」点不到 = 列表里没有下一个候选 → missingCode 让它以 TASK_SELECTION_SHORTFALL 收尾。
+ * - 结果校验：发送成功后平台会清空表单里的商品行 → waitForGone 复核，没清空就如实失败。
  */
 export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptions, squareUrl: string): StepDraft[] {
+  const squarePath = (() => { try { return new URL(squareUrl).pathname } catch { return squareUrl } })()
   const typeIn = (selector: string, text: string) =>
     round.push({ type: 'typeText', input: { selector, text, deep: true }, timeoutMs: 30000 })
+  // 一轮 = 从广场取一个"还没邀约过的"达人 → 详情 → 邀请带货 → 表单 → 发送 → 回广场
   const round: StepDraft[] = [
-    { type: 'navigate', input: { url: squareUrl }, timeoutMs: 45000 },
-    { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrl) }, timeoutMs: 45000 }
+    { type: 'useTab', input: { path: squarePath }, timeoutMs: 30000 }
   ]
-  // 每轮重新应用筛选（重新导航后筛选会重置）
-  if (opts.finderType) round.push({ type: 'clickByText', input: { text: opts.finderType, deep: true, mode: 'real' }, timeoutMs: 25000 })
-  for (const c of (opts.finderCategories || [])) round.push({ type: 'clickByText', input: { text: c, deep: true, mode: 'real', missingCode: 'TASK_SELECTION_SHORTFALL' }, timeoutMs: 25000 })
-  for (const f of (opts.finderOtherFilters || [])) round.push({ type: 'clickByText', input: { text: f, deep: true, mode: 'real' }, timeoutMs: 25000 })
-  // 进达人详情：平台是 window.open 开**新标签页**（页面自身不跳转），所以点完要跟随新标签页；
-  // nth:'round' = 每轮取列表里第 N 条（第 1 轮第 1 条、第 2 轮第 2 条…），
-  // 否则每轮都点第一条会把同一份邀约重复发给同一位达人；条数不够 = 没有下一个候选 → 干净停止
+  // 进达人详情：平台是 window.open 开**新标签页**（页面自身不跳转），所以点完要跟随新标签页。
+  // nth:'unvisited'：取第一条还没点过的（列表每次加载都洗牌，"第几条"不可靠）；
+  // 本页都点过了 → TASK_PAGE_EXHAUSTED → loop 的 onCode 点「下一页」后重试。
   round.push({ type: 'waitForText', input: { text: '详情', deep: true }, timeoutMs: 30000 })
   round.push({
     type: 'clickByText',
-    input: { text: '详情', deep: true, mode: 'real', nth: 'round', missingCode: 'TASK_SELECTION_SHORTFALL', followTab: { urlIncludes: 'finder-detail' } },
+    input: {
+      text: '详情', deep: true, mode: 'real', nth: 'unvisited',
+      missingCode: 'TASK_PAGE_EXHAUSTED',
+      // closeOld:false —— 详情页是新标签页，但**广场必须留着**（分页/筛选是页面内部状态，
+      // 关了就得重新加载：分页丢、名单重新洗牌）。广场由轮末的 useTab 负责切回。
+      followTab: { urlIncludes: 'finder-detail', closeOld: false }
+    },
     timeoutMs: 40000
   })
   round.push({ type: 'waitForPage', input: { urlIncludes: 'finder-detail' }, timeoutMs: 45000 })
@@ -245,6 +254,9 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
   // 发送成功后平台会清空「邀约商品」行；没清空说明这次提交没被接受，如实失败
   round.push({ type: 'waitForGone', input: { selector: p.selectors.goodsRows, deep: true }, timeoutMs: 30000 })
   round.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
+  // 收尾：回广场（下一轮开头那次 useTab 会再切一次，这里先回来是为了让"本轮已发出"的
+  // 现场留在广场页上，同时把详情/表单页关掉）
+  round.push({ type: 'useTab', input: { path: squarePath }, timeoutMs: 30000 })
 
   const contactDesc = [
     `联系人 ${opts.contact.trim()}`,
@@ -252,17 +264,49 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
     opts.phone?.trim() ? `手机 ${opts.phone.trim()}` : null
   ].filter(Boolean).join('｜')
 
-  return [{
-    type: 'loop',
-    input: {
-      // label 上限 60 字（Zod）：联系人/微信/手机都可能很长，这里必须截断——
-      // 实测超限会让任务创建整单被拒，而失败提示不易察觉，表现成"点开始邀约没反应"
-      label: (`${contactDesc} · 逐个邀约${productIds.length ? ` · 商品ID ${productIds.join('/')}` : ''}`).slice(0, 60),
-      maxRounds: ASSIST_LOOP_MAX_ROUNDS,
-      stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL'],
-      steps: round
+  // 广场页只开一次：先导航过去、应用一次筛选（每轮重载会丢分页/筛选，且列表会重新洗牌）
+  const opening: StepDraft[] = [
+    { type: 'navigate', input: { url: squareUrl }, timeoutMs: 45000 },
+    { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrl) }, timeoutMs: 45000 }
+  ]
+  if (opts.finderType) opening.push({ type: 'clickByText', input: { text: opts.finderType, deep: true, mode: 'real' }, timeoutMs: 25000 })
+  for (const c of (opts.finderCategories || [])) opening.push({ type: 'clickByText', input: { text: c, deep: true, mode: 'real', missingCode: 'TASK_SELECTION_SHORTFALL' }, timeoutMs: 25000 })
+  for (const f of (opts.finderOtherFilters || [])) opening.push({ type: 'clickByText', input: { text: f, deep: true, mode: 'real' }, timeoutMs: 25000 })
+
+  return [
+    ...opening,
+    {
+      type: 'loop',
+      input: {
+        // label 上限 60 字（Zod）：联系人/微信/手机都可能很长，这里必须截断——
+        // 实测超限会让任务创建整单被拒，而失败提示不易察觉，表现成"点开始邀约没反应"
+        label: (`${contactDesc} · 逐个邀约${productIds.length ? ` · 商品ID ${productIds.join('/')}` : ''}`).slice(0, 60),
+        maxRounds: ASSIST_LOOP_MAX_ROUNDS,
+        // 收工条件：额度用完 / 翻到最后一页也没有新候选（onCode 里点不动「下一页」时会报它）
+        stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL'],
+        // 本页候选都点过了 → 点「下一页」再重试；「下一页」点不动（最后一页）→ 交给 stopOn 收工
+        onCode: [{
+          code: 'TASK_PAGE_EXHAUSTED',
+          limit: 10,
+          steps: [
+            {
+              type: 'clickByText',
+              input: {
+                text: '下一页', deep: true, mode: 'real',
+                // 找不到「下一页」（页面还没渲染完）→ 也当作"没有更多候选"收工，而不是报选择器改版
+                missingCode: 'TASK_SELECTION_SHORTFALL',
+                // 最后一页按钮会置灰：那个"禁用"就是"没有更多了"，同样干净收工
+                disabledCode: 'TASK_SELECTION_SHORTFALL'
+              },
+              timeoutMs: 20000
+            },
+            { type: 'waitMs', input: { ms: 2500 }, timeoutMs: 15000 }
+          ]
+        }],
+        steps: round
+      }
     }
-  }]
+  ]
 }
 
 /** 按档案流程分派（平台邀约功能相互独立，新增平台在此登记新流程即可） */
