@@ -1,0 +1,9 @@
+
+[账户中心] https://s.kwaixiaodian.com/main/404
+  {"含发票":false,"发票元素":[],"invoice链接":[],"片段":".anticon { display: inline-block; color: inherit; font-style: normal; line-height: 0; text-align: center; text-transform: none; vertical-align: -0.125em; text-r"}
+
+[生意通-账户中心] https://syt.kwaixiaodian.com/zones/finance/account_center
+  {"含发票":false,"发票元素":[],"invoice链接":[],"片段":".anticon { display: inline-block; color: inherit; font-style: normal; line-height: 0; text-align: center; text-transform: none; vertical-align: -0.125em; text-r"}
+
+[后台首页] https://s.kwaixiaodian.com/zone/home
+  {"含发票":false,"发票元素":[],"invoice链接":[],"片段":".anticon { display: inline-block; color: inherit; font-style: normal; line-height: 0; text-align: center; text-transform: none; vertical-align: -0.125em; text-r"}

@@ -95,6 +95,8 @@ export const IPC_CHANNELS = {
   OVERVIEW_STATS: 'overview:stats',
   // 数据中心：汇总所有店铺的数据（店铺分布 / 指标快照 / 邀约与任务运行）
   OVERVIEW_DATACENTER: 'overview:datacenter',
+  // 发票中心：汇总各店铺的**待开票信息**（来自发票页 readTable 快照）
+  OVERVIEW_INVOICE_CENTER: 'overview:invoiceCenter',
   // 手动录入经营指标（平台用反抓取字体渲染数字时，由用户看页面自行录入，来源如实标记为"手动"）
   OVERVIEW_MANUAL_METRIC: 'overview:manualMetric',
 

@@ -816,17 +816,49 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const deepTable = !!input.deep
       await waitForSelector(wc, String(input.selector), run, step.timeoutMs, deepTable)
       const findTable = deepTable
-        ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().find(el => { try { return el.matches(${JSON.stringify(String(input.selector))}) } catch { return false } }) || null })()`
-        : `(document.querySelector(${JSON.stringify(String(input.selector))}))`
+        ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().filter(el => { try { return el.matches(${JSON.stringify(String(input.selector))}) } catch { return false } }) })()`
+        : `(Array.from(document.querySelectorAll(${JSON.stringify(String(input.selector))})))`
+      // pickByHeader：页面上常有多张表（实测微信发票中心有 2 张日历表 + 1 张数据表），
+      // 取第一张会读到日历。给了表头文案就挑**含该文案的那一张**，挑不到如实失败。
+      //
+      // mergeHeaderTable：表头与数据**分属两个 <table>** 的页面（实测拼多多订单开票：
+      // table[0] 只有表头行、table[1] 才是数据行）。此时把含表头的那张与**紧随其后的表**合并，
+      // 否则只能读到一行表头、数据行数为 0（实测踩过）。
+      const pick = input.pickByHeader ? String(input.pickByHeader) : ''
+      const mergeHeader = !!input.mergeHeaderTable
       const rows = await wc.executeJavaScript(`(() => {
-        const el = ${findTable};
-        if (!el) return null;
-        return Array.from(el.querySelectorAll('tr')).slice(0, 2000).map(tr =>
+        const tables = ${findTable};
+        if (!tables || !tables.length) return null;
+        let target = tables[0];
+        let body = null;
+        if (${JSON.stringify(pick)}) {
+          const i = tables.findIndex(t => String(t.innerText || '').includes(${JSON.stringify(pick)}));
+          if (i < 0) return 'PICK_MISS';
+          target = tables[i];
+          // 表头表自身没有数据行（只有 thead 那一行）→ 数据在下一张表里
+          if (${mergeHeader} && tables[i + 1]) {
+            const own = target.querySelectorAll('tr').length;
+            if (own <= 1) body = tables[i + 1];
+          }
+        }
+        const grab = (t) => Array.from(t.querySelectorAll('tr')).map(tr =>
           Array.from(tr.children).map(c => String(c.innerText || '').trim().slice(0, 500)));
+        const out = grab(target);
+        if (body) out.push(...grab(body));
+        return out.slice(0, 2000);
       })()`)
+      if (rows === 'PICK_MISS') {
+        throw new Error(`TASK_SELECTOR_CHANGED: 页面上没有表头含「${pick}」的表格（发票页可能改版或未加载完）`)
+      }
       if (!rows) throw new Error(`TASK_SELECTOR_CHANGED: 未找到表格 ${String(input.selector)}`)
       if (input.metric) {
-        TaskStore.insertSnapshot(run.storeId, String(input.metric), rows.length, run.runId)
+        // keepRows：把整表行数组落快照（发票中心要展示"待开票信息"的内容，不只是一个行数）；
+        // 默认仍只落行数，保持既有行为不变（概览页/环境面板看的是"采集到几行"）
+        TaskStore.insertSnapshot(
+          run.storeId, String(input.metric),
+          input.keepRows ? rows : rows.length,
+          run.runId
+        )
       }
       return { kind: 'table', payload: { rows, rowCount: rows.length, metric: input.metric || null } }
     }

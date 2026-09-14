@@ -1,0 +1,12 @@
+=== 全部 a[href]（去重，前 60）===
+[
+ "AI智能打单发货· 上线啦！ → https://edu.kwaixiaodian.com/bbs/web/article?id=910624416567398432&layoutType=4",
+ "「保证金保险」覆盖范围再扩大！符合条 → https://edu.kwaixiaodian.com/bbs/web/article?id=911356052858888262&layoutType=4",
+ "先用后付2.0全新升级，一键开通更享 → https://edu.kwaixiaodian.com/bbs/web/article?id=13447&layoutType=4",
+ "商达商单合作模式重磅上线 → https://edu.kwaixiaodian.com/bbs/web/article?id=899426674986098688&layoutType=4",
+ "翡翠珠宝行业-精品/达人商家人设 → https://edu.kwaixiaodian.com/bbs/web/article?id=921559092081619039&layoutType=4"
+]
+
+=== 点「资金」看落地页 ===
+落地 URL: https://s.kwaixiaodian.com/zone/home
+页内链接（含发票/资金/结算）: []

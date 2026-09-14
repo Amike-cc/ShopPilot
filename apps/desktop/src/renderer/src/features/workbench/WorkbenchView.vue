@@ -719,19 +719,27 @@
       </template>
     </aside>
 
-    <!-- 发票中心：按店铺给出各平台后台的**发票/开票入口**（只做跳转，不代替平台操作） -->
+    <!-- 发票中心：抓取并展示各平台后台的**待开票信息**（只读采集；开票操作仍在平台页面完成） -->
     <div v-if="invoiceCenterOpen" class="modal-mask" @click.self="invoiceCenterOpen = false">
       <div class="modal modal-wide dc-modal" data-test="invoice-center-modal">
         <div class="dc-head">
           <h2 style="margin:0">发票中心</h2>
-          <span class="row-sub">各平台后台的发票/开票入口 · 点击即在对应店铺的浏览器里打开</span>
+          <span class="row-sub">
+            各平台后台的待开票信息
+            <template v-if="invoice.generatedAt"> · 采集于 {{ new Date(invoice.generatedAt).toLocaleString() }}</template>
+            <template v-if="invoiceLoading"> · 读取中…</template>
+          </span>
+          <button class="mini-btn" data-test="invoice-collect" :disabled="invoiceCollecting" @click="collectInvoiceData()">
+            {{ invoiceCollecting ? '采集中…' : '抓取待开票信息' }}
+          </button>
+          <button class="mini-btn" data-test="invoice-refresh" :disabled="invoiceLoading" @click="loadInvoiceCenter()">刷新</button>
           <button class="mini-btn" data-test="invoice-center-close" @click="invoiceCenterOpen = false">关闭</button>
         </div>
 
         <div class="env-note" style="margin-bottom:10px">
-          本功能<b>只做跳转</b>：在你该店铺的隔离浏览器里打开平台的发票页，登录态与页面上的一切操作都由平台负责。
-          已验证的入口会标 <span class="inv-vtag on">已实测</span>；平台未提供独立入口或尚未实测的，会如实标注
-          <span class="inv-vtag">未实测</span>（不会拿猜测的地址当可用深链）。
+          <b>只做读取与展示</b>：软件在你该店铺的隔离浏览器里打开平台的发票页，把<b>待开票清单</b>读回来展示；
+          开发票/上传发票等操作仍由你在平台页面上完成（本应用不代提交）。
+          采集走的是各平台<b>实测过</b>的发票页与表头锚点，改版会如实报错而不是显示错数据。
         </div>
 
         <div v-if="!invoiceRows.length" class="empty-hint">还没有店铺</div>
@@ -740,20 +748,43 @@
             <span class="inv-dot" :style="{ background: r.color }"></span>
             <b>{{ r.storeName }}</b>
             <span class="row-sub">{{ r.platform }}</span>
-            <button class="mini-btn" style="margin-left:auto" data-test="invoice-open-store" @click="openInvoiceFor(r)">打开后台</button>
-          </div>
-          <div class="inv-links">
-            <button
-              v-for="(rt, i) in r.routes" :key="i"
-              class="inv-link" :class="{ primary: rt.verified }"
-              :data-test="`invoice-link-${r.storeId}-${i}`"
-              :title="rt.url"
-              @click="openInvoiceUrl(r, rt)"
-            >
-              <span class="inv-link-t">{{ rt.title }}</span>
-              <span class="inv-vtag" :class="{ on: rt.verified }">{{ rt.verified ? '已实测' : '未实测' }}</span>
+            <span v-if="r.capturedAt" class="row-sub">· 采集于 {{ new Date(r.capturedAt).toLocaleString() }}</span>
+            <span v-if="r.manual" class="inv-vtag">手动</span>
+            <span class="row-sub" style="margin-left:auto">
+              {{ r.supported ? (r.items.length ? `待开票 ${r.items.length} 条` : '暂无待开票数据') : '未支持抓取' }}
+            </span>
+            <button class="mini-btn" data-test="invoice-open-store" @click="openInvoiceFor(r)">
+              {{ r.supported ? '打开发票页' : '打开后台' }}
             </button>
           </div>
+
+          <div v-if="!r.supported" class="env-note" style="margin:0">{{ r.unsupportedReason }}</div>
+          <template v-else>
+            <div v-if="!r.items.length" class="env-note" style="margin:0">
+              还没有采集到数据——点上方「抓取待开票信息」开始；若采集失败会在这里显示原因。
+            </div>
+            <div v-else class="inv-table-wrap">
+              <table class="inv-table" data-test="invoice-table">
+                <thead>
+                  <tr>
+                    <th v-for="c in invoice.columns" :key="c.key">{{ c.label }}</th>
+                    <th v-if="r.hasExtras">其他信息</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(it, i) in r.items" :key="i">
+                    <td v-for="c in invoice.columns" :key="c.key" :class="{ 'inv-cell-strong': c.key === 'amount' }">
+                      {{ cleanCell(it.cells[c.key]) || '—' }}
+                    </td>
+                    <td v-if="r.hasExtras" class="inv-cell-extra" :title="extrasFull(it)">
+                      {{ extrasBrief(it) }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="r.note" class="env-note" style="margin:6px 0 0">{{ r.note }}</div>
+          </template>
         </div>
       </div>
     </div>
@@ -1167,6 +1198,8 @@ import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile, isAssistProfile } from '@shared/constants/invite'
 import { buildInviteSteps } from '@shared/invite-steps'
+import { invoiceProfileFor, INVOICE_COLUMNS } from '@shared/constants/invoice'
+import { buildInvoiceCollectSteps } from '@shared/invoice-steps'
 import { BIZ_METRICS, businessProfileFor, BUSINESS_SUPPORTED_PLATFORMS } from '@shared/constants/business'
 import { buildBusinessCollectSteps } from '@shared/business-steps'
 import {
@@ -2496,43 +2529,138 @@ async function doCopyConfig() {
 }
 
 /**
- * 发票中心：按店铺列出各平台后台的**发票/开票入口**（只做跳转，不在本应用里代替平台开票）。
- * 入口数据来自平台目录的 invoiceRoutes：已实测的标「已实测」，平台没有独立入口或未实测的
- * 如实标「未实测」——绝不拿猜测的地址当可用深链。
+ * 发票中心：抓取并展示各平台后台的**待开票信息**（只读采集）。
+ *
+ * 数据链路与数据中心一致：采集任务在发票页 readTable(keepRows) → store_snapshots
+ * → overview:invoiceCenter 汇总（主进程按实测表头映射成统一列）→ 这里展示。
+ * 开票动作仍在平台页面上人工完成，本应用只读取、不代提交。
  */
 const invoiceCenterOpen = ref(false)
+const invoiceLoading = ref(false)
+const invoiceCollecting = ref(false)
+const invoice = reactive<{ generatedAt: number | null; columns: Array<{ key: string; label: string }>; rows: any[] }>({
+  generatedAt: null,
+  columns: [],
+  rows: []
+})
+
 const invoiceRows = computed(() => {
-  const cat = (window.shopilot.platforms || []) as Array<PlatformDef & { invoiceRoutes?: Array<{ title: string; url: string; verified?: boolean }> }>
+  const cat = (window.shopilot.platforms || []) as Array<PlatformDef>
+  const byStore = new Map(invoice.rows.map((r: any) => [r.storeId, r]))
   return ws.stores.map(s => {
-    const def = cat.find(p => p.name === s.platform)
-    const routes = def?.invoiceRoutes || []
+    const got: any = byStore.get(s.id) || {}
+    const items = Array.isArray(got.items) ? got.items : []
     return {
       storeId: s.id,
       storeName: s.name,
       platform: s.platform,
-      color: def?.color || 'var(--color-primary)',
-      // 有独立发票入口就用它；否则退回该店铺后台地址（保证这一行永远可点）
-      routes: routes.length ? routes : [{ title: `${s.platform}后台`, url: s.adminUrl || def?.adminUrl || '', verified: false }]
+      color: cat.find(p => p.name === s.platform)?.color || 'var(--color-primary)',
+      supported: got.supported !== false,
+      unsupportedReason: got.unsupportedReason || '该平台尚未实测到可读取的发票页',
+      capturedAt: got.capturedAt || null,
+      manual: !!got.manual,
+      note: got.note || null,
+      items,
+      // 有"其他信息"列（该平台多出来的列）时表格多一列
+      hasExtras: items.some((it: any) => Array.isArray(it.extras) && it.extras.length > 0)
     }
   })
 })
 
-async function openInvoiceFor(row: { storeId: string; storeName: string }) {
-  const cat = (window.shopilot.platforms || []) as Array<PlatformDef>
-  const s = ws.stores.find(x => x.id === row.storeId)
-  const url = s?.adminUrl || cat.find(p => p.name === (s?.platform || ''))?.adminUrl || ''
-  if (!url) { ws.toast('该店铺没有后台地址', 'error'); return }
-  await openInvoiceUrl(row, { title: '后台', url })
+async function loadInvoiceCenter() {
+  invoiceLoading.value = true
+  try {
+    const res = await window.shopilot.overview.invoiceCenter()
+    if (!res.ok) { ws.toast('读取发票信息失败: ' + res.error.message, 'error'); return }
+    invoice.generatedAt = res.data.generatedAt || null
+    invoice.columns = res.data.columns || []
+    invoice.rows = res.data.rows || []
+  } finally {
+    invoiceLoading.value = false
+  }
 }
 
-/** 在**该店铺自己的隔离浏览器**里打开入口（登录态只能用那家店铺的，不能串店） */
-async function openInvoiceUrl(row: { storeId: string; storeName: string }, route: { title: string; url: string }) {
-  if (!route.url) { ws.toast('该入口没有地址', 'error'); return }
+/** 抓取：为每个有实测发票档案的店铺建一个采集任务（发票页 → readTable 落快照） */
+async function collectInvoiceData() {
+  const supported = ws.stores.filter(s => !!invoiceProfileFor(s.platform))
+  if (!supported.length) {
+    ws.toast('还没有已实测发票页锚点的平台——需先在真实登录态后台实测发票页（不猜选择器）', 'error')
+    return
+  }
+  invoiceCollecting.value = true
+  let created = 0
+  const runIds: string[] = []
+  const skipped: string[] = []
+  try {
+    for (const s of supported) {
+      const profile = invoiceProfileFor(s.platform)!
+      const steps = buildInvoiceCollectSteps(profile)
+      // 引擎不静默拉起店铺浏览器（§4.4）：未打开的店铺会一直排队。
+      // 用户点「抓取」就是要采集这几家 → 这里显式把它打开（这是用户主动发起的动作，不算静默）。
+      if (!ws.openStoreIds.includes(s.id)) {
+        try { await window.shopilot.browser.open(s.id) } catch { /* 打开失败就让它在队里等，下面汇报 */ }
+      }
+      const res = await window.shopilot.task.create({
+        name: `发票采集 · ${s.platform} · ${new Date().toLocaleDateString()}`,
+        storeScope: s.id,
+        steps
+      })
+      if (!res.ok) { skipped.push(`${s.name}（创建失败）`); continue }
+      const run = await window.shopilot.task.run(res.data.id)
+      if (!run.ok) { skipped.push(`${s.name}（启动失败）`); continue }
+      if (run.data?.runId) runIds.push(run.data.runId)
+      created++
+    }
+    await ws.refreshTasks()
+    const notOpen = supported.filter(s => !ws.openStoreIds.includes(s.id)).length
+    ws.toast(
+      `已启动 ${created} 个发票采集任务` +
+      (notOpen ? `（其中 ${notOpen} 家店铺浏览器未打开，会排队等待，不静默拉起）` : '') +
+      (skipped.length ? `；跳过：${skipped.join('、')}` : ''),
+      created ? 'success' : 'error'
+    )
+    // 等采集跑完再刷新，避免界面停在旧值上；逐店如实汇报结果
+    if (runIds.length) {
+      const deadline = Date.now() + 180000
+      let last: any[] = []
+      for (;;) {
+        await new Promise(r => setTimeout(r, 3000))
+        const list = await window.shopilot.task.list()
+        const all = list.ok ? (list.data.tasks || list.data) : []
+        last = all.filter((x: any) => x.latestRun && runIds.includes(x.latestRun.id))
+        const done = runIds.every(id => {
+          const t = all.find((x: any) => x.latestRun?.id === id)
+          const st = t?.latestRun?.status
+          return st && ['succeeded', 'failed', 'cancelled'].includes(st)
+        })
+        if (done || Date.now() > deadline) break
+      }
+      const parts = last.map((t: any) => {
+        const st = t.latestRun?.status
+        const name = String(t.name || '').split(' · ')[1] || t.name
+        if (st === 'succeeded') return `${name} ✓`
+        if (st === 'queued') return `${name}（排队等浏览器打开）`
+        return `${name} ✗（${String(t.latestRun?.errorMessage || st).slice(0, 60)}）`
+      })
+      if (parts.length) ws.toast('发票采集结果：' + parts.join('；'), parts.every((p: string) => p.includes('✓')) ? 'success' : 'info')
+    }
+    await loadInvoiceCenter()
+  } finally {
+    invoiceCollecting.value = false
+  }
+}
+
+async function openInvoiceFor(row: { storeId: string; storeName: string }) {
+  const profile = invoiceProfileFor(ws.stores.find(x => x.id === row.storeId)?.platform || '')
+  const cat = (window.shopilot.platforms || []) as Array<PlatformDef>
+  const s = ws.stores.find(x => x.id === row.storeId)
+  // 有实测发票页就打开发票页；否则退回该店后台首页
+  const url = profile?.pageUrl || s?.adminUrl || cat.find(p => p.name === (s?.platform || ''))?.adminUrl || ''
+  if (!url) { ws.toast('该店铺没有可打开的地址', 'error'); return }
   invoiceCenterOpen.value = false
-  // 切到目标店铺（openStore 会同时设置 displayedStoreId 与浏览器显示），再新开标签页
   await ws.openStore(row.storeId)
-  await ws.newTab(route.url)
-  ws.toast(`已在「${row.storeName}」打开：${route.title}`, 'info')
+  await ws.newTab(url)
+  ws.toast(`已在「${row.storeName}」打开：${profile ? '发票页' : '后台首页'}`, 'info')
 }
 
 /**
@@ -2633,9 +2761,29 @@ function openDataCenter() {
   void loadDataCenter()
 }
 
-/** 打开发票中心（入口数据是本地的，无需请求） */
+/** 单元格内的换行（实测拼多多的「订单号」列把"逾期未开票"折在下一行）→ 压成空格，
+ *  否则一个单元格多行会把整行撑到 170px+，表格看着像坏了 */
+function cleanCell(v: unknown): string {
+  return String(v ?? '').replace(/\s*\n\s*/g, ' ').trim()
+}
+
+/** 「其他信息」列：内容可能很长（拼多多 5 项、每项都不短）→ 只显示前 2 项，
+ *  完整值放 title 悬停看。否则单元格折成十几行、把整行撑到 170px+（实测踩过）。 */
+function extrasBrief(it: any): string {
+  const ex = Array.isArray(it?.extras) ? it.extras : []
+  if (!ex.length) return '—'
+  const shown = ex.slice(0, 2).map((x: any) => `${x.label}：${x.value}`).join('；')
+  return ex.length > 2 ? `${shown} …（共 ${ex.length} 项）` : shown
+}
+function extrasFull(it: any): string {
+  const ex = Array.isArray(it?.extras) ? it.extras : []
+  return ex.map((x: any) => `${x.label}：${x.value}`).join('；') || '—'
+}
+
+/** 打开发票中心（先把已采集的数据读回来） */
 function openInvoiceCenter() {
   invoiceCenterOpen.value = true
+  void loadInvoiceCenter()
 }
 
 async function loadDataCenter() {
@@ -3224,6 +3372,23 @@ onBeforeUnmount(() => {
   border: 1px solid var(--color-border); color: var(--color-text-secondary);
 }
 .inv-vtag.on { border-color: #4ade80; color: #4ade80; }
+/* 待开票信息表：列多（拼多多 15 列）→ 允许横向滚动，不挤成竖排 */
+.inv-table-wrap { overflow-x: auto; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.inv-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; table-layout: auto; }
+.inv-table th {
+  text-align: left; padding: 5px 8px; font-weight: 600; color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary); border-bottom: 1px solid var(--color-border); vertical-align: top;
+}
+.inv-table td { padding: 5px 8px; border-bottom: 1px solid rgba(255, 255, 255, .05); vertical-align: top; }
+.inv-table tr:last-child td { border-bottom: none; }
+.inv-cell-strong { font-weight: 600; color: #fff; }
+/* 「其他信息」列内容较长：限宽并**截断为最多 2 行**，完整值在 title 里；
+   不限高的话一个单元格折十几行会把整行撑到 170px+（实测拼多多踩过） */
+.inv-cell-extra {
+  color: var(--color-text-secondary); max-width: 220px;
+  white-space: normal; word-break: break-all;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 .update-modal { width: 390px; }
 /* 设置弹窗 + 任务面板二级页签共用的页签条。刻意不复用 .panel-tabs：
    那是右栏一级页签，带 padding-right:140px 给原生窗口按钮避让，装在弹窗/面板里会右侧留白诡异 */

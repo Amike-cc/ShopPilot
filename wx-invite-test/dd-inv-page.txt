@@ -1,0 +1,122 @@
+店铺 1111（抖店）→ 导航到 https://fxg.jinritemai.com/ffa/m-invoice/merchant-invoice
+落地 URL: https://fxg.jinritemai.com/ffa/m-invoice/merchant-invoice
+
+=== 结构 ===
+{
+ "标题": "我给平台开票",
+ "微应用数": 0,
+ "table数": 1,
+ "table表头": [
+  [
+   "",
+   "账单名称",
+   "账单类型",
+   "收票方主体",
+   "账单总额",
+   "",
+   "操作"
+  ]
+ ],
+ "表列头th合计": [
+  "账单名称",
+  "账单类型",
+  "收票方主体",
+  "账单总额",
+  "操作"
+ ],
+ "状态文案": [
+  "已购服务",
+  "管理和使用已订购的服务",
+  "申请关店",
+  "发票管理",
+  "我给平台开票",
+  "给消费者开票",
+  "平台给我开票",
+  "达人给我开票",
+  "您的开票主体为：",
+  "开票常见问题可查看",
+  "开票须知",
+  "开票引导",
+  "1.为何给平台开票？",
+  "2.开票的具体要求？",
+  "3.无法开票怎么办？",
+  "开票操作流程",
+  "选择待开票账单",
+  "开具并上传发票",
+  "平台审核发票",
+  "开票完成",
+  "审核通过即完成开票",
+  "待开票账单 1",
+  "导出开票账单",
+  "已选个账单，",
+  "合计开票金额：",
+  "合并开具并上传发票",
+  "待办"
+ ],
+ "按钮": [
+  "返回首页",
+  "商品管理",
+  "订单管理",
+  "售后工作台",
+  "账户中心",
+  "搜索运营",
+  "短视频运营",
+  "直播管理",
+  "图文运营",
+  "商城运营",
+  "推荐卡运营",
+  "活动广场",
+  "优价推手",
+  "营销工具",
+  "优惠券",
+  "单品直降",
+  "营销管理",
+  "千川推广",
+  "联盟推广",
+  "卡券管理",
+  "发货中心",
+  "订单报备",
+  "包裹中心",
+  "物流工具",
+  "电子面单",
+  "物流服务",
+  "物流诊断",
+  "质检订单管理",
+  "服务工单",
+  "消费者权益"
+ ]
+}
+
+=== 表格数据行（前 6）===
+[
+ [
+  "",
+  "账单名称",
+  "账单类型",
+  "收票方主体",
+  "账单总额",
+  "",
+  "操作"
+ ],
+ [
+  "",
+  "账单名称",
+  "账单类型",
+  "收票方主体",
+  "账单总额",
+  "",
+  "操作"
+ ],
+ [
+  "",
+  "平台补贴（2026/08）",
+  "平台补贴",
+  "北京有竹居网络技术有限公司",
+  "￥9.49",
+  "",
+  "开具并上传发票 手动付款抵扣"
+ ]
+]
+
+=== 页面主文本（前 900 字）===
+".aurora-icon {\n  display: inline-flex;\n  align-items: center;\n  color: inherit;\n  font-style: normal;\n  line-height: 0;\n  text-align: center;\n  text-transform: none;\n  vertical-align: -0.125em;\n  text-rendering: optimizeLegibility;\n  -webkit-font-smoothing: antialiased;\n  -moz-osx-font-smoothing: grayscale;\n}\n\n.aurora-icon > * {\n  line-height: 1;\n}\n\n.aurora-icon svg {\n  display: inline-block;\n  vertical-align: inherit;\n}\n\n.aurora-icon::before {\n  display: none;\n}\n\n.aurora-icon .aurora-icon-icon {\n  display: block;\n}\n\n.aurora-icon[tabindex] {\n  cursor: pointer;\n}\n\n.aurora-icon-spin::before,\n.aurora-icon-spin {\n  display: inline-block;\n  -webkit-animation: loadingCircle 1s infinite linear;\n  animation: loadingCircle 1s infinite linear;\n}\n\n@-webkit-keyframes loadingCircle {\n  100% {\n    -webkit-transform: rotate(360deg);\n    transform: rotate(360deg);\n  }\n}\n\n@keyframes loadingCircle {\n  100"

@@ -1,0 +1,56 @@
+店铺 1111（抖店）→ 导航到 https://fxg.jinritemai.com/ffa/mshop/invoice/list
+落地 URL: https://fxg.jinritemai.com/ffa/mshop/invoice/list
+
+=== 结构 ===
+{
+ "标题": "抖店",
+ "微应用数": 0,
+ "table数": 0,
+ "table表头": [],
+ "表列头th合计": [],
+ "状态文案": [
+  "已购服务",
+  "管理和使用已订购的服务",
+  "申请关店",
+  "发票管理",
+  "待办"
+ ],
+ "按钮": [
+  "返回首页",
+  "商品管理",
+  "订单管理",
+  "售后工作台",
+  "账户中心",
+  "搜索运营",
+  "短视频运营",
+  "直播管理",
+  "图文运营",
+  "商城运营",
+  "推荐卡运营",
+  "活动广场",
+  "优价推手",
+  "营销工具",
+  "优惠券",
+  "单品直降",
+  "营销管理",
+  "千川推广",
+  "联盟推广",
+  "卡券管理",
+  "发货中心",
+  "订单报备",
+  "包裹中心",
+  "物流工具",
+  "电子面单",
+  "物流服务",
+  "物流诊断",
+  "质检订单管理",
+  "服务工单",
+  "消费者权益"
+ ]
+}
+
+=== 表格数据行（前 6）===
+[]
+
+=== 页面主文本（前 900 字）===
+".anticon {\n  display: inline-block;\n  color: inherit;\n  font-style: normal;\n  line-height: 0;\n  text-align: center;\n  text-transform: none;\n  vertical-align: -0.125em;\n  text-rendering: optimizeLegibility;\n  -webkit-font-smoothing: antialiased;\n  -moz-osx-font-smoothing: grayscale;\n}\n\n.anticon > * {\n  line-height: 1;\n}\n\n.anticon svg {\n  display: inline-block;\n}\n\n.anticon::before {\n  display: none;\n}\n\n.anticon .anticon-icon {\n  display: block;\n}\n\n.anticon[tabindex] {\n  cursor: pointer;\n}\n\n.anticon-spin::before,\n.anticon-spin {\n  display: inline-block;\n  -webkit-animation: loadingCircle 1s infinite linear;\n  animation: loadingCircle 1s infinite linear;\n}\n\n@-webkit-keyframes loadingCircle {\n  100% {\n    -webkit-transform: rotate(360deg);\n    transform: rotate(360deg);\n  }\n}\n\n@keyframes loadingCircle {\n  100% {\n    -webkit-transform: rotate(360deg);\n    transform: rotate(360deg);\n  }\n} | !fu"

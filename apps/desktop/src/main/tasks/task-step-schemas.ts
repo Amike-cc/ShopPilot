@@ -44,7 +44,17 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   // deep = 穿透 ShadowRoot 查询（微信小店整页在 micro-app 的 ShadowRoot 里）
   waitForSelector: z.object({ selector, deep: z.boolean().optional() }).strict(),
   readText: z.object({ selector, metric: z.string().min(1).max(60).optional(), deep: z.boolean().optional() }).strict(),
-  readTable: z.object({ selector, metric: z.string().min(1).max(60).optional(), deep: z.boolean().optional() }).strict(),
+  // keepRows：把整表行数组落快照（发票中心要展示"待开票信息"的内容）；默认只落行数
+  // pickByHeader：页面上有多张表时，挑表内含该文案的那一张（实测微信发票中心有 2 张日历表）
+  // mergeHeaderTable：表头与数据分属两个 <table> 时（实测拼多多），把表头表的下一张也读进来
+  readTable: z.object({
+    selector,
+    metric: z.string().min(1).max(60).optional(),
+    deep: z.boolean().optional(),
+    keepRows: z.boolean().optional(),
+    pickByHeader: z.string().min(1).max(60).optional(),
+    mergeHeaderTable: z.boolean().optional()
+  }).strict(),
   screenshot: z.object({}).strict(),
   fillDraft: z.object({ selector, text: z.string().max(20000) }).strict(),
   waitForUserConfirmation: z.object({ message: z.string().min(1).max(500) }).strict(),

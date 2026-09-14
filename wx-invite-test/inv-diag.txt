@@ -1,0 +1,51 @@
+发票采集任务: [
+ {
+  "name": "发票采集 · 抖店 · 2026/9/14",
+  "status": "queued",
+  "code": null,
+  "msg": null,
+  "runId": "run_f914e574ca7efdc648bd4066",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 微信小店 · 2026/9/14",
+  "status": "queued",
+  "code": null,
+  "msg": null,
+  "runId": "run_59897ac8b6b8b43c1071459e",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "clickByText",
+   "waitMs",
+   "readTable"
+  ]
+ },
+ {
+  "name": "发票采集 · 拼多多 · 2026/9/14",
+  "status": "queued",
+  "code": null,
+  "msg": null,
+  "runId": "run_d343b9ac0607c4a1f26960ef",
+  "steps": [
+   "navigate",
+   "waitForPage",
+   "waitMs",
+   "readTable"
+  ]
+ }
+]
+
+[发票采集 · 抖店 · 2026/9/14] 步骤结果:
+[]
+
+[发票采集 · 微信小店 · 2026/9/14] 步骤结果:
+[]
+
+[发票采集 · 拼多多 · 2026/9/14] 步骤结果:
+[]

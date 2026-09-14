@@ -12,6 +12,8 @@ import * as TaskStore from '../tasks/task-store'
 import { verifyStoreFingerprint } from '../browser/fingerprint-injector'
 import { getDatabase } from '../db/database'
 import { writeAudit, queryAudit } from '../services/audit-logger'
+import { invoiceProfileFor, INVOICE_COLUMNS, INVOICE_UNSUPPORTED_NOTE } from '@shared/constants/invoice'
+import type { InvoiceColumnKey } from '@shared/constants/invoice'
 import { randomUUID } from 'crypto'
 
 function generateRequestId(): string {
@@ -103,6 +105,85 @@ export function registerProfileAndMiscHandlers(): void {
         bookmarks: (db.prepare('SELECT COUNT(*) c FROM bookmarks').get() as any).c
       }
       return success(stats, requestId)
+    } catch (err: any) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+    }
+  })
+
+  /**
+   * overview:invoiceCenter - 发票中心：汇总各店铺的**待开票信息**（只读）。
+   *
+   * 数据来源：采集任务在发票页 readTable(keepRows) 落下的快照（metric = invoice.rows）。
+   * 这里把**原始表行**按该平台实测的表头映射到统一列（见 shared/constants/invoice.ts）；
+   * 映射不到的列不丢，放进 extras 一并展示——平台加列不会让数据消失。
+   * 没有任何快照就如实返回空数组（界面显示"还没采集"），绝不估算或伪造。
+   */
+  ipcMain.handle(IPC_CHANNELS.OVERVIEW_INVOICE_CENTER, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const db = getDatabase()
+      const stores = db.prepare(
+        `SELECT id, name, platform, status FROM stores WHERE deleted_at IS NULL ORDER BY platform, name`
+      ).all() as any[]
+
+      // 每店取 invoice.rows 的**最新一条**（含采集时间与来源运行）
+      const snapRows = db.prepare(`
+        SELECT store_id, value_json, captured_at, source_run_id FROM (
+          SELECT store_id, value_json, captured_at, source_run_id,
+                 ROW_NUMBER() OVER (PARTITION BY store_id ORDER BY rowid DESC) AS rn
+          FROM store_snapshots WHERE metric = 'invoice.rows'
+        ) WHERE rn = 1
+      `).all() as any[]
+      const snapByStore = new Map<string, any>()
+      for (const r of snapRows) {
+        let v: any = r.value_json
+        try { v = JSON.parse(r.value_json) } catch { /* 保底原样 */ }
+        snapByStore.set(r.store_id, { value: v, capturedAt: r.captured_at, manual: !r.source_run_id })
+      }
+
+      const rows = stores.map(s => {
+        const profile = invoiceProfileFor(s.platform)
+        const snap = snapByStore.get(s.id) || null
+        const raw: any[] = Array.isArray(snap?.value) ? snap.value : []
+        // 第一行是表头（readTable 把 thead 的 tr 也读进来）
+        const header: string[] = raw.length ? raw[0].map((x: any) => String(x ?? '').trim()) : []
+        const body = raw.slice(1)
+        // 表头文案 → 统一列 key（用实测的 headerMap；找不到的列保留为额外列）
+        const colOf = new Map<number, InvoiceColumnKey>()
+        const extraIdx: number[] = []
+        header.forEach((h, i) => {
+          const k = profile?.headerMap?.[h]
+          if (k) colOf.set(i, k)
+          else if (h) extraIdx.push(i)
+        })
+        const items = body
+          .filter(r => Array.isArray(r) && r.some(c => String(c ?? '').trim() !== ''))
+          .map(r => {
+            const cells: Partial<Record<InvoiceColumnKey, string>> = {}
+            for (const [i, k] of colOf) cells[k] = String(r[i] ?? '').trim()
+            const extras = extraIdx
+              .map(i => ({ label: header[i], value: String(r[i] ?? '').trim() }))
+              .filter(x => x.value && x.value !== '-')
+            return { cells, extras }
+          })
+        return {
+          storeId: s.id,
+          storeName: s.name,
+          platform: s.platform,
+          // 该平台是否有实测的发票档案（没有 = 抓不了，界面如实说明）
+          supported: !!profile,
+          unsupportedReason: profile ? null : (INVOICE_UNSUPPORTED_NOTE[s.platform] || '该平台尚未实测到可读取的发票页'),
+          measuredAt: profile?.measuredAt || null,
+          pageUrl: profile?.pageUrl || null,
+          note: profile?.note || null,
+          capturedAt: snap?.capturedAt || null,
+          manual: snap ? !!snap.manual : false,
+          header,
+          items
+        }
+      })
+
+      return success({ generatedAt: Date.now(), columns: INVOICE_COLUMNS, rows }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }
