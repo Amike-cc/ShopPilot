@@ -192,11 +192,15 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
     timeoutMs: 40000
   })
   round.push({ type: 'waitForPage', input: { urlIncludes: 'finder-detail' }, timeoutMs: 45000 })
-  // 「邀请带货」同样可能开新标签页（进到 initiate-invite），给出 followTab 兼容两种行为
+  // 「邀请带货」实测是普通 BUTTON、点击后**同标签页 pushState** 到 initiate-invite（不是 window.open），
+  // 所以**不能**配 followTab（那会白等 40s 新标签页，实测踩过）。
+  // 另一个实测坑：详情页刚到时按钮已在 DOM 里（waitForText 立刻通过），但 SPA 还没挂上事件——
+  // 此时点击会被丢弃、后面 waitForPage 等到超时。所以先等页面稳定一下再点。
+  round.push({ type: 'waitMs', input: { ms: 4000 }, timeoutMs: 20000 })
   round.push({
     type: 'clickByText',
-    input: { text: '邀请带货', deep: true, mode: 'real', followTab: { urlIncludes: p.inviteUrlMarker } },
-    timeoutMs: 40000
+    input: { text: '邀请带货', deep: true, mode: 'real' },
+    timeoutMs: 30000
   })
   round.push({ type: 'waitForPage', input: { urlIncludes: p.inviteUrlMarker }, timeoutMs: 45000 })
   // 额度预检：为 0 时如实失败（TASK_QUOTA_EXCEEDED）→ 循环干净收尾

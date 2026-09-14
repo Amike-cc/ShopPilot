@@ -159,8 +159,14 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect(detail.input.followTab).toMatchObject({ urlIncludes: 'finder-detail', closeOld: false })
     // 选人靠"还没点过的第一条"：列表每次加载都会洗牌，"第几条"保证不了换人
     expect(detail.input.nth).toBe('unvisited')
+    // 详情页的「邀请带货」是普通 BUTTON、点击后**同标签页 pushState** 到 initiate-invite
+    // （真站实测）——不能配 followTab，否则白等 40s 新标签页
     const invite = round.find(s => s.type === 'clickByText' && String(s.input.text) === '邀请带货')!
-    expect(invite.input.followTab).toMatchObject({ urlIncludes: 'initiate-invite' })
+    expect(invite.input.followTab).toBeUndefined()
+    expect(invite.input.mode).toBe('real')
+    // 点它之前要先等页面稳定（按钮已在 DOM 里但 SPA 尚未挂事件 → 点击会被丢弃）
+    const inviteIdx = round.indexOf(invite)
+    expect(round.slice(0, inviteIdx).some(s => s.type === 'waitMs')).toBe(true)
     expect(texts).toContain('邀请带货')
     // 轮内仍应等待详情页/表单页
     for (const inc of ['finder-detail', 'initiate-invite']) {
