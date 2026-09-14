@@ -67,7 +67,9 @@ const api = {
     name: p.name,
     color: p.color,
     adminUrl: p.adminUrl,
-    entryRoutes: p.entryRoutes.map(r => ({ title: r.title, url: r.url }))
+    entryRoutes: p.entryRoutes.map(r => ({ title: r.title, url: r.url })),
+    // 发票入口（「发票中心」用）：verified=true 表示已真机实测
+    invoiceRoutes: p.invoiceRoutes.map(r => ({ title: r.title, url: r.url, verified: r.verified === true }))
   })),
   
   // 下载

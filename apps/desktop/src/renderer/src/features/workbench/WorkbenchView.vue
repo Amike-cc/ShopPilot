@@ -10,7 +10,7 @@
           <span v-if="ws.trashStores.length" class="rail-badge" data-test="rail-trash-badge"></span>
         </button>
         <button class="rail-btn" data-test="rail-settings" title="设置（含软件更新）" @click="openSettings()">⚙</button>
-        <button class="rail-btn dc-rail-btn" data-test="rail-datacenter" title="数据中心（全部店铺）" @click="openDataCenter()">📊</button>
+        <button class="rail-btn dc-rail-btn" data-test="rail-invoice-center" title="发票中心（全部店铺）" @click="openInvoiceCenter()">🧾</button>
       </div>
 
       <template v-else>
@@ -99,9 +99,9 @@
       </div>
 
       <div class="sidebar-dc">
-        <button class="dc-entry-row" data-test="datacenter-open" title="数据中心：汇总展示所有店铺的数据" @click="openDataCenter()">
-          <span class="dc-ico">📊</span>
-          <span class="dc-txt">数据中心</span>
+        <button class="dc-entry-row" data-test="invoice-center-open" title="发票中心：各平台发票/开票入口" @click="openInvoiceCenter()">
+          <span class="dc-ico">🧾</span>
+          <span class="dc-txt">发票中心</span>
           <span class="row-sub">全部店铺</span>
         </button>
       </div>
@@ -718,6 +718,45 @@
       </div>
       </template>
     </aside>
+
+    <!-- 发票中心：按店铺给出各平台后台的**发票/开票入口**（只做跳转，不代替平台操作） -->
+    <div v-if="invoiceCenterOpen" class="modal-mask" @click.self="invoiceCenterOpen = false">
+      <div class="modal modal-wide dc-modal" data-test="invoice-center-modal">
+        <div class="dc-head">
+          <h2 style="margin:0">发票中心</h2>
+          <span class="row-sub">各平台后台的发票/开票入口 · 点击即在对应店铺的浏览器里打开</span>
+          <button class="mini-btn" data-test="invoice-center-close" @click="invoiceCenterOpen = false">关闭</button>
+        </div>
+
+        <div class="env-note" style="margin-bottom:10px">
+          本功能<b>只做跳转</b>：在你该店铺的隔离浏览器里打开平台的发票页，登录态与页面上的一切操作都由平台负责。
+          已验证的入口会标 <span class="inv-vtag on">已实测</span>；平台未提供独立入口或尚未实测的，会如实标注
+          <span class="inv-vtag">未实测</span>（不会拿猜测的地址当可用深链）。
+        </div>
+
+        <div v-if="!invoiceRows.length" class="empty-hint">还没有店铺</div>
+        <div v-for="r in invoiceRows" :key="r.storeId" class="inv-row-card" data-test="invoice-row">
+          <div class="inv-row-head">
+            <span class="inv-dot" :style="{ background: r.color }"></span>
+            <b>{{ r.storeName }}</b>
+            <span class="row-sub">{{ r.platform }}</span>
+            <button class="mini-btn" style="margin-left:auto" data-test="invoice-open-store" @click="openInvoiceFor(r)">打开后台</button>
+          </div>
+          <div class="inv-links">
+            <button
+              v-for="(rt, i) in r.routes" :key="i"
+              class="inv-link" :class="{ primary: rt.verified }"
+              :data-test="`invoice-link-${r.storeId}-${i}`"
+              :title="rt.url"
+              @click="openInvoiceUrl(r, rt)"
+            >
+              <span class="inv-link-t">{{ rt.title }}</span>
+              <span class="inv-vtag" :class="{ on: rt.verified }">{{ rt.verified ? '已实测' : '未实测' }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- 数据中心：汇总展示所有店铺的数据（只读；数据来自本机快照与运行记录） -->
     <div v-if="dataCenterOpen" class="modal-mask" @click.self="dataCenterOpen = false">
@@ -2457,9 +2496,52 @@ async function doCopyConfig() {
 }
 
 /**
+ * 发票中心：按店铺列出各平台后台的**发票/开票入口**（只做跳转，不在本应用里代替平台开票）。
+ * 入口数据来自平台目录的 invoiceRoutes：已实测的标「已实测」，平台没有独立入口或未实测的
+ * 如实标「未实测」——绝不拿猜测的地址当可用深链。
+ */
+const invoiceCenterOpen = ref(false)
+const invoiceRows = computed(() => {
+  const cat = (window.shopilot.platforms || []) as Array<PlatformDef & { invoiceRoutes?: Array<{ title: string; url: string; verified?: boolean }> }>
+  return ws.stores.map(s => {
+    const def = cat.find(p => p.name === s.platform)
+    const routes = def?.invoiceRoutes || []
+    return {
+      storeId: s.id,
+      storeName: s.name,
+      platform: s.platform,
+      color: def?.color || 'var(--color-primary)',
+      // 有独立发票入口就用它；否则退回该店铺后台地址（保证这一行永远可点）
+      routes: routes.length ? routes : [{ title: `${s.platform}后台`, url: s.adminUrl || def?.adminUrl || '', verified: false }]
+    }
+  })
+})
+
+async function openInvoiceFor(row: { storeId: string; storeName: string }) {
+  const cat = (window.shopilot.platforms || []) as Array<PlatformDef>
+  const s = ws.stores.find(x => x.id === row.storeId)
+  const url = s?.adminUrl || cat.find(p => p.name === (s?.platform || ''))?.adminUrl || ''
+  if (!url) { ws.toast('该店铺没有后台地址', 'error'); return }
+  await openInvoiceUrl(row, { title: '后台', url })
+}
+
+/** 在**该店铺自己的隔离浏览器**里打开入口（登录态只能用那家店铺的，不能串店） */
+async function openInvoiceUrl(row: { storeId: string; storeName: string }, route: { title: string; url: string }) {
+  if (!route.url) { ws.toast('该入口没有地址', 'error'); return }
+  invoiceCenterOpen.value = false
+  // 切到目标店铺（openStore 会同时设置 displayedStoreId 与浏览器显示），再新开标签页
+  await ws.openStore(row.storeId)
+  await ws.newTab(route.url)
+  ws.toast(`已在「${row.storeName}」打开：${route.title}`, 'info')
+}
+
+/**
  * 数据中心：汇总所有店铺的数据（只读）。
  * 数据全部来自本机：stores / store_snapshots（任务指标快照）/ task_runs（任务与邀约运行）。
  * 没有数据就如实显示空状态，不做任何估算补数。
+ *
+ * 说明：界面入口已改为「发票中心」（0.4.21），本功能代码保留以便随时恢复；
+ * 需要时把左栏入口重新指到 openDataCenter() 即可。
  */
 const dataCenterOpen = ref(false)
 const dcLoading = ref(false)
@@ -2549,6 +2631,11 @@ function openDataCenter() {
   // 手动录入默认选中"当前显示的店铺"，减少一步选择
   if (!manualDraft.storeId) manualDraft.storeId = ws.displayedStoreId || ws.stores[0]?.id || ''
   void loadDataCenter()
+}
+
+/** 打开发票中心（入口数据是本地的，无需请求） */
+function openInvoiceCenter() {
+  invoiceCenterOpen.value = true
 }
 
 async function loadDataCenter() {
@@ -2662,7 +2749,7 @@ function refreshOverlayOcclusion() {
     // A newer watch event has already scheduled a fresher DOM state.
     if (revision !== overlayRevision) return
 
-    const modalOpen = !!(ws.createDialogOpen || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value || dataCenterOpen.value)
+    const modalOpen = !!(ws.createDialogOpen || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value || dataCenterOpen.value || invoiceCenterOpen.value)
     if (ctx.open && viewportEl.value) {
       const m = document.querySelector('[data-test="store-ctx"]')?.getBoundingClientRect()
       const v = viewportEl.value.getBoundingClientRect()
@@ -2678,7 +2765,7 @@ function refreshOverlayOcclusion() {
 }
 
 watch(
-  () => [ws.createDialogOpen, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value],
+  () => [ws.createDialogOpen, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value, invoiceCenterOpen.value],
   () => { refreshOverlayOcclusion() },
   { immediate: true }
 )
@@ -3110,10 +3197,33 @@ onBeforeUnmount(() => {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   margin: 8px 0 6px; padding: 8px; border: 1px dashed var(--color-border); border-radius: var(--radius-sm);
 }
-.dc-manual-form select, .dc-manual-form input {
-  background: var(--color-bg-tertiary); color: var(--color-text-primary);
+.dc-manual-form select, .dc-manual-form input {  background: var(--color-bg-tertiary); color: var(--color-text-primary);
   border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 4px 6px; font-size: 12px;
 }
+/* ---------- 发票中心 ---------- */
+.inv-row-card {
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  padding: 8px 10px; margin-bottom: 8px;
+}
+.inv-row-head { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; font-size: 13px; }
+.inv-row-head .inv-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.inv-row-head > b { flex: 0 0 auto; }
+.inv-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.inv-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 9px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary); color: var(--color-text-primary);
+}
+.inv-link:hover { border-color: var(--color-primary); }
+/* 已实测的入口给主色描边，和未实测的区分开 */
+.inv-link.primary { border-color: var(--color-primary); }
+.inv-link-t { white-space: nowrap; }
+.inv-vtag {
+  font-size: 10px; padding: 1px 5px; border-radius: 10px;
+  border: 1px solid var(--color-border); color: var(--color-text-secondary);
+}
+.inv-vtag.on { border-color: #4ade80; color: #4ade80; }
 .update-modal { width: 390px; }
 /* 设置弹窗 + 任务面板二级页签共用的页签条。刻意不复用 .panel-tabs：
    那是右栏一级页签，带 padding-right:140px 给原生窗口按钮避让，装在弹窗/面板里会右侧留白诡异 */
