@@ -1,0 +1,7 @@
+目标页面: https://login.kwaixiaodian.com/?biz=zone&redirect_url=https%3A%2F%2Fs.kwaixiaodian.com%2Fzone%2Ffund%2Ftax-bill%2Fsubsidy 
+
+=== 页面上疑似方向/页签的元素 ===
+
+
+(没给方向名，只 dump 当前状态)
+{"表数":0,"数据表":[],"全部表头":[]}

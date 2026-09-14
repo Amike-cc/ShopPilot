@@ -14,7 +14,7 @@ import * as TaskStore from '../tasks/task-store'
 import { verifyStoreFingerprint } from '../browser/fingerprint-injector'
 import { getDatabase } from '../db/database'
 import { writeAudit, queryAudit } from '../services/audit-logger'
-import { invoiceProfileFor, INVOICE_COLUMNS, INVOICE_UNSUPPORTED_NOTE } from '@shared/constants/invoice'
+import { invoiceProfileFor, INVOICE_COLUMNS, INVOICE_UNSUPPORTED_NOTE, normalizeCellText } from '@shared/constants/invoice'
 import type { InvoiceColumnKey } from '@shared/constants/invoice'
 import { randomUUID } from 'crypto'
 
@@ -71,7 +71,7 @@ function collectInvoiceRows(): any[] {
 
   /** 把某个方向的原始表行映射成 {cells, extras} */
   const mapSection = (headerMap: Record<string, InvoiceColumnKey>, raw: any[]) => {
-    const header: string[] = raw.length ? raw[0].map((x: any) => String(x ?? '').trim()) : []
+    const header: string[] = raw.length ? raw[0].map((x: any) => normalizeCellText(x)) : []
     const colOf = new Map<number, InvoiceColumnKey>()
     const extraIdx: number[] = []
     header.forEach((h, i) => {
@@ -83,9 +83,9 @@ function collectInvoiceRows(): any[] {
       .filter(r => Array.isArray(r) && r.some(c => String(c ?? '').trim() !== ''))
       .map(r => {
         const cells: Partial<Record<InvoiceColumnKey, string>> = {}
-        for (const [i, k] of colOf) cells[k] = String(r[i] ?? '').trim()
+        for (const [i, k] of colOf) cells[k] = normalizeCellText(r[i])
         const extras = extraIdx
-          .map(i => ({ label: header[i], value: String(r[i] ?? '').trim() }))
+          .map(i => ({ label: header[i], value: normalizeCellText(r[i]) }))
           .filter(x => x.value && x.value !== '-')
         return { cells, extras }
       })
@@ -99,7 +99,13 @@ function collectInvoiceRows(): any[] {
     const sections = (profile?.sections || []).map(sec => {
       const name = sec.name
       const metricKey = sec.metricKey
-      const base = { name, metricKey, measuredRows: sec.measuredRows }
+      // pending 默认 true；false = 该方向是**已提交、商家无需操作**的流水（如快手「处理中」「处理记录」），
+      // 展示照常，但不计入"待开票条数/可开金额合计"，否则合计虚高
+      const base = {
+        name, metricKey, measuredRows: sec.measuredRows,
+        pending: sec.pending !== false,
+        notPendingNote: sec.notPendingNote || null
+      }
       // labels 模式：该方向不是表格，值分散在 `<metricKey>.<列key>` 的快照里 → 拼成一行。
       // 一个标签都没读到时才视作"没采集"（有部分值也如实展示，缺的列留空）。
       if (sec.labels?.length) {

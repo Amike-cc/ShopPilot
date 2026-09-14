@@ -47,6 +47,19 @@ export interface InvoiceSection {
    */
   tabText?: string
   /**
+   * 页签点击的**查找范围**限定（`clickByText.within`）。
+   * 实测动机：页签文案在页面上常有同名副本（教程文案、标题），限定到页签容器里点才准。
+   */
+  tabWithin?: { selector: string; climb?: number }
+  /**
+   * 点完校验页签**真的选中了**（`clickByText.verifyActive`）。
+   *
+   * 为什么必须有：平台常有一批**表头完全相同**的页签（实测快手发票页「处理中」与
+   * 「处理记录」列名一致）。切页签静默失败时读回的是上一个页签的数据，而按表头做的
+   * `expectHeaders`/`rejectHeaders` 对这种情况完全看不出来——校验选中态才拦得住。
+   */
+  tabVerify?: { selector: string; classIncludes: string }
+  /**
    * 该方向的页**不在**平台的默认发票页上，而在另一个地址（实测拼多多：
    * 「给平台开票」在资金中心 cashier.pinduoduo.com/main/invoice，而「给买家开票」在
    * mms.pinduoduo.com/invoice/center，两者是不同站点）。给了它就先导航过去再读。
@@ -78,6 +91,20 @@ export interface InvoiceSection {
   metricKey: string
   /** 该方向实测到的条数（写档案里，便于日后对比"是不是抓漏了"） */
   measuredRows: number
+  /**
+   * 该方向是否还有**商家侧待办**。默认 true。
+   *
+   * 为什么要这个标记：同一页的某些方向是**已提交/已办完**的流水，商家这边没有待办动作
+   * （实测快手发票页：「处理中」= 已提交等平台审核、「处理记录」= 已审核通过）。
+   * 把它们算进"待开票条数/可开金额合计"，合计就虚高了——界面必须只对真正待办的求和，
+   * 这类方向照常展示、但单独标注且不计入。
+   */
+  pending?: boolean
+  /**
+   * `pending: false` 时展示给用户的**原因**（如实写清这一页是什么状态）。
+   * 不写就用界面的通用兜底文案。
+   */
+  notPendingNote?: string
 }
 
 /**
@@ -285,6 +312,10 @@ const KUAISHOU: InvoiceProfile = {
   settleMs: 9000,
   tabSettleMs: 8000,
   measuredAt: '2026-09-14',
+  // 实测（2026-09-14 真机，ant-tabs 三个页签）：
+  //   未开票账单（默认，5 条）/ 处理中（0 条）/ 处理记录（3 条）
+  // 「处理中」与「处理记录」**表头完全相同**（流水单号/账单编号/…/状态/操作）——
+  // 切页签静默失败时表头校验完全看不出来，必须靠 tabVerify 校验选中态（见该字段说明）。
   sections: [
     {
       name: '给平台开票（未开票账单）',
@@ -299,9 +330,48 @@ const KUAISHOU: InvoiceProfile = {
       },
       metricKey: 'invoice.toPlatform',
       measuredRows: 5
+    },
+    {
+      name: '开票处理中',
+      tabText: '处理中',
+      // 页签容器限定：页面上有同名文案的标题/教程，限定到 .ant-tabs-tab-btn 里点才准
+      tabWithin: { selector: '.ant-tabs-tab-btn' },
+      tabVerify: { selector: '.ant-tabs-tab', classIncludes: 'ant-tabs-tab-active' },
+      pickByHeader: '流水单号',
+      headerMap: {
+        '流水单号': 'id',
+        '账单月份': 'period',
+        '账单金额（元）': 'amount',
+        '发票类型': 'type',
+        '状态': 'status'
+      },
+      metricKey: 'invoice.processing',
+      measuredRows: 0,
+      // 已提交、等平台审核——商家这边没有待办动作，不计入"待开票"
+      pending: false,
+      notPendingNote: '已提交、等平台审核的流水，商家无需再操作'
+    },
+    {
+      name: '开票处理记录',
+      tabText: '处理记录',
+      tabWithin: { selector: '.ant-tabs-tab-btn' },
+      tabVerify: { selector: '.ant-tabs-tab', classIncludes: 'ant-tabs-tab-active' },
+      pickByHeader: '流水单号',
+      headerMap: {
+        '流水单号': 'id',
+        '账单月份': 'period',
+        '账单金额（元）': 'amount',
+        '发票类型': 'type',
+        '状态': 'status'
+      },
+      metricKey: 'invoice.records',
+      measuredRows: 3,
+      // 实测里面是「审核通过」的流水（已办完）→ 展示但不计入待开票
+      pending: false,
+      notPendingNote: '已提交并通过审核的记录，商家无需再操作'
     }
   ],
-  note: '取「给平台开票 → 未开票账单」：账单编号 / 账单月份 / 账单类型 / 账单金额（元）/ 开票主体名称 / 阈值生效时间；阈值金额与收票主体进「其他信息」。'
+  note: '取「给平台开票」三个页签：未开票账单（账单编号 / 账单月份 / 账单类型 / 账单金额（元）/ 开票主体名称 / 阈值生效时间，阈值金额与收票主体名称进「其他信息」）/ 处理中 / 处理记录（后两者是提交后的核销流水：流水单号 / 账单编号 / 账单月份 / 账单金额 / 发票类型 / 提交时间 / 状态，违约金三项与核销方式进「其他信息」）。'
 }
 
 export const INVOICE_PROFILES: Readonly<Record<string, InvoiceProfile>> = {
@@ -314,6 +384,30 @@ export const INVOICE_PROFILES: Readonly<Record<string, InvoiceProfile>> = {
 export function invoiceProfileFor(platformName: string | null | undefined): InvoiceProfile | null {
   if (!platformName) return null
   return INVOICE_PROFILES[platformName] || null
+}
+
+/**
+ * 单元格文本规范化（主进程映射时统一走这里，界面与 CSV 导出共用同一份结果）。
+ *
+ * 实测踩到的两种脏文本：
+ *  ① 同一段文案重复两遍——平台为了响应式/自定义 tooltip 会把同内容渲染两次，
+ *     cell.innerText 于是变成 "2026年01月\n\n2026年01月"（快手「处理记录」的账单月份）；
+ *  ② 内部换行/多空格——拼多多的订单号带 "\n逾期未开票"，直接展示会把表格撑破。
+ *
+ * 规则保守：只把**连续空白**压成一个空格，并且只在"整串正好是同一段重复两遍"时才去重，
+ * 绝不做模糊的相似度合并（那会把真有重复含义的内容吃掉）。
+ * 每半段至少要 2 个字符才判重复——否则「人人」这种叠字内容会被误削成「人」。
+ */
+export function normalizeCellText(v: unknown): string {
+  const s = String(v ?? '').replace(/\s+/g, ' ').trim()
+  if (!s) return ''
+  // 整串正好由同一段重复两遍构成 → 只留一遍
+  const compact = s.replace(/ /g, '')
+  if (compact.length >= 4 && compact.length % 2 === 0) {
+    const half = compact.slice(0, compact.length / 2)
+    if (half === compact.slice(compact.length / 2)) return half
+  }
+  return s
 }
 
 /** 已实测可抓取待开票信息的平台（供界面如实展示） */

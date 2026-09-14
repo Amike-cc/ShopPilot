@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   INVOICE_COLUMNS, INVOICE_PROFILES, INVOICE_SUPPORTED_PLATFORMS,
-  invoiceProfileFor, INVOICE_UNSUPPORTED_NOTE, TABLE_ROW_CLEAN_FN
+  invoiceProfileFor, INVOICE_UNSUPPORTED_NOTE, TABLE_ROW_CLEAN_FN, normalizeCellText
 } from '../../packages/shared/src/constants/invoice'
 import { buildInvoiceCollectSteps } from '../../packages/shared/src/invoice-steps'
 import { stepInputSchemas } from '../../apps/desktop/src/main/tasks/task-step-schemas'
@@ -121,7 +121,7 @@ describe('发票档案（抓取待开票信息用）', () => {
     )
   })
 
-  it('快手已实测到发票页（资金 → 给平台开票 → 未开票账单）', () => {
+  it('快手已实测到发票页（资金 → 给平台开票），三个页签都登记了', () => {
     const ks = invoiceProfileFor('快手小店')!
     expect(ks).toBeTruthy()
     expect(ks.urlMarker).toBe('tax-bill/subsidy')
@@ -131,6 +131,56 @@ describe('发票档案（抓取待开票信息用）', () => {
       expect.arrayContaining(['账单编号', '账单月份', '账单类型', '账单金额（元）', '开票主体名称', '阈值生效时间'])
     )
     expect(INVOICE_UNSUPPORTED_NOTE['快手小店']).toBeUndefined()
+    // 三个页签：未开票账单（默认）+ 处理中 + 处理记录
+    expect(ks.sections.map(s => s.name)).toEqual(['给平台开票（未开票账单）', '开票处理中', '开票处理记录'])
+    expect(ks.sections[0].tabText).toBeUndefined()          // 默认页签，不用点
+    expect(ks.sections.slice(1).map(s => s.tabText)).toEqual(['处理中', '处理记录'])
+    expect(new Set(ks.sections.map(s => s.metricKey)).size).toBe(3)
+  })
+
+  it('快手的「处理中 / 处理记录」表头完全相同 → 必须靠 tabVerify 校验选中态', () => {
+    const ks = invoiceProfileFor('快手小店')!
+    const [processing, records] = ks.sections.slice(1)
+    // 两页签列名一致，按表头做的 expectHeaders/rejectHeaders 分辨不出谁是谁
+    expect(Object.keys(processing.headerMap).sort()).toEqual(Object.keys(records.headerMap).sort())
+    // 所以每个要点的页签都得带选中态校验
+    for (const sec of ks.sections.slice(1)) {
+      expect(sec.tabVerify).toEqual({ selector: '.ant-tabs-tab', classIncludes: 'ant-tabs-tab-active' })
+      // 页签文案在页面上有同名副本（教程标题），限定到页签容器里点
+      expect(sec.tabWithin).toEqual({ selector: '.ant-tabs-tab-btn' })
+    }
+    // 步骤里真的带上了这两项
+    const clicks = buildInvoiceCollectSteps(ks).filter(s => s.type === 'clickByText')
+    expect(clicks.length).toBe(2)
+    for (const c of clicks) {
+      expect(c.input.verifyActive).toBeTruthy()
+      expect(c.input.within).toEqual({ selector: '.ant-tabs-tab-btn' })
+      expect(c.input.allowJsWhenDetached).toBe(true)
+    }
+    // 默认页签（未开票账单）没有 tabVerify 的要求，不该被误加
+    expect(ks.sections[0].tabVerify).toBeUndefined()
+  })
+
+  it('快手「处理中 / 处理记录」是**已提交、商家无需操作** → pending:false，不计入待开票合计', () => {
+    const ks = invoiceProfileFor('快手小店')!
+    // 只有「未开票账单」是待办；另两个是已提交/已通过、无需商家再操作的流水
+    expect(ks.sections.map(s => s.pending)).toEqual([undefined, false, false])
+    // pending:false 的方向必须写清原因（界面 tooltip 直接用，不能是空话）
+    for (const sec of ks.sections.slice(1)) {
+      expect(sec.notPendingNote, sec.name).toBeTruthy()
+      expect(sec.notPendingNote!.length).toBeGreaterThan(4)
+    }
+    // 待办与否在渲染层用 `pending !== false` 判定 → 默认方向（undefined）算待办
+    const isPending = (s: any) => s.pending !== false
+    expect(isPending(ks.sections[0])).toBe(true)
+    expect(isPending(ks.sections[1])).toBe(false)
+    expect(isPending(ks.sections[2])).toBe(false)
+    // 其它平台的方向都还是待办语义（没有新增历史方向，别误标）
+    for (const name of ['微信小店', '拼多多', '抖店']) {
+      for (const sec of invoiceProfileFor(name)!.sections) {
+        expect(sec.pending, `${name}/${sec.name}`).not.toBe(false)
+      }
+    }
   })
 })
 
@@ -295,6 +345,43 @@ describe('发票采集步骤（多开票方向）', () => {
     // 默认不开：依赖框架真实输入的按钮不能走 JS 合成点击
     expect(stepInputSchemas.clickByText.safeParse({ text: '给平台开票', mode: 'real' }).success).toBe(true)
     expect(stepInputSchemas.clickByText.safeParse({ text: 'x', mode: 'real', evil: 1 }).success).toBe(false)
+  })
+
+  it('clickByText 的 verifyActive 过白名单（同名页签必须校验选中态）', () => {
+    const ok = { text: '处理中', mode: 'real', allowJsWhenDetached: true, within: { selector: '.ant-tabs-tab-btn' }, verifyActive: { selector: '.ant-tabs-tab', classIncludes: 'ant-tabs-tab-active' } }
+    expect(stepInputSchemas.clickByText.safeParse(ok).success).toBe(true)
+    expect(stepInputSchemas.clickByText.safeParse({ ...ok, verifyActive: { selector: '.ant-tabs-tab' } }).success).toBe(false)   // 缺 classIncludes
+    expect(stepInputSchemas.clickByText.safeParse({ ...ok, verifyActive: { selector: '.ant-tabs-tab', classIncludes: 'x', evil: 1 } }).success).toBe(false)
+  })
+})
+
+describe('单元格文本规范化（界面显示与 CSV 导出共用同一口径）', () => {
+  it('压掉内部换行与多空格（拼多多「订单号」把"逾期未开票"折在下一行）', () => {
+    expect(normalizeCellText('220630-401819647563847\n逾期未开票')).toBe('220630-401819647563847 逾期未开票')
+    expect(normalizeCellText('  a   b  ')).toBe('a b')
+    expect(normalizeCellText('账单信息：3笔订单\n；操作：提交发票')).toBe('账单信息：3笔订单 ；操作：提交发票')
+  })
+
+  it('整段重复两遍 → 只留一遍（快手「处理记录」的账单月份被渲染两次）', () => {
+    // 实测 2026 年 01 月的行：cell.innerText 是 "2026年01月\n\n2026年01月"
+    expect(normalizeCellText('2026年01月\n\n2026年01月')).toBe('2026年01月')
+    expect(normalizeCellText('2026年01月 2026年01月')).toBe('2026年01月')
+    expect(normalizeCellText('审核通过审核通过')).toBe('审核通过')
+  })
+
+  it('正常内容原样保留，不做模糊合并', () => {
+    expect(normalizeCellText('2026年05月')).toBe('2026年05月')
+    expect(normalizeCellText('¥13.91')).toBe('¥13.91')
+    expect(normalizeCellText('')).toBe('')
+    expect(normalizeCellText(null)).toBe('')
+    expect(normalizeCellText(undefined)).toBe('')
+    // 两半不一样就不该动（"2026年01月" vs "2026年02月" 只差一个字）
+    expect(normalizeCellText('2026年01月2026年02月')).toBe('2026年01月2026年02月')
+    // 内容本身是叠字（如"人人"）也要保留，不能被当成重复——每半段至少 2 字符才判重复
+    expect(normalizeCellText('人人')).toBe('人人')
+    expect(normalizeCellText('五五')).toBe('五五')
+    // 边界：半段正好 2 字符（"5月"重复两遍）仍能去重
+    expect(normalizeCellText('5月5月')).toBe('5月')
   })
 })
 

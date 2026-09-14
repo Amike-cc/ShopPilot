@@ -359,6 +359,8 @@ function classifyError(e: any): string {
   if (msg.includes('TASK_VIEW_DETACHED')) return 'TASK_VIEW_DETACHED'
   // 页面被重定向到登录页（登录态失效）：用户能自己解决，必须与"页面慢/改版"区分开
   if (msg.includes('TASK_LOGIN_REQUIRED')) return 'TASK_LOGIN_REQUIRED'
+  // 页签点了但没选中（平台同名页签数据不同：不校验就会把上一个页签的数据当成这个的）
+  if (msg.includes('TASK_TAB_NOT_ACTIVE')) return 'TASK_TAB_NOT_ACTIVE'
   // 店铺浏览器/任务标签页被关闭（此前落进 INTERNAL_ERROR，看不出真实原因）
   if (msg.includes('BROWSER_CLOSED')) return 'BROWSER_CLOSED'
   // AI 相关的固定错误码：如实透出，便于界面区分"没配 Key / 地址不合法 / 超时 / 请求失败"
@@ -495,24 +497,34 @@ const PICK_SORT_FN = `
  * 查找范围限定（clickByText / waitForText 的 within）。
  * 实测动机（抖店广场）：类目名同时出现在筛选 chip 与达人卡片的类目文案里，
  * "不限"在等级下拉里也有同名项——不限定范围就会点错目标，筛选静默失效。
+ *
+ * 返回的是**范围集合**而不是单个元素：`selector` 命中多个时要每个都算范围内。
+ * 实测踩过（快手发票页签）：页签容器 `.ant-tabs-tab-btn` 有三个，旧实现只取
+ * `querySelector` 的第一个——于是"在页签里找「处理中」"变成了"在第一个页签
+ * （未开票账单）里找处理中"，必然找不到，报出误导性的"页面上找不到文案为「处理中」的可点击元素"。
  */
-const SCOPE_FN = `
-  const __scopeRoot = (w) => {
+export const SCOPE_FN = `
+  const __scopeRoots = (w) => {
     if (!w) return null;
-    let root = null;
-    if (w.selector) root = document.querySelector(w.selector);
+    let roots = [];
+    if (w.selector) roots = Array.from(document.querySelectorAll(w.selector));
     else {
       const cands = [];
       for (const el of document.querySelectorAll('*')) {
         const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
         if (own === w.text || (own.includes(w.text) && own.length <= w.text.length + 12)) cands.push({ el, len: own.length });
       }
-      if (cands.length) { cands.sort((a, b) => a.len - b.len); root = cands[0].el }
+      if (cands.length) { cands.sort((a, b) => a.len - b.len); roots = [cands[0].el] }
     }
-    if (!root) return null;
-    for (let i = 0; i < (w.climb || 0); i++) { if (!root.parentElement) break; root = root.parentElement }
-    return root;
-  }
+    if (!roots.length) return null;
+    const climb = w.climb || 0;
+    for (let i = 0; i < climb; i++) {
+      roots = roots.map(r => r.parentElement).filter(Boolean);
+      if (!roots.length) break;
+    }
+    return roots.length ? roots : null;
+  };
+  const __inScope = (roots, el) => !roots || roots.some(r => r.contains(el));
 `
 
 async function findTextTarget(
@@ -533,13 +545,13 @@ async function findTextTarget(
     const visited = new Set(${JSON.stringify((pick && pick.visited) || [])});
     const dedupNs = ${JSON.stringify((pick && pick.dedupNs) || '')};
     const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
-    const root = within ? __scopeRoot(within) : null;
-    if (within && !root) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
+    const roots = within ? __scopeRoots(within) : null;
+    if (within && !roots) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
     const cands = [];
     for (const el of scope) {
       const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
       if (!own.includes(needle)) continue;
-      if (root && !root.contains(el)) continue;
+      if (!__inScope(roots, el)) continue;
       if (!__visible(el)) continue;
       cands.push({ el, len: own.length });
     }
@@ -1214,6 +1226,44 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             throw new Error(`TASK_TIMEOUT: 点击「${needle}」${attempts} 次后地址仍未变为含「${waitUrl.includes}」的页面`)
           }
         }
+        // verifyActive：点完页签后校验它**真的选中了**。
+        //
+        // 为什么要这一步：页签切换唯一可靠的证据是"它变成选中态"，而平台常有一批表头完全相同的
+        // 页签（实测快手发票页「处理中」与「处理记录」表头一模一样）。切页签静默失败时，
+        // 读回来的是**上一个页签**的数据——表头校验（expectHeaders）对这种情况完全无能为力，
+        // 于是「处理中」会显示成「处理记录」的 3 条，而且看不出来。
+        // 有了它，切不动就如实失败，绝不把邻居的数据当成本页签的。
+        const verifyActive = input.verifyActive as { selector: string; classIncludes: string; text?: string } | undefined
+        if (verifyActive) {
+          const wantText = verifyActive.text ? String(verifyActive.text) : needle
+          const until = Date.now() + Math.max(5000, Math.min(step.timeoutMs, 20000))
+          let active = false
+          let lastSeen = ''
+          for (;;) {
+            guardSignals(run)
+            const st = await wcOrThrow(run).executeJavaScript(`(() => {
+              const sel = ${JSON.stringify(String(verifyActive.selector))};
+              const want = ${JSON.stringify(wantText)};
+              const cls = ${JSON.stringify(String(verifyActive.classIncludes))};
+              const seen = [];
+              for (const el of document.querySelectorAll(sel)) {
+                const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+                const has = String(el.className || '').includes(cls);
+                seen.push(t.slice(0, 20) + (has ? '(选中)' : ''));
+                if (t === want && has) return JSON.stringify({ ok: true, seen });
+              }
+              return JSON.stringify({ ok: false, seen });
+            })()`).catch(() => JSON.stringify({ ok: false, seen: [] }))
+            const parsed = (() => { try { return JSON.parse(String(st)) } catch { return { ok: false, seen: [] } } })()
+            lastSeen = (parsed.seen || []).join(' / ')
+            if (parsed.ok) { active = true; break }
+            if (Date.now() >= until) break
+            await new Promise(r => setTimeout(r, 300))
+          }
+          if (!active) {
+            throw new Error(`TASK_TAB_NOT_ACTIVE: 点了「${wantText}」但它没有变成选中态（${verifyActive.selector} 上未见 ${verifyActive.classIncludes}）——页签可能没切成功，已中止以免把上一个页签的数据当成本页签的。当前页签：${lastSeen}`)
+          }
+        }
         return {
           kind: 'executed',
           payload: {
@@ -1222,6 +1272,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             // 视图当时没挂载 → 只能降级为 JS 点击。如实记下来：这种点击对
             // "未接收合成事件"的框架按钮可能不生效，排查时一眼能看出走了哪条路。
             transport: hit.transport ?? 'trusted-mouse',
+            ...(verifyActive ? { verifiedActive: true } : {}),
             ...(hit.rowKey ? { picked: hit.picked ?? 'best', rowKey: hit.rowKey } : {}),
             ...(follow ? { followedTab: run.tabId } : {})
           }
@@ -1235,14 +1286,14 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         ${PICK_SORT_FN}
         const needle = ${JSON.stringify(needle)};
         const within = ${JSON.stringify(within || null)};
-        const root = within ? __scopeRoot(within) : null;
-        if (within && !root) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
+        const roots = within ? __scopeRoots(within) : null;
+        if (within && !roots) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
         const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
         const cands = [];
         for (const el of scope) {
           const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
           if (!own.includes(needle)) continue;
-          if (root && !root.contains(el)) continue;
+          if (!__inScope(roots, el)) continue;
           const r = el.getBoundingClientRect();
           if (!(r.width > 0 && r.height > 0)) continue;
           cands.push({ el, len: own.length });
@@ -1884,13 +1935,13 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             ${SCOPE_FN}
             const needle = ${JSON.stringify(needle)};
             const within = ${JSON.stringify(within || null)};
-            const root = within ? __scopeRoot(within) : null;
-            if (within && !root) return false;
+            const roots = within ? __scopeRoots(within) : null;
+            if (within && !roots) return false;
             const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
             for (const el of scope) {
               const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
               if (!own.includes(needle)) continue;
-              if (root && !root.contains(el)) continue;
+              if (!__inScope(roots, el)) continue;
               if (__visible(el)) return true;
             }
             return false;

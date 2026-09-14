@@ -34,10 +34,13 @@ function tabClick(section: InvoiceSection, deep: boolean): InvoiceStepDraft {
     type: 'clickByText',
     input: {
       text: section.tabText,
+      ...(section.tabWithin ? { within: section.tabWithin } : {}),
       ...(deep ? { deep: true } : {}),
       mode: 'real',
       // 视图未挂载时降级为 JS 点击（见文件头说明）——切页签不依赖浏览器输入管线
-      allowJsWhenDetached: true
+      allowJsWhenDetached: true,
+      // 点完必须确认它真的选中了：同名页签数据不同，切不动就会张冠李戴
+      ...(section.tabVerify ? { verifyActive: section.tabVerify } : {})
     },
     timeoutMs: 25000
   }

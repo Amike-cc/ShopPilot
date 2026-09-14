@@ -1,0 +1,10 @@
+快手店铺: 福气满满
+标签页: https://login.kwaixiaodian.com/?biz=zone&redirect_url=https% | https://login.kwaixiaodian.com/?biz=zone&redirect_url=https% | https://login.kwaixiaodian.com/?biz=zone&redirect_url=https% | https://login.kwaixiaodian.com/?biz=zone&redirect_url=https% | https://login.kwaixiaodian.com/?biz=zone&redirect_url=https% | https://login.kwaixiaodian.com/?biz=zone&redirect_url=https% | https://login.kwaixiaodian.com/?biz=zone&redirect_url=https%
+当前地址: https://login.kwaixiaodian.com/?biz=zone&redirect_url=https%3A%2F%2Fs.kwaixiaodian.com%2Fzone%2Ffund%2Ftax-bil
+>>> 未登录（在登录页）
+Warning: Detected unsettled top-level await at file:///D:/code/%E7%94%B5%E5%95%86%E6%B5%8F%E8%A7%88%E5%99%A8/wx-invite-test/ks-check.mjs:44
+const shot = await send('Page.captureScreenshot', { format: 'png' })
+             ^
+
+
+

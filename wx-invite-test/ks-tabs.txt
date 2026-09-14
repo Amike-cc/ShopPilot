@@ -1,0 +1,12 @@
+地址: https://s.kwaixiaodian.com/zone/fund/tax-bill/subsidy
+
+=== ant-tabs 页签 ===
+[选中] 未开票账单  <DIV.ant-tabs-tab ant-tabs-tab-active>
+[    ] 未开票账单  <DIV.ant-tabs-tab-btn>
+[    ] 处理中  <DIV.ant-tabs-tab>
+[    ] 处理中  <DIV.ant-tabs-tab-btn>
+[    ] 处理记录  <DIV.ant-tabs-tab>
+[    ] 处理记录  <DIV.ant-tabs-tab-btn>
+
+=== 页面上的「已开票 / 未开票」类文案 ===
+未开票账单  <DIV.ant-tabs-tab-btn>

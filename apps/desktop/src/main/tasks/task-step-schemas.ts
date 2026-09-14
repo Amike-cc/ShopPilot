@@ -132,7 +132,21 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * 依赖框架真实输入的按钮（微信邀约表单）**绝不能**开：JS 合成 click 对它们不生效，
      * 开了会静默点空、把根因推到后面几步才暴露。
      */
-    allowJsWhenDetached: z.boolean().optional()
+    allowJsWhenDetached: z.boolean().optional(),
+    /**
+     * 点完校验它**真的选中了**：`{ selector, classIncludes, text? }` ——
+     * 在 selector 匹配的元素里找一个 innerText === text（默认 = 本次点的文案）且 className
+     * 含 classIncludes 的，超时没有就报 TASK_TAB_NOT_ACTIVE。
+     *
+     * 用途：平台常有一批**表头完全相同**的页签（实测快手发票页「处理中」与「处理记录」），
+     * 切页签静默失败时读回来的是上一个页签的数据，而表头校验对此无能为力——
+     * 有了它切不动就如实失败，不会张冠李戴。
+     */
+    verifyActive: z.object({
+      selector,
+      classIncludes: z.string().min(1).max(60),
+      text: z.string().min(1).max(200).optional()
+    }).strict().optional()
   }).strict().refine((v) => !v.nth || v.mode === 'real', { message: 'nth 仅支持 mode:"real"（需要真实鼠标点击）' }),
   clickAll: z.object({
     selector: selector.optional(),

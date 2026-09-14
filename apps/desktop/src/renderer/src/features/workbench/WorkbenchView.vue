@@ -741,8 +741,12 @@
         <div class="dc-cards" data-test="invoice-totals">
           <div class="dc-card"><div class="dc-num">{{ invoiceTotal.count }}</div><div class="dc-label">待开票条数</div></div>
           <div class="dc-card"><div class="dc-num">{{ invoiceTotal.amountText }}</div><div class="dc-label">可开金额合计</div></div>
-          <div class="dc-card"><div class="dc-num">{{ invoiceTotal.stores }}</div><div class="dc-label">有数据的店铺</div></div>
+          <div class="dc-card"><div class="dc-num">{{ invoiceTotal.stores }}</div><div class="dc-label">有待办的店铺</div></div>
           <div class="dc-card"><div class="dc-num">{{ invoiceTotal.overdue }}</div><div class="dc-label">含逾期/到期提示</div></div>
+        </div>
+        <div v-if="invoiceTotal.historical" class="env-note" style="margin-bottom:10px">
+          另有 <b>{{ invoiceTotal.historical }} 条</b>属「已提交 / 已通过」的方向（各平台的「处理中 / 处理记录」这类）——
+          商家在那边没有待办，因此<b>不计入</b>上方待开票条数与金额合计；记录照常列在各店铺下方并标了「无需操作」。
         </div>
         <div v-if="invoiceTotal.aliasWarning" class="env-note" style="margin-bottom:10px">
           <b>注意</b>：合计金额混有 {{ invoiceTotal.currencyNote }}；不同平台的金额口径（含税/不含税、阈值金额与账单金额）以各自页面为准。
@@ -750,8 +754,8 @@
         </div>
         <!-- 按开票方向分开的合计（实测同页不同方向数据不同，分开算才不会互相串） -->
         <div v-if="invoiceTotal.dirs.length" class="inv-dirs" data-test="invoice-dir-totals">
-          <span class="inv-dir" v-for="d in invoiceTotal.dirs" :key="d.name">
-            <i>{{ d.name }}</i>{{ d.count }} 条 · {{ d.amountText }}
+          <span class="inv-dir" v-for="d in invoiceTotal.dirs" :key="d.name" :title="d.pending ? '' : '已提交/已通过的方向，商家无需再操作，不计入待开票合计'">
+            <i>{{ d.name }}</i>{{ d.count }} 条<template v-if="!d.pending">（无需操作）</template> · {{ d.amountText }}
             <em v-if="d.unparsed">（{{ d.unparsed }} 条金额未解析）</em>
           </span>
         </div>
@@ -791,6 +795,7 @@
             <span v-if="r.manual" class="inv-vtag">手动</span>
             <span class="row-sub" style="margin-left:auto">
               {{ r.supported ? `待开票 ${r.count} 条` : '未支持抓取' }}
+              <template v-if="r.historyCount">　·　无需操作 {{ r.historyCount }} 条</template>
             </span>
             <button class="mini-btn" data-test="invoice-open-store" @click="openInvoiceFor(r)">
               {{ r.supported ? '打开发票页' : '打开后台' }}
@@ -799,7 +804,7 @@
 
           <div v-if="!r.supported" class="env-note" style="margin:0">{{ r.unsupportedReason }}</div>
           <template v-else>
-            <div v-if="!r.count" class="env-note" style="margin:0">
+            <div v-if="!r.count && !r.historyCount" class="env-note" style="margin:0">
               还没有采集到数据——点上方「抓取待开票信息」开始。
               <template v-if="r.lastFail">
                 上次采集失败：<b>{{ r.lastFail.message || r.lastFail.code }}</b><template v-if="r.lastFail.at">（{{ new Date(r.lastFail.at).toLocaleString() }}）</template>
@@ -813,6 +818,7 @@
               <div class="inv-sec-h">
                 <span class="inv-sec-name">{{ sec.name }}</span>
                 <span class="row-sub">{{ sec.items.length }} 条</span>
+                <span v-if="sec.pending === false" class="inv-vtag" :title="sec.notPendingNote || '商家无需再操作，不计入上方待开票合计'">无需操作</span>
                 <span v-if="sec.measuredRows && sec.items.length < sec.measuredRows" class="inv-vtag" :title="`首次实测该方向有 ${sec.measuredRows} 条，本次抓到 ${sec.items.length} 条`">
                   比实测少（实测 {{ sec.measuredRows }}）
                 </span>
@@ -2673,8 +2679,11 @@ const invoiceRows = computed(() => {
       lastFail: got.lastFail || null,
       loginRequired: !!got.loginRequired,
       sections: visible,
-      // 该店全部方向的条数合计（筛选后）
-      count: visible.reduce((a: number, x: any) => a + x.items.length, 0),
+      // 该店**待办**方向的条数合计（筛选后）；历史方向（pending===false）不算进来，
+      // 否则"待开票 N 条"里会混进已办完的记录（实测快手「处理记录」）
+      count: visible.reduce((a: number, x: any) => a + (x.pending === false ? 0 : x.items.length), 0),
+      // 该店历史方向的条数（界面在卡片角上单独说明，不藏起来）
+      historyCount: visible.reduce((a: number, x: any) => a + (x.pending === false ? x.items.length : 0), 0),
       hasExtras: visible.some((x: any) => x.items.some((it: any) => Array.isArray(it.extras) && it.extras.length > 0))
     }
   })
@@ -2682,13 +2691,15 @@ const invoiceRows = computed(() => {
 
 /** 「只看有数据的」筛选（搜索与排序已在 invoiceRows 里做过） */
 const visibleInvoiceRows = computed(() =>
-  invoiceOnlyWithData.value ? invoiceRows.value.filter(r => r.count > 0) : invoiceRows.value
+  invoiceOnlyWithData.value ? invoiceRows.value.filter(r => r.count > 0 || r.historyCount > 0) : invoiceRows.value
 )
 
 /**
  * 跨店铺合计（含**按方向**分开的合计）。金额口径如实处理：
  *  - 解析不出的**不计入**，并把条数报出来（界面注明），避免"合计比实际小"却看不出来；
- *  - 同时出现过 ¥ 与 ￥ 时提示一下；不同平台/方向口径以各自页面为准（不做汇率/含税换算）。
+ *  - 同时出现过 ¥ 与 ￥ 时提示一下；不同平台/方向口径以各自页面为准（不做汇率/含税换算）；
+ *  - `pending === false` 的方向是**已提交/已通过、商家无需操作**（实测快手「处理中」「处理记录」）
+ *    → 照常展示，但**不计入**待开票条数与可开金额，否则合计虚高。
  */
 const invoiceTotal = computed(() => {
   let count = 0
@@ -2696,15 +2707,20 @@ const invoiceTotal = computed(() => {
   let unparsed = 0
   let overdue = 0
   let stores = 0
+  let historical = 0
   const symbols = new Set<string>()
   // 按方向汇总（方向名跨平台合并，如各家的「给平台开票」）
-  const byDirection = new Map<string, { name: string; count: number; amount: number; unparsed: number }>()
+  const byDirection = new Map<string, { name: string; count: number; amount: number; unparsed: number; pending: boolean }>()
   for (const r of invoiceRows.value) {
     if (!r.supported) continue
-    if (r.count) stores++
+    // "有数据的店铺"只算**有待办**的店：只有历史记录的店不该被算成"有 1 家在等你开票"
+    if (r.sections.some((s: any) => s.pending !== false && s.items.length)) stores++
     for (const sec of r.sections) {
-      const dir = byDirection.get(sec.name) || { name: sec.name, count: 0, amount: 0, unparsed: 0 }
+      const isPending = sec.pending !== false
+      const dir = byDirection.get(sec.name) || { name: sec.name, count: 0, amount: 0, unparsed: 0, pending: isPending }
       for (const it of sec.items) {
+        // 历史方向：条数与金额都不进合计，只统计条数让界面能说明"另有 N 条历史记录"
+        if (!isPending) { historical++; dir.count++; continue }
         count++
         dir.count++
         const a = parseAmount(it.cells?.amount)
@@ -2720,12 +2736,13 @@ const invoiceTotal = computed(() => {
     }
   }
   const symList = [...symbols]
+  // 历史方向也列出来（照实展示），但标出来它不参与合计。
   const dirs = [...byDirection.values()]
     .filter(d => d.count > 0)
     .sort((a, b) => b.count - a.count)
     .map(d => ({ ...d, amountText: '¥' + fmtAmount(d.amount) }))
   return {
-    count, amount, stores, unparsed, overdue, dirs,
+    count, amount, stores, unparsed, overdue, dirs, historical,
     amountText: count ? (symList.includes('￥') && !symList.includes('¥') ? '￥' : '¥') + fmtAmount(amount) : '—',
     aliasWarning: symList.length > 1 || (amount > 0 && unparsed > 0),
     currencyNote: symList.length > 1 ? `¥ 与 ￥ 两种符号（同一币种，仅符号不同）` : `无法解析的金额`
@@ -2934,10 +2951,21 @@ function openDataCenter() {
   void loadDataCenter()
 }
 
-/** 单元格内的换行（实测拼多多的「订单号」列把"逾期未开票"折在下一行）→ 压成空格，
- *  否则一个单元格多行会把整行撑到 170px+，表格看着像坏了 */
+/**
+ * 单元格文本：换行压成空格（实测拼多多「订单号」把"逾期未开票"折在下一行，
+ * 一个单元格多行会把整行撑到 170px+，表格看着像坏了），并去掉平台重复渲染的整段重复。
+ * 与主进程 `normalizeCellText`（shared/constants/invoice.ts）同一口径——界面显示的值
+ * 与 CSV 导出的值必须一致，不能一个去重一个不去。
+ */
 function cleanCell(v: unknown): string {
-  return String(v ?? '').replace(/\s*\n\s*/g, ' ').trim()
+  const s = String(v ?? '').replace(/\s+/g, ' ').trim()
+  const compact = s.replace(/ /g, '')
+  // 每半段至少 2 字符才判重复——否则「人人」这类叠字会被误削成「人」
+  if (compact.length >= 4 && compact.length % 2 === 0) {
+    const half = compact.slice(0, compact.length / 2)
+    if (half === compact.slice(compact.length / 2)) return half
+  }
+  return s
 }
 
 /** 「其他信息」列：内容可能很长（拼多多 5 项、每项都不短）→ 只显示前 2 项，

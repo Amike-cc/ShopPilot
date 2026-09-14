@@ -5,3 +5,9 @@
 视口: 0x0 vis=hidden
 正文: 我是店主 快手商家账号登录 我是员工 快手商家子账号登录 密码登录 短信登录 扫码登录 打开 快手小店商家 APP 点击左上角侧边栏 扫一扫 登录即代表同意 用户协议 和 隐私政策 没有账号？免费注册开店 网安备案|蜀ICP备19035576号-2|增值电信业务经营许可证：川B2-20200036 www.kwaixiaodian.com 2019-现在 @ All rights Reserved
 二维码元素: [class*=qrcode]×5 | [class*=code]×5  含"过期/刷新"=false
+Warning: Detected unsettled top-level await at file:///D:/code/%E7%94%B5%E5%95%86%E6%B5%8F%E8%A7%88%E5%99%A8/wx-invite-test/refresh-ks-login.mjs:68
+  const shot = await snd('Page.captureScreenshot', { format: 'png' })
+               ^
+
+
+

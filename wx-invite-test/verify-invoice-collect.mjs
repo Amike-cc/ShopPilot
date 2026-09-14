@@ -64,6 +64,8 @@ const data = JSON.parse(await ev(`(async () => {
       登录失效: !!x.loginRequired,
       方向: (x.sections||[]).map(sec => ({
         名: sec.name, 指标: sec.metricKey, 实测条数: sec.measuredRows,
+        待办: sec.pending !== false,
+        无需操作原因: sec.notPendingNote || null,
         采集于: sec.capturedAt ? new Date(sec.capturedAt).toLocaleString() : null,
         条数: (sec.items||[]).length,
         表头: sec.header,
@@ -140,6 +142,35 @@ if (pdd) {
 // 至少要有一个平台是"多方向各自拿到数据"的，证明多方向确实生效
 const multi = supported.filter((r) => r.方向.filter((s) => s.条数 > 0).length >= 2)
 check('③ 有平台做到了多方向各自取数', multi.length >= 2, multi.map((r) => `${r.平台}:${r.方向.filter((s) => s.条数 > 0).map((s) => s.名 + s.条数).join('/')}`).join(' '))
+
+// 快手「处理中 / 处理记录」是已提交、商家无需操作的流水 → 必须标成"无需操作"，
+// 否则它们会被算进"待开票条数/可开金额合计"，合计虚高（实测踩过：多算了 3 条 + ¥389.69）
+const ks = data.rows.find((r) => r.平台 === '快手小店')
+if (ks && ks.方向.length >= 3) {
+  const noop = ks.方向.filter((s) => !s.待办)
+  check('③ 快手「处理中/处理记录」标为无需操作（不计入待开票合计）',
+    noop.length === 2 && noop.every((s) => !!s.无需操作原因),
+    noop.map((s) => `${s.名}(${s.条数}条): ${String(s.无需操作原因).slice(0, 20)}`).join(' | '))
+}
+
+// 合计口径：待开票条数 / 金额 只应包含"待办"方向的数据。
+// 用返回的方向数据自行重算一遍，和界面的算法对齐（防止哪边悄悄改了口径）。
+let pendingItems = 0, historyItems = 0
+for (const r of supported) for (const s of r.方向) (s.待办 ? (pendingItems += s.条数) : (historyItems += s.条数))
+check('③ 待办/无需操作两个桶都非空（划分真的生效）', pendingItems > 0 && historyItems > 0,
+  `待办 ${pendingItems} 条 / 无需操作 ${historyItems} 条`)
+
+// 单元格规范化：平台重复渲染的整段重复要去掉（实测快手「处理记录」的账单月份）
+const dup = []
+for (const r of supported) for (const s of r.方向) for (const it of (s.样例 || [])) {
+  for (const v of Object.values(it.cells || {})) {
+    const t = String(v ?? '').replace(/\s+/g, ' ').trim()
+    const c = t.replace(/ /g, '')
+    if (c.length >= 4 && c.length % 2 === 0 && c.slice(0, c.length / 2) === c.slice(c.length / 2)) dup.push(`${r.平台}/${s.名}: ${t}`)
+  }
+}
+check('③ 没有"同一段文案重复两遍"的脏单元格', dup.length === 0, dup.slice(0, 3).join(' | '))
+
 // 采集失败必须如实透出（不能把失败显示成"暂无数据"）
 check('③ 失败原因如实透出', data.rows.every((r) => !r.失败 || r.失败.includes(':')))
 // 至少有平台把金额/单号映射进了统一列

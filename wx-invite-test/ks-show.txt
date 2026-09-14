@@ -2,3 +2,9 @@
 显示店铺: 福气满满
 页面地址: https://login.kwaixiaodian.com/?biz=zone&redirect_url=https%3A%2F%2Fs.kwaixiaodian.com%2Fz
 视口: 0x0 vis=hidden
+Warning: Detected unsettled top-level await at file:///D:/code/%E7%94%B5%E5%95%86%E6%B5%8F%E8%A7%88%E5%99%A8/wx-invite-test/show-ks-login.mjs:59
+const shot = await snd('Page.captureScreenshot', { format: 'png' })
+             ^
+
+
+
