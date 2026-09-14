@@ -130,6 +130,11 @@ describe('微信小店（assist-form）步骤构造', () => {
     // 进达人详情：点不到就按 SELECTION_SHORTFALL 收尾（loop 视为正常停止）
     const detail = round.find(s => s.type === 'clickByText' && String(s.input.text) === '详情')!
     expect(detail.input.missingCode).toBe('TASK_SELECTION_SHORTFALL')
+    // 平台点「详情」是 window.open 开新标签页（页面本身不跳转）→ 必须带 followTab，
+    // 否则引擎留在旧标签页等 finder-detail，整轮超时失败（2026-09-14 真店实测）
+    expect(detail.input.followTab).toMatchObject({ urlIncludes: 'finder-detail' })
+    const invite = round.find(s => s.type === 'clickByText' && String(s.input.text) === '邀请带货')!
+    expect(invite.input.followTab).toMatchObject({ urlIncludes: 'initiate-invite' })
     expect(texts).toContain('邀请带货')
     // 也应在轮内等待详情页/表单页
     for (const inc of ['finder-detail', 'initiate-invite']) {
@@ -329,6 +334,14 @@ describe('任务步骤输入 schema', () => {
     expect(stepInputSchemas.ensureRows.safeParse({ rowsSelector: 'a', max: 1 }).success).toBe(false)
     expect(stepInputSchemas.requireQuota.safeParse({ textIncludes: 'x' }).success).toBe(false)
     expect(stepInputSchemas.requireEnabled.safeParse({ text: 'x', extra: 1 }).success).toBe(false)
+  })
+
+  it('followTab（点完跟到新标签页）：可选、键受白名单约束', () => {
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', deep: true, mode: 'real', followTab: { urlIncludes: 'finder-detail' } }).success).toBe(true)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', followTab: { closeOld: false } }).success).toBe(true)
+    // 多余键/非法值一律拒绝（不接受任何"额外行为"入口）
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', followTab: { urlIncludes: 'x', evil: 1 } }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', followTab: 'yes' }).success).toBe(false)
   })
 
   it('within 限定范围：selector 与 text 二选一，climb 有上限', () => {

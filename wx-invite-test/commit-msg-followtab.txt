@@ -1,0 +1,24 @@
+fix(invite): 微信连续邀约的真因修复——平台点「详情」是开新标签页，引擎新增 followTab 跟随
+
+真店实测（2026-09-14）：达人广场点「详情」当前页地址不变，平台是 window.open 在店铺
+窗口里**新开标签页**（日志里攒了 7 个 finder-detail 标签页可证）。引擎此前只认运行标签页，
+后续 waitForPage(finder-detail) 永远等不到 → 每轮都在第一步超时失败。
+
+引擎
+- clickByText 新增可选 followTab { urlIncludes?, closeOld? }（Zod strict 白名单）：
+  点击前记下已有标签页，点击后等新标签页出现即切过去继续本次运行，并默认关掉旧运行标签页
+  （否则每个候选留一个标签页）。只"跟随"不"断言"，地址仍由后续 waitForPage 独立校验。
+- 遮挡处理补一条：遮挡者若是"自身文本完全相同"的可点元素（表格横向滚动时平台复制的
+  右侧固定列镜像 .weui-desktop-table__right-shadow 里的同一链接，分属不同 <tr>），
+  按同一目标处理，点落点即用户会点的那份。
+
+微信流程（assist-form）
+- 「详情」带 followTab{urlIncludes:'finder-detail'}；「邀请带货」带 followTab{urlIncludes:'initiate-invite'}
+  （兼容原地跳转与开新标签页两种行为）。
+
+验证
+- 真机（运行中的应用，非单测）：仿真复刻平台形态的页面（1640px 表 + position:fixed 右侧
+  固定列镜像 + 两份「详情」都是 window.open）跑真任务 → 两次跟随成功、达人序号一致、
+  标签页 9→10（旧标签页自动回收）、run succeeded、payload 有 followedTab。脚本 wx-invite-test/verify-followtab.js
+- 单测 22 项：followTab 白名单校验 + 微信两处点击必须带 followTab 的回归断言。
+- 待真实复验：微信登录态随应用重启失效（连首页都返回「登录超时」），真实批量邀约需扫码后跑。

@@ -173,11 +173,21 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
   if (opts.finderType) round.push({ type: 'clickByText', input: { text: opts.finderType, deep: true, mode: 'real' }, timeoutMs: 25000 })
   for (const c of (opts.finderCategories || [])) round.push({ type: 'clickByText', input: { text: c, deep: true, mode: 'real', missingCode: 'TASK_SELECTION_SHORTFALL' }, timeoutMs: 25000 })
   for (const f of (opts.finderOtherFilters || [])) round.push({ type: 'clickByText', input: { text: f, deep: true, mode: 'real' }, timeoutMs: 25000 })
-  // 进达人详情：找不到「详情」= 没有下一个候选 → 干净停止
+  // 进达人详情：平台是 window.open 开**新标签页**（页面自身不跳转），所以点完要跟随新标签页；
+  // 找不到「详情」= 没有下一个候选 → 干净停止
   round.push({ type: 'waitForText', input: { text: '详情', deep: true }, timeoutMs: 30000 })
-  round.push({ type: 'clickByText', input: { text: '详情', deep: true, mode: 'real', missingCode: 'TASK_SELECTION_SHORTFALL' }, timeoutMs: 30000 })
+  round.push({
+    type: 'clickByText',
+    input: { text: '详情', deep: true, mode: 'real', missingCode: 'TASK_SELECTION_SHORTFALL', followTab: { urlIncludes: 'finder-detail' } },
+    timeoutMs: 40000
+  })
   round.push({ type: 'waitForPage', input: { urlIncludes: 'finder-detail' }, timeoutMs: 45000 })
-  round.push({ type: 'clickByText', input: { text: '邀请带货', deep: true, mode: 'real' }, timeoutMs: 30000 })
+  // 「邀请带货」同样可能开新标签页（进到 initiate-invite），给出 followTab 兼容两种行为
+  round.push({
+    type: 'clickByText',
+    input: { text: '邀请带货', deep: true, mode: 'real', followTab: { urlIncludes: p.inviteUrlMarker } },
+    timeoutMs: 40000
+  })
   round.push({ type: 'waitForPage', input: { urlIncludes: p.inviteUrlMarker }, timeoutMs: 45000 })
   // 额度预检：为 0 时如实失败（TASK_QUOTA_EXCEEDED）→ 循环干净收尾
   round.push({ type: 'requireQuota', input: { textIncludes: p.quota.textIncludes, min: p.quota.min, metric: 'invite.quota', deep: true }, timeoutMs: 30000 })

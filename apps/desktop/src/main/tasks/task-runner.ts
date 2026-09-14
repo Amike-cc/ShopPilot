@@ -23,7 +23,7 @@ import { writeAudit } from '../services/audit-logger'
 import { logMain } from '../services/logger'
 import { generateInviteScript } from '../services/ai-client'
 import { isAppLocked } from '../services/security-manager'
-import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab } from '../browser/window-manager'
+import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, closeTab } from '../browser/window-manager'
 import { getDatabase } from '../db/database'
 
 interface RunHandle {
@@ -553,6 +553,19 @@ async function findTextTarget(
           return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag };
         }
       }
+      // 固定列副本：表格比视口宽时平台把右侧「操作」列复制成 position:fixed 的镜像
+      // （实测微信广场 .weui-desktop-table__right-shadow 里那份「详情」压住了滚动区那份）。
+      // 两份是同一个链接、同一行，但分属不同 <tr>，上面的同行判定认不出来——
+      // 这里按"自身文本完全相同"认定是同一目标，直接点这个点到手的位置（落点就是它）。
+      const ownOf = (el) => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+      let same = blocker;
+      for (let i = 0; i < 4 && same; i++, same = same.parentElement) {
+        const tag = same.tagName;
+        const interactive = tag === 'A' || tag === 'BUTTON' || tag === 'LABEL' || same.getAttribute('role') === 'button';
+        if (interactive && ownOf(same) === ownOf(hit)) {
+          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(same.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag + '(同文本副本)' };
+        }
+      }
     }
     return { ok: false, reason: 'COVERED', coveredBy: blocker ? blocker.tagName + '.' + String(blocker.className || '').slice(0, 40) : 'unknown' };
   })()`), run, timeoutMs, label)
@@ -563,6 +576,34 @@ function realClick(wc: Electron.WebContents, x: number, y: number): void {
   wc.sendInputEvent({ type: 'mouseMove', x, y })
   wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
   wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
+}
+
+/**
+ * 跟随新标签页（点击后平台用 window.open 打开目标页时使用）。
+ *
+ * 真店实测（微信小店达人广场「详情」）：点击不改变当前页地址，而是在店铺窗口里
+ * **新开一个标签页**——店铺窗口的弹窗策略是"开成新标签页并切到前台"（window-manager
+ * createTab 的 setWindowOpenHandler）。引擎此前只认运行标签页，于是后面的
+ * waitForPage（urlIncludes: finder-detail）永远等不到，整轮就在超时中失败。
+ *
+ * 这里在点击前记下已有标签页、点击后等新标签页出现，把本次运行切到新标签页，
+ * 旧的运行标签页关掉（不关的话每个候选都留一个，几十轮下来堆满窗口）。
+ * 只做"跟随"，不做断言：地址是否真的是目标页由后面紧跟的 waitForPage 校验。
+ */
+async function followOpenedTab(
+  run: RunHandle, beforeIds: Set<string>, urlIncludes: string | undefined, timeoutMs: number
+): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs
+  const fresh = () => getStoreTabs(run.storeId).filter(t => !beforeIds.has(t.id))
+  for (;;) {
+    guardSignals(run)
+    const opened = fresh()
+    // 优先取地址匹配的那个；没有匹配的（新标签页还在 about:blank / 先开壳后跳转）就取第一个新的
+    const picked = (urlIncludes ? opened.find(t => String(t.url || '').includes(urlIncludes)) : null) || opened[0]
+    if (picked) return picked.id
+    if (Date.now() >= deadline) return null
+    await new Promise(r => setTimeout(r, 250))
+  }
 }
 
 /**
@@ -850,9 +891,31 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
           await new Promise(r => setTimeout(r, 300))
         }
         guardSignals(run)
+        const follow = input.followTab as { urlIncludes?: string; closeOld?: boolean } | undefined
+        const beforeTabIds = follow ? new Set(getStoreTabs(run.storeId).map(t => t.id)) : null
         realClick(wc, hit.x!, hit.y!)
         guardSignals(run)
-        return { kind: 'executed', payload: { action: 'clickByText', matched: needle, clickedText: hit.clickedText, candidates: hit.candidates, mode: 'real' } }
+        if (follow && beforeTabIds) {
+          const openedId = await followOpenedTab(run, beforeTabIds, follow.urlIncludes, step.timeoutMs)
+          if (openedId) {
+            const oldTabId = run.tabId
+            run.tabId = openedId
+            runTabByStore.set(run.storeId, openedId)
+            try { activateTab(run.storeId, openedId) } catch { /* 视图未挂载不阻塞流程 */ }
+            if (follow.closeOld !== false && oldTabId && oldTabId !== openedId) {
+              // 旧运行标签页用完即关：否则"每个候选一个标签页"（几十轮后窗口爆炸）
+              try { closeTab(run.storeId, oldTabId) } catch { /* 已关闭/未挂载都无妨 */ }
+            }
+          }
+          // 没等到新标签页不当失败：也可能这次是原地跳转，交给后面的 waitForPage 判定
+        }
+        return {
+          kind: 'executed',
+          payload: {
+            action: 'clickByText', matched: needle, clickedText: hit.clickedText,
+            candidates: hit.candidates, mode: 'real', ...(follow ? { followedTab: run.tabId } : {})
+          }
+        }
       }
       for (;;) {
         guardSignals(run)

@@ -63,7 +63,17 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * 例如微信按列表逐个邀约时，点「详情」找不到 = 没有更多达人了，
      * 给它 TASK_SELECTION_SHORTFALL，loop 就会**干净停止**而不是报失败。
      */
-    missingCode: z.string().min(1).max(40).optional()
+    missingCode: z.string().min(1).max(40).optional(),
+    /**
+     * 点完可能在新标签页打开时用（微信达人广场实测：「详情」是 window.open，
+     * 页面本身不跳转）。给了它就等新标签页出现、把本次运行切到新标签页上继续，
+     * 并默认关掉旧的运行标签页（否则每个候选都留一个标签页）。
+     * 后续紧跟的 waitForPage 仍会独立校验地址——这里只是"跟过去"，不做断言。
+     */
+    followTab: z.object({
+      urlIncludes: z.string().min(1).max(300).optional(),
+      closeOld: z.boolean().optional()
+    }).strict().optional()
   }).strict(),
   clickAll: z.object({
     selector: selector.optional(),

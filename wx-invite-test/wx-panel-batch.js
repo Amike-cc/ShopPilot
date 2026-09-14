@@ -42,6 +42,9 @@ async function main() {
   await sleep(1500)
   await app.ev(`(()=>{const t=[...document.querySelectorAll('.ptab')].find(e=>String(e.innerText||'').trim()==='任务');if(t)t.click();return 1})()`)
   await sleep(1500)
+  // 微信平台在窄视口下布局会重叠（筛选项/详情被盖住）→ 跑之前先把店铺视口拉宽
+  console.log('视口:', await app.ev(`(async()=>{const r=await window.shopilot.browser.setViewport({x:0,y:0,width:1380,height:840});return JSON.stringify(r.ok)})()`))
+  await sleep(2500)
   console.log('按钮态:', await app.ev(`(()=>{const b=document.querySelector('[data-test=invite-start]');return b?JSON.stringify({disabled:b.disabled}):'no-btn'})()`))
   const startAt = Date.now()
   const beforeIds = JSON.parse(await app.ev(`(async()=>{const r=await window.shopilot.task.list();return JSON.stringify((Array.isArray(r.data)?r.data:[]).map(t=>t.id))})()`))
