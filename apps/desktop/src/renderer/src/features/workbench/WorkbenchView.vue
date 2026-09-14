@@ -408,7 +408,7 @@
             <!-- batch-list（抖店）：广场筛选 → 逐个勾 40 位 → 批量邀约带货 → 直接发送（无二次确认门禁） -->
             <template v-if="inviteProfile.flow === 'batch-list'">
             <div class="inv-card">
-              <div class="inv-card-h">① 选人范围<span class="row-sub">对应广场筛选项 · 每轮都会重新应用</span></div>
+              <div class="inv-card-h"><span class="inv-step">1</span><span class="inv-card-t">选人范围</span><span class="row-sub">对应广场筛选项 · 每轮都会重新应用</span></div>
 
               <div class="inv-grid2">
                 <label class="inv-row inv-col">主推类目
@@ -442,14 +442,14 @@
                 额度按「店铺类型 × 达人等级」下发：实测本店只有 <b>{{ inviteProfile.levelsWithQuotaHint.join(' / ') }}</b> 有额度，其余为 0（邀约按钮会变禁用态）。额度随经营情况变化，请自行确认。
               </div>
 
-              <label class="inv-row">本批数量
+              <label class="inv-row"><span class="inv-label">本批数量</span>
                 <input type="number" min="1" :max="inviteProfile.maxBatch" v-model.number="invite.count" class="inv-num" data-test="invite-count" />
                 <span class="row-sub">上限 {{ inviteProfile.maxBatch }} 位（平台限制）</span>
               </label>
             </div>
 
             <div class="inv-card">
-              <div class="inv-card-h">② 邀约内容</div>
+              <div class="inv-card-h"><span class="inv-step">2</span><span class="inv-card-t">邀约内容</span></div>
               <div class="inv-row inv-block">话术来源
                 <span class="inv-chips">
                   <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
@@ -474,6 +474,9 @@
               <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
                 AI 会在打开邀约抽屉后读取该抽屉里的商品信息生成话术；<b>生成的原文会落库留档</b>。
               </div>
+              <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
+                AI 会在打开邀约抽屉后读取该抽屉里的商品信息生成话术；<b>生成的原文会落库留档</b>。
+              </div>
               <div class="inv-row inv-block">专属权益（可多选）
                 <span class="inv-chips">
                   <label
@@ -486,48 +489,74 @@
               </div>
             </div>
 
-            <div class="inv-card">
-              <div class="inv-card-h">③ 运行</div>
+            <div class="inv-card inv-run-bar">
+              <div class="inv-card-h"><span class="inv-step">3</span><span class="inv-card-t">运行</span><span class="row-sub" v-if="inviteRun">进行中 · {{ statusLabel(inviteRun.status) }}</span></div>
               <div class="cf-btns">
                 <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
-                <template v-else>
-                  <span class="row-sub" style="align-self:center">邀约进行中 · {{ statusLabel(inviteRun.status) }}</span>
-                  <button class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
-                </template>
+                <button v-else class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
+                <span v-if="!inviteReady && !inviteRun" class="row-sub">补齐必填项后可开始</span>
               </div>
-              <div class="env-note">
-                可邀约的是"未发过消息"的达人（已邀约行平台会禁用复选框，执行时<b>跳过并如实回报</b>）。勾人是<b>一个一个点</b>（不点表头全选），一屏不够就向下滚动加载更多。
-              </div>
-              <div class="env-note">
-                点「开始邀约」后<b>连续开批</b>：每批勾 {{ invite.count }} 位 → 批量邀约带货 → 确认发送；一批发完自动开下一批，
-                <b>直到额度用完</b>或可选达人不足 {{ invite.count }} 位为止，然后自动停止。<b>抖店不再弹二次确认</b>——发送即真实发出。
-              </div>
+              <details class="inv-help">
+                <summary>执行说明（点开）</summary>
+                <div class="env-note" style="margin-top:4px">
+                  可邀约的是"未发过消息"的达人（已邀约行平台会禁用复选框，执行时<b>跳过并如实回报</b>）。勾人是<b>一个一个点</b>（不点表头全选），一屏不够就向下滚动加载更多。
+                </div>
+                <div class="env-note">
+                  点「开始邀约」后<b>连续开批</b>：每批勾 {{ invite.count }} 位 → 批量邀约带货 → 确认发送；一批发完自动开下一批，
+                  <b>直到额度用完</b>或可选达人不足 {{ invite.count }} 位为止，然后自动停止。<b>抖店不再弹二次确认</b>——发送即真实发出。
+                </div>
+              </details>
               <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
             </div>
             </template>
 
-            <!-- assist-form（微信小店）：人工选人进邀约页，引擎代填表单+门禁后发送 -->
+            <!-- assist-form（微信小店）：全自动连续邀约，逐位达人一张独立表单 -->
             <template v-else>
-            <div class="env-note">
-              微信小店按达人<b>逐个邀约</b>（每位达人一张独立表单，平台不支持批量），现在是<b>全自动连续邀约</b>：
-              点「开始邀约」后软件自己完成每一轮——进广场 → 按上面的筛选挑达人 → 进详情页点「<b>邀请带货</b>」→ 代填联系方式与话术、按商品ID添加商品 → 点「发送邀约」→ 在平台确认弹窗上点「确认」；
-              <b>一次一位、连续进行，直到「今日剩余邀请机会」用完或列表里没有更多达人为止</b>，然后自动停止。
-              <b>没有人工二次确认</b>：点「开始邀约」即开始真实发送（单次运行上限 50 位，随时可点「停止邀约」）。{{ inviteProfile.dailyQuotaHint }}。
+            <!-- 配置摘要：开跑前一眼核对（面板很长，避免滚到底才发现选错） -->
+            <div class="inv-summary" data-test="invite-summary">
+              <span v-for="s in inviteSummary" :key="s.k" class="inv-sum-item">
+                <i>{{ s.k }}</i>{{ s.v }}
+              </span>
             </div>
+            <details class="inv-help">
+              <summary>使用说明（点开）</summary>
+              <div class="env-note" style="margin-top:4px">
+                微信小店按达人<b>逐个邀约</b>（每位达人一张独立表单，平台不支持批量）。点「开始邀约」后软件自动完成每一轮：
+                进广场 → 按上面筛选挑达人 → 进详情页点「<b>邀请带货</b>」→ 代填联系方式与话术、按商品 ID 添加商品 →
+                点「发送邀约」→ 在平台确认弹窗上点「确认」。
+                <b>一次一位、连续进行，直到「今日剩余邀请机会」用完或列表里没有更多达人为止</b>。
+                <b>没有人工二次确认</b>：点「开始邀约」即开始真实发送（单次运行上限 50 位，随时可点「停止邀约」）。{{ inviteProfile.dailyQuotaHint }}。
+              </div>
+            </details>
 
             <div class="inv-card">
-              <div class="inv-card-h">① 广场筛选<span class="row-sub">打开达人广场时应用</span></div>
+              <div class="inv-card-h"><span class="inv-step">1</span><span class="inv-card-t">广场筛选</span><span class="row-sub">点「打开达人广场」时应用</span></div>
               <label class="inv-row inv-col">带货者类型
                 <select v-model="invite.finderType" data-test="invite-finder-type">
                   <option v-for="t in inviteProfile.finderTypes" :key="t" :value="t">{{ t }}</option>
                 </select>
               </label>
               <div class="inv-row inv-block">带货类目
+                <span v-if="invite.finderCategories.length" class="inv-picked">
+                  已选 {{ invite.finderCategories.length }} 项：<b>{{ invite.finderCategories.join('、') }}</b>
+                  <button class="mini-btn" style="margin-left:auto" data-test="invite-cats-clear" @click="invite.finderCategories.splice(0)">清空</button>
+                </span>
+                <input
+                  v-if="inviteCatsExpanded || inviteCatQuery"
+                  v-model="inviteCatQuery" type="text" class="inv-cat-search"
+                  data-test="invite-cat-search" placeholder="搜索类目，如 母婴 / 生鲜"
+                />
                 <span class="inv-chips">
-                  <label v-for="c in inviteProfile.finderCategories" :key="c" class="inv-chip" :class="{ on: invite.finderCategories.includes(c) }">
+                  <label v-for="c in finderCategoryShown" :key="c" class="inv-chip" :class="{ on: invite.finderCategories.includes(c) }">
                     <input type="checkbox" :value="c" v-model="invite.finderCategories" :data-test="'invite-finder-category-' + c" />{{ c }}
                   </label>
                 </span>
+                <button
+                  v-if="!inviteCatQuery && (finderCategoryHidden > 0 || inviteCatsExpanded)"
+                  class="mini-btn inv-more" data-test="invite-cats-toggle"
+                  @click="inviteCatsExpanded = !inviteCatsExpanded"
+                >{{ inviteCatsExpanded ? '收起类目' : `展开全部 ${inviteProfile.finderCategories.length} 项（还有 ${finderCategoryHidden} 项）` }}</button>
+                <span v-else-if="inviteCatQuery" class="row-sub">搜索到 {{ finderCategoryShown.length }} 项</span>
               </div>
               <div class="inv-row inv-block">其他筛选
                 <span class="inv-chips">
@@ -536,27 +565,24 @@
                   </label>
                 </span>
               </div>
-              <div class="env-note">
-                筛选条件会保存；点「打开达人广场」后按本配置筛选（类型 <b>{{ invite.finderType }}</b>｜类目 <b>{{ invite.finderCategories.length ? invite.finderCategories.join('、') : '不限' }}</b>｜其他 <b>{{ invite.finderOtherFilters.length ? invite.finderOtherFilters.join('、') : '无' }}</b>），之后仍由你人工进入详情页发起邀约。
-              </div>
             </div>
 
             <div class="inv-card">
-              <div class="inv-card-h">② 联系方式</div>
-              <label class="inv-row">邀约联系人
+              <div class="inv-card-h"><span class="inv-step">2</span><span class="inv-card-t">联系方式</span></div>
+              <label class="inv-row"><span class="inv-label">邀约联系人</span>
                 <input type="text" v-model="invite.contact" maxlength="30" data-test="invite-contact" placeholder="商家侧联系人（必填）" />
               </label>
-              <label class="inv-row">微信号
+              <label class="inv-row"><span class="inv-label">微信号</span>
                 <input type="text" v-model="invite.wechat" maxlength="30" data-test="invite-wechat" placeholder="必填（与手机号都要填）" />
               </label>
-              <label class="inv-row">手机号码
+              <label class="inv-row"><span class="inv-label">手机号码</span>
                 <input type="text" v-model="invite.phone" maxlength="11" data-test="invite-phone" placeholder="必填（11 位手机号）" />
               </label>
               <div class="env-note">平台要求<b>微信号与手机号都填写</b>，缺一个提交会被平台拦下。</div>
             </div>
 
             <div class="inv-card">
-              <div class="inv-card-h">③ 邀约内容</div>
+              <div class="inv-card-h"><span class="inv-step">3</span><span class="inv-card-t">邀约内容</span></div>
               <div class="inv-row inv-block">话术来源
                 <span class="inv-chips">
                   <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
@@ -579,26 +605,25 @@
                 <b>AI 未配置</b>：请到「设置 → AI 配置」填写接口地址、模型名与 API Key（可先点「测试连接」验证）。
               </div>
               <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
-                AI 会在邀约页读取邀约商品信息生成话术；<b>生成的原文会落库留档</b>，且放行前会停下让你核对。
+                AI 会在打开邀约抽屉后读取该抽屉里的商品信息生成话术；<b>生成的原文会落库留档</b>。
               </div>
               <label class="inv-row inv-block">指定邀约商品 ID
                 <textarea v-model="invite.productIds" rows="2" data-test="invite-product-ids" placeholder="可填多个商品 ID，用逗号、空格或换行分隔；例如 10000687986563"></textarea>
                 <span class="row-sub">已填写 ID 时按 ID 指定商品；留空则按数量自动添加</span>
               </label>
-              <label class="inv-row">添加商品数量
+              <label class="inv-row"><span class="inv-label">添加商品数量</span>
                 <input type="number" min="1" :max="inviteProfile.maxProducts" v-model.number="invite.productCount" class="inv-num" data-test="invite-product-count" />
                 <span class="row-sub">没有指定 ID 时生效；页面已有商品则原样不动，最多 {{ inviteProfile.maxProducts }} 个</span>
               </label>
             </div>
 
-            <div class="inv-card">
-              <div class="inv-card-h">④ 运行</div>
+            <!-- 运行条吸底：面板很长（实测 2200+px），按钮不能只放在最底部 -->
+            <div class="inv-card inv-run-bar" data-test="invite-run-bar">
+              <div class="inv-card-h"><span class="inv-step">4</span><span class="inv-card-t">运行</span><span class="row-sub" v-if="inviteRun">进行中 · {{ statusLabel(inviteRun.status) }}</span></div>
               <div class="cf-btns">
                 <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
-                <template v-else>
-                  <span class="row-sub" style="align-self:center">邀约进行中 · {{ statusLabel(inviteRun.status) }}</span>
-                  <button class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
-                </template>
+                <button v-else class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
+                <span v-if="!inviteReady && !inviteRun" class="row-sub">补齐必填项后可开始</span>
               </div>
               <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
             </div>
@@ -643,26 +668,35 @@
           </div>
 
           <div class="env-sec">
-            <div class="env-h">执行说明</div>
-            <template v-if="inviteProfile.flow === 'batch-list'">
-              <div class="env-note">
-                一轮动作（<b>独立功能，不进任务列表</b>；运行明细见下方「邀约记录」）：进入达人广场 → 选类目（点类目 chip 后还要点级联里的「不限」叶子，<b>并校验「已筛选」里真的出现该类目</b>，否则不勾人）→ 选等级 → 搜索 → <b>逐个勾</b> {{ invite.count }} 位（不够就向下滚动加载更多）→ 批量邀约带货 → <b>先检测可邀约额度</b>（以抽屉「确认发送」是否可用来判定）→ 填话术（手填或 AI 生成）→ 勾权益 → 点「确认发送」→ <b>校验抽屉已关闭</b>（没关闭=平台没接受，如实失败）→ 截图留档。
-              </div>
-              <div class="env-note">
-                一批发完<b>自动开下一批</b>，直到额度用完或可选达人不足 {{ invite.count }} 位为止（这两种都算正常收尾，运行显示成功并在步骤结果里写明停止原因）；单次运行最多 20 批（400–800 位的安全阀）。<b>抖店没有二次确认</b>：点「开始邀约」即开始真实发送，发出去不可撤回。
-              </div>
-              <div class="env-note">
-                邀约进行中面板会出现「停止邀约」，随时可中止运行。联系方式（手机号/微信号）与专属推荐商品由平台在抽屉里要求填写：联系方式请在平台侧填好（<b>本应用不保存你的手机号/微信号</b>），商品用平台的"推荐商品"即可。发送消耗店铺邀约额度。频繁自动操作可能触发平台风控验证（如出现验证码请在页面上手动完成后重试）。
-              </div>
-            </template>
-            <template v-else>
-              <div class="env-note">
-                点「开始邀约」会启动一次受策展的邀约运行（<b>独立功能，不进任务列表</b>；运行明细见下方「邀约记录」）：自建标签页镜像你打开的邀约页 → <b>先检测可邀约额度</b>（读取页面「今日剩余N次」，为 0 时如实失败）→ 填联系方式与合作说明（手填，或 AI 按邀约商品生成）→ 确保邀约商品（页面已有则不动）→ <b>停下等你核对</b> → 才会点「发送邀约」，并在平台「确认发送邀约」弹窗上点「确认」。<b>拒绝即整单取消，绝不发送</b>。发送不可撤回，并消耗店铺邀约额度。
-              </div>
-              <div class="env-note">
-                选人由你人工完成（达人详情页 URL 带每人专属 token，软件不猜测、不代选）。运行会<b>把运行标签页切到前台</b>供你核对；邀约进行中面板会出现「停止邀约」；发送成功后会自动截图留档（「邀约记录」里可查）。
-              </div>
-            </template>
+            <details class="inv-help" data-test="invite-exec-help">
+              <summary>执行说明（点开）</summary>
+              <template v-if="inviteProfile.flow === 'batch-list'">
+                <div class="env-note">
+                  一轮动作（<b>独立功能，不进任务列表</b>；运行明细见下方「邀约记录」）：进入达人广场 → 选类目（点类目 chip 后还要点级联里的「不限」叶子，<b>并校验「已筛选」里真的出现该类目</b>，否则不勾人）→ 选等级 → 搜索 → <b>逐个勾</b> {{ invite.count }} 位（不够就向下滚动加载更多）→ 批量邀约带货 → <b>先检测可邀约额度</b>（以抽屉「确认发送」是否可用来判定）→ 填话术（手填或 AI 生成）→ 勾权益 → 点「确认发送」→ <b>校验抽屉已关闭</b>（没关闭=平台没接受，如实失败）→ 截图留档。
+                </div>
+                <div class="env-note">
+                  一批发完<b>自动开下一批</b>，直到额度用完或可选达人不足 {{ invite.count }} 位为止（这两种都算正常收尾，运行显示成功并在步骤结果里写明停止原因）；单次运行最多 20 批（400–800 位的安全阀）。<b>抖店没有二次确认</b>：点「开始邀约」即开始真实发送，发出去不可撤回。
+                </div>
+                <div class="env-note">
+                  邀约进行中面板会出现「停止邀约」，随时可中止运行。频繁自动操作可能触发平台风控验证（如出现验证码请在页面上手动完成后重试）。发送消耗店铺邀约额度。
+                </div>
+              </template>
+              <template v-else>
+                <div class="env-note">
+                  一轮动作（<b>独立功能，不进任务列表</b>；运行明细见下方「邀约记录」）：进广场应用筛选 → 取一位<b>还没邀约过</b>的达人
+                  （列表每次加载都会重新排序，所以按"是否处理过"去重，不会重复邀同一人）→ 进详情页点「邀请带货」→
+                  进邀约表单 → <b>先读「今日剩余 N 次」</b>（为 0 则正常收尾）→ 代填联系方式与合作说明 → 按商品 ID 添加商品 →
+                  点「发送邀约」→ 在平台「确认发送邀约」弹窗上点「确认」→ <b>校验表单已被平台清空</b>（没清空=没提交成功，如实失败）→ 截图留档。
+                </div>
+                <div class="env-note">
+                  一轮结束自动开下一轮，<b>直到额度用完或列表翻到底都没有新达人</b>（两种都算正常收尾，运行显示成功并写明停止原因）。
+                  本页达人都邀约过会自动点「下一页」；某位达人的详情页打不开（平台限流）会<b>退避重试同一位</b>，不会跳过漏人。
+                </div>
+                <div class="env-note">
+                  邀约进行中面板会出现「停止邀约」，随时可中止运行。发送消耗店铺邀约额度、<b>不可撤回</b>；频繁自动操作可能触发平台限流（软件会自动退避等待）。
+                </div>
+              </template>
+            </details>
           </div>
           </template>
         </div>
@@ -1096,7 +1130,7 @@
 import { reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import PlatformIcon from '../../components/PlatformIcon.vue'
-import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile } from '@shared/constants/invite'
+import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile, isAssistProfile } from '@shared/constants/invite'
 import { buildInviteSteps } from '@shared/invite-steps'
 import { BIZ_METRICS, businessProfileFor, BUSINESS_SUPPORTED_PLATFORMS } from '@shared/constants/business'
 import { buildBusinessCollectSteps } from '@shared/business-steps'
@@ -1832,6 +1866,48 @@ const subCategoryOptions = computed(() => {
   if (!p || !isBatchProfile(p) || !invite.category) return []
   return p.categoryTree.find(c => c.name === invite.category)?.children ?? []
 })
+
+// ---------- 微信邀约面板的展示态（只影响观感，不参与执行） ----------
+/** 带货类目默认折叠：34 项铺开要占 13 行（实测 314px），默认只显示已选 + 前若干项 */
+const inviteCatsExpanded = ref(false)
+const inviteCatQuery = ref('')
+/** 类目搜索：空词且未展开时，只给「已选 + 前 N 项」，其余折叠 */
+const CAT_COLLAPSED_LIMIT = 10
+const finderCategoryShown = computed(() => {
+  const p = inviteProfile.value
+  if (!p || !isAssistProfile(p)) return []
+  const all = p.finderCategories as readonly string[]
+  const q = inviteCatQuery.value.trim()
+  if (q) return all.filter(c => c.includes(q))
+  if (inviteCatsExpanded.value || invite.finderCategories.length > 0) {
+    // 展开或已有选择：显示全部（已选的排前面，方便核对）
+    const chosen = all.filter(c => invite.finderCategories.includes(c))
+    const rest = all.filter(c => !invite.finderCategories.includes(c))
+    return inviteCatsExpanded.value ? [...chosen, ...rest] : [...chosen, ...rest.slice(0, CAT_COLLAPSED_LIMIT)]
+  }
+  return all.slice(0, CAT_COLLAPSED_LIMIT)
+})
+const finderCategoryHidden = computed(() => {
+  const p = inviteProfile.value
+  if (!p || !isAssistProfile(p)) return 0
+  const q = inviteCatQuery.value.trim()
+  if (q) return 0
+  return Math.max(0, p.finderCategories.length - finderCategoryShown.value.length)
+})
+/** 顶部配置摘要：开跑前一眼核对（避免滚下去才发现选错） */
+const inviteSummary = computed(() => {
+  const p = inviteProfile.value
+  if (!p || !isAssistProfile(p)) return []
+  const cats = invite.finderCategories
+  return [
+    { k: '类型', v: invite.finderType },
+    { k: '类目', v: cats.length ? (cats.length <= 2 ? cats.join('、') : `${cats.slice(0, 2).join('、')} 等 ${cats.length} 项`) : '不限' },
+    { k: '其他', v: invite.finderOtherFilters.length ? invite.finderOtherFilters.join('、') : '无' },
+    { k: '联系人', v: invite.contact.trim() || '未填' },
+    { k: '商品', v: inviteProducts.value.length ? `${inviteProducts.value.length} 个ID` : `${invite.productCount} 个(自动)` }
+  ]
+})
+
 // 一级变化时二级跟随：已选二级不在新一级的子类里就回到「不限」
 watch(() => invite.category, () => {
   if (invite.subcategory && !subCategoryOptions.value.includes(invite.subcategory)) invite.subcategory = ''
@@ -3052,7 +3128,61 @@ onBeforeUnmount(() => {
 .sub-pane { display: flex; flex-direction: column; }
 /* 邀约面板分区卡片：① 选人范围/联系方式 ② 邀约内容 ③ 运行 */
 .inv-card { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 8px 9px; margin: 0 0 8px; }
-.inv-card-h { display: flex; align-items: baseline; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.inv-card-h { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+/* 标题必须是 flex 项并禁止收缩+折行：右栏只有 320px，裸文本会被当匿名项挤压，
+   实测把「选人范围」断成「选人范/围」、并把右侧说明挤成竖排 */
+.inv-card-h > .inv-card-t { flex: 0 0 auto; white-space: nowrap; }
+.inv-card-h > .row-sub { flex: 1 1 auto; min-width: 0; }
+/* 步骤序号做成小圆标，扫一眼就知道到哪一步了 */
+.inv-step {
+  flex: 0 0 auto; width: 16px; height: 16px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: #fff; background: var(--color-primary);
+}
+/* 配置摘要：一行一个键值对，长文本截断（细节在下面卡片里） */
+.inv-summary {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 8px;
+  padding: 6px 8px; border: 1px dashed var(--color-border); border-radius: var(--radius-sm);
+  font-size: 11px; color: var(--color-text-primary);
+}
+.inv-sum-item { display: inline-flex; gap: 4px; align-items: baseline; min-width: 0; }
+.inv-sum-item > i { font-style: normal; color: var(--color-text-secondary); flex: 0 0 auto; }
+/* 长说明默认折叠：整块说明文字实测占 648px，展开才看，日常不挡操作 */
+.inv-help { margin: 0 0 8px; }
+.inv-help > summary {
+  cursor: pointer; font-size: 11px; color: var(--color-text-secondary);
+  padding: 4px 2px; list-style: none; user-select: none;
+  display: flex; align-items: center; gap: 4px;
+}
+/* 箭头用 CSS 三角，不用字符（'▸' 在本机字体里会落到序号字形，实测显示成「①」） */
+.inv-help > summary::before {
+  content: ''; flex: 0 0 auto;
+  width: 0; height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform 0.12s ease;
+}
+.inv-help[open] > summary::before { transform: rotate(90deg); }
+.inv-help > summary:hover { color: var(--color-text-primary); }
+/* 类目搜索框 + 「展开全部」按钮：34 项铺开占 13 行，默认折叠 */
+.inv-cat-search { width: 100%; }
+.inv-more { align-self: flex-start; font-size: 11px; }
+/* 已选类目回显：一眼看清选了什么，右边给「清空」 */
+.inv-picked {
+  display: flex; align-items: center; gap: 4px; font-size: 11px;
+  color: var(--color-text-primary); background: var(--color-bg-tertiary);
+  border-radius: var(--radius-sm); padding: 3px 6px; min-width: 0;
+}
+.inv-picked > b { font-weight: 600; word-break: break-all; }
+/* 运行条吸底：面板内容实测 2200+px 而可视区只有 ~960px，按钮不能只放最底下 */
+.inv-run-bar {
+  position: sticky; bottom: -1px; z-index: 2;
+  background: var(--color-bg-secondary);
+  box-shadow: 0 -6px 12px -6px rgba(0, 0, 0, 0.45);
+  margin-bottom: 0;
+}
+.inv-run-bar .cf-btns { align-items: center; }
 .inv-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .inv-col { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
 .inv-col select { width: 100%; }
@@ -3065,6 +3195,9 @@ onBeforeUnmount(() => {
 /* 达人邀约面板：全部按 [data-test="invite-panel"] 作用域限定，
    避免历史上"通用 .env-sec input 撑爆布局"那类连带影响（右栏只有 320px 宽） */
 [data-test="invite-panel"] .inv-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; color: var(--color-text-secondary); }
+/* 行首标签不收缩、不折行：右栏仅 320px，「本批数量」这类 4 字标签会被挤成竖排（实测踩过）。
+   裸文本节点在 flex 里是匿名项，所以模板里已把它们包成 .inv-label。 */
+[data-test="invite-panel"] .inv-label { flex: 0 0 auto; white-space: nowrap; }
 [data-test="invite-panel"] .inv-block { flex-direction: column; align-items: stretch; gap: 4px; }
 [data-test="invite-panel"] select,
 [data-test="invite-panel"] textarea,
@@ -3086,8 +3219,14 @@ onBeforeUnmount(() => {
 [data-test="invite-panel"] .inv-chip {
   display: flex; align-items: center; gap: 3px; font-size: 11px; padding: 2px 7px;
   border: 1px solid var(--color-border); border-radius: 20px; cursor: pointer;
+  background: var(--color-bg-tertiary);
 }
-[data-test="invite-panel"] .inv-chip.on { border-color: var(--color-primary); color: #fff; }
+/* 选中态给**实底**：此前只有蓝色描边（文字仍是白色、底色透明），在深色卡片上不够醒目，
+   多选类目时容易看漏自己勾了哪些 */
+[data-test="invite-panel"] .inv-chip.on {
+  border-color: var(--color-primary); color: #fff; background: var(--color-primary);
+}
+[data-test="invite-panel"] .inv-chip:hover { border-color: var(--color-primary); }
 [data-test="invite-panel"] .inv-chip input { width: auto; margin: 0; flex: 0 0 auto; }
 /* 平台首页地址配置行：名称 + 自适应输入 + 恢复默认。宽度按容器算，
    不要写通用 .env-sec input（历史上那条规则把"添加代理"的输入挤到 18px 并让右栏横向溢出） */
