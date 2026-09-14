@@ -44,7 +44,7 @@ export interface AssistInviteOptions {
   phone?: string
   script: string
   scriptMode: 'manual' | 'ai'
-  /** 本次要确保存在的邀约商品数量（1 起） */
+  /** 留空 productIds 时按数量自动添加的商品数（面板已无此项，固定传 1） */
   productCount: number
   /** 指定商品 ID；非空时优先使用 ensureRowsById，不再按列表顺序盲选 */
   productIds?: string[]

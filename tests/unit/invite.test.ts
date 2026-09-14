@@ -188,7 +188,7 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect(openTexts2).not.toContain('直播带货者')
   })
 
-  it('邀约商品：填了商品ID走 ensureRowsById（按ID指定），没填走 ensureRows（按数量）', () => {
+  it('邀约商品：填了商品ID按ID精确指定；留空则固定加 1 个（面板已去掉「添加商品数量」）', () => {
     const withIds = wxRound(buildAssistSteps(WX as any, { ...base, productIds: ['10000687986563', '10000687986564'] }, SQUARE))
     const byId = withIds.find(s => s.type === 'ensureRowsById')!
     expect(byId).toBeTruthy()
@@ -200,6 +200,7 @@ describe('微信小店（assist-form）步骤构造', () => {
     const noIds = wxRound(buildAssistSteps(WX as any, base, SQUARE))
     expect(noIds.some(s => s.type === 'ensureRowsById')).toBe(false)
     const byCount = noIds.find(s => s.type === 'ensureRows')!
+    // 面板不再让用户填数量，productCount 恒为 1 → 只确保 1 个商品
     expect(byCount.input).toMatchObject({ min: 1, max: 1, deep: true })
   })
 

@@ -609,11 +609,7 @@
               </div>
               <label class="inv-row inv-block">指定邀约商品 ID
                 <textarea v-model="invite.productIds" rows="2" data-test="invite-product-ids" placeholder="可填多个商品 ID，用逗号、空格或换行分隔；例如 10000687986563"></textarea>
-                <span class="row-sub">已填写 ID 时按 ID 指定商品；留空则按数量自动添加</span>
-              </label>
-              <label class="inv-row"><span class="inv-label">添加商品数量</span>
-                <input type="number" min="1" :max="inviteProfile.maxProducts" v-model.number="invite.productCount" class="inv-num" data-test="invite-product-count" />
-                <span class="row-sub">没有指定 ID 时生效；页面已有商品则原样不动，最多 {{ inviteProfile.maxProducts }} 个</span>
+                <span class="row-sub">按 ID 精确指定邀约商品；留空则自动添加 1 个，页面已有商品则原样不动</span>
               </label>
             </div>
 
@@ -1904,7 +1900,7 @@ const inviteSummary = computed(() => {
     { k: '类目', v: cats.length ? (cats.length <= 2 ? cats.join('、') : `${cats.slice(0, 2).join('、')} 等 ${cats.length} 项`) : '不限' },
     { k: '其他', v: invite.finderOtherFilters.length ? invite.finderOtherFilters.join('、') : '无' },
     { k: '联系人', v: invite.contact.trim() || '未填' },
-    { k: '商品', v: inviteProducts.value.length ? `${inviteProducts.value.length} 个ID` : `${invite.productCount} 个(自动)` }
+    { k: '商品', v: inviteProducts.value.length ? `${inviteProducts.value.length} 个ID` : '1 个(自动)' }
   ]
 })
 
@@ -1931,7 +1927,8 @@ watch(inviteProfile, (p) => {
     invite.levels = []
     invite.benefits = []
     invite.count = 1
-    invite.productCount = Math.max(1, Math.min(invite.productCount || 1, p.maxProducts))
+    // 微信流程商品固定按 ID 指定（留空则自动加 1 个），不再有可调数量
+    invite.productCount = 1
   }
   void loadInviteConfig(p)
 }, { immediate: true })
@@ -1944,7 +1941,8 @@ const inviteCfgLoaded = new Set<string>()
 function inviteCfgFields(flow: 'batch-list' | 'assist-form'): readonly string[] {
   return flow === 'batch-list'
     ? ['category', 'subcategory', 'levels', 'count', 'script', 'scriptMode', 'benefits']
-    : ['contact', 'wechat', 'phone', 'finderType', 'finderCategories', 'finderOtherFilters', 'productIds', 'script', 'scriptMode', 'productCount']
+    // 微信流程不含 productCount：面板已去掉「添加商品数量」，商品固定按 ID 指定（留空则加 1 个）
+    : ['contact', 'wechat', 'phone', 'finderType', 'finderCategories', 'finderOtherFilters', 'productIds', 'script', 'scriptMode']
 }
 
 async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFor>>) {
@@ -1981,7 +1979,7 @@ async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFo
         const ids = str(saved.productIds, 4000); if (ids !== null) invite.productIds = ids
         const sc = str(saved.script, p.scriptMaxLen); if (sc !== null) invite.script = sc
         if (saved.scriptMode === 'ai' || saved.scriptMode === 'manual') invite.scriptMode = saved.scriptMode
-        if (typeof saved.productCount === 'number' && Number.isFinite(saved.productCount)) invite.productCount = Math.max(1, Math.min(Math.round(saved.productCount), p.maxProducts))
+        // 不再恢复 productCount：面板已去掉该输入项，商品固定按 ID 指定（留空则加 1 个）
       }
     }
   } catch { /* 读不到就按默认值走，不阻塞面板 */ }
@@ -2026,14 +2024,14 @@ const inviteReady = computed(() => {
   if (!p || !ws.displayedStoreId) return false
   const scriptOk = invite.scriptMode === 'ai' ? aiReady.value : invite.script.trim().length > 0
   // 微信小店：联系人、微信号、手机号**都要填**（用户明确要求；平台也会因缺项拦下提交）
-  // 商品：指定了商品 ID 就不再要求数量合法（按 ID 添加），但最多 30 个
+  // 商品：固定按商品 ID 指定（留空则由引擎自动加 1 个，页面已有则不动）；只约束 ID 数量上限
   if (p.flow === 'assist-form') {
     const ids = inviteProducts.value
     return scriptOk &&
       invite.contact.trim().length > 0 &&
       invite.wechat.trim().length > 0 &&
       invite.phone.trim().length > 0 &&
-      (ids.length > 0 ? ids.length <= 30 : invite.productCount >= 1 && invite.productCount <= p.maxProducts)
+      ids.length <= 30
   }
   return invite.levels.length > 0 &&
     invite.count >= 1 && invite.count <= p.maxBatch &&
@@ -2119,7 +2117,9 @@ async function startInvite() {
     : buildInviteSteps(p, {
         assist: {
           contact: invite.contact, wechat: invite.wechat, phone: invite.phone,
-          script: invite.script, scriptMode: invite.scriptMode, productCount: invite.productCount,
+          script: invite.script, scriptMode: invite.scriptMode,
+          // 面板已去掉「添加商品数量」；留空 productIds 时引擎按 1 个自动添加（页面已有则不动）
+          productCount: 1,
           productIds: inviteProducts.value,
           finderType: invite.finderType,
           finderCategories: invite.finderCategories,
