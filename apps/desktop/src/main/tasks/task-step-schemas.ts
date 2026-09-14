@@ -73,8 +73,14 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     followTab: z.object({
       urlIncludes: z.string().min(1).max(300).optional(),
       closeOld: z.boolean().optional()
-    }).strict().optional()
-  }).strict(),
+    }).strict().optional(),
+    /**
+     * nth:'round' —— 取"列表里第 N 条"（N = 当前循环轮次，1 起），逐轮换目标。
+     * 微信邀约实测需要：每轮都点第一条详情会对同一位达人重复发邀约。
+     * 按行容器去重后计数，条数不够 = 没有下一个候选（配 missingCode 干净收尾）。
+     */
+    nth: z.enum(['round']).optional()
+  }).strict().refine((v) => !v.nth || v.mode === 'real', { message: 'nth 仅支持 mode:"real"（需要真实鼠标点击）' }),
   clickAll: z.object({
     selector: selector.optional(),
     text: z.string().min(1).max(200).optional(),

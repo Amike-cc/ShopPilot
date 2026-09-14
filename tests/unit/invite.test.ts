@@ -133,6 +133,8 @@ describe('微信小店（assist-form）步骤构造', () => {
     // 平台点「详情」是 window.open 开新标签页（页面本身不跳转）→ 必须带 followTab，
     // 否则引擎留在旧标签页等 finder-detail，整轮超时失败（2026-09-14 真店实测）
     expect(detail.input.followTab).toMatchObject({ urlIncludes: 'finder-detail' })
+    // 每轮换一条：否则每轮都点第一条 → 同一份邀约重复发给同一位达人
+    expect(detail.input.nth).toBe('round')
     const invite = round.find(s => s.type === 'clickByText' && String(s.input.text) === '邀请带货')!
     expect(invite.input.followTab).toMatchObject({ urlIncludes: 'initiate-invite' })
     expect(texts).toContain('邀请带货')
@@ -342,6 +344,14 @@ describe('任务步骤输入 schema', () => {
     // 多余键/非法值一律拒绝（不接受任何"额外行为"入口）
     expect(stepInputSchemas.clickByText.safeParse({ text: '详情', followTab: { urlIncludes: 'x', evil: 1 } }).success).toBe(false)
     expect(stepInputSchemas.clickByText.safeParse({ text: '详情', followTab: 'yes' }).success).toBe(false)
+  })
+
+  it('nth:"round"（每轮换一条）：必须配 mode:"real"，值只有 round', () => {
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', deep: true, mode: 'real', nth: 'round' }).success).toBe(true)
+    // 没有真实鼠标点击就没有"第几条"可言 → 拒绝
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', nth: 'round' }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', mode: 'js', nth: 'round' }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', mode: 'real', nth: 'first' }).success).toBe(false)
   })
 
   it('within 限定范围：selector 与 text 二选一，climb 有上限', () => {

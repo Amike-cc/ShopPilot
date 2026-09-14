@@ -174,11 +174,12 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
   for (const c of (opts.finderCategories || [])) round.push({ type: 'clickByText', input: { text: c, deep: true, mode: 'real', missingCode: 'TASK_SELECTION_SHORTFALL' }, timeoutMs: 25000 })
   for (const f of (opts.finderOtherFilters || [])) round.push({ type: 'clickByText', input: { text: f, deep: true, mode: 'real' }, timeoutMs: 25000 })
   // 进达人详情：平台是 window.open 开**新标签页**（页面自身不跳转），所以点完要跟随新标签页；
-  // 找不到「详情」= 没有下一个候选 → 干净停止
+  // nth:'round' = 每轮取列表里第 N 条（第 1 轮第 1 条、第 2 轮第 2 条…），
+  // 否则每轮都点第一条会把同一份邀约重复发给同一位达人；条数不够 = 没有下一个候选 → 干净停止
   round.push({ type: 'waitForText', input: { text: '详情', deep: true }, timeoutMs: 30000 })
   round.push({
     type: 'clickByText',
-    input: { text: '详情', deep: true, mode: 'real', missingCode: 'TASK_SELECTION_SHORTFALL', followTab: { urlIncludes: 'finder-detail' } },
+    input: { text: '详情', deep: true, mode: 'real', nth: 'round', missingCode: 'TASK_SELECTION_SHORTFALL', followTab: { urlIncludes: 'finder-detail' } },
     timeoutMs: 40000
   })
   round.push({ type: 'waitForPage', input: { urlIncludes: 'finder-detail' }, timeoutMs: 45000 })

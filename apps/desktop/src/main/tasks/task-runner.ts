@@ -359,6 +359,13 @@ function classifyError(e: any): string {
 // （executed 也是"已成功"的凭据，succeededStepIndexes 只按 step_index 去重）
 interface StepOutput { kind: StepResultKind | 'confirm' | 'executed'; payload: unknown; artifact?: { path: string; sha256: string } }
 
+/**
+ * 步骤执行上下文：loop 内嵌套步骤会拿到当前轮次（1 起）。
+ * 用途：clickByText 的 nth:'round' —— 微信广场每轮点"第 N 条详情"，
+ * 否则每轮都点第一位达人，会对同一个人重复发邀约。
+ */
+interface StepContext { round?: number }
+
 function wcOrThrow(run: RunHandle): Electron.WebContents {
   const wc = run.tabId ? getTabWebContents(run.storeId, run.tabId) : null
   if (!wc) throw new Error('BROWSER_CLOSED: 店铺浏览器或任务标签页已被关闭')
@@ -493,7 +500,7 @@ const SCOPE_FN = `
 
 async function findTextTarget(
   wc: Electron.WebContents, run: RunHandle, needle: string, deep: boolean, timeoutMs: number, label: string,
-  within?: { selector?: string; text?: string; climb?: number }
+  within?: { selector?: string; text?: string; climb?: number }, roundIdx?: number
 ): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string }> {
   return withTimeout(() => wc.executeJavaScript(`(() => {
     ${deep ? ENUM_DEEP_FN : ''}
@@ -502,6 +509,7 @@ async function findTextTarget(
     ${PICK_SORT_FN}
     const needle = ${JSON.stringify(needle)};
     const within = ${JSON.stringify(within || null)};
+    const roundIdx = ${roundIdx == null ? 'null' : JSON.stringify(roundIdx)};
     const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
     const root = within ? __scopeRoot(within) : null;
     if (within && !root) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
@@ -515,7 +523,31 @@ async function findTextTarget(
     }
     if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
     cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
-    const hit = cands[0].el;
+    // nth:'round' —— 按"列表条目"去重后取第 roundIdx 条（0 起）。
+    // 微信广场每轮要换个达人：只在 candidate 里按下标取会取到同一行的多个副本
+    // （横向滚动时平台会复制右侧固定列），所以按行容器文本去重后再取第 N 条。
+    // 条数不够 = 列表里没有下一个候选 → NOT_FOUND（调用方按 missingCode 干净收尾）。
+    let hit = cands[0].el;
+    let picked = 'best';
+    if (roundIdx != null) {
+      const rowOf = (el) => el.closest('tr, li, [data-row-key], [class*="card"], [class*="dorami"]') || el.parentElement || el;
+      const keyOf = (el) => {
+        const row = rowOf(el);
+        const t = String((row && row.innerText) || el.innerText || '').replace(/\\s+/g, ' ').trim();
+        return t.slice(0, 300);
+      };
+      const seen = new Set();
+      const entries = [];
+      for (const c of cands) {
+        const k = keyOf(c.el);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        entries.push(c.el);
+      }
+      if (roundIdx >= entries.length) return { ok: false, reason: 'NOT_FOUND' };
+      hit = entries[roundIdx];
+      picked = 'round' + roundIdx;
+    }
     let dis = hit.disabled === true || hit.getAttribute('aria-disabled') === 'true';
     let p = hit.parentElement;
     for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
@@ -536,7 +568,7 @@ async function findTextTarget(
       for (const y of ys) {
         const at = deepAt(x, y);
         if (at && (at === hit || hit.contains(at) || at.contains(hit) || labelEl.contains(at) || at.contains(labelEl))) {
-          return { ok: true, x, y, clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length };
+          return { ok: true, x, y, clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, picked };
         }
       }
     }
@@ -550,7 +582,7 @@ async function findTextTarget(
         const tag = anc.tagName;
         const interactive = tag === 'A' || tag === 'BUTTON' || tag === 'LABEL' || anc.getAttribute('role') === 'button';
         if (interactive && rowOf(anc) === rowOf(hit)) {
-          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag };
+          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag, picked };
         }
       }
       // 固定列副本：表格比视口宽时平台把右侧「操作」列复制成 position:fixed 的镜像
@@ -563,7 +595,7 @@ async function findTextTarget(
         const tag = same.tagName;
         const interactive = tag === 'A' || tag === 'BUTTON' || tag === 'LABEL' || same.getAttribute('role') === 'button';
         if (interactive && ownOf(same) === ownOf(hit)) {
-          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(same.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag + '(同文本副本)' };
+          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(same.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag + '(同文本副本)', picked };
         }
       }
     }
@@ -688,7 +720,7 @@ async function trustedWrite(
   throw new Error(`TASK_INPUT_NOT_APPLIED: ${label} 写入未生效（${lastDiag}）`)
 }
 
-async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput | null> {
+async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}): Promise<StepOutput | null> {
   const input = step.input as any
   switch (step.type) {
     case 'navigate': {
@@ -860,6 +892,8 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
       // 找不到目标时的错误码（默认 TASK_SELECTOR_CHANGED）；批量循环里用它区分"页面改版"与"没有下一个候选"
       const missingCode = input.missingCode ? String(input.missingCode) : 'TASK_SELECTOR_CHANGED'
+      // nth:'round' —— 循环里每轮取"第 N 条"（N = 当前轮次），逐轮换个目标（微信邀约不能重复邀同一人）
+      const roundIdx = input.nth === 'round' ? Math.max(0, (ctx.round ?? 1) - 1) : undefined
       guardSignals(run)
       const deadline = Date.now() + step.timeoutMs
       let sawScopeMiss = false
@@ -868,7 +902,7 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       if (input.mode === 'real') {
         for (;;) {
           guardSignals(run)
-          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within)
+          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, roundIdx)
           if (hit.ok) break
           if (hit.reason === 'DISABLED') {
             throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`)
@@ -1004,7 +1038,7 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
             childType = child.type
             guardSignals(run)
             emitProgress(run, { phase: 'started', stepIndex: parentIndex, stepType: child.type, message: `第 ${round}/${maxRounds} 轮 · ${loopLabel}` })
-            const out = await execStep(run, child)
+            const out = await execStep(run, child, { round })
             if (out?.artifact) lastArtifact = out.artifact
             if (run.deniedByConfirm) break
           }
