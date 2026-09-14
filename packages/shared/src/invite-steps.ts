@@ -46,6 +46,12 @@ export interface AssistInviteOptions {
   scriptMode: 'manual' | 'ai'
   /** 本次要确保存在的邀约商品数量（1 起） */
   productCount: number
+  /** 指定商品 ID；非空时优先使用 ensureRowsById，不再按列表顺序盲选 */
+  productIds?: string[]
+  /** 带货者广场筛选：类型/类目/其他筛选只用于打开广场时，不能混入邀约表单步骤 */
+  finderType?: string
+  finderCategory?: string
+  finderOtherFilters?: string[]
 }
 
 /** 从达人广场地址取末段路径作为 waitForPage 的就绪判据（换成自定义地址也要能用） */
@@ -177,19 +183,35 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
     typeIn(p.selectors.script, opts.script.trim())
   }
 
-  steps.push({
-    type: 'ensureRows',
-    input: {
-      rowsSelector: p.selectors.goodsRows,
-      checkboxSelector: p.selectors.goodsCheckbox,
-      addText: p.texts.addGoods,
-      confirmText: p.texts.confirmAdd,
-      min: 1,
-      max: Math.max(1, opts.productCount),
-      deep: true
-    },
-    timeoutMs: 120000
-  })
+  const productIds = (opts.productIds || []).map(x => x.trim()).filter(Boolean)
+  if (productIds.length) {
+    steps.push({
+      type: 'ensureRowsById',
+      input: {
+        rowsSelector: p.selectors.goodsRows,
+        checkboxSelector: p.selectors.goodsCheckbox,
+        addText: p.texts.addGoods,
+        confirmText: p.texts.confirmAdd,
+        productIds,
+        deep: true
+      },
+      timeoutMs: 120000
+    })
+  } else {
+    steps.push({
+      type: 'ensureRows',
+      input: {
+        rowsSelector: p.selectors.goodsRows,
+        checkboxSelector: p.selectors.goodsCheckbox,
+        addText: p.texts.addGoods,
+        confirmText: p.texts.confirmAdd,
+        min: 1,
+        max: Math.max(1, opts.productCount),
+        deep: true
+      },
+      timeoutMs: 120000
+    })
+  }
 
   const contactDesc = [
     `联系人 ${opts.contact.trim()}`,
@@ -200,7 +222,7 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
   steps.push({
     type: 'waitForUserConfirmation',
     input: {
-      message: `【达人邀约·${p.platform}】${contactDesc}｜商品：页面已有则不动，否则自动添加 ${Math.max(1, opts.productCount)} 个｜话术：` +
+      message: `【达人邀约·${p.platform}】${contactDesc}｜商品：${productIds.length ? `指定 ID：${productIds.join('、')}` : `页面已有则不动，否则自动添加 ${Math.max(1, opts.productCount)} 个`}｜话术：` +
         (opts.scriptMode === 'ai'
           ? '由 AI 按邀约商品信息生成，请在页面「合作说明」框里核对后再放行'
           : opts.script.trim()) +

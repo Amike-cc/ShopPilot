@@ -1444,6 +1444,72 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       }
       return { kind: 'executed', payload: { action: 'ensureRows', present, added } }
     }
+    case 'ensureRowsById': {
+      // 按商品ID在邀约商品弹窗中逐项搜索并勾选（微信小店流程：用户指定ID，系统代填）。
+      // 与 ensureRows 不同：不是"勾前N个未选项"，而是"找到匹配 ID 的行并勾上"。
+      const wc = wcOrThrow(run)
+      const deep = !!input.deep
+      const ids = Array.isArray(input.productIds) ? input.productIds.map(String) : []
+      if (!ids.length) throw new Error('TASK_INVALID_STEP: ensureRowsById 缺少 productIds')
+      const addHit = await findTextTarget(wc, run, String(input.addText), deep, step.timeoutMs, 'ensureRowsById 打开添加入口')
+      if (!addHit.ok) throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${String(input.addText)}」入口（${addHit.reason}）`)
+      realClick(wc, addHit.x!, addHit.y!)
+      await new Promise(r => setTimeout(r, 600))
+      guardSignals(run)
+      await waitForSelector(wc, String(input.checkboxSelector), run, step.timeoutMs, deep)
+      const boxes = await withTimeout(() => wc.executeJavaScript(`(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${VISIBLE_JS}
+        const sel = ${JSON.stringify(String(input.checkboxSelector))};
+        const ids = ${JSON.stringify(ids)};
+        const out = [];
+        for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+          try { if (!el.matches(sel)) continue } catch { continue }
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) continue;
+          const cs = getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+          // 商品 ID 在行内的其它单元格里，不在复选框自身上——必须按"所在行"的文本匹配
+          // （实测：只看复选框 innerText 会永远匹配不到）
+          const row = el.closest('tr') || el.parentElement || el;
+          const rowText = String(row.innerText || '');
+          if (!ids.some(id => rowText.includes(id))) continue;
+          const input = el.querySelector('input[type=checkbox]');
+          out.push({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), checked: input ? !!input.checked : false, text: rowText.slice(0, 40) });
+        }
+        return out;
+      })()`), run, step.timeoutMs, 'ensureRowsById 搜索匹配行')
+      if (!boxes.length) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 弹窗中未找到匹配商品ID「${ids.join(', ')}」的行——请确认商品ID正确且已上架`)
+      }
+      let added = 0
+      for (const b of boxes) {
+        if (b.checked) continue
+        guardSignals(run)
+        realClick(wc, b.x, b.y)
+        added++
+        await new Promise(r => setTimeout(r, 200))
+      }
+      const confirmHit = await findTextTarget(wc, run, String(input.confirmText), deep, step.timeoutMs, 'ensureRowsById 确认')
+      if (!confirmHit.ok) throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${String(input.confirmText)}」确认按钮（${confirmHit.reason}）`)
+      realClick(wc, confirmHit.x!, confirmHit.y!)
+      await new Promise(r => setTimeout(r, 800))
+      guardSignals(run)
+      const countRowsExpr = `(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        const sel = ${JSON.stringify(String(input.rowsSelector))};
+        let n = 0;
+        for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+          try { if (!el.matches(sel)) continue } catch { continue }
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) continue;
+          n++;
+        }
+        return n;
+      })()`
+      const present = await withTimeout(() => wc.executeJavaScript(countRowsExpr).catch(() => 0), run, step.timeoutMs, 'ensureRowsById 复核')
+      return { kind: 'executed', payload: { action: 'ensureRowsById', requested: ids.length, added, present } }
+    }
     case 'requireQuota': {
       // 额度预检（读型）：可见元素自有文本含 textIncludes → 提取第一个数字 → ≥ min 放行。
       // 微信小店「今日剩余N次邀请机会」是平台唯一明示的额度口径；optional=true 时平台

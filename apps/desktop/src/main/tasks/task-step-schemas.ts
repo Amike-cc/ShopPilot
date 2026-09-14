@@ -92,6 +92,16 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     max: z.number().int().min(1).max(100),
     deep: z.boolean().optional()
   }).strict(),
+  // 按商品ID指定的商品添加（微信小店邀约商品弹窗）
+  ensureRowsById: z.object({
+    rowsSelector: selector,
+    checkboxSelector: selector,
+    addText: z.string().min(1).max(100),
+    confirmText: z.string().min(1).max(100),
+    /** 商品ID 数组：在弹窗列表里按文本包含搜索并勾选指定行 */
+    productIds: z.array(z.string().min(1).max(40)).min(1).max(30),
+    deep: z.boolean().optional()
+  }).strict(),
   // 额度预检（读型步骤，无副作用）：文本含 textIncludes 的可见元素里提取数字 ≥ min
   requireQuota: z.object({
     textIncludes: z.string().min(1).max(100),
@@ -140,7 +150,7 @@ export const NON_RESUMABLE_TYPES: ReadonlySet<string> = new Set([
   'fillDraft', 'waitForUserConfirmation',
   'click', 'clickByText', 'clickAll', 'setInput', 'aiGenerate',
   // 微信小店流程的副作用步骤同样不可重复执行（重复点击=重复发送风险）
-  'typeText', 'ensureRows',
+  'typeText', 'ensureRows', 'ensureRowsById',
   // 循环体里通常含点击/写入（一循环就是一轮真实发送），整步不可重放
   'loop'
 ])
@@ -154,6 +164,7 @@ export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
   typeText: 30000,
   waitForText: 30000,
   ensureRows: 120000,
+  ensureRowsById: 120000,
   requireQuota: 30000,
   requireEnabled: 20000,
   readLabelValue: 25000,

@@ -48,6 +48,7 @@ export const IPC_CHANNELS = {
   BROWSER_TAB_SET_PINNED: 'browser:tab:setPinned',
   BROWSER_TAB_LIST: 'browser:tab:list',
   BROWSER_NAVIGATE: 'browser:navigate',
+  BROWSER_PREPARE_INVITE_SQUARE: 'browser:prepareInviteSquare',
   BROWSER_TAB_CONTROL: 'browser:tab:control',   // 前进/后退/重载（地址栏）
   BROWSER_CLEAR_DATA: 'browser:clearData',
   BROWSER_CAPTURE: 'browser:capture',

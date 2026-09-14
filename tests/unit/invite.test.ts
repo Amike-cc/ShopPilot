@@ -40,6 +40,11 @@ describe('达人邀约平台档案', () => {
       expect(p.selectors.script).toContain('合作说明')
       expect(p.texts.sendInvite).toBe('发送邀约')
       expect(p.texts.dialogMarker).toBe('确认发送邀约')
+      // 广场筛选：四个类型页签 + 带货类目 + 其他筛选（真实页面实测 2026-09-14）
+      expect(p.finderTypes).toEqual(['全部带货者', '直播带货者', '短视频带货者', '公众号带货者'])
+      expect(p.finderCategories).toContain('母婴')
+      expect(p.finderCategories).toContain('美妆护肤')
+      expect(p.finderOtherFilters).toContain('有联系方式')
     }
   })
 
@@ -101,6 +106,24 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect(confirm.input).toEqual({ text: '确认', deep: true, mode: 'real' })
     // 步骤总数必须在引擎 30 步上限内
     expect(steps.length).toBeLessThanOrEqual(30)
+  })
+
+  it('邀约商品：填了商品ID走 ensureRowsById（按ID指定），没填走 ensureRows（按数量）', () => {
+    const withIds = buildAssistSteps(WX as any, { ...base, productIds: ['10000687986563', '10000687986564'] })
+    const byId = withIds.find(s => s.type === 'ensureRowsById')!
+    expect(byId).toBeTruthy()
+    expect(byId.input.productIds).toEqual(['10000687986563', '10000687986564'])
+    expect(byId.input.deep).toBe(true)
+    expect(String(byId.input.addText)).toBe('添加商品')
+    expect(withIds.some(s => s.type === 'ensureRows')).toBe(false)
+    // 门禁消息里如实写明指定了哪些 ID
+    const gate = withIds.find(s => s.type === 'waitForUserConfirmation')!
+    expect(String(gate.input.message)).toContain('10000687986563')
+
+    const noIds = buildAssistSteps(WX as any, base)
+    expect(noIds.some(s => s.type === 'ensureRowsById')).toBe(false)
+    const byCount = noIds.find(s => s.type === 'ensureRows')!
+    expect(byCount.input).toMatchObject({ min: 1, max: 1, deep: true })
   })
 
   it('微信号/手机号留空则不生成对应步骤', () => {
@@ -259,6 +282,10 @@ describe('任务步骤输入 schema', () => {
     expect(stepInputSchemas.ensureRows.safeParse({
       rowsSelector: 'tbody tr', checkboxSelector: 'tbody label',
       addText: '添加商品', confirmText: '确认', min: 1, max: 3, deep: true
+    }).success).toBe(true)
+    expect(stepInputSchemas.ensureRowsById.safeParse({
+      rowsSelector: 'tbody tr', checkboxSelector: 'tbody label',
+      addText: '添加商品', confirmText: '确认', productIds: ['10000687986563'], deep: true
     }).success).toBe(true)
     expect(stepInputSchemas.clickByText.safeParse({ text: '发送邀约', deep: true, mode: 'real' }).success).toBe(true)
     expect(stepInputSchemas.requireQuota.safeParse({ textIncludes: '今日剩余', min: 1, metric: 'invite.quota', deep: true }).success).toBe(true)

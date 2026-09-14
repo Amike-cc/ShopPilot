@@ -516,7 +516,33 @@
             </div>
 
             <div class="inv-card">
-              <div class="inv-card-h">① 联系方式</div>
+              <div class="inv-card-h">① 广场筛选<span class="row-sub">打开达人广场时应用</span></div>
+              <label class="inv-row inv-col">带货者类型
+                <select v-model="invite.finderType" data-test="invite-finder-type">
+                  <option v-for="t in inviteProfile.finderTypes" :key="t" :value="t">{{ t }}</option>
+                </select>
+              </label>
+              <div class="inv-row inv-block">带货类目
+                <span class="inv-chips">
+                  <label v-for="c in inviteProfile.finderCategories" :key="c" class="inv-chip" :class="{ on: invite.finderCategories.includes(c) }">
+                    <input type="checkbox" :value="c" v-model="invite.finderCategories" :data-test="'invite-finder-category-' + c" />{{ c }}
+                  </label>
+                </span>
+              </div>
+              <div class="inv-row inv-block">其他筛选
+                <span class="inv-chips">
+                  <label v-for="f in inviteProfile.finderOtherFilters" :key="f" class="inv-chip" :class="{ on: invite.finderOtherFilters.includes(f) }">
+                    <input type="checkbox" :value="f" v-model="invite.finderOtherFilters" :data-test="'invite-finder-other-' + f" />{{ f }}
+                  </label>
+                </span>
+              </div>
+              <div class="env-note">
+                筛选条件会保存；点「打开达人广场」后按本配置筛选（类型 <b>{{ invite.finderType }}</b>｜类目 <b>{{ invite.finderCategories.length ? invite.finderCategories.join('、') : '不限' }}</b>｜其他 <b>{{ invite.finderOtherFilters.length ? invite.finderOtherFilters.join('、') : '无' }}</b>），之后仍由你人工进入详情页发起邀约。
+              </div>
+            </div>
+
+            <div class="inv-card">
+              <div class="inv-card-h">② 联系方式</div>
               <label class="inv-row">邀约联系人
                 <input type="text" v-model="invite.contact" maxlength="30" data-test="invite-contact" placeholder="商家侧联系人（必填）" />
               </label>
@@ -529,7 +555,7 @@
             </div>
 
             <div class="inv-card">
-              <div class="inv-card-h">② 邀约内容</div>
+              <div class="inv-card-h">③ 邀约内容</div>
               <div class="inv-row inv-block">话术来源
                 <span class="inv-chips">
                   <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
@@ -554,14 +580,18 @@
               <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
                 AI 会在邀约页读取邀约商品信息生成话术；<b>生成的原文会落库留档</b>，且放行前会停下让你核对。
               </div>
+              <label class="inv-row inv-block">指定邀约商品 ID
+                <textarea v-model="invite.productIds" rows="2" data-test="invite-product-ids" placeholder="可填多个商品 ID，用逗号、空格或换行分隔；例如 10000687986563"></textarea>
+                <span class="row-sub">已填写 ID 时按 ID 指定商品；留空则按数量自动添加</span>
+              </label>
               <label class="inv-row">添加商品数量
                 <input type="number" min="1" :max="inviteProfile.maxProducts" v-model.number="invite.productCount" class="inv-num" data-test="invite-product-count" />
-                <span class="row-sub">页面已有商品则原样不动；没有才自动添加，最多 {{ inviteProfile.maxProducts }} 个</span>
+                <span class="row-sub">没有指定 ID 时生效；页面已有商品则原样不动，最多 {{ inviteProfile.maxProducts }} 个</span>
               </label>
             </div>
 
             <div class="inv-card">
-              <div class="inv-card-h">③ 运行</div>
+              <div class="inv-card-h">④ 运行</div>
               <div class="cf-btns">
                 <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
                 <template v-else>
@@ -1785,6 +1815,12 @@ const invite = reactive({
   contact: '',
   wechat: '',
   phone: '',
+  /** 微信广场筛选：类型单选、带货类目多选、其他筛选多选 */
+  finderType: '全部带货者',
+  finderCategories: [] as string[],
+  finderOtherFilters: [] as string[],
+  /** 指定邀约商品 ID，逗号/空格/换行分隔 */
+  productIds: '',
   productCount: 1,
   /** 跨平台不共话术：切到不同平台的店铺时清空脚本（抖店/微信的话术口径不同） */
   platformKey: ''
@@ -1831,7 +1867,7 @@ const inviteCfgLoaded = new Set<string>()
 function inviteCfgFields(flow: 'batch-list' | 'assist-form'): readonly string[] {
   return flow === 'batch-list'
     ? ['category', 'subcategory', 'levels', 'count', 'script', 'scriptMode', 'benefits']
-    : ['contact', 'wechat', 'phone', 'script', 'scriptMode', 'productCount']
+    : ['contact', 'wechat', 'phone', 'finderType', 'finderCategories', 'finderOtherFilters', 'productIds', 'script', 'scriptMode', 'productCount']
 }
 
 async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFor>>) {
@@ -1862,6 +1898,10 @@ async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFo
         const c = str(saved.contact, 60); if (c !== null) invite.contact = c
         const w = str(saved.wechat, 60); if (w !== null) invite.wechat = w
         const ph = str(saved.phone, 40); if (ph !== null) invite.phone = ph
+        if (typeof saved.finderType === 'string' && p.finderTypes.includes(saved.finderType)) invite.finderType = saved.finderType
+        if (Array.isArray(saved.finderCategories)) invite.finderCategories = saved.finderCategories.filter((x): x is string => typeof x === 'string' && p.finderCategories.includes(x))
+        if (Array.isArray(saved.finderOtherFilters)) invite.finderOtherFilters = saved.finderOtherFilters.filter((x): x is string => typeof x === 'string' && p.finderOtherFilters.includes(x))
+        const ids = str(saved.productIds, 4000); if (ids !== null) invite.productIds = ids
         const sc = str(saved.script, p.scriptMaxLen); if (sc !== null) invite.script = sc
         if (saved.scriptMode === 'ai' || saved.scriptMode === 'manual') invite.scriptMode = saved.scriptMode
         if (typeof saved.productCount === 'number' && Number.isFinite(saved.productCount)) invite.productCount = Math.max(1, Math.min(Math.round(saved.productCount), p.maxProducts))
@@ -1888,6 +1928,19 @@ watch(invite, () => {
   }, 500)
 }, { deep: true })
 
+/** 指定的商品 ID 列表（逗号/空格/分号/换行分隔；去重、保序） */
+const inviteProducts = computed(() => {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of invite.productIds.split(/[\s,，;；]+/)) {
+    const id = raw.trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(id.slice(0, 40))
+  }
+  return out
+})
+
 /** AI 是否可用（接口地址/模型名有值 + 主进程已存 Key）——AI 模式下用它当"开始邀约"的前置条件 */
 const aiReady = computed(() => !!aiConfig.value.endpoint && !!aiConfig.value.model && aiConfig.value.hasKey)
 
@@ -1895,22 +1948,37 @@ const inviteReady = computed(() => {
   const p = inviteProfile.value
   if (!p || !ws.displayedStoreId) return false
   const scriptOk = invite.scriptMode === 'ai' ? aiReady.value : invite.script.trim().length > 0
-  // 微信小店：联系人必填，微信号/手机号至少一个（平台用来联系商家）
+  // 微信小店：联系人必填，微信号/手机号至少一个（平台用来联系商家）；
+  // 商品：指定了商品 ID 就不再要求数量合法（按 ID 添加），但最多 30 个
   if (p.flow === 'assist-form') {
+    const ids = inviteProducts.value
     return scriptOk &&
       invite.contact.trim().length > 0 &&
       (invite.wechat.trim().length > 0 || invite.phone.trim().length > 0) &&
-      invite.productCount >= 1 && invite.productCount <= p.maxProducts
+      (ids.length > 0 ? ids.length <= 30 : invite.productCount >= 1 && invite.productCount <= p.maxProducts)
   }
   return invite.levels.length > 0 &&
     invite.count >= 1 && invite.count <= p.maxBatch &&
     scriptOk
 })
 
-/** 打开达人广场：带上登录态让用户确认页面 / 填写平台侧联系方式 */
-function openInvitePage() {
+/** 打开达人广场：抖店直接导航；微信按面板里保存的类型/类目/其他筛选自动应用后，再由用户人工进详情页 */
+async function openInvitePage() {
   const p = inviteProfile.value
-  if (p) ws.navigate(squareUrlFor(p.platform))
+  if (!p) return
+  const url = squareUrlFor(p.platform)
+  if (p.flow === 'assist-form') {
+    const res = await window.shopilot.browser.prepareInviteSquare(ws.displayedStoreId!, {
+      url,
+      finderType: invite.finderType,
+      categories: invite.finderCategories,
+      otherFilters: invite.finderOtherFilters
+    })
+    if (!res.ok) ws.toast('打开达人广场失败: ' + res.error.message, 'error')
+    else ws.toast('达人广场已打开并应用筛选，请人工进入达人详情页', 'success')
+  } else {
+    ws.navigate(url)
+  }
 }
 
 /**
@@ -1955,7 +2023,11 @@ async function startInvite() {
     : buildInviteSteps(p, {
         assist: {
           contact: invite.contact, wechat: invite.wechat, phone: invite.phone,
-          script: invite.script, scriptMode: invite.scriptMode, productCount: invite.productCount
+          script: invite.script, scriptMode: invite.scriptMode, productCount: invite.productCount,
+          productIds: inviteProducts.value,
+          finderType: invite.finderType,
+          finderCategory: invite.finderCategories[0] || '',
+          finderOtherFilters: invite.finderOtherFilters
         }
       }, squareUrl)
   const name = p.flow === 'batch-list'

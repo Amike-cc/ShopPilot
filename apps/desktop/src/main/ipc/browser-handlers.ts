@@ -130,6 +130,69 @@ export function registerBrowserHandlers(): void {
     }
   })
   
+  // browser:prepareInviteSquare — 微信带货者广场筛选应用（用户仍需人工进入达人详情）
+  ipcMain.handle(IPC_CHANNELS.BROWSER_PREPARE_INVITE_SQUARE, async (_event: IpcMainInvokeEvent, input: {
+    storeId: string, url: string, finderType?: string, categories?: string[], otherFilters?: string[]
+  }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const tabId = WindowManager.getActiveTabId(input.storeId)
+      if (!tabId) return error(ERROR_CODES.INTERNAL_ERROR.code, '店铺没有当前标签页', requestId)
+      const wc = WindowManager.getTabWebContents(input.storeId, tabId)
+      if (!wc) return error(ERROR_CODES.BROWSER_CLOSED.code, '店铺标签页不可用', requestId)
+      WindowManager.activateTab(input.storeId, tabId)
+      await wc.loadURL(input.url)
+      await new Promise(r => setTimeout(r, 2000))
+      // 微应用（micro-app ShadowRoot）不吃合成 click：先定位元素坐标，再发**受信任鼠标事件**
+      // （与微信表单必须 typeText 同理；实测合成 click 后筛选项勾选状态不变）
+      // 注意：needle/exact 必须注入进脚本字符串——直接引用会抛 ReferenceError，
+      // 被 catch 成 null 后表现为"永远定位不到"（实测踩过）
+      const locate = (needle: string, exact: boolean) => wc.executeJavaScript(`(() => {
+        const NEEDLE = ${JSON.stringify(needle)}
+        const EXACT = ${JSON.stringify(exact)}
+        const out = []
+        const walk = (root) => { for (const el of root.querySelectorAll('*')) { out.push(el); if (el.shadowRoot) walk(el.shadowRoot) } }
+        walk(document)
+        const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
+        for (const el of out) {
+          const t = own(el)
+          if (EXACT ? t !== NEEDLE : !t.includes(NEEDLE)) continue
+          const r = el.getBoundingClientRect()
+          if (!(r.width > 0 && r.height > 0)) continue
+          const cs = getComputedStyle(el)
+          if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue
+          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
+        }
+        return null
+      })()`) as Promise<{ x: number, y: number } | null>
+      const realClick = (x: number, y: number) => {
+        wc.sendInputEvent({ type: 'mouseMove', x, y })
+        wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
+        wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
+      }
+      const clickByText = async (needle: string, exact: boolean, attempts = 12) => {
+        for (let i = 0; i < attempts; i++) {
+          const hit = await locate(needle, exact).catch(() => null)
+          if (hit) {
+            realClick(hit.x, hit.y)
+            await new Promise(r => setTimeout(r, 700))
+            return true
+          }
+          await new Promise(r => setTimeout(r, 400))
+        }
+        return false
+      }
+      const typeOk = input.finderType ? await clickByText(input.finderType, true) : true
+      const catOk: Array<[string, boolean]> = []
+      for (const c of (input.categories || [])) catOk.push([c, await clickByText(c, true)])
+      const otherOk: Array<[string, boolean]> = []
+      for (const f of (input.otherFilters || [])) otherOk.push([f, await clickByText(f, true)])
+      return success({ tabId, result: { type: typeOk, categories: catOk, others: otherOk } }, requestId)
+    } catch (err: any) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+    }
+  })
+
   // browser:clearData
   ipcMain.handle(IPC_CHANNELS.BROWSER_CLEAR_DATA, async (_event: IpcMainInvokeEvent, input: { storeId: string, types: string[], origin?: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()

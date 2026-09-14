@@ -116,6 +116,12 @@ export interface BatchInviteProfile extends InviteProfileBase {
  */
 export interface AssistInviteProfile extends InviteProfileBase {
   flow: 'assist-form'
+  /** 带货者广场的类型页签（应用于用户打开广场时） */
+  finderTypes: readonly string[]
+  /** 带货类目筛选项（真实页面文案） */
+  finderCategories: readonly string[]
+  /** 其他筛选项（真实页面文案） */
+  finderOtherFilters: readonly string[]
   /** 邀约表单页 URL 判据（mirrorTabUrl 据此找到人工打开的邀约页） */
   inviteUrlMarker: string
   /** 单次邀约可添加商品上限（平台弹窗上限 30；引擎单次默认只加少量，宁少勿错） */
@@ -228,6 +234,15 @@ const WEIXIN: AssistInviteProfile = {
   platform: '微信小店',
   pageUrl: 'https://store.weixin.qq.com/shop/findersquare/find',
   flow: 'assist-form',
+  finderTypes: ['全部带货者', '直播带货者', '短视频带货者', '公众号带货者'],
+  finderCategories: [
+    '文玩文创', '珠宝首饰', '家纺', '运动户外', '母婴', '家用电器', '数码', '鞋靴',
+    '家庭清洁/纸品', '箱包皮具', '个人护理', '食品饮料', '生鲜', '家居日用', '家具',
+    '酒类', '钟表', '图书', '保健食品/膳食营养补充食品', '服饰内衣', '家装建材', '美妆护肤',
+    '汽车电动', '玩具乐器', '教育培训', '农资园艺', '宠物生活', '成人用品', '酒旅', '餐饮',
+    '电脑、办公', '手机通讯', '厨具', '其他'
+  ],
+  finderOtherFilters: ['可开发票', '有联系方式'],
   scriptMaxLen: 200,
   inviteUrlMarker: 'initiate-invite',
   maxProducts: 10,
