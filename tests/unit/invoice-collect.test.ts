@@ -14,7 +14,7 @@ describe('发票档案（抓取待开票信息用）', () => {
   })
 
   it('已实测平台都有页地址/就绪判据/表头映射/指标名（缺一项就抓不了）', () => {
-    expect(INVOICE_SUPPORTED_PLATFORMS.sort()).toEqual(['微信小店', '抖店', '拼多多'].sort())
+    expect(INVOICE_SUPPORTED_PLATFORMS.sort()).toEqual(['微信小店', '抖店', '拼多多', '快手小店'].sort())
     for (const [name, p] of Object.entries(INVOICE_PROFILES)) {
       expect(p.platform, name).toBe(name)
       expect(p.pageUrl).toMatch(/^https:\/\//)
@@ -50,9 +50,18 @@ describe('发票档案（抓取待开票信息用）', () => {
     )
   })
 
-  it('快手未实测 → 不进档案，但给出如实说明（不给假锚点）', () => {
-    expect(invoiceProfileFor('快手小店')).toBeNull()
-    expect(INVOICE_UNSUPPORTED_NOTE['快手小店']).toContain('无「发票」入口')
+  it('快手已实测到发票页（资金 → 给平台开票 → 未开票账单）', () => {
+    const ks = invoiceProfileFor('快手小店')!
+    expect(ks).toBeTruthy()
+    expect(ks.pageUrl).toBe('https://s.kwaixiaodian.com/zone/fund/tax-bill/subsidy')
+    expect(ks.urlMarker).toBe('tax-bill/subsidy')
+    expect(ks.pickByHeader).toBe('账单编号')
+    // 实测表头（含单位后缀，必须按原样写才匹配得上）
+    expect(Object.keys(ks.headerMap)).toEqual(
+      expect.arrayContaining(['账单编号', '账单月份', '账单类型', '账单金额（元）', '开票主体名称', '阈值生效时间'])
+    )
+    // 已实测 → 不该再出现在"未支持"说明里
+    expect(INVOICE_UNSUPPORTED_NOTE['快手小店']).toBeUndefined()
   })
 })
 

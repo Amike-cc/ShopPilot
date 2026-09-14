@@ -78,9 +78,9 @@ for (const r of data.rows) {
 }
 const supported = data.rows.filter((r) => r.支持)
 const withData = supported.filter((r) => r.条数 > 0)
-check('③ 支持的平台数 = 3（微信/拼多多/抖店）', supported.length === 3, supported.map((r) => r.平台).join('、'))
+check('③ 支持的平台数 = 4（微信/拼多多/抖店/快手）', supported.length === 4, supported.map((r) => r.平台).join('、'))
 check('③ 抓到了待开票数据', withData.length > 0, withData.map((r) => `${r.平台}:${r.条数}`).join(' '))
-check('③ 快手如实报未支持', data.rows.some((r) => r.平台 === '快手小店' && r.支持 === false))
+check('③ 四家都抓到了数据', withData.length === 4, `实际 ${withData.length} 家有数据`)
 // 至少有平台把金额/单号映射进了统一列
 const mapped = withData.some((r) => r.样例.some((it) => it.cells && (it.cells.amount || it.cells.id)))
 check('③ 字段已映射进统一列（金额/单号）', mapped)

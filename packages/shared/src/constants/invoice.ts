@@ -127,10 +127,32 @@ const DOUDIAN: InvoiceProfile = {
   note: '取「我给平台开票 → 待开票账单」：账单名称 / 账单类型 / 收票方主体 / 账单总额。该页另有「给消费者开票 / 平台给我开票 / 达人给我开票」页签，本版只抓默认的待开票账单。'
 }
 
+const KUAISHOU: InvoiceProfile = {
+  platform: '快手小店',
+  // 实测路径：后台「资金」→「给平台开票」→「未开票账单」（菜单需先滚进视口才点得到）
+  pageUrl: 'https://s.kwaixiaodian.com/zone/fund/tax-bill/subsidy',
+  urlMarker: 'tax-bill/subsidy',
+  tableSelector: 'table',
+  pickByHeader: '账单编号',
+  settleMs: 9000,
+  headerMap: {
+    '账单编号': 'id',
+    '账单月份': 'period',
+    '账单类型': 'type',
+    '账单金额（元）': 'amount',
+    '开票主体名称': 'title',
+    '阈值生效时间': 'deadline'
+  },
+  metric: 'invoice.rows',
+  measuredAt: '2026-09-14',
+  note: '取「给平台开票 → 未开票账单」：账单编号 / 账单月份 / 账单类型 / 账单金额（元）/ 开票主体名称 / 阈值生效时间；阈值金额与收票主体进「其他信息」。'
+}
+
 export const INVOICE_PROFILES: Readonly<Record<string, InvoiceProfile>> = {
   [WEIXIN.platform]: WEIXIN,
   [PINDUODUO.platform]: PINDUODUO,
-  [DOUDIAN.platform]: DOUDIAN
+  [DOUDIAN.platform]: DOUDIAN,
+  [KUAISHOU.platform]: KUAISHOU
 }
 
 export function invoiceProfileFor(platformName: string | null | undefined): InvoiceProfile | null {
@@ -142,6 +164,4 @@ export function invoiceProfileFor(platformName: string | null | undefined): Invo
 export const INVOICE_SUPPORTED_PLATFORMS: readonly string[] = Object.keys(INVOICE_PROFILES)
 
 /** 已知但**未实测到可读发票页**的平台（界面如实说明，不给假锚点） */
-export const INVOICE_UNSUPPORTED_NOTE: Readonly<Record<string, string>> = {
-  快手小店: '实测其后台整页无「发票」入口，资金类路径均重定向回后台首页——本版无法抓取，未登记假锚点。'
-}
+export const INVOICE_UNSUPPORTED_NOTE: Readonly<Record<string, string>> = {}

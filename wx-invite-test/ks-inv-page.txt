@@ -1,0 +1,147 @@
+店铺 福气满满（快手小店）→ 导航到 https://s.kwaixiaodian.com/zone/fund/tax-bill/subsidy
+落地 URL: https://s.kwaixiaodian.com/zone/fund/tax-bill/subsidy
+
+=== 结构 ===
+{
+ "标题": "快手小店",
+ "微应用数": 0,
+ "table数": 1,
+ "table表头": [
+  [
+   "",
+   "账单编号",
+   "账单月份",
+   "账单类型",
+   "账单金额（元）",
+   "阈值金额（元）",
+   "阈值生效时间",
+   "开票主体名称",
+   "收票主体名称",
+   "账单说明",
+   "操作"
+  ]
+ ],
+ "表列头th合计": [
+  "账单编号",
+  "账单月份",
+  "账单类型",
+  "账单金额（元）",
+  "阈值金额（元）",
+  "阈值生效时间",
+  "开票主体名称",
+  "收票主体名称",
+  "账单说明",
+  "操作"
+ ],
+ "状态文案": [
+  "开票规则",
+  "给平台开具补贴发票小教程",
+  "给平台开票",
+  "未开票账单",
+  "全部",
+  "已选择个月 共元",
+  "合并提交发票",
+  "开票主体名称",
+  "提交发票"
+ ],
+ "按钮": [
+  "返回旧版",
+  "设置",
+  "全国各省税局代开增值税发票指南",
+  "给平台开具补贴发票小教程",
+  "重 置",
+  "查 询",
+  "合并提交发票",
+  "合并支付违约金",
+  "查看导出记录",
+  "提交发票",
+  "支付违约金",
+  "账单导出",
+  "1"
+ ]
+}
+
+=== 表格数据行（前 6）===
+[
+ [
+  "",
+  "账单编号",
+  "账单月份",
+  "账单类型",
+  "账单金额（元）",
+  "阈值金额（元）",
+  "阈值生效时间",
+  "开票主体名称",
+  "收票主体名称",
+  "账单说明",
+  "操作"
+ ],
+ [
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  "",
+  ""
+ ],
+ [
+  "",
+  "28351275426",
+  "2026年04月",
+  "支付营销补贴",
+  "2.02",
+  "0.61",
+  "2026-06-15(预计)",
+  "夏邑县唯衣美服装工作室",
+  "成都快购科技有限公司",
+  "-",
+  "提交发票 支付违约金 账单导出"
+ ],
+ [
+  "",
+  "26987458026",
+  "2026年03月",
+  "支付营销补贴",
+  "1.49",
+  "0.45",
+  "2026-05-15(预计)",
+  "夏邑县唯衣美服装工作室",
+  "成都快购科技有限公司",
+  "-",
+  "提交发票 支付违约金 账单导出"
+ ],
+ [
+  "",
+  "27119308426",
+  "2026年03月",
+  "平台补贴",
+  "53.00",
+  "15.90",
+  "2026-05-15(预计)",
+  "夏邑县唯衣美服装工作室",
+  "成都快购科技有限公司",
+  "-",
+  "提交发票 支付违约金 账单导出"
+ ],
+ [
+  "",
+  "24229432426",
+  "2026年02月",
+  "平台补贴",
+  "256.24",
+  "76.88",
+  "2026-04-15(预计)",
+  "夏邑县唯衣美服装工作室",
+  "成都快购科技有限公司",
+  "-",
+  "提交发票 支付违约金 账单导出"
+ ]
+]
+
+=== 页面主文本（前 900 字）===
+".anticon {\n  display: inline-block;\n  color: inherit;\n  font-style: normal;\n  line-height: 0;\n  text-align: center;\n  text-transform: none;\n  vertical-align: -0.125em;\n  text-rendering: optimizeLegibility;\n  -webkit-font-smoothing: antialiased;\n  -moz-osx-font-smoothing: grayscale;\n}\n\n.anticon > * {\n  line-height: 1;\n}\n\n.anticon svg {\n  display: inline-block;\n}\n\n.anticon::before {\n  display: none;\n}\n\n.anticon .anticon-icon {\n  display: block;\n}\n\n.anticon[tabindex] {\n  cursor: pointer;\n}\n\n.anticon-spin::before,\n.anticon-spin {\n  display: inline-block;\n  -webkit-animation: loadingCircle 1s infinite linear;\n  animation: loadingCircle 1s infinite linear;\n}\n\n@-webkit-keyframes loadingCircle {\n  100% {\n    -webkit-transform: rotate(360deg);\n    transform: rotate(360deg);\n  }\n}\n\n@keyframes loadingCircle {\n  100% {\n    -webkit-transform: rotate(360deg);\n    transform: rotate(360deg);\n  }\n} | win"
