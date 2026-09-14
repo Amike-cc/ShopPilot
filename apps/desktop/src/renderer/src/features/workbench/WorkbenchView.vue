@@ -725,25 +725,57 @@
         <div class="dc-head">
           <h2 style="margin:0">发票中心</h2>
           <span class="row-sub">
-            各平台后台的待开票信息
-            <template v-if="invoice.generatedAt"> · 采集于 {{ new Date(invoice.generatedAt).toLocaleString() }}</template>
+            待开票信息汇总
+            <template v-if="invoice.generatedAt"> · 读取于 {{ new Date(invoice.generatedAt).toLocaleString() }}</template>
             <template v-if="invoiceLoading"> · 读取中…</template>
           </span>
           <button class="mini-btn" data-test="invoice-collect" :disabled="invoiceCollecting" @click="collectInvoiceData()">
             {{ invoiceCollecting ? '采集中…' : '抓取待开票信息' }}
           </button>
+          <button class="mini-btn" data-test="invoice-export" :disabled="!invoiceTotal.count" @click="exportInvoice()">导出 CSV</button>
           <button class="mini-btn" data-test="invoice-refresh" :disabled="invoiceLoading" @click="loadInvoiceCenter()">刷新</button>
           <button class="mini-btn" data-test="invoice-center-close" @click="invoiceCenterOpen = false">关闭</button>
         </div>
 
+        <!-- 总览：跨店铺合计（金额按"能解析出的数字"累加，解析不了的不计入并如实标注） -->
+        <div class="dc-cards" data-test="invoice-totals">
+          <div class="dc-card"><div class="dc-num">{{ invoiceTotal.count }}</div><div class="dc-label">待开票条数</div></div>
+          <div class="dc-card"><div class="dc-num">{{ invoiceTotal.amountText }}</div><div class="dc-label">可开金额合计</div></div>
+          <div class="dc-card"><div class="dc-num">{{ invoiceTotal.stores }}</div><div class="dc-label">有数据的店铺</div></div>
+          <div class="dc-card"><div class="dc-num">{{ invoiceTotal.overdue }}</div><div class="dc-label">含逾期/到期提示</div></div>
+        </div>
+        <div v-if="invoiceTotal.aliasWarning" class="env-note" style="margin-bottom:10px">
+          <b>注意</b>：合计金额混有 {{ invoiceTotal.currencyNote }}；不同平台的金额口径（含税/不含税、阈值金额与账单金额）以各自页面为准。
+          <template v-if="invoiceTotal.unparsed">另有 {{ invoiceTotal.unparsed }} 条金额无法解析为数字，<b>未计入</b>合计。</template>
+        </div>
+
+        <!-- 工具栏：搜索 + 只看有数据的 + 排序 -->
+        <div class="inv-toolbar" data-test="invoice-toolbar">
+          <input
+            v-model="invoiceQuery" type="text" class="inv-cat-search" data-test="invoice-search"
+            placeholder="搜索：店铺 / 单号 / 类型 / 抬头 / 税号…"
+          />
+          <label class="inv-chip" :class="{ on: invoiceOnlyWithData }">
+            <input type="checkbox" v-model="invoiceOnlyWithData" data-test="invoice-only-data" />只看有数据的
+          </label>
+          <select v-model="invoiceSort" data-test="invoice-sort" title="行内排序">
+            <option value="amountDesc">金额从高到低</option>
+            <option value="amountAsc">金额从低到高</option>
+            <option value="none">按平台顺序</option>
+          </select>
+        </div>
+
         <div class="env-note" style="margin-bottom:10px">
-          <b>只做读取与展示</b>：软件在你该店铺的隔离浏览器里打开平台的发票页，把<b>待开票清单</b>读回来展示；
+          <b>只做读取与展示</b>：软件在你该店铺的隔离浏览器里打开平台的发票页，把<b>待开票清单</b>读回来；
           开发票/上传发票等操作仍由你在平台页面上完成（本应用不代提交）。
           采集走的是各平台<b>实测过</b>的发票页与表头锚点，改版会如实报错而不是显示错数据。
         </div>
 
         <div v-if="!invoiceRows.length" class="empty-hint">还没有店铺</div>
-        <div v-for="r in invoiceRows" :key="r.storeId" class="inv-row-card" data-test="invoice-row">
+        <div v-else-if="!visibleInvoiceRows.length" class="empty-hint">
+          没有符合当前筛选/搜索条件的记录<template v-if="invoiceOnlyWithData">（已勾选「只看有数据的」）</template>
+        </div>
+        <div v-for="r in visibleInvoiceRows" :key="r.storeId" class="inv-row-card" data-test="invoice-row">
           <div class="inv-row-head">
             <span class="inv-dot" :style="{ background: r.color }"></span>
             <b>{{ r.storeName }}</b>
@@ -751,7 +783,7 @@
             <span v-if="r.capturedAt" class="row-sub">· 采集于 {{ new Date(r.capturedAt).toLocaleString() }}</span>
             <span v-if="r.manual" class="inv-vtag">手动</span>
             <span class="row-sub" style="margin-left:auto">
-              {{ r.supported ? (r.items.length ? `待开票 ${r.items.length} 条` : '暂无待开票数据') : '未支持抓取' }}
+              {{ r.supported ? `待开票 ${r.items.length} 条` : '未支持抓取' }}
             </span>
             <button class="mini-btn" data-test="invoice-open-store" @click="openInvoiceFor(r)">
               {{ r.supported ? '打开发票页' : '打开后台' }}
@@ -761,7 +793,10 @@
           <div v-if="!r.supported" class="env-note" style="margin:0">{{ r.unsupportedReason }}</div>
           <template v-else>
             <div v-if="!r.items.length" class="env-note" style="margin:0">
-              还没有采集到数据——点上方「抓取待开票信息」开始；若采集失败会在这里显示原因。
+              还没有采集到数据——点上方「抓取待开票信息」开始。
+              <template v-if="r.lastFail">
+                上次采集失败：<b>{{ r.lastFail.message || r.lastFail.code }}</b><template v-if="r.lastFail.at">（{{ new Date(r.lastFail.at).toLocaleString() }}）</template>
+              </template>
             </div>
             <div v-else class="inv-table-wrap">
               <table class="inv-table" data-test="invoice-table">
@@ -2538,18 +2573,68 @@ async function doCopyConfig() {
 const invoiceCenterOpen = ref(false)
 const invoiceLoading = ref(false)
 const invoiceCollecting = ref(false)
+/** 工具栏：搜索词 / 只看有数据的 / 行内排序 */
+const invoiceQuery = ref('')
+const invoiceOnlyWithData = ref(false)
+const invoiceSort = ref<'amountDesc' | 'amountAsc' | 'none'>('amountDesc')
 const invoice = reactive<{ generatedAt: number | null; columns: Array<{ key: string; label: string }>; rows: any[] }>({
   generatedAt: null,
   columns: [],
   rows: []
 })
 
+/**
+ * 金额解析：各平台金额是**带符号的字符串**（¥14.89 / ￥9.49 / 2.02 / -），
+ * 解析不出数字的（"—"/空）返回 null 并**不计入合计**——绝不把解析失败当 0 加进去。
+ */
+function parseAmount(v: unknown): number | null {
+  const s = cleanCell(v)
+  if (!s || s === '—' || s === '-') return null
+  const m = /-?[\d,]+(?:\.\d+)?/.exec(s.replace(/[¥￥$€\s]/g, ''))
+  if (!m) return null
+  const n = Number(m[0].replace(/,/g, ''))
+  return Number.isFinite(n) ? n : null
+}
+/** 金额显示：合计用两位小数 + 千分位；货币符号按出现过的样式挑一个 */
+function fmtAmount(n: number): string {
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
 const invoiceRows = computed(() => {
   const cat = (window.shopilot.platforms || []) as Array<PlatformDef>
   const byStore = new Map(invoice.rows.map((r: any) => [r.storeId, r]))
+  const q = invoiceQuery.value.trim().toLowerCase()
   return ws.stores.map(s => {
     const got: any = byStore.get(s.id) || {}
-    const items = Array.isArray(got.items) ? got.items : []
+    let items = Array.isArray(got.items) ? got.items : []
+    // 行内搜索命中范围：店铺名/平台（命中则整店保留）或 任一单元格/额外列文本（命中则只留该行）
+    let storeMatched = false
+    if (q) {
+      storeMatched = (s.name + ' ' + s.platform).toLowerCase().includes(q)
+      if (!storeMatched) {
+        items = items.filter((it: any) => {
+          const text = [
+            ...Object.values(it.cells || {}),
+            ...(it.extras || []).map((x: any) => `${x.label} ${x.value}`)
+          ].map(v => cleanCell(v)).join(' ').toLowerCase()
+          return text.includes(q)
+        })
+      }
+    }
+    // 行内排序：按解析出的金额；解析不出的排在最后（不是当 0 排最前）
+    if (invoiceSort.value !== 'none' && items.length > 1) {
+      const dir = invoiceSort.value === 'amountDesc' ? -1 : 1
+      const parsed = items.map((it: any) => parseAmount(it.cells?.amount))
+      const idx = items.map((_, i) => i)
+      idx.sort((a, b) => {
+        const pa = parsed[a], pb = parsed[b]
+        if (pa == null && pb == null) return 0
+        if (pa == null) return 1
+        if (pb == null) return -1
+        return (pa - pb) * dir
+      })
+      items = idx.map(i => items[i])
+    }
     return {
       storeId: s.id,
       storeName: s.name,
@@ -2560,11 +2645,53 @@ const invoiceRows = computed(() => {
       capturedAt: got.capturedAt || null,
       manual: !!got.manual,
       note: got.note || null,
+      lastFail: got.lastFail || null,
       items,
       // 有"其他信息"列（该平台多出来的列）时表格多一列
       hasExtras: items.some((it: any) => Array.isArray(it.extras) && it.extras.length > 0)
     }
   })
+})
+
+/** 「只看有数据的」筛选（搜索与排序已在 invoiceRows 里做过） */
+const visibleInvoiceRows = computed(() =>
+  invoiceOnlyWithData.value ? invoiceRows.value.filter(r => r.items.length > 0) : invoiceRows.value
+)
+
+/**
+ * 跨店铺合计。金额口径如实处理：
+ *  - 解析不出的**不计入**，并把条数报出来（界面注明），避免"合计比实际小"却看不出来；
+ *  - 同时出现过 ¥ 与 ￥ 时提示一下；不同平台口径以各自页面为准（不做汇率/含税换算）。
+ */
+const invoiceTotal = computed(() => {
+  let count = 0
+  let amount = 0
+  let unparsed = 0
+  let overdue = 0
+  let stores = 0
+  const symbols = new Set<string>()
+  for (const r of invoiceRows.value) {
+    if (!r.supported) continue
+    if (r.items.length) stores++
+    for (const it of r.items) {
+      count++
+      const a = parseAmount(it.cells?.amount)
+      if (a == null) unparsed++
+      else amount += a
+      const s = cleanCell(it.cells?.amount)
+      const sym = /[¥￥$€]/.exec(s)
+      if (sym) symbols.add(sym[0])
+      const dl = cleanCell(it.cells?.deadline) + ' ' + cleanCell(it.cells?.status) + ' ' + cleanCell(it.cells?.id)
+      if (/逾期|过期|即将|待开票|未开票/.test(dl)) overdue++
+    }
+  }
+  const symList = [...symbols]
+  return {
+    count, amount, stores, unparsed, overdue,
+    amountText: count ? (symList.includes('￥') && !symList.includes('¥') ? '￥' : '¥') + fmtAmount(amount) : '—',
+    aliasWarning: symList.length > 1 || (amount > 0 && unparsed > 0),
+    currencyNote: symList.length > 1 ? `¥ 与 ￥ 两种符号（同一币种，仅符号不同）` : `无法解析的金额`
+  }
 })
 
 async function loadInvoiceCenter() {
@@ -2648,6 +2775,14 @@ async function collectInvoiceData() {
   } finally {
     invoiceCollecting.value = false
   }
+}
+
+/** 导出当前待开票清单为 CSV（主进程弹保存框写文件；只落本地，不上传） */
+async function exportInvoice() {
+  const res = await window.shopilot.overview.invoiceExport()
+  if (!res.ok) { ws.toast('导出失败：' + res.error.message, 'error'); return }
+  if (res.data?.canceled) return
+  ws.toast(`已导出 ${res.data.rows} 条待开票记录：${res.data.path}`, 'success')
 }
 
 async function openInvoiceFor(row: { storeId: string; storeName: string }) {
@@ -2962,10 +3097,12 @@ onMounted(async () => {
   window.shopilot.on('update:statusChanged', updateEventHandler)
   window.shopilot.on('update:progress', updateEventHandler)
   // 采集任务可能在数据中心的等待窗口之后才跑完（例如运行排队等店铺浏览器打开）：
-  // 任何运行结束都刷新一次已打开的数据中心，避免表格停在旧数字上
+  // 任何运行结束都刷新一次已打开的面板，避免表格停在旧数字上
   window.shopilot.on('task:progress', (ev: any) => {
-    if (!dataCenterOpen.value) return
-    if (ev?.phase === 'finished' || ev?.phase === 'failed') void loadDataCenter()
+    if (ev?.phase === 'finished' || ev?.phase === 'failed') {
+      if (dataCenterOpen.value) void loadDataCenter()
+      if (invoiceCenterOpen.value) void loadInvoiceCenter()
+    }
   })
   await ws.init()
   // Renderer reloads do not reset main-process WebContentsView state. Explicitly
@@ -3349,6 +3486,16 @@ onBeforeUnmount(() => {
   border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 4px 6px; font-size: 12px;
 }
 /* ---------- 发票中心 ---------- */
+/* 工具栏：搜索 + 只看有数据的 + 排序（窄屏自动换行） */
+.inv-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.inv-toolbar .inv-cat-search { flex: 1 1 200px; min-width: 160px; }
+/* 「只看有数据的」是 label.inv-chip：工具栏里必须保持单行（勾选框 + 文字），
+   否则窄宽度下勾选框和文字会被拆成两行（实测 .inv-chip 是 flex，需要 nowrap + 不收缩） */
+.inv-toolbar .inv-chip { flex: 0 0 auto; white-space: nowrap; padding: 4px 9px; }
+.inv-toolbar select {
+  box-sizing: border-box; background: var(--color-bg-tertiary); color: var(--color-text-primary);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 4px 6px; font-size: 12px;
+}
 .inv-row-card {
   border: 1px solid var(--color-border); border-radius: var(--radius-sm);
   padding: 8px 10px; margin-bottom: 8px;

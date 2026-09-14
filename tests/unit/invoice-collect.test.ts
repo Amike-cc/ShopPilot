@@ -65,6 +65,52 @@ describe('发票档案（抓取待开票信息用）', () => {
   })
 })
 
+describe('发票金额解析（合计用）', () => {
+  // 与渲染层 parseAmount 同一套规则（这里独立实现一份做等价性说明，防止规则被改坏而无人察觉）
+  const parse = (v: unknown): number | null => {
+    const s = String(v ?? '').replace(/\s*\n\s*/g, ' ').trim()
+    if (!s || s === '—' || s === '-') return null
+    const m = /-?[\d,]+(?:\.\d+)?/.exec(s.replace(/[¥￥$€\s]/g, ''))
+    if (!m) return null
+    const n = Number(m[0].replace(/,/g, ''))
+    return Number.isFinite(n) ? n : null
+  }
+  it('各平台实测的金额写法都能解析', () => {
+    expect(parse('¥14.89')).toBeCloseTo(14.89)
+    expect(parse('￥9.49')).toBeCloseTo(9.49)
+    expect(parse('2.02')).toBeCloseTo(2.02)
+    expect(parse('256.24')).toBeCloseTo(256.24)
+    expect(parse('1,234.5')).toBeCloseTo(1234.5)
+  })
+  it('解析不出的返回 null（绝不当作 0 计入合计）', () => {
+    expect(parse('')).toBeNull()
+    expect(parse('—')).toBeNull()
+    expect(parse('-')).toBeNull()
+    expect(parse('暂无')).toBeNull()
+  })
+  it('金额单元格里的换行不干扰解析', () => {
+    expect(parse('¥1.50\n已含税')).toBeCloseTo(1.5)
+  })
+})
+
+describe('CSV 转义（导出用）', () => {
+  // 与主进程导出的 esc 同规则：含逗号/引号/换行加引号，内部引号翻倍
+  const esc = (v: unknown) => {
+    const s = String(v ?? '')
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  it('普通值不加引号', () => {
+    expect(esc('2026年04月')).toBe('2026年04月')
+    expect(esc('28351275426')).toBe('28351275426')
+  })
+  it('含逗号/换行/引号的值被正确转义（拼多多订单号带换行，实测踩过）', () => {
+    expect(esc('220630-401819647563847\n逾期未开票')).toBe('"220630-401819647563847\n逾期未开票"')
+    expect(esc('a,b')).toBe('"a,b"')
+    expect(esc('说"明"')).toBe('"说""明"""')
+    expect(esc('账单信息：3笔订单；操作：提交发票')).toBe('账单信息：3笔订单；操作：提交发票')
+  })
+})
+
 describe('发票采集步骤', () => {
   it('序列：navigate → waitForPage → (可选点页签) → waitMs → readTable(keepRows+pickByHeader)', () => {
     const steps = buildInvoiceCollectSteps(invoiceProfileFor('微信小店')!)

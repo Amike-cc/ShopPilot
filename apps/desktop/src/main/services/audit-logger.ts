@@ -17,7 +17,7 @@ export type AuditAction =
   | 'task.retry' | 'task.cancel' | 'task.confirm'
   | 'update.check' | 'update.download' | 'update.install'
   | 'ai.keySet' | 'ai.keyClear' | 'ai.test' | 'ai.generate' | 'ai.models'
-  | 'diagnostics.export' | 'audit.export'
+  | 'diagnostics.export' | 'audit.export' | 'invoice.export'
 
 export type AuditResult = 'success' | 'failure'
 

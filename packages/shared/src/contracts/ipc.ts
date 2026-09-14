@@ -97,6 +97,8 @@ export const IPC_CHANNELS = {
   OVERVIEW_DATACENTER: 'overview:datacenter',
   // 发票中心：汇总各店铺的**待开票信息**（来自发票页 readTable 快照）
   OVERVIEW_INVOICE_CENTER: 'overview:invoiceCenter',
+  // 发票中心：把当前待开票清单导出为 CSV（弹保存框；只写文件，不上传）
+  OVERVIEW_INVOICE_EXPORT: 'overview:invoiceExport',
   // 手动录入经营指标（平台用反抓取字体渲染数字时，由用户看页面自行录入，来源如实标记为"手动"）
   OVERVIEW_MANUAL_METRIC: 'overview:manualMetric',
 

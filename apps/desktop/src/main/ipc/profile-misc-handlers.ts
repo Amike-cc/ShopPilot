@@ -2,7 +2,9 @@
  * 环境配置 / 概览 / 设置 / 审计 IPC 处理器 - §6.6 / §6.7
  */
 
-import { ipcMain, IpcMainInvokeEvent, BrowserWindow } from 'electron'
+import { ipcMain, IpcMainInvokeEvent, BrowserWindow, dialog, app } from 'electron'
+import { writeFileSync } from 'fs'
+import { join } from 'path'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import { ERROR_CODES } from '@shared/errors/error-codes'
@@ -15,6 +17,92 @@ import { writeAudit, queryAudit } from '../services/audit-logger'
 import { invoiceProfileFor, INVOICE_COLUMNS, INVOICE_UNSUPPORTED_NOTE } from '@shared/constants/invoice'
 import type { InvoiceColumnKey } from '@shared/constants/invoice'
 import { randomUUID } from 'crypto'
+
+/**
+ * 汇总各店铺的待开票信息（发票中心与导出共用这一份取数逻辑）。
+ *
+ * 数据来源：采集任务在发票页 readTable(keepRows) 落下的快照（metric = invoice.rows）。
+ * 把**原始表行**按该平台实测的表头映射到统一列（见 shared/constants/invoice.ts）；
+ * 映射不到的列不丢，放进 extras——平台加列不会让数据消失。
+ * 没有快照的店铺如实返回空 items（界面显示"还没采集"），绝不估算或伪造。
+ */
+function collectInvoiceRows(): any[] {
+  const db = getDatabase()
+  const stores = db.prepare(
+    `SELECT id, name, platform, status, admin_url FROM stores WHERE deleted_at IS NULL ORDER BY platform, name`
+  ).all() as any[]
+
+  // 每店取 invoice.rows 的**最新一条**（含采集时间与来源运行）
+  const snapRows = db.prepare(`
+    SELECT store_id, value_json, captured_at, source_run_id FROM (
+      SELECT store_id, value_json, captured_at, source_run_id,
+             ROW_NUMBER() OVER (PARTITION BY store_id ORDER BY rowid DESC) AS rn
+      FROM store_snapshots WHERE metric = 'invoice.rows'
+    ) WHERE rn = 1
+  `).all() as any[]
+  const snapByStore = new Map<string, any>()
+  for (const r of snapRows) {
+    let v: any = r.value_json
+    try { v = JSON.parse(r.value_json) } catch { /* 保底原样 */ }
+    snapByStore.set(r.store_id, { value: v, capturedAt: r.captured_at, manual: !r.source_run_id })
+  }
+
+  // 采集失败信息：取该店铺最近一次「发票采集 ·」任务的失败原因，好让界面如实说明
+  const failRows = db.prepare(`
+    SELECT s.id AS storeId, r.error_code, r.error_message, r.finished_at FROM task_runs r
+    JOIN tasks t ON t.id = r.task_id
+    JOIN stores s ON s.id = r.store_id
+    WHERE t.name LIKE '发票采集 ·%' AND r.status = 'failed'
+    ORDER BY r.rowid DESC
+  `).all() as any[]
+  const failByStore = new Map<string, any>()
+  for (const f of failRows) if (!failByStore.has(f.storeId)) failByStore.set(f.storeId, f)
+
+  return stores.map(s => {
+    const profile = invoiceProfileFor(s.platform)
+    const snap = snapByStore.get(s.id) || null
+    const raw: any[] = Array.isArray(snap?.value) ? snap.value : []
+    // 第一行是表头（readTable 把 thead 的 tr 也读进来）
+    const header: string[] = raw.length ? raw[0].map((x: any) => String(x ?? '').trim()) : []
+    // 表头文案 → 统一列 key（用实测的 headerMap；找不到的列保留为额外列）
+    const colOf = new Map<number, InvoiceColumnKey>()
+    const extraIdx: number[] = []
+    header.forEach((h, i) => {
+      const k = profile?.headerMap?.[h]
+      if (k) colOf.set(i, k)
+      else if (h) extraIdx.push(i)
+    })
+    const items = raw.slice(1)
+      .filter(r => Array.isArray(r) && r.some(c => String(c ?? '').trim() !== ''))
+      .map(r => {
+        const cells: Partial<Record<InvoiceColumnKey, string>> = {}
+        for (const [i, k] of colOf) cells[k] = String(r[i] ?? '').trim()
+        const extras = extraIdx
+          .map(i => ({ label: header[i], value: String(r[i] ?? '').trim() }))
+          .filter(x => x.value && x.value !== '-')
+        return { cells, extras }
+      })
+    const fail = failByStore.get(s.id) || null
+    return {
+      storeId: s.id,
+      storeName: s.name,
+      platform: s.platform,
+      // 该平台是否有实测的发票档案（没有 = 抓不了，界面如实说明）
+      supported: !!profile,
+      unsupportedReason: profile ? null : (INVOICE_UNSUPPORTED_NOTE[s.platform] || '该平台尚未实测到可读取的发票页'),
+      measuredAt: profile?.measuredAt || null,
+      pageUrl: profile?.pageUrl || null,
+      adminUrl: s.admin_url || null,
+      note: profile?.note || null,
+      capturedAt: snap?.capturedAt || null,
+      manual: snap ? !!snap.manual : false,
+      header,
+      items,
+      // 最近一次采集失败的原因（界面在"没有数据"时如实展示，而不是只说"暂无"）
+      lastFail: fail ? { code: fail.error_code || null, message: String(fail.error_message || '').slice(0, 240), at: fail.finished_at || null } : null
+    }
+  })
+}
 
 function generateRequestId(): string {
   return randomUUID()
@@ -121,69 +209,52 @@ export function registerProfileAndMiscHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.OVERVIEW_INVOICE_CENTER, async (): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
-      const db = getDatabase()
-      const stores = db.prepare(
-        `SELECT id, name, platform, status FROM stores WHERE deleted_at IS NULL ORDER BY platform, name`
-      ).all() as any[]
+      return success({ generatedAt: Date.now(), columns: INVOICE_COLUMNS, rows: collectInvoiceRows() }, requestId)
+    } catch (err: any) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+    }
+  })
 
-      // 每店取 invoice.rows 的**最新一条**（含采集时间与来源运行）
-      const snapRows = db.prepare(`
-        SELECT store_id, value_json, captured_at, source_run_id FROM (
-          SELECT store_id, value_json, captured_at, source_run_id,
-                 ROW_NUMBER() OVER (PARTITION BY store_id ORDER BY rowid DESC) AS rn
-          FROM store_snapshots WHERE metric = 'invoice.rows'
-        ) WHERE rn = 1
-      `).all() as any[]
-      const snapByStore = new Map<string, any>()
-      for (const r of snapRows) {
-        let v: any = r.value_json
-        try { v = JSON.parse(r.value_json) } catch { /* 保底原样 */ }
-        snapByStore.set(r.store_id, { value: v, capturedAt: r.captured_at, manual: !r.source_run_id })
+  /**
+   * overview:invoiceExport - 把当前待开票清单导出为 **CSV**（弹保存框；只落本地文件，不上传）。
+   *
+   * 为什么用 CSV 而不是 xlsx：不引依赖、Excel/WPS 都能直接打开、用户可自己再加工。
+   * 带 UTF-8 BOM——否则 Excel 打开中文会乱码（实测过）。
+   */
+  ipcMain.handle(IPC_CHANNELS.OVERVIEW_INVOICE_EXPORT, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const rows = collectInvoiceRows()
+      const dataRows = rows.flatMap((r: any) =>
+        (r.items || []).map((it: any) => ({
+          店铺: r.storeName,
+          平台: r.platform,
+          ...Object.fromEntries(INVOICE_COLUMNS.map(c => [c.label, it.cells?.[c.key] ?? ''])),
+          其他信息: (it.extras || []).map((x: any) => `${x.label}：${x.value}`).join('；')
+        }))
+      )
+      if (!dataRows.length) {
+        return error(ERROR_CODES.INVALID_ARGUMENT.code, '当前没有可导出的待开票数据（先点「抓取待开票信息」）', requestId)
       }
-
-      const rows = stores.map(s => {
-        const profile = invoiceProfileFor(s.platform)
-        const snap = snapByStore.get(s.id) || null
-        const raw: any[] = Array.isArray(snap?.value) ? snap.value : []
-        // 第一行是表头（readTable 把 thead 的 tr 也读进来）
-        const header: string[] = raw.length ? raw[0].map((x: any) => String(x ?? '').trim()) : []
-        const body = raw.slice(1)
-        // 表头文案 → 统一列 key（用实测的 headerMap；找不到的列保留为额外列）
-        const colOf = new Map<number, InvoiceColumnKey>()
-        const extraIdx: number[] = []
-        header.forEach((h, i) => {
-          const k = profile?.headerMap?.[h]
-          if (k) colOf.set(i, k)
-          else if (h) extraIdx.push(i)
-        })
-        const items = body
-          .filter(r => Array.isArray(r) && r.some(c => String(c ?? '').trim() !== ''))
-          .map(r => {
-            const cells: Partial<Record<InvoiceColumnKey, string>> = {}
-            for (const [i, k] of colOf) cells[k] = String(r[i] ?? '').trim()
-            const extras = extraIdx
-              .map(i => ({ label: header[i], value: String(r[i] ?? '').trim() }))
-              .filter(x => x.value && x.value !== '-')
-            return { cells, extras }
-          })
-        return {
-          storeId: s.id,
-          storeName: s.name,
-          platform: s.platform,
-          // 该平台是否有实测的发票档案（没有 = 抓不了，界面如实说明）
-          supported: !!profile,
-          unsupportedReason: profile ? null : (INVOICE_UNSUPPORTED_NOTE[s.platform] || '该平台尚未实测到可读取的发票页'),
-          measuredAt: profile?.measuredAt || null,
-          pageUrl: profile?.pageUrl || null,
-          note: profile?.note || null,
-          capturedAt: snap?.capturedAt || null,
-          manual: snap ? !!snap.manual : false,
-          header,
-          items
-        }
+      const headers = Object.keys(dataRows[0])
+      const esc = (v: unknown) => {
+        const s = String(v ?? '')
+        // CSV 转义：含逗号/引号/换行一律加引号，内部引号翻倍（换行是最常见的坑：
+        // 拼多多的"订单号"列就带换行）
+        return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+      }
+      const csv = '\uFEFF' + [headers.join(','), ...dataRows.map(r => headers.map(h => esc((r as any)[h])).join(','))].join('\r\n')
+      const stamp = new Date().toISOString().slice(0, 10)
+      const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+      const res = await dialog.showSaveDialog(win, {
+        title: '导出发票中心待开票清单',
+        defaultPath: join(app.getPath('documents'), `待开票清单-${stamp}.csv`),
+        filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
       })
-
-      return success({ generatedAt: Date.now(), columns: INVOICE_COLUMNS, rows }, requestId)
+      if (res.canceled || !res.filePath) return success({ canceled: true }, requestId)
+      writeFileSync(res.filePath, csv, 'utf8')
+      writeAudit('invoice.export', 'success', { requestId: JSON.stringify({ rows: dataRows.length }) })
+      return success({ path: res.filePath, rows: dataRows.length }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }
