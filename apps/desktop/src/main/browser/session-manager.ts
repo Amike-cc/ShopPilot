@@ -10,6 +10,7 @@ import { mkdirSync, existsSync } from 'fs'
 import { recordDownload, updateDownloadState } from './download-manager'
 import { getProxyCredentials } from '../services/credential-store'
 import { writeAudit } from '../services/audit-logger'
+import { clearStoreSessionSnapshot, trackStoreSession, untrackStoreSession, snapshotStoreSession } from '../services/session-persistence'
 import { parseUaClientHints } from './fingerprint-injector'
 
 /**
@@ -84,6 +85,17 @@ export function getStoreSession(storeId: string): Session {
   
   // 缓存
   activeSessions.set(storeId, storeSession)
+  // 纳入定期会话快照（会话级 Cookie 不落盘，靠这份快照跨重启保住登录态）
+  trackStoreSession(storeId)
+  // Cookie 一变就快照（防抖 3s）：进程被强杀时也能留住最近的登录态，
+  // 否则只能靠 60s 定时，最多丢一分钟内的登录动作
+  try {
+    let snapTimer: NodeJS.Timeout | null = null
+    storeSession.cookies.on('changed', () => {
+      if (snapTimer) clearTimeout(snapTimer)
+      snapTimer = setTimeout(() => { void snapshotStoreSession(storeId).catch(() => {}) }, 3000)
+    })
+  } catch { /* 监听装不上不影响主流程（还有定时与退出前快照兜底） */ }
   
   return storeSession
 }
@@ -354,6 +366,11 @@ export async function clearStoreData(
     options.storages = storages
     await sess.clearStorageData(options)
   }
+  // 清了 Cookie 就必须同时丢掉会话快照，否则下次启动会把刚清掉的登录态又灌回来
+  // （用户会以为"清数据没生效"）
+  if (types.includes('cookies') && !origin) {
+    try { clearStoreSessionSnapshot(storeId) } catch { /* 清理失败不阻塞 */ }
+  }
   
   // 下载记录清理 - §5.9
   if (types.includes('downloads')) {
@@ -367,11 +384,16 @@ export async function clearStoreData(
 
 /**
  * 关闭店铺 session
+ *
+ * 关闭前**先快照会话级 Cookie**（异步、不阻塞）：微信小店的登录 Cookie 全是会话级，
+ * Chromium 默认不落盘——不在这里存一份，关掉店铺窗口/退出应用后就得重新扫码。
  */
 export function closeStoreSession(storeId: string): void {
   if (activeSessions.has(storeId)) {
+    void snapshotStoreSession(storeId).catch(() => { /* 快照失败不阻塞关闭 */ })
     activeSessions.delete(storeId)
   }
+  untrackStoreSession(storeId)
 }
 
 /**

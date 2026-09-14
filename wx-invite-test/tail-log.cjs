@@ -1,0 +1,12 @@
+/** 读今天的应用日志尾部，找会话持久化相关行 */
+const fs = require('fs')
+const path = require('path')
+const p = path.join(process.env.APPDATA, 'shopilot', 'logs', 'app-2026-09-14.log')
+const lines = fs.readFileSync(p, 'utf8').split(/\r?\n/)
+console.log('日志:', p, '共', lines.length, '行')
+const pat = new RegExp(process.argv[2] || 'cookies|持久|会话|store_4eb9b43c')
+const hits = lines.map((l, i) => ({ i: i + 1, l })).filter(x => pat.test(x.l))
+console.log('匹配', hits.length, '行；末尾 30 条：')
+for (const h of hits.slice(-30)) console.log(String(h.i).padStart(6) + ': ' + h.l.slice(0, 220))
+console.log('\n--- 最后 12 行（不过滤）---')
+for (const l of lines.slice(-12)) console.log(l.slice(0, 220))

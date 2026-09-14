@@ -23,9 +23,10 @@ import * as Security from './services/security-manager'
 import { setBrowserHostWindow, setBrowserViewsVisible, emitToRenderer } from './browser/window-manager'
 import { clearProxyAuthTracking } from './browser/session-manager'
 import { verifyStoreFingerprint } from './browser/fingerprint-injector'
-import { createStore, deleteStorePermanent } from './stores/store-manager'
+import { createStore, deleteStorePermanent, listStores } from './stores/store-manager'
 import { updateProfile } from './stores/profile-manager'
 import { openStoreBrowser, closeStoreBrowser, getStoreTabs } from './browser/window-manager'
+import { startSessionPersistence } from './services/session-persistence'
 import { logMain } from './services/logger'
 
 /**
@@ -270,7 +271,16 @@ async function initialize(): Promise<void> {
 
     // 自动更新（§21）：update.autoCheck 开启时启动后延迟自动检查一次
     scheduleStartupCheck()
-    
+
+    // 会话级 Cookie 持久化：微信小店的登录 Cookie 全是会话级，Chromium 默认不落盘，
+    // 导致"重启应用就要重新扫码"。启动时把上回的快照灌回各店铺分区（失败不阻塞启动）。
+    try {
+      const ids = listStores().map(s => s.id)
+      const { restored } = await startSessionPersistence(ids)
+      logMain('info', `会话持久化已启动：店铺 ${ids.length} 个，本次恢复 ${restored} 条 Cookie`)
+    } catch (e: any) {
+      logMain('warn', '会话持久化启动失败（不影响其他功能）: ' + String(e?.message || e))
+    }
   } catch (error: any) {
     console.error('Failed to initialize application:', error)
     try {
