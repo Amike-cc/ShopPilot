@@ -143,6 +143,14 @@ export function registerBrowserHandlers(): void {
       WindowManager.activateTab(input.storeId, tabId)
       await wc.loadURL(input.url)
       await new Promise(r => setTimeout(r, 2000))
+      // 登录态检测：微信会话很短（实测数十分钟），过期时页面只渲染「登录超时，请重新登录」，
+      // 此时筛选根本无从点起。必须明确报"登录已过期"，否则用户看到的是"筛选没生效"。
+      const loginExpired = await wc.executeJavaScript(
+        `(() => { const t = String(document.body ? document.body.innerText : ''); return /登录超时|请重新\\s*登录|扫码进入我的小店/.test(t) })()`
+      ).catch(() => false)
+      if (loginExpired) {
+        return error(ERROR_CODES.INTERNAL_ERROR.code, '微信小店登录已过期：请在店铺窗口打开 store.weixin.qq.com 扫码重新登录后再试', requestId)
+      }
       // 微应用（micro-app ShadowRoot）不吃合成 click：先定位元素坐标，再发**受信任鼠标事件**
       // （与微信表单必须 typeText 同理；实测合成 click 后筛选项勾选状态不变）
       // 注意：needle/exact 必须注入进脚本字符串——直接引用会抛 ReferenceError，
@@ -170,24 +178,49 @@ export function registerBrowserHandlers(): void {
         wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
         wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
       }
-      const clickByText = async (needle: string, exact: boolean, attempts = 12) => {
-        for (let i = 0; i < attempts; i++) {
-          const hit = await locate(needle, exact).catch(() => null)
-          if (hit) {
-            realClick(hit.x, hit.y)
-            await new Promise(r => setTimeout(r, 700))
-            return true
-          }
-          await new Promise(r => setTimeout(r, 400))
+      // 点完必须回读"是否真的选中"：真实页面点一下可能因为重排/自定义控件而没生效，
+      // 不校验就会把"点过了"当成"筛上了"（实测 美妆护肤 点了没选上）。
+      // 选中判定：最近 label 里的 input.checked，或 label/自身 class 带 on|active|checked|selected。
+      const stateOf = (needle: string) => wc.executeJavaScript(`(() => {
+        const NEEDLE = ${JSON.stringify(needle)}
+        const out = []
+        const walk = (root) => { for (const el of root.querySelectorAll('*')) { out.push(el); if (el.shadowRoot) walk(el.shadowRoot) } }
+        walk(document)
+        const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
+        for (const el of out) {
+          if (own(el) !== NEEDLE) continue
+          const r = el.getBoundingClientRect()
+          if (!(r.width > 0 && r.height > 0)) continue
+          const cs = getComputedStyle(el)
+          if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue
+          const label = el.closest('label') || el.parentElement
+          const inp = label ? label.querySelector('input') : null
+          const cls = String((label || el).className || '')
+          const on = !!inp?.checked || /(^|[\\s-])(on|active|checked|selected)([\\s-]|$)/i.test(cls)
+          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), selected: on, cls: cls.slice(0, 60) }
+        }
+        return null
+      })()`) as Promise<{ x: number, y: number, selected: boolean, cls: string } | null>
+      /** 点击并按回读结果校验，未选中则重试（最多 3 次）；返回是否**确认选中** */
+      const clickAndVerify = async (needle: string): Promise<boolean> => {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const st = await stateOf(needle).catch(() => null)
+          if (!st) { await new Promise(r => setTimeout(r, 500)); continue }
+          if (st.selected) return true
+          realClick(st.x, st.y)
+          await new Promise(r => setTimeout(r, 800))
+          const after = await stateOf(needle).catch(() => null)
+          if (after?.selected) return true
         }
         return false
       }
-      const typeOk = input.finderType ? await clickByText(input.finderType, true) : true
+      const typeOk = input.finderType ? await clickAndVerify(input.finderType) : true
       const catOk: Array<[string, boolean]> = []
-      for (const c of (input.categories || [])) catOk.push([c, await clickByText(c, true)])
+      for (const c of (input.categories || [])) catOk.push([c, await clickAndVerify(c)])
       const otherOk: Array<[string, boolean]> = []
-      for (const f of (input.otherFilters || [])) otherOk.push([f, await clickByText(f, true)])
-      return success({ tabId, result: { type: typeOk, categories: catOk, others: otherOk } }, requestId)
+      for (const f of (input.otherFilters || [])) otherOk.push([f, await clickAndVerify(f)])
+      const allOk = typeOk && catOk.every(x => x[1]) && otherOk.every(x => x[1])
+      return success({ tabId, applied: allOk, result: { type: typeOk, categories: catOk, others: otherOk } }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }
