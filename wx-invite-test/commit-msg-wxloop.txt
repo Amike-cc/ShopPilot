@@ -1,0 +1,16 @@
+feat(invite): 微信小店邀约改为全自动连续邀约（无人工二次确认，额度用完即停）
+
+按用户要求与抖店对齐：点「开始邀约」= 真实发送，不再弹确认门禁；一轮=一个达人，
+循环到「今日剩余邀请机会」用完或列表里没有更多可邀约达人。
+
+实现：
+- buildAssistSteps 重写为一轮 + loop：进广场 → 重应用筛选（类型/类目/其他）→ 点第一个达人
+  「详情」→ 详情页「邀请带货」→ 邀约表单 → 额度预检 → typeText（联系人/微信号/手机号/话术）
+  → ensureRowsById(商品ID) 或 ensureRows(数量) → 点「发送邀约」→ 等「确认发送邀约」弹窗 → 点「确认」
+  → waitForGone 校验表单商品行被清空（平台接受并重置）→ 截图。
+- loop.stopOn: TASK_QUOTA_EXCEEDED（额度用完）/ TASK_SELECTION_SHORTFALL（没有下一个达人）→ 干净停止；
+  maxRounds=50 安全阀；随时可停止邀约。
+- clickByText 新增 missingCode（找不到目标时用的错误码）：点不到「详情」按 SELECTION_SHORTFALL 收尾。
+- 档案 texts 增加 detail/inviteEntry；面板文案更新（全自动连续邀约、无二次确认、上限 50 位）。
+
+测试：36 项单测通过（新增微信 loop 结构与筛选参数用例）；typecheck 通过。

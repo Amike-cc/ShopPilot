@@ -48,11 +48,14 @@ export interface AssistInviteOptions {
   productCount: number
   /** 指定商品 ID；非空时优先使用 ensureRowsById，不再按列表顺序盲选 */
   productIds?: string[]
-  /** 带货者广场筛选：类型/类目/其他筛选只用于打开广场时，不能混入邀约表单步骤 */
+  /** 带货者广场筛选：每轮进广场后重新应用（类型/类目/其他） */
   finderType?: string
-  finderCategory?: string
+  finderCategories?: string[]
   finderOtherFilters?: string[]
 }
+
+/** 微信逐个邀约的批次上限（安全阀）：真实停止条件是"额度用完/没有更多达人" */
+export const ASSIST_LOOP_MAX_ROUNDS = 50
 
 /** 从达人广场地址取末段路径作为 waitForPage 的就绪判据（换成自定义地址也要能用） */
 export function urlPathHint(url: string): string {
@@ -149,43 +152,54 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
 }
 
 /**
- * 辅助填单流（微信小店）。要点：
- * - mirrorTabUrl：人工已在店铺浏览器进到某达人的「邀请带货」表单页（URL 含 initiate-invite），
- *   引擎在自建标签页里镜像同一 URL——列表 DOM 拿不到 finderUsername，选人必须人工完成；
+ * 逐个邀约流（微信小店）。一轮 = 一个达人：
+ * - 进广场 → 重新应用筛选 → 点第一个达人的「详情」→ 详情页点「邀请带货」→ 落到邀约表单页；
  * - 表单写入用 typeText（受信任键鼠输入）：微信表单不吃合成 input 事件，setInput 无效；
- * - 微信号/手机号可选（至少填一个由面板校验），空值不生成对应步骤；
- * - ensureRows 自适应：页面已有商品行则不动，没有才走「添加商品」弹窗勾选；
- * - 门禁后引擎点「发送邀约」，等平台「确认发送邀约」弹窗出现再点「确认」，最后截图留档。
+ * - 额度先行：页面明示「今日剩余N次邀请机会」，为 0 时 requireQuota 如实失败 → 循环**正常收尾**；
+ * - 商品：填了商品ID走 ensureRowsById（按 ID 指定），否则 ensureRows 按数量自适应；
+ * - **没有人工确认门禁**（用户明确要求）：点「发送邀约」→ 等平台「确认发送邀约」弹窗 → 点「确认」即真实发出；
+ * - 结果校验：发送成功后平台会清空表单里的商品行 → waitForGone 复核，没清空就如实失败；
+ * - 一轮外面套 loop：**循环到额度用完或没有更多可邀约达人**为止（stopOn 命中=干净停止），
+ *   「详情」点不到 = 列表里没有下一个候选 → missingCode 让它以 TASK_SELECTION_SHORTFALL 收尾。
  */
-export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptions): StepDraft[] {
-  const steps: StepDraft[] = [
-    { type: 'mirrorTabUrl', input: { urlIncludes: p.inviteUrlMarker }, timeoutMs: 45000 },
-    { type: 'waitForPage', input: { urlIncludes: p.inviteUrlMarker }, timeoutMs: 45000 },
-    // 额度先行：微信小店页面明示「今日剩余N次邀请机会」，数字 < min（=0）时如实失败，
-    // 不进入填表/发送流程
-    { type: 'requireQuota', input: { textIncludes: p.quota.textIncludes, min: p.quota.min, metric: 'invite.quota', deep: true }, timeoutMs: 30000 }
-  ]
+export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptions, squareUrl: string): StepDraft[] {
   const typeIn = (selector: string, text: string) =>
-    steps.push({ type: 'typeText', input: { selector, text, deep: true }, timeoutMs: 30000 })
+    round.push({ type: 'typeText', input: { selector, text, deep: true }, timeoutMs: 30000 })
+  const round: StepDraft[] = [
+    { type: 'navigate', input: { url: squareUrl }, timeoutMs: 45000 },
+    { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrl) }, timeoutMs: 45000 }
+  ]
+  // 每轮重新应用筛选（重新导航后筛选会重置）
+  if (opts.finderType) round.push({ type: 'clickByText', input: { text: opts.finderType, deep: true, mode: 'real' }, timeoutMs: 25000 })
+  for (const c of (opts.finderCategories || [])) round.push({ type: 'clickByText', input: { text: c, deep: true, mode: 'real', missingCode: 'TASK_SELECTION_SHORTFALL' }, timeoutMs: 25000 })
+  for (const f of (opts.finderOtherFilters || [])) round.push({ type: 'clickByText', input: { text: f, deep: true, mode: 'real' }, timeoutMs: 25000 })
+  // 进达人详情：找不到「详情」= 没有下一个候选 → 干净停止
+  round.push({ type: 'waitForText', input: { text: '详情', deep: true }, timeoutMs: 30000 })
+  round.push({ type: 'clickByText', input: { text: '详情', deep: true, mode: 'real', missingCode: 'TASK_SELECTION_SHORTFALL' }, timeoutMs: 30000 })
+  round.push({ type: 'waitForPage', input: { urlIncludes: 'finder-detail' }, timeoutMs: 45000 })
+  round.push({ type: 'clickByText', input: { text: '邀请带货', deep: true, mode: 'real' }, timeoutMs: 30000 })
+  round.push({ type: 'waitForPage', input: { urlIncludes: p.inviteUrlMarker }, timeoutMs: 45000 })
+  // 额度预检：为 0 时如实失败（TASK_QUOTA_EXCEEDED）→ 循环干净收尾
+  round.push({ type: 'requireQuota', input: { textIncludes: p.quota.textIncludes, min: p.quota.min, metric: 'invite.quota', deep: true }, timeoutMs: 30000 })
 
   typeIn(p.selectors.contact, opts.contact.trim())
   if (opts.wechat?.trim()) typeIn(p.selectors.wechat, opts.wechat.trim())
   if (opts.phone?.trim()) typeIn(p.selectors.phone, opts.phone.trim())
 
   if (opts.scriptMode === 'ai') {
-    steps.push({
+    round.push({
       type: 'aiGenerate',
       input: { selector: p.selectors.script, sourceSelector: p.selectors.goodsSource, deep: true, maxLen: p.scriptMaxLen },
       timeoutMs: 90000
     })
-    steps.push({ type: 'readText', input: { selector: p.selectors.script, metric: 'invite.script', deep: true }, timeoutMs: 15000 })
+    round.push({ type: 'readText', input: { selector: p.selectors.script, metric: 'invite.script', deep: true }, timeoutMs: 15000 })
   } else {
     typeIn(p.selectors.script, opts.script.trim())
   }
 
   const productIds = (opts.productIds || []).map(x => x.trim()).filter(Boolean)
   if (productIds.length) {
-    steps.push({
+    round.push({
       type: 'ensureRowsById',
       input: {
         rowsSelector: p.selectors.goodsRows,
@@ -198,7 +212,7 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
       timeoutMs: 120000
     })
   } else {
-    steps.push({
+    round.push({
       type: 'ensureRows',
       input: {
         rowsSelector: p.selectors.goodsRows,
@@ -213,28 +227,29 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
     })
   }
 
+  // 发送（无门禁，真实发出）→ 等平台确认弹窗 → 确认 → 校验表单被清空
+  round.push({ type: 'clickByText', input: { text: p.texts.sendInvite, deep: true, mode: 'real' }, timeoutMs: 20000 })
+  round.push({ type: 'waitForText', input: { text: p.texts.dialogMarker, deep: true }, timeoutMs: 25000 })
+  round.push({ type: 'clickByText', input: { text: p.texts.confirmSend, deep: true, mode: 'real' }, timeoutMs: 20000 })
+  // 发送成功后平台会清空「邀约商品」行；没清空说明这次提交没被接受，如实失败
+  round.push({ type: 'waitForGone', input: { selector: p.selectors.goodsRows, deep: true }, timeoutMs: 30000 })
+  round.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
+
   const contactDesc = [
     `联系人 ${opts.contact.trim()}`,
     opts.wechat?.trim() ? `微信 ${opts.wechat.trim()}` : null,
     opts.phone?.trim() ? `手机 ${opts.phone.trim()}` : null
   ].filter(Boolean).join('｜')
 
-  steps.push({
-    type: 'waitForUserConfirmation',
+  return [{
+    type: 'loop',
     input: {
-      message: `【达人邀约·${p.platform}】${contactDesc}｜商品：${productIds.length ? `指定 ID：${productIds.join('、')}` : `页面已有则不动，否则自动添加 ${Math.max(1, opts.productCount)} 个`}｜话术：` +
-        (opts.scriptMode === 'ai'
-          ? '由 AI 按邀约商品信息生成，请在页面「合作说明」框里核对后再放行'
-          : opts.script.trim()) +
-        `。放行后软件将点击「${p.texts.sendInvite}」，并在平台「${p.texts.dialogMarker}」弹窗上点「${p.texts.confirmSend}」——这是真实发送，请先在页面上核对全部内容。`
-    },
-    timeoutMs: 1800000
-  })
-  steps.push({ type: 'clickByText', input: { text: p.texts.sendInvite, deep: true, mode: 'real' }, timeoutMs: 20000 })
-  steps.push({ type: 'waitForText', input: { text: p.texts.dialogMarker, deep: true }, timeoutMs: 20000 })
-  steps.push({ type: 'clickByText', input: { text: p.texts.confirmSend, deep: true, mode: 'real' }, timeoutMs: 20000 })
-  steps.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
-  return steps
+      label: `${contactDesc} · 逐个邀约${productIds.length ? ` · 商品ID ${productIds.join('/')}` : ''}`,
+      maxRounds: ASSIST_LOOP_MAX_ROUNDS,
+      stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL'],
+      steps: round
+    }
+  }]
 }
 
 /** 按档案流程分派（平台邀约功能相互独立，新增平台在此登记新流程即可） */
@@ -248,5 +263,5 @@ export function buildInviteSteps(
     return buildBatchSteps(profile, opts.batch, squareUrl)
   }
   if (!opts.assist) throw new Error('assist-form 档案缺少 assist 配置')
-  return buildAssistSteps(profile, opts.assist)
+  return buildAssistSteps(profile, opts.assist, squareUrl)
 }

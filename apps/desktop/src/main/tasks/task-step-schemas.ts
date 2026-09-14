@@ -56,7 +56,14 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     text: z.string().min(1).max(200),
     deep: z.boolean().optional(),
     mode: z.enum(['js', 'real']).optional(),
-    within: within.optional()
+    within: within.optional(),
+    /**
+     * 找不到目标时用的错误码（默认 TASK_SELECTOR_CHANGED）。
+     * 批量循环里用它可以区分"页面改版找不到了"和"没有下一个候选了"：
+     * 例如微信按列表逐个邀约时，点「详情」找不到 = 没有更多达人了，
+     * 给它 TASK_SELECTION_SHORTFALL，loop 就会**干净停止**而不是报失败。
+     */
+    missingCode: z.string().min(1).max(40).optional()
   }).strict(),
   clickAll: z.object({
     selector: selector.optional(),

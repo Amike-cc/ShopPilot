@@ -63,6 +63,7 @@ const WX = inviteProfileFor('微信小店')!
 const DD = inviteProfileFor('抖店')!
 
 describe('微信小店（assist-form）步骤构造', () => {
+  const SQUARE = 'https://store.weixin.qq.com/shop/findersquare/find'
   const base = {
     contact: '测试联系人',
     wechat: 'wx_test',
@@ -72,62 +73,92 @@ describe('微信小店（assist-form）步骤构造', () => {
     productCount: 1
   }
 
-  it('完整序列：镜像邀约页 → 额度预检 → 填表 → 商品 → 门禁 → 发送 → 等弹窗 → 确认 → 截图', () => {
-    const steps = buildAssistSteps(WX as any, base)
-    const types = steps.map(s => s.type)
-    expect(types[0]).toBe('mirrorTabUrl')
-    expect(steps[0].input).toEqual({ urlIncludes: 'initiate-invite' })
-    expect(types[1]).toBe('waitForPage')
-    // 额度先行：镜像后立即检测「今日剩余N次」
-    expect(types[2]).toBe('requireQuota')
-    expect(steps[2].input).toEqual({ textIncludes: '今日剩余', min: 1, metric: 'invite.quota', deep: true })
+  // 微信现在和抖店一样：整条序列是一个 loop（一轮=一个达人），**无人工确认门禁**，
+  // 循环到额度用完或列表里没有更多达人（stopOn）为止
+  const wxRound = (steps: any[]) => {
+    expect(steps).toHaveLength(1)
+    expect(steps[0].type).toBe('loop')
+    return steps[0].input.steps as any[]
+  }
+
+  it('整条序列是一个 loop：一轮=一个达人（进广场→详情→邀请带货→表单→发送→校验）', () => {
+    const steps = buildAssistSteps(WX as any, base, 'https://store.weixin.qq.com/shop/findersquare/find')
+    expect(steps).toHaveLength(1)
+    const loop = steps[0]
+    expect(loop.type).toBe('loop')
+    expect(loop.input.stopOn).toContain('TASK_QUOTA_EXCEEDED')
+    expect(loop.input.stopOn).toContain('TASK_SELECTION_SHORTFALL')
+    expect(loop.input.maxRounds).toBeGreaterThan(1)
+    const round = wxRound(steps)
+    const types = round.map(s => s.type)
+    // 一轮以"进广场"开始（不再依赖人工镜像的邀约页）
+    expect(types[0]).toBe('navigate')
+    expect(types).toContain('waitForPage')
+    // 额度预检在轮内（额度为 0 → 干净停止）
+    expect(types).toContain('requireQuota')
+    const quota = round.find(s => s.type === 'requireQuota')!
+    expect(quota.input).toEqual({ textIncludes: '今日剩余', min: 1, metric: 'invite.quota', deep: true })
     // 三个联系字段 + 话术 = 4 个 typeText，全部 deep
-    const typeTexts = steps.filter(s => s.type === 'typeText')
+    const typeTexts = round.filter(s => s.type === 'typeText')
     expect(typeTexts.length).toBe(4)
     for (const t of typeTexts) expect(t.input.deep).toBe(true)
     // 商品自适应步骤
     expect(types).toContain('ensureRows')
-    // 门禁在发送之前
-    expect(types.indexOf('waitForUserConfirmation')).toBeLessThan(types.indexOf('clickByText'))
-    // 门禁消息说明"放行即真实发送"
-    const gate = steps.find(s => s.type === 'waitForUserConfirmation')!
-    expect(String(gate.input.message)).toContain('真实发送')
-    expect(String(gate.input.message)).toContain(base.script)
-    // 发送 → 等平台确认弹窗 → 确认 → 截图
-    const tail = types.slice(types.indexOf('waitForUserConfirmation'))
-    expect(tail).toEqual([
-      'waitForUserConfirmation', 'clickByText', 'waitForText', 'clickByText', 'screenshot'
-    ])
-    const send = steps[types.indexOf('waitForUserConfirmation') + 1]
-    expect(send.input).toEqual({ text: '发送邀约', deep: true, mode: 'real' })
-    const waitForDialog = steps[types.indexOf('waitForUserConfirmation') + 2]
-    expect(waitForDialog.input).toEqual({ text: '确认发送邀约', deep: true })
-    const confirm = steps[types.indexOf('waitForUserConfirmation') + 3]
-    expect(confirm.input).toEqual({ text: '确认', deep: true, mode: 'real' })
-    // 步骤总数必须在引擎 30 步上限内
-    expect(steps.length).toBeLessThanOrEqual(30)
+    // **没有人工确认门禁**（用户明确要求；点开始即真实发送）
+    expect(types).not.toContain('waitForUserConfirmation')
+    // 发送 → 等平台确认弹窗 → 确认 → 校验表单商品行消失 → 截图
+    const sendIdx = round.findIndex(s => s.type === 'clickByText' && s.input.text === '发送邀约')
+    expect(sendIdx).toBeGreaterThan(-1)
+    expect(round[sendIdx].input).toMatchObject({ text: '发送邀约', deep: true, mode: 'real' })
+    expect(round[sendIdx + 1]).toMatchObject({ type: 'waitForText', input: { text: '确认发送邀约', deep: true } })
+    expect(round[sendIdx + 2]).toMatchObject({ type: 'clickByText', input: { text: '确认', deep: true, mode: 'real' } })
+    expect(round[sendIdx + 3].type).toBe('waitForGone')
+    expect(types[types.length - 1]).toBe('screenshot')
+    // 一轮步骤数在 loop 的 40 步上限内
+    expect(round.length).toBeLessThanOrEqual(40)
+  })
+
+  it('筛选参数进轮内：类型/类目/其他筛选每轮重新应用；点不到「详情」=没有下一个达人（干净停止）', () => {
+    const steps = buildAssistSteps(WX as any, {
+      ...base, finderType: '直播带货者', finderCategories: ['母婴'], finderOtherFilters: ['有联系方式']
+    }, 'https://store.weixin.qq.com/shop/findersquare/find')
+    const round = wxRound(steps)
+    const texts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(texts).toContain('直播带货者')
+    expect(texts).toContain('母婴')
+    expect(texts).toContain('有联系方式')
+    // 进达人详情：点不到就按 SELECTION_SHORTFALL 收尾（loop 视为正常停止）
+    const detail = round.find(s => s.type === 'clickByText' && String(s.input.text) === '详情')!
+    expect(detail.input.missingCode).toBe('TASK_SELECTION_SHORTFALL')
+    expect(texts).toContain('邀请带货')
+    // 也应在轮内等待详情页/表单页
+    for (const inc of ['finder-detail', 'initiate-invite']) {
+      expect(round.some(s => s.type === 'waitForPage' && String(s.input.urlIncludes) === inc)).toBe(true)
+    }
+    // 不传筛选时不该出现这些点击
+    const round2 = wxRound(buildAssistSteps(WX as any, base, 'https://store.weixin.qq.com/shop/findersquare/find'))
+    const texts2 = round2.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(texts2).not.toContain('直播带货者')
+    expect(texts2).toContain('详情')
   })
 
   it('邀约商品：填了商品ID走 ensureRowsById（按ID指定），没填走 ensureRows（按数量）', () => {
-    const withIds = buildAssistSteps(WX as any, { ...base, productIds: ['10000687986563', '10000687986564'] })
+    const withIds = wxRound(buildAssistSteps(WX as any, { ...base, productIds: ['10000687986563', '10000687986564'] }, SQUARE))
     const byId = withIds.find(s => s.type === 'ensureRowsById')!
     expect(byId).toBeTruthy()
     expect(byId.input.productIds).toEqual(['10000687986563', '10000687986564'])
     expect(byId.input.deep).toBe(true)
     expect(String(byId.input.addText)).toBe('添加商品')
     expect(withIds.some(s => s.type === 'ensureRows')).toBe(false)
-    // 门禁消息里如实写明指定了哪些 ID
-    const gate = withIds.find(s => s.type === 'waitForUserConfirmation')!
-    expect(String(gate.input.message)).toContain('10000687986563')
 
-    const noIds = buildAssistSteps(WX as any, base)
+    const noIds = wxRound(buildAssistSteps(WX as any, base, SQUARE))
     expect(noIds.some(s => s.type === 'ensureRowsById')).toBe(false)
     const byCount = noIds.find(s => s.type === 'ensureRows')!
     expect(byCount.input).toMatchObject({ min: 1, max: 1, deep: true })
   })
 
   it('微信号/手机号留空则不生成对应步骤', () => {
-    const steps = buildAssistSteps(WX as any, { ...base, wechat: '', phone: '' })
+    const steps = wxRound(buildAssistSteps(WX as any, { ...base, wechat: '', phone: '' }, SQUARE))
     const sels = steps.filter(s => s.type === 'typeText').map(s => String(s.input.selector))
     expect(sels.some(s => s.includes('微信号'))).toBe(false)
     expect(sels.some(s => s.includes('手机号码'))).toBe(false)
@@ -135,7 +166,7 @@ describe('微信小店（assist-form）步骤构造', () => {
   })
 
   it('AI 模式：aiGenerate(deep) + readText 落库，不生成手填 typeText 话术', () => {
-    const steps = buildAssistSteps(WX as any, { ...base, scriptMode: 'ai' as const })
+    const steps = wxRound(buildAssistSteps(WX as any, { ...base, scriptMode: 'ai' as const }, SQUARE))
     const types = steps.map(s => s.type)
     expect(types).toContain('aiGenerate')
     expect(types).toContain('readText')
@@ -263,8 +294,8 @@ describe('buildInviteSteps 分派与 urlPathHint', () => {
   it('按档案 flow 分派；配置缺失时明确报错', () => {
     expect(() => buildInviteSteps(WX, {}, 'https://x')).toThrow('assist')
     expect(() => buildInviteSteps(DD, {}, 'https://x')).toThrow('batch')
-    const steps = buildInviteSteps(WX, { assist: { contact: 'a', script: 'b', scriptMode: 'manual', productCount: 1 } }, 'https://x')
-    expect(steps[0].type).toBe('mirrorTabUrl')
+    const steps = buildInviteSteps(WX, { assist: { contact: 'a', wechat: 'wx', phone: '13800000000', script: 'b', scriptMode: 'manual', productCount: 1 } }, 'https://x')
+    expect(steps[0].type).toBe('loop')
   })
   it('urlPathHint 取末段路径', () => {
     expect(urlPathHint('https://store.weixin.qq.com/shop/findersquare/find')).toBe('find')
@@ -336,10 +367,10 @@ describe('任务步骤输入 schema', () => {
 
   it('taskCreateSchema 接受完整微信邀约任务', () => {
     const steps = buildAssistSteps(WX as any, {
-      contact: '测试联系人', wechat: 'wx', script: '话术', scriptMode: 'manual', productCount: 1
-    })
+      contact: '测试联系人', wechat: 'wx', phone: '13800000000', script: '话术', scriptMode: 'manual', productCount: 1
+    }, 'https://store.weixin.qq.com/shop/findersquare/find')
     const parsed = taskCreateSchema.safeParse({
-      name: '达人邀约 · 微信小店 · 辅助填单 · 测试联系人',
+      name: '达人邀约 · 微信小店 · 逐个邀约 · 测试联系人',
       storeScope: 'store_x',
       steps
     })

@@ -509,10 +509,10 @@
             <!-- assist-form（微信小店）：人工选人进邀约页，引擎代填表单+门禁后发送 -->
             <template v-else>
             <div class="env-note">
-              微信小店按达人<b>逐个邀约</b>（每位达人一张独立表单，平台不支持批量）：
-              ① 点「打开达人广场」→ 自己挑选达人，进其详情页点「<b>邀请带货</b>」；
-              ② 停在邀约表单页，回到这里点「开始邀约」——软件自建标签页打开同一邀约页，代填下面的联系方式与话术；
-              ③ 填完<b>停下让你核对</b>，确认后才会点「发送邀约」。每次运行邀约 1 位，{{ inviteProfile.dailyQuotaHint }}。
+              微信小店按达人<b>逐个邀约</b>（每位达人一张独立表单，平台不支持批量），现在是<b>全自动连续邀约</b>：
+              点「开始邀约」后软件自己完成每一轮——进广场 → 按上面的筛选挑达人 → 进详情页点「<b>邀请带货</b>」→ 代填联系方式与话术、按商品ID添加商品 → 点「发送邀约」→ 在平台确认弹窗上点「确认」；
+              <b>一次一位、连续进行，直到「今日剩余邀请机会」用完或列表里没有更多达人为止</b>，然后自动停止。
+              <b>没有人工二次确认</b>：点「开始邀约」即开始真实发送（单次运行上限 50 位，随时可点「停止邀约」）。{{ inviteProfile.dailyQuotaHint }}。
             </div>
 
             <div class="inv-card">
@@ -2028,7 +2028,7 @@ async function startInvite() {
           script: invite.script, scriptMode: invite.scriptMode, productCount: invite.productCount,
           productIds: inviteProducts.value,
           finderType: invite.finderType,
-          finderCategory: invite.finderCategories[0] || '',
+          finderCategories: invite.finderCategories,
           finderOtherFilters: invite.finderOtherFilters
         }
       }, squareUrl)

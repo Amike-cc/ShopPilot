@@ -787,6 +787,8 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
       const needle = String(input.text)
       const deep = !!input.deep
       const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
+      // 找不到目标时的错误码（默认 TASK_SELECTOR_CHANGED）；批量循环里用它区分"页面改版"与"没有下一个候选"
+      const missingCode = input.missingCode ? String(input.missingCode) : 'TASK_SELECTOR_CHANGED'
       guardSignals(run)
       const deadline = Date.now() + step.timeoutMs
       let sawScopeMiss = false
@@ -807,7 +809,7 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
             if (sawScopeMiss) {
               throw new Error(`TASK_SELECTOR_CHANGED: 超时内未出现「${needle}」的限定范围（${JSON.stringify(within)}）`)
             }
-            throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
+            throw new Error(`${missingCode}: 页面上找不到文案为「${needle}」的可点击元素`)
           }
           await new Promise(r => setTimeout(r, 300))
         }
@@ -862,7 +864,7 @@ async function execStep(run: RunHandle, step: TaskStepDef): Promise<StepOutput |
           if (sawScopeMiss) {
             throw new Error(`TASK_SELECTOR_CHANGED: 超时内未出现「${needle}」的限定范围（${JSON.stringify(within)}）`)
           }
-          throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可点击元素`)
+          throw new Error(`${missingCode}: 页面上找不到文案为「${needle}」的可点击元素`)
         }
         await new Promise(r => setTimeout(r, 300))
       }

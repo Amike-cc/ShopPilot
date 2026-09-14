@@ -147,6 +147,10 @@ export interface AssistInviteProfile extends InviteProfileBase {
     /** 「确认发送邀约」弹窗里的确认按钮文案（弹窗标题用 dialogMarker 等待出现） */
     confirmSend: string
     dialogMarker: string
+    /** 广场列表里的「详情」（逐个邀约时按它进入达人详情页） */
+    detail: string
+    /** 详情页里的「邀请带货」入口 */
+    inviteEntry: string
   }
   /** 每日额度提示（实测页面文案，供界面展示；额度随经营情况变化） */
   dailyQuotaHint: string
@@ -260,7 +264,9 @@ const WEIXIN: AssistInviteProfile = {
     confirmAdd: '确认',
     sendInvite: '发送邀约',
     confirmSend: '确认',
-    dialogMarker: '确认发送邀约'
+    dialogMarker: '确认发送邀约',
+    detail: '详情',
+    inviteEntry: '邀请带货'
   },
   dailyQuotaHint: '每日 200 次邀请额度',
   quota: { textIncludes: '今日剩余', min: 1 }
