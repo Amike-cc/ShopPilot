@@ -153,74 +153,100 @@ export function registerBrowserHandlers(): void {
       }
       // 微应用（micro-app ShadowRoot）不吃合成 click：先定位元素坐标，再发**受信任鼠标事件**
       // （与微信表单必须 typeText 同理；实测合成 click 后筛选项勾选状态不变）
-      // 注意：needle/exact 必须注入进脚本字符串——直接引用会抛 ReferenceError，
-      // 被 catch 成 null 后表现为"永远定位不到"（实测踩过）
-      const locate = (needle: string, exact: boolean) => wc.executeJavaScript(`(() => {
-        const NEEDLE = ${JSON.stringify(needle)}
-        const EXACT = ${JSON.stringify(exact)}
-        const out = []
-        const walk = (root) => { for (const el of root.querySelectorAll('*')) { out.push(el); if (el.shadowRoot) walk(el.shadowRoot) } }
-        walk(document)
-        const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
-        for (const el of out) {
-          const t = own(el)
-          if (EXACT ? t !== NEEDLE : !t.includes(NEEDLE)) continue
-          const r = el.getBoundingClientRect()
-          if (!(r.width > 0 && r.height > 0)) continue
-          const cs = getComputedStyle(el)
-          if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue
-          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
-        }
-        return null
-      })()`) as Promise<{ x: number, y: number } | null>
-      const realClick = (x: number, y: number) => {
-        wc.sendInputEvent({ type: 'mouseMove', x, y })
-        wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
-        wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
-      }
-      // 点完必须回读"是否真的选中"：真实页面点一下可能因为重排/自定义控件而没生效，
-      // 不校验就会把"点过了"当成"筛上了"（实测 美妆护肤 点了没选上）。
-      // 选中判定：最近 label 里的 input.checked，或 label/自身 class 带 on|active|checked|selected。
-      const stateOf = (needle: string) => wc.executeJavaScript(`(() => {
+      // 注意：needle 必须注入进脚本字符串——直接引用会抛 ReferenceError，
+      // 被 catch 成 null 后表现为"永远定位不到"（实测踩过）。
+      //
+      // 返回一个**未被遮挡**的可点坐标：窗口较窄时页面布局会重叠（实测 776px 宽下
+      // 「美妆护肤」整块被另一个筛选块压住），按元素中心点会点在浮层上、勾选永不生效。
+      // 因此在元素矩形内取多个采样点，用 elementFromPoint（穿 ShadowRoot）确认命中的
+      // 是目标自身/其后代/同一 label，命中即用；全被遮挡则如实报告遮挡者。
+      const locatePoint = (needle: string) => wc.executeJavaScript(`(() => {
         const NEEDLE = ${JSON.stringify(needle)}
         const out = []
         const walk = (root) => { for (const el of root.querySelectorAll('*')) { out.push(el); if (el.shadowRoot) walk(el.shadowRoot) } }
         walk(document)
         const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
+        const deepAt = (x, y) => { let el = document.elementFromPoint(x, y); while (el && el.shadowRoot) { const inner = el.shadowRoot.elementFromPoint(x, y); if (!inner || inner === el) break; el = inner } return el }
         for (const el of out) {
           if (own(el) !== NEEDLE) continue
           const r = el.getBoundingClientRect()
           if (!(r.width > 0 && r.height > 0)) continue
           const cs = getComputedStyle(el)
           if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue
-          const label = el.closest('label') || el.parentElement
-          const inp = label ? label.querySelector('input') : null
-          const cls = String((label || el).className || '')
-          const on = !!inp?.checked || /(^|[\\s-])(on|active|checked|selected)([\\s-]|$)/i.test(cls)
-          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), selected: on, cls: cls.slice(0, 60) }
+          const labelEl = el.closest('label') || el.parentElement || el
+          const xs = [0.12, 0.3, 0.5, 0.7, 0.88].map(f => Math.round(r.left + r.width * f))
+          const ys = [0.5, 0.25, 0.75].map(f => Math.round(r.top + r.height * f))
+          for (const x of xs) {
+            for (const y of ys) {
+              const hit = deepAt(x, y)
+              if (hit && (hit === el || el.contains(hit) || hit.contains(el) || labelEl.contains(hit) || hit.contains(labelEl))) {
+                return JSON.stringify({ ok: true, x, y })
+              }
+            }
+          }
+          const blocker = deepAt(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2))
+          return JSON.stringify({ ok: false, coveredBy: blocker ? blocker.tagName + '.' + String(blocker.className || '').slice(0, 40) : 'unknown' })
         }
-        return null
-      })()`) as Promise<{ x: number, y: number, selected: boolean, cls: string } | null>
-      /** 点击并按回读结果校验，未选中则重试（最多 3 次）；返回是否**确认选中** */
-      const clickAndVerify = async (needle: string): Promise<boolean> => {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const st = await stateOf(needle).catch(() => null)
-          if (!st) { await new Promise(r => setTimeout(r, 500)); continue }
-          if (st.selected) return true
-          realClick(st.x, st.y)
-          await new Promise(r => setTimeout(r, 800))
-          const after = await stateOf(needle).catch(() => null)
-          if (after?.selected) return true
-        }
-        return false
+        return JSON.stringify({ ok: false, missing: true })
+      })()`) as Promise<string>
+      const realClick = (x: number, y: number) => {
+        wc.sendInputEvent({ type: 'mouseMove', x, y })
+        wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
+        wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
       }
-      const typeOk = input.finderType ? await clickAndVerify(input.finderType) : true
-      const catOk: Array<[string, boolean]> = []
-      for (const c of (input.categories || [])) catOk.push([c, await clickAndVerify(c)])
-      const otherOk: Array<[string, boolean]> = []
-      for (const f of (input.otherFilters || [])) otherOk.push([f, await clickAndVerify(f)])
-      const allOk = typeOk && catOk.every(x => x[1]) && otherOk.every(x => x[1])
-      return success({ tabId, applied: allOk, result: { type: typeOk, categories: catOk, others: otherOk } }, requestId)
+      // 点完必须回读"是否真的选中"：真实页面点一下可能被遮挡/重排/自定义控件吃掉，
+      // 不校验就会把"点过了"当成"筛上了"（实测 美妆护肤 点了没选上）。
+      // 选中判定：最近 label 的 input.checked，或元素/父/祖父 class 带
+      // on|active|current|checked|selected（微信类型页签的选中态是父 LI 的 nav_current）。
+      const stateOf = (needle: string) => wc.executeJavaScript(`(() => {
+        const NEEDLE = ${JSON.stringify(needle)}
+        const out = []
+        const walk = (root) => { for (const el of root.querySelectorAll('*')) { out.push(el); if (el.shadowRoot) walk(el.shadowRoot) } }
+        walk(document)
+        const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
+        const RE = /(^|[\\s_-])(on|active|current|checked|selected)([\\s_-]|$)/i
+        for (const el of out) {
+          if (own(el) !== NEEDLE) continue
+          const r = el.getBoundingClientRect()
+          if (!(r.width > 0 && r.height > 0)) continue
+          const cs = getComputedStyle(el)
+          if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue
+          const label = el.closest('label') || null
+          const inp = label && label.querySelector('input')
+          let on = !!(inp && inp.checked)
+          let node: Element | null = el
+          for (let i = 0; i < 3 && node && !on; i++, node = node.parentElement) {
+            if (RE.test(String(node.className || ''))) on = true
+          }
+          return JSON.stringify({ selected: on, cls: String((label || el).className || '').slice(0, 60) })
+        }
+        return JSON.stringify({ selected: false, missing: true })
+      })()`) as Promise<string>
+      /** 点击并按回读结果校验，未选中则重试（最多 3 次）；返回是否**确认选中** */
+      const clickAndVerify = async (needle: string): Promise<{ ok: boolean, reason?: string }> => {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const st = JSON.parse(await stateOf(needle).catch(() => '{"selected":false}'))
+          if (st.selected) return { ok: true }
+          const pt = JSON.parse(await locatePoint(needle).catch(() => '{"ok":false}'))
+          if (!pt.ok) {
+            if (pt.coveredBy) return { ok: false, reason: `被「${pt.coveredBy}」遮挡` }
+            await new Promise(r => setTimeout(r, 500))
+            continue
+          }
+          realClick(pt.x!, pt.y!)
+          await new Promise(r => setTimeout(r, 900))
+          const after = JSON.parse(await stateOf(needle).catch(() => '{"selected":false}'))
+          if (after.selected) return { ok: true }
+        }
+        return { ok: false, reason: '点击后未确认选中' }
+      }
+      const typeRes = input.finderType ? await clickAndVerify(input.finderType) : { ok: true }
+      const catRes: Array<{ name: string, ok: boolean, reason?: string }> = []
+      for (const c of (input.categories || [])) catRes.push({ name: c, ...(await clickAndVerify(c)) })
+      const otherRes: Array<{ name: string, ok: boolean, reason?: string }> = []
+      for (const f of (input.otherFilters || [])) otherRes.push({ name: f, ...(await clickAndVerify(f)) })
+      const allOk = typeRes.ok && catRes.every(x => x.ok) && otherRes.every(x => x.ok)
+      return success({ tabId, applied: allOk, finderType: { name: input.finderType || '', ...typeRes }, categories: catRes, otherFilters: otherRes }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }
