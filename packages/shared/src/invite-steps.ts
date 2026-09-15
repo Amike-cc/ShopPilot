@@ -36,6 +36,15 @@ export interface BatchInviteOptions {
   script: string
   scriptMode: 'manual' | 'ai'
   benefits: string[]
+  /**
+   * 额外的筛选行选择（快手特有）：`{ '内容标签': ['美妆'], '合作信息': ['有联系方式'] }`。
+   * 这些是**页面上独立的多选筛选行**，与类目是不同维度，可以同时生效。
+   */
+  extraFilters?: Record<string, string[]>
+  /** 抽屉里的必填联系方式（快手要求必填；抖店无此字段 → 空数组即不填） */
+  contacts?: { selector: string; text: string }[]
+  /** 邀约商品自动添加的个数（快手商品在弹窗里选；0 = 不添加） */
+  productCount?: number
 }
 
 export interface AssistInviteOptions {
@@ -69,15 +78,18 @@ export function urlPathHint(url: string): string {
 }
 
 /**
- * 批量勾选流（抖店）。要点：
+ * 批量勾选流（抖店 / 快手小店）。要点：
  * - 平台无稳定 data-test，筛选与提交靠文案点击（clickByText）；
  * - 行复选框用 tbody 限定，避免点到表头的"全选"；勾选是**逐个点**（clickAll 不碰表头全选）；
- * - 主推类目是「chip + 级联叶子」两步（实测只点 chip 筛选不生效，详见 constants/invite.ts 注释），
- *   点完还要校验「已筛选」里真的出现该类目——平台改版时宁可在勾人前失败；
- * - 一轮 = 筛选 → 逐个勾 count 位 → 批量邀约带货 → 额度预检 → 填话术 → 确认发送 → 抽屉关闭校验；
- * - 一轮外面套 loop：**循环到额度用完或可选达人不足 40 位为止**（stopOn 命中=干净停止，不算失败）；
- * - 平台侧无"发送前人工确认"步骤（用户明确要求抖店不再二次确认）：额度预检 + 发送后抽屉关闭校验
+ * - 类目是「chip + 级联叶子」两步（实测只点 chip 筛选不生效，详见 constants/invite.ts 注释），
+ *   点完还要校验生效标记里真的出现该类目——平台改版时宁可在勾人前失败；
+ * - 一轮 = 筛选 → 逐个勾 count 位 → 批量邀约 → 额度预检 → 填话术（+必填联系方式/商品）→ 发送 → 抽屉关闭校验；
+ * - 一轮外面套 loop：**循环到额度用完或可选达人不足为止**（stopOn 命中=干净停止，不算失败）；
+ * - 平台侧无"发送前人工确认"步骤（用户明确要求不再二次确认）：额度预检 + 发送后抽屉关闭校验
  *   两道判据替代它——额度不足不发，抽屉没关就如实失败，绝不把"点了"当"发出去了"。
+ *
+ * 两个平台的差异全部走**档案字段**驱动，不在这里写 `if (platform === ...)`：
+ *   minSelect / quotaCheck / goodsModal / benefits / contacts / postSendConfirmText。
  */
 export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions, squareUrl: string): StepDraft[] {
   const round: StepDraft[] = [
@@ -87,36 +99,97 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   if (opts.category) {
     // ① 点类目 chip：限定在"类目快捷选项行"里——类目名在达人卡片的类目文案里也有，
     //    不限范围可能点到卡片上（实测就是筛选静默失效的原因之一）；
-    // ② 点级联弹层里的二级项：限定在弹层内——等级下拉里也有同名"不限"。
-    //    选了二级 → 点该二级项（实测点二级即生效，「已筛选」显示 一级/二级/…）；
-    //    只选一级 → 点「不限」（不限子类 = 整个一级）。二级名可能被平台截断，按包含匹配。
+    // ② 点级联弹层里的叶子项：限定在弹层内——别处也有同名"不限/全部"。
+    //    抖店选二级 → 点该二级项；快手点「全部」= 不限子类。叶子名可能被平台截断，按包含匹配。
     const sub = (opts.subcategory || '').trim()
-    round.push({ type: 'clickByText', input: { text: opts.category, within: { selector: p.categoryChipScope } }, timeoutMs: 20000 })
+    // 范围写法两种都支持：字符串=CSS 选择器（抖店）；{text,climb}=从行标签上溯（快手，
+    // 因为那几行的行容器类名完全相同，选择器区分不了）
+    const chipWithin = typeof p.categoryChipScope === 'string'
+      ? { selector: p.categoryChipScope }
+      : { text: p.categoryChipScope.text, climb: p.categoryChipScope.climb }
+    round.push({ type: 'clickByText', input: { text: opts.category, within: chipWithin }, timeoutMs: 20000 })
     // 级联项必须用受信任鼠标点击（mode:'real'）：有下级的二级项吃合成 click 时只展开下一列、
-    // 不选中（真机实测「休闲食品」点了没反应、「已筛选」里 主推类目： 后面是空的）；
-    // 真实鼠标点在文字上=用户操作，二级直接生效（实测 家清纸品 → 主推类目：个护家清/家清纸品/…）
+    // 不选中（真机实测抖店「休闲食品」点了没反应）；真实鼠标点在文字上=用户操作，直接生效。
     round.push({ type: 'clickByText', input: { text: sub || p.texts.categoryAnyLeaf, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
+    // 选完类目后**把下拉收起来**：实测这个级联下拉会一直展开着，盖住后面要点的按钮
+    // （快手：商品弹窗的「确 认」就被它压住，点了没反应）。Escape 是页面级的收起手势。
+    round.push({ type: 'pressKey', input: { key: 'Escape' }, timeoutMs: 10000 })
   }
-  round.push({ type: 'clickByText', input: { text: p.texts.levelTrigger } })
-  for (const lv of opts.levels) round.push({ type: 'clickByText', input: { text: lv } })
-  round.push({ type: 'clickByText', input: { text: p.texts.search } })
+  // 达人等级：快手没有这一维（等级是达人属性、不是筛选项）→ 档案里 levelTrigger 留空则整段跳过
+  if (p.texts.levelTrigger) {
+    round.push({ type: 'clickByText', input: { text: p.texts.levelTrigger } })
+    for (const lv of opts.levels) round.push({ type: 'clickByText', input: { text: lv } })
+  }
+  // 额外的筛选行（快手：内容标签 / 合作信息…）。每行的行容器类名相同，用行标签上溯定位，
+  // 只在该行范围内点选项——否则"美妆"这类词在别处（达人卡片的标签、类目名）也会命中。
+  for (const row of (p.extraFilterRows || [])) {
+    const picks = opts.extraFilters?.[row.label] || []
+    for (const opt of picks) {
+      round.push({
+        type: 'clickByText',
+        input: { text: opt, within: { text: row.label, climb: row.climb } },
+        timeoutMs: 20000
+      })
+    }
+  }
+  // 搜索按钮：抖店有独立的「搜索」按钮；快手是**关键词输入框**（没有搜索按钮，
+  // 筛选靠点 chip 即时生效）→ 档案里 texts.search 留空则整段跳过。
+  if (p.texts.search) round.push({ type: 'clickByText', input: { text: p.texts.search } })
   round.push({ type: 'waitForSelector', input: { selector: p.rowCheckboxSelector }, timeoutMs: 30000 })
-  // 类目生效校验：在「已筛选」标签行里必须能看到所选类目（选了二级时连同二级名一起校验，
-  // 实测标签形如 `主推类目：个护家清/家清纸品/…`）——否则宁可现在失败，也别把错类目的人邀了
+  // 类目生效校验：生效标记里必须能看到所选类目（抖店「已筛选」、快手「已选N个 …」）——
+  // 否则宁可现在失败，也别把错类目的人邀了。
+  // 定位方式按档案：有 filteredScope 用选择器（快手那条标记整段是子元素、无自有文本），
+  // 否则按锚点文案上溯（抖店）。
   if (opts.category) {
-    round.push({ type: 'waitForText', input: { text: opts.category, within: { text: p.texts.filteredMarker, climb: 1 } }, timeoutMs: 25000 })
+    const scope = p.filteredScope
+      ? { selector: p.filteredScope }
+      : { text: p.texts.filteredMarker, climb: 1 }
+    round.push({ type: 'waitForText', input: { text: opts.category, within: scope }, timeoutMs: 25000 })
     const sub = (opts.subcategory || '').trim()
-    if (sub) round.push({ type: 'waitForText', input: { text: sub, within: { text: p.texts.filteredMarker, climb: 1 } }, timeoutMs: 25000 })
+    if (sub) round.push({ type: 'waitForText', input: { text: sub, within: scope }, timeoutMs: 25000 })
   }
-  // scroll=true：抖店广场列表在固定容器里滚动加载（无分页），一屏放不下 40 位——
+  // 勾选数下限（实测快手：只勾 1 位点「批量邀约」静默无反应）→ 不足就把本批要的人数抬到下限，
+  // 否则每轮都会白跑一次"点了没反应"。count 本身已由面板按 maxBatch 收过口。
+  const need = Math.max(opts.count, p.minSelect || 1)
+  // scroll=true：广场列表在固定容器里滚动加载（无分页），一屏放不下 40 位——
   // 点完当前可点的行后向下滚动、等新行渲染再继续（实测修掉"要勾 40 位却只勾中 1 位"）。
-  round.push({ type: 'clickAll', input: { selector: p.rowCheckboxSelector, max: opts.count, scroll: true, maxRounds: 40 }, timeoutMs: 240000 })
+  round.push({
+    type: 'clickAll',
+    input: {
+      selector: p.rowCheckboxSelector,
+      max: need,
+      scroll: true,
+      maxRounds: 40,
+      // 计数消歧义：快手达人选人区的计数写作「已选N条」（不是抖店的「已选择N位达人」）。
+      // 不给这一段只认抖店写法；给了才启用宽松写法（见 clickAll 的 counterIncludes 说明）。
+      counterIncludes: '已选'
+    },
+    timeoutMs: 240000
+  })
+  // 勾不满时 clickAll 自己会报 TASK_SELECTION_SHORTFALL（loop 的 stopOn 把它当正常收尾），
+  // 所以这里**不需要**再加一道"按钮可用性预检"——那道预检看着更保险，实际会因页面上的
+  // 类目下拉挡住按钮而误报"找不到「批量邀约」"（真机踩到）。
   round.push({ type: 'clickByText', input: { text: p.texts.batchInvite } })
   round.push({ type: 'waitForSelector', input: { selector: p.scriptSelector }, timeoutMs: 30000 })
-  // 额度先行：抖店不展示剩余额度数字，额度用尽/平台限制表现为抽屉「确认发送」禁用——
-  // 填话术之前先校验可用性，额度不足立即如实失败（TASK_QUOTA_EXCEEDED），
-  // 在 loop 里这个错误码 = "额度用完"，会被当成**正常收尾**
-  round.push({ type: 'requireEnabled', input: { text: p.texts.drawerConfirm, hint: p.quotaNote }, timeoutMs: 30000 })
+  // 额度先行（按档案选择方式）：
+  //  - requireEnabled：平台不展示剩余额度，额度用尽表现为抽屉确认按钮禁用（抖店）；
+  //  - requireQuota  ：页面**明示**剩余额度（快手「今日剩余N条发送邀请机会」），取数字判断。
+  // 两者不足时都如实报 TASK_QUOTA_EXCEEDED → loop 里视为"额度用完"正常收尾。
+  if (p.quotaCheck === 'requireQuota' && p.quota) {
+    round.push({
+      type: 'requireQuota',
+      input: { textIncludes: p.quota.textIncludes, min: p.quota.min, optional: !!p.quota.optional, hint: p.quotaNote },
+      timeoutMs: 30000
+    })
+  } else if (p.texts.drawerConfirm) {
+    round.push({ type: 'requireEnabled', input: { text: p.texts.drawerConfirm, hint: p.quotaNote }, timeoutMs: 30000 })
+  }
+  // 必填联系方式（快手要求联系人/手机号/微信号；抖店无此字段 → contacts 为空则整段跳过）。
+  // 用 setInput（合成 input 事件）：实测快手这三个框吃合成事件；微信那种不吃的是 typeText 流程。
+  for (const c of (opts.contacts || [])) {
+    if (!c.text) continue
+    round.push({ type: 'setInput', input: { selector: c.selector, text: c.text }, timeoutMs: 20000 })
+  }
   if (opts.scriptMode === 'ai') {
     round.push({
       type: 'aiGenerate',
@@ -132,18 +205,85 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   } else {
     round.push({ type: 'setInput', input: { selector: p.scriptSelector, text: opts.script.trim() } })
   }
+  // 商品：快手**必须选商品**才能发送（实测点「发送邀请」会提示「请选择商品」），
+  // 而抽屉里那份商品表永远是空的 → 必须点「选择商品」进**弹窗**选，再点弹窗「确 认」回到抽屉。
+  //
+  // 这里**不用 ensureRows**，而是拆成显式步骤，原因：ensureRows 内部是**受信任鼠标**点击
+  // （找坐标 → sendInputEvent），而实测快手选完带货类目后级联下拉常残留展开、盖住这些按钮，
+  // 受信任鼠标会点在浮层上（引擎如实报 COVERED 或点了没反应）。改用 clickByText 的默认
+  // **JS 点击**（不依赖坐标、不受遮挡影响）＋ clickAll（内部也是 label.click()）即可稳定走通。
+  if (p.goodsModal) {
+    const g = p.goodsModal
+    round.push({ type: 'clickByText', input: { text: g.addText }, timeoutMs: 20000 })
+    round.push({ type: 'waitForSelector', input: { selector: g.rowCheckboxSelector }, timeoutMs: 30000 })
+    round.push({
+      type: 'clickAll',
+      input: {
+        selector: g.rowCheckboxSelector,
+        max: Math.max(1, opts.productCount ?? 1),
+        // 排除表头的"全选"：它在 modal-body 内、也是 input[type=checkbox]，
+        // 会被当成一个候选（点它会全选，不是我们要的"勾 N 个"）。
+        skipSelector: '.kwaishop-cps-daren-match-pc-modal-body thead input[type=checkbox]'
+      },
+      timeoutMs: 60000
+    })
+    round.push({ type: 'clickByText', input: { text: g.confirmText }, timeoutMs: 20000 })
+    // 选完商品点「确 认」后，平台**可能**再弹一个确认框：
+    // 「您所选择的商品不符合达人带货要求，确认是否仍要发送邀请？」（取消 / 确认）。
+    // 只在商品与该达人的品类要求不匹配时出现（实测同一个商品换一位达人就不弹），
+    // 所以用 clickIfPresent：出现就点掉、没出现就跳过，并把"到底弹没弹"如实记进步骤结果。
+    // nearText 必须给：那个确认框的按钮也叫「确认」，与商品弹窗的「确 认」同名——
+    // 不限范围会点到下层弹窗的按钮（点了白点，确认框一直留着，商品计数还是 0/100）。
+    //
+    // 锚点用「确认是否仍要发送邀请」而不是更具体的那半句：**这个提示框的文案是动态的**，
+    // 实测同一个流程见过两种：
+    //   「您所选择的商品不符合达人带货要求，确认是否仍要发送邀请？」
+    //   「您所设置的商品佣金率低于达人带货要求，确认是否仍要发送邀请？」
+    // 只有"确认是否仍要发送邀请"是共有的（按具体那半句当锚点，第二种就点不掉了）。
+    round.push({
+      type: 'clickIfPresent',
+      input: { text: '确认', nearText: '确认是否仍要发送邀请', waitMs: 8000 },
+      timeoutMs: 22000
+    })
+    // 结果校验：**商品数真的 ≥ 1**（实测抽屉里「已选择商品数：1/100」）。
+    // 用 requireQuota 这枚通用"数字 ≥ min"断言，但**必须换错误码**：
+    // 默认的 TASK_QUOTA_EXCEEDED 在 loop 的 stopOn 里（= 正常收尾），
+    // 用它会把"商品没选上"当成"按预期收工"→ 一位都没邀约却报成功（最危险的静默失败）。
+    round.push({
+      type: 'requireQuota',
+      input: {
+        textIncludes: g.selectedMarker,
+        min: 1,
+        code: 'TASK_PRODUCT_NOT_SELECTED',
+        hint: '邀约商品没选上——平台要求必选商品才能发送，已在发送前中止'
+      },
+      timeoutMs: 30000
+    })
+  }
   for (const b of opts.benefits) round.push({ type: 'clickByText', input: { text: b } })
   round.push({ type: 'clickByText', input: { text: p.texts.confirmSend } })
+  // 发送后**可能**弹二次确认框（平台行为未定时的兜底）：出现就点、没出现就跳过，如实记录。
+  // 不硬等（白等超时会把成功报成失败），也不假设没有（真弹了没人点其实没发出去）。
+  if (p.postSendConfirmText) {
+    round.push({ type: 'clickIfPresent', input: { text: p.postSendConfirmText, waitMs: 6000 }, timeoutMs: 20000 })
+  }
   // 发送后的结果校验：邀约抽屉应关闭；没关说明平台没接受这次提交，如实失败
-  // （避免"点了确认发送"被当成"已经发出去了"）
-  round.push({ type: 'waitForGone', input: { selector: p.scriptSelector }, timeoutMs: 30000 })
+  // （避免"点了发送"被当成"已经发出去了"）。
+  // 超时给到 180s：实测快手真实发送后抽屉要**一分多钟**才关（平台侧在处理；
+  // 实测 30s / 90s 都太短，会把一次成功的发送误报成失败）。
+  round.push({ type: 'waitForGone', input: { selector: p.scriptSelector }, timeoutMs: (p.postSendConfirmText ? 60000 : 180000) })
   // 截图留档：每轮发送后的达人侧状态（最后一轮的工件会挂在本步骤上）
   round.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
 
+  const labelParts = [
+    opts.category ? opts.category + (opts.subcategory ? '/' + opts.subcategory : '') : '全部',
+    ...(opts.levels.length ? [opts.levels.join('/')] : []),
+    `每批 ${need} 位`
+  ]
   return [{
     type: 'loop',
     input: {
-      label: `${opts.category ? opts.category + (opts.subcategory ? '/' + opts.subcategory : '') : '全部'} · ${opts.levels.join('/')} · 每批 ${opts.count} 位`,
+      label: labelParts.join(' · '),
       maxRounds: BATCH_LOOP_MAX_ROUNDS,
       stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL'],
       steps: round

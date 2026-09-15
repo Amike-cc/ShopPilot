@@ -1,0 +1,12 @@
+=== run run_eda7e9cd3d51a6f9468a7f05 的步骤结果 ===
+  [0] executed {"action":"loop","label":"个护家清/纸品湿巾 · 每批 2 位","maxRounds":1,"completedRounds":0,"stopReason":"TASK_QUOTA_EXCEEDED","stopOn":["TASK_QUOTA_EXCEEDED"],"rounds":[{"round":1,"ok":false,"stop":"TASK_QUOTA_EXCEEDED","message":"
+工件: []
+
+=== 清理堆积的快手标签页（只留一个） ===
+当前标签页数: 6
+  关闭 tab_971368e23b {"ok":true,"data":{"success":true},"requ
+  关闭 tab_65be4b2aaa {"ok":true,"data":{"success":true},"requ
+  关闭 tab_dd04034097 {"ok":true,"data":{"success":true},"requ
+  关闭 tab_a8f0a01e4f {"ok":true,"data":{"success":true},"requ
+  关闭 tab_85b7882e55 {"ok":true,"data":{"success":true},"requ
+清理后标签页数: 1

@@ -357,6 +357,9 @@ function classifyError(e: any): string {
   if (msg.includes('TASK_DAREN_PAGE_UNOPENABLE')) return 'TASK_DAREN_PAGE_UNOPENABLE'
   // 店铺视图当时未挂载（弹层遮挡导致摘除）：需要真实落点的步骤无法进行，明确报出来
   if (msg.includes('TASK_VIEW_DETACHED')) return 'TASK_VIEW_DETACHED'
+  // 邀约商品没真正选上（平台会因此拦下发送）：必须在发送前如实失败，
+  // 绝不能落进 stopOn（那会被当成"按预期收工"，静默地一位都没邀约）
+  if (msg.includes('TASK_PRODUCT_NOT_SELECTED')) return 'TASK_PRODUCT_NOT_SELECTED'
   // 页面被重定向到登录页（登录态失效）：用户能自己解决，必须与"页面慢/改版"区分开
   if (msg.includes('TASK_LOGIN_REQUIRED')) return 'TASK_LOGIN_REQUIRED'
   // 页签点了但没选中（平台同名页签数据不同：不校验就会把上一个页签的数据当成这个的）
@@ -479,7 +482,7 @@ const VISIBLE_JS = `
  * <button>达人等级</button></div>），只按长度排会先命中容器——点容器是个空操作，
  * 后续步骤就找不到本该出现的元素（仿真站点验证时踩到）。
  */
-const PICK_SORT_FN = `
+export const PICK_SORT_FN = `
   const __clickableScore = (el) => {
     const tag = el.tagName;
     if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'LABEL' || tag === 'SELECT') return 0;
@@ -491,6 +494,15 @@ const PICK_SORT_FN = `
     cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
     return cands[0];
   };
+  /**
+   * 文案规范化：去掉**全部空白**。
+   *
+   * 实测动因（快手达人广场，2026-09-15）：平台把按钮文案拆进子 span 并用 CSS 拉字距，
+   * innerText 变成「确 认」「重 置」「查 询」，而元素的 ownText 干脆是空串——
+   * 按 ownText 精确匹配一个都命中不了，点击直接报"找不到文案为「确认」的可点击元素"。
+   * 规范化后按 innerText 匹配即可命中（见下面 ownText 为主、innerText 兜底的两级扫描）。
+   */
+  const __narrow = (s) => String(s == null ? '' : s).replace(/\\s+/g, '');
 `
 
 /**
@@ -548,12 +560,34 @@ async function findTextTarget(
     const roots = within ? __scopeRoots(within) : null;
     if (within && !roots) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
     const cands = [];
+    // 两级匹配（顺序不能反）：
+    //  ① 自有文本（最精确，"按钮自己的文字"）——既有平台的既有行为全靠它，先跑，保持零变化；
+    //  ② 规范化后的 innerText（去空白的整段文本）——兜住"文案被拆进子 span + CSS 拉字距"的平台。
+    //     实测快手：按钮 innerText 是「确 认」「批量邀约」，而 ownText 为空串，
+    //     只做 ① 一个都命中不了。② 只在 ① 一无所获时启用，且限定"文本短"（≤ needle+12 个字符）
+    //     并且是**可点元素或其祖先**，避免把大容器（整页文本凑巧含该词）当成目标点上去。
+    const narrowNeedle = __narrow(needle);
     for (const el of scope) {
       const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
       if (!own.includes(needle)) continue;
       if (!__inScope(roots, el)) continue;
       if (!__visible(el)) continue;
       cands.push({ el, len: own.length });
+    }
+    if (!cands.length && narrowNeedle) {
+      // ② 的扫描域：有范围限定就遍历范围内的元素，否则遍历整个文档
+      const pool = []
+      if (roots) for (const r of roots) { pool.push(r); for (const c of r.querySelectorAll('*')) pool.push(c) }
+      else for (const el of scope) pool.push(el);
+      for (const c of pool) {
+        const tag = c.tagName;
+        // 只认"本身就可能是那个控件"的标签：普通容器即使文本凑巧相同也不点（点了等于点空白）
+        if (!(tag === 'BUTTON' || tag === 'A' || tag === 'LABEL' || tag === 'SPAN' ||
+              (c.getAttribute && c.getAttribute('role') === 'button'))) continue;
+        if (!__visible(c)) continue;
+        if (__narrow(c.innerText) !== narrowNeedle) continue;
+        cands.push({ el: c, len: narrowNeedle.length, viaText: true });
+      }
     }
     if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
     cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
@@ -1110,6 +1144,97 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       guardSignals(run)
       return { kind: 'executed', payload: { action: 'click', selector: sel, clickedText: res.text || null } }
     }
+    case 'pressKey': {
+      // 只支持 Escape：收起页面上残留的下拉浮层/弹层。
+      // 实测快手：选完「带货类目」后级联下拉仍然展开着，把后面要点的按钮盖住，
+      // 于是「确 认」点不中（受信任鼠标点在浮层上）。按一下 Esc 收起它即可。
+      // 白名单只有 Escape（Zod 已限），不存在"通用键盘输入"的口子。
+      const wc = wcOrThrow(run)
+      const key = String(input.key)
+      if (key !== 'Escape') throw new Error(`TASK_INVALID_STEP: pressKey 仅支持 Escape（收到 ${key}）`)
+      // 发到页面（受信任键盘事件），让页面的浮层自己收起来
+      wc.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+      wc.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+      await new Promise(r => setTimeout(r, 400))
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'pressKey', key } }
+    }
+    case 'clickIfPresent': {
+      // 条件点击：平台**可能**弹二次确认框时用它。
+      //
+      // 为什么不硬等：没实测到该平台一定有确认框时，硬等一个不存在的元素 = 白等超时（还会
+      // 把一次成功的发送报成失败）。为什么也不能假设没有：真弹了而没人点，发送就没发出去，
+      // 而"点了发送按钮"很容易被误当成"已经发出去了"。
+      // 所以：在给定窗口内轮询，出现就点；超时未出现就按"没有确认框"跳过，
+      // 并把 clicked 如实记进步骤结果（事后能查出到底走没走确认流程）。
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      const deep = !!input.deep
+      const nearText = input.nearText ? String(input.nearText) : ''
+      const waitMs = input.waitMs == null ? 8000 : Number(input.waitMs)
+      const until = Date.now() + waitMs
+      guardSignals(run)
+      let clicked = false
+      let viaInfo = ''
+      for (;;) {
+        guardSignals(run)
+        let hit: Awaited<ReturnType<typeof findTextTarget>> | null = null
+        if (nearText) {
+          // 精确模式：判断"这个候选按钮的祖先链里是否含锚点文案"。
+          //
+          // 为什么不先找锚点再往上取浮层：实测快手那个警告框和商品弹窗**共享外层容器**
+          // （往上找只会找到同时包含两者的那个 wrap），在它里面找「确认」仍旧会命中下层弹窗的按钮。
+          // 按"祖先链包含锚点"筛选才是精确的：警告框的按钮在警告框里，下层弹窗的按钮不在。
+          const near = await wcOrThrow(run).executeJavaScript(`(() => {
+            ${deep ? ENUM_DEEP_FN : ''}
+            ${VISIBLE_JS}
+            const needle = ${JSON.stringify(needle)};
+            const anchor = ${JSON.stringify(nearText)};
+            const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+            const ownOf = (el) => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            const narrow = (s) => String(s == null ? '' : s).replace(/\\s+/g, '');
+            const hits = [];
+            for (const el of scope) {
+              // 候选：可点元素，文案匹配（自有文本或规范化 innerText——平台把按钮文案拆进子 span）
+              const tag = el.tagName;
+              if (!(tag === 'BUTTON' || tag === 'A' || tag === 'LABEL' ||
+                    (el.getAttribute && el.getAttribute('role') === 'button'))) continue;
+              if (!__visible(el)) continue;
+              const okText = ownOf(el).includes(needle) || narrow(el.innerText) === narrow(needle);
+              if (!okText) continue;
+              // 祖先链里必须有锚点文案（即：这个按钮属于那个警告框）
+              let has = false;
+              for (let n = el; n && n !== document.body; n = n.parentElement) {
+                if (String(n.innerText || '').includes(anchor)) { has = true; break }
+              }
+              if (!has) continue;
+              const r = el.getBoundingClientRect();
+              hits.push({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), text: String(el.innerText || '').replace(/\\s+/g, '').slice(0, 20) });
+            }
+            return hits.length ? JSON.stringify(hits[0]) : null;
+          })()`).catch(() => null)
+          if (near) {
+            try { hit = { ok: true, x: JSON.parse(near).x, y: JSON.parse(near).y, clickedText: JSON.parse(near).text } } catch { hit = null }
+          }
+        } else {
+          hit = await findTextTarget(wcOrThrow(run), run, needle, deep, Math.min(6000, waitMs), 'clickIfPresent')
+        }
+        if (hit && hit.ok) {
+          performHitClick(wcOrThrow(run), hit)
+          clicked = true
+          viaInfo = hit.clickedText || ''
+          break
+        }
+        if (hit && hit.reason === 'DISABLED') {
+          // 确认框在但按钮禁用：这不是"没有确认框"，如实失败（点不动就别假装发成功了）
+          throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态，确认框无法确认`)
+        }
+        if (Date.now() >= until) break
+        await new Promise(r => setTimeout(r, 300))
+      }
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'clickIfPresent', text: needle, nearText: nearText || null, clicked, clickedText: viaInfo || null, waitedMs: waitMs } }
+    }
     case 'clickByText': {
       // 平台页面没有稳定选择器，只能按"元素自身的直接文本"点；
       // 取文本最短的命中项（最具体的那个），再向上找可点击祖先。
@@ -1297,6 +1422,23 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           const r = el.getBoundingClientRect();
           if (!(r.width > 0 && r.height > 0)) continue;
           cands.push({ el, len: own.length });
+        }
+        // 兜底：规范化 innerText（文案被拆进子 span 的平台，如快手「确 认」）。
+        // 与 mode:'real' 分支同一套规则，保证两条路径行为一致。
+        if (!cands.length) {
+          const nw = __narrow(needle);
+          const pool = [];
+          if (roots) for (const rt of roots) { pool.push(rt); for (const c of rt.querySelectorAll('*')) pool.push(c) }
+          else for (const el of scope) pool.push(el);
+          for (const c of pool) {
+            const tag = c.tagName;
+            if (!(tag === 'BUTTON' || tag === 'A' || tag === 'LABEL' || tag === 'SPAN' ||
+                  (c.getAttribute && c.getAttribute('role') === 'button'))) continue;
+            const r = c.getBoundingClientRect();
+            if (!(r.width > 0 && r.height > 0)) continue;
+            if (__narrow(c.innerText) !== nw) continue;
+            cands.push({ el: c, len: nw.length, viaText: true });
+          }
         }
         if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
         cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
@@ -1506,14 +1648,26 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const scroll = !!input.scroll
       const maxRounds = input.maxRounds == null ? 25 : Number(input.maxRounds)
       const deadline = Date.now() + step.timeoutMs
-      // 页面自己的权威计数（抖店广场："已选择 N 位达人"；没有则为 null → 退回按点击数判断）
+      // 页面自己的权威计数（抖店广场：「已选择 N 位达人」）。
+      // counterIncludes：**限定计数文案必须包含这段字**，用于同一页面上存在多个计数时的消歧义。
+      // 实测踩到：快手商品弹窗里也在勾选，而页面上达人选人区仍写着「已选2条」——
+      // 计数读到那个，progress() 恒为 0，于是"勾中 0 位"的误报（其实商品勾上了）。
+      // 不给 counterIncludes 时只认抖店那种明确写成「已选择N位达人」的计数。
+      const counterIncludes = input.counterIncludes ? String(input.counterIncludes) : ''
+      const counterPats = counterIncludes
+        ? `[/\\u5df2\\u9009\\u62e9\\s*(\\d+)\\s*\\u4f4d\\u8fbe\\u4eba/, /\\u5df2\\u9009\\s*(\\d+)\\s*\\u6761/, /\\u5df2\\u9009\\s*(\\d+)\\s*\\u4f4d/]`
+        : `[/\\u5df2\\u9009\\u62e9\\s*(\\d+)\\s*\\u4f4d\\u8fbe\\u4eba/]`
       const counterExpr = `(() => {
-        const re = /\\u5df2\\u9009\\u62e9\\s*(\\d+)\\s*\\u4f4d\\u8fbe\\u4eba/;
+        const pats = ${counterPats};
+        const must = ${JSON.stringify(counterIncludes)};
         for (const el of document.querySelectorAll('div,span,p,b,strong,em')) {
           const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
           if (t.length > 40) continue;
-          const m = re.exec(t);
-          if (m) return Number(m[1]);
+          if (must && !t.includes(must)) continue;
+          for (const re of pats) {
+            const m = re.exec(t);
+            if (m) return Number(m[1]);
+          }
         }
         return null;
       })()`
@@ -1523,15 +1677,20 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const seenKeys: string[] = []
       const batchExpr = (seen: string[], limit: number) => `(async () => {
         const SEL = ${JSON.stringify(sel)}, TXT = ${JSON.stringify(txt)}, LIMIT = ${limit};
+        const SKIP = ${JSON.stringify(input.skipSelector ? String(input.skipSelector) : '')};
+        const MUST = ${JSON.stringify(counterIncludes)};
         const seen = new Set(${JSON.stringify(seen)});
         const sleep = (ms) => new Promise(r => setTimeout(r, ms));
         const read = () => { try {
-          const re = /\\u5df2\\u9009\\u62e9\\s*(\\d+)\\s*\\u4f4d\\u8fbe\\u4eba/;
+          const pats = ${counterPats};
           for (const el of document.querySelectorAll('div,span,p,b,strong,em')) {
             const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
             if (t.length > 40) continue;
-            const m = re.exec(t);
-            if (m) return Number(m[1]);
+            if (MUST && !t.includes(MUST)) continue;
+            for (const re of pats) {
+              const m = re.exec(t);
+              if (m) return Number(m[1]);
+            }
           }
           return null;
         } catch { return null } };
@@ -1544,9 +1703,11 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           }
         }
         const clicked = [], seenNew = [];
-        let skippedDisabled = 0, skippedInvisible = 0, skippedChecked = 0, retried = 0, corrected = 0;
+        let skippedDisabled = 0, skippedInvisible = 0, skippedChecked = 0, retried = 0, corrected = 0, skippedBySelector = 0;
         for (const el of els) {
           if (clicked.length >= LIMIT) break;
+          // skipSelector：表头"全选"这类不算候选（点它会全选，不是"勾 N 个"）
+          if (SKIP) { try { if (el.matches(SKIP) || el.closest(SKIP)) { skippedBySelector++; continue } } catch {} }
           const row = el.closest('tr') || el.parentElement;
           // 行 key 是去重的锚：虚拟列表重渲染后同一行只点一次，避免把已选行点反选
           const key = (row && row.getAttribute && row.getAttribute('data-row-key')) ||
@@ -1583,7 +1744,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             retried: didRetry
           });
         }
-        return { ok: true, clicked, seenNew, skippedDisabled, skippedInvisible, skippedChecked, retried, corrected, total: els.length, pageSelected: read() };
+        return { ok: true, clicked, seenNew, skippedDisabled, skippedInvisible, skippedChecked, skippedBySelector, retried, corrected, total: els.length, pageSelected: read() };
       })()`
       // 滚动：从首个目标元素向上找可滚动祖先，向下滚一屏的 95%。
       // 必须先强制 scroll-behavior:auto，否则 smooth 动画期间读到的是旧 scrollTop，"滚没滚"永远判 false。
@@ -1933,6 +2094,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             ${deep ? ENUM_DEEP_FN : ''}
             ${VISIBLE_JS}
             ${SCOPE_FN}
+            ${PICK_SORT_FN}
             const needle = ${JSON.stringify(needle)};
             const within = ${JSON.stringify(within || null)};
             const roots = within ? __scopeRoots(within) : null;
@@ -1943,6 +2105,18 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
               if (!own.includes(needle)) continue;
               if (!__inScope(roots, el)) continue;
               if (__visible(el)) return true;
+            }
+            // 兜底：文案被拆进子 span 时（实测快手「已选1个 个护家清: 清空」整行都是子元素，
+            // 没有任何元素的**自有文本**是「个护家清」）——按规范化 innerText 再找一遍。
+            // 仍然限定"整段文本不能比要找的长太多"，避免把大容器（凑巧含该词）当成命中。
+            const nw = __narrow(needle);
+            for (const el of scope) {
+              if (!__inScope(roots, el)) continue;
+              if (!__visible(el)) continue;
+              const it = __narrow(el.innerText);
+              if (!it.includes(nw)) continue;
+              if (it.length > nw.length + 12) continue;
+              return true;
             }
             return false;
           })()`).catch(() => false)
@@ -1963,21 +2137,42 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const deep = !!input.deep
       const min = input.min == null ? 1 : Number(input.min)
       const max = Number(input.max)
+      // 弹窗式（给了 confirmClosesSelector）：**不能**用"行是否已存在"做提前返回。
+      // 实测快手：商品弹窗的表格节点常驻 DOM（关闭后仍有尺寸），于是 present ≥ min 成立、
+      // 步骤静默返回 added:0——看着"成功"，实际一个商品都没选，最后被平台的
+      // 「请选择商品」拦下（真机踩到：run 报 succeeded 但抽屉里是 0/100）。
+      const modalMode = !!input.confirmClosesSelector
+      // 可见性判据（行数/复选框共用）：**必须与视口有交集**。
+      // 实测快手：商品弹窗虽未打开，它的节点已经预渲染在 DOM 里且有尺寸——
+      // 只判"有尺寸"会把隐藏弹窗里的行/复选框也数进来，于是步骤误以为"已经就有行"、
+      // 甚至去点视口外的复选框（点了个寂寞），最后被平台拦下（真机踩到）。
+      const inViewJs = `
+        const __inView = (el) => {
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return false;
+          if (r.bottom <= 0 || r.right <= 0 || r.top >= innerHeight || r.left >= innerWidth) return false;
+          for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+            const cs = getComputedStyle(n);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+          }
+          return true;
+        };
+      `
       const countRowsExpr = `(() => {
         ${deep ? ENUM_DEEP_FN : ''}
+        ${inViewJs}
         const sel = ${JSON.stringify(String(input.rowsSelector))};
         let n = 0;
         for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
           try { if (!el.matches(sel)) continue } catch { continue }
-          const r = el.getBoundingClientRect();
-          if (!(r.width > 0 && r.height > 0)) continue;
+          if (!__inView(el)) continue;
           n++;
         }
         return n;
       })()`
       guardSignals(run)
       let present = await withTimeout(() => wc.executeJavaScript(countRowsExpr).catch(() => 0), run, step.timeoutMs, 'ensureRows 计数')
-      if (present >= min) {
+      if (present >= min && !modalMode) {
         return { kind: 'executed', payload: { action: 'ensureRows', present, added: 0 } }
       }
       const addHit = await findTextTarget(wc, run, String(input.addText), deep, step.timeoutMs, 'ensureRows 打开添加入口')
@@ -1988,29 +2183,32 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       await waitForSelector(wc, String(input.checkboxSelector), run, step.timeoutMs, deep)
       const boxes = await withTimeout(() => wc.executeJavaScript(`(() => {
         ${deep ? ENUM_DEEP_FN : ''}
+        ${inViewJs}
         const sel = ${JSON.stringify(String(input.checkboxSelector))};
         const out = [];
         for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
           try { if (!el.matches(sel)) continue } catch { continue }
-          const r = el.getBoundingClientRect();
-          if (!(r.width > 0 && r.height > 0)) continue;
-          const cs = getComputedStyle(el);
-          if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+          // 必须真在视口里：否则会去点"预渲染但没显示"的弹窗里的复选框（点了个寂寞）。
+          // 不把 opacity:0 当不可见：平台普遍把原生 checkbox 做成透明、上面盖一个自绘方块
+          // （实测快手：input 是 16×16 但 opacity=0，真正能点的是外面那层 label）。
+          if (!__inView(el)) continue;
           const input = el.querySelector('input[type=checkbox]');
-          out.push({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), checked: input ? !!input.checked : false });
+          out.push({ x: Math.round(el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2), y: Math.round(el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2), checked: input ? !!input.checked : false });
         }
         return out;
       })()`), run, step.timeoutMs, 'ensureRows 找复选框')
       let added = 0
+      let alreadyChecked = 0
       for (const b of boxes) {
+        if (b.checked) { alreadyChecked++; continue }
         if (added >= max) break
-        if (b.checked) continue
         guardSignals(run)
         realClick(wc, b.x, b.y)
         added++
         await new Promise(r => setTimeout(r, 200))
       }
-      if (added === 0) {
+      // 弹窗式：本次没新勾但**已有勾选**也算就绪（重复执行/平台预勾选），不该报错
+      if (added === 0 && !(modalMode && alreadyChecked > 0)) {
         throw new Error('TASK_SELECTOR_CHANGED: 没有可勾选的行（弹窗内没有未选中项）——请人工确认平台是否还有可添加内容')
       }
       const confirmHit = await findTextTarget(wc, run, String(input.confirmText), deep, step.timeoutMs, 'ensureRows 确认')
@@ -2018,6 +2216,51 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       realClick(wc, confirmHit.x!, confirmHit.y!)
       await new Promise(r => setTimeout(r, 800))
       guardSignals(run)
+      // 结果校验二选一（都是"确认真的生效"的正证据）：
+      //  默认按行数复核——列表式的抽屉（抖店/微信）确认后行会出现在同一页面上；
+      //  confirmClosesSelector——**弹窗式**的选择器（实测快手「选择商品」）确认后弹窗会关闭，
+      //  此时行数不在当前页面上了，按行数复核必然读到 0 并误报失败。
+      //  等它消失 = 确认被平台接受，比"行数不为 0"更直接。
+      const closes = input.confirmClosesSelector ? String(input.confirmClosesSelector) : ''
+      if (closes) {
+        const until = Date.now() + Math.max(5000, Math.min(step.timeoutMs, 20000))
+        let gone = false
+        for (;;) {
+          guardSignals(run)
+          // 判据是"**所有**匹配的元素都真的看不见了"，两处都要算：
+          //  ① 平台常保留一个隐藏的弹窗节点（display:none）——只查第一个匹配会读到残留节点；
+          //  ② 抽屉/弹窗常靠 **transform 滑出视口** 来"关闭"，子节点自身的 rect 依然非零，
+          //     只测子节点会永远判定"还开着"（实测快手商品弹窗就折在这里）。
+          // 所以：沿祖先链查 display/visibility，并要求元素矩形与视口有交集。
+          const still = await wc.executeJavaScript(`(() => {
+            const els = [...document.querySelectorAll(${JSON.stringify(closes)})];
+            if (!els.length) return false;
+            const hiddenByAncestor = (el) => {
+              for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+                const cs = getComputedStyle(n);
+                if (cs.display === 'none' || cs.visibility === 'hidden') return true;
+              }
+              return false;
+            };
+            for (const el of els) {
+              if (hiddenByAncestor(el)) continue;
+              const r = el.getBoundingClientRect();
+              if (r.width <= 0 || r.height <= 0) continue;
+              // 与视口有交集才算"还看得见"（滑出视口的弹窗不算）
+              const inView = r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+              if (inView) return true;
+            }
+            return false;
+          })()`).catch(() => false)
+          if (!still) { gone = true; break }
+          if (Date.now() >= until) break
+          await new Promise(r => setTimeout(r, 300))
+        }
+        if (!gone) {
+          throw new Error(`TASK_SELECTOR_CHANGED: 点「${String(input.confirmText)}」后 ${closes} 仍可见——确认可能没被接受`)
+        }
+        return { kind: 'executed', payload: { action: 'ensureRows', added, verifiedBy: 'dialogClosed' } }
+      }
       present = await withTimeout(() => wc.executeJavaScript(countRowsExpr).catch(() => 0), run, step.timeoutMs, 'ensureRows 复核')
       if (present < min) {
         throw new Error(`TASK_SELECTOR_CHANGED: 确认后页面仍未见 ${min} 行（当前 ${present}）——请人工确认内容是否添加成功`)
@@ -2103,11 +2346,17 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const optional = !!input.optional
       const deadline = Date.now() + step.timeoutMs
       let found: string | null = null
+      // 只在**带数字**的文案上收手：额度文案常常先渲染成占位（实测快手抽屉的
+      // 「今日剩余条发送邀请机会」——数字是随后异步填进去的），若拿到第一条含标记的文案就
+      // 判定"没有数字"，会把"还没渲染完"误报成"额度不足"（真机彩排踩到）。
+      // 所以命中无数字时继续轮询到超时，超时才如实报错。
+      let sawWithoutNumber: string | null = null
       for (;;) {
         guardSignals(run)
         found = await wc.executeJavaScript(`(() => {
           ${deep ? ENUM_DEEP_FN : ''}
           const marker = ${JSON.stringify(marker)};
+          let firstAny = null;
           for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
             const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
             if (!own.includes(marker)) continue;
@@ -2115,16 +2364,27 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             if (!(r.width > 0 && r.height > 0)) continue;
             const cs = getComputedStyle(el);
             if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
-            return own;
+            // **优先返回带数字的那条**：实测快手把数字放在子元素里，父节点的文本节点拼起来是
+            // 「今日剩余条发送邀请机会」（没有数字）——按文档序取第一条会拿到它，
+            // 于是"额度 100"被误判成"读不到数字"（真机彩排踩到）。
+            if (/\\d/.test(own)) return own;
+            if (firstAny == null) firstAny = own;
           }
-          return null;
+          return firstAny;
         })()`).catch(() => null)
-        if (found != null) break
+        if (found != null) {
+          if (/\d/.test(found)) break
+          sawWithoutNumber = found
+        }
         if (Date.now() >= deadline) break
         await new Promise(r => setTimeout(r, 300))
       }
       guardSignals(run)
-      if (found == null) {
+      if (found == null || !/\d/.test(found)) {
+        // 一直只看到"没有数字"的文案 → 如实说是"没读到额度数字"，别含糊成"找不到文案"
+        if (sawWithoutNumber != null) {
+          throw new Error(`TASK_QUOTA_EXCEEDED: 额度文案「${sawWithoutNumber.slice(0, 60)}」里始终没有可识别的数字（等到超时）——无法确认可邀约额度`)
+        }
         if (optional) return { kind: 'executed', payload: { action: 'requireQuota', present: false, min } }
         throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到含「${marker}」的额度文案（平台可能已改版）`)
       }
@@ -2137,7 +2397,10 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         TaskStore.insertSnapshot(run.storeId, String(input.metric), quota, run.runId)
       }
       if (quota < min) {
-        throw new Error(`TASK_QUOTA_EXCEEDED: 可邀约额度不足——页面显示「${found.slice(0, 60)}」（需要 ≥ ${min}），本次邀约已按你的要求在发送前中止`)
+        // 错误码可配：断言额度用默认（stopOn 里，= 正常收尾）；
+        // 断言别的东西（如已选商品数）必须用不在 stopOn 里的码，否则会静默"按预期收工"
+        const code = input.code ? String(input.code) : 'TASK_QUOTA_EXCEEDED'
+        throw new Error(`${code}: 数值不足——页面显示「${found.slice(0, 60)}」（需要 ≥ ${min}）${input.hint ? '。' + String(input.hint) : '，本次邀约已按你的要求在发送前中止'}`)
       }
       return { kind: 'executed', payload: { action: 'requireQuota', present: true, quota, min, text: found.slice(0, 60) } }
     }

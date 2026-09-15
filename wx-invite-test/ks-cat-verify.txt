@@ -1,0 +1,24 @@
+当前地址: https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro
+
+=== 点「个护家清」（within=行标签上溯2层）===
+{"chain":["DIV","DIV","DIV"]}
+下拉是否出现: 全部 个护仪器 假发 口腔护理 女性护理 家用清洁 洗发护发 纸品湿巾 衣物清洁 身体护理 身体清洁
+
+=== 点叶子「纸品湿巾」 ===
+["DIV","LI","UL"]
+
+=== 点完后的「已选」相关 DOM ===
+own="" inner="已选1个 个护家清: 清空"  <DIV.kwaishop-cps-daren-match-pc-pro-tagForm-result> vis=true tagForm=true
+own="" inner="已选1个 个护家清: 清空"  <DIV.kwaishop-cps-daren-match-pc-row kwaishop-cps-daren-matc> vis=true tagForm=false
+own="" inner="已选1个"  <DIV.kwaishop-cps-daren-match-pc-col kwaishop-cps-daren-matc> vis=true tagForm=false
+own="" inner="已选1个"  <LABEL.kwaishop-cps-daren-match-pc-form-item-no-colon> vis=true tagForm=false
+own="已选个" inner="已选1个"  <DIV.kwaishop-cps-daren-match-pc-pro-tagForm-result__label> vis=true tagForm=true
+own="" inner="已选0条 批量收藏 批量邀约"  <DIV.kwaishop-cps-daren-match-pc-space kwaishop-cps-daren-ma> vis=true tagForm=false
+own="" inner="已选0条"  <DIV.kwaishop-cps-daren-match-pc-space-item> vis=true tagForm=false
+own="已选0条" inner="已选0条"  <SPAN.selectedText___QEkk4> vis=true tagForm=false
+
+=== 「已选1个/已选2个」标记的完整文本 ===
+已选1个
+
+=== 表格是否有「主推类目/带货类目」生效文案 ===
+个护家清:

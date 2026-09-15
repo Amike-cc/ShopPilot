@@ -1,0 +1,19 @@
+彩排步骤数: 22 （「发送邀请」已替换为截图）
+点店铺卡: clicked
+中栏是否已挂载店铺视图: viewport 776x818
+payload 长度: 2657 steps[0].input.steps 长度: 22
+
+=== 创建彩排任务 ===
+create: {"ok":true,"data":{"id":"task_dc70409960cf0b3a8ad07d91","name":"邀约彩排 · 快手小店（不发送）","storeScope":"store_3856e71a3ae8499ebdbec1f4ccbb4394","status":"active","schedule":null,"lastFiredAt":null,"createdAt":1789409608054,"updatedAt":1789409608054,"steps":[{"index":0,"type":"loop","input":{"label":"个护家清/纸品湿巾 · 每批 2 位","maxRounds":1,"stopOn":["TASK_QUOTA_EXCEEDED"],"steps":[{"type":"navigate","input":{"ur
+
+=== 运行（真实执行到发送前一步）===
+run: {"ok":true,"data":{"runId":"run_eda7e9cd3d51a6f9468a7f05","storeId":"store_3856e71a3ae8499ebdbec1f4ccbb4394","waitingForStore":false},"requestId":"69215457-db29-48ce-b1a8-58f383a56239"}
+  [4s] succeeded step=0
+
+=== 彩排结果: succeeded   ===
+
+任务详情（截断）:
+(无 detail API)
+
+截图已存 wx-invite-test/ui-ks-rehearsal.png
+TASK_ID=task_dc70409960cf0b3a8ad07d91

@@ -1,0 +1,21 @@
+彩排步骤数: 23 （「发送邀请」已替换为截图）
+payload 长度: 2624 steps[0].input.steps 长度: 23
+
+=== 创建彩排任务 ===
+create: {"ok":true,"data":{"id":"task_4f777e3d7e681d907913d675","name":"邀约彩排 · 快手小店（不发送）","storeScope":"store_3856e71a3ae8499ebdbec1f4ccbb4394","status":"active","schedule":null,"lastFiredAt":null,"createdAt":1789407815036,"updatedAt":1789407815036,"steps":[{"index":0,"type":"loop","input":{"label":"个护家清/纸品湿巾 · 每批 2 位","maxRounds":1,"stopOn":["TASK_QUOTA_EXCEEDED"],"steps":[{"type":"navigate","input":{"ur
+
+=== 运行（真实执行到发送前一步）===
+run: {"ok":true,"data":{"runId":"run_3ec6f3a2c6fcbd509b2376ea","storeId":"store_3856e71a3ae8499ebdbec1f4ccbb4394","waitingForStore":false},"requestId":"1b203c82-9e9a-401c-88fe-2a55ad17029f"}
+  [4s] running step=0
+  [20s] failed step=0
+
+=== 彩排结果: failed TASK_SELECTOR_CHANGED — LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 7/23 clickByText）失败：TASK_SELECTOR_CHANGED: 页面上找不到文案为「搜索」的可点击元素 ===
+
+任务详情（截断）:
+(无 detail API)
+Warning: Detected unsettled top-level await at file:///D:/code/%E7%94%B5%E5%95%86%E6%B5%8F%E8%A7%88%E5%99%A8/wx-invite-test/rehearse-ks3.mjs:94
+const shot = await send('Page.captureScreenshot', { format: 'png' })
+             ^
+
+
+

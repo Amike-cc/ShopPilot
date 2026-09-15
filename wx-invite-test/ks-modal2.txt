@@ -1,0 +1,18 @@
+打开快手店铺: 福气满满
+起始: {"modal":0,"rows":0,"boxes":0,"counter":null}
+
+勾 2 行: 20
+点批量邀约: SPAN own="批量邀约" @(1356,0)
+  抽屉后: {"modal":0,"rows":0,"boxes":0,"counter":null}
+
+点选择商品: NOT_FOUND
+  + 2000 → {"modal":0,"rows":0,"boxes":0,"counter":null}
+  + 3000 → {"modal":0,"rows":0,"boxes":0,"counter":null}
+  + 4000 → {"modal":0,"rows":0,"boxes":0,"counter":null}
+
+第一个可见复选框: null
+
+所有「确认」按钮（含坐标）: (无)
+
+点确认: NOT_FOUND
+  点后: {"modal":0,"rows":0,"boxes":0,"counter":null}

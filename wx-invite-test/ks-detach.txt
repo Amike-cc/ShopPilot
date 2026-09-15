@@ -1,0 +1,8 @@
+渲染层视口: 1400x900
+中间栏在显示: welcome（未选中店铺）
+打开的弹层: {"settings":false,"invoice":false,"data":false,"create":false,"trash":false}
+当前显示的店铺: {"displayedStoreId":null}
+
+===== 快手页面视口 =====
+地址: https://s.kwaixiaodian.com/zone/home
+视口: 0x0 vis=hidden

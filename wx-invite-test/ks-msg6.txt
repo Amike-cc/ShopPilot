@@ -1,0 +1,5 @@
+status: failed
+errorCode: TASK_SELECTOR_CHANGED
+errorMessage: LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 20/24 ensureRows）失败：TASK_SELECTOR_CHANGED: 点「确 认」后 .kwaishop-cps-daren-match-pc-modal-body 仍可见——确认可能没被接受
+statusReason: 步骤 1/1（loop）失败
+用时: 25804 ms

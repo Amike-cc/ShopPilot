@@ -1,0 +1,5 @@
+① 弹窗打开后: {"modalVisible":false,"modalCount":0,"counter":"已选择商品数：0/100"}
+② 目标 checkbox: {"x":9,"y":116,"checked":false}
+   点后 checked: false
+   计数: {"modalVisible":false,"modalCount":0,"counter":"已选择商品数：0/100"}
+③ 确认按钮: null

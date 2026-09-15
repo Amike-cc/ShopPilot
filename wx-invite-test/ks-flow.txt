@@ -1,0 +1,28 @@
+=== ① 刷新页面清残留 ===
+计数: 已选0 抽屉: null
+表格行数: 21
+
+=== ② 勾 1 行（标签与 tbody 两种选择器都试，记录哪种生效）===
+tbody input[type=checkbox] × 20 | tbody label × 20
+{"有label":true,"labelCls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","boxCls":"kwaishop-cps-daren-match-pc-checkbox-input"}
+JS 点 label: checked=true
+计数: 已选1
+
+=== ③ 受信任鼠标点「批量邀约」（精确命中 BUTTON 本身）===
+按钮: {"cls":"kwaishop-cps-daren-match-pc-btn","disabled":false,"w":88,"h":32,"x":1252,"y":506}
+抽屉: null
+
+=== ③b 回退：JS 逐级点（SPAN→BUTTON→DIV）===
+["SPAN","BUTTON","DIV","DIV"]
+抽屉: null
+
+=== ④ 抽屉内容（若已开）===
+(没打开)
+
+发送按钮: no-button
+
+截图已存 wx-invite-test/ui-ks-drawer5.png
+
+=== 收尾 ===
+取消 0
+收尾计数: 已选0 抽屉: null

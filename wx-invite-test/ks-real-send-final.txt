@@ -1,0 +1,9 @@
+=== 真实发送（1 批）===
+步骤数: 28 含发送: true
+中栏 viewport: 776x818
+create ok = true 
+runId = run_e892740dae46a5aa48f33c33
+  [4s] running step=0
+
+=== 结果: succeeded  ===
+TASK_ID=task_fd453d48dbf2964c757995f4 RUN_ID=run_e892740dae46a5aa48f33c33

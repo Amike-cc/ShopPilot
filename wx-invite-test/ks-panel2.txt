@@ -1,0 +1,32 @@
+=== 第一步：点快手店铺行的打开按钮 ===
+clicked store-action in store-card
+displayedStoreId 是否已设: false
+当前可见的 data-test: sidebar,sidebar-collapse,invoice-center-open,settings-open-btn
+
+=== 第二步：切到「达人邀约」页签 ===
+no-subtab
+
+=== 第三步：校验面板 ===
+✗ ① 邀约页签已打开
+   面板首 120 字: 
+✗ ② 标题为「达人邀约 · 快手小店」
+✗ ③ 类目下拉 18 项（+1 个"不筛选"） — options=undefined
+✓ ④ 不显示「达人等级」
+✗ ⑤ 有「内容标签」行
+✗ ⑥ 有「合作信息」行
+✗ ⑦ 内容标签「美妆」可勾
+✗ ⑧ 合作信息「有联系方式」可勾
+✗ ⑨ 联系人输入框
+✗ ⑩ 手机号输入框
+✗ ⑪ 微信号输入框
+✗ ⑫ 标签叫「合作标签」
+✓ ⑬ 不出现抖店的「专属权益」
+✗ ⑭ 有邀约商品数输入
+✗ ⑮ 提示至少勾 2 位
+✗ ⑯ 必填项未填时「开始邀约」禁用 — disabled=undefined
+✗ ⑰ 填齐后可开始 — disabled=undefined
+✗ ⑱ 二级类目联动为实测子类 — 子类=
+
+截图已存 wx-invite-test/ui-ks-invite-panel.png
+
+=== 通过 2 / 失败 16 ===

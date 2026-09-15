@@ -1,0 +1,36 @@
+视口: 0x0
+
+点「选择商品」: ["SPAN","BUTTON","DIV"]
+勾商品: checked=true
+商品计数: 已选择商品数：0/100
+
+点商品弹窗的「确 认」: ["SPAN","BUTTON","DIV"]
+
+===== 点确认后：所有可见弹层 =====
+z=auto  kwaishop-cps-daren-match-pc-drawer-content-wrapper  860x81 y=0
+    文本=带货邀约 若达人当天拒绝过或未处理您的邀请时，您当天不可再向此达人发送带货邀请 添加商品告知达人：商品价格可与您协商，并支持在直播为其实时改价 选择商品已选择商品数：1/100 商
+
+===== 所有可见按钮 =====
+"批量收藏"  y=-264  kwaishop-cps-daren-match-pc-bt < kwaishop-cps-daren-match-pc-sp < kwaishop-cps-daren-match-pc-sp < toolbar___YsjOj < promoterTableRoot___rjMEl
+"批量邀约"  y=-264  kwaishop-cps-daren-match-pc-bt < kwaishop-cps-daren-match-pc-sp < kwaishop-cps-daren-match-pc-sp < toolbar___YsjOj < promoterTableRoot___rjMEl
+"快捷邀约"  y=-143  kwaishop-cps-daren-match-pc-bt < kwaishop-cps-daren-match-pc-to < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"在线沟通"  y=-115  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"加入收藏"  y=-89  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"快捷邀约"  y=-36  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"在线沟通"  y=-10  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"加入收藏"  y=16  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"快捷邀约"  y=69  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"在线沟通"  y=95  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"加入收藏"  y=121  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"快捷邀约"  y=174  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"在线沟通"  y=200  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+"加入收藏"  y=226  kwaishop-cps-daren-match-pc-bt < buttonsWrap___xkB9H < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta < kwaishop-cps-daren-match-pc-ta
+
+===== 抽屉是否还在 =====
+{"textarea可见":2}
+Warning: Detected unsettled top-level await at file:///D:/code/%E7%94%B5%E5%95%86%E6%B5%8F%E8%A7%88%E5%99%A8/wx-invite-test/probe-second-dialog.mjs:100
+await shot('ks-dialog-after-confirm.png')
+^
+
+
+

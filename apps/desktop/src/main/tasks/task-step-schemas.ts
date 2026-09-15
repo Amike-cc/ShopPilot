@@ -148,6 +148,29 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
       text: z.string().min(1).max(200).optional()
     }).strict().optional()
   }).strict().refine((v) => !v.nth || v.mode === 'real', { message: 'nth 仅支持 mode:"real"（需要真实鼠标点击）' }),
+  // 条件点击：目标出现就点、没出现就跳过（不入库失败）。
+  // 用途：平台**可能**弹二次确认框（没实测到确定行为时不能硬等，也不能假设没有）——
+  // 硬等会白等超时、假设没有则可能"点了发送却没真的发出去"。用它把两种可能都覆盖，
+  // 并把"到底有没有出现过"如实记进步骤结果。
+  clickIfPresent: z.object({
+    text: z.string().min(1).max(200),
+    deep: z.boolean().optional(),
+    /** 等待时长（ms）：这段时间内出现就点；超时未出现按"没有这个确认框"处理 */
+    waitMs: z.number().int().min(500).max(60000).optional(),
+    /**
+     * 只在"包含这段文案的最近祖先"里找目标。
+     *
+     * 为什么需要：同一页面上常有多个**同名按钮**（实测快手：商品弹窗与它上面弹出的
+     * 「商品不符合达人带货要求」确认框都叫「确认」），按文案找会命中先出现的那个（下层弹窗的），
+     * 点了等于白点、上层确认框一直留着。给一段**只属于该确认框**的文案当锚点即可精确定位。
+     */
+    nearText: z.string().min(1).max(200).optional()
+  }).strict(),
+  // 按键（白名单只允许 Escape）：用于收起页面上残留的下拉浮层。
+  // 实测快手选完「带货类目」后级联下拉仍展开，会盖住后续要点的按钮（商品弹窗的「确 认」）。
+  pressKey: z.object({
+    key: z.enum(['Escape'])
+  }).strict(),
   clickAll: z.object({
     selector: selector.optional(),
     text: z.string().min(1).max(200).optional(),
@@ -156,7 +179,20 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     // scroll=true：点完当前可点的行后向下滚动列表继续选（虚拟滚动/滚动加载的列表，如抖店广场）
     scroll: z.boolean().optional(),
     // 滚动续选的最大轮数（防止无进展时空转）
-    maxRounds: z.number().int().min(1).max(60).optional()
+    maxRounds: z.number().int().min(1).max(60).optional(),
+    /**
+     * 这些元素**不算候选**（按选择器命中即跳过）。
+     * 用途：表头的"全选"复选框往往落在同一选择器范围内（实测快手商品弹窗），
+     * 它会被当成一个候选（点它会全选，不是"勾 N 个"）。
+     */
+    skipSelector: z.string().min(1).max(300).optional(),
+    /**
+     * 页面计数文案必须包含这段字才算"本次操作的计数"。
+     * 同一页面上有多个「已选N…」时用它消歧义——实测快手：在商品弹窗里勾选时，
+     * 页面上达人选人区的「已选2条」还在，被当成本次计数 → progress 恒为 0 →
+     * 误报"只勾中 0 位"（其实商品勾上了）。给了它才启用宽松计数写法。
+     */
+    counterIncludes: z.string().min(1).max(40).optional()
   }).strict().refine((v) => !!v.selector !== !!v.text, { message: 'selector 与 text 必须二选一' }),
   setInput: z.object({ selector, text: z.string().max(2000) }).strict(),
   // AI 生成：从 sourceSelector 读商品信息 → 主进程调大模型 → 写入 selector（参数仍只有选择器与文本/数值）
@@ -180,7 +216,14 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     confirmText: z.string().min(1).max(100),
     min: z.number().int().min(0).max(100).optional(),
     max: z.number().int().min(1).max(100),
-    deep: z.boolean().optional()
+    deep: z.boolean().optional(),
+    /**
+     * 确认按钮点完后，**这个容器应当消失**才算是生效（弹窗式选择器的结果校验）。
+     * 不给则按 rowsSelector 的行数复核（列表式抽屉用）。
+     * 实测动机：快手「选择商品」是弹窗，确认后弹窗关闭、行不在当前页面上，
+     * 按行数复核会读到 0 并误报失败；等弹窗消失才是"确认被接受"的正证据。
+     */
+    confirmClosesSelector: selector.optional()
   }).strict(),
   // 按商品ID指定的商品添加（微信小店邀约商品弹窗）
   ensureRowsById: z.object({
@@ -198,7 +241,17 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     min: z.number().int().min(0).max(100000),
     optional: z.boolean().optional(),
     metric: z.string().min(1).max(60).optional(),
-    deep: z.boolean().optional()
+    deep: z.boolean().optional(),
+    /** 失败时给用户的提示（与 requireEnabled 一致；额度不足时说明"为什么停") */
+    hint: z.string().max(200).optional(),
+    /**
+     * 不满足时抛的错误码（默认 TASK_QUOTA_EXCEEDED）。
+     * 为什么要能改：本步骤其实是通用的"某处数字 ≥ min"断言。
+     * 断言**额度**时用默认码（loop 的 stopOn 会当成"额度用完"正常收尾）；
+     * 断言**别的东西**时（如"已选商品数 ≥ 1"）必须换一个不在 stopOn 里的码，
+     * 否则会把"商品没选上"当成"按预期收工"，静默地没发出去（最危险的一类错）。
+     */
+    code: z.string().min(1).max(40).optional()
   }).strict(),
   // 可用性预检（读型步骤）：文案为 text 的可见按钮若禁用则如实失败
   requireEnabled: z.object({
@@ -270,7 +323,8 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
 export const NON_RESUMABLE_TYPES: ReadonlySet<string> = new Set([
   'fillDraft', 'waitForUserConfirmation',
   'click', 'clickByText', 'clickAll', 'setInput', 'aiGenerate',
-  // 微信小店流程的副作用步骤同样不可重复执行（重复点击=重复发送风险）
+  // 条件点击也是副作用（点了就是真发出去了），不可重放
+  'clickIfPresent',  // 微信小店流程的副作用步骤同样不可重复执行（重复点击=重复发送风险）
   'typeText', 'ensureRows', 'ensureRowsById',
   // 切标签页是运行态操作（tabId 会被改写），重放没有意义
   'useTab',
@@ -290,6 +344,8 @@ export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
   ensureRowsById: 120000,
   requireQuota: 30000,
   requireEnabled: 20000,
+  clickIfPresent: 30000,
+  pressKey: 10000,
   readLabelValue: 25000,
   waitMs: 120000,
   waitForGone: 30000,

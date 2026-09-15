@@ -1,0 +1,17 @@
+彩排步骤数: 22 （「发送邀请」已替换为截图）
+payload 长度: 2579 steps[0].input.steps 长度: 22
+
+=== 创建彩排任务 ===
+create: {"ok":true,"data":{"id":"task_fdd33a46c8f99c50809a7f8b","name":"邀约彩排 · 快手小店（不发送）","storeScope":"store_3856e71a3ae8499ebdbec1f4ccbb4394","status":"active","schedule":null,"lastFiredAt":null,"createdAt":1789408323989,"updatedAt":1789408323989,"steps":[{"index":0,"type":"loop","input":{"label":"个护家清/纸品湿巾 · 每批 2 位","maxRounds":1,"stopOn":["TASK_QUOTA_EXCEEDED"],"steps":[{"type":"navigate","input":{"ur
+
+=== 运行（真实执行到发送前一步）===
+run: {"ok":true,"data":{"runId":"run_aef0c1b62f37c743cad1b2db","storeId":"store_3856e71a3ae8499ebdbec1f4ccbb4394","waitingForStore":false},"requestId":"c0aa4128-d122-4f90-8113-b71de4342169"}
+  [4s] failed step=0
+
+=== 彩排结果: failed TASK_VIEW_DETACHED — LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 4/22 clickByText）失败：TASK_VIEW_DETACHED: 点「纸品湿巾」需要真实落点，但店铺视图当前未挂载（视口 0x0）——请关闭遮挡它的弹层后重试 ===
+
+任务详情（截断）:
+(无 detail API)
+
+截图已存 wx-invite-test/ui-ks-rehearsal.png
+TASK_ID=task_fdd33a46c8f99c50809a7f8b

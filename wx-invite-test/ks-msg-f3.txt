@@ -1,0 +1,5 @@
+status: failed
+errorCode: TASK_SELECTION_SHORTFALL
+errorMessage: LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 22/28 clickAll）失败：TASK_SELECTION_SHORTFALL: 本次只勾中 0 位（要求 1 位；当前筛选下的可选达人已全部勾完，其中 0 位已邀约/禁用）。请减少本批数量或调整筛选项后重试
+statusReason: 步骤 1/1（loop）失败
+用时: 5923 ms

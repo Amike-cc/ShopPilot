@@ -41,7 +41,7 @@ export interface CategoryNode {
 }
 
 /**
- * 批量勾选流档案（抖店）。
+ * 批量勾选流档案（抖店 / 快手小店）。
  * 字段说明沿用实测注释；选择器只依赖 tbody/checkbox 这类稳定结构，
  * 文案点击靠 clickByText（页面无稳定 data-test）。
  */
@@ -49,40 +49,77 @@ export interface BatchInviteProfile extends InviteProfileBase {
   flow: 'batch-list'
   /** 平台单次批量上限 */
   maxBatch: number
+  /**
+   * 平台要求的最少勾选数（实测快手：只勾 1 位点「批量邀约」**静默无反应**，
+   * 勾 2 位才打开抽屉——不留够就会白跑一轮、还看不出原因）。
+   * 默认 1（抖店无此限制）。
+   */
+  minSelect?: number
   /** 推荐商品上限 */
   maxProducts: number
-  /** 主推类目（实测可点击项） */
+  /**
+   * 类目筛选区的**文案名**（面板标题用）。抖店叫「主推类目」，快手叫「带货类目」。
+   * 留空用界面默认文案。
+   */
+  categoryLabelText?: string
+  /**
+   * 额外的多选筛选行（快手特有：页面把筛选分成「内容标签 / 带货类目 / 带货数据 / 合作信息」四行）。
+   * 每行是一个容器，行内有 label + 一排可点项；`scope` 决定点击限定在哪个容器里
+   * （平台的行容器类名相同、无法用选择器区分，所以用 `{ text: 行标签, climb }` 从标签上溯——见 invite-steps）。
+   * 抖店没有这些行 → 不定义。
+   */
+  extraFilterRows?: readonly {
+    /** 行标签文案（既用于界面显示，也用于运行时定位该行） */
+    label: string
+    options: readonly string[]
+    /** 从行标签元素上溯几层到行容器（实测快手：LABEL → DIV.col → DIV.row，climb=2） */
+    climb: number
+  }[]
+  /**
+   * 抽屉内那组复选标签的**叫法**（面板标题用）。抖店叫「专属权益」，快手叫「合作标签」。
+   */
+  benefitsLabelText?: string
+  /**
+   * 类目（实测可点击项）。抖店叫「主推类目」，快手叫「带货类目」；
+   * 平台自己的叫法由 categoryLabelText 提供，界面据此显示。
+   */
   categories: readonly string[]
   /**
-   * 主推类目树（一级 → 二级子类）。二级取自平台级联弹层的逐个实测（2026-09-14，
-   * 弹层懒创建：一页只点一个 chip 才能读到对的子类，见 wx-invite-test/category-tree.json）。
-   * 平台对二级的交互：点一级 chip 展开子类级联，**点二级项即生效**（「已筛选」显示 一级/二级/…）。
-   * 子类名可能被平台截断（如"摩托车/电动车/自行..."），流程按"包含匹配"点击，不做全等假设。
+   * 类目 chip 的**限定范围**（只在这行里点类目名）。
+   * 实测：类目名在达人卡片的类目文案里也会出现（自身文本同样是"个护家清"），
+   * 不限定范围就可能点到达人卡片上，筛选自然不生效。
+   * 写法二选一：CSS 选择器字符串（抖店 `.quick-filter-button-enums`），
+   * 或 `{ text:'行标签', climb:N }`（快手那几行类名相同，只能从标签上溯定位）。
+   */
+  categoryChipScope: string | { text: string; climb: number }
+  /**
+   * 类目级联弹层的限定范围。实测：点类目 chip 只是展开子类级联，
+   * **必须再点一个叶子项**（"不限/全部"= 不限子类）筛选才真正生效。
+   * 叶子项点击必须限定在这个弹层内——别处也有同名的"不限/全部"，不限范围会点错。
+   */
+  categoryPopoverSelector: string
+  /**
+   * 类目树（一级 → 二级子类）。二级取自平台级联弹层的逐个实测
+   * （抖店 2026-09-14 见 wx-invite-test/category-tree.json；快手 2026-09-15 见 ks-category-tree.json）。
+   * 平台对二级的交互：点一级 chip 展开子类级联，**点二级项即生效**。
+   * 子类名可能被平台截断（如抖店"摩托车/电动车/自行..."），流程按"包含匹配"点击，不做全等假设。
    */
   categoryTree: readonly CategoryNode[]
-  /** 达人等级可选项 */
+  /** 达人等级可选项（快手没有这一维 → 空数组，面板与步骤都跳过） */
   levels: readonly string[]
   /** 实测有邀约额度的等级（仅作提示：额度按"店铺类型 × 等级"下发，会随经营情况变化） */
   levelsWithQuotaHint: readonly string[]
-  /** 专属权益可选项 */
+  /** 抽屉里那组复选标签的可选项（抖店=专属权益；快手=合作标签） */
   benefits: readonly string[]
   /** 表格行复选框（thead 里的是"全选"，必须排除） */
   rowCheckboxSelector: string
   /** 邀约抽屉里的话术输入框 */
   scriptSelector: string
   /**
-   * 主推类目的「快捷选项行」容器（只在这行里点类目名）。
-   * 实测：类目名在达人卡片的类目文案里也会出现（自身文本同样是"个护家清"），
-   * 不限定范围就可能点到达人卡片上，筛选自然不生效。
+   * 抽屉里的必填联系方式输入框（实测快手要求联系人/手机号/微信号三项必填，
+   * 且平台会记住上次填的）。抖店无此字段 → 不定义。
    */
-  categoryChipScope: string
-  /**
-   * 主推类目的级联弹层。实测：点类目 chip 只是展开子类级联（不限/个人护理/家清纸品…），
-   * **必须再点一个叶子项**（"不限"= 不限子类）筛选才真正生效；只点 chip 的话
-   * 「已筛选」里不会出现主推类目、列表也不会按类目过滤。
-   * 叶子项点击必须限定在这个弹层内——等级下拉里也有"不限"，不限范围会点错。
-   */
-  categoryPopoverSelector: string
+  contactSelectors?: { contact: string; phone?: string; wechat?: string }
   /**
    * 邀约抽屉里「推荐商品」区域的读取源（用于 AI 生成话术时参考商品）。
    * 留空 = 运行时从话术框向上找最近的「固定定位浮层」（抽屉本体）再读其可见文本；
@@ -105,8 +142,57 @@ export interface BatchInviteProfile extends InviteProfileBase {
     /** 「已筛选」标签行锚点（校验筛选真的生效：该行里应出现所选类目名） */
     filteredMarker: string
   }
+  /**
+   * 类目生效标记的**定位方式**（默认 `{ text: texts.filteredMarker, climb: 1 }`）。
+   *
+   * 为什么需要它：抖店的「已筛选」是一个元素的**自有文本**，按文案上溯就能定位；
+   * 而快手那条标记（`.pro-tagForm-result`，文本形如「已选1个 个护家清: 清空」）**整段都是子元素**、
+   * 自身没有文本节点——按文案找不到它（真机彩排实测：waitForText 直接超时）。
+   * 给了 selector 就按选择器定位。
+   */
+  filteredScope?: string
   /** 额度预检提示（抖店不在页面展示剩余额度数字，额度用尽表现为按钮禁用） */
   quotaNote: string
+  /**
+   * 额度预检方式（默认 'requireEnabled' = 校验抽屉确认按钮是否禁用，抖店用）：
+   *  - 'requireEnabled'：平台不在页面展示剩余额度数字，只能看按钮禁用与否；
+   *  - 'requireQuota'  ：页面**明示**剩余额度（实测快手抽屉底部「今日剩余100条发送邀请机会」）
+   *                      → 取其中数字判断，比"按钮禁用"更早、更明确。
+   */
+  quotaCheck?: 'requireEnabled' | 'requireQuota'
+  /** quotaCheck='requireQuota' 时的锚点：文案片段与最低通过值 */
+  quota?: { textIncludes: string; min: number; optional?: boolean }
+  /**
+   * 抽屉里的「选择商品」是**弹窗**（实测快手：点「选择商品」开 modal，
+   * 里面左侧有商品列表、底部「取 消 / 确 认」）——勾选在 modal 内完成，确认后才回到抽屉。
+   */
+  goodsModal?: {
+    /** 弹窗根容器（在它范围内找商品行复选框与确认按钮，避免点到抽屉里别的"确认"） */
+    rootSelector: string
+    /** 打开弹窗的按钮文案（抽屉里的那个按钮；实测「选择商品」） */
+    addText: string
+    /**
+     * 弹窗内商品行复选框的选择器。
+     * **不能写 `… tbody input[...]`**：实测这个弹窗的商品列表是自绘表格、**没有 <tbody>**
+     * （截图确认：有表头 + 若干行，但结构里无 tbody），写 tbody 会一个都匹配不到
+     * → clickAll 报"只勾中 0 位"（真机踩到）。
+     */
+    rowCheckboxSelector: string
+    /** 商品搜索框（按商品ID精确搜索时用；placeholder 锚点） */
+    searchSelector: string
+    /** 搜索按钮（实测文案是「查 询」，按去空格匹配） */
+    searchText: string
+    /** 确认按钮（实测「确 认」） */
+    confirmText: string
+    /** 抽屉里"已选商品数"的文案锚点（选完商品后校验商品真的挂上去了） */
+    selectedMarker: string
+  }
+  /**
+   * 发送后可能出现的二次确认框文案（平台行为未定时的兜底）。
+   * 给了它就插入 clickIfPresent：出现就点、没出现就跳过，并如实记录。
+   * 未实测到快手有该确认框 → 留空时插入的是"占位式"条件点击，不会白等。
+   */
+  postSendConfirmText?: string
 }
 
 /**
@@ -272,10 +358,161 @@ const WEIXIN: AssistInviteProfile = {
   quota: { textIncludes: '今日剩余', min: 1 }
 }
 
+/**
+ * 快手小店（快手快分销「达人广场」，2026-09-15 真机实测）。
+ *
+ * 与抖店同属"批量勾选流"，但锚点与交互差异较大，逐条都是从真实登录态页面上量出来的：
+ *  - 入口在**另一个站点**：cps.kwaixiaodian.com（分销后台），不是 s.kwaixiaodian.com（商家后台）；
+ *  - 筛选区分 4 行（内容标签 / 带货类目 / 带货数据 / 合作信息），每行是一个 .row 容器，
+ *    行内首列是 label。**行之间文案会重名**（"达人信息"既是行标签也是表格表头），
+ *    所以类目/合作的点击必须限定在对应 .row 里（同抖店思路）；
+ *  - 带货类目是**下拉级联**：点 chip 开下拉（实测「个护家清」→ 全部/个护仪器/假发/…），
+ *    必须再点一个叶子项（「全部」= 不限子类）才真正生效；生效判据是行内出现
+ *    「已选N个 个护家清: 清空」（实测锚点，比抖店的「已筛选」好认）；
+ *  - **勾选数是硬门槛**：只勾 1 位点「批量邀约」静默无反应，勾 2 位才开抽屉（实测）；
+ *  - 行复选框：input.kwaishop-...-checkbox-input，label 是 .checkbox-wrapper；
+ *    JS 点 label 即可生效（与微信不同，快手吃合成 click）；
+ *  - 抽屉「带货邀约」：底部有**明示额度**「今日剩余100条发送邀请机会」；
+ *    带货描述 textarea（占位「请输入带货描述，最多可输入500个汉字。」）；
+ *    联系人/手机号/微信号三个必填输入（平台会**记住上次填的**，面板预填只作覆盖用）；
+ *    合作标签是 6 个复选框（免费申样/可聊高佣/素材支持/支持投流/24h发货/可破价）；
+ *  - 商品：需点「选择商品」开**弹窗**，在里面勾商品行 → 点「确 认」（实测文案带空格
+ *    「确 认」，引擎已支持去空格匹配）→ 回到抽屉，商品计数变「已选择商品数：1/10」；
+ *  - 平台把按钮文案拆进子 span 并拉字距（「确 认」「重 置」「查 询」），元素的自有文本为空——
+ *    引擎为此加了"规范化 innerText"兜底匹配（见 task-runner 的 PICK_SORT_FN 注释）。
+ */
+const KUAISHOU_BATCH: BatchInviteProfile = {
+  platform: '快手小店',
+  pageUrl: 'https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro',
+  flow: 'batch-list',
+  // 平台没在页面标出单批上限；抽屉底部明示「今日剩余100条发送邀请机会」。
+  // 取 100 = 一天的额度，避免一轮就把额度打满（真要跑满就多轮）。
+  maxBatch: 100,
+  // 实测：只勾 1 位点「批量邀约」没有任何反应，2 位才打开抽屉
+  minSelect: 2,
+  scriptMaxLen: 500,
+  maxProducts: 10,
+  categoryLabelText: '带货类目',
+  // 实测「带货类目」18 项 + 各自子类（2026-09-15 逐个点开量取，见 wx-invite-test/ks-category-tree.json）
+  categories: [
+    '零食饮料', '家居百货', '女装女鞋', '美妆护肤', '个护家清', '营养健康', '母婴玩具', '生鲜食品',
+    '男装男鞋', '运动户外', '数码家电', '珠宝文玩', '茶叶酒水', '箱包配饰', '图书学习', '花宠园艺',
+    '童装童鞋', '内衣裤袜'
+  ],
+  categoryTree: [
+    { name: '零食饮料', children: ['乳品饮料', '冲调饮品', '南北干货', '卤味肉干', '坚果炒货', '方便速食', '果干蜜饯', '糖巧克力', '面包糕点', '饼干膨化'] },
+    { name: '家居百货', children: ['五金机电', '家具', '家居家纺', '家装软饰', '床上用品', '收纳整理', '汽车用品', '生活日用', '餐厨用具', '驱虫用品'] },
+    { name: '女装女鞋', children: ['上衣', '中老年', '外套', '大码女装', '套装', '女鞋', '裙子', '裤子'] },
+    { name: '美妆护肤', children: ['唇彩口红', '男士用品', '眼部护理', '美发用品', '美妆工具', '美妆香水', '美甲美睫', '防晒必备', '面部护肤', '面部色彩'] },
+    { name: '个护家清', children: ['个护仪器', '假发', '口腔护理', '女性护理', '家用清洁', '洗发护发', '纸品湿巾', '衣物清洁', '身体护理', '身体清洁'] },
+    { name: '营养健康', children: ['传统滋补', '保健品', '养生用品', '参类滋补', '燕窝阿胶', '膳食补充', '蜂蜜', '隐形眼镜', '食疗滋补', '鹿茸灵芝'] },
+    { name: '母婴玩具', children: ['奶粉', '婴儿服饰', '婴儿用品', '孕妇专用', '早教学习', '益智玩具', '纸尿裤', '辅食营养'] },
+    { name: '生鲜食品', children: ['冷冻食品', '月饼', '水果', '海鲜水产', '烘焙原料', '米面杂粮', '肉蛋制品', '蔬菜', '调味品', '食用油'] },
+    { name: '男装男鞋', children: ['上衣', '中老年', '外套', '大码男装', '男士套装', '男士毛衣', '男鞋', '裤装'] },
+    { name: '运动户外', children: ['体育用品', '健身训练', '垂钓装备', '户外服装', '户外照明', '户外装备', '户外鞋靴', '旅行出游', '运动服', '运动鞋'] },
+    { name: '数码家电', children: ['二手数码', '厨房电器', '家用电器', '影音摄像', '手机/配件', '数码配件', '智能设备', '生活电器', '电子教育', '电脑办公'] },
+    { name: '珠宝文玩', children: ['书画收藏', '古董文玩', '水晶宝石', '珍珠', '翡翠玉石', '黄金'] },
+    { name: '茶叶酒水', children: ['养生茶', '啤酒', '国产白酒', '果酒', '洋酒', '粮食酒', '花果茶', '茶具', '茶叶', '葡萄酒'] },
+    { name: '箱包配饰', children: ['功能箱包', '发饰', '女士包袋', '帽子围巾', '打火机', '流行首饰', '男士包袋', '眼镜'] },
+    { name: '图书学习', children: ['书包', '作业辅导', '图书', '学习用品', '画具画材'] },
+    { name: '花宠园艺', children: ['主粮饲料', '农林牧渔', '园艺用品', '宠物用品', '生活鲜花', '绿植盆栽', '美容清洁', '花草种子', '观赏宠物', '零食营养'] },
+    { name: '童装童鞋', children: ['亲子装', '休闲服饰', '儿童服配', '儿童裤子', '儿童配饰', '内衣裤袜', '家居服', '户外运动', '礼服制服', '童鞋'] },
+    { name: '内衣裤袜', children: ['保暖内衣', '内裤', '女士内衣', '家居服', '袜子'] }
+  ],
+  /**
+   * 内容标签行（快手特有）。与「带货类目」是两回事：
+   * 内容标签描述达人的**内容方向**（三农/美妆/美食…），带货类目是他的**货品方向**。
+   * 两者可以同时筛（平台就是这么设计的四行筛选）。
+   */
+  extraFilterRows: [
+    {
+      label: '内容标签',
+      climb: 2,
+      options: [
+        '三农', '二次元', '亲子', '随手拍', '生活', '穿搭', '美妆', '美食', '旅游', '健康',
+        '游戏', '情感', '资讯', '颜值', '运动', '高新数码', '动物', '汽车', '音乐', '影视和短剧',
+        '法律', '才艺', '明星娱乐', '军事', '教育', '宗教', '读书', '房产家居', '摄影', '舞蹈',
+        '搞笑', '财经', '星座命理', '奇人异象', '科学', '历史', '其他'
+      ]
+    },
+    {
+      label: '合作信息',
+      climb: 2,
+      options: ['有联系方式', '无坑位费', '招商中达人', '专属推荐']
+    }
+  ],
+  benefitsLabelText: '合作标签',
+  // 快手**没有「达人等级」筛选**（LV0 是达人自身属性，不是可筛条件）→ 置空，
+  // 面板/步骤据此不渲染也不点击等级区（见 invite-steps.ts 的 levelTrigger 判断）。
+  levels: [],
+  levelsWithQuotaHint: [],
+  // 抽屉里的合作标签（6 个复选框，实测；页面提示最多 5 个）
+  benefits: ['免费申样', '可聊高佣', '素材支持', '支持投流', '24h发货', '可破价'],
+  rowCheckboxSelector: 'tbody input[type=checkbox]',
+  scriptSelector: 'textarea',
+  // 四行的行容器类名**完全相同**（.kwaishop-cps-daren-match-pc-row），选择器区分不了，
+  // 所以用「行标签 + 上溯层数」定位（LABEL → DIV.col → DIV.row，climb=2）
+  categoryChipScope: { text: '带货类目', climb: 2 },
+  // 类目下拉（点开后才存在）
+  categoryPopoverSelector: '.kwaishop-cps-daren-match-pc-select-dropdown',
+  // 抽屉里的必填联系方式（实测三项都是必填，label 带 required 类）
+  contactSelectors: {
+    contact: 'input[placeholder*="常用联系人称呼"]',
+    phone: 'input[placeholder*="常用11位手机号"]',
+    wechat: 'input[placeholder*="常用微信号"]'
+  },
+  goodsSourceSelector: '',
+  texts: {
+    // 快手没有"达人等级"下拉；留空表示面板不渲染该行
+    levelTrigger: '',
+    // 快手**没有独立的「搜索」按钮**：关键词是输入框（回车生效），而筛选靠点 chip 即时生效。
+    // 留空 = 不生成"点搜索"的步骤（真机彩排实测：按文案找「搜索」必然失败）。
+    search: '',
+    batchInvite: '批量邀约',
+    confirmSend: '发送邀请',
+    // 抽屉里没有"确认发送"这类禁用态按钮可预检（页面明示额度代替）
+    drawerConfirm: '',
+    categoryLabel: '带货类目',
+    categoryAnyLeaf: '全部',
+    // 生效判据（实测）：行内出现「已选1个 个护家清: 清空」
+    filteredMarker: '已选'
+  },
+  // 那条标记整段都是子元素（自身无文本节点）→ 必须按选择器定位（见 filteredScope 说明）
+  filteredScope: '.kwaishop-cps-daren-match-pc-pro-tagForm-result',
+  quotaNote: '快手抽屉底部明示「今日剩余N条发送邀请机会」，额度为 0 时如实停止（不会硬发）',
+  quotaCheck: 'requireQuota',
+  quota: { textIncludes: '今日剩余', min: 1, optional: false },
+  goodsModal: {
+    rootSelector: '.kwaishop-cps-daren-match-pc-modal-body',
+    /**
+     * 抽屉里打开商品弹窗的**按钮**文案：实测「选择商品」（蓝底，紧挨「已选择商品数：0/100」）。
+     * 注意页面里另有一个「添加商品」——那是**空态里的提示按钮**，点它同样能开弹窗，
+     * 但「选择商品」是常驻的入口，更稳（商品列表非空时「添加商品」就不在了）。
+     */
+    addText: '选择商品',
+    /**
+     * 弹窗内商品行复选框的选择器。实测弹窗里确实有 `<tbody>`（7 行、6 个复选框），
+     * 所以按 tbody 限定即可，表头的"全选"天然被排除在外。仍额外给 skipSelector（见步骤构造）
+     * 作为第二道保险——表头复选框列若被平台改到 tbody 里也不至于被当成商品。
+     */
+    rowCheckboxSelector: '.kwaishop-cps-daren-match-pc-modal-body tbody input[type=checkbox]',
+    searchSelector: '.kwaishop-cps-daren-match-pc-modal-body input[placeholder="请输入"]',
+    searchText: '查 询',
+    confirmText: '确 认',
+    /**
+     * 抽屉里"已选商品数"的文案锚点（实测「已选择商品数：0/100」）。
+     * 选完商品后用它**校验商品真的挂上去了**——比"等弹窗消失"可靠：
+     * 弹窗的隐藏方式平台会改，而"选了几个商品"才是我们真正关心的结果。
+     */
+    selectedMarker: '已选择商品数'
+  }
+}
+
 /** 已实现的平台档案（每个平台流程独立；后续按平台扩展只需在此追加） */
 export const INVITE_PROFILES: Readonly<Record<string, InviteProfile>> = {
   [DOUDIAN.platform]: DOUDIAN,
-  [WEIXIN.platform]: WEIXIN
+  [WEIXIN.platform]: WEIXIN,
+  [KUAISHOU_BATCH.platform]: KUAISHOU_BATCH
 }
 
 /** 已支持达人邀约的平台名（供界面如实展示） */

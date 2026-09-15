@@ -1,0 +1,38 @@
+=== 准备：勾 1 行 + 开抽屉 ===
+计数: 已选1
+
+=== A. 抽屉内全部短文案（找标签/弹窗线索）===
+(没找到 drawer)
+
+=== B. 全页 modal/dialog 容器（含隐藏）→ 点发送会不会弹确认框 ===
+[
+ {
+  "cls": "global-sign-dialog-container",
+  "可见": true,
+  "w": 1296,
+  "h": 0,
+  "文本": ""
+ },
+ {
+  "cls": "global-sign-dialog-container",
+  "可见": true,
+  "w": 1296,
+  "h": 0,
+  "文本": ""
+ }
+]
+
+=== C. 「发送邀请」按钮状态 ===
+no-send-button
+
+=== D. 合作标签项（含是否可点）===
+(没找到 drawer)
+
+=== E. 点「选择商品」看弹窗结构 ===
+(没有可见的 modal)
+弹窗内复选框: none
+截图已存 wx-invite-test/ui-ks-goods.png
+
+=== 收尾：Esc 关弹窗 + 关抽屉 + 取消勾选 ===
+取消了 20 行勾选
+收尾计数: 已选0

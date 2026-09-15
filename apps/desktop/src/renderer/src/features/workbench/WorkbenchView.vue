@@ -405,13 +405,13 @@
               <button class="mini-btn" style="margin-left:auto" data-test="invite-open-page" @click="openInvitePage">打开达人广场</button>
             </div>
 
-            <!-- batch-list（抖店）：广场筛选 → 逐个勾 40 位 → 批量邀约带货 → 直接发送（无二次确认门禁） -->
+            <!-- batch-list（抖店 / 快手小店）：广场筛选 → 勾满一批 → 批量邀约 → 填话术 → 发送 -->
             <template v-if="inviteProfile.flow === 'batch-list'">
             <div class="inv-card">
               <div class="inv-card-h"><span class="inv-step">1</span><span class="inv-card-t">选人范围</span><span class="row-sub">对应广场筛选项 · 每轮都会重新应用</span></div>
 
               <div class="inv-grid2">
-                <label class="inv-row inv-col">主推类目
+                <label class="inv-row inv-col">{{ inviteProfile.categoryLabelText || '主推类目' }}
                   <select v-model="invite.category" data-test="invite-category">
                     <option value="">不筛选（全部）</option>
                     <option v-for="c in inviteProfile.categories" :key="c" :value="c">{{ c }}</option>
@@ -425,10 +425,29 @@
                 </label>
               </div>
               <div class="env-note" style="margin-top:4px">
-                选二级后按「一级/二级」精确筛选（如 个护家清/家清纸品）；二级名以平台级联实测为准，个别过长名称平台侧有截断，执行时按包含匹配。
+                选二级后按「一级/二级」精确筛选（如 {{ invite.category || '个护家清' }}/{{ invite.subcategory || subCategoryOptions[0] || '家清纸品' }}）；二级名以平台级联实测为准，个别过长名称平台侧有截断，执行时按包含匹配。
               </div>
 
-              <div class="inv-row inv-block">达人等级
+              <!-- 额外筛选行（快手：内容标签 / 合作信息…）。与类目是不同维度，可同时生效 -->
+              <div v-for="row in (inviteProfile.extraFilterRows || [])" :key="row.label" class="inv-row inv-block">
+                {{ row.label }}
+                <span class="inv-chips">
+                  <label
+                    v-for="opt in row.options" :key="opt"
+                    class="inv-chip" :class="{ on: (invite.extraFilters[row.label] || []).includes(opt) }"
+                  >
+                    <input
+                      type="checkbox" :value="opt"
+                      :checked="(invite.extraFilters[row.label] || []).includes(opt)"
+                      :data-test="'invite-extra-' + row.label + '-' + opt"
+                      @change="toggleExtraFilter(row.label, opt)"
+                    />{{ opt }}
+                  </label>
+                </span>
+              </div>
+
+              <!-- 达人等级：快手没有这一维（等级是达人自身属性）→ 档案 levels 为空则不显示 -->
+              <div v-if="inviteProfile.levels.length" class="inv-row inv-block">达人等级
                 <span class="inv-chips">
                   <label
                     v-for="lv in inviteProfile.levels" :key="lv"
@@ -438,18 +457,43 @@
                   </label>
                 </span>
               </div>
-              <div class="env-note">
+              <div v-if="inviteProfile.levels.length" class="env-note">
                 额度按「店铺类型 × 达人等级」下发：实测本店只有 <b>{{ inviteProfile.levelsWithQuotaHint.join(' / ') }}</b> 有额度，其余为 0（邀约按钮会变禁用态）。额度随经营情况变化，请自行确认。
               </div>
 
               <label class="inv-row"><span class="inv-label">本批数量</span>
-                <input type="number" min="1" :max="inviteProfile.maxBatch" v-model.number="invite.count" class="inv-num" data-test="invite-count" />
-                <span class="row-sub">上限 {{ inviteProfile.maxBatch }} 位（平台限制）</span>
+                <input type="number" :min="inviteProfile.minSelect || 1" :max="inviteProfile.maxBatch" v-model.number="invite.count" class="inv-num" data-test="invite-count" />
+                <span class="row-sub">
+                  上限 {{ inviteProfile.maxBatch }} 位（平台限制）
+                  <template v-if="inviteProfile.minSelect && inviteProfile.minSelect > 1">・平台要求至少 {{ inviteProfile.minSelect }} 位</template>
+                </span>
               </label>
+              <div v-if="inviteProfile.minSelect && invite.count < inviteProfile.minSelect" class="env-note">
+                平台实测<b>至少勾选 {{ inviteProfile.minSelect }} 位</b>才能批量邀约（只勾 1 位点按钮没有反应）——执行时会自动按 {{ inviteProfile.minSelect }} 位勾选。
+              </div>
             </div>
 
             <div class="inv-card">
               <div class="inv-card-h"><span class="inv-step">2</span><span class="inv-card-t">邀约内容</span></div>
+
+              <!-- 抽屉里的必填联系方式（实测快手要求三项必填；抖店没有这些输入框 → 不显示） -->
+              <template v-if="inviteProfile.contactSelectors">
+                <div class="env-note" style="margin-top:0">
+                  平台抽屉里这<b>三项必填</b>（联系人 / 手机号 / 微信号）。平台会记住上次填的，这里填了就以这里为准。
+                </div>
+                <div class="inv-grid2">
+                  <label class="inv-row inv-col">联系人
+                    <input type="text" v-model="invite.batchContact" maxlength="30" data-test="invite-batch-contact" placeholder="如 刘涛" />
+                  </label>
+                  <label class="inv-row inv-col">手机号
+                    <input type="text" v-model="invite.batchPhone" maxlength="20" data-test="invite-batch-phone" placeholder="11 位手机号" />
+                  </label>
+                  <label class="inv-row inv-col">微信号
+                    <input type="text" v-model="invite.batchWechat" maxlength="40" data-test="invite-batch-wechat" placeholder="如 amike688" />
+                  </label>
+                </div>
+              </template>
+
               <div class="inv-row inv-block">话术来源
                 <span class="inv-chips">
                   <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
@@ -474,10 +518,14 @@
               <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
                 AI 会在打开邀约抽屉后读取该抽屉里的商品信息生成话术；<b>生成的原文会落库留档</b>。
               </div>
-              <div class="env-note" v-else-if="invite.scriptMode === 'ai'">
-                AI 会在打开邀约抽屉后读取该抽屉里的商品信息生成话术；<b>生成的原文会落库留档</b>。
-              </div>
-              <div class="inv-row inv-block">专属权益（可多选）
+
+              <!-- 邀约商品：快手**必选商品才能发送**（实测点发送会提示「请选择商品」） -->
+              <label v-if="inviteProfile.goodsModal" class="inv-row"><span class="inv-label">邀约商品</span>
+                <input type="number" min="1" :max="inviteProfile.maxProducts" v-model.number="invite.batchProductCount" class="inv-num" data-test="invite-batch-products" />
+                <span class="row-sub">从平台商品里选前 {{ invite.batchProductCount }} 个（平台要求必选，上限 {{ inviteProfile.maxProducts }}）</span>
+              </label>
+
+              <div class="inv-row inv-block">{{ inviteProfile.benefitsLabelText || '专属权益' }}（可多选）
                 <span class="inv-chips">
                   <label
                     v-for="b in inviteProfile.benefits" :key="b"
@@ -500,10 +548,16 @@
                 <summary>执行说明（点开）</summary>
                 <div class="env-note" style="margin-top:4px">
                   可邀约的是"未发过消息"的达人（已邀约行平台会禁用复选框，执行时<b>跳过并如实回报</b>）。勾人是<b>一个一个点</b>（不点表头全选），一屏不够就向下滚动加载更多。
+                  <template v-if="inviteProfile.minSelect && inviteProfile.minSelect > 1">
+                    该平台<b>至少勾 {{ inviteProfile.minSelect }} 位</b>才能批量邀约，所以会按这个下限勾。
+                  </template>
                 </div>
                 <div class="env-note">
-                  点「开始邀约」后<b>连续开批</b>：每批勾 {{ invite.count }} 位 → 批量邀约带货 → 确认发送；一批发完自动开下一批，
-                  <b>直到额度用完</b>或可选达人不足 {{ invite.count }} 位为止，然后自动停止。<b>抖店不再弹二次确认</b>——发送即真实发出。
+                  点「开始邀约」后<b>连续开批</b>：每批勾满 → 批量邀约 → {{ inviteProfile.goodsModal ? '选商品 → ' : '' }}填话术 → 发送；一批发完自动开下一批，
+                  <b>直到额度用完</b>或可选达人不足为止，然后自动停止。<b>不再弹二次确认</b>——发送即真实发出。
+                </div>
+                <div class="env-note" v-if="inviteProfile.quotaCheck === 'requireQuota'">
+                  该平台在抽屉底部明示剩余额度（<b>{{ inviteProfile.quota?.textIncludes }}N…</b>），额度为 0 时会如实停止，不会硬发。
                 </div>
               </details>
               <div class="env-note" v-if="!ws.displayedStoreId">请先打开一个店铺（任务要绑定店铺执行）。</div>
@@ -1988,6 +2042,15 @@ const invite = reactive({
   /** 指定邀约商品 ID，逗号/空格/换行分隔 */
   productIds: '',
   productCount: 1,
+  // ---- batch-list 平台间的差异字段（快手用；抖店留空即不生效）----
+  /** 额外筛选行（快手：内容标签 / 合作信息）→ { 行标签: [已选项] } */
+  extraFilters: {} as Record<string, string[]>,
+  /** 抽屉里的必填联系方式（快手要求联系人/手机号/微信号都填） */
+  batchContact: '',
+  batchPhone: '',
+  batchWechat: '',
+  /** 邀约商品数（快手必选商品才能发送；默认 1 个） */
+  batchProductCount: 1,
   /** 跨平台不共话术：切到不同平台的店铺时清空脚本（抖店/微信的话术口径不同） */
   platformKey: ''
 })
@@ -2039,10 +2102,21 @@ const inviteSummary = computed(() => {
   ]
 })
 
-// 一级变化时二级跟随：已选二级不在新一级的子类里就回到「不限」
+/** 一级变化时二级跟随：已选二级不在新一级的子类里就回到「不限」 */
 watch(() => invite.category, () => {
   if (invite.subcategory && !subCategoryOptions.value.includes(invite.subcategory)) invite.subcategory = ''
 })
+
+/**
+ * 额外筛选行的多选切换（快手：内容标签 / 合作信息）。
+ * 不用 v-model 直接绑（那是动态 key，模板里不好写），改成一个显式 toggle——
+ * 同时保证写回的数组是**新数组**，让 deep watch 能捕捉到并触发配置持久化。
+ */
+function toggleExtraFilter(rowLabel: string, opt: string) {
+  const cur = invite.extraFilters[rowLabel] || []
+  const next = cur.includes(opt) ? cur.filter(x => x !== opt) : [...cur, opt]
+  invite.extraFilters = { ...invite.extraFilters, [rowLabel]: next }
+}
 // 店铺/平台变化时把可选项重置为该平台档案的默认值，随后**合并该平台保存过的配置**
 // （用户要求：主推类目/达人等级/数量/话术要能记住，不能每次重启都重置）
 watch(inviteProfile, (p) => {
@@ -2057,6 +2131,7 @@ watch(inviteProfile, (p) => {
     invite.subcategory = ''
     invite.levels = [...p.levelsWithQuotaHint]
     invite.benefits = []
+    invite.extraFilters = {}
     invite.count = Math.max(1, Math.min(invite.count || 5, p.maxBatch))
   } else {
     invite.levels = []
@@ -2075,7 +2150,9 @@ const inviteCfgLoaded = new Set<string>()
 
 function inviteCfgFields(flow: 'batch-list' | 'assist-form'): readonly string[] {
   return flow === 'batch-list'
-    ? ['category', 'subcategory', 'levels', 'count', 'script', 'scriptMode', 'benefits']
+    // extraFilters/batchContact 等是快手需要的字段；抖店那份配置里它们留空，不影响既有行为
+    ? ['category', 'subcategory', 'levels', 'count', 'script', 'scriptMode', 'benefits',
+       'extraFilters', 'batchContact', 'batchPhone', 'batchWechat', 'batchProductCount']
     // 微信流程不含 productCount：面板已去掉「添加商品数量」，商品固定按 ID 指定（留空则加 1 个）
     : ['contact', 'wechat', 'phone', 'finderType', 'finderCategories', 'finderOtherFilters', 'productIds', 'script', 'scriptMode']
 }
@@ -2104,6 +2181,23 @@ async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFo
         if (sc !== null) invite.script = sc
         if (saved.scriptMode === 'ai' || saved.scriptMode === 'manual') invite.scriptMode = saved.scriptMode
         if (Array.isArray(saved.benefits)) invite.benefits = saved.benefits.filter((x): x is string => typeof x === 'string' && p.benefits.includes(x))
+        // 快手那几项（抖店存档里没有 → 保持默认）
+        if (saved.extraFilters && typeof saved.extraFilters === 'object') {
+          const out: Record<string, string[]> = {}
+          for (const row of (p.extraFilterRows || [])) {
+            const v = (saved.extraFilters as any)[row.label]
+            // 只收该行**确实存在**的选项（平台改版/换平台后不残留无效项）
+            if (Array.isArray(v)) out[row.label] = v.filter((x: unknown): x is string => typeof x === 'string' && row.options.includes(x))
+          }
+          invite.extraFilters = out
+        }
+        const bc = str(saved.batchContact, 60); if (bc !== null) invite.batchContact = bc
+        const bp = str(saved.batchPhone, 40); if (bp !== null) invite.batchPhone = bp
+        const bw = str(saved.batchWechat, 60); if (bw !== null) invite.batchWechat = bw
+        if (typeof saved.batchProductCount === 'number' && Number.isFinite(saved.batchProductCount)) {
+          // 快手必选商品 → 下限 1（存档里的 0 会被抬到 1）
+          invite.batchProductCount = Math.max(1, Math.min(Math.round(saved.batchProductCount), p.maxProducts))
+        }
       } else {
         const c = str(saved.contact, 60); if (c !== null) invite.contact = c
         const w = str(saved.wechat, 60); if (w !== null) invite.wechat = w
@@ -2168,7 +2262,14 @@ const inviteReady = computed(() => {
       invite.phone.trim().length > 0 &&
       ids.length <= 30
   }
-  return invite.levels.length > 0 &&
+  // 批量流：等级（快手没有这一维 → 档案 levels 为空，不要求）与数量必须合法，话术就绪。
+  // 快手另外要求抽屉里的联系方式必填（平台会拦），所以也在开跑前就要求填好——
+  // 免得跑起来了才在抽屉那一步失败（那时已经勾了一批人、白跑）。
+  const levelsOk = p.levels.length === 0 || invite.levels.length > 0
+  const contactsOk = !p.contactSelectors ||
+    invite.batchContact.trim().length > 0
+  return levelsOk &&
+    contactsOk &&
     invite.count >= 1 && invite.count <= p.maxBatch &&
     scriptOk
 })
@@ -2246,7 +2347,17 @@ async function startInvite() {
     ? buildInviteSteps(p, {
         batch: {
           category: invite.category, subcategory: invite.subcategory, levels: invite.levels, count: invite.count,
-          script: invite.script, scriptMode: invite.scriptMode, benefits: invite.benefits
+          script: invite.script, scriptMode: invite.scriptMode, benefits: invite.benefits,
+          // 快手：额外筛选行 / 抽屉必填联系方式 / 邀约商品数（抖店没有这些字段 → 传空即不生效）
+          extraFilters: JSON.parse(JSON.stringify(invite.extraFilters)),
+          contacts: p.contactSelectors
+            ? [
+                { selector: p.contactSelectors.contact, text: invite.batchContact.trim() },
+                ...(p.contactSelectors.phone ? [{ selector: p.contactSelectors.phone, text: invite.batchPhone.trim() }] : []),
+                ...(p.contactSelectors.wechat ? [{ selector: p.contactSelectors.wechat, text: invite.batchWechat.trim() }] : [])
+              ].filter(c => c.text)
+            : [],
+          productCount: invite.batchProductCount
         }
       }, squareUrl)
     : buildInviteSteps(p, {

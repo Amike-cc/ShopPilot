@@ -1,0 +1,34 @@
+'��窗口，再跑彩排脚本（不替换发送步骤）' �����ڲ����ⲿ���Ҳ���ǿ����еĳ���
+���������ļ���
+pid=28772 restored; stillMinimized=False
+*** 真实发送模式：会真的把邀约发给达人（只发一批）***
+步骤数: 22 （含真实「发送邀请」）
+点店铺卡: clicked
+中栏是否已挂载店铺视图: viewport 776x818
+payload 长度: 2397 steps[0].input.steps 长度: 22
+
+=== 创建彩排任务 ===
+create: {"ok":true,"data":{"id":"task_b5ff6a156032c1712db00c63","name":"邀约彩排 · 快手小店（不发送）","storeScope":"store_3856e71a3ae8499ebdbec1f4ccbb4394","status":"active","schedule":null,"lastFiredAt":null,"createdAt":1789444673090,"updatedAt":1789444673090,"steps":[{"index":0,"type":"loop","input":{"label":"个护家清/纸品湿巾 · 每批 2 位","maxRounds":1,"stopOn":["TASK_DAREN_PAGE_UNOPENABLE"],"steps":[{"type":"navigate","inpu
+
+=== 运行（真实执行到发送前一步）===
+run: {"ok":true,"data":{"runId":"run_8ee99de038d28b53d47b2fe5","storeId":"store_3856e71a3ae8499ebdbec1f4ccbb4394","waitingForStore":false},"requestId":"2d2708f0-b212-4b16-a638-9dd33d0c9c85"}
+  [4s] running step=0
+  [20s] running step=0
+  [36s] running step=0
+  [52s] running step=0
+  [68s] running step=0
+  [85s] running step=0
+  [101s] running step=0
+  [117s] running step=0
+  [133s] running step=0
+  [149s] running step=0
+  [165s] running step=0
+  [181s] running step=0
+
+=== 彩排结果: failed INTERNAL_ERROR — LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 21/22 waitForGone）失败：TASK_TIMEOUT: 等待元素消失 textarea 超过 180000ms ===
+
+任务详情（截断）:
+(无 detail API)
+
+截图已存 wx-invite-test/ui-ks-rehearsal.png
+TASK_ID=task_b5ff6a156032c1712db00c63

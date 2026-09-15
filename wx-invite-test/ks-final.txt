@@ -1,0 +1,36 @@
+=== ① 开抽屉 → 开商品弹窗，验证精确选择器 ===
+候选容器里的行/复选框计数:
+[class*=modal-body] tbody tr → 7
+[class*=modal-body] tbody input[type=checkbox] → 6
+[class*=modal-wrap] tbody tr → 7
+.kwaishop-cps-daren-match-pc-modal-body tbody input[type=checkbox] → 6
+
+弹窗内「确认」按钮的可点祖先判定（引擎逻辑模拟）:
+{
+ "按钮innerText": "确 认",
+ "自有文本": "",
+ "层级": [
+  "BUTTON.kwaishop-cps-daren-match-pc-btn",
+  "DIV.kwaishop-cps-daren-match-pc-space-item",
+  "DIV.kwaishop-cps-daren-match-pc-space",
+  "DIV."
+ ]
+}
+
+=== ② 在页面 JS bundle 里搜「发送邀请」周边文案（非破坏性判断有无二次确认）===
+{
+ "扫描脚本数": 11,
+ "命中": {}
+}
+
+=== ③ 顺手确认：类目筛选后有「已选1个」标记（可作生效判据）===
+["DIV","DIV","DIV"]
+["DIV","LI","UL"]
+已选1个
+该标记所在元素:
+已选1个 个护家清: 清空  <DIV.kwaishop-cps-daren-match-pc-pro-tagForm-result>
+已选1个 个护家清: 清空  <DIV.kwaishop-cps-daren-match-pc-row kwaishop-cps-daren>
+已选1个  <DIV.kwaishop-cps-daren-match-pc-col kwaishop-cps-daren>
+已选1个  <LABEL.kwaishop-cps-daren-match-pc-form-item-no-colon>
+
+收尾计数: 已选0

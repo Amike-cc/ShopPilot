@@ -1,0 +1,115 @@
+=== A. 筛选行：label → 行的层级 ===
+内容标签 层级: LABEL.kwaishop-cps-daren-match-pc-form-item-no-col → DIV.kwaishop-cps-daren-match-pc-col.kwaishop-cps → DIV.kwaishop-cps-daren-match-pc-row.kwaishop-cps → FORM.kwaishop-cps-daren-match-pc-form.kwaishop-cp → DIV. → DIV.kwaishop-cps-daren-match-pc-pro-page-item → DIV.kwaishop-cps-daren-match-pc-pro-page
+带货类目 层级: LABEL.kwaishop-cps-daren-match-pc-form-item-no-col → DIV.kwaishop-cps-daren-match-pc-col.kwaishop-cps → DIV.kwaishop-cps-daren-match-pc-row.kwaishop-cps → FORM.kwaishop-cps-daren-match-pc-form.kwaishop-cp → DIV. → DIV.kwaishop-cps-daren-match-pc-pro-page-item → DIV.kwaishop-cps-daren-match-pc-pro-page
+合作信息 层级: LABEL.kwaishop-cps-daren-match-pc-form-item-no-col → DIV.kwaishop-cps-daren-match-pc-col.kwaishop-cps → DIV.kwaishop-cps-daren-match-pc-row.kwaishop-cps → FORM.kwaishop-cps-daren-match-pc-form.kwaishop-cp → DIV. → DIV.kwaishop-cps-daren-match-pc-pro-page-item → DIV.kwaishop-cps-daren-match-pc-pro-page
+达人信息 层级: LABEL.kwaishop-cps-daren-match-pc-form-item-no-col → DIV.kwaishop-cps-daren-match-pc-col.kwaishop-cps → DIV.kwaishop-cps-daren-match-pc-row.kwaishop-cps → FORM.kwaishop-cps-daren-match-pc-form.kwaishop-cp → DIV. → DIV.kwaishop-cps-daren-match-pc-pro-page-item → DIV.kwaishop-cps-daren-match-pc-pro-page
+行 class 样本: kwaishop-cps-daren-match-pc-row
+
+=== B. 商品弹窗根容器 class（先勾2行走一遍）===
+[
+ {
+  "cls": "kwaishop-cps-daren-match-pc-drawer kwaishop-cps-daren-match-pc-drawer-right kwaishop-cps-d",
+  "w": 1296,
+  "h": 950
+ },
+ {
+  "cls": "kwaishop-cps-daren-match-pc-modal-mask kwaishop-cps-daren-match-pc-fade-appear kwaishop-cp",
+  "w": 1296,
+  "h": 950
+ },
+ {
+  "cls": "kwaishop-cps-daren-match-pc-modal-wrap kwaishop-cps-daren-match-pc-modal-centered",
+  "w": 1296,
+  "h": 950
+ }
+]
+弹窗内 tbody 复选框数: 0
+用 [class*=modal] + tbody 统计行数: 0
+
+=== C. 带货类目 chip → 下拉叶子 ===
+点 chip「个护家清」: {"own":"个护家清","chain":["DIV","DIV","DIV"]}
+下拉内容: 全部 个护仪器 假发 口腔护理 女性护理 家用清洁 洗发护发 纸品湿巾 衣物清洁 身体护理 身体清洁
+点叶子「全部」: {"own":"全部","chain":["DIV","LI","UL"]}
+点完后的视觉线索: 已选1个 个护家清: 清空 直播达人 短视频达人 已选0条 批量收藏 批量邀约 达人
+chip 自身 class 是否变化: [
+ {
+  "tag": "DIV",
+  "cls": "kwaishop-cps-daren-match-pc-pro-field-label-light-labelLeft",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ },
+ {
+  "tag": "SPAN",
+  "cls": "",
+  "bg": "rgba(0, 0, 0, 0)"
+ }
+]
+截图已存 wx-invite-test/ui-ks-cat-selected.png
+
+=== D. 合作信息 chip「有联系方式」点击前后 ===
+点: {"own":"有联系方式","chain":["DIV","DIV","DIV"]}
+[
+ {
+  "tag": "DIV",
+  "cls": "kwaishop-cps-daren-match-pc-pro-checkableTag kwaishop-cps-daren-match-",
+  "bg": "rgb(245, 246, 249)",
+  "color": "rgb(29, 29, 31)"
+ }
+]
+
+=== 收尾：刷新页面恢复 ===
+收尾计数: 已选0

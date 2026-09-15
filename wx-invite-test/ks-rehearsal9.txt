@@ -1,0 +1,20 @@
+彩排步骤数: 22 （「发送邀请」已替换为截图）
+点店铺卡: clicked
+中栏是否已挂载店铺视图: viewport 776x818
+payload 长度: 2579 steps[0].input.steps 长度: 22
+
+=== 创建彩排任务 ===
+create: {"ok":true,"data":{"id":"task_9160e5e826a75509fbd5a026","name":"邀约彩排 · 快手小店（不发送）","storeScope":"store_3856e71a3ae8499ebdbec1f4ccbb4394","status":"active","schedule":null,"lastFiredAt":null,"createdAt":1789409225475,"updatedAt":1789409225475,"steps":[{"index":0,"type":"loop","input":{"label":"个护家清/纸品湿巾 · 每批 2 位","maxRounds":1,"stopOn":["TASK_QUOTA_EXCEEDED"],"steps":[{"type":"navigate","input":{"ur
+
+=== 运行（真实执行到发送前一步）===
+run: {"ok":true,"data":{"runId":"run_20c3bc3560cb2a51bb8e1375","storeId":"store_3856e71a3ae8499ebdbec1f4ccbb4394","waitingForStore":false},"requestId":"3721142e-0112-4343-a3fd-f12faad87be7"}
+  [4s] running step=0
+  [20s] running step=0
+
+=== 彩排结果: failed INTERNAL_ERROR — LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 8/22 waitForText）失败：TASK_TIMEOUT: 等待文本「个护家清」 超过 25000ms ===
+
+任务详情（截断）:
+(无 detail API)
+
+截图已存 wx-invite-test/ui-ks-rehearsal.png
+TASK_ID=task_9160e5e826a75509fbd5a026

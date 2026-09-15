@@ -1,0 +1,158 @@
+=== 彩排模式（不发送）===
+步骤数: 21 含发送: false
+中栏 viewport: 776x818
+create ok = true 
+runId = run_d31bec6fbb10281e2fd77a60
+  [4s] succeeded step=0
+
+=== 结果: succeeded  ===
+
+步骤结果:
+{
+ "run": {
+  "id": "run_d31bec6fbb10281e2fd77a60",
+  "taskId": "task_fbea89547f8a156348ab763f",
+  "storeId": "store_3856e71a3ae8499ebdbec1f4ccbb4394",
+  "status": "succeeded",
+  "currentStep": 0,
+  "startedAt": 1789445734864,
+  "finishedAt": 1789445738624,
+  "errorCode": null,
+  "errorMessage": null,
+  "statusReason": "全部步骤完成"
+ },
+ "steps": [
+  {
+   "index": 0,
+   "type": "loop",
+   "input": {
+    "label": "个护家清/纸品湿巾 · 每批 2 位",
+    "maxRounds": 1,
+    "stopOn": [
+     "TASK_DAREN_PAGE_UNOPENABLE"
+    ],
+    "steps": [
+     {
+      "type": "navigate",
+      "input": {
+       "url": "https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro"
+      },
+      "timeoutMs": 45000
+     },
+     {
+      "type": "waitForPage",
+      "input": {
+       "urlIncludes": "daren-square-pro"
+      },
+      "timeoutMs": 45000
+     },
+     {
+      "type": "clickByText",
+      "input": {
+       "text": "个护家清",
+       "within": {
+        "text": "带货类目",
+        "climb": 2
+       }
+      },
+      "timeoutMs": 20000
+     },
+     {
+      "type": "clickByText",
+      "input": {
+       "text": "纸品湿巾",
+       "mode": "real",
+       "within": {
+        "selector": ".kwaishop-cps-daren-match-pc-select-dropdown"
+       }
+      },
+      "timeoutMs": 25000
+     },
+     {
+      "type": "clickByText",
+      "input": {
+       "text": "美妆",
+       "within": {
+        "text": "内容标签",
+        "climb": 2
+       }
+      },
+      "timeoutMs": 20000
+     },
+     {
+      "type": "clickByText",
+      "input": {
+       "text": "有联系方式",
+       "within": {
+        "text": "合作信息",
+        "climb": 2
+       }
+      },
+      "timeoutMs": 20000
+     },
+     {
+      "type": "waitForSelector",
+      "input": {
+       "selector": "tbody input[type=checkbox]"
+      },
+      "timeoutMs": 30000
+     },
+     {
+      "type": "waitForText",
+      "input": {
+       "text": "个护家清",
+       "within": {
+        "selector": ".kwaishop-cps-daren-match-pc-pro-tagForm-result"
+       }
+      },
+      "timeoutMs": 25000
+     },
+     {
+      "type": "waitForText",
+      "input": {
+       "text": "纸品湿巾",
+       "within": {
+        "selector": ".kwaishop-cps-daren-match-pc-pro-tagForm-result"
+       }
+      },
+      "timeoutMs": 25000
+     },
+     {
+      "type": "clickAll",
+      "input": {
+       "selector": "tbody input[type=checkbox]",
+       "max": 2,
+       "scroll": true,
+       "maxRounds": 40
+      },
+      "timeoutMs": 240000
+     },
+     {
+      "type": "requireEnabled",
+      "input": {
+       "text": "批量邀约",
+       "hint": "需要勾选至少 2 位达人才能批量邀约（平台要求）"
+      },
+      "timeoutMs": 20000
+     },
+     {
+      "type": "clickByText",
+      "input": {
+       "text": "批量邀约"
+      },
+      "timeoutMs": 15000
+     },
+     {
+      "type": "waitForSelector",
+      "input": {
+       "selector": "textarea"
+      },
+      "timeoutMs": 30000
+     },
+     {
+      "type": "requireQuota",
+      "input": {
+       "textIncludes": "今日剩余",
+       "min": 1,
+       "optional": false,
+       "hint": "快手抽屉底部明示「今日剩余N条发送邀请机会」，额度为 0 

@@ -1,0 +1,15 @@
+=== 彩排模式：不点「发送邀请」 ===
+店铺: 福气满满 store_3856e71a3ae8499ebdbec1f4ccbb4394
+面板已填；开始按钮可用: true
+
+=== 点「开始邀约」（真实执行）===
+拦截到的步骤序列: null
+  [任务] 发票采集 · 快手小店 · 2026/9/15
+  [4s] succeeded
+
+=== 任务结束：succeeded   ===
+
+步骤结果:
+(无 runDetail API)
+
+截图已存 wx-invite-test/ui-ks-rehearsal.png

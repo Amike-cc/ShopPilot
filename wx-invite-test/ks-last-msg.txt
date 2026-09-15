@@ -1,0 +1,5 @@
+status: failed
+errorCode: TASK_SELECTOR_CHANGED
+errorMessage: LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 19/23 ensureRows）失败：TASK_SELECTOR_CHANGED: 超时未出现元素 .kwaishop-cps-daren-match-pc-modal-body tbody input[type=checkbox]
+statusReason: 步骤 1/1（loop）失败
+用时: 124474 ms

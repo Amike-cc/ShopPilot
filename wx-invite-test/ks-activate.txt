@@ -1,0 +1,22 @@
+初始各页视口: {
+ "744100": "0x0@e/daren-match/daren-square-pro",
+ "78CAB6": "0x0@e/daren-match/daren-square-pro",
+ "474FD6": "0x0@e/daren-match/daren-square-pro",
+ "C6031F": "0x0@e/daren-match/daren-square-pro",
+ "B3712B": "0x0@//s.kwaixiaodian.com/zone/home"
+}
+
+店铺标签页:
+   tab_20763f137e39ac09d5fb7400b49465e7          https://s.kwaixiaodian.com/zone/home
+   tab_4fe5114fee950856f7bf478ad573f3c7          iaodian.com/zone/daren-match/daren-square-pro
+   tab_2511a08f1231b47fbab2ea1b738b521e          iaodian.com/zone/daren-match/daren-square-pro
+   tab_e9c3b1e8e5d3d8982826916025a7133b          iaodian.com/zone/daren-match/daren-square-pro
+   tab_37d1abd342ffc921ff5eb87225927d73          iaodian.com/zone/daren-match/daren-square-pro
+
+=== 逐个激活并测量 ===
+browser.tab API: create,activate,close,reorder,setPinned,list,control
+  激活 tab_20763f137e39ac09d5fb7400b49465e7 → {"ok":true,"data":{"success":true},"requestId":"155dd61a-c1f1-43a9-845b-e145961e | 非零视口: (全为 0×0)
+  激活 tab_4fe5114fee950856f7bf478ad573f3c7 → {"ok":true,"data":{"success":true},"requestId":"db9956d4-ceb3-4012-94cc-48f6f869 | 非零视口: (全为 0×0)
+  激活 tab_2511a08f1231b47fbab2ea1b738b521e → {"ok":true,"data":{"success":true},"requestId":"63c7c3f6-d95b-4493-8935-7e538c31 | 非零视口: (全为 0×0)
+  激活 tab_e9c3b1e8e5d3d8982826916025a7133b → {"ok":true,"data":{"success":true},"requestId":"5f387ea3-a2a8-4738-a90c-bd47f3ec | 非零视口: (全为 0×0)
+  激活 tab_37d1abd342ffc921ff5eb87225927d73 → {"ok":true,"data":{"success":true},"requestId":"fac63a84-62d6-465d-8ca1-daa24644 | 非零视口: (全为 0×0)

@@ -1,0 +1,7 @@
+893: {{ cleanCell(it.cells[c.key]) || '—' }}
+2730: const s = cleanCell(v)
+2770: ].map(v => cleanCell(v)).join(' ').toLowerCase()
+2840: const s = cleanCell(it.cells?.amount)
+2843: const dl = cleanCell(it.cells?.deadline) + ' ' + cleanCell(it.cells?.status) + ' ' + cleanCell(it.cells?.id)
+3068: * 与主进程 `normalizeCellText`（shared/constants/invoice.ts）同一口径——界面显示的值
+3071: function cleanCell(v: unknown): string {

@@ -1,0 +1,4 @@
+=== 彩排模式（不发送）===
+步骤数: 24 含发送: false
+中栏 viewport: 776x818
+create ok = false {"code":"TASK_INVALID_STEP","message":"步骤不合法：step 1 loop: Unrecognized key(s) in object: '__probe'; Unrecognized key(s) in object: '__probe'"}

@@ -1,0 +1,97 @@
+抽屉已开: true
+
+=== A. 必填标记（带红星/required 的字段）===
+联系人  <LABEL> cls=kwaishop-cps-daren-match-pc-form-item-required
+手机号  <LABEL> cls=kwaishop-cps-daren-match-pc-form-item-required
+微信号  <LABEL> cls=kwaishop-cps-daren-match-pc-form-item-required
+免费申样  <LABEL> cls=kwaishop-cps-daren-match-pc-checkbox-wrapper
+可聊高佣  <LABEL> cls=kwaishop-cps-daren-match-pc-checkbox-wrapper
+素材支持  <LABEL> cls=kwaishop-cps-daren-match-pc-checkbox-wrapper
+支持投流  <LABEL> cls=kwaishop-cps-daren-match-pc-checkbox-wrapper
+24h发货  <LABEL> cls=kwaishop-cps-daren-match-pc-checkbox-wrapper
+可破价  <LABEL> cls=kwaishop-cps-daren-match-pc-checkbox-wrapper
+
+=== B. 「发送邀请」按钮：未选商品时是否禁用 ===
+{"cls":"kwaishop-cps-daren-match-pc-btn kwaishop-cps-daren-match-pc-btn-primary","disabled":false,"aria":null,"背景":"rgb(50, 107, 251)","color":"rgb(255, 255, 255)","opacity":"1","cursor":"pointer"}
+
+=== C. 带货描述框 ===
+[
+ {
+  "ph": "",
+  "maxlength": -1,
+  "cls": ""
+ },
+ {
+  "ph": "请输入带货描述，最多可输入500个汉字。",
+  "maxlength": -1,
+  "cls": "kwaishop-cps-daren-match-pc-input"
+ }
+]
+
+=== D. 合作标签可选项 ===
+联系人  <LABEL.kwaishop-cps-daren-match-pc-form-item-re> checked=n/a
+手机号  <LABEL.kwaishop-cps-daren-match-pc-form-item-re> checked=n/a
+微信号  <LABEL.kwaishop-cps-daren-match-pc-form-item-re> checked=n/a
+免费申样  <LABEL.kwaishop-cps-daren-match-pc-checkbox-wra> checked=false
+可聊高佣  <LABEL.kwaishop-cps-daren-match-pc-checkbox-wra> checked=false
+素材支持  <LABEL.kwaishop-cps-daren-match-pc-checkbox-wra> checked=false
+支持投流  <LABEL.kwaishop-cps-daren-match-pc-checkbox-wra> checked=false
+24h发货  <LABEL.kwaishop-cps-daren-match-pc-checkbox-wra> checked=false
+可破价  <LABEL.kwaishop-cps-daren-match-pc-checkbox-wra> checked=false
+
+=== E. 点「选择商品」→ 弹窗结构 ===
+点击结果: ["SPAN","BUTTON","DIV"]
+{
+ "cls": "kwaishop-cps-daren-match-pc-modal-body",
+ "w": 940,
+ "h": 680,
+ "文本": "普通/定向计划 专属计划 普通招商 专属招商 推广状态 请选择 商品ID 重 置 查 询 商品 单价(元) 商品佣金率 商品计划 操作 装饰植绒小灯笼挂饰盆景阳台新年节日结婚庆装饰圆形红灯笼挂件 商品ID：25722117941326 ¥6.8 25% 普通计划 设置定向佣金 新年乔迁高档金箔纸杯加厚红色一次性喜庆水杯喜迁新居搬家喜杯子 商品ID：25812911614326 ¥9.9 11% 普通计划 设置定向佣金 新款红果福袋中国结挂件新年装饰乔迁新居室内客厅装饰新年挂件 商品ID：25653200140326 ¥9.8 11% 普通计划 设置定向佣金 【高质量加量30根彩带】手抛彩带结婚生日节日网红礼花筒氛围道具 商品ID：25806162803326 ¥3.9 40% 普通计划 设置定向佣金 高档千元红包春节新款磨砂烫金创意福字结婚压岁乔迁通用红包 商品ID：25653584715326 ¥5.9 20% 普通计划 设置定向佣金 2026新款挂件新年春节过年装饰画挂饰木质福字乔迁新居布置年货 商品ID：25780321564326 ¥19.8 15% 普通计划 去上架商品 共 6 条 1"
+}
+
+=== F. 弹窗内表格/复选框/按钮 ===
+{
+ "表": [
+  {
+   "表头": [
+    "商品",
+    "单价(元)",
+    "商品佣金率",
+    "商品计划",
+    "操作"
+   ],
+   "行数": 0,
+   "首行": []
+  },
+  {
+   "表头": [],
+   "行数": 7,
+   "首行": [
+    "",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ]
+  }
+ ],
+ "复选框": 7,
+ "按钮": [
+  "重 置",
+  "查 询",
+  "设置定向佣金",
+  "设置定向佣金",
+  "设置定向佣金",
+  "设置定向佣金",
+  "设置定向佣金",
+  "去上架商品",
+  "取 消",
+  "确 认"
+ ]
+}
+
+截图已存 wx-invite-test/ui-ks-goods-modal.png
+
+=== 收尾：关弹窗/抽屉 + 清勾选 ===
+取消 0
+收尾: 已选0

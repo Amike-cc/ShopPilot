@@ -1,0 +1,33 @@
+=== 全部 data-test（前 60）===
+sidebar
+sidebar-collapse
+invoice-center-open
+settings-open-btn
+
+=== 左栏全部按钮文案（含图标）===
+‹  test=sidebar-collapse cls=sidebar-collapse x=261 y=18
++  test= cls=btn-new x=255 y=62
+全部 4  test= cls=fp-chip on x=16 y=127
+拼多多 1  test= cls=fp-chip x=79 y=127
+微信小店 1  test= cls=fp-chip x=170 y=127
+快手小店 1  test= cls=fp-chip x=16 y=155
+抖店 1  test= cls=fp-chip x=117 y=155
+⏻  test= cls=store-action x=256 y=235
+▶  test= cls=store-action x=256 y=289
+▶  test= cls=store-action x=256 y=343
+▶  test= cls=store-action x=256 y=397
+🧾 发票中心 全部店铺  test=invoice-center-open cls=dc-entry-row x=12 y=810
+🗑 回收站 1  test= cls=foot-btn x=16 y=858
+📸 截图  test= cls=foot-btn x=109 y=858
+⚙ 设置  test=settings-open-btn cls=foot-btn x=202 y=858
+拼多多  test= cls=qp x=645 y=518
+微信小店  test= cls=qp x=748 y=518
+快手小店  test= cls=qp x=864 y=518
+抖店  test= cls=qp x=980 y=518
+
+=== 中栏/右栏容器 class ===
+app-shell  1400x900 x=0
+workbench  1400x900 x=0
+sidebar  304x900 x=0
+store-list  303x613 x=0
+welcome  1096x900 x=304

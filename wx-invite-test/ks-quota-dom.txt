@@ -1,0 +1,10 @@
+=== 含「今日剩余」的元素（own vs inner）===
+own="" inner="今日剩余100条发送邀请机会 取 消 发送邀请" <DIV.kwaishop-cps-daren-match-pc-space kw>
+own="" inner="今日剩余100条发送邀请机会" <DIV.kwaishop-cps-daren-match-pc-space-it>
+own="" inner="今日剩余100条发送邀请机会" <DIV.kwaishop-cps-daren-match-pc-alert kw>
+own="" inner="今日剩余100条发送邀请机会" <DIV.kwaishop-cps-daren-match-pc-alert-co>
+own="" inner="今日剩余100条发送邀请机会" <DIV.kwaishop-cps-daren-match-pc-alert-me>
+own="今日剩余100条发送邀请机会" inner="今日剩余100条发送邀请机会" <SPAN.>
+
+=== 抽屉底部区域的文字 ===
+今日剩余100条发送邀请机会

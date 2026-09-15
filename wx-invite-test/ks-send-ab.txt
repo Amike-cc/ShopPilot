@@ -1,0 +1,14 @@
+视口: 0x0
+
+=== A. JS 逐级点击「发送邀请」 ===
+  起点: {"抽屉开着":true,"弹窗数":0,"提示":[]}
+  点击: ["SPAN","BUTTON","DIV"]
+   +3s → {"抽屉开着":true,"弹窗数":0,"提示":["请选择商品"]}
+   +8s → {"抽屉开着":true,"弹窗数":0,"提示":["请选择商品"]}
+   +15s → {"抽屉开着":true,"弹窗数":0,"提示":["请选择商品"]}
+Warning: Detected unsettled top-level await at file:///D:/code/%E7%94%B5%E5%95%86%E6%B5%8F%E8%A7%88%E5%99%A8/wx-invite-test/diag-send-ab.mjs:74
+{ const r = await send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync('wx-invite-test/ks-send-js.png', Buffer.from(r.data, 'base64')) }
+            ^
+
+
+

@@ -1,0 +1,25 @@
+页面: https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro
+
+=== 「已选」标记的元素与上溯链（复刻 __scopeRoots 的 text 分支）===
+own="已选0条" <SPAN.selectedText___QEkk4>
+
+=== 若取到候选，climb=1 后容器文本是否含「个护家清」===
+{
+ "容器": "DIV.kwaishop-cps-daren-match-pc-space-item",
+ "容器文本": "已选0条",
+ "含个护家清": false
+}
+
+=== 直接看「已选」相关元素的层级（找出正确的锚点）===
+<DIV.kwaishop-cps-daren-match-pc-row kwaishop-cps-d> text="个护家清" result=false
+<DIV.kwaishop-cps-daren-match-pc-col kwaishop-cps-d> text="个护家清" result=false
+<DIV.kwaishop-cps-daren-match-pc-form-item-control-> text="个护家清" result=false
+<DIV.kwaishop-cps-daren-match-pc-pro-field-select-l> text="个护家清" result=false
+<DIV.> text="个护家清" result=false
+<DIV.kwaishop-cps-daren-match-pc-pro-field-label-li> text="个护家清" result=false
+<DIV.kwaishop-cps-daren-match-pc-pro-checkableTag k> text="个护家清" result=false
+<TD.kwaishop-cps-daren-match-pc-table-cell> text="玲姐爱旅行 快手号：384415904个护家清/生鲜食品/零食饮料" result=false
+<DIV.promoterInfoCell___LIGus> text="玲姐爱旅行 快手号：384415904个护家清/生鲜食品/零食饮料" result=false
+<DIV.promoterMeta___ccEkU> text="玲姐爱旅行 快手号：384415904个护家清/生鲜食品/零食饮料" result=false
+<DIV.subInfo___xwTVK> text="快手号：384415904个护家清/生鲜食品/零食饮料" result=false
+<SPAN.> text="个护家清/" result=false

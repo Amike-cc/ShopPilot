@@ -1,0 +1,7 @@
+status=succeeded code=- reason=全部步骤完成
+用时 6575 ms
+label=个护家清/纸品湿巾 · 每批 2 位
+maxRounds=1 stopOn=["TASK_DAREN_PAGE_UNOPENABLE"]
+嵌套步骤数=29 含screenshot=4 含发送=false
+(没找到 loop 的步骤结果)
+[{"id":"tres_3c7939e8f463871d083e1ec7","runId":"run_8ca19828b8547cfae4ea5840","stepIndex":0,"kind":"executed","summary":"已执行","payload":{"action":"loop","label":"个护家清/纸品湿巾 · 每批 2 位","maxRounds":1,"completedRounds":1,"stopReason":null,"stopOn":["TASK_DAREN_PAGE_UNOPENABLE"],"rounds":[{"round":1,"ok":true,"ms":6558}]},"artifactPath":"C:\\Users\\15240\\AppData\\Roaming\\shopilot\\stores\\store_3856e71a3ae8499ebdbec1f4ccbb4394\\artifacts\\run_8ca19828b8547cfae4ea5840_step0.28r1.png","artifactSha256":"792260c3a8c089d238229a88a8a6ff00e91c87d37d89f9a9d9a93f0a09961cbe","createdAt":1789453631394}]

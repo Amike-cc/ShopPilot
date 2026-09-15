@@ -1,0 +1,6 @@
+彩排步骤数: 23 （「发送邀请」已替换为截图）
+payload 长度: 2624 steps[0].input.steps 长度: 23
+
+=== 创建彩排任务 ===
+create: {"ok":false,"error":{"code":"TASK_INVALID_STEP","message":"步骤不合法：step 1.15 requireQuota: Unrecognized key(s) in object: 'hint'"},"requestId":"71b214ba-86e3-4f85-9152-a1d6b0fd58ad"}
+创建失败，终止

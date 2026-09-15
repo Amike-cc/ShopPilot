@@ -1,0 +1,57 @@
+391: <div class="env-sec" v-if="!inviteProfile">
+397: 本版已实现的平台：<b>{{ INVITE_SUPPORTED_PLATFORMS.join('、') }}</b>。其余平台未实测，不做猜测式实现——后续按平台逐个补齐（每加一家只需新增一份平台档案）。
+404: <div class="env-h">达人邀约 · {{ inviteProfile.platform }}
+408: <!-- batch-list（抖店）：广场筛选 → 逐个勾 40 位 → 批量邀约带货 → 直接发送（无二次确认门禁） -->
+409: <template v-if="inviteProfile.flow === 'batch-list'">
+417: <option v-for="c in inviteProfile.categories" :key="c" :value="c">{{ c }}</option>
+434: v-for="lv in inviteProfile.levels" :key="lv"
+442: 额度按「店铺类型 × 达人等级」下发：实测本店只有 <b>{{ inviteProfile.levelsWithQuotaHint.join(' / ') }}</b> 有额度，其余为 0（邀约按钮会变禁用态）。额度随经营情况变化，请自行确认。
+446: <input type="number" min="1" :max="inviteProfile.maxBatch" v-model.number="invite.count" class="inv-num" data-test="invite-count" />
+447: <span class="row-sub">上限 {{ inviteProfile.maxBatch }} 位（平台限制）</span>
+464: <textarea v-model="invite.script" :readonly="invite.scriptMode === 'ai'" :maxlength="inviteProfile.scriptMaxLen" rows="3" data-test="invite-script"
+468: <span class="row-sub" v-if="invite.scriptMode === 'manual'">{{ invite.script.length }}/{{ inviteProfile.scriptMaxLen }}</span>
+469: <span class="row-sub" v-else>AI 生成 · 不超过 {{ inviteProfile.scriptMaxLen }} 字</span>
+483: v-for="b in inviteProfile.benefits" :key="b"
+513: <!-- assist-form（微信小店）：全自动连续邀约，逐位达人一张独立表单 -->
+528: <b>没有人工二次确认</b>：点「开始邀约」即开始真实发送（单次运行上限 50 位，随时可点「停止邀约」）。{{ inviteProfile.dailyQuotaHint }}。
+536: <option v-for="t in inviteProfile.finderTypes" :key="t" :value="t">{{ t }}</option>
+558: >{{ inviteCatsExpanded ? '收起类目' : `展开全部 ${inviteProfile.finderCategories.length} 项（还有 ${finderCategoryHidden} 项）` }}</button>
+563: <label v-for="f in inviteProfile.finderOtherFilters" :key="f" class="inv-chip" :class="{ on: invite.finderOtherFilters.includes(f) }">
+597: <textarea v-model="invite.script" :readonly="invite.scriptMode === 'ai'" :maxlength="inviteProfile.scriptMaxLen" rows="3" data-test="invite-script"
+601: <span class="row-sub" v-if="invite.scriptMode === 'manual'">{{ invite.script.length }}/{{ inviteProfile.scriptMaxLen }}</span>
+602: <span class="row-sub" v-else>AI 生成 · 不超过 {{ inviteProfile.scriptMaxLen }} 字</span>
+669: <template v-if="inviteProfile.flow === 'batch-list'">
+1127: <div v-for="p in inviteProfiles" :key="p.platform" class="plat-row" data-test="square-url-row">
+1137: <div class="env-note">当前已支持达人邀约的平台：<b>{{ INVITE_SUPPORTED_PLATFORMS.join('、') }}</b>（其余平台未实测，面板会明确拒绝而不是猜测）。</div>
+1262: import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile, isAssistProfile } from '@shared/constants/invite'
+1344: const inviteProfiles = computed(() => Object.values(INVITE_PROFILES))
+1364: for (const p of inviteProfiles.value) {
+1497: for (const p of inviteProfiles.value) squareUrlDraft[p.platform] = squareUrls.value[p.platform] || ''
+1966: const inviteProfile = computed(() => {
+1968: return inviteProfileFor(s?.platform)
+1980: // ---- 以下为 assist-form（微信小店）专属字段 ----
+1996: const p = inviteProfile.value
+1997: if (!p || !isBatchProfile(p) || !invite.category) return []
+2008: const p = inviteProfile.value
+2009: if (!p || !isAssistProfile(p)) return []
+2022: const p = inviteProfile.value
+2023: if (!p || !isAssistProfile(p)) return 0
+2030: const p = inviteProfile.value
+2031: if (!p || !isAssistProfile(p)) return []
+2048: watch(inviteProfile, (p) => {
+2055: if (p.flow === 'batch-list') {
+2076: function inviteCfgFields(flow: 'batch-list' | 'assist-form'): readonly string[] {
+2077: return flow === 'batch-list'
+2083: async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFor>>) {
+2088: if (inviteProfile.value?.platform !== key) return
+2094: if (p.flow === 'batch-list') {
+2126: const p = inviteProfile.value
+2131: const cur = inviteProfile.value
+2158: const p = inviteProfile.value
+2163: if (p.flow === 'assist-form') {
+2178: const p = inviteProfile.value
+2181: if (p.flow === 'assist-form') {
+2242: const p = inviteProfile.value
+2245: const steps = p.flow === 'batch-list'
+2264: const name = p.flow === 'batch-list'
+2271: ws.toast(p.flow === 'batch-list'

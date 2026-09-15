@@ -1,0 +1,14 @@
+视口: 0x0
+抽屉已开; counter = 已选择商品数：0/100 modal = 0
+
+=== ① 点「选择商品」（JS 逐级）===
+   ["SPAN","BUTTON","DIV"]
+  +2s modal=0 counter=已选择商品数：0/100
+  +4s modal=0 counter=已选择商品数：0/100
+  +6s modal=0 counter=已选择商品数：0/100
+Warning: Detected unsettled top-level await at file:///D:/code/%E7%94%B5%E5%95%86%E6%B5%8F%E8%A7%88%E5%99%A8/wx-invite-test/diag-goods-flow.mjs:60
+await shot('ks-g1.png')
+^
+
+
+

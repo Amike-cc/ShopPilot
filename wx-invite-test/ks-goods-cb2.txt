@@ -1,0 +1,29 @@
+用容器: [class*=modal-body]
+
+=== 行数 ===
+7
+
+=== input[type=checkbox] 的可见性与几何 ===
+{"w":16,"h":16,"disp":"block","vis":"visible","op":"0","checked":false,"cls":"kwaishop-cps-daren-match-pc-checkbox-input"}
+{"w":16,"h":16,"disp":"block","vis":"visible","op":"0","checked":false,"cls":"kwaishop-cps-daren-match-pc-checkbox-input"}
+{"w":16,"h":16,"disp":"block","vis":"visible","op":"0","checked":false,"cls":"kwaishop-cps-daren-match-pc-checkbox-input"}
+{"w":16,"h":16,"disp":"block","vis":"visible","op":"0","checked":false,"cls":"kwaishop-cps-daren-match-pc-checkbox-input"}
+{"w":16,"h":16,"disp":"block","vis":"visible","op":"0","checked":false,"cls":"kwaishop-cps-daren-match-pc-checkbox-input"}
+{"w":16,"h":16,"disp":"block","vis":"visible","op":"0","checked":false,"cls":"kwaishop-cps-daren-match-pc-checkbox-input"}
+
+=== 同区域的 label（可点的那个） ===
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","w":16,"h":22,"op":"1","hasInput":true,"checked":false}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","w":16,"h":22,"op":"1","hasInput":true,"checked":false}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","w":16,"h":22,"op":"1","hasInput":true,"checked":false}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","w":16,"h":22,"op":"1","hasInput":true,"checked":false}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","w":16,"h":22,"op":"1","hasInput":true,"checked":false}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper kwais","w":16,"h":22,"op":"1","hasInput":true,"checked":false}
+
+=== [class*=checkbox-wrapper] 类 ===
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","tag":"LABEL","w":16,"h":22}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","tag":"LABEL","w":16,"h":22}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","tag":"LABEL","w":16,"h":22}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","tag":"LABEL","w":16,"h":22}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","tag":"LABEL","w":16,"h":22}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper","tag":"LABEL","w":16,"h":22}
+{"cls":"kwaishop-cps-daren-match-pc-checkbox-wrapper kwais","tag":"LABEL","w":16,"h":22}

@@ -1,0 +1,57 @@
+视口: 0x0
+
+=== 所有含 drawer 的 class 全名 ===
+kwaishop-cps-daren-match-pc-drawer kwaishop-cps-daren-match-pc-drawer-right kwaishop-cps-d
+kwaishop-cps-daren-match-pc-drawer-mask
+kwaishop-cps-daren-match-pc-drawer-content-wrapper
+kwaishop-cps-daren-match-pc-drawer-content
+kwaishop-cps-daren-match-pc-drawer-wrapper-body
+kwaishop-cps-daren-match-pc-drawer-header
+kwaishop-cps-daren-match-pc-drawer-header-title
+kwaishop-cps-daren-match-pc-drawer-title
+kwaishop-cps-daren-match-pc-drawer-close
+
+=== 所有 textarea（含隐藏）===
+[
+ {
+  "w": 744,
+  "h": 106,
+  "disp": "inline-block",
+  "vis": "visible",
+  "ph": "请输入带货描述，最多可输入500个汉字。",
+  "在drawer内": true,
+  "drawerCls": "cps-invite-daren-drawer-card-content"
+ },
+ {
+  "w": 744,
+  "h": 18,
+  "disp": "block",
+  "vis": "hidden",
+  "ph": "",
+  "在drawer内": false,
+  "drawerCls": null
+ }
+]
+
+=== 「发送邀请」按钮在哪、父链是什么 ===
+{
+ "rect": {
+  "w": 88,
+  "h": 32,
+  "y": 33
+ },
+ "disabled": false,
+ "父链": [
+  "BUTTON.kwaishop-cps-daren-match-pc-btn",
+  "DIV.kwaishop-cps-daren-match-pc-space-item",
+  "DIV.kwaishop-cps-daren-match-pc-space",
+  "DIV.kwaishop-cps-daren-match-pc-drawer-body",
+  "DIV.kwaishop-cps-daren-match-pc-drawer-wrapper-b",
+  "DIV.kwaishop-cps-daren-match-pc-drawer-content",
+  "DIV.kwaishop-cps-daren-match-pc-drawer-content-w",
+  "DIV.kwaishop-cps-daren-match-pc-drawer"
+ ]
+}
+
+=== 页面是否有 fixed 定位的大浮层（抽屉本体）===
+(无 fixed 大浮层)

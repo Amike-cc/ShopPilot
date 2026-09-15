@@ -1,0 +1,19 @@
+彩排步骤数: 22 （「发送邀请」已替换为截图）
+点店铺卡: clicked
+中栏是否已挂载店铺视图: viewport 776x818
+payload 长度: 2664 steps[0].input.steps 长度: 22
+
+=== 创建彩排任务 ===
+create: {"ok":true,"data":{"id":"task_464a8a3c670c374929ca7f94","name":"邀约彩排 · 快手小店（不发送）","storeScope":"store_3856e71a3ae8499ebdbec1f4ccbb4394","status":"active","schedule":null,"lastFiredAt":null,"createdAt":1789410099468,"updatedAt":1789410099468,"steps":[{"index":0,"type":"loop","input":{"label":"个护家清/纸品湿巾 · 每批 2 位","maxRounds":1,"stopOn":["TASK_DAREN_PAGE_UNOPENABLE"],"steps":[{"type":"navigate","inpu
+
+=== 运行（真实执行到发送前一步）===
+run: {"ok":true,"data":{"runId":"run_1e33653310fe8c9163792595","storeId":"store_3856e71a3ae8499ebdbec1f4ccbb4394","waitingForStore":false},"requestId":"2a7a5458-10cf-4cf5-967d-55e8ab3cc2f9"}
+  [4s] running step=0
+
+=== 彩排结果: failed TASK_SELECTOR_CHANGED — LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 19/22 ensureRows）失败：TASK_SELECTOR_CHANGED: 没有可勾选的行（弹窗内没有未选中项）——请人工确认平台是否还有可添加内容 ===
+
+任务详情（截断）:
+(无 detail API)
+
+截图已存 wx-invite-test/ui-ks-rehearsal.png
+TASK_ID=task_464a8a3c670c374929ca7f94

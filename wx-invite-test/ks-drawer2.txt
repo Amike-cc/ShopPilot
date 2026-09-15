@@ -1,0 +1,57 @@
+起始计数: 已选0条 => 0
+
+=== A. 单击第一个 checkbox 的 label（只点一次）===
+label.click() 已发; checked=true
+计数: 已选1条 => 1
+
+=== B. 若没选中，试真实鼠标点该复选框坐标 ===
+目标: {"x":245,"y":507,"w":16,"h":22,"checked":true}
+真实鼠标点击后计数: 已选0条 => 0
+
+=== C. 打开「批量邀约」抽屉 ===
+{"clicked":"批量邀约","chain":["SPAN","BUTTON","DIV"]}
+
+=== D. 抽屉结构 ===
+{
+ "浮层": [],
+ "textarea": []
+}
+
+=== E. 抽屉内按钮/标题文案 ===
+合作邀约  <SPAN.cps-main-menu-title-content> y=1016 w=117
+合作邀约  <SPAN.kpro-workbench-layout-sider-v2__itemmenu> y=1019 w=69
+合作邀约  <SPAN.cps-main-badge> y=1024 w=52
+合作邀约  <SPAN.kpro-workbench-layout-sider-v2__itemmenu> y=1023 w=52
+已选0条 批量收藏 批量邀约  <DIV.kwaishop-cps-daren-match-pc-space kwaish> y=349 w=242
+批量邀约  <DIV.kwaishop-cps-daren-match-pc-space-item> y=349 w=88
+批量邀约  <BUTTON.kwaishop-cps-daren-match-pc-btn> y=349 w=88
+批量邀约  <SPAN.> y=354 w=56
+快捷邀约 在线沟通 加入收藏  <DIV.buttonsWrap___xkB9H tableActionButtons__> y=470 w=88
+快捷邀约  <SPAN.kwaishop-cps-daren-match-pc-tooltip-disa> y=470 w=88
+快捷邀约  <BUTTON.kwaishop-cps-daren-match-pc-btn kwaishop> y=470 w=88
+快捷邀约  <SPAN.> y=471 w=56
+在线沟通  <BUTTON.kwaishop-cps-daren-match-pc-btn kwaishop> y=498 w=88
+在线沟通  <SPAN.> y=499 w=56
+快捷邀约 在线沟通 加入收藏  <DIV.buttonsWrap___xkB9H tableActionButtons__> y=577 w=88
+快捷邀约  <BUTTON.kwaishop-cps-daren-match-pc-btn kwaishop> y=577 w=88
+快捷邀约  <SPAN.> y=578 w=56
+在线沟通  <BUTTON.kwaishop-cps-daren-match-pc-btn kwaishop> y=603 w=88
+在线沟通  <SPAN.> y=604 w=56
+快捷邀约 在线沟通 加入收藏  <DIV.buttonsWrap___xkB9H tableActionButtons__> y=682 w=88
+快捷邀约  <BUTTON.kwaishop-cps-daren-match-pc-btn kwaishop> y=682 w=88
+快捷邀约  <SPAN.> y=683 w=56
+在线沟通  <BUTTON.kwaishop-cps-daren-match-pc-btn kwaishop> y=708 w=88
+在线沟通  <SPAN.> y=709 w=56
+快捷邀约 在线沟通 加入收藏  <DIV.buttonsWrap___xkB9H tableActionButtons__> y=787 w=88
+快捷邀约  <SPAN.kwaishop-cps-daren-match-pc-tooltip-disa> y=787 w=88
+快捷邀约  <BUTTON.kwaishop-cps-daren-match-pc-btn kwaishop> y=787 w=88
+快捷邀约  <SPAN.> y=788 w=56
+在线沟通  <BUTTON.kwaishop-cps-daren-match-pc-btn kwaishop> y=815 w=88
+在线沟通  <SPAN.> y=816 w=56
+
+=== F. 抽屉正文（取 fixed 浮层内的文本）===
+(没有 fixed 浮层)
+
+截图已存 wx-invite-test/ui-ks-drawer2.png
+
+=== 收尾 ===

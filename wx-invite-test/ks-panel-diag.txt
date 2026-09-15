@@ -1,0 +1,13 @@
+当前视口: 1400x900
+
+=== 页面上所有 data-test 里含 task/invite 的元素 ===
+
+
+=== 任务面板容器是否在 DOM ===
+THREW {"exceptionId":1,"text":"Uncaught","lineNumber":4,"columnNumber":16,"scriptId":"27","exception":{"type":"object","subtype":"error","className":"SyntaxError","description":"SyntaxError: Unexpected token '-'","objectId":"2782323331497696118.1.2"}}
+
+=== 左栏/工具栏按钮（找打开任务面板的入口）===
+
+
+=== 正文片段（看当前停在哪）===
+商 ShopPilot ‹ 🔍 + 平台 全部 4 拼多多 1 微信小店 1 快手小店 1 抖店 1 未分组 福气满满 快手小店 ⏻ 慕么美 拼多多 ▶ 微信小店测试 微信小店 ▶ 1111 抖店 ▶ 🧾 发票中心 全部店铺 🗑 回收站 1 📸 截图 ⚙ 设置 商 欢迎使用 ShopPilot 电商店铺浏览器工作台。选择左侧店铺开始，或创建一个新店铺。 拼多多 微信小店 快手小店 抖店

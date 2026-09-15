@@ -1,0 +1,147 @@
+起始: 已选0
+
+=== 勾 2 行（JS label.click）===
+["checked=true","checked=true"]
+计数: 已选2
+
+=== 点「批量邀约」===
+{"tag":"BUTTON","cls":"kwaishop-cps-daren-match-pc-btn","disabled":false}
+
+=== 抽屉/弹窗（含 z-index 高的容器）===
+[
+ {
+  "tag": "DIV",
+  "cls": "kwaishop-cps-daren-match-pc-drawer kwaishop-cps-daren-match-pc-d",
+  "pos": "fixed",
+  "z": 1000,
+  "w": 1296,
+  "h": 950,
+  "y": 0
+ }
+]
+
+=== 页面新增文本（找"邀约/话术/确认"）===
+商品定向计划  <SPAN.cps-main-menu-title-content> y=212
+商品定向计划  <SPAN.kpro-workbench-layout-sider-v2__it> y=215
+商品定向计划  <SPAN.cps-main-badge> y=220
+商品定向计划  <SPAN.kpro-workbench-layout-sider-v2__it> y=219
+阶梯佣金计划  <SPAN.cps-main-menu-title-content> y=356
+阶梯佣金计划  <SPAN.kpro-workbench-layout-sider-v2__it> y=359
+阶梯佣金计划  <SPAN.cps-main-badge> y=364
+阶梯佣金计划  <SPAN.kpro-workbench-layout-sider-v2__it> y=363
+商品优化助手  <SPAN.cps-main-menu-title-content> y=392
+商品优化助手  <SPAN.kpro-workbench-layout-sider-v2__it> y=395
+商品优化助手  <SPAN.cps-main-badge> y=400
+商品优化助手  <SPAN.kpro-workbench-layout-sider-v2__it> y=399
+合作邀约  <SPAN.cps-main-menu-title-content> y=1016
+合作邀约  <SPAN.kpro-workbench-layout-sider-v2__it> y=1019
+合作邀约  <SPAN.cps-main-badge> y=1024
+合作邀约  <SPAN.kpro-workbench-layout-sider-v2__it> y=1023
+按商品找人  <DIV.kwaishop-cps-daren-match-pc-tabs-t> y=-169
+按商品找人  <DIV.kwaishop-cps-daren-match-pc-tabs-t> y=-158
+直播商品均价  <DIV.kwaishop-cps-daren-match-pc-row kw> y=99
+直播商品均价  <DIV.kwaishop-cps-daren-match-pc-col kw> y=99
+直播商品均价  <DIV.kwaishop-cps-daren-match-pc-form-i> y=99
+直播商品均价  <DIV.kwaishop-cps-daren-match-pc-pro-fi> y=99
+直播商品均价  <DIV.kwaishop-cps-daren-match-pc-pro-ch> y=99
+佣金率区间  <DIV.kwaishop-cps-daren-match-pc-row kw> y=99
+佣金率区间  <DIV.kwaishop-cps-daren-match-pc-col kw> y=99
+佣金率区间  <DIV.kwaishop-cps-daren-match-pc-form-i> y=99
+佣金率区间  <DIV.kwaishop-cps-daren-match-pc-pro-fi> y=99
+佣金率区间  <DIV.kwaishop-cps-daren-match-pc-pro-ch> y=99
+已选1条 批量收藏 批量邀约  <DIV.kwaishop-cps-daren-match-pc-space > y=349
+批量邀约  <DIV.kwaishop-cps-daren-match-pc-space-> y=349
+批量邀约  <BUTTON.kwaishop-cps-daren-match-pc-btn> y=349
+批量邀约  <SPAN.> y=354
+快捷邀约 在线沟通 加入收藏  <DIV.buttonsWrap___xkB9H tableActionBut> y=470
+快捷邀约  <SPAN.kwaishop-cps-daren-match-pc-toolti> y=470
+快捷邀约  <BUTTON.kwaishop-cps-daren-match-pc-btn kw> y=470
+快捷邀约  <SPAN.> y=471
+在线沟通  <BUTTON.kwaishop-cps-daren-match-pc-btn kw> y=498
+在线沟通  <SPAN.> y=499
+快捷邀约 在线沟通 加入收藏  <DIV.buttonsWrap___xkB9H tableActionBut> y=577
+快捷邀约  <BUTTON.kwaishop-cps-daren-match-pc-btn kw> y=577
+
+=== textarea / 可见输入框 ===
+{
+ "textarea": [
+  {
+   "ph": "请输入带货描述，最多可输入500个汉字。",
+   "cls": "kwaishop-cps-daren-match-pc-input",
+   "vis": true
+  },
+  {
+   "ph": "",
+   "cls": "",
+   "vis": true
+  }
+ ],
+ "输入框": [
+  {
+   "type": "text",
+   "ph": "可搜索达人昵称/ID/类目/内容类型/品牌",
+   "cls": "kwaishop-cps-daren-match-pc-input kwaishop-c"
+  },
+  {
+   "type": "search",
+   "ph": "",
+   "cls": "kwaishop-cps-daren-match-pc-select-selection"
+  },
+  {
+   "type": "search",
+   "ph": "",
+   "cls": "kwaishop-cps-daren-match-pc-select-selection"
+  },
+  {
+   "type": "search",
+   "ph": "",
+   "cls": "kwaishop-cps-daren-match-pc-select-selection"
+  },
+  {
+   "type": "search",
+   "ph": "",
+   "cls": "kwaishop-cps-daren-match-pc-select-selection"
+  },
+  {
+   "type": "search",
+   "ph": "",
+   "cls": "kwaishop-cps-daren-match-pc-select-selection"
+  },
+  {
+   "type": "search",
+   "ph": "",
+   "cls": "kwaishop-cps-daren-match-pc-select-selection"
+  },
+  {
+   "type": "search",
+   "ph": "",
+   "cls": "kwaishop-cps-daren-match-pc-select-selection"
+  },
+  {
+   "type": "search",
+   "ph": "",
+   "cls": "kwaishop-cps-daren-match-pc-select-selection"
+  },
+  {
+   "type": "text",
+   "ph": "请输入常用联系人称呼",
+   "cls": "kwaishop-cps-daren-match-pc-input"
+  },
+  {
+   "type": "text",
+   "ph": "请输入常用11位手机号",
+   "cls": "kwaishop-cps-daren-match-pc-input"
+  },
+  {
+   "type": "text",
+   "ph": "请输入常用微信号",
+   "cls": "kwaishop-cps-daren-match-pc-input"
+  }
+ ]
+}
+
+截图已存 wx-invite-test/ui-ks-drawer3.png
+
+=== 还原：取消勾选 ===
+unchecked 1 行
+收尾计数: 已选0

@@ -48,12 +48,56 @@ describe('达人邀约平台档案', () => {
     }
   })
 
-  it('已支持平台列表包含两家，未实现平台返回 null（不猜测）', () => {
+  it('已支持平台列表包含三家，未实现平台返回 null（不猜测）', () => {
     expect(INVITE_SUPPORTED_PLATFORMS).toContain('抖店')
     expect(INVITE_SUPPORTED_PLATFORMS).toContain('微信小店')
+    expect(INVITE_SUPPORTED_PLATFORMS).toContain('快手小店')
     expect(inviteProfileFor('拼多多')).toBeNull()
     expect(inviteProfileFor(null)).toBeNull()
     expect(Object.keys(INVITE_PROFILES).length).toBe(INVITE_SUPPORTED_PLATFORMS.length)
+  })
+
+  it('快手小店为 batch-list 流程，实测锚点入档（2026-09-15 真机量取）', () => {
+    const p = inviteProfileFor('快手小店')
+    expect(p).toBeTruthy()
+    expect(isBatchProfile(p!)).toBe(true)
+    if (!isBatchProfile(p!)) return
+    // 入口在**分销后台**，不是商家后台
+    expect(p.pageUrl).toBe('https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro')
+    // 单批上限 100（抽屉底部明示「今日剩余100条」）；平台要求至少勾 2 位（只勾 1 位点按钮无反应）
+    expect(p.maxBatch).toBe(100)
+    expect(p.minSelect).toBe(2)
+    expect(p.scriptMaxLen).toBe(500)
+    expect(p.maxProducts).toBe(10)
+    // 快手没有「达人等级」筛选 → levels 为空（面板与步骤据此跳过）
+    expect(p.levels).toEqual([])
+    expect(p.texts.levelTrigger).toBe('')
+    // 类目 = 带货类目 18 项，且每项都有实测子类
+    expect(p.categories.length).toBe(18)
+    expect(p.categories).toEqual(p.categoryTree.map(c => c.name))
+    for (const node of p.categoryTree) {
+      expect(node.children.length, `${node.name} 应有子类`).toBeGreaterThan(0)
+    }
+    expect(p.categoryLabelText).toBe('带货类目')
+    expect(p.texts.categoryAnyLeaf).toBe('全部')
+    // 四行筛选里只有需要用户选的登记为 extraFilterRows（带货类目=主类目、带货数据未做）
+    expect(p.extraFilterRows?.map(r => r.label)).toEqual(['内容标签', '合作信息'])
+    for (const row of (p.extraFilterRows || [])) expect(row.climb).toBeGreaterThan(0)
+    // 抽屉里的必填联系方式
+    expect(p.contactSelectors?.contact).toContain('联系人')
+    expect(p.contactSelectors?.phone).toContain('手机号')
+    expect(p.contactSelectors?.wechat).toContain('微信号')
+    // 商品要开弹窗选（含带空格的确认真实文案）
+    expect(p.goodsModal?.confirmText).toBe('确 认')
+    expect(p.goodsModal?.rootSelector).toContain('modal-body')
+    // 额度按页面明示文案取（不是抖店那种"看按钮禁用"）
+    expect(p.quotaCheck).toBe('requireQuota')
+    expect(p.quota?.textIncludes).toBe('今日剩余')
+    expect(p.quota?.min).toBeGreaterThan(0)
+    // 类目行容器类名相同 → 用「行标签 + 上溯」
+    expect(p.categoryChipScope).toEqual({ text: '带货类目', climb: 2 })
+    expect(p.benefitsLabelText).toBe('合作标签')
+    expect(p.benefits).toHaveLength(6)
   })
 })
 
@@ -335,6 +379,231 @@ describe('抖店（batch-list）步骤构造', () => {
     expect(types.indexOf('aiGenerate')).toBeGreaterThan(types.indexOf('requireEnabled'))
     expect(types.indexOf('aiGenerate')).toBeLessThan(types.lastIndexOf('clickByText'))
   })
+})
+
+// ---------- 快手小店（batch-list 的第二个平台：差异全部走档案字段） ----------
+
+describe('快手小店（batch-list）步骤构造', () => {
+  const KS = inviteProfileFor('快手小店')!
+  const ksBuild = (over: Partial<Parameters<typeof buildBatchSteps>[1]> = {}) => buildBatchSteps(
+    KS as any,
+    {
+      category: '个护家清', subcategory: '', levels: [], count: 2,
+      script: '来带货吧', scriptMode: 'manual', benefits: ['可聊高佣'],
+      contacts: [{ selector: 'input[placeholder*="常用联系人称呼"]', text: '刘涛' }],
+      extraFilters: { 内容标签: ['美妆'], 合作信息: ['有联系方式'] },
+      // 与面板默认一致：快手必选商品，默认 1 个
+      productCount: 1,
+      ...over
+    } as any,
+    'https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro'
+  )
+  const ksRound = (over: Partial<Parameters<typeof buildBatchSteps>[1]> = {}) =>
+    (ksBuild(over)[0].input as any).steps as Array<{ type: string; input: Record<string, any>; timeoutMs?: number }>
+
+  it('任务能过创建校验（步骤都在白名单内、loop 不带 timeoutMs）', () => {
+    const steps = ksBuild()
+    expect(steps).toHaveLength(1)
+    expect(steps[0].type).toBe('loop')
+    expect(steps[0].timeoutMs).toBeUndefined()
+    expect(taskCreateSchema.safeParse({ name: '达人邀约 · 快手小店', storeScope: 'store_x', steps }).success).toBe(true)
+  })
+
+  it('勾选下限按档案抬到 minSelect（快手只勾 1 位点「批量邀约」无反应）', () => {
+    // 用户填 1 位（低于平台下限 2）→ 实际按 2 位勾
+    const round = ksRound({ count: 1 })
+    const clickAll = round.find(s => s.type === 'clickAll')!
+    expect(clickAll.input).toMatchObject({ selector: 'tbody input[type=checkbox]', max: 2, scroll: true })
+    // 快手达人选人区的计数写作「已选N条」→ 必须给 counterIncludes 消歧义，
+    // 否则统计会读到页面上别的「已选…」文案（真机：商品弹窗勾选时读到达人的「已选2条」→ 误报 0 位）
+    expect(clickAll.input.counterIncludes).toBe('已选')
+    // 勾不满时 clickAll 自己报 TASK_SELECTION_SHORTFALL（loop 的 stopOn 当正常收尾）——
+    // 所以不该再加"按钮可用性预检"：那道预检会被页面上的下拉挡住按钮而误报（真机踩到）。
+    expect(round.filter(s => s.type === 'requireEnabled').map(s => s.input.text)).toEqual([])
+    // 用户填 5 位（高于下限）则按 5 位
+    expect(ksRound({ count: 5 }).find(s => s.type === 'clickAll')!.input.max).toBe(5)
+    // loop 标签如实写"每批 N 位"（N 是实际会勾的数）
+    expect(String(ksBuild({ count: 1 })[0].input.label)).toContain('每批 2 位')
+  })
+
+  it('类目：chip 与叶子都限定范围；快手用「行标签+上溯」，点「全部」= 不限子类', () => {
+    const round = ksRound()
+    const chip = round.find(s => s.type === 'clickByText' && String(s.input.text) === '个护家清')!
+    expect(chip.input.within).toEqual({ text: '带货类目', climb: 2 })
+    const leaf = round.find(s => s.type === 'clickByText' && String(s.input.text) === '全部')!
+    expect(leaf.input.within).toEqual({ selector: KS.categoryPopoverSelector })
+    // 生效校验：在**选择器定位的标记容器**里找类目名。
+    // 快手那条标记（.pro-tagForm-result）整段是子元素、自身没有文本节点，
+    // 按文案上溯找不到 → 必须用 filteredScope 的选择器（真机彩排实测踩到）。
+    const verify = round.find(s => s.type === 'waitForText')!
+    expect(String(verify.input.text)).toBe('个护家清')
+    expect(verify.input.within).toEqual({ selector: KS.filteredScope })
+  })
+
+  it('没有等级步骤（快手无该筛选维度）', () => {
+    const round = ksRound({ levels: ['LV0'] })
+    const texts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    // 档案 levelTrigger 为空 → 就算前端误传了等级名，也不生成"点等级"的步骤
+    expect(texts).not.toContain('达人等级')
+    expect(texts).not.toContain('LV0')
+  })
+
+  it('额外筛选行：只在对应行范围内点（内容标签 / 合作信息）', () => {
+    const round = ksRound()
+    const tag = round.find(s => s.type === 'clickByText' && String(s.input.text) === '美妆')!
+    expect(tag.input.within).toEqual({ text: '内容标签', climb: 2 })
+    const coop = round.find(s => s.type === 'clickByText' && String(s.input.text) === '有联系方式')!
+    expect(coop.input.within).toEqual({ text: '合作信息', climb: 2 })
+    // 没选的行不生成步骤（不乱点）
+    const empty = ksRound({ extraFilters: {} })
+    const emptyTexts = empty.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(emptyTexts).not.toContain('美妆')
+    expect(emptyTexts).not.toContain('有联系方式')
+  })
+
+  it('额度按页面明示文案预检（不是抖店的"看按钮禁用"）', () => {
+    const round = ksRound()
+    const quota = round.find(s => s.type === 'requireQuota')!
+    expect(String(quota.input.textIncludes)).toBe('今日剩余')
+    expect(round.some(s => s.type === 'requireEnabled' && String(s.input.text) === '发送邀请')).toBe(false)
+  })
+
+  it('必填联系方式逐项写入（联系人/手机号/微信号）', () => {
+    const round = ksRound({
+      contacts: [
+        { selector: 'input[placeholder*="常用联系人称呼"]', text: '刘涛' },
+        { selector: 'input[placeholder*="常用11位手机号"]', text: '13800000000' },
+        { selector: 'input[placeholder*="常用微信号"]', text: 'amike688' }
+      ]
+    })
+    const sets = round.filter(s => s.type === 'setInput').map(s => ({ sel: String(s.input.selector), text: String(s.input.text) }))
+    const byText = Object.fromEntries(sets.map(s => [s.text, s.sel]))
+    expect(byText['刘涛']).toContain('联系人')
+    expect(byText['13800000000']).toContain('手机号')
+    expect(byText['amike688']).toContain('微信号')
+    // 留空的不写（不覆盖平台上已有的值）
+    const onlyContact = ksRound({ contacts: [{ selector: 'input[placeholder*="常用联系人称呼"]', text: '刘涛' }] })
+    expect(onlyContact.filter(s => s.type === 'setInput' && String(s.input.selector).includes('手机号'))).toHaveLength(0)
+  })
+
+  it('商品：快手**必选**商品才能发送 → 用 JS 点击走弹窗（不受类目下拉遮挡影响）', () => {
+    // 实测：快手点「发送邀请」会提示「请选择商品」，且抽屉里那份商品表永远是空的
+    // → 必须点「选择商品」开弹窗选，再点弹窗「确 认」回到抽屉。
+    // 为什么不用 ensureRows：它内部是受信任鼠标点击，而实测类目级联下拉常残留展开、
+    // 盖住这些按钮；clickByText 的默认 JS 点击不受遮挡影响。
+    const round = ksRound({ productCount: 2 })
+    const open = round.find(s => s.type === 'clickByText' && String(s.input.text) === '选择商品')!
+    expect(open).toBeTruthy()
+    expect(open.input.mode).toBeUndefined()            // 默认 JS 点击（不依赖坐标）
+    expect(KS.goodsModal!.addText).toBe('选择商品')
+    // 弹窗内的复选框用 clickAll（内部 label.click()，同样不受遮挡影响）。
+    // 弹窗里确实有 tbody（实测 6 个复选框），按 tbody 限定即可排除表头的"全选"
+    const boxes = round.find(s => s.type === 'clickAll' && String(s.input.selector).includes('modal-body'))!
+    expect(boxes.input.max).toBe(2)
+    expect(String(boxes.input.selector)).toContain('tbody')
+    // 确认按钮按文案点（实测「确 认」带空格，引擎按去空格匹配）
+    expect(round.some(s => s.type === 'clickByText' && String(s.input.text) === '确 认')).toBe(true)
+    // 结果校验：商品数必须 ≥ 1（用通用"数字 ≥ min"断言），
+    // 但**必须换错误码**——默认 TASK_QUOTA_EXCEEDED 在 loop 的 stopOn 里，
+    // 用它会把"商品没选上"当成"按预期收工"，静默地一位都没邀约却报成功。
+    const assertCount = round.find(s => s.type === 'requireQuota' && String(s.input.textIncludes) === '已选择商品数')!
+    expect(assertCount.input.min).toBe(1)
+    expect(assertCount.input.code).toBe('TASK_PRODUCT_NOT_SELECTED')
+    // 商品弹窗确认后**可能**再弹一个「商品不符合达人带货要求，确认是否仍要发送邀请？」
+    // （只在商品与该达人品类要求不匹配时出现）→ 用 clickIfPresent 出现就点掉，
+    // 且必须在"商品数 ≥ 1"断言之前（不点掉它，计数一直是 0/100）。
+    const acceptWarn = round.findIndex(s => s.type === 'clickIfPresent')
+    expect(acceptWarn).toBeGreaterThan(round.findIndex(s => s.type === 'clickByText' && String(s.input.text) === '确 认'))
+    expect(acceptWarn).toBeLessThan(round.indexOf(assertCount))
+    // 那个确认框的按钮也叫「确认」，与商品弹窗的「确 认」同名 → 必须用 nearText 限定范围，
+    // 否则会点到下层弹窗的按钮（白点一次、确认框留着）。
+    // 锚点用**两个变体共有的**那半句（实测该提示框文案是动态的：
+    // 「商品不符合达人带货要求…」/「商品佣金率低于达人带货要求…」都出现过）
+    expect(round[acceptWarn].input.nearText).toBe('确认是否仍要发送邀请')
+    // 商品在**发送之前**选（平台缺商品会拦下发送）
+    const sendIdx = round.findIndex(s => s.type === 'clickByText' && String(s.input.text) === '发送邀请')
+    expect(round.indexOf(open)).toBeLessThan(sendIdx)
+    // 不再用 ensureRows 走商品（那是受信任鼠标路径）
+    expect(round.some(s => s.type === 'ensureRows')).toBe(false)
+    // 抖店没有 goodsModal → 不生成这些步骤（保持既有行为）
+    const ddSteps = buildBatchSteps(DD as any, {
+      category: '生鲜', levels: ['LV0'], count: 5,
+      script: 'x', scriptMode: 'manual', benefits: []
+    } as any, 'https://buyin.jinritemai.com/dashboard/servicehall/daren-square')
+    const ddTypes = (ddSteps[0].input as any).steps.map((s: any) => s.type)
+    expect(ddTypes).not.toContain('ensureRows')
+    // 抖店没有商品弹窗 → 不该有"等弹窗消失"那一步
+    expect((ddSteps[0].input as any).steps.some((s: any) => s.type === 'waitForGone' && String(s.input.selector).includes('modal-body'))).toBe(false)
+  })
+  it('发送后：发送邀请 → 关抽屉校验 → 截图；无人工确认门禁', () => {
+    const round = ksRound()
+    const types = round.map(s => s.type)
+    const send = round.find(s => s.type === 'clickByText' && String(s.input.text) === '发送邀请')!
+    expect(send).toBeTruthy()
+    expect(types).not.toContain('waitForUserConfirmation')
+    // 关**抽屉**的那次校验必须在发送之后（现在还有一次"等商品弹窗消失"在前，要按选择器区分）
+    const drawerGoneIdx = round.findIndex(s => s.type === 'waitForGone' && String(s.input.selector) === KS.scriptSelector)
+    expect(drawerGoneIdx).toBeGreaterThan(round.indexOf(send))
+    expect(types[types.length - 1]).toBe('screenshot')
+    // 关抽屉校验的超时不能太短：实测快手发送后要几十秒才关，30s 会把成功误报成失败
+    expect(round[drawerGoneIdx].timeoutMs).toBeGreaterThanOrEqual(60000)
+  })
+
+  it('合作标签按文案点击（抽屉里的复选框）', () => {
+    const round = ksRound({ benefits: ['可聊高佣', '素材支持'] })
+    const texts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(texts).toContain('可聊高佣')
+    expect(texts).toContain('素材支持')
+  })
+})
+
+/**
+ * 端到端形状校验：**把生成的每一个嵌套步骤都过一遍 taskCreateSchema**。
+ *
+ * 为什么必须有：真机彩排时任务创建被拒 `Unrecognized key(s) in object: 'hint'`——
+ * 构造器给 requireQuota 塞了一个 schema 里不存在的字段，而单测只检查了"步骤长什么样"、
+ * 没检查"能不能被创建"。这道校验就是那次缺陷的回归网。
+ */
+describe('生成的步骤必须能真的创建任务（形状与白名单一致）', () => {
+  const CASES: Array<[string, any, string]> = [
+    [
+      '抖店',
+      inviteProfileFor('抖店'),
+      { category: '个护家清', subcategory: '家清纸品', levels: ['LV0', 'LV1'], count: 40, script: '话术', scriptMode: 'manual', benefits: ['专属高佣'] }
+    ],
+    [
+      '快手小店',
+      inviteProfileFor('快手小店'),
+      {
+        category: '个护家清', subcategory: '纸品湿巾', levels: [], count: 2,
+        script: '话术', scriptMode: 'manual', benefits: ['可聊高佣'],
+        extraFilters: { 内容标签: ['美妆'], 合作信息: ['有联系方式'] },
+        contacts: [
+          { selector: 'input[placeholder*="常用联系人称呼"]', text: '刘涛' },
+          { selector: 'input[placeholder*="常用手机号"]', text: '13800000000' }
+        ],
+        productCount: 1
+      }
+    ],
+    ['快手小店（AI 话术）', inviteProfileFor('快手小店'), { category: '', subcategory: '', levels: [], count: 2, script: '', scriptMode: 'ai', benefits: [], productCount: 1 }]
+  ]
+
+  for (const [label, profile, opts] of CASES) {
+    it(`${label}：每个嵌套步骤都过 taskCreateSchema`, () => {
+      const steps = buildBatchSteps(profile as any, opts as any, 'https://example.com/daren')
+      const parsed = taskCreateSchema.safeParse({ name: '达人邀约 · 校验', storeScope: 'store_x', steps })
+      if (!parsed.success) {
+        // 把具体是第几步、哪个字段不合法打出来，便于直接定位
+        const issues = parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(' | ')
+        throw new Error(`${label} 生成的步骤无法创建任务：${issues}`)
+      }
+      expect(parsed.success).toBe(true)
+      // 嵌套步骤数不能超过引擎上限（loop.steps 上限 40）
+      const inner = (steps[0].input as any).steps
+      expect(inner.length).toBeGreaterThan(0)
+      expect(inner.length).toBeLessThanOrEqual(40)
+    })
+  }
 })
 
 describe('buildInviteSteps 分派与 urlPathHint', () => {

@@ -1,0 +1,84 @@
+候选标签页:
+  - https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro
+  - https://s.kwaixiaodian.com/zone/home
+
+探查目标: https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro
+
+=== 概况 ===
+标题: 分销商家
+视口: 1296x950 vis=visible
+正文片段: 2 1 福气满满嘉年华工厂店福气满满嘉年华工厂店 ID:4256462326 首页 计划管理 普通计划 商品定向计划 店铺定向计划 达人专属计划 商城推广计划 阶梯佣金计划 商品优化助手 选品中心分析 商单合作 寄样管理 找达人 达人广场 达人建联诊断 达人智能推荐 达人排行榜 同行合作参考 达人招商 我的达人 找团长 团长招商 我报名的活动 店铺托管 合作邀约 智慧经营 合作达人 推广效果 推广趋势 智能托管 分销资质 资质列表 清退列表 规则中心 准入清退规则 结算规则 推广协议规则 基本设置 达人黑名单 收款账号 联系方式 营销设置 聚力计划 推广设置 店铺主页 达人广场 建联分析 建议 建议更积极建联达人，提高合作达人规模 近7日在线沟通发起建联人数低，低于55.71%的同行商家 更多达人推荐 建议 建议关注建联达人匹配度，避免无效建联 近7日在线沟通建联成功率低，低于99.0%的同行商家 更多达人推荐 按条件找人 按商品找人 找相似达人 每日达人推荐 内容标签 全选 三农 二次元 亲子 随手拍 生活 穿搭 美妆 美食 旅游 健康 游戏 情感 资讯 颜值 运动 高新数码 动物 汽车 音乐 影视和短剧 法律 才艺 明星娱乐 军事 教育 宗教 读书 房产家居 摄影 舞蹈 搞笑 财经 星座命理 奇人异象 科学 历史 其他 更多 带货类目 零食饮料 家居百货 女装女鞋 美妆护肤 个护家清 营养健康 母婴玩具 生鲜食品 男装男鞋 运动户外 数码家电 珠宝文玩 茶叶酒水 箱包配饰 图书学习 花宠园艺 童装童鞋 内衣裤袜 带货数据 合作商家数 30日直播场均观看人数 直播场均销售额 
+
+=== iframe / shadow ===
+{"iframes":[],"shadowHosts":[]}
+
+=== 表格 ===
+[
+ {
+  "第几张": 0,
+  "行数": 21,
+  "表头": [
+   "达人信息",
+   "粉丝数",
+   "30日直播均场销售额",
+   "30日直播均场观看人数",
+   "千次曝光成交额",
+   "商品均价",
+   "合作店铺",
+   "操作"
+  ],
+  "首行": [
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   ""
+  ]
+ }
+]
+
+=== 复选框 ===
+input[type=checkbox] × 21 | tbody input[type=checkbox] × 20 | [class*=checkbox] input × 21
+
+=== 疑似按钮/筛选（自身文本 2-12 字）===
+达人专属计划  <SPAN.kpro-workbench-layout-sider-v2__it> 78x17 y=291
+找达人  <SPAN.kpro-workbench-layout-sider-v2__su> 42x19 y=566
+达人广场  <SPAN.kpro-workbench-layout-sider-v2__it> 52x17 y=611
+达人建联诊断  <SPAN.kpro-workbench-layout-sider-v2__it> 78x17 y=647
+达人智能推荐  <SPAN.kpro-workbench-layout-sider-v2__it> 78x17 y=683
+达人排行榜  <SPAN.kpro-workbench-layout-sider-v2__it> 65x17 y=719
+达人招商  <SPAN.kpro-workbench-layout-sider-v2__it> 52x17 y=791
+我的达人  <SPAN.kpro-workbench-layout-sider-v2__it> 52x17 y=827
+合作邀约  <SPAN.kpro-workbench-layout-sider-v2__it> 52x17 y=1023
+合作达人  <SPAN.kpro-workbench-layout-sider-v2__it> 52x17 y=1111
+达人黑名单  <SPAN.kpro-workbench-layout-sider-v2__it> 65x17 y=1591
+达人广场  <DIV.titleWrapper___lAm0O> 155x26 y=112
+更多达人推荐  <SPAN.> 84x30 y=189
+找相似达人  <DIV.kwaishop-cps-daren-match-pc-tabs-t> 90x26 y=273
+每日达人推荐  <DIV.kwaishop-cps-daren-match-pc-tabs-t> 108x26 y=273
+带货类目  <LABEL.kwaishop-cps-daren-match-pc-form-i> 70x32 y=438
+带货数据  <LABEL.kwaishop-cps-daren-match-pc-form-i> 70x32 y=530
+达人信息  <LABEL.kwaishop-cps-daren-match-pc-form-i> 70x32 y=578
+达人地域  <DIV.kwaishop-cps-daren-match-pc-pro-fi> 56x32 y=578
+达人性别  <DIV.kwaishop-cps-daren-match-pc-pro-fi> 56x32 y=578
+粉丝年龄  <DIV.kwaishop-cps-daren-match-pc-pro-fi> 56x32 y=578
+粉丝性别  <DIV.kwaishop-cps-daren-match-pc-pro-fi> 56x32 y=578
+粉丝城市划分  <DIV.kwaishop-cps-daren-match-pc-pro-fi> 84x32 y=578
+招商中达人  <DIV.kwaishop-cps-daren-match-pc-pro-ch> 96x32 y=626
+直播达人  <DIV.kwaishop-cps-daren-match-pc-tabs-t> 122x36 y=778
+短视频达人  <DIV.kwaishop-cps-daren-match-pc-tabs-t> 122x36 y=778
+批量收藏  <SPAN.> 56x22 y=785
+批量邀约  <SPAN.> 56x22 y=785
+达人信息  <TH.kwaishop-cps-daren-match-pc-table-> 400x56 y=829
+粉丝数  <SPAN.kwaishop-cps-daren-match-pc-table-> 73x22 y=846
+快捷邀约  <SPAN.> 56x20 y=902
+艳姐（直播带货）  <SPAN.nickname___cMsru> 128x24 y=1856
+
+=== 分页/页脚 ===
+[class*=pagination] × 16 :: 1 2 3 4 5 ••• 50
+
+截图已存 wx-invite-test/ui-ks-square.png

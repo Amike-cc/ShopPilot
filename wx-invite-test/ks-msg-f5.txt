@@ -1,0 +1,5 @@
+status: failed
+errorCode: INTERNAL_ERROR
+errorMessage: LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 1/28 screenshot）失败：CAPTURE_EMPTY: 页面当前不可见（视口未渲染），无法截图
+statusReason: 步骤 1/1（loop）失败
+用时: 23 ms

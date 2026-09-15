@@ -1,0 +1,5 @@
+status: failed
+errorCode: INTERNAL_ERROR
+errorMessage: LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 24/28 waitForGone）失败：TASK_TIMEOUT: 等待元素消失 .kwaishop-cps-daren-match-pc-modal-body 超过 30000ms
+statusReason: 步骤 1/1（loop）失败
+用时: 35768 ms

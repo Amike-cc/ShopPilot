@@ -1,0 +1,158 @@
+=== A. 商品弹窗按钮的**原始文本**（JSON 转义看空格）===
+[
+ {
+  "innerText": "",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-modal-close"
+ },
+ {
+  "innerText": "",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-tabs-nav-more"
+ },
+ {
+  "innerText": "重 置",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-btn"
+ },
+ {
+  "innerText": "查 询",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-btn kwaishop-cps-daren"
+ },
+ {
+  "innerText": "设置定向佣金",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-btn kwaishop-cps-daren"
+ },
+ {
+  "innerText": "设置定向佣金",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-btn kwaishop-cps-daren"
+ },
+ {
+  "innerText": "设置定向佣金",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-btn kwaishop-cps-daren"
+ },
+ {
+  "innerText": "设置定向佣金",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-btn kwaishop-cps-daren"
+ },
+ {
+  "innerText": "设置定向佣金",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-btn kwaishop-cps-daren"
+ },
+ {
+  "innerText": "去上架商品",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-btn kwaishop-cps-daren"
+ },
+ {
+  "innerText": "",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-pagination-item-link"
+ },
+ {
+  "innerText": "",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-pagination-item-link"
+ },
+ {
+  "innerText": "取 消",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-btn"
+ },
+ {
+  "innerText": "确 认",
+  "自有文本": "",
+  "cls": "kwaishop-cps-daren-match-pc-btn kwaishop-cps-daren"
+ }
+]
+
+=== B. 搜索输入框（商品ID 路径用）===
+[
+ {
+  "type": "search",
+  "ph": "",
+  "cls": "kwaishop-cps-daren-match-pc-select-selection-searc"
+ },
+ {
+  "type": "text",
+  "ph": "请输入",
+  "cls": "kwaishop-cps-daren-match-pc-input"
+ },
+ {
+  "type": "checkbox",
+  "ph": "",
+  "cls": "kwaishop-cps-daren-match-pc-checkbox-input"
+ },
+ {
+  "type": "checkbox",
+  "ph": "",
+  "cls": "kwaishop-cps-daren-match-pc-checkbox-input"
+ },
+ {
+  "type": "checkbox",
+  "ph": "",
+  "cls": "kwaishop-cps-daren-match-pc-checkbox-input"
+ },
+ {
+  "type": "checkbox",
+  "ph": "",
+  "cls": "kwaishop-cps-daren-match-pc-checkbox-input"
+ },
+ {
+  "type": "checkbox",
+  "ph": "",
+  "cls": "kwaishop-cps-daren-match-pc-checkbox-input"
+ },
+ {
+  "type": "checkbox",
+  "ph": "",
+  "cls": "kwaishop-cps-daren-match-pc-checkbox-input"
+ },
+ {
+  "type": "checkbox",
+  "ph": "",
+  "cls": "kwaishop-cps-daren-match-pc-checkbox-input"
+ }
+]
+
+=== C. 商品行与复选框 ===
+{
+ "复选框总数": 7,
+ "行数": 7,
+ "每行复选框": [
+  {
+   "有": false,
+   "文本": ""
+  },
+  {
+   "有": true,
+   "文本": "装饰植绒小灯笼挂饰盆景阳台新年节日结婚庆装饰圆形红灯笼挂件 商品ID：25722117941326 "
+  },
+  {
+   "有": true,
+   "文本": "新年乔迁高档金箔纸杯加厚红色一次性喜庆水杯喜迁新居搬家喜杯子 商品ID：25812911614326"
+  }
+ ],
+ "第一行label类": null
+}
+
+=== D. 勾选第一个商品行 + 点确认 ===
+勾选: checked=true
+确认点击: ["SPAN","BUTTON","DIV"]
+弹窗是否还在: true
+抽屉里的"已选择商品数": 已选择商品数：1/10
+
+=== E. JS 里搜"二次确认"线索 ===
+(未从 initialState 里找到线索；发送后以"抽屉关闭"为成功判据)
+
+截图已存 wx-invite-test/ui-ks-goods-selected.png
+
+=== 收尾 ===
+取消 0
+收尾计数: 已选0

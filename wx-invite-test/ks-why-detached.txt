@@ -1,0 +1,14 @@
+快手 storeId: store_3856e71a3ae8499ebdbec1f4ccbb4394
+① 初始: 78CAB6=0x0 744100=0x0 474FD6=0x0 C6031F=0x0 B3712B=0x0
+
+② 再 display 一次…
+   视口: 78CAB6=0x0 744100=0x0 474FD6=0x0 C6031F=0x0 B3712B=0x0
+
+③ setViewsObscured(false)…
+   返回: {"ok":true,"data":{"obscured":false},"requestId":"e336ce95-945d-4323-802c-39441fbf4280"}
+   视口: 78CAB6=0x0 744100=0x0 474FD6=0x0 C6031F=0x0 B3712B=0x0
+
+④ setViewport 上报 776x818…
+   视口: 78CAB6=0x0 744100=0x0 474FD6=0x0 C6031F=0x0 B3712B=0x0
+
+⑤ 渲染层是否有"锁屏"覆盖层: {"lock":false,"welcome":false}

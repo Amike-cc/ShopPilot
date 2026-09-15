@@ -1,0 +1,18 @@
+--- step 0 executed ---
+{
+ "action": "loop",
+ "label": "个护家清/纸品湿巾 · 每批 2 位",
+ "maxRounds": 1,
+ "completedRounds": 1,
+ "stopReason": null,
+ "stopOn": [
+  "TASK_DAREN_PAGE_UNOPENABLE"
+ ],
+ "rounds": [
+  {
+   "round": 1,
+   "ok": true,
+   "ms": 2983
+  }
+ ]
+}

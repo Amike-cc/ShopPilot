@@ -1,0 +1,13 @@
+准备完成: {"drawer":0,"modals":0,"发送邀请按钮":{"w":88,"h":32,"disabled":false}}
+
+=== A. JS 逐级点击「发送邀请」 ===
+点击: ["SPAN","BUTTON","DIV"]
+  +3s → {"drawer":0,"modals":0,"发送邀请按钮":{"w":88,"h":32,"disabled":false}}
+  +10s → {"drawer":0,"modals":0,"发送邀请按钮":{"w":88,"h":32,"disabled":false}}
+  +20s → {"drawer":0,"modals":0,"发送邀请按钮":{"w":88,"h":32,"disabled":false}}
+Warning: Detected unsettled top-level await at file:///D:/code/%E7%94%B5%E5%95%86%E6%B5%8F%E8%A7%88%E5%99%A8/wx-invite-test/diag-send-click.mjs:96
+await shot('ks-send-afters-js.png')
+^
+
+
+

@@ -1,0 +1,158 @@
+=== 彩排模式（不发送）===
+步骤数: 28 含发送: false
+中栏 viewport: 776x818
+create ok = true 
+runId = run_bc8d731ceebcf203cb744737
+  [4s] failed step=0
+
+=== 结果: failed INTERNAL_ERROR ===
+错误信息: LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 1/28 screenshot）失败：CAPTURE_EMPTY: 页面当前不可见（视口未渲染），无法截图
+
+步骤结果:
+{
+ "run": {
+  "id": "run_bc8d731ceebcf203cb744737",
+  "taskId": "task_d2e969caa0c1fda3e135c826",
+  "storeId": "store_3856e71a3ae8499ebdbec1f4ccbb4394",
+  "status": "failed",
+  "currentStep": 0,
+  "startedAt": 1789452165231,
+  "finishedAt": 1789452165254,
+  "errorCode": "INTERNAL_ERROR",
+  "errorMessage": "LOOP_ROUND_FAILED: 第 1/1 轮（子步骤 1/28 screenshot）失败：CAPTURE_EMPTY: 页面当前不可见（视口未渲染），无法截图",
+  "statusReason": "步骤 1/1（loop）失败"
+ },
+ "steps": [
+  {
+   "index": 0,
+   "type": "loop",
+   "input": {
+    "label": "个护家清/纸品湿巾 · 每批 2 位",
+    "maxRounds": 1,
+    "stopOn": [
+     "TASK_DAREN_PAGE_UNOPENABLE"
+    ],
+    "steps": [
+     {
+      "type": "screenshot",
+      "input": {},
+      "timeoutMs": 20000
+     },
+     {
+      "type": "navigate",
+      "input": {
+       "url": "https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro"
+      },
+      "timeoutMs": 45000
+     },
+     {
+      "type": "waitForPage",
+      "input": {
+       "urlIncludes": "daren-square-pro"
+      },
+      "timeoutMs": 45000
+     },
+     {
+      "type": "clickByText",
+      "input": {
+       "text": "个护家清",
+       "within": {
+        "text": "带货类目",
+        "climb": 2
+       }
+      },
+      "timeoutMs": 20000
+     },
+     {
+      "type": "clickByText",
+      "input": {
+       "text": "纸品湿巾",
+       "mode": "real",
+       "within": {
+        "selector": ".kwaishop-cps-daren-match-pc-select-dropdown"
+       }
+      },
+      "timeoutMs": 25000
+     },
+     {
+      "type": "pressKey",
+      "input": {
+       "key": "Escape"
+      },
+      "timeoutMs": 10000
+     },
+     {
+      "type": "clickByText",
+      "input": {
+       "text": "美妆",
+       "within": {
+        "text": "内容标签",
+        "climb": 2
+       }
+      },
+      "timeoutMs": 20000
+     },
+     {
+      "type": "clickByText",
+      "input": {
+       "text": "有联系方式",
+       "within": {
+        "text": "合作信息",
+        "climb": 2
+       }
+      },
+      "timeoutMs": 20000
+     },
+     {
+      "type": "waitForSelector",
+      "input": {
+       "selector": "tbody input[type=checkbox]"
+      },
+      "timeoutMs": 30000
+     },
+     {
+      "type": "waitForText",
+      "input": {
+       "text": "个护家清",
+       "within": {
+        "selector": ".kwaishop-cps-daren-match-pc-pro-tagForm-result"
+       }
+      },
+      "timeoutMs": 25000
+     },
+     {
+      "type": "waitForText",
+      "input": {
+       "text": "纸品湿巾",
+       "within": {
+        "selector": ".kwaishop-cps-daren-match-pc-pro-tagForm-result"
+       }
+      },
+      "timeoutMs": 25000
+     },
+     {
+      "type": "clickAll",
+      "input": {
+       "selector": "tbody input[type=checkbox]",
+       "max": 2,
+       "scroll": true,
+       "maxRounds": 40,
+       "counterIncludes": "已选"
+      },
+      "timeoutMs": 240000
+     },
+     {
+      "type": "clickByText",
+      "input": {
+       "text": "批量邀约"
+      },
+      "timeoutMs": 15000
+     },
+     {
+      "type": "waitForSelector",
+      "input": {
+       "selector": "textarea"
+      },
+      "timeoutMs": 30000
+     },
+   

@@ -1,0 +1,9 @@
+视口: 0x0 scrollY=0
+开抽屉: ["SPAN","BUTTON","DIV"]
+抽屉后 counter: 已选择商品数：0/10
+Warning: Detected unsettled top-level await at file:///D:/code/%E7%94%B5%E5%95%86%E6%B5%8F%E8%A7%88%E5%99%A8/wx-invite-test/diag-modal3.mjs:75
+await shot('ks-before-goods.png')
+^
+
+
+
