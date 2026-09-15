@@ -17,6 +17,8 @@ export interface StepDraft {
   type: string
   input: Record<string, unknown>
   timeoutMs?: number
+  /** 瞬态失败（超时/网络抖动）时的重试次数；只对**可安全重放**的步骤用（写话术是幂等的） */
+  retryLimit?: number
 }
 
 /**
@@ -198,7 +200,10 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
         sourceSelector: p.goodsSourceSelector || '',
         maxLen: p.scriptMaxLen
       },
-      timeoutMs: 90000
+      timeoutMs: 90000,
+      // 生成话术幂等（重跑=重新生成覆盖同一输入框）→ 允许瞬态重试，
+      // 免得一次模型抖动把整批（可能已真实发出几十位）打掉。理由同 assist 流程那条注释。
+      retryLimit: 2
     })
     // aiGenerate 的 payload 只有摘要（模型/长度/预览），完整话术靠 readText 落库——事后能查出"到底发了什么"
     round.push({ type: 'readText', input: { selector: p.scriptSelector, metric: 'invite.script' }, timeoutMs: 15000 })
@@ -344,6 +349,20 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
     input: {
       text: '邀请带货', deep: true, mode: 'real',
       missingCode: 'TASK_DAREN_PAGE_UNOPENABLE',
+      // 详情页渲染正常、但平台明说这一位**不满足合作条件**时，页面上没有「邀请带货」，
+      // 而是写着「暂未到达合作门槛」（实测：同一页可邀约的显示「邀请带货」）。
+      // 这两件事的处置**相反**，必须在这里分开：
+      //   - 按钮不在、也没有这句话 → 页面（微应用）没渲染出来 → 退避后重试同一位；
+      //   - 按钮不在、但有这句话 → 这位达人天生不能邀约 → 立刻换下一位，重试毫无意义。
+      // 不给 absentCode 的话两者会共用 missingCode，表现成"一直重试同一个不能邀约的人"。
+      absentText: p.texts.notInvitable,
+      absentCode: 'TASK_DAREN_NOT_INVITABLE',
+      // 按钮存在但**禁用**：微信在这里表达的是"这一位现在不能邀约"，实测原因是
+      // 「你已经邀请过该达人，7天内不可再次发送带货邀约」（悬浮说明）。
+      // 与上面的缺席判据一样，必须**跳过换下一位**而不是中止整单——
+      // 一批刚发完就再跑时，广场排在前面的往往正是刚邀过的人。
+      // 报出的文案由引擎带上平台给的禁用原因，日志里能看出到底是"已邀约"还是别的原因。
+      disabledCode: 'TASK_DAREN_ALREADY_INVITED',
       waitUrl: { includes: p.inviteUrlMarker, attempts: 4 }
     },
     timeoutMs: 60000
@@ -360,7 +379,11 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
     round.push({
       type: 'aiGenerate',
       input: { selector: p.selectors.script, sourceSelector: p.selectors.goodsSource, deep: true, maxLen: p.scriptMaxLen },
-      timeoutMs: 90000
+      timeoutMs: 90000,
+      // 生成话术是**幂等**的（重跑只是重新生成并覆盖同一个输入框），所以允许瞬态重试：
+      // 真机实测第 25 轮 aiGenerate 超时 30s 直接把整单打掉，而前 24 位已真实发出——
+      // 一次模型抖动不该让整批作废。aiGenerate 内部超时由 AI 客户端控制，重试由 loop 做。
+      retryLimit: 2
     })
     round.push({ type: 'readText', input: { selector: p.selectors.script, metric: 'invite.script', deep: true }, timeoutMs: 15000 })
   } else {
@@ -467,6 +490,26 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
               { type: 'useTab', input: { path: squarePath }, timeoutMs: 30000 },
               { type: 'waitMs', input: { ms: 20000 }, timeoutMs: 30000 }
             ]
+          },
+          {
+            // 页面正常、但平台明说这一位不满足合作条件（「暂未到达合作门槛」）：
+            // **跳过换下一位**（advance = 重开本轮但保留"已访问"记录，所以会取到下一条候选），
+            // 不做退避——它不是限流，等多久都一样。
+            // limit=20：一屏里不可邀约的占比实测约 1/4，给足余量；连续 20 位都不行
+            // （多半是这组筛选下确实没几个可邀约的）就如实收尾，不做无意义空转。
+            code: 'TASK_DAREN_NOT_INVITABLE',
+            limit: 20,
+            advance: true,
+            steps: [{ type: 'waitMs', input: { ms: 300 }, timeoutMs: 5000 }]
+          },
+          {
+            // 这一位已经邀约过（按钮禁用 + 平台提示「你已经邀请过该达人，7天内不可再次发送带货邀约」）：
+            // 同样是**跳过换下一位**。一批刚发完就再跑时，广场排在前面的往往正是刚邀过的人；
+            // 不跳过就会在第一轮当场 TASK_TARGET_DISABLED 中止，整单跑不起来。
+            code: 'TASK_DAREN_ALREADY_INVITED',
+            limit: 20,
+            advance: true,
+            steps: [{ type: 'waitMs', input: { ms: 300 }, timeoutMs: 5000 }]
           }
         ],
         steps: round

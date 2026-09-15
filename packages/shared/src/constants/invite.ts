@@ -237,6 +237,14 @@ export interface AssistInviteProfile extends InviteProfileBase {
     detail: string
     /** 详情页里的「邀请带货」入口 */
     inviteEntry: string
+    /**
+     * 详情页在**不可邀约**时显示的**替代文案**（实测微信：「暂未到达合作门槛」）。
+     * 与 inviteEntry 互斥：页面出现它就说明这位达人自身不满足平台合作条件
+     * （实测该文案的悬浮说明是「成为热招品牌 / 店铺需满足店铺评分行业前30%」）。
+     * 引擎据此**跳过换下一位**——与"页面没渲染出来"（重试同一位）是相反的处理，
+     * 不区分的话就会一直重试同一个不能邀约的人，白跑整轮。
+     */
+    notInvitable: string
   }
   /** 每日额度提示（实测页面文案，供界面展示；额度随经营情况变化） */
   dailyQuotaHint: string
@@ -352,7 +360,11 @@ const WEIXIN: AssistInviteProfile = {
     confirmSend: '确认',
     dialogMarker: '确认发送邀约',
     detail: '详情',
-    inviteEntry: '邀请带货'
+    inviteEntry: '邀请带货',
+    // 实测（2026-09-15 真机）：同一详情页上，可邀约的显示「邀请带货」，
+    // 不可邀约的显示「暂未到达合作门槛」（悬浮说明「成为热招品牌 / 店铺需满足店铺评分行业前30%」）。
+    // 广场列表里约 1/4 是这种——不区分会一直重试同一位，整单空转。
+    notInvitable: '暂未到达合作门槛'
   },
   dailyQuotaHint: '每日 200 次邀请额度',
   quota: { textIncludes: '今日剩余', min: 1 }

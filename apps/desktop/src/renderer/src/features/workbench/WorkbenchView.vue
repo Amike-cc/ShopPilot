@@ -701,6 +701,7 @@
                   <div class="p-info">
                     <div class="row-main">{{ i + 1 }}. {{ s.type }}<span class="row-sub"> · {{ s.timeoutMs / 1000 }}s</span></div>
                     <div class="row-sub">{{ stepInputBrief(s) }}<template v-if="stepResultBrief(t, i)"> ⇒ {{ stepResultBrief(t, i) }}</template></div>
+                    <div class="row-sub" v-if="s.type === 'loop' && loopSkipSummary(t)" data-test="invite-loop-summary">{{ loopSkipSummary(t) }}</div>
                   </div>
                 </div>
                 <div class="tc-btns" v-if="detailRunId(t)">
@@ -2439,6 +2440,28 @@ function stepInputBrief(s: any): string {
 function stepResultBrief(t: any, i: number): string {
   const r = resultOf(t, i)
   return r ? String(r.summary || r.kind).slice(0, 60) : ''
+}
+
+/**
+ * 邀约循环的"换人"明细：把 loop.payload.rounds 里的恢复记录汇总成一行。
+ *
+ * 为什么需要它（真机实测的缺口）：逐位邀约时引擎会**跳过**两类不能邀约的达人
+ * （不达合作门槛 / 7 天内已邀约过），这些位不会出现在任何步骤成功里。用户只看
+ * "本次邀约 N 位"根本分不清"跳过了 3 位"和"平台不给发了"——而这两件事的处置完全不同。
+ * 这里如实把跳过数说出来，并把最后为什么停下也带出来。
+ */
+function loopSkipSummary(t: any): string {
+  const d = detailData[t.id]
+  const loop = (d?.results || []).map((r: any) => {
+    try { return typeof r.payload === 'string' ? JSON.parse(r.payload) : (r.payload || {}) } catch { return {} }
+  }).find((p: any) => p.action === 'loop')
+  if (!loop) return ''
+  const rounds: any[] = Array.isArray(loop.rounds) ? loop.rounds : []
+  const skipped = rounds.reduce((n, r) => n + (Array.isArray(r.recovered) ? r.recovered.filter((m: string) => /跳过这一位|跳过并重开本轮/.test(String(m))).length : 0), 0)
+  const parts = [`成功邀约 ${loop.completedRounds ?? 0} 位`]
+  if (skipped) parts.push(`跳过 ${skipped} 位（不达合作门槛 / 7 天内已邀约过）`)
+  if (loop.stopReason) parts.push(`因「${loop.stopReason}」正常收尾`)
+  return parts.join(' · ')
 }
 
 async function toggleTaskDetail(t: any) {

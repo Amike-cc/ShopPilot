@@ -187,6 +187,21 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect(skip.restart).toBe(true)
     expect(skip.limit).toBeGreaterThan(1)
     expect(skip.steps.some((s: any) => s.type === 'useTab')).toBe(true)
+    // 这一位不满足平台合作条件（页面正常、只是不能邀约）→ advance：换下一位，且**不退避**
+    // （不是限流，等多久都一样）。restart 与 advance 的差别在"要不要回滚已访问记录"，
+    // 用 restart 会原地重试同一位直到耗尽次数。
+    const notInvitable = (loop.input.onCode || []).find((r: any) => r.code === 'TASK_DAREN_NOT_INVITABLE')!
+    expect(notInvitable).toBeTruthy()
+    expect(notInvitable.advance).toBe(true)
+    expect(notInvitable.restart).toBeUndefined()
+    expect(notInvitable.limit).toBeGreaterThan(1)
+    expect(notInvitable.steps.some((s: any) => s.type === 'useTab')).toBe(false)
+    // 这一位 7 天内已邀约过（按钮禁用 + 平台提示）→ 同样 advance 跳过换人。
+    // 一批刚发完紧接着再跑时，广场排在前面的往往正是刚邀过的人，不跳过会当场中止。
+    const already = (loop.input.onCode || []).find((r: any) => r.code === 'TASK_DAREN_ALREADY_INVITED')!
+    expect(already).toBeTruthy()
+    expect(already.advance).toBe(true)
+    expect(already.limit).toBeGreaterThan(1)
     // "列表到头"（SELECTION_SHORTFALL）不能配 restart，否则永远收不了尾
     expect((loop.input.onCode || []).some((r: any) => r.code === 'TASK_SELECTION_SHORTFALL')).toBe(false)
   })
@@ -221,6 +236,13 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect((invite.input.waitUrl as any).attempts).toBeGreaterThan(1)
     // 这一位打不开（微应用没渲染、按钮不存在）要报专属码，才能被 onCode 跳过换人而不是整批中断
     expect(invite.input.missingCode).toBe('TASK_DAREN_PAGE_UNOPENABLE')
+    // 页面正常但平台明说"这一位不满足合作条件"（实测「暂未到达合作门槛」）时，必须与上面那条
+    // **分开**：一个要换下一位、一个要重试同一位。缺席判据与专属码都要落在步骤上。
+    expect(invite.input.absentText).toBe('暂未到达合作门槛')
+    expect(invite.input.absentCode).toBe('TASK_DAREN_NOT_INVITABLE')
+    // 按钮存在但禁用（实测平台提示「你已经邀请过该达人，7天内不可再次发送带货邀约」）
+    // 也要走"跳过换下一位"而不是中止整单
+    expect(invite.input.disabledCode).toBe('TASK_DAREN_ALREADY_INVITED')
     expect(texts).toContain('邀请带货')
     // 轮内仍应等待详情页/表单页
     for (const inc of ['finder-detail', 'initiate-invite']) {
@@ -230,6 +252,18 @@ describe('微信小店（assist-form）步骤构造', () => {
     const step2 = buildAssistSteps(WX as any, base, SQUARE)
     const openTexts2 = wxParts(step2).opening.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
     expect(openTexts2).not.toContain('直播带货者')
+  })
+
+  it('assist-form 的 aiGenerate 带 retryLimit（模型抖动不该把整批已发出的邀约打成失败）', () => {
+    const steps = buildAssistSteps(WX as any, { ...base, scriptMode: 'ai', script: '' }, SQUARE)
+    const ai = wxRound(steps).find(s => s.type === 'aiGenerate')!
+    expect(ai).toBeTruthy()
+    // 生成话术是幂等的（重跑只是重新生成覆盖同一输入框），所以允许瞬态重试
+    expect(ai.retryLimit).toBeGreaterThan(0)
+    // 非幂等的步骤绝不能带 retryLimit（重放=重复点击/重复发送）
+    for (const s of wxRound(steps)) {
+      if (s.type === 'clickByText' || s.type === 'typeText') expect(s.retryLimit).toBeUndefined()
+    }
   })
 
   it('邀约商品：填了商品ID按ID精确指定；留空则固定加 1 个（面板已去掉「添加商品数量」）', () => {
@@ -604,6 +638,33 @@ describe('生成的步骤必须能真的创建任务（形状与白名单一致�
       expect(inner.length).toBeLessThanOrEqual(40)
     })
   }
+
+  /**
+   * assist-form（微信）也要过同一道校验。
+   *
+   * 为什么单列一条：`task.create` 会在写库前用 Zod 逐条校验**嵌套步骤与 onCode 规则**，
+   * 不合法就整单拒绝、面板只弹一句提示——步骤构造多了个超限字段（如 onCode.limit 超过上限）
+   * 就会表现成"点开始邀约没反应"，且在纯步骤构造的单测里完全看不出来。
+   * 校验字段上限这类问题必须由"真过一遍 taskCreateSchema"来兜住。
+   */
+  it('微信小店（assist-form）：生成的步骤同样能创建任务（含 absentText 与 onCode.advance）', () => {
+    const steps = buildAssistSteps(WX as any, {
+      contact: '刘涛', wechat: 'jiaoe988', phone: '15057937334',
+      script: '话术', scriptMode: 'manual', productCount: 1,
+      productIds: ['10000687986563'],
+      finderType: '直播带货者', finderCategories: ['母婴'], finderOtherFilters: ['有联系方式']
+    }, 'https://store.weixin.qq.com/shop/findersquare/find')
+    const parsed = taskCreateSchema.safeParse({ name: '达人邀约 · 微信小店 · 校验', storeScope: 'store_x', steps })
+    if (!parsed.success) {
+      const issues = parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(' | ')
+      throw new Error(`微信小店生成的步骤无法创建任务：${issues}`)
+    }
+    expect(parsed.success).toBe(true)
+    const loop = steps.find(s => s.type === 'loop')!
+    const inner = (loop.input as any).steps
+    expect(inner.length).toBeGreaterThan(0)
+    expect(inner.length).toBeLessThanOrEqual(40)
+  })
 })
 
 describe('buildInviteSteps 分派与 urlPathHint', () => {
@@ -688,10 +749,24 @@ describe('任务步骤输入 schema', () => {
     expect(stepInputSchemas.useTab.safeParse({ path: '/a', evil: 1 }).success).toBe(false)
   })
 
+  it('absentText/absentCode：目标缺席时按替代文案立刻失败（可换专属错误码）', () => {
+    const ok = { text: '邀请带货', deep: true, mode: 'real', absentText: '暂未到达合作门槛', absentCode: 'TASK_DAREN_NOT_INVITABLE' }
+    expect(stepInputSchemas.clickByText.safeParse(ok).success).toBe(true)
+    // 两者都可以单独给（只给 absentText 时错误码沿用 missingCode）
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', absentText: '暂未到达合作门槛' }).success).toBe(true)
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', absentCode: 'TASK_DAREN_NOT_INVITABLE' }).success).toBe(true)
+    // 超长 / 多余键都被拒
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', absentText: 'y'.repeat(201) }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', absentCode: 'z'.repeat(41) }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', absentText: 'y', evil: 1 }).success).toBe(false)
+  })
+
   it('loop.onCode：恢复步骤同样走白名单（未登记类型/超量被拒）', () => {
     const okRule = { code: 'TASK_PAGE_EXHAUSTED', limit: 3, steps: [{ type: 'clickByText', input: { text: '下一页', deep: true, mode: 'real' } }] }
     const base = { label: 'x', maxRounds: 2, stopOn: ['TASK_QUOTA_EXCEEDED'], steps: [{ type: 'navigate', input: { url: 'https://a.b/c' } }] }
     expect(stepInputSchemas.loop.safeParse({ ...base, onCode: [okRule] }).success).toBe(true)
+    // advance：跳过这一位换下一位（与 restart 的区别在引擎侧：要不要回滚已访问记录）
+    expect(stepInputSchemas.loop.safeParse({ ...base, onCode: [{ ...okRule, advance: true }] }).success).toBe(true)
     // 恢复步骤里的未登记类型 → 整条被拒
     expect(stepInputSchemas.loop.safeParse({ ...base, onCode: [{ ...okRule, steps: [{ type: 'runArbitraryCode', input: {} }] }] }).success).toBe(false)
     // 恢复步骤里的多余字段 → 被拒

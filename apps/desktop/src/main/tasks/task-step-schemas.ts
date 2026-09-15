@@ -96,6 +96,18 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      */
     disabledCode: z.string().min(1).max(40).optional(),
     /**
+     * 目标不存在时，若页面上出现这段**替代文案**，就立刻按 absentCode 失败（不等超时）。
+     *
+     * 用途：平台用"另一种说法"表达"这件事做不了，但页面本身是正常的"——
+     * 实测微信达人详情页：可邀约的显示「邀请带货」，不达合作门槛的显示
+     * 「暂未到达合作门槛」（页面渲染完好，只是这位达人不能邀约）。
+     * 不区分的话，这两件事会被同一个错误码混在一起：前者是"页面没渲染出来"（等一下还能好），
+     * 后者是"这位达人天生不能邀约"（等多久都一样）——而"等下一位"与"重试同一位"是完全相反的处理。
+     */
+    absentText: z.string().min(1).max(200).optional(),
+    /** absentText 命中时的错误码（默认 TASK_SELECTOR_CHANGED） */
+    absentCode: z.string().min(1).max(40).optional(),
+    /**
      * 点完可能在新标签页打开时用（微信达人广场实测：「详情」是 window.open，
      * 页面本身不跳转）。给了它就等新标签页出现、把本次运行切到新标签页上继续，
      * 并默认关掉旧的运行标签页（否则每个候选都留一个标签页）。
@@ -304,15 +316,25 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
       code: z.string().min(1).max(40),
       // 恢复动作（如「点下一页」）；同样逐条走白名单校验
       steps: z.array(taskStepSchema).min(1).max(10),
-      // 本轮内最多恢复几次（防止"翻页点不动"时空转）
-      limit: z.number().int().min(1).max(10).optional(),
+      // 本轮内最多恢复几次（防止"翻页点不动"时空转）。
+      // 上限给到 30：advance（跳过不满足平台合作条件的达人）在一屏里可能连续遇到多位，
+      // 实测广场里这类占约 1/4，20 位上限留了余量；loop.maxRounds 本身还有 50 的硬顶。
+      limit: z.number().int().min(1).max(30).optional(),
       /**
        * restart=true：命中后**重开本轮**（而不是重试当前子步骤）。
        * 用途：这一位达人打不开（平台间歇性渲染失败）→ 记下他、回广场取下一位继续。
        * limit 在 restart 语义下表示"**连续**跳过多少轮后放弃"（跨轮累计，成功一轮即清零），
        * 防止平台整体故障时静默跳过所有人。
        */
-      restart: z.boolean().optional()
+      restart: z.boolean().optional(),
+      /**
+       * advance=true：命中后**重开本轮，但保留本轮的"已访问"记录** —— 即"跳过这一位、换下一位"。
+       * 与 restart 的唯一差别就是那条记录（restart 要回滚它才能在重试时**再选中同一位**）：
+       * 用途：页面正常、但平台明说这一位不满足合作条件（微信详情页「暂未到达合作门槛」）。
+       * 重试同一位永远没用，必须换人；用 restart 会因为回滚记录而原地打转。
+       * limit 同为"连续跳过多少位后放弃"（成功邀约一位即清零）。
+       */
+      advance: z.boolean().optional()
     }).strict()).max(4).optional(),
     // 一轮动作的步骤数上限：抖店一轮 ≈ 17–28 步（含多等级/多权益），给到 40 步余量
     steps: z.array(taskStepSchema).min(1).max(40)

@@ -353,8 +353,15 @@ function classifyError(e: any): string {
   // 由 loop 的 onCode 恢复步骤「点下一页」消化掉；翻到最后一页仍取不出 → 由 stopOn 收工
   if (msg.includes('TASK_PAGE_EXHAUSTED')) return 'TASK_PAGE_EXHAUSTED'
   // 这一位达人的详情页打不开（微应用间歇性不渲染，「邀请带货」按钮不存在）：
-  // 由 loop 的 onCode restart 规则跳过换人（连续多位都这样才会停）
+  // 由 loop 的 onCode restart 规则**退避后重试同一位**（连续多位都这样才会停）
   if (msg.includes('TASK_DAREN_PAGE_UNOPENABLE')) return 'TASK_DAREN_PAGE_UNOPENABLE'
+  // 详情页打开了、页面也正常，但平台明说这一位**不满足合作条件**（微信「暂未到达合作门槛」）：
+  // 与上面那条是**相反**的处置——重试同一位永远没有用，必须跳过换下一位。
+  if (msg.includes('TASK_DAREN_NOT_INVITABLE')) return 'TASK_DAREN_NOT_INVITABLE'
+  // 「邀请带货」是禁用态且平台给出的原因是"已经邀约过"（实测微信悬浮说明
+  // 「你已经邀请过该达人，7天内不可再次发送带货邀约」）：同样要**跳过换下一位**——
+  // 一批发完之后紧接着再跑，广场里排在前面的往往正是刚邀过的人，不跳过就会当场中止。
+  if (msg.includes('TASK_DAREN_ALREADY_INVITED')) return 'TASK_DAREN_ALREADY_INVITED'
   // 店铺视图当时未挂载（弹层遮挡导致摘除）：需要真实落点的步骤无法进行，明确报出来
   if (msg.includes('TASK_VIEW_DETACHED')) return 'TASK_VIEW_DETACHED'
   // 邀约商品没真正选上（平台会因此拦下发送）：必须在发送前如实失败，
@@ -465,8 +472,9 @@ const ENUM_DEEP_FN = `
 
 /**
  * 元素可见性判据（微信的弹窗节点常预渲染在 DOM 里，仅靠存在性判断会被隐藏节点骗过）。
+ * 导出供单测复用同一份源码（见 tests/unit/click-absent-text.test.ts）。
  */
-const VISIBLE_JS = `
+export const VISIBLE_JS = `
   const __visible = (el) => {
     const r = el.getBoundingClientRect();
     if (!(r.width > 0 && r.height > 0)) return false;
@@ -539,20 +547,52 @@ export const SCOPE_FN = `
   const __inScope = (roots, el) => !roots || roots.some(r => r.contains(el));
 `
 
+/**
+ * 目标缺席判据（clickByText 的 absentText）：页面上是不是**明说了这件事做不了**。
+ *
+ * 实测动因（微信达人详情页，2026-09-15）：可邀约的达人显示「邀请带货」，
+ * 不达合作门槛的显示「暂未到达合作门槛」——两者都表现为"找不到「邀请带货」"，
+ * 但处置**相反**：前者多半是微应用没渲染出来（退避后重试同一位还能成），
+ * 后者是这位达人天生不能邀约（重试一万次也一样，必须换下一位）。
+ * 不区分就会出现"一直重试同一位 → 连续 N 次 → 整单失败、一位都没邀约"。
+ *
+ * 判据的松紧很关键：只认"**本身就在说这句话**"的元素（自有文本命中，或整段文本
+ * 不比那句话长多少）。不设这条限制的话，任何祖先（直到整页容器）都会因为
+ * "后代里有这句话"而命中，判据就退化成"页面上出现过这几个字"——太松，容易误判。
+ */
+export const ABSENT_FN = `
+  const __absentHit = (el, at) => {
+    if (!__visible(el)) return false;
+    const narrowAt = __narrow(at);
+    const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+    const it = __narrow(el.innerText);
+    if (own.includes(at)) return narrowAt ? it.length <= narrowAt.length + 24 : true;
+    return narrowAt.length > 0 && it.includes(narrowAt) && it.length <= narrowAt.length + 24;
+  };
+`
+
 async function findTextTarget(
   wc: Electron.WebContents, run: RunHandle, needle: string, deep: boolean, timeoutMs: number, label: string,
   within?: { selector?: string; text?: string; climb?: number },
   pick?: { roundIdx?: number; visited?: string[]; dedupNs?: string },
   /** 视图未挂载时是否允许降级为 JS 点击（见下方视口退化分支）。默认 false = 如实报 VIEW_DETACHED */
-  allowJsWhenDetached = false
-): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string; rowKey?: string; picked?: string; viaBlocker?: string; transport?: 'trusted-mouse' | 'js-fallback' }> {
+  allowJsWhenDetached = false,
+  /**
+   * "目标不存在，但页面上出现了这段替代文案"时的判据（见 StepInput 的 absentText）。
+   * 命中时**立刻**返回 reason:'ABSENT'——不要等到超时：这两件事的处置完全相反
+   * （页面没渲染出来 → 等一下/重试同一位；这位对象天生不可用 → 立刻换下一位）。
+   */
+  absentTexts?: string[]
+): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string; rowKey?: string; picked?: string; viaBlocker?: string; transport?: 'trusted-mouse' | 'js-fallback'; absentText?: string; disabledReason?: string }> {
   return withTimeout(() => wc.executeJavaScript(`(() => {
     ${deep ? ENUM_DEEP_FN : ''}
     ${VISIBLE_JS}
     ${SCOPE_FN}
     ${PICK_SORT_FN}
+    ${ABSENT_FN}
     const needle = ${JSON.stringify(needle)};
     const within = ${JSON.stringify(within || null)};
+    const absentTexts = ${JSON.stringify(absentTexts || [])};
     const roundIdx = ${pick && pick.roundIdx != null ? JSON.stringify(pick.roundIdx) : 'null'};
     const visited = new Set(${JSON.stringify((pick && pick.visited) || [])});
     const dedupNs = ${JSON.stringify((pick && pick.dedupNs) || '')};
@@ -589,7 +629,13 @@ async function findTextTarget(
         cands.push({ el: c, len: narrowNeedle.length, viaText: true });
       }
     }
-    if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
+    if (!cands.length) {
+      // 目标一个都没有时，先看页面上是不是**明说了这件事做不了**（absentTexts，见 ABSENT_FN）
+      for (const at of absentTexts) {
+        if ([...scope].some(el => __absentHit(el, at))) return { ok: false, reason: 'ABSENT', absentText: at };
+      }
+      return { ok: false, reason: 'NOT_FOUND' };
+    }
     cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
     // 按"列表条目"（行容器文本）去重后取目标：
     //  - nth:'round'     → 第 roundIdx 条（0 起；条数不够 = 没有下一个候选）
@@ -643,7 +689,22 @@ async function findTextTarget(
     for (let i = 0; i < 4 && p && !dis; i++, p = p.parentElement) {
       if (/disabled/i.test(String(p.className || ''))) dis = true;
     }
-    if (dis) return { ok: false, reason: 'DISABLED' };
+    if (dis) {
+      // 禁用原因的浮层文案：平台普遍把"为什么不能点"放在按钮旁边的 popover 里
+      // （实测微信达人详情页：已邀约的按钮带 weui-desktop-btn_disabled，
+      //   悬浮说明是「你已经邀请过该达人，7天内不可再次发送带货邀约」）。
+      // 读它是为了让日志说出**真实原因**，而不是一句含糊的"平台限制该操作"——
+      // 排查时"已邀约"和"额度用完"是完全不同的处置。
+      let why = '';
+      try {
+        let n = hit;
+        for (let i = 0; i < 6 && n && !why; i++, n = n.parentElement) {
+          const pop = n.querySelector && n.querySelector('.weui-desktop-popover, [class*="tooltip"], [role="tooltip"]');
+          if (pop) why = String(pop.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+        }
+      } catch { /* 读不到原因不影响主流程 */ }
+      return { ok: false, reason: 'DISABLED', disabledReason: why };
+    }
     // 视口退化的兜底：WebContentsView 从窗口 contentView 上摘下来（渲染层打开弹层时
     // setBrowserViewsObscured(true) 会摘）之后，页面文档视口变成 0×0——元素还在、也还有
     // 尺寸，但坐标全在视口外，elementFromPoint 一律 null，受信任鼠标**物理上到不了**。
@@ -1251,6 +1312,10 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       // 禁用态的错误码（默认 TASK_TARGET_DISABLED）：翻页按钮在最后一页会置灰——
       // 那不是"平台限制操作"，而是"没有更多了"，用 disabledCode 让它如实收工
       const disabledCode = input.disabledCode ? String(input.disabledCode) : 'TASK_TARGET_DISABLED'
+      // 目标不存在时的"替代文案"判据与它对应的错误码（见 StepInput.absentText）：
+      // 命中即**立刻**失败，不等到超时——"这位对象天生不可用"与"页面还没渲染出来"处置相反。
+      const absentTexts = input.absentText ? [String(input.absentText)] : []
+      const absentCode = input.absentCode ? String(input.absentCode) : missingCode
       // nth:'round' —— 循环里每轮取"第 N 条"（N = 当前轮次）
       // nth:'unvisited' —— 取"第一条本次运行还没点过的"（微信广场每次加载都洗牌，"第几条"不可靠）
       const roundIdx = input.nth === 'round' ? Math.max(0, (ctx.round ?? 1) - 1) : undefined
@@ -1273,10 +1338,18 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       if (input.mode === 'real') {
         for (;;) {
           guardSignals(run)
-          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, pick, allowJsWhenDetached)
+          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, pick, allowJsWhenDetached, absentTexts)
           if (hit.ok) break
           if (hit.reason === 'DISABLED') {
-            throw new Error(`${disabledCode}: 「${needle}」当前为禁用态${disabledCode === 'TASK_TARGET_DISABLED' ? '（平台限制该操作）' : ''}`)
+            // 把平台给的禁用原因一并报出来（读到了就带，读不到退回默认文案）
+            const why = hit.disabledReason ? `——平台提示「${hit.disabledReason}」` : (disabledCode === 'TASK_TARGET_DISABLED' ? '（平台限制该操作）' : '')
+            throw new Error(`${disabledCode}: 「${needle}」当前为禁用态${why}`)
+          }
+          // ABSENT：页面明确写着"这件事做不了"（如微信详情页「暂未到达合作门槛」）。
+          // 立刻如实报出，**不等到超时**——它不是"页面慢"，是这位对象本身不可用；
+          // 等下去只会白耗几十秒，还会把"该换下一位"耗成"疑似平台整体异常"。
+          if (hit.reason === 'ABSENT') {
+            throw new Error(`${absentCode}: 页面上没有「${needle}」，而是写着「${hit.absentText}」——这一位不满足平台的合作条件，跳过换下一位`)
           }
           // 视图未挂载且步骤没允许降级：立刻如实失败，别白等到超时
           // （此时 elementFromPoint 恒为 null，再轮询一万次也还是 null）
@@ -1497,6 +1570,10 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         code: String(o?.code || ''),
         limit: Number(o?.limit) > 0 ? Number(o.limit) : 3,
         restart: o?.restart === true,
+        // advance=true：重开本轮，但**保留**本轮的"已访问"记录 —— 即"跳过这一位、换下一位"。
+        // 与 restart 的差别就在这条记录：restart 回滚它是为了**重试同一位**（限流恢复后能补上）；
+        // 而"这位天生不可邀约"重试多少次都一样，回滚记录会让引擎原地打转直到耗尽次数后整单失败。
+        advance: o?.advance === true,
         steps: (Array.isArray(o?.steps) ? o.steps : []).map((c: any) => ({
           ...c,
           timeoutMs: Number(c?.timeoutMs) > 0 ? Number(c.timeoutMs) : (DEFAULT_STEP_TIMEOUT[c?.type] ?? 15000)
@@ -1518,6 +1595,8 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         let childType = ''
         let recovered = 0
         const recoveryLog: string[] = []
+        // 每个子步骤本轮内已重试的次数（只在"该子步骤声明了 retryLimit 且没命中 onCode 规则"时用）
+        const childRetries = new Map<number, number>()
         // 本轮新记下的"已访问"行：**一轮整体成功才提交**。
         // 若本轮中途回退重做（如达人详情页打不开），把这些行回滚掉——
         // 否则那位达人会被永久记成"已邀约过"，限流恢复后也不会再被选中（等于凭空漏掉一位）。
@@ -1527,6 +1606,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             for (;;) {
               const child = nested[childIdx]
               childType = child.type
+              if (!childRetries.has(childIdx)) childRetries.set(childIdx, 0)
               guardSignals(run)
               emitProgress(run, { phase: 'started', stepIndex: parentIndex, stepType: child.type, message: `第 ${round}/${maxRounds} 轮 · ${loopLabel}` })
               let out: StepOutput | null = null
@@ -1535,22 +1615,48 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
               } catch (ce: any) {
                 if (ce?.name === 'CancelSignal' || ce?.name === 'PauseSignal') throw ce
                 const hitRule = onCode.find((o: any) => o.code === classifyError(ce))
-                if (!hitRule) throw ce
-                // restart 规则：跳过这一位/这一页，重开本轮（limit 是"连续跳过上限"）
-                // 非 restart 规则：重试当前子步骤（limit 是"本轮恢复次数上限"）
-                const overLimit = hitRule.restart ? skipStreak >= hitRule.limit : recovered >= hitRule.limit
-                if (overLimit) {
-                  if (hitRule.restart) {
-                    throw new Error(`连续 ${skipStreak} 轮命中 ${hitRule.code}（累计跳过 ${skippedTotal} 位），疑似平台整体异常，停止以免静默跳过所有人：${String(ce?.message || ce)}`)
-                  }
-                  throw ce
+                // 嵌套步骤的 retryLimit：外层的"整步重试"只作用于顶层步骤，循环体内的子步骤
+                // 拿不到它。于是子步骤的**瞬态失败**（典型：AI 生成话术超时）会直接把整批打掉——
+                // 真机实测：微信逐位邀约跑到第 25 轮时 aiGenerate 超时 30s，前 24 位已真实发出，
+                // 整单却报 failed。这里补上：子步骤声明了 retryLimit 就在 onCode 规则之前先重试它。
+                if (!hitRule && childRetries.get(childIdx)! < (child.retryLimit ?? 0)) {
+                  childRetries.set(childIdx, childRetries.get(childIdx)! + 1)
+                  const n = childRetries.get(childIdx)!
+                  emitProgress(run, { phase: 'retry', stepIndex: parentIndex, stepType: child.type, message: `第 ${round} 轮子步骤重试（第 ${n}/${child.retryLimit} 次）：${String(ce?.message || ce).slice(0, 120)}` })
+                  recoveryLog.push(`第 ${round} 轮「${child.type}」瞬态失败，重试第 ${n} 次：${String(ce?.message || ce).slice(0, 80)}`)
+                  continue
                 }
-                if (hitRule.restart) skipStreak++
+                if (!hitRule) throw ce
+                // restart/advance 规则：重开本轮（limit 是"连续跳过上限"）
+                // 非 restart 规则：重试当前子步骤（limit 是"本轮恢复次数上限"）
+                const reopen = hitRule.restart || hitRule.advance
+                const overLimit = reopen ? skipStreak >= hitRule.limit : recovered >= hitRule.limit
+                if (overLimit) {
+                  // advance（这一位不满足平台合作条件，换下一位）连续撞满上限 → **干净收尾**，不算失败。
+                  // 理由：触发它的判据是平台自己写明的"不可邀约"文案（如「暂未到达合作门槛」），
+                  // 那是确定性的信号、不是渲染故障——连续这么多位都不可邀约，只能说明这组筛选下
+                  // 确实没有更多能邀约的人了，那就该像"额度用完"一样停下并如实说明。
+                  // 报成失败会把前面已经真实发出的邀约一起说成"失败"，反而失真。
+                  if (hitRule.advance) {
+                    stopReason = hitRule.code
+                    summary.push({
+                      round, ok: false, stop: hitRule.code, ms: Date.now() - startedAt,
+                      message: `连续 ${skipStreak} 位都不满足平台的合作条件（累计跳过 ${skippedTotal} 位），没有更多可邀约的人，按预期收尾`.slice(0, 240),
+                      ...(recoveryLog.length ? { recovered: recoveryLog } : {})
+                    })
+                    emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮按预期停止：连续 ${skipStreak} 位不可邀约` })
+                    break roundLoop
+                  }
+                  // restart（详情页打不开）撞满上限才按故障处理：它更可能是平台整体不可用，
+                  // 静默跳过所有人是不可接受的，必须如实失败。
+                  throw new Error(`连续 ${skipStreak} 轮命中 ${hitRule.code}（累计跳过 ${skippedTotal} 位），疑似平台整体异常，停止以免静默跳过所有人：${String(ce?.message || ce)}`)
+                }
+                if (reopen) skipStreak++
                 recovered++
-                recoveryLog.push(`第 ${round} 轮「${child.type}」命中 ${hitRule.code} → ${hitRule.restart ? '跳过并重开本轮' : '执行恢复步骤'}（第 ${recovered} 次）`)
+                recoveryLog.push(`第 ${round} 轮「${child.type}」命中 ${hitRule.code} → ${hitRule.advance ? '跳过这一位并重开本轮' : hitRule.restart ? '跳过并重开本轮' : '执行恢复步骤'}（第 ${recovered} 次）`)
                 emitProgress(run, {
                   phase: 'retry', stepIndex: parentIndex, stepType: child.type,
-                  message: `第 ${round} 轮命中 ${hitRule.code} → ${hitRule.restart ? `本轮回退重做（连续 ${skipStreak}/${hitRule.limit}）` : `恢复后重试（第 ${recovered}/${hitRule.limit} 次）`}`
+                  message: `第 ${round} 轮命中 ${hitRule.code} → ${reopen ? `${hitRule.advance ? '换下一位' : '本轮回退重做'}（连续 ${skipStreak}/${hitRule.limit}）` : `恢复后重试（第 ${recovered}/${hitRule.limit} 次）`}`
                 })
                 for (const rs of hitRule.steps) {
                   guardSignals(run)
@@ -1575,11 +1681,14 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
                     throw re
                   }
                 }
-                if (hitRule.restart) {
-                  // 重开本轮：把子步骤游标退回起点，并**回滚本轮的"已访问"记录**——
-                  // 这样重试时还会选中同一位达人（限流恢复后能补上，不会凭空漏人）。
+                if (reopen) {
+                  // 重开本轮：把子步骤游标退回起点。
+                  //  - restart（如详情页限流打不开）：**回滚**本轮的"已访问"记录 ——
+                  //    重试时还会选中同一位达人（限流恢复后能补上，不会凭空漏人）；
+                  //  - advance（这位不满足平台合作条件）：**保留**记录 —— 重开就是为了换下一位，
+                  //    回滚等于原地重试同一个人，永远走不出去。
                   skippedTotal++
-                  run.visitedRows = new Set(visitedSnapshot)
+                  if (hitRule.restart) run.visitedRows = new Set(visitedSnapshot)
                   childIdx = -1
                   break
                 }
