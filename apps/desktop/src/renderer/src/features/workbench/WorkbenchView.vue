@@ -386,6 +386,65 @@
           >{{ st.label }}<span v-if="st.pending" class="stab-dot" title="功能开发中"></span></button>
         </div>
 
+        <!-- 任务列表：本店铺的通用任务（读取型步骤 + 人工确认门禁）；可按需新建并手动运行 -->
+        <div class="sub-pane" v-show="taskSubTab === 'tasks'" data-test="task-list-panel">
+          <div class="env-sec tc-headsec">
+            <div class="env-h" style="margin:0">任务列表
+              <span class="row-sub" v-if="ws.displayedStoreId"> · {{ storeName(ws.displayedStoreId) }}</span>
+              <span class="row-sub" v-else> · 请先打开店铺</span>
+            </div>
+            <button class="mini-btn primary" data-test="task-new" :disabled="!ws.stores.length" @click="openTaskDialog">+ 新建任务</button>
+          </div>
+
+          <div v-if="!ws.displayedStoreId" class="env-note">
+            任务要绑定店铺执行：<b>先打开一个店铺</b>，列表只显示该店铺的任务（引擎侧仍存全量，界面按店铺隔离）。
+          </div>
+
+          <div v-if="ws.displayedStoreId && storeTasks.length === 0" class="empty-hint" data-test="task-empty" style="padding:14px 8px">
+            当前店铺暂无任务。点右上角「+ 新建任务」创建——任务只能由<b>已实测跑通的流程</b>创建
+            （当前支持「达人邀约」，参数取「达人邀约」页签里的配置）。<br>
+            达人邀约的运行也会出现在这里；想看邀约业务明细（发给谁/额度/留档截图）请去「达人邀约」页签的「邀约记录」。
+          </div>
+
+          <div v-for="t in storeTasks" :key="t.id" class="env-sec task-card" :class="{ on: detailTaskId === t.id }" data-test="task-card">
+            <div class="tc-head" @click="toggleTaskDetail(t)">
+              <div class="p-info">
+                <div class="row-main">{{ t.name }}</div>
+                <div class="row-sub">
+                  {{ t.steps.length }} 步 · {{ storeName(t.storeScope) }}<span v-if="t.schedule"> · 每 {{ Math.round(t.schedule.everyMs / 60000) }} 分钟</span><span v-if="liveStatus(t)"> · {{ statusLabel(liveStatus(t)) }}</span>
+                </div>
+              </div>
+              <button class="mini-btn primary" data-test="task-run" title="立即运行" @click.stop="runTask(t)">▶</button>
+              <button class="row-del" title="删除任务" @click.stop="delTask(t.id)">×</button>
+            </div>
+
+            <template v-if="detailTaskId === t.id">
+              <div class="step-row" v-for="(s, i) in t.steps" :key="i">
+                <span class="s-ico">{{ stepIcon(t, i) }}</span>
+                <div class="p-info">
+                  <div class="row-main">{{ i + 1 }}. {{ s.type }}<span class="row-sub"> · {{ s.timeoutMs / 1000 }}s<template v-if="s.retryLimit"> · 重试{{ s.retryLimit }}</template></span></div>
+                  <div class="row-sub">{{ stepInputBrief(s) }}<template v-if="stepResultBrief(t, i)"> ⇒ {{ stepResultBrief(t, i) }}</template></div>
+                </div>
+              </div>
+
+              <div class="tc-btns" v-if="detailRunId(t)">
+                <button class="mini-btn" v-if="liveStatus(t) === 'running'" @click="runOp(t, 'pause')">暂停</button>
+                <button class="mini-btn" v-if="liveStatus(t) === 'paused'" @click="runOp(t, 'resume')">继续</button>
+                <button class="mini-btn" v-if="liveStatus(t) === 'failed'" @click="runOp(t, 'retry')" title="跳过已成功步骤；副作用步骤不可恢复">从失败步骤继续</button>
+                <button class="mini-btn" v-if="['running','paused','queued','waiting_confirmation'].includes(liveStatus(t))" @click="runOp(t, 'cancel')">取消</button>
+                <button class="mini-btn" @click="loadTaskDetail(t)">刷新</button>
+              </div>
+              <div class="row-sub" v-if="liveMessage(t)" style="padding:2px 0" data-test="task-live-msg">{{ liveMessage(t) }}</div>
+
+              <div class="log-box" v-if="ws.taskLogs[detailRunId(t)]?.length">
+                <div class="log-line" v-for="(l, i) in ws.taskLogs[detailRunId(t)]" :key="i">
+                  {{ new Date(l.at || Date.now()).toLocaleTimeString() }} [{{ l.phase }}]{{ l.stepType ? ' ' + l.stepType : '' }} {{ l.message || '' }}
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
         <!-- 达人邀约：按店铺平台匹配平台档案；本版只有抖店，其余平台明确拒绝 -->
         <div class="sub-pane" v-show="taskSubTab === 'invite'" data-test="invite-panel">
           <div class="env-sec" v-if="!inviteProfile">
@@ -1133,6 +1192,54 @@
         <div class="modal-actions">
           <button class="btn-ghost" @click="copycfg.open = false">取消</button>
           <button class="btn-primary" data-test="copy-apply" :disabled="copycfg.targets.length === 0" @click="doCopyConfig">复制到选中店铺</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新建任务对话框：**只从已实现的流程里挑**（当前＝达人邀约）。
+         不给底层步骤编辑器——自己拼步骤必然拼出跑不通的半成品，失败还会以"任务失败"回抛。 -->
+    <div v-if="taskDialogOpen" class="modal-mask" data-test="task-dialog" @click.self="taskDialogOpen = false">
+      <div class="modal" style="max-width:520px">
+        <h2>新建任务</h2>
+        <div class="row-sub" style="margin-bottom:8px">
+          任务只能由<b>已实测跑通的流程</b>创建（参数表单 + 内置确认门禁都由流程自己带），
+          这样建出来的任务一定是能跑的；以后新增流程会在这里多一项。
+        </div>
+
+        <label>任务类型
+          <select v-model="taskFlow" data-test="task-flow">
+            <option v-for="f in taskFlowOptions" :key="f.key" :value="f.key">{{ f.label }}<template v-if="!f.ready">（不可用）</template></option>
+          </select>
+          <span class="row-sub">{{ taskFlowCurrent?.desc }}</span>
+        </label>
+
+        <template v-if="['navigate', 'invite'].includes(taskFlow)">
+          <!-- 邀约的参数在「达人邀约」页签里配置（同一份配置、同一份步骤构造），这里只做汇总 -->
+          <div class="env-note" v-if="!taskFlowCurrent?.ready" data-test="task-flow-blocked">
+            <b>暂时建不了</b>：{{ taskFlowCurrent?.needs }}
+          </div>
+          <template v-else>
+            <div class="env-note">
+              参数取「<b>达人邀约</b>」页签里的当前配置（改配置请到那边，两处是同一份）。
+              要改配置就先去那边调好，再回来建。
+            </div>
+            <div class="env-sec" style="padding:0">
+              <div class="env-h" style="margin:0">将创建
+                <span class="row-sub"> · {{ inviteProfile?.platform }} · {{ inviteProfile?.flow === 'batch-list' ? '批量勾选流' : '辅助填单流' }}</span>
+              </div>
+              <div class="row-sub" style="padding:2px 0" data-test="task-flow-summary">{{ taskFlowSummaryText }}</div>
+            </div>
+
+            <label>定时（分钟，留空 = 仅手动）
+              <input v-model.number="tf.everyMin" type="number" min="1" max="43200" data-test="task-every" placeholder="例如 60" />
+              <span class="row-sub">到点自动运行（店铺窗口没开时保持排队，不会静默拉起）</span>
+            </label>
+          </template>
+        </template>
+
+        <div class="modal-actions">
+          <button class="btn-ghost" data-test="task-cancel" @click="taskDialogOpen = false">取消</button>
+          <button class="btn-primary" data-test="task-submit" :disabled="!taskFlowCurrent?.ready" @click="submitTask">创建任务</button>
         </div>
       </div>
     </div>
@@ -1996,14 +2103,28 @@ watch(() => ws.displayedStoreId, () => { verifyItems.value = []; detailTaskId.va
  * pending=true 的页签是占位——只说明"位置留好了"，不代表已有能力。
  */
 const TASK_SUB_TABS = [
+  { key: 'tasks' as const, label: '任务列表', pending: false },
   { key: 'invite' as const, label: '达人邀约', pending: false },
   { key: 'todo' as const, label: '待开发', pending: true }
 ]
-const taskSubTab = ref<'invite' | 'todo'>('invite')
-/** 任务功能对应每个店铺：任务列表只显示当前显示店铺的任务（引擎侧仍存全量，仅界面按店铺隔离）。
- *  达人邀约是独立功能——邀约运行（名称前缀「达人邀约 ·」）不进任务列表，只在邀约面板的「邀约记录」里展示；
- *  未打开店铺时显示历史遗留的"未绑定店铺"任务（新任务一律绑定店铺） */
+const taskSubTab = ref<'tasks' | 'invite' | 'todo'>('tasks')
+/**
+ * 任务功能对应每个店铺：任务列表只显示当前显示店铺的任务（引擎侧仍存全量，仅界面按店铺隔离）。
+ *  未打开店铺时显示历史遗留的"未绑定店铺"任务（新任务一律绑定店铺）。
+ *
+ * **达人邀约也进任务列表**（用户明确要求）：它由「新建任务 → 达人邀约」创建，与其它任务一样
+ * 能看进度、运行/停止/删除；同时在「达人邀约」页签保留「邀约记录」视图（同一份运行，
+ * 两个入口两种视角：这里看"任务整体状态"，那边看"邀约业务明细"）。
+ *
+ * 「发票采集 / 经营数据采集」仍**不**列进来：它们由各自面板发起、且结果就在那个面板里，
+ * 混进来只会让人对着两份视图找同一个结果。
+ */
 const INVITE_TASK_PREFIX = '达人邀约 ·'
+const SELF_MANAGED_TASK_PREFIXES = ['发票采集 ·', '经营数据采集 ·'] as const
+const storeTasks = computed(() => ws.tasks.filter(t =>
+  t.storeScope === ws.displayedStoreId &&
+  !SELF_MANAGED_TASK_PREFIXES.some(p => t.name.startsWith(p))
+))
 const inviteHistory = computed(() => {
   const sid = ws.displayedStoreId
   if (!sid) return []
@@ -2090,6 +2211,41 @@ const finderCategoryHidden = computed(() => {
   return Math.max(0, p.finderCategories.length - finderCategoryShown.value.length)
 })
 /** 顶部配置摘要：开跑前一眼核对（避免滚下去才发现选错） */
+/**
+ * 「新建任务」对话框里的"将创建"汇总（纯文本，覆盖两种流程）。
+ *
+ * 为什么不复用 inviteSummary：那是面板顶部摘要条的 `{k,v}` 数组，且**只对 assist-form（微信）
+ * 有返回**——抖店/快手的 batch-list 拿到的是空数组，对话框里会显示成 `[]`（真机实测踩到）。
+ * 这里按 flow 分别取各自真正会写进步骤的字段。
+ */
+const taskFlowSummaryText = computed(() => {
+  const p = inviteProfile.value
+  if (!p) return ''
+  if (p.flow === 'batch-list') {
+    const cat = invite.category ? invite.category + (invite.subcategory ? '/' + invite.subcategory : '') : '全部'
+    const parts = [`类目 ${cat}`]
+    if (p.levels.length) parts.push(`等级 ${invite.levels.join('/') || '未选'}`)
+    for (const row of (p.extraFilterRows || [])) {
+      const picks = invite.extraFilters[row.label] || []
+      if (picks.length) parts.push(`${row.label} ${picks.join('、')}`)
+    }
+    parts.push(`每批 ${Math.max(invite.count, p.minSelect || 1)} 位`)
+    if (p.contactSelectors) parts.push(`联系人 ${invite.batchContact.trim() || '未填'}`)
+    if (p.goodsModal) parts.push(`商品 ${invite.batchProductCount} 个`)
+    parts.push(invite.scriptMode === 'ai' ? '话术 AI 生成' : `话术 ${invite.script.trim().length} 字`)
+    return parts.join(' · ')
+  }
+  // assist-form（微信）：逐个达人邀约
+  const parts = [
+    `类型 ${invite.finderType}`,
+    `类目 ${invite.finderCategories.length ? (invite.finderCategories.length <= 2 ? invite.finderCategories.join('、') : invite.finderCategories.slice(0, 2).join('、') + ` 等 ${invite.finderCategories.length} 项`) : '不限'}`,
+    `其他 ${invite.finderOtherFilters.length ? invite.finderOtherFilters.join('、') : '无'}`,
+    `联系人 ${invite.contact.trim() || '未填'}`,
+    `商品 ${inviteProducts.value.length ? inviteProducts.value.length + ' 个ID' : '1 个(自动)'}`
+  ]
+  return parts.join(' · ')
+})
+
 const inviteSummary = computed(() => {
   const p = inviteProfile.value
   if (!p || !isAssistProfile(p)) return []
@@ -2340,9 +2496,18 @@ async function stopInvite() {
   await ws.refreshTasks()
 }
 
-async function startInvite() {
+/**
+ * 由**邀约面板当前的配置**构造一个邀约任务的载荷（名称 + 步骤）。
+ *
+ * 为什么抽出来：邀约面板的「开始邀约」与「任务列表 → 新建任务 → 达人邀约」必须是**同一份**
+ * 步骤构造——两处各写一遍必然漂移（引擎那边改了步骤，漏改一处就会出现"从这个入口建的能跑、
+ * 从那个入口建的跑不了"）。所以两边共用这一个函数。
+ *
+ * 返回 null 表示当前不可建（平台不支持 / 配置没填齐），调用方负责提示原因。
+ */
+function buildInviteTaskPayload(): { name: string; storeScope: string; steps: unknown[] } | null {
   const p = inviteProfile.value
-  if (!p || !inviteReady.value) return
+  if (!p || !ws.displayedStoreId || !inviteReady.value) return null
   const squareUrl = squareUrlFor(p.platform)
   const steps = p.flow === 'batch-list'
     ? buildInviteSteps(p, {
@@ -2376,7 +2541,15 @@ async function startInvite() {
   const name = p.flow === 'batch-list'
     ? `达人邀约 · ${p.platform} · ${invite.category ? invite.category + (invite.subcategory ? '/' + invite.subcategory : '') : '全部'} · 最多 ${invite.count} 位`
     : `达人邀约 · ${p.platform} · 辅助填单 · ${invite.contact.trim() || '未命名'}`
-  const created = await window.shopilot.task.create({ name, storeScope: ws.displayedStoreId, steps })
+  return { name, storeScope: ws.displayedStoreId, steps }
+}
+
+async function startInvite() {
+  const p = inviteProfile.value
+  if (!p || !inviteReady.value) return
+  const payload = buildInviteTaskPayload()
+  if (!payload) { ws.toast('邀约配置不完整，无法创建任务', 'error'); return }
+  const created = await window.shopilot.task.create(payload)
   if (!created.ok) { ws.toast('创建邀约任务失败: ' + created.error.message, 'error'); return }
   const started = await window.shopilot.task.run(created.data.id)
   if (!started.ok) { ws.toast('启动邀约任务失败: ' + started.error.message, 'error'); return }
@@ -2387,10 +2560,89 @@ async function startInvite() {
   await ws.refreshTasks()
 }
 
-const tf = reactive({
-  name: '', storeId: '', everyMin: null as number | null,
-  steps: [] as Array<{ type: string; timeoutSec: number; retry: number; params: Record<string, string> }>
+/**
+ * 「新建任务」= **从已实现的流程里挑一个建**（当前只有「达人邀约」）。
+ *
+ * 为什么不给底层步骤编辑器：引擎的步骤类型有 20 多种，让用户自己拼 navigate/readTable/click…
+ * 必然拼出跑不通的半成品（选择器写不对、少了必要的等待、提交类动作漏了确认门禁），
+ * 而失败会以"任务失败"的形式回抛——用户无从对应到"我少填了哪个字段"。
+ * 每个**已实测跑通的流程**都有自己的参数表单与内置门禁，从这儿建出来的任务是"能跑的"。
+ *
+ * 新增流程 = 在这里加一条（label/描述/是否可用/建法），面板结构不用动。
+ */
+type TaskFlowKey = 'invite'
+const taskFlow = ref<TaskFlowKey>('invite')
+
+/** 「新建任务」的定时输入（唯一还需要用户填的字段——其余参数都取自各流程自己的面板配置） */
+const tf = reactive({ everyMin: null as number | null })
+
+const taskFlowOptions = computed(() => {
+  const p = inviteProfile.value
+  const openStore = !!ws.displayedStoreId
+  // 「能建」= 档案存在 + 已打开店铺 + 面板配置填齐（与「开始邀约」同一套判据 inviteReady）。
+  // 不用 inviteReady 直接当 ready 的原因是还要区分"没打开店铺"和"配置没填齐"两种阻断，
+  // 好把原因说清楚（一句"配置不完整"用户不知道该去哪儿补）。
+  const ready = !!p && openStore && inviteReady.value
+  return [
+    {
+      key: 'invite' as TaskFlowKey,
+      label: '达人邀约',
+      desc: p
+        ? `${p.platform} · ${p.flow === 'batch-list' ? '广场筛选后批量邀约' : '逐个达人邀约'}`
+        : '当前店铺的平台暂不支持达人邀约',
+      ready,
+      // 不可用时说清到底缺什么，别让用户点完才发现建不了
+      needs: !openStore
+        ? '请先打开一个店铺（任务要绑定店铺执行）'
+        : (!p
+            ? `平台「${(ws.stores.find(s => s.id === ws.displayedStoreId)?.platform) || '未知'}」尚未实现达人邀约`
+            : '邀约参数还没填齐——请到「达人邀约」页签补齐必填项（联系方式 / 话术 / 商品等），再回来创建')
+    }
+  ]
 })
+const taskFlowCurrent = computed(() => taskFlowOptions.value.find(f => f.key === taskFlow.value) || taskFlowOptions.value[0])
+
+const taskDialogOpen = ref(false)
+
+function openTaskDialog() {
+  taskFlow.value = 'invite'
+  tf.everyMin = null
+  taskDialogOpen.value = true
+}
+
+async function submitTask() {
+  if (taskFlow.value !== 'invite') { ws.toast('该流程尚未实现', 'error'); return }
+  const payload = buildInviteTaskPayload()
+  if (!payload) {
+    // 说清到底缺什么，而不是一句"配置不完整"
+    const p = inviteProfile.value
+    if (!ws.displayedStoreId) ws.toast('请先打开一个店铺（任务要绑定店铺执行）', 'error')
+    else if (!p) ws.toast('当前店铺的平台未实现达人邀约', 'error')
+    else ws.toast('邀约配置不完整：请到「达人邀约」页签补齐必填项（联系方式/话术/商品等）', 'error')
+    return
+  }
+  // 用面板里配置好的名称（与「开始邀约」建的完全一致），定时由这里补
+  const res = await window.shopilot.task.create({
+    ...payload,
+    schedule: tf.everyMin ? { everyMs: Math.max(1, Number(tf.everyMin)) * 60000 } : null
+  })
+  if (res.ok) {
+    taskDialogOpen.value = false
+    ws.toast('任务已创建，可在列表里点 ▶ 运行', 'success')
+    await ws.refreshTasks()
+  } else ws.toast('创建失败: ' + res.error.message, 'error')
+}
+
+async function runTask(t: any) {
+  const res = await window.shopilot.task.run(t.id)
+  if (res.ok) {
+    // 店铺窗口没开时引擎会把运行保持 queued（不静默拉起）——如实告诉用户，别让他干等
+    ws.toast(res.data?.waitingForStore ? '任务已排队：店铺浏览器打开后自动开始' : '任务已入队开始', 'success')
+    await ws.refreshTasks()
+    const fresh = ws.tasks.find(x => x.id === t.id)
+    if (fresh) await loadTaskDetail(fresh)
+  } else ws.toast('运行失败: ' + res.error.message, 'error')
+}
 
 const detailTaskId = ref<string | null>(null)
 const detailData = reactive<Record<string, any>>({})
@@ -3238,7 +3490,7 @@ function refreshOverlayOcclusion() {
     // A newer watch event has already scheduled a fresher DOM state.
     if (revision !== overlayRevision) return
 
-    const modalOpen = !!(ws.createDialogOpen || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value || dataCenterOpen.value || invoiceCenterOpen.value)
+    const modalOpen = !!(ws.createDialogOpen || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value || dataCenterOpen.value || invoiceCenterOpen.value || taskDialogOpen.value)
     if (ctx.open && viewportEl.value) {
       const m = document.querySelector('[data-test="store-ctx"]')?.getBoundingClientRect()
       const v = viewportEl.value.getBoundingClientRect()
@@ -3254,7 +3506,7 @@ function refreshOverlayOcclusion() {
 }
 
 watch(
-  () => [ws.createDialogOpen, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value, invoiceCenterOpen.value],
+  () => [ws.createDialogOpen, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value, invoiceCenterOpen.value, taskDialogOpen.value],
   () => { refreshOverlayOcclusion() },
   { immediate: true }
 )
