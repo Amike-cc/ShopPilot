@@ -1715,6 +1715,20 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             break
           }
           // 其他错误照常失败，但把"第几轮、哪个子步骤"带进消息——否则只看到子步骤报错，不知道跑到哪了
+          //
+          // 失败前**先把这一轮的进度落库**：loop 的 payload（完成轮数、跳过记录）此前只在整步
+          // 成功时才写入，于是"跑完 24 轮、第 25 轮失败"这种情况，24 位已真实发出的战绩在界面上
+          // 完全看不到（面板的"成功邀约 N 位 · 跳过 N 位"那一行取的就是这份 payload）。
+          // 最需要看到计数的场景恰恰是失败收尾，所以这里必须补上。
+          try {
+            TaskStore.insertStepResult(run.runId, parentIndex, 'executed', {
+              action: 'loop', label: loopLabel, maxRounds,
+              completedRounds,
+              stopReason: code,
+              failedRound: round, failedChild: `${childIdx + 1}/${nested.length} ${childType}`,
+              rounds: summary
+            })
+          } catch { /* 落库失败不掩盖原始错误 */ }
           throw new Error(`LOOP_ROUND_FAILED: 第 ${round}/${maxRounds} 轮（子步骤 ${childIdx + 1}/${nested.length} ${childType}）失败：${String(e?.message || e)}`)
         }
       }

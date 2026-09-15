@@ -2460,7 +2460,13 @@ function loopSkipSummary(t: any): string {
   const skipped = rounds.reduce((n, r) => n + (Array.isArray(r.recovered) ? r.recovered.filter((m: string) => /跳过这一位|跳过并重开本轮/.test(String(m))).length : 0), 0)
   const parts = [`成功邀约 ${loop.completedRounds ?? 0} 位`]
   if (skipped) parts.push(`跳过 ${skipped} 位（不达合作门槛 / 7 天内已邀约过）`)
-  if (loop.stopReason) parts.push(`因「${loop.stopReason}」正常收尾`)
+  // 部分成功：loop 中途失败时已完成的那几轮是**真实发出去了**的，必须与"整批失败"区分开。
+  // completedRounds=0 时不写这句（"已完成的 0 位"读起来像废话）。
+  if (loop.failedRound) {
+    parts.push(loop.completedRounds > 0
+      ? `第 ${loop.failedRound} 轮失败——已完成的 ${loop.completedRounds} 位是真发出去了的`
+      : `第 ${loop.failedRound} 轮失败，没有发出任何邀约`)
+  } else if (loop.stopReason) parts.push(`因「${loop.stopReason}」正常收尾`)
   return parts.join(' · ')
 }
 
