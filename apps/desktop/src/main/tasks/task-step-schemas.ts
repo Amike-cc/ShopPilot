@@ -271,6 +271,26 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     deep: z.boolean().optional(),
     hint: z.string().max(200).optional()
   }).strict(),
+  /**
+   * 文案缺席断言（读型步骤）：页面上**不该出现**这段文案；出现即按 code 如实失败。
+   *
+   * 用途（真机实测驱动）：提交类动作之后，平台会**用文案告诉我们它拒绝了**——
+   * 快手点「发送邀请」后弹「部分邀约发送失败」，并且**故意把抽屉留着**（让你调整后重试）。
+   * 于是"抽屉没关"既可能是失败、也可能只是平台还在处理，区分不出来；
+   * 只有读这段失败文案，才能如实报出"这一批其实没发出去"。
+   */
+  requireTextAbsent: z.object({
+    text: z.string().min(1).max(200),
+    deep: z.boolean().optional(),
+    /** 命中时抛出的错误码（默认 TASK_TEXT_PRESENT） */
+    code: z.string().min(1).max(40).optional(),
+    hint: z.string().max(300).optional(),
+    /**
+     * 命中前的最长轮询时间（ms，默认 5000）。给一点余量：弹窗可能比返回值晚一拍渲染出来；
+     * 但不能给太长——这段文案一旦出现就是**确定性的拒绝**，不需要等。
+     */
+    waitMs: z.number().int().min(0).max(60000).optional()
+  }).strict(),
   // 按标签文案读指标值（读型步骤）：标签 → 最近"多出一小段文本"的祖先 → 那段文本即值
   readLabelValue: z.object({
     label: z.string().min(1).max(60),

@@ -281,7 +281,19 @@ export function createTab(storeId: string, url?: string): string {
   const tabId = generateTabId()
   const session = getStoreSession(storeId)
 
-  const view = new WebContentsView({ webPreferences: { session } })
+  /**
+   * backgroundThrottling: false —— **必须关**。
+   *
+   * Chromium 默认在页面不可见/窗口被遮挡时把 requestAnimationFrame 与定时器降频
+   * （后台标签页 rAF 直接停摆）。这对"人在前台看着"的普通浏览没影响，但这家软件的核心
+   * 是**无人值守地跑页面自动化**：用户切到别的窗口时，被节流的页面会以各种古怪方式失灵——
+   * 实测（2026-09-15 快手达人邀约）：店铺窗口被终端窗口遮住后，页面 `visibilityState=hidden`、
+   * rAF 触发 0 次，而快手的「带货类目」级联弹层正是靠 rAF 计算定位，于是弹层永远停在初始的
+   * `-9999,-9999`，子类「纸品湿巾」整块在视口外 → 点击步骤如实报「被 unknown 遮挡」，
+   * 整轮在类目筛选就失败。把窗口切到前台（rAF 恢复）同一套步骤立刻跑通。
+   * 所以：**页面被遮挡是我们不能接受的运行前提**，这里显式关掉节流。
+   */
+  const view = new WebContentsView({ webPreferences: { session, backgroundThrottling: false } })
 
   view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     try { createTab(storeId, targetUrl) } catch { /* ignore */ }
@@ -532,6 +544,8 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // 同主窗口的店铺标签页：独立窗口同样可能被遮挡，节流会让页面里的 rAF 依赖型组件失灵
+      backgroundThrottling: false,
       partition: `persist:store_${storeId}`
     }
   })

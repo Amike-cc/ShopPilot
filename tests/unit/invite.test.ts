@@ -583,6 +583,53 @@ describe('快手小店（batch-list）步骤构造', () => {
     expect(round[drawerGoneIdx].timeoutMs).toBeGreaterThanOrEqual(60000)
   })
 
+  it('发送后必须点掉「邀约提示」复核弹窗（不点它抽屉不关，一条都发不出去）', () => {
+    // 2026-09-15 真机：点「发送邀请」后平台弹「邀约提示」（佣金率/体验分低于达人要求），
+    // 按钮是「继续发送邀约」；不点 → 抽屉一直开着 → waitForGone 超时 → 真实发送被记成失败。
+    const round = ksRound()
+    const sendIdx = round.findIndex(s => s.type === 'clickByText' && String(s.input.text) === '发送邀请')
+    const drawerGoneIdx = round.findIndex(s => s.type === 'waitForGone' && String(s.input.selector) === KS.scriptSelector)
+    const between = round.slice(sendIdx + 1, drawerGoneIdx).filter(s => s.type === 'clickIfPresent')
+    expect(between.length).toBeGreaterThan(0)
+    const texts = between.map(s => String(s.input.text))
+    expect(texts).toContain('继续发送邀约')
+    // 必须是 clickIfPresent（该弹窗只在"商品与达人要求不匹配"时出现，不能硬等也不能假设没有）
+    for (const s of between) expect(s.type).toBe('clickIfPresent')
+    // 抽屉收起超时必须维持长值——不能因为"配了确认框"就缩到 60s（那会让快手必然超时）
+    expect(round[drawerGoneIdx].timeoutMs).toBeGreaterThanOrEqual(120000)
+  })
+
+  it('未实测到发送后弹窗的平台不插入任何条件点击（不会白等，也不会误点）', () => {
+    // 抖店档案没登记 postSendConfirmTexts → 发送后不应出现 clickIfPresent
+    const ddSteps = buildBatchSteps(DD as any, {
+      category: '个护家清', subcategory: '家清纸品', levels: ['LV0'], count: 40,
+      script: '话术', scriptMode: 'manual', benefits: ['专属高佣']
+    }, 'https://x')
+    const inner = (ddSteps[0].input as any).steps
+    expect(inner.some((s: any) => s.type === 'clickIfPresent')).toBe(false)
+    // 也没登记失败文案 → 不应出现 requireTextAbsent
+    expect(inner.some((s: any) => s.type === 'requireTextAbsent')).toBe(false)
+  })
+
+  it('发送后先断言"平台报告失败"，再等抽屉收起（否则失败会被误当成"还在处理"）', () => {
+    // 2026-09-15 真机：快手发送失败时弹「部分邀约发送失败」并**故意留着抽屉**，
+    // waitForGone 只能超时，区分不出"失败了"与"平台还在处理"。
+    const round = ksRound()
+    const sendIdx = round.findIndex(s => s.type === 'clickByText' && String(s.input.text) === '发送邀请')
+    const absentIdx = round.findIndex(s => s.type === 'requireTextAbsent')
+    const drawerGoneIdx = round.findIndex(s => s.type === 'waitForGone' && String(s.input.selector) === KS.scriptSelector)
+    expect(absentIdx).toBeGreaterThan(sendIdx)
+    expect(absentIdx).toBeLessThan(drawerGoneIdx)
+    expect(String(round[absentIdx].input.text)).toBe('部分邀约发送失败')
+    // 错误码用 PARTIAL：实测这条弹窗是"逐条拒绝"，同批其余人可能已发出（2 位里 1 位进了邀约中），
+    // 若用"总失败"的措辞会误导用户重发、造成重复邀约
+    expect(round[absentIdx].input.code).toBe('TASK_SEND_PARTIAL')
+    expect(String(round[absentIdx].input.hint)).toMatch(/其余人可能已发出/)
+    // 必须换错误码：默认码若落进 stopOn 会被当成"按预期收工"（静默地把失败报成成功）
+    const loopStep = ksBuild()[0]
+    expect((loopStep.input as any).stopOn).not.toContain('TASK_SEND_PARTIAL')
+  })
+
   it('合作标签按文案点击（抽屉里的复选框）', () => {
     const round = ksRound({ benefits: ['可聊高佣', '素材支持'] })
     const texts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))

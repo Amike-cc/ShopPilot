@@ -364,9 +364,17 @@ function classifyError(e: any): string {
   if (msg.includes('TASK_DAREN_ALREADY_INVITED')) return 'TASK_DAREN_ALREADY_INVITED'
   // 店铺视图当时未挂载（弹层遮挡导致摘除）：需要真实落点的步骤无法进行，明确报出来
   if (msg.includes('TASK_VIEW_DETACHED')) return 'TASK_VIEW_DETACHED'
+  // 目标整块在视口外（多为平台弹层靠 rAF 定位、但页面被节流）：与"被遮挡"分开，
+  // 否则会把"页面被后台节流"误导成"窗口太窄"（实测快手级联弹层）
+  if (msg.includes('TASK_TARGET_OUT_OF_VIEWPORT')) return 'TASK_TARGET_OUT_OF_VIEWPORT'
   // 邀约商品没真正选上（平台会因此拦下发送）：必须在发送前如实失败，
   // 绝不能落进 stopOn（那会被当成"按预期收工"，静默地一位都没邀约）
   if (msg.includes('TASK_PRODUCT_NOT_SELECTED')) return 'TASK_PRODUCT_NOT_SELECTED'
+  // 提交后页面上出现了平台给的**失败文案**（实测快手「部分邀约发送失败」）：
+  // 这是平台逐条给出的拒绝，必须如实失败——绝不能因为"抽屉还开着"就当成"平台还在处理"。
+  // 注意措辞是"部分"：同一批里其余人可能已经发送成功（实测 2 位里 1 位进了「邀约中」），
+  // 所以错误码与消息都不能暗示"整批都没发出去"——那会误导用户重发、造成重复邀约。
+  if (msg.includes('TASK_SEND_PARTIAL')) return 'TASK_SEND_PARTIAL'
   // 页面被重定向到登录页（登录态失效）：用户能自己解决，必须与"页面慢/改版"区分开
   if (msg.includes('TASK_LOGIN_REQUIRED')) return 'TASK_LOGIN_REQUIRED'
   // 页签点了但没选中（平台同名页签数据不同：不校验就会把上一个页签的数据当成这个的）
@@ -776,6 +784,20 @@ async function findTextTarget(
           return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), clickedText: String(same.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, viaBlocker: tag + '(同文本副本)', picked, rowKey };
         }
       }
+    }
+    // 元素整块在视口外 ≠ 被别的元素遮挡：这两件事的原因与处置完全不同。
+    // 实测（2026-09-15 快手达人邀约）：平台的级联弹层靠 rAF 计算定位；页面被节流时
+    // （窗口被遮挡 → Chromium 降频/停摆 rAF）弹层永远停在初始的 -9999,-9999，
+    // 子类「纸品湿巾」的矩形完全落在视口外，elementFromPoint 一律 null。
+    // 此前这里统一报「被 unknown 遮挡——请把店铺窗口拉宽一些」，把人往"窗口太窄"上引，
+    // 而实际与宽度无关（加到 1320 也一样，实测）。这里如实分开说。
+    // 注意：这段是**注入页面的脚本**（在模板字面量里），字符串拼接不能用模板字面量。
+    const outsideViewport = r.right <= 0 || r.bottom <= 0 || r.left >= innerWidth || r.top >= innerHeight
+    if (outsideViewport) {
+      return {
+        ok: false, reason: 'OUT_OF_VIEWPORT',
+        coveredBy: '元素在视口外（矩形 ' + Math.round(r.left) + ',' + Math.round(r.top) + ' ' + Math.round(r.width) + '×' + Math.round(r.height) + '；视口 ' + innerWidth + '×' + innerHeight + '）'
+      };
     }
     return { ok: false, reason: 'COVERED', coveredBy: blocker ? blocker.tagName + '.' + String(blocker.className || '').slice(0, 40) : 'unknown' };
   })()`), run, timeoutMs, label)
@@ -1334,6 +1356,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const deadline = Date.now() + step.timeoutMs
       let sawScopeMiss = false
       let sawCoveredBy: string | null = null
+      let sawOutsideBy: string | null = null
       let hit: Awaited<ReturnType<typeof findTextTarget>> | null = null
       if (input.mode === 'real') {
         for (;;) {
@@ -1367,7 +1390,13 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           sawScopeMiss = sawScopeMiss || hit.reason === 'SCOPE_NOT_FOUND'
           // COVERED：目标被别的浮层压住（窄窗口下平台布局重叠，实测踩过）→ 超时内轮询等它露出来
           if (hit.reason === 'COVERED') sawCoveredBy = hit.coveredBy || 'unknown'
+          // OUT_OF_VIEWPORT：元素整块在视口外。**与"被遮挡"分开报**——实测快手级联弹层
+          // 因为 rAF 被节流而停在 -9999,-9999 时就是这一种；报成"遮挡/窗口太窄"会把人引偏。
+          if (hit.reason === 'OUT_OF_VIEWPORT') sawOutsideBy = hit.coveredBy || '元素在视口外'
           if (Date.now() >= deadline) {
+            if (sawOutsideBy) {
+              throw new Error(`TASK_TARGET_OUT_OF_VIEWPORT: 「${needle}」的位置在视口外（${sawOutsideBy}）——多为平台弹层依赖 rAF 定位但页面被节流（窗口被遮挡/最小化）或弹层未展开；可先让店铺窗口处于前台再重试`)
+            }
             if (sawCoveredBy) {
               throw new Error(`TASK_TARGET_COVERED: 「${needle}」被「${sawCoveredBy}」遮挡，点不到——请把店铺窗口拉宽一些让页面不再重叠后重试`)
             }
@@ -2457,6 +2486,56 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       })()`
       const present = await withTimeout(() => wc.executeJavaScript(countRowsExpr).catch(() => 0), run, step.timeoutMs, 'ensureRowsById 复核')
       return { kind: 'executed', payload: { action: 'ensureRowsById', requested: ids.length, added, present } }
+    }
+    case 'requireTextAbsent': {
+      // 文案缺席断言（读型）：页面上**不该出现**这段文案；出现则按 code 如实失败。
+      //
+      // 为什么必须有这一步（2026-09-15 快手真机）：点「发送邀请」后平台可能弹
+      // 「部分邀约发送失败 —— 近7天有未处理/被拒绝的邀约单，暂不能发送新的邀约单」，
+      // 并且**故意把邀约抽屉留着**（设计上让你调整后重试）。于是"抽屉没关"这件事
+      // 既可能是失败、也可能只是平台还在处理，光靠 waitForGone 根本区分不出来——
+      // 一次**一条都没发出去**的整批，会被记成"等到超时"，甚至可能被误判成成功。
+      // 这段失败文案是平台自己给的确定性判据，读到就如实报错。
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      const deep = !!input.deep
+      const code = input.code ? String(input.code) : 'TASK_TEXT_PRESENT'
+      const hint = input.hint ? String(input.hint) : ''
+      const waitMs = input.waitMs == null ? 5000 : Number(input.waitMs)
+      const until = Date.now() + waitMs
+      let seen: string | null = null
+      for (;;) {
+        guardSignals(run)
+        // 只在**可见**元素里找：平台常把弹窗节点预渲染在 DOM 里（隐藏态也查得到），
+        // 按存在性判断会把"历史弹窗残留"误当成"这次真的失败了"。
+        seen = await wc.executeJavaScript(`(() => {
+          ${deep ? ENUM_DEEP_FN : ''}
+          const needle = ${JSON.stringify(needle)};
+          const narrow = (s) => String(s == null ? '' : s).replace(/\\s+/g, '');
+          const nw = narrow(needle);
+          for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+            const r = el.getBoundingClientRect();
+            if (!(r.width > 0 && r.height > 0)) continue;
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            const it = narrow(el.innerText);
+            // 只认"本身就在说这句话"的元素（同 ABSENT_FN 的收紧逻辑）：
+            // 不收紧的话任何祖先都会因"后代里有这句话"而命中。
+            if (own.includes(needle) && it.length <= nw.length + 24) return it.slice(0, 120);
+            if (nw && it.includes(nw) && it.length <= nw.length + 24) return it.slice(0, 120);
+          }
+          return null;
+        })()`).catch(() => null)
+        if (seen) break
+        if (Date.now() >= until) break
+        await new Promise(r => setTimeout(r, 300))
+      }
+      guardSignals(run)
+      if (seen) {
+        throw new Error(`${code}: 页面上出现了「${needle}」——${hint || '平台已明确拒绝，本次提交没有成功'}（原文：${seen}）`)
+      }
+      return { kind: 'executed', payload: { action: 'requireTextAbsent', text: needle, present: false, waitedMs: waitMs } }
     }
     case 'requireQuota': {
       // 额度预检（读型）：可见元素自有文本含 textIncludes → 提取第一个数字 → ≥ min 放行。

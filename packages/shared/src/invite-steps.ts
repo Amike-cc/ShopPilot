@@ -91,7 +91,7 @@ export function urlPathHint(url: string): string {
  *   两道判据替代它——额度不足不发，抽屉没关就如实失败，绝不把"点了"当"发出去了"。
  *
  * 两个平台的差异全部走**档案字段**驱动，不在这里写 `if (platform === ...)`：
- *   minSelect / quotaCheck / goodsModal / benefits / contacts / postSendConfirmText。
+ *   minSelect / quotaCheck / goodsModal / benefits / contacts / postSendConfirmTexts。
  */
 export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions, squareUrl: string): StepDraft[] {
   const round: StepDraft[] = [
@@ -112,6 +112,12 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
     round.push({ type: 'clickByText', input: { text: opts.category, within: chipWithin }, timeoutMs: 20000 })
     // 级联项必须用受信任鼠标点击（mode:'real'）：有下级的二级项吃合成 click 时只展开下一列、
     // 不选中（真机实测抖店「休闲食品」点了没反应）；真实鼠标点在文字上=用户操作，直接生效。
+    //
+    // 这里**不要**开 jsClickWhenOffscreen（试过，已回退）：快手把这个级联弹层定位在屏幕外
+    // （`.…select-dropdown` 停在 -9999,-9999），JS 点击虽然"点得到"，但平台只记下了一级类目
+    // （实测标记只有「已选1个 个护家清: 清空」，**没有**子类），会被后面的 waitForText 校验拦下——
+    // 于是"点不到"变成"校验超时"，诊断反而更难。离屏时如实报 TASK_TARGET_OUT_OF_VIEWPORT
+    // （提示把店铺窗口放到前台）才是对用户最有用的信息。
     round.push({ type: 'clickByText', input: { text: sub || p.texts.categoryAnyLeaf, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
     // 选完类目后**把下拉收起来**：实测这个级联下拉会一直展开着，盖住后面要点的按钮
     // （快手：商品弹窗的「确 认」就被它压住，点了没反应）。Escape 是页面级的收起手势。
@@ -269,14 +275,48 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   round.push({ type: 'clickByText', input: { text: p.texts.confirmSend } })
   // 发送后**可能**弹二次确认框（平台行为未定时的兜底）：出现就点、没出现就跳过，如实记录。
   // 不硬等（白等超时会把成功报成失败），也不假设没有（真弹了没人点其实没发出去）。
-  if (p.postSendConfirmText) {
-    round.push({ type: 'clickIfPresent', input: { text: p.postSendConfirmText, waitMs: 6000 }, timeoutMs: 20000 })
+  //
+  // 实测（2026-09-15 快手真机）：点「发送邀请」后平台弹**「邀约提示」**弹窗，列出
+  // "商品佣金率低于达人下限 / 商家体验分低于达人设置下限"等**逐条不满足项**，
+  // 底部两个按钮是「返回调整 / **继续发送邀约**」——不点它，邀约抽屉永远不关，
+  // waitForGone 白等到超时，一次真实的发送被记成失败（且平台侧确实一条都没发出去）。
+  // 这类弹窗**只在商品与该达人的要求不匹配时出现**（同一批里换一位达人可能就不弹），
+  // 所以必须用 clickIfPresent（出现就点、没出现就跳过）。
+  // 它可能同时有「确认」这一种措辞（旧版实测），所以逐个候选试一遍。
+  for (const t of p.postSendConfirmTexts || []) {
+    round.push({ type: 'clickIfPresent', input: { text: t, waitMs: 8000 }, timeoutMs: 25000 })
   }
-  // 发送后的结果校验：邀约抽屉应关闭；没关说明平台没接受这次提交，如实失败
-  // （避免"点了发送"被当成"已经发出去了"）。
-  // 超时给到 180s：实测快手真实发送后抽屉要**一分多钟**才关（平台侧在处理；
-  // 实测 30s / 90s 都太短，会把一次成功的发送误报成失败）。
-  round.push({ type: 'waitForGone', input: { selector: p.scriptSelector }, timeoutMs: (p.postSendConfirmText ? 60000 : 180000) })
+  // 发送后的结果校验（顺序很重要）：
+  //  ① 先断言**平台没说失败**：实测快手点「发送邀请」后可能弹「部分邀约发送失败」
+  //     （近7天有未处理/被拒绝的邀约单），并且**故意把抽屉留着**让你调整重试。
+  //     这时"抽屉没关"根本区分不出"发送失败"与"平台还在处理"——只有读这段失败文案才能
+  //     如实报出"这一批其实没发出去"。放在 waitForGone 之前：失败文案通常立刻出现，
+  //     先读它就不用白等三分钟才知道没发成功。
+  //     没登记该文案的平台（如抖店）不插入这一步。
+  //  ② 再校验邀约抽屉应关闭；没关说明平台没接受这次提交，如实失败。
+  //     超时按平台给：实测快手真实发送后抽屉要**一分多钟**才关（平台侧在处理；
+  //     实测 30s / 90s 都太短，会把一次成功的发送误报成失败）。
+  //     注意不能再用"有没有配确认框"去推这个超时——独立字段，各平台自己说。
+  if (p.texts.sendRejectedMarker) {
+    // 先记下平台给的失败原文（它是"平台已拒绝"的**证据**，点掉前先读一次）。
+    //
+    // 措辞必须是"部分"：实测快手这条弹窗叫「**部分**邀约发送失败」，列出的是**逐条**被拒的人
+    // （如「近7天有未处理/被拒绝的邀约单，暂不能发送新的邀约单(达人ID:…)]」），
+    // 同一批里**其余人可能已经发出去了**（实测同一批 2 位：1 位进「邀约中」、1 位被拒）。
+    // 所以错误码用 TASK_SEND_PARTIAL、提示语**不能**说"未产生有效邀约"——那是把部分成功
+    // 说成全失败，会误导用户以为要重发，反而造成重复邀约。
+    round.push({
+      type: 'requireTextAbsent',
+      input: {
+        text: p.texts.sendRejectedMarker,
+        code: 'TASK_SEND_PARTIAL',
+        hint: '平台列出的是**这些**达人没发出去（多为"近7天有未处理/被拒绝的邀约单"）——本批其余人可能已发出，请以「我的达人 → 邀约中」为准，别急着重发',
+        waitMs: 8000
+      },
+      timeoutMs: 20000
+    })
+  }
+  round.push({ type: 'waitForGone', input: { selector: p.scriptSelector }, timeoutMs: p.postSendGoneTimeoutMs ?? 180000 })
   // 截图留档：每轮发送后的达人侧状态（最后一轮的工件会挂在本步骤上）
   round.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
 
