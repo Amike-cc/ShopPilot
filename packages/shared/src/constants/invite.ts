@@ -34,10 +34,21 @@ export interface InviteProfileBase {
   scriptMaxLen: number
 }
 
+/** 三级类目节点（children = 平台级联里的三级名称） */
+export interface CategoryGrandchildNode {
+  name: string
+  children: readonly string[]
+}
+
 /** 主推类目树的一个一级类目（children = 平台级联里的二级子类，空数组 = 无子类） */
 export interface CategoryNode {
   name: string
   children: readonly string[]
+  /**
+   * 可选三级类目。仅平台真实存在三级级联时提供；每个节点的 children
+   * 是所选二级类目下可点的三级名称。没有三级数据的平台保持原样。
+   */
+  grandchildren?: readonly CategoryGrandchildNode[]
 }
 
 /**
@@ -57,6 +68,8 @@ export interface BatchInviteProfile extends InviteProfileBase {
   minSelect?: number
   /** 推荐商品上限 */
   maxProducts: number
+  /** 类目筛选层级：2 = 只到二级；3 = 支持三级类目 */
+  categoryDepth?: 2 | 3
   /**
    * 类目筛选区的**文案名**（面板标题用）。抖店叫「主推类目」，快手叫「带货类目」。
    * 留空用界面默认文案。
@@ -287,6 +300,7 @@ const DOUDIAN: BatchInviteProfile = {
   maxBatch: 40,
   scriptMaxLen: 150,
   maxProducts: 5,
+  categoryDepth: 3,
   categories: [
     '玩具乐器', '服饰内衣', '个护家清', '智能家居', '生鲜', '美妆',
     '母婴宠物', '鲜花园艺', '本地生活', '食品饮料', '3C数码家电', '图书教育',
@@ -422,6 +436,7 @@ const KUAISHOU_BATCH: BatchInviteProfile = {
   minSelect: 2,
   scriptMaxLen: 500,
   maxProducts: 10,
+  categoryDepth: 2,
   categoryLabelText: '带货类目',
   // 实测「带货类目」18 项 + 各自子类（2026-09-15 逐个点开量取，见 wx-invite-test/ks-category-tree.json）
   categories: [

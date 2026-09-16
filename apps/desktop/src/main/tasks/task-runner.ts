@@ -59,6 +59,19 @@ let keepAliveTimer: NodeJS.Timeout | null = null
 /** 每个店铺的任务运行标签页（复用以防标签页/渲染进程堆积；浏览器关闭后 id 失效自动重建） */
 const runTabByStore = new Map<string, string>()
 
+/** 未结束运行状态：同一任务只能存在一个，避免重复点击/定时叠加造成真实副作用重复执行。 */
+export function findActiveRunForTask(
+  runs: Iterable<{ taskId: string; status: string }>,
+  taskId: string
+): { taskId: string; status: string } | null {
+  for (const run of runs) {
+    if (run.taskId === taskId && ['queued', 'running', 'waiting_confirmation', 'paused'].includes(run.status)) {
+      return run
+    }
+  }
+  return null
+}
+
 /** §9.2 任务状态机（含 A1 修订的失败恢复迁移） */
 const TRANSITIONS: Record<string, string[]> = {
   queued: ['running', 'cancelled'],
@@ -111,6 +124,10 @@ function emitProgress(run: RunHandle, extra: Partial<TaskProgressEvent>): void {
 export function enqueueRun(taskId: string, opts: { reason: string; storeId?: string }): { runId: string; storeId: string } {
   const task = TaskStore.getTask(taskId)
   if (!task) throw new Error('TASK_NOT_FOUND')
+  const active = findActiveRunForTask(live.values(), taskId)
+  if (active) {
+    throw new Error('TASK_BAD_STATE: 该任务已有未结束的运行，请先等待、恢复或取消当前运行后再启动')
+  }
   const storeId = opts.storeId || task.storeScope
   if (!storeId) throw new Error('TASK_BAD_STATE: 任务未绑定店铺，请先在任务中指定店铺或运行时选择')
   const run = TaskStore.createRun(taskId, storeId, opts.reason)
@@ -146,6 +163,10 @@ export function retryRunFromFailed(runId: string): void {
   const run = live.get(runId)
   if (!run) throw new Error('TASK_BAD_STATE: 该运行属于上一进程会话，无法原地恢复；请重新运行任务')
   if (run.status !== 'failed') throw new Error(`TASK_BAD_STATE: ${run.status} 状态不可从失败恢复`)
+  const active = findActiveRunForTask(live.values(), run.taskId)
+  if (active) {
+    throw new Error('TASK_BAD_STATE: 该任务已有未结束的运行，不能同时恢复旧运行')
+  }
   const failedIdx = run.startFrom
   const step = run.steps[failedIdx]
   if (step && NON_RESUMABLE_TYPES.has(step.type)) {

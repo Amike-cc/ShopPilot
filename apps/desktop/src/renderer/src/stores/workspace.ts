@@ -15,6 +15,7 @@ export interface StoreRow {
   adminUrl: string
   status: string
   avatarColor: string
+  sortOrder: number
   groupName: string | null
   tags: string[]
   owner?: string | null
@@ -38,6 +39,7 @@ function toRow(row: any): StoreRow {
   return {
     id: row.id, name: row.name, platform: row.platform, adminUrl: row.adminUrl,
     status: row.status, avatarColor: row.avatarColor || '#3B82F6',
+    sortOrder: Number(row.sortOrder) || 0,
     groupName: row.groupName ?? null, tags: parseTags(row),
     owner: row.owner ?? null, region: row.region ?? null,
     lastActiveAt: row.lastActiveAt ?? null
@@ -175,6 +177,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
         const log = (this.taskLogs[ev.runId] || []).concat([{ ...ev, at: Date.now() }])
         this.taskLogs = { ...this.taskLogs, [ev.runId]: log.slice(-80) }
+        if (['succeeded', 'failed', 'cancelled'].includes(ev.status)) this.clearConfirmation(ev.runId)
         if (ev.phase === 'finished' || ev.phase === 'failed') { this.refreshTasks() }
       })
       window.shopilot.on(EVENT_CHANNELS.TASK_CONFIRMATION_REQUIRED, (ev: any) => {
@@ -240,6 +243,33 @@ export const useWorkspaceStore = defineStore('workspace', {
       const res = await window.shopilot.store.list()
       if (res.ok) this.stores = (res.data || []).map(toRow)
       else this.toast('加载店铺失败: ' + res.error.message, 'error')
+    },
+
+    async reorderStores(orderedStoreIds: string[]): Promise<boolean> {
+      const previous = this.stores
+      const byId = new Map(previous.map(store => [store.id, store]))
+      const optimistic = orderedStoreIds
+        .map((id, index) => {
+          const store = byId.get(id)
+          return store ? { ...store, sortOrder: index } : null
+        })
+        .filter((store): store is StoreRow => store !== null)
+
+      if (optimistic.length !== previous.length) {
+        this.toast('保存排序失败: 店铺列表已变化，请重试', 'error')
+        return false
+      }
+
+      this.stores = optimistic
+      const res = await window.shopilot.store.reorder(orderedStoreIds)
+      if (!res.ok) {
+        this.stores = previous
+        this.toast('保存排序失败: ' + res.error.message, 'error')
+        return false
+      }
+
+      await this.refreshStores()
+      return true
     },
 
     async refreshBookmarks() {

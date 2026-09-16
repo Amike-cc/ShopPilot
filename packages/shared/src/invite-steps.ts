@@ -34,6 +34,8 @@ export interface BatchInviteOptions {
   category: string
   /** 二级子类（'' = 不限子类，即整个一级）；仅 category 非空时有效 */
   subcategory?: string
+  /** 三级类目（'' = 不限三级）；仅 category/subcategory 都非空时有效 */
+  category3?: string
   levels: string[]
   count: number
   script: string
@@ -103,8 +105,10 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
     // ① 点类目 chip：限定在"类目快捷选项行"里——类目名在达人卡片的类目文案里也有，
     //    不限范围可能点到卡片上（实测就是筛选静默失效的原因之一）；
     // ② 点级联弹层里的叶子项：限定在弹层内——别处也有同名"不限/全部"。
-    //    抖店选二级 → 点该二级项；快手点「全部」= 不限子类。叶子名可能被平台截断，按包含匹配。
+    //    抖店选二级 → 点该二级项并继续展开三级；快手点「全部」= 不限子类。
+    //    叶子名可能被平台截断，按包含匹配。
     const sub = (opts.subcategory || '').trim()
+    const third = sub ? (opts.category3 || '').trim() : ''
     // 范围写法两种都支持：字符串=CSS 选择器（抖店）；{text,climb}=从行标签上溯（快手，
     // 因为那几行的行容器类名完全相同，选择器区分不了）
     const chipWithin = typeof p.categoryChipScope === 'string'
@@ -120,6 +124,10 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
     // 于是"点不到"变成"校验超时"，诊断反而更难。离屏时如实报 TASK_TARGET_OUT_OF_VIEWPORT
     // （提示把店铺窗口放到前台）才是对用户最有用的信息。
     round.push({ type: 'clickByText', input: { text: sub || p.texts.categoryAnyLeaf, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
+    // 有三级类目时，二级项真实点击后展开第三列；再点三级叶子才真正选中。
+    if (third) {
+      round.push({ type: 'clickByText', input: { text: third, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
+    }
     // 选完类目后**把下拉收起来**：实测这个级联下拉会一直展开着，盖住后面要点的按钮
     // （快手：商品弹窗的「确 认」就被它压住，点了没反应）。Escape 是页面级的收起手势。
     round.push({ type: 'pressKey', input: { key: 'Escape' }, timeoutMs: 10000 })
@@ -156,6 +164,8 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
     round.push({ type: 'waitForText', input: { text: opts.category, within: scope }, timeoutMs: 25000 })
     const sub = (opts.subcategory || '').trim()
     if (sub) round.push({ type: 'waitForText', input: { text: sub, within: scope }, timeoutMs: 25000 })
+    const third = sub ? (opts.category3 || '').trim() : ''
+    if (third) round.push({ type: 'waitForText', input: { text: third, within: scope }, timeoutMs: 25000 })
   }
   // 勾选数下限（实测快手：只勾 1 位点「批量邀约」静默无反应）→ 不足就把本批要的人数抬到下限，
   // 否则每轮都会白跑一次"点了没反应"。count 本身已由面板按 maxBatch 收过口。
@@ -327,7 +337,11 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   round.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
 
   const labelParts = [
-    opts.category ? opts.category + (opts.subcategory ? '/' + opts.subcategory : '') : '全部',
+    opts.category
+      ? opts.category +
+        (opts.subcategory ? '/' + opts.subcategory : '') +
+        (opts.subcategory && opts.category3 ? '/' + opts.category3 : '')
+      : '全部',
     ...(opts.levels.length ? [opts.levels.join('/')] : []),
     `每批 ${need} 位`
   ]

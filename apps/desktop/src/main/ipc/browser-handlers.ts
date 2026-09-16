@@ -6,6 +6,7 @@
 import { ipcMain, IpcMainInvokeEvent } from 'electron'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
+import type { CategoryNode } from '@shared/constants/invite'
 import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as WindowManager from '../browser/window-manager'
 import { clearStoreData } from '../browser/session-manager'
@@ -25,6 +26,88 @@ function error(code: string, message: string, requestId: string, details?: any):
     error: { code, message, details },
     requestId
   }
+}
+
+type JsonRecord = Record<string, any>
+
+function optionLabel(value: any): string {
+  if (typeof value === 'string') return value.trim()
+  if (!value || typeof value !== 'object') return ''
+  for (const key of ['label', 'name', 'text', 'title', 'show_name', 'value_name', 'option_name', 'cate_name', 'category_name']) {
+    const v = value[key]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return ''
+}
+
+function optionChildren(value: any): any[] {
+  if (!value || typeof value !== 'object') return []
+  for (const key of ['children', 'enums', 'options', 'values', 'sub', 'sub_items', 'child', 'list', 'items']) {
+    if (Array.isArray(value[key]) && value[key].length > 0) return value[key]
+    const nested = value[key]
+    if (nested && typeof nested === 'object') {
+      for (const nestedKey of ['options', 'children', 'enums', 'values', 'list', 'items']) {
+        if (Array.isArray(nested[nestedKey]) && nested[nestedKey].length > 0) return nested[nestedKey]
+      }
+    }
+  }
+  return []
+}
+
+function findFirstOptionArray(value: any, depth = 0): any[] {
+  if (depth > 4 || value == null) return []
+  if (Array.isArray(value)) {
+    if (value.some(x => optionLabel(x))) return value
+    for (const item of value) {
+      const found = findFirstOptionArray(item, depth + 1)
+      if (found.length) return found
+    }
+    return []
+  }
+  if (typeof value !== 'object') return []
+  for (const key of ['options', 'children', 'enums', 'values', 'items', 'list', 'cascader', 'data']) {
+    const found = findFirstOptionArray((value as JsonRecord)[key], depth + 1)
+    if (found.length) return found
+  }
+  return []
+}
+
+/**
+ * 抖店筛选接口返回的是动态配置，字段名会随版本变化。
+ * 这里只做结构归一化，不硬编码任何类目名称；找不到“主推类目”就返回空数组并如实报错。
+ */
+function normalizeDoudianCategoryTree(payload: any): CategoryNode[] {
+  const headers = payload?.data?.headers || payload?.data?.header || payload?.data?.filter_headers || []
+  if (!Array.isArray(headers) || headers.length === 0) return []
+  const header = headers.find((h: any) => {
+    const identity = [h?.key, h?.name, h?.title, h?.label, h?.type].filter(Boolean).join(' ')
+    return /main_cate|主推类目/i.test(identity)
+  }) || headers.find((h: any) => /main_cate|主推类目/i.test(JSON.stringify(h).slice(0, 2000)))
+  if (!header) return []
+
+  const roots = findFirstOptionArray(header)
+  const cleanNames = (values: any[]) => values
+    .map(optionLabel)
+    .filter(name => name && !['不限', '全部', '暂无数据'].includes(name))
+
+  return roots
+    .map((first: any): CategoryNode | null => {
+      const firstName = optionLabel(first)
+      if (!firstName) return null
+      const secondItems = optionChildren(first)
+      const grandchildren = secondItems
+        .map((second: any) => ({
+          name: optionLabel(second),
+          children: cleanNames(optionChildren(second))
+        }))
+        .filter(second => second.name && second.children.length > 0)
+      return {
+        name: firstName,
+        children: cleanNames(secondItems),
+        ...(grandchildren.length ? { grandchildren } : {})
+      }
+    })
+    .filter((node): node is CategoryNode => !!node && node.children.length > 0)
 }
 
 /**
@@ -132,7 +215,8 @@ export function registerBrowserHandlers(): void {
   
   // browser:prepareInviteSquare — 微信带货者广场筛选应用（用户仍需人工进入达人详情）
   ipcMain.handle(IPC_CHANNELS.BROWSER_PREPARE_INVITE_SQUARE, async (_event: IpcMainInvokeEvent, input: {
-    storeId: string, url: string, finderType?: string, categories?: string[], otherFilters?: string[]
+    storeId: string, url: string, finderType?: string, categories?: string[], otherFilters?: string[],
+    loadCategoryTree?: boolean
   }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
@@ -143,6 +227,62 @@ export function registerBrowserHandlers(): void {
       WindowManager.activateTab(input.storeId, tabId)
       await wc.loadURL(input.url)
       await new Promise(r => setTimeout(r, 2000))
+      if (input.loadCategoryTree) {
+        const pageState = await wc.executeJavaScript(`(() => {
+          const text = String(document.body ? document.body.innerText : '')
+          const login = /请选择您要登录的角色|登录商家工作台|账号未登录|请重新登录/.test(text) ||
+            /roles-select|\\/login\\//.test(location.href)
+          return { ok: !login, url: location.href }
+        })()`) as { ok: boolean, url: string }
+        if (!pageState.ok) {
+          return error(
+            ERROR_CODES.INTERNAL_ERROR.code,
+            '抖店达人广场未登录：请在店铺窗口打开达人广场并完成商家工作台登录后重试',
+            requestId,
+            { url: pageState.url }
+          )
+        }
+        const raw = await wc.executeJavaScript(`(async () => {
+          const pathname = location.pathname || ''
+          const currentPrefix = pathname.startsWith('/ffa/buyin') ? '/ffa/buyin' : ''
+          const prefixes = [...new Set([currentPrefix, '/ffa/buyin', ''])]
+          const suffixes = [
+            '/square_doudian_pc_api/square/filter',
+            '/square_pc_api/square/filter'
+          ]
+          const attempts = []
+          for (const prefix of prefixes) {
+            for (const suffix of suffixes) {
+              const url = prefix + suffix + '?type=1&req_scene=1'
+              try {
+                const res = await fetch(url, {
+                  method: 'GET',
+                  credentials: 'include',
+                  headers: { accept: 'application/json, text/plain, */*' }
+                })
+                const text = await res.text()
+                let json = null
+                try { json = JSON.parse(text) } catch { /* 非 JSON 多为登录/风控页，继续换入口 */ }
+                attempts.push({ url, status: res.status, json, text: json ? '' : text.slice(0, 180) })
+                if (json && json.code === 0) return { ok: true, attempts }
+              } catch (err) {
+                attempts.push({ url, error: String(err && err.message || err) })
+              }
+            }
+          }
+          return { ok: false, attempts }
+        })()`) as { ok: boolean, attempts: any[] }
+        if (!raw.ok) {
+          const detail = raw.attempts?.map(a => `${a.url}: ${a.status || a.error || '非 JSON'}`).join('；') || '无响应'
+          return error(ERROR_CODES.INTERNAL_ERROR.code, `读取抖店类目失败：${detail}`, requestId)
+        }
+        const payload = raw.attempts.find(a => a.json?.code === 0)?.json
+        const categoryTree = normalizeDoudianCategoryTree(payload)
+        if (!categoryTree.length) {
+          return error(ERROR_CODES.INTERNAL_ERROR.code, '抖店筛选接口已返回，但未找到「主推类目」三级数据', requestId)
+        }
+        return success({ tabId, categoryTree }, requestId)
+      }
       // 登录态检测：微信会话很短（实测数十分钟），过期时页面只渲染「登录超时，请重新登录」，
       // 此时筛选根本无从点起。必须明确报"登录已过期"，否则用户看到的是"筛选没生效"。
       const loginExpired = await wc.executeJavaScript(

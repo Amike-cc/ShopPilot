@@ -42,6 +42,7 @@ declare global {
           control: (storeId: string, tabId: string, action: 'back' | 'forward' | 'reload') => Promise<IPCResult>
         }
         navigate: (storeId: string, tabId: string, url: string) => Promise<IPCResult>
+        prepareInviteSquare: (storeId: string, input: any) => Promise<IPCResult>
         clearData: (storeId: string, types: string[], origin?: string) => Promise<IPCResult>
         capture: (storeId: string, tabId: string, format: string) => Promise<IPCResult>
         openWindow: (storeId: string, tabId?: string) => Promise<IPCResult>

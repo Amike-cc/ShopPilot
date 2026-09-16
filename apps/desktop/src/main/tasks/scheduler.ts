@@ -31,6 +31,10 @@ function tick(): void {
   for (const t of tasks) {
     if (t.status !== 'active' || !t.schedule?.everyMs) continue
     if (!t.storeScope) continue // 未绑定店铺的任务不自动触发
+    if (t.latestRun && ['queued', 'running', 'waiting_confirmation', 'paused'].includes(t.latestRun.status)) {
+      nextFireAt.set(t.id, now + t.schedule.everyMs)
+      continue
+    }
     if (!nextFireAt.has(t.id)) nextFireAt.set(t.id, now + t.schedule.everyMs)
     if (now >= nextFireAt.get(t.id)!) {
       nextFireAt.set(t.id, now + t.schedule.everyMs)

@@ -17,6 +17,7 @@ describe('达人邀约平台档案', () => {
       expect(p.maxBatch).toBe(40)
       expect(p.scriptMaxLen).toBe(150)
       expect(p.maxProducts).toBe(5)
+      expect(p.categoryDepth).toBe(3)
       expect(p.rowCheckboxSelector).toBe('tbody input[type=checkbox]')
       expect(p.texts.batchInvite).toBe('批量邀约带货')
       // 二级类目树（2026-09-14 平台级联逐个实测）
@@ -69,6 +70,7 @@ describe('达人邀约平台档案', () => {
     expect(p.minSelect).toBe(2)
     expect(p.scriptMaxLen).toBe(500)
     expect(p.maxProducts).toBe(10)
+    expect(p.categoryDepth).toBe(2)
     // 快手没有「达人等级」筛选 → levels 为空（面板与步骤据此跳过）
     expect(p.levels).toEqual([])
     expect(p.texts.levelTrigger).toBe('')
@@ -400,6 +402,24 @@ describe('抖店（batch-list）步骤构造', () => {
     expect(round3.some(s => s.type === 'clickByText' && String(s.input.text) === '不限')).toBe(false)
   })
 
+  it('三级类目：二级展开后继续点三级，并校验一级/二级/三级都生效', () => {
+    const steps = build({
+      category: '个护家清',
+      subcategory: '家清纸品',
+      category3: '纸品'
+    })
+    const round = roundSteps(steps)
+    const texts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(texts.slice(0, 3)).toEqual(['个护家清', '家清纸品', '纸品'])
+    const verifies = round.filter(s => s.type === 'waitForText').map(s => String(s.input.text))
+    expect(verifies).toEqual(['个护家清', '家清纸品', '纸品'])
+    expect(String(steps[0].input.label)).toContain('个护家清/家清纸品/纸品')
+
+    // 没有三级值时仍保留原来的两级行为，不额外猜测叶子。
+    const twoLevel = roundSteps(build({ category: '个护家清', subcategory: '家清纸品', category3: '' }))
+    expect(twoLevel.filter(s => s.type === 'waitForText').map(s => String(s.input.text))).toEqual(['个护家清', '家清纸品'])
+  })
+
   it('不选类目时不生成类目相关步骤（不猜、不多点）', () => {
     const round = roundSteps(build({ category: '' }))
     const types = round.map(s => s.type)
@@ -654,7 +674,7 @@ describe('生成的步骤必须能真的创建任务（形状与白名单一致�
     [
       '抖店',
       inviteProfileFor('抖店'),
-      { category: '个护家清', subcategory: '家清纸品', levels: ['LV0', 'LV1'], count: 40, script: '话术', scriptMode: 'manual', benefits: ['专属高佣'] }
+      { category: '个护家清', subcategory: '家清纸品', category3: '纸品', levels: ['LV0', 'LV1'], count: 40, script: '话术', scriptMode: 'manual', benefits: ['专属高佣'] }
     ],
     [
       '快手小店',

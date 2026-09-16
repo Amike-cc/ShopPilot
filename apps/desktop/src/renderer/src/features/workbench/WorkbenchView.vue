@@ -76,9 +76,25 @@
           <div
             v-for="s in grp.items"
             :key="s.id"
-            :class="['store-card', { active: ws.selectedStoreId === s.id, displayed: ws.displayedStoreId === s.id }]"
+            :class="[
+              'store-card',
+              {
+                active: ws.selectedStoreId === s.id,
+                displayed: ws.displayedStoreId === s.id,
+                dragging: storeDrag.draggingId === s.id,
+                'drag-over-before': storeDrag.overId === s.id && storeDrag.position === 'before',
+                'drag-over-after': storeDrag.overId === s.id && storeDrag.position === 'after'
+              }
+            ]"
+            draggable="true"
+            data-test="store-card"
             @click="ws.selectStore(s.id)"
             @contextmenu.prevent="onStoreContext(s, $event)"
+            @dragstart="onStoreDragStart(s, $event)"
+            @dragover="onStoreDragOver(s, $event)"
+            @dragleave="onStoreDragLeave(s, $event)"
+            @drop="onStoreDrop(s, $event)"
+            @dragend="onStoreDragEnd"
           >
             <PlatformIcon :name="s.platform" :size="32" />
             <div class="store-meta">
@@ -92,6 +108,8 @@
             <button
               class="store-action"
               :title="isOpen(s.id) ? '关闭浏览器' : '打开浏览器'"
+              draggable="false"
+              @dragstart.stop.prevent
               @click.stop="toggleStore(s.id)"
             >{{ isOpen(s.id) ? '⏻' : '▶' }}</button>
           </div>
@@ -414,7 +432,13 @@
                   {{ t.steps.length }} 步 · {{ storeName(t.storeScope) }}<span v-if="t.schedule"> · 每 {{ Math.round(t.schedule.everyMs / 60000) }} 分钟</span><span v-if="liveStatus(t)"> · {{ statusLabel(liveStatus(t)) }}</span>
                 </div>
               </div>
-              <button class="mini-btn primary" data-test="task-run" title="立即运行" @click.stop="runTask(t)">▶</button>
+              <button
+                class="mini-btn primary"
+                data-test="task-run"
+                :disabled="isTaskActive(t)"
+                :title="isTaskActive(t) ? '当前运行未结束，不能重复启动' : '立即运行'"
+                @click.stop="runTask(t)"
+              >▶</button>
               <button class="row-del" title="删除任务" @click.stop="delTask(t.id)">×</button>
             </div>
 
@@ -469,11 +493,11 @@
             <div class="inv-card">
               <div class="inv-card-h"><span class="inv-step">1</span><span class="inv-card-t">选人范围</span><span class="row-sub">对应广场筛选项 · 每轮都会重新应用</span></div>
 
-              <div class="inv-grid2">
+              <div class="inv-grid2" :class="{ 'inv-grid3': inviteProfile.categoryDepth === 3 }">
                 <label class="inv-row inv-col">{{ inviteProfile.categoryLabelText || '主推类目' }}
                   <select v-model="invite.category" data-test="invite-category">
                     <option value="">不筛选（全部）</option>
-                    <option v-for="c in inviteProfile.categories" :key="c" :value="c">{{ c }}</option>
+                    <option v-for="c in categoryOptions" :key="c" :value="c">{{ c }}</option>
                   </select>
                 </label>
                 <label class="inv-row inv-col">二级类目
@@ -482,9 +506,20 @@
                     <option v-for="s in subCategoryOptions" :key="s" :value="s">{{ s }}</option>
                   </select>
                 </label>
+                <label v-if="inviteProfile.categoryDepth === 3" class="inv-row inv-col">三级类目
+                  <select v-model="invite.category3" data-test="invite-category3" :disabled="!invite.subcategory || !thirdCategoryOptions.length">
+                    <option value="">不限</option>
+                    <option v-for="s in thirdCategoryOptions" :key="s" :value="s">{{ s }}</option>
+                  </select>
+                </label>
               </div>
               <div class="env-note" style="margin-top:4px">
-                选二级后按「一级/二级」精确筛选（如 {{ invite.category || '个护家清' }}/{{ invite.subcategory || subCategoryOptions[0] || '家清纸品' }}）；二级名以平台级联实测为准，个别过长名称平台侧有截断，执行时按包含匹配。
+                <template v-if="inviteProfile.categoryDepth === 3">
+                  可选到「一级/二级/三级」（如 {{ invite.category || '个护家清' }}/{{ invite.subcategory || subCategoryOptions[0] || '家清纸品' }}/{{ invite.category3 || thirdCategoryOptions[0] || '待读取' }}）。三级名称由打开达人广场时的平台筛选接口实时读取，不写死、不猜测。
+                </template>
+                <template v-else>
+                  选二级后按「一级/二级」精确筛选（如 {{ invite.category || '个护家清' }}/{{ invite.subcategory || subCategoryOptions[0] || '家清纸品' }}）；二级名以平台级联实测为准，个别过长名称平台侧有截断，执行时按包含匹配。
+                </template>
               </div>
 
               <!-- 额外筛选行（快手：内容标签 / 合作信息…）。与类目是不同维度，可同时生效 -->
@@ -1420,8 +1455,10 @@
 <script setup lang="ts">
 import { reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
+import { moveStoreId, type StoreDropPosition } from '../../stores/store-order'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile, isAssistProfile } from '@shared/constants/invite'
+import type { CategoryNode } from '@shared/constants/invite'
 import { buildInviteSteps } from '@shared/invite-steps'
 import { invoiceProfileFor } from '@shared/constants/invoice'
 import { buildInvoiceCollectSteps } from '@shared/invoice-steps'
@@ -1437,6 +1474,92 @@ const ws = useWorkspaceStore()
 const viewportEl = ref<HTMLElement | null>(null)
 const urlInput = ref<HTMLElement | null>(null)
 const urlDraft = ref('')
+
+const storeDrag = reactive({
+  draggingId: '',
+  overId: '',
+  position: 'before' as StoreDropPosition
+})
+
+function storeGroupKey(store: StoreRow): string {
+  return store.groupName || '未分组'
+}
+
+function resetStoreDrag() {
+  storeDrag.draggingId = ''
+  storeDrag.overId = ''
+  storeDrag.position = 'before'
+}
+
+function onStoreDragStart(store: StoreRow, event: DragEvent) {
+  const target = event.target as HTMLElement | null
+  if (target?.closest('button')) {
+    event.preventDefault()
+    return
+  }
+
+  storeDrag.draggingId = store.id
+  storeDrag.overId = ''
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', store.id)
+  }
+}
+
+function onStoreDragOver(store: StoreRow, event: DragEvent) {
+  const draggingId = storeDrag.draggingId || event.dataTransfer?.getData('text/plain') || ''
+  const dragged = ws.stores.find(item => item.id === draggingId)
+  if (!dragged || dragged.id === store.id || storeGroupKey(dragged) !== storeGroupKey(store)) {
+    if (storeDrag.overId === store.id) {
+      storeDrag.overId = ''
+      storeDrag.position = 'before'
+    }
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
+    return
+  }
+
+  event.preventDefault()
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const position: StoreDropPosition = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+  if (storeDrag.overId !== store.id || storeDrag.position !== position) {
+    storeDrag.overId = store.id
+    storeDrag.position = position
+  }
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+
+function onStoreDragLeave(store: StoreRow, event: DragEvent) {
+  const current = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (current && related && current.contains(related)) return
+  if (storeDrag.overId === store.id) {
+    storeDrag.overId = ''
+    storeDrag.position = 'before'
+  }
+}
+
+async function onStoreDrop(targetStore: StoreRow, event: DragEvent) {
+  event.preventDefault()
+  const draggingId = storeDrag.draggingId || event.dataTransfer?.getData('text/plain') || ''
+  const dragged = ws.stores.find(item => item.id === draggingId)
+  const position = storeDrag.position
+  resetStoreDrag()
+
+  if (!dragged || dragged.id === targetStore.id) return
+  if (storeGroupKey(dragged) !== storeGroupKey(targetStore)) {
+    ws.toast('只能在同一个分组内调整店铺顺序', 'info')
+    return
+  }
+
+  const currentIds = ws.stores.map(store => store.id)
+  const nextIds = moveStoreId(currentIds, dragged.id, targetStore.id, position)
+  if (nextIds === currentIds) return
+  await ws.reorderStores(nextIds)
+}
+
+function onStoreDragEnd() {
+  resetStoreDrag()
+}
 
 // ── 平台筛选增强 ──
 /** 当前搜索+状态筛选后未过滤平台前的总店铺数 */
@@ -1506,6 +1629,14 @@ async function loadPlatformHomeUrls() {
 const inviteProfiles = computed(() => Object.values(INVITE_PROFILES))
 const squareUrls = ref<Record<string, string>>({})
 const squareUrlDraft = reactive<Record<string, string>>({})
+const INVITE_CATEGORY_TREES_SETTING = 'invite.categoryTrees'
+const dynamicCategoryTrees = ref<Record<string, CategoryNode[]>>({})
+
+/** 平台实时读取的三级类目优先；未读取成功时退回档案内置的两级数据。 */
+function inviteCategoryTreeFor(p: { platform: string; categoryTree?: readonly CategoryNode[] }): readonly CategoryNode[] {
+  const dynamic = dynamicCategoryTrees.value[p.platform]
+  return Array.isArray(dynamic) && dynamic.length ? dynamic : (p.categoryTree || [])
+}
 
 /** 某平台实际使用的达人广场地址：配置值 → 平台档案内置默认 */
 function squareUrlFor(platformName: string): string {
@@ -1518,6 +1649,23 @@ async function loadSquareUrls() {
   const res = await window.shopilot.settings.get(INVITE_SQUARE_URLS_SETTING)
   const v = res.ok ? res.data?.value : null
   squareUrls.value = v && typeof v === 'object' ? v : {}
+}
+
+async function loadInviteCategoryTrees() {
+  const res = await window.shopilot.settings.get(INVITE_CATEGORY_TREES_SETTING)
+  const v = res.ok ? res.data?.value : null
+  dynamicCategoryTrees.value = v && typeof v === 'object' && !Array.isArray(v) ? v : {}
+}
+
+async function saveInviteCategoryTree(platform: string, tree: CategoryNode[]): Promise<void> {
+  if (!Array.isArray(tree) || tree.length === 0) return
+  const next = { ...dynamicCategoryTrees.value, [platform]: tree }
+  const res = await window.shopilot.settings.set(INVITE_CATEGORY_TREES_SETTING, JSON.parse(JSON.stringify(next)))
+  if (!res.ok) {
+    ws.toast('三级类目已读取，但保存失败: ' + res.error.message, 'error')
+    return
+  }
+  dynamicCategoryTrees.value = next
 }
 
 /** 存覆盖表；只做格式校验（http/https），不联网探测——与平台首页地址同一红线 */
@@ -2148,6 +2296,8 @@ const invite = reactive({
   category: '' as string,
   /** 二级类目（'' = 不限子类，即整个一级）；仅 category 非空时可选 */
   subcategory: '' as string,
+  /** 三级类目（'' = 不限三级）；仅抖店等 categoryDepth=3 的平台可选 */
+  category3: '' as string,
   levels: [] as string[],
   count: 5,
   script: '',
@@ -2177,11 +2327,26 @@ const invite = reactive({
   /** 跨平台不共话术：切到不同平台的店铺时清空脚本（抖店/微信的话术口径不同） */
   platformKey: ''
 })
-/** 当前一级类目的二级选项（categoryTree 实测；category 为空或无子类 → 空数组） */
+const categoryOptions = computed(() => {
+  const p = inviteProfile.value
+  if (!p || !isBatchProfile(p)) return []
+  return inviteCategoryTreeFor(p).map(c => c.name)
+})
+
+/** 当前一级类目的二级选项（平台档案或实时读取；category 为空或无子类 → 空数组） */
 const subCategoryOptions = computed(() => {
   const p = inviteProfile.value
   if (!p || !isBatchProfile(p) || !invite.category) return []
-  return p.categoryTree.find(c => c.name === invite.category)?.children ?? []
+  return inviteCategoryTreeFor(p).find(c => c.name === invite.category)?.children ?? []
+})
+
+/** 当前二级类目的三级选项（只有平台返回真实三级数据时非空） */
+const thirdCategoryOptions = computed(() => {
+  const p = inviteProfile.value
+  if (!p || !isBatchProfile(p) || p.categoryDepth !== 3 || !invite.category || !invite.subcategory) return []
+  return inviteCategoryTreeFor(p)
+    .find(c => c.name === invite.category)?.grandchildren
+    ?.find(c => c.name === invite.subcategory)?.children ?? []
 })
 
 // ---------- 微信邀约面板的展示态（只影响观感，不参与执行） ----------
@@ -2223,7 +2388,11 @@ const taskFlowSummaryText = computed(() => {
   const p = inviteProfile.value
   if (!p) return ''
   if (p.flow === 'batch-list') {
-    const cat = invite.category ? invite.category + (invite.subcategory ? '/' + invite.subcategory : '') : '全部'
+    const cat = invite.category
+      ? invite.category +
+        (invite.subcategory ? '/' + invite.subcategory : '') +
+        (invite.subcategory && invite.category3 ? '/' + invite.category3 : '')
+      : '全部'
     const parts = [`类目 ${cat}`]
     if (p.levels.length) parts.push(`等级 ${invite.levels.join('/') || '未选'}`)
     for (const row of (p.extraFilterRows || [])) {
@@ -2260,9 +2429,13 @@ const inviteSummary = computed(() => {
   ]
 })
 
-/** 一级变化时二级跟随：已选二级不在新一级的子类里就回到「不限」 */
+/** 一级变化时二级、三级跟随清空；二级变化时三级跟随清空 */
 watch(() => invite.category, () => {
   if (invite.subcategory && !subCategoryOptions.value.includes(invite.subcategory)) invite.subcategory = ''
+  if (invite.category3 && !thirdCategoryOptions.value.includes(invite.category3)) invite.category3 = ''
+})
+watch(() => invite.subcategory, () => {
+  if (invite.category3 && !thirdCategoryOptions.value.includes(invite.category3)) invite.category3 = ''
 })
 
 /**
@@ -2285,8 +2458,10 @@ watch(inviteProfile, (p) => {
     invite.platformKey = p.platform
   }
   if (p.flow === 'batch-list') {
-    invite.category = p.categories[2] || p.categories[0] || ''
+    const tree = inviteCategoryTreeFor(p)
+    invite.category = tree[2]?.name || tree[0]?.name || p.categories[2] || p.categories[0] || ''
     invite.subcategory = ''
+    invite.category3 = ''
     invite.levels = [...p.levelsWithQuotaHint]
     invite.benefits = []
     invite.extraFilters = {}
@@ -2309,7 +2484,7 @@ const inviteCfgLoaded = new Set<string>()
 function inviteCfgFields(flow: 'batch-list' | 'assist-form'): readonly string[] {
   return flow === 'batch-list'
     // extraFilters/batchContact 等是快手需要的字段；抖店那份配置里它们留空，不影响既有行为
-    ? ['category', 'subcategory', 'levels', 'count', 'script', 'scriptMode', 'benefits',
+    ? ['category', 'subcategory', 'category3', 'levels', 'count', 'script', 'scriptMode', 'benefits',
        'extraFilters', 'batchContact', 'batchPhone', 'batchWechat', 'batchProductCount']
     // 微信流程不含 productCount：面板已去掉「添加商品数量」，商品固定按 ID 指定（留空则加 1 个）
     : ['contact', 'wechat', 'phone', 'finderType', 'finderCategories', 'finderOtherFilters', 'productIds', 'script', 'scriptMode']
@@ -2327,12 +2502,17 @@ async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFo
     if (saved) {
       const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : null)
       if (p.flow === 'batch-list') {
+        const tree = inviteCategoryTreeFor(p)
         const cat = str(saved.category, 40)
-        if (cat !== null && (cat === '' || p.categories.includes(cat))) invite.category = cat
+        if (cat !== null && (cat === '' || tree.some(c => c.name === cat))) invite.category = cat
         const sub = str(saved.subcategory, 40)
-        const kids = cat ? (p.categoryTree.find(c => c.name === cat)?.children ?? []) : []
+        const catNode = cat ? tree.find(c => c.name === cat) : undefined
+        const kids = catNode?.children ?? []
         // 二级只在属于该一级的子类列表时才恢复，否则回「不限」
         if (sub !== null && (sub === '' || kids.includes(sub))) invite.subcategory = sub
+        const third = str(saved.category3, 40)
+        const thirdKids = catNode?.grandchildren?.find(c => c.name === invite.subcategory)?.children ?? []
+        if (third !== null && (third === '' || thirdKids.includes(third))) invite.category3 = third
         if (Array.isArray(saved.levels)) invite.levels = saved.levels.filter((x): x is string => typeof x === 'string' && p.levels.includes(x))
         if (typeof saved.count === 'number' && Number.isFinite(saved.count)) invite.count = Math.max(1, Math.min(Math.round(saved.count), p.maxBatch))
         const sc = str(saved.script, p.scriptMaxLen)
@@ -2464,6 +2644,28 @@ async function openInvitePage() {
       // 绝不静默：处理函数里任何异常都要让用户看见（此前这个异常被吞掉，表现为"点了没反应"）
       ws.toast('打开达人广场失败: ' + String(e?.message || e), 'error')
     }
+  } else if (p.platform === '抖店' && p.categoryDepth === 3 && ws.activeTab) {
+    try {
+      const res = await window.shopilot.browser.prepareInviteSquare(ws.displayedStoreId!, {
+        url,
+        loadCategoryTree: true
+      })
+      if (!res.ok) {
+        ws.toast('打开达人广场/读取三级类目失败: ' + res.error.message, 'error')
+        return
+      }
+      const tree = (res.data as any)?.categoryTree as CategoryNode[] | undefined
+      if (tree?.length) {
+        await saveInviteCategoryTree(p.platform, tree)
+        // 首次读取完成后重新合并该平台存档，让已保存的三级类目恢复出来。
+        await loadInviteConfig(p)
+        ws.toast(`达人广场已打开，已读取 ${tree.length} 个一级类目的完整三级结构`, 'success')
+      } else {
+        ws.toast('达人广场已打开，但平台未返回三级类目', 'info')
+      }
+    } catch (e: any) {
+      ws.toast('打开达人广场/读取三级类目失败: ' + String(e?.message || e), 'error')
+    }
   } else {
     ws.navigate(url)
   }
@@ -2513,7 +2715,8 @@ function buildInviteTaskPayload(): { name: string; storeScope: string; steps: un
   const steps = p.flow === 'batch-list'
     ? buildInviteSteps(p, {
         batch: {
-          category: invite.category, subcategory: invite.subcategory, levels: invite.levels, count: invite.count,
+          category: invite.category, subcategory: invite.subcategory, category3: invite.category3,
+          levels: invite.levels, count: invite.count,
           script: invite.script, scriptMode: invite.scriptMode, benefits: invite.benefits,
           // 快手：额外筛选行 / 抽屉必填联系方式 / 邀约商品数（抖店没有这些字段 → 传空即不生效）
           extraFilters: JSON.parse(JSON.stringify(invite.extraFilters)),
@@ -2540,7 +2743,13 @@ function buildInviteTaskPayload(): { name: string; storeScope: string; steps: un
         }
       }, squareUrl)
   const name = p.flow === 'batch-list'
-    ? `达人邀约 · ${p.platform} · ${invite.category ? invite.category + (invite.subcategory ? '/' + invite.subcategory : '') : '全部'} · 最多 ${invite.count} 位`
+    ? `达人邀约 · ${p.platform} · ${
+        invite.category
+          ? invite.category +
+            (invite.subcategory ? '/' + invite.subcategory : '') +
+            (invite.subcategory && invite.category3 ? '/' + invite.category3 : '')
+          : '全部'
+      } · 最多 ${invite.count} 位`
     : `达人邀约 · ${p.platform} · 辅助填单 · ${invite.contact.trim() || '未命名'}`
   return { name, storeScope: ws.displayedStoreId, steps }
 }
@@ -2635,6 +2844,10 @@ async function submitTask() {
 }
 
 async function runTask(t: any) {
+  if (isTaskActive(t)) {
+    ws.toast('当前运行未结束，不能重复启动；请先等待、恢复或取消', 'info')
+    return
+  }
   const res = await window.shopilot.task.run(t.id)
   if (res.ok) {
     // 店铺窗口没开时引擎会把运行保持 queued（不静默拉起）——如实告诉用户，别让他干等
@@ -2659,6 +2872,12 @@ function statusLabel(st: string) {
 function liveStatus(t: any): string {
   const rid = t.latestRun?.id
   return (rid && ws.runLive[rid]?.status) || t.latestRun?.status || ''
+}
+function isTaskActive(t: any): boolean {
+  const persisted = t.latestRun?.status || ''
+  if (['succeeded', 'failed', 'cancelled'].includes(persisted)) return false
+  return ['queued', 'running', 'waiting_confirmation', 'paused'].includes(persisted) ||
+    ['queued', 'running', 'waiting_confirmation', 'paused'].includes(liveStatus(t))
 }
 function liveMessage(t: any): string {
   const rid = t.latestRun?.id
@@ -2737,7 +2956,13 @@ async function loadTaskDetail(t: any) {
 
 async function delTask(id: string) {
   if (!window.confirm('删除该任务？其运行记录与结果引用将一并级联删除。')) return
-  await window.shopilot.task.delete(id)
+  const task = ws.tasks.find(t => t.id === id)
+  const res = await window.shopilot.task.delete(id)
+  if (!res.ok) {
+    ws.toast('删除失败: ' + res.error.message, 'error')
+    return
+  }
+  if (task?.latestRun?.id) ws.clearConfirmation(task.latestRun.id)
   if (detailTaskId.value === id) detailTaskId.value = null
   ws.refreshTasks()
 }
@@ -2752,6 +2977,7 @@ async function runOp(t: any, action: 'pause' | 'resume' | 'retry' | 'cancel') {
   else if (action === 'retry') res = await api.resume(rid, 'retry')
   else res = await api.cancel(rid)
   if (!res.ok) ws.toast('操作失败: ' + res.error.message, 'error')
+  else if (action === 'cancel') ws.clearConfirmation(rid)
   setTimeout(() => ws.refreshTasks(), 400)
 }
 
@@ -3567,6 +3793,8 @@ onMounted(async () => {
   await loadPlatformHomeUrls()
   // 达人广场地址覆盖表（邀约面板与设置都用它）
   await loadSquareUrls()
+  // 已成功读取过的完整类目树（抖店三级类目优先于档案内的两级快照）
+  await loadInviteCategoryTrees()
   // AI 配置（只回 hasKey，Key 本身永不回渲染层）：邀约面板的"AI 生成"要据此判断能不能开始
   await loadAiConfig()
   // 恢复上次的右栏收起状态
@@ -3679,11 +3907,15 @@ onBeforeUnmount(() => {
 
 .store-card {
   display: flex; align-items: center; gap: 10px; padding: 8px 10px;
-  border-radius: var(--radius-sm); cursor: pointer; border: 1px solid transparent;
+  border-radius: var(--radius-sm); cursor: grab; border: 1px solid transparent;
 }
 .store-card:hover { background: var(--color-bg-tertiary); }
 .store-card.active { background: var(--color-bg-tertiary); }
 .store-card.displayed { border-color: var(--color-primary); }
+.store-card:active { cursor: grabbing; }
+.store-card.dragging { opacity: .42; }
+.store-card.drag-over-before { box-shadow: inset 0 2px 0 var(--color-primary); }
+.store-card.drag-over-after { box-shadow: inset 0 -2px 0 var(--color-primary); }
 .avatar {
   width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
@@ -4071,6 +4303,7 @@ onBeforeUnmount(() => {
 }
 .inv-run-bar .cf-btns { align-items: center; }
 .inv-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.inv-grid3 .inv-col:last-child { grid-column: 1 / -1; }
 .inv-col { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
 .inv-col select { width: 100%; }
 /* 任务面板的二级页签：内容区自己的页签行（不参与标题栏拖拽、不占 WCO 那 140px 留白） */

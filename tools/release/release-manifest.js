@@ -47,6 +47,9 @@ const manifest = {
   electron: JSON.parse(fs.readFileSync(path.join(root, 'node_modules', 'electron', 'package.json'), 'utf8')).version,
   dbSchemaVersion: 2,
   acceptanceSuites: [
+    'node tools/acceptance/store-drag-local-verify.js（10 项：店铺拖动状态、插入线、数据库顺序、刷新后持久化）',
+    'node tools/acceptance/douyin-invite-local-verify.js（21 项：抖店三级类目读取、UI 配置、一级/二级/三级点击顺序、人工确认门禁、仿真发布）',
+    'node tools/acceptance/m3-runner.js（113 项：任务引擎、任务列表 UI、重复启动拒绝、AI/邀约回归）',
     'node m1-runner.js（108 项，含设置四页签「配置/达人广场/AI 配置/关于软件」、API Key 不回显、达人广场地址覆盖并驱动邀约任务（含"邀约任务真能创建成功"的门禁超时回归）、平台首页地址配置与首页按钮优先级、左栏收起/展开、回收站徽标计数、右栏收起/展开、国内四平台目录与平台入口链路）',
     'node m2-runner.js stage1|stage2（29 + 8 项）',
     'node m3-runner.js（111 项，含 6 种新增副作用步骤的 Zod 白名单/跳过禁用/受控写入/门禁拒绝不执行/禁用目标、aiGenerate 的未配置如实失败与本地假端点生成写入与抽屉降级与 readText 留档、门禁超时上限回归、设置「获取可用模型」、达人邀约抖店面板（含话术来源二选一与 AI 未配置门禁）与未支持平台的明确拒绝）',
@@ -56,7 +59,7 @@ const manifest = {
     'pnpm test（会话包单测 9 项）'
   ],
   // 只声明本版（0.1.5）构建上实际复跑的套件；未复跑的不计入，避免把历史结果冒充本版结论
-  acceptanceSummary: '本版构建复跑通过：M1 108 + M3 111 + 安全 44 + 更新链路 16 + 单测 9 + M4 13 阶段（含 19/3/4 分项）。M2（代理/指纹）未在本版构建上复跑——本次改动未触及该路径。',
+  acceptanceSummary: '本版构建复跑通过：单测 158/158 + M3 113/113 + 店铺拖动排序本地端到端 10/10 + 抖店邀约本地端到端 21/21 + M4 打包态核心 19/19。本机应用控制策略阻止执行 electron-builder 重写后的测试 EXE，M4 安装/升级/卸载阶段未在本机复跑。M1/M2/安全/更新链路的最近结果见历史验收记录；本次未重复宣称未复跑结果。',
   artifacts: files,
     releaseNotesFile: fs.existsSync(notesPath) ? 'docs/RELEASE_NOTES.md' : null,
   rollback: '保留上一版本安装包：卸载当前版本 → 安装旧版；数据库 schema 仅升不降，回退前先备份 userData。',

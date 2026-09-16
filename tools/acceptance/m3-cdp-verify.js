@@ -322,6 +322,9 @@ async function main() {
   check('task:run 运行时选店（未绑定任务）返回 runId', run1.ok && !!run1.data.runId && run1.data.waitingForStore === false, JSON.stringify(run1.data || run1.error))
   if (!run1.ok) finishEarly(results)
   const rid1 = run1.data.runId
+  const duplicateRun1 = await api.taskRun(mt.id, sid1)
+  check('同一任务未结束时重复 task:run 被主进程拒绝 TASK_BAD_STATE',
+    !duplicateRun1.ok && duplicateRun1.error?.code === 'TASK_BAD_STATE', JSON.stringify(duplicateRun1.error || duplicateRun1.data))
 
   const done1 = await pollRun(rid1, d => d.run.status === 'waiting_confirmation', 30000)
   check('推进至确认门禁 waiting_confirmation（含 1.5s 迟到元素等待）', !!done1 && done1.run.status === 'waiting_confirmation',
@@ -372,11 +375,14 @@ async function main() {
     await new Promise(r => setTimeout(r, 400));
     out.after = document.querySelectorAll('.task-card').length;
     out.newTaskBtnBack = !![...document.querySelectorAll('.right-panel button')].find(b => (b.textContent || '').includes('新建任务'));
+    out.activeRunButtonsDisabled = [...document.querySelectorAll('[data-test="task-run"]')].filter(b => b.disabled).length;
     return out;
   `)
   check('任务面板有「任务列表 / 达人邀约」二级页签，切走再切回后任务列表完好',
     subTabs.panel === true && subTabs.after === subTabs.before && subTabs.newTaskBtnBack === true,
     JSON.stringify(subTabs))
+  check('活动任务运行时禁止重复启动（界面按钮禁用）',
+    subTabs.activeRunButtonsDisabled >= 1, JSON.stringify({ disabled: subTabs.activeRunButtonsDisabled }))
   // 当前店铺是拼多多 → 面板必须"明确拒绝"而不是猜测式实现
   check('达人邀约：店铺平台未实现时明确拒绝（如实列出已支持平台，且不给「开始邀约」）',
     /暂不支持/.test(subTabs.text || '') && /抖店/.test(subTabs.text || '') && subTabs.startBtn === false,
