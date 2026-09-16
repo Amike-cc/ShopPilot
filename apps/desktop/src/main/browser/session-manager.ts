@@ -277,17 +277,20 @@ function ensureGlobalLoginHandler(): void {
     event: { preventDefault: () => void },
     webContents: any,
     details: LoginDetails,
+    authInfo: { isProxy?: boolean } | undefined,
     callback: (username?: string, password?: string) => void
   ) => {
     event.preventDefault()
     const storeId = resolveStoreIdFromWebContents(webContents)
-    console.log(`[login:app] resolved store=${storeId} url=${details.url} proxyChallenge=${looksLikeProxyChallenge(details)}`)
+    const loginDetails: LoginDetails = { ...details, isProxy: authInfo?.isProxy === true || details?.isProxy === true }
+    console.log(`[login:app] resolved store=${storeId} url=${details.url} proxyChallenge=${looksLikeProxyChallenge(loginDetails)}`)
     if (!storeId) { callback(); return }
     if (isDuplicateChallenge(details.url)) {
-      console.log(`[login:app] dedup skip url=${details.url}`)
+      console.log(`[login:app] dedup cancel url=${details.url}`)
+      callback()
       return
     }
-    handleLoginChallenge(storeId, details, callback)
+    handleLoginChallenge(storeId, loginDetails, callback)
   })
 }
 

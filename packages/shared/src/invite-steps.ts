@@ -8,7 +8,8 @@
  *     确保邀约商品 → 门禁 → 发送 → 等平台确认框 → 确认 → 截图留档。
  *
  * 红线：文案/选择器失配时任务引擎报 TASK_SELECTOR_CHANGED，绝不静默重试或假装成功；
- * 「确认发送」前必须有一道 waitForUserConfirmation 门禁，拒绝即整单取消。
+ * 批量流的「确认发送」前必须有一道 waitForUserConfirmation 门禁，拒绝即整单取消。
+ * 辅助填单流的最终确认由平台「确认发送邀约」对话框完成，并按档案步骤校验结果。
  */
 
 import type { AssistInviteProfile, BatchInviteProfile, InviteProfile } from './constants/invite'
@@ -87,8 +88,8 @@ export function urlPathHint(url: string): string {
  *   点完还要校验生效标记里真的出现该类目——平台改版时宁可在勾人前失败；
  * - 一轮 = 筛选 → 逐个勾 count 位 → 批量邀约 → 额度预检 → 填话术（+必填联系方式/商品）→ 发送 → 抽屉关闭校验；
  * - 一轮外面套 loop：**循环到额度用完或可选达人不足为止**（stopOn 命中=干净停止，不算失败）；
- * - 平台侧无"发送前人工确认"步骤（用户明确要求不再二次确认）：额度预检 + 发送后抽屉关闭校验
- *   两道判据替代它——额度不足不发，抽屉没关就如实失败，绝不把"点了"当"发出去了"。
+ * - 发送类动作前保留人工确认门禁：额度预检 + 人工确认 + 发送后抽屉关闭校验，
+ *   三道判据共同保证不会把一次误触当成真实邀约。
  *
  * 两个平台的差异全部走**档案字段**驱动，不在这里写 `if (platform === ...)`：
  *   minSelect / quotaCheck / goodsModal / benefits / contacts / postSendConfirmTexts。
@@ -272,6 +273,11 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
     })
   }
   for (const b of opts.benefits) round.push({ type: 'clickByText', input: { text: b } })
+  round.push({
+    type: 'waitForUserConfirmation',
+    input: { message: `确认向 ${need} 位达人发送邀约？` },
+    timeoutMs: 3600000
+  })
   round.push({ type: 'clickByText', input: { text: p.texts.confirmSend } })
   // 发送后**可能**弹二次确认框（平台行为未定时的兜底）：出现就点、没出现就跳过，如实记录。
   // 不硬等（白等超时会把成功报成失败），也不假设没有（真弹了没人点其实没发出去）。

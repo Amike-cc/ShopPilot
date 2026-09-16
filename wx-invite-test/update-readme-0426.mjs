@@ -3,7 +3,7 @@ const fs = await import('fs')
 let t = fs.readFileSync('README.md', 'utf8')
 const before = t
 t = t.replace('**版本**: v0.4.25', '**版本**: v0.4.26')
-t = t.replace('| [RELEASE_NOTES.md](./RELEASE_NOTES.md) | 0.4.25 变更说明与回滚方式 |', '| [RELEASE_NOTES.md](./RELEASE_NOTES.md) | 0.4.26 变更说明与回滚方式 |')
+t = t.replace('| [RELEASE_NOTES.md](./docs/RELEASE_NOTES.md) | 0.4.25 变更说明与回滚方式 |', '| [RELEASE_NOTES.md](./docs/RELEASE_NOTES.md) | 0.4.26 变更说明与回滚方式 |')
 t = t.replace('pnpm exec vitest run        # 单测 73 项', 'pnpm exec vitest run        # 单测 85 项')
 // 发票中心描述里补一句：方向分"待办/无需操作"
 t = t.replace(

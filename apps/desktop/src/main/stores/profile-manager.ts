@@ -63,6 +63,24 @@ function digestOf(config: Record<string, unknown>): string {
   return createHash('sha256').update(JSON.stringify(config)).digest('hex').slice(0, 16)
 }
 
+function profileConfigForDigest(profile: Pick<BrowserProfile, 'userAgent' | 'language' | 'timezone' | 'screenWidth' | 'screenHeight' | 'colorDepth' | 'hardwareConcurrency' | 'webglVendor' | 'webglRenderer'>): Record<string, unknown> {
+  return {
+    userAgent: profile.userAgent,
+    language: profile.language,
+    timezone: profile.timezone,
+    screenWidth: profile.screenWidth,
+    screenHeight: profile.screenHeight,
+    colorDepth: profile.colorDepth,
+    hardwareConcurrency: profile.hardwareConcurrency,
+    webglVendor: profile.webglVendor,
+    webglRenderer: profile.webglRenderer
+  }
+}
+
+export function profileConfigDigest(profile: Pick<BrowserProfile, 'userAgent' | 'language' | 'timezone' | 'screenWidth' | 'screenHeight' | 'colorDepth' | 'hardwareConcurrency' | 'webglVendor' | 'webglRenderer'>): string {
+  return digestOf(profileConfigForDigest(profile))
+}
+
 /**
  * 店铺创建时同步建默认环境（§8.1 步骤3）
  */
@@ -83,7 +101,17 @@ export function ensureProfileForStore(storeId: string, storeName: string): Brows
     screenHeight: 1080
   }
   const userAgent = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${defaults.browserVersion} Safari/537.36`
-  const configDigest = digestOf({ ua: userAgent, lang: defaults.language, tz: defaults.timezone, w: defaults.screenWidth, h: defaults.screenHeight })
+  const configDigest = profileConfigDigest({
+    userAgent,
+    language: defaults.language,
+    timezone: defaults.timezone,
+    screenWidth: defaults.screenWidth,
+    screenHeight: defaults.screenHeight,
+    colorDepth: 24,
+    hardwareConcurrency: null,
+    webglVendor: null,
+    webglRenderer: null
+  })
 
   db.prepare(`
     INSERT INTO browser_profiles (
@@ -149,7 +177,7 @@ export function updateProfile(storeId: string, patch: ProfilePatch): BrowserProf
   const nextVersion = current.configVersion + 1
   const merged = { ...current, ...patch }
   updates.push('config_version = ?', 'config_digest = ?', 'updated_at = ?')
-  values.push(nextVersion, digestOf({ ua: merged.userAgent, lang: merged.language, tz: merged.timezone, w: merged.screenWidth, h: merged.screenHeight }), Date.now(), storeId)
+  values.push(nextVersion, profileConfigDigest(merged), Date.now(), storeId)
 
   db.prepare(`UPDATE browser_profiles SET ${updates.join(', ')} WHERE store_id = ?`).run(...values)
   return getProfile(storeId)!
@@ -217,10 +245,10 @@ export function copyProfileConfig(
       UPDATE browser_profiles
       SET user_agent = ?, language = ?, timezone = ?, screen_width = ?, screen_height = ?,
           webgl_vendor = ?, webgl_renderer = ?,
-          config_version = config_version + 1, updated_at = ?
+          config_version = config_version + 1, config_digest = ?, updated_at = ?
       WHERE store_id = ?
     `).run(source.userAgent, source.language, source.timezone, source.screenWidth, source.screenHeight,
-      source.webglVendor, source.webglRenderer, now, targetId)
+      source.webglVendor, source.webglRenderer, profileConfigDigest(source), now, targetId)
     copied++
   }
   return { copied, skipped }

@@ -39,6 +39,8 @@ release-icon/
 _dsh_tool_probe.txt
 _probe_browser.png
 copy-export-report.txt
+artifacts/*
+!artifacts/README.md
 m1-reg*.log
 m2-reg*.log
 m3-reg*.log

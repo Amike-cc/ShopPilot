@@ -12,9 +12,13 @@
  * WebContents 无 destroy()，销毁用 webContents.close()。
  */
 
-import { BrowserWindow, WebContentsView } from 'electron'
+import { BrowserWindow, Menu, WebContentsView, clipboard } from 'electron'
 import { getStoreSession } from './session-manager'
 import { registerFingerprintTarget, unregisterFingerprintTarget } from './fingerprint-injector'
+import {
+  buildStoreContextMenu, runStoreMenuAction, toStoreMenuInput, toElectronMenuTemplate,
+  type StoreMenuId, type StoreContextMenuParams, type StoreMenuDeps
+} from './store-context-menu'
 import { getDatabase } from '../db/database'
 import { updateStoreStatus, updateStoreLastActive } from '../stores/store-manager'
 import { StoreStatus } from '@shared/enums/store-status'
@@ -50,6 +54,28 @@ let hostWindow: BrowserWindow | null = null
 let mountedView: WebContentsView | null = null
 let displayedStoreId: string | null = null
 let viewport: ViewportBounds = { x: 0, y: 0, width: 0, height: 0 }
+
+// WebContentsView.setVisible(false) controls compositor visibility, but
+// Chromium may keep document.visibilityState="visible" after a view is
+// detached. Keep the page lifecycle signal aligned with the native view so
+// store pages and acceptance probes observe the same state.
+function syncDocumentVisibility(view: WebContentsView, hidden: boolean): void {
+  const script = hidden
+    ? `(() => {
+        try {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+          Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+        } catch (_) {}
+      })()`
+    : `(() => {
+        try { delete document.visibilityState; } catch (_) {}
+        try { delete document.hidden; } catch (_) {}
+      })()`
+  try {
+    if (view.webContents.isDestroyed()) return
+    void view.webContents.executeJavaScript(script, true).catch(() => undefined)
+  } catch { /* ignore a view destroyed during an overlay transition */ }
+}
 
 function generateTabId(): string {
   return `tab_${randomBytes(16).toString('hex')}`
@@ -158,6 +184,11 @@ export function displayStore(storeId: string | null): void {
 
 function detachMounted(): void {
   if (mountedView && hostWindow && !hostWindow.isDestroyed()) {
+    // removeChildView alone does not make the WebContents invisible. Chromium
+    // may keep reporting visibilityState=visible and the native layer can
+    // still win the compositor race against HTML modals/context menus.
+    try { mountedView.setVisible(false) } catch { /* ignore */ }
+    syncDocumentVisibility(mountedView, true)
     try { hostWindow.contentView.removeChildView(mountedView) } catch { /* ignore */ }
   }
   mountedView = null
@@ -221,6 +252,7 @@ function mountTab(tab: Tab | null): void {
     detachMounted()
     hostWindow.contentView.addChildView(tab.webContentsView)
   }
+  syncDocumentVisibility(tab.webContentsView, false)
   try { tab.webContentsView.setVisible(true) } catch { /* ignore */ }
   tab.webContentsView.setBounds({
     x: bounds.x, y: bounds.y,
@@ -315,6 +347,17 @@ export function createTab(storeId: string, url?: string): string {
     saveTabToDatabase(tab)
     emitTabs(storeId)
   })
+
+  // 右键菜单：导航 / 重新加载 / 强制重新加载 / 编辑 / 链接（原生菜单，见 store-context-menu.ts）
+  attachStoreContextMenu(view.webContents, () => ({
+    wc: view.webContents,
+    // 链接地址来自页面（可能是 javascript: 之类），过一遍协议白名单再开
+    openUrl: (u) => { try { createTab(storeId, assertNavigableUrl(u)) } catch { /* ignore */ } },
+    copyText: (t) => clipboard.writeText(t),
+    openStandalone: () => { try { openStandaloneWindow(storeId, tabId) } catch { /* ignore */ } }
+  }))
+  // 键盘兜底：页面即使封了右键，Ctrl+R / Ctrl+Shift+R 仍然可用
+  attachStoreReloadShortcuts(view.webContents)
 
   view.webContents.on('did-navigate', (_e, newUrl) => {
     tab.url = newUrl
@@ -493,27 +536,107 @@ export async function captureTab(storeId: string, tabId: string, format: string 
 /**
  * 标签页导航（§10.1 scheme 白名单）
  */
-export function navigateTab(storeId: string, tabId: string, url: string): void {
-  const state = browserStates.get(storeId)
-  if (!state) throw new Error('Browser not open for this store')
-  const tab = state.tabs.get(tabId)
-  if (!tab || !tab.webContentsView) throw new Error('Tab not found')
-
+/**
+ * 允许导航的协议白名单（§10.1）：页面给的地址（例如右键菜单里的 `linkURL`）也要过这一道，
+ * 否则 `javascript:` / `file:` 这类地址会被直接交给 loadURL。
+ * 返回规范化后的 URL；不合格就抛（调用方决定是报错还是忽略）。
+ */
+function assertNavigableUrl(url: string): string {
   let parsed: URL
   try {
     parsed = new URL(url)
   } catch {
     throw new Error('Navigation blocked: invalid URL')
   }
-
   if (!['http:', 'https:', 'about:'].includes(parsed.protocol)) {
     throw new Error('Navigation blocked: unsafe URL scheme')
   }
+  return parsed.toString()
+}
 
-  tab.url = url
-  tab.webContentsView.webContents.loadURL(url).catch(() => { /* 错误由页面呈现 */ })
+export function navigateTab(storeId: string, tabId: string, url: string): void {
+  const state = browserStates.get(storeId)
+  if (!state) throw new Error('Browser not open for this store')
+  const tab = state.tabs.get(tabId)
+  if (!tab || !tab.webContentsView) throw new Error('Tab not found')
+
+  const safeUrl = assertNavigableUrl(url)
+
+  tab.url = safeUrl
+  tab.webContentsView.webContents.loadURL(safeUrl).catch(() => { /* 错误由页面呈现 */ })
   saveTabToDatabase(tab)
   emitTabs(storeId)
+}
+
+/**
+ * 给一个店铺页面挂上右键菜单（主窗口标签页与独立窗口共用）。
+ *
+ * `deps` 传函数而不是对象：动作要用的 wc 与回调都在运行期才确定（标签页会被切换/关闭），
+ * 挂载时先不求值更不容易被后续改动引到过期对象上。
+ *
+ * 与平台自带右键菜单的关系（如实说明，别指望"完全接管"）：
+ * 本监听器由浏览器进程在 `context-menu` 事件上回调，**若页面自己 `preventDefault()` 了这个事件，
+ * 浏览器就不会走到这里**（Electron/Chromium 的既有行为），此时本菜单不会弹出——
+ * 所以「重新加载 / 强制重新加载」在封右键的页面上不可用（工具条上的 ⟳ 与 Ctrl+R 不受影响，仍可用）。
+ */
+function attachStoreContextMenu(
+  wc: Electron.WebContents,
+  deps: () => StoreMenuDeps,
+  opts?: { isStandalone?: boolean }
+): void {
+  wc.on('context-menu', (_e, params: StoreContextMenuParams) => {
+    // 菜单弹在窗口上：窗口已被销毁时不弹（避免"无主菜单"卡住主进程）
+    const win = BrowserWindow.fromWebContents(wc)
+    if (!win || win.isDestroyed()) return
+    try {
+      const input = toStoreMenuInput(params, {
+        canGoBack: wc.canGoBack(),
+        canGoForward: wc.canGoForward()
+      }, { isStandalone: opts?.isStandalone })
+      const items = buildStoreContextMenu(input)
+      // 翻译成 Electron 模板（enabled 契约见 toElectronMenuTemplate 的说明）
+      const menu = Menu.buildFromTemplate(toElectronMenuTemplate(items, (id) => {
+        try { runStoreMenuAction(id, deps(), { linkUrl: input.linkUrl }) }
+        catch (err) { logMain('warn', `store context menu action ${id} failed: ${String(err)}`) }
+      }))
+      menu.popup({ window: win })
+    } catch (err) {
+      // 这个回调是 Electron 从浏览器进程同步调起的：异常逃出去会变成主进程 uncaughtException，
+      // 表现为"菜单静默不出现"而用户毫无线索。这里兜住并留痕（页面本身不受影响）。
+      logMain('error', `store context menu build/popup failed tab=${wc.id}: ${String(err)}`)
+    }
+  })
+}
+
+/**
+ * 给店铺页面挂上键盘快捷键：Ctrl+R 重新加载、Ctrl+Shift+R 强制重新加载。
+ *
+ * 为什么要有这一道（与右键菜单并存）：右键菜单的触发依赖页面**没有**吞掉 `contextmenu`
+ * 事件（详见 attachStoreContextMenu 的说明），一旦某个平台页面 `preventDefault()` 了它，
+ * 菜单就不会弹，用户就完全没有"重载"的入口了。键盘事件走的是 `before-input-event`，
+ * 在页面拿到按键**之前**由主进程处理，不受页面脚本影响，所以它才是那项能力的可靠兜底。
+ * （工具条上的 ⟳ 也是兜底之一，但用户点进页面后手在键盘上时这个更顺手。）
+ */
+function attachStoreReloadShortcuts(wc: Electron.WebContents): void {
+  wc.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    // 按住不放会连续 keyDown：只认第一次，否则会连着重载（在跑自动化的页面上尤其难受）
+    if (input.isAutoRepeat) return
+    // 只认 Ctrl+R / Ctrl+Shift+R（macOS 上是 Cmd，语义与浏览器一致）
+    const mod = process.platform === 'darwin' ? input.meta : input.control
+    if (!mod) return
+    // 用 code（物理键位）判断，避免非拉丁键盘布局下 key 不是 'r' 而漏判；
+    // code 缺失时退回 key 判断（两者取或，宁可多认也别漏）
+    const isR = input.code === 'KeyR' || String(input.key).toLowerCase() === 'r'
+    if (!isR) return
+    event.preventDefault()
+    try {
+      if (input.shift) wc.reloadIgnoringCache()
+      else wc.reload()
+    } catch (err) {
+      logMain('warn', `store reload shortcut failed tab=${wc.id}: ${String(err)}`)
+    }
+  })
 }
 
 /**
@@ -555,6 +678,18 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
     win.loadURL(targetUrl)
     return { action: 'deny' }
   })
+
+  // 独立窗口同样给右键菜单与重载快捷键：导航/重新加载/强制重新加载/编辑/链接。
+  // isStandalone=true → 不出现「在独立窗口打开当前标签页」（已经在这里了）。
+  attachStoreContextMenu(win.webContents, () => ({
+    wc: win.webContents,
+    // 独立窗口没有多标签页，链接就在本窗口打开（与它自己的 window.open 策略一致）；
+    // 同样过协议白名单
+    openUrl: (u) => { try { win.loadURL(assertNavigableUrl(u)).catch(() => { /* 错误由页面呈现 */ }) } catch { /* ignore */ } },
+    copyText: (t) => clipboard.writeText(t),
+    openStandalone: () => { /* 已在独立窗口，无需再用 */ }
+  }), { isStandalone: true })
+  attachStoreReloadShortcuts(win.webContents)
 }
 
 /** 获取店铺标签页（排序后） */

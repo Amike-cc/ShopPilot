@@ -361,8 +361,10 @@ describe('抖店（batch-list）步骤构造', () => {
     expect(String(requireEnabled.input.text)).toBe('确认发送')
     expect(types.indexOf('requireEnabled')).toBeLessThan(types.lastIndexOf('clickByText'))
 
-    // **没有**人工确认门禁（用户明确要求抖店不再二次确认）
-    expect(types).not.toContain('waitForUserConfirmation')
+    // 批量发送前必须经过软件人工确认门禁，防止误触发不可撤回的邀约。
+    const gateIdx = types.indexOf('waitForUserConfirmation')
+    expect(gateIdx).toBeGreaterThan(-1)
+    expect(gateIdx).toBeLessThan(types.lastIndexOf('clickByText'))
 
     // 发送后必须校验结果（抽屉关闭）并截图留档
     expect(types.indexOf('waitForGone')).toBeGreaterThan(types.lastIndexOf('clickByText'))
@@ -569,12 +571,14 @@ describe('快手小店（batch-list）步骤构造', () => {
     // 抖店没有商品弹窗 → 不该有"等弹窗消失"那一步
     expect((ddSteps[0].input as any).steps.some((s: any) => s.type === 'waitForGone' && String(s.input.selector).includes('modal-body'))).toBe(false)
   })
-  it('发送后：发送邀请 → 关抽屉校验 → 截图；无人工确认门禁', () => {
+  it('发送前保留人工确认门禁；发送后：发送邀请 → 关抽屉校验 → 截图', () => {
     const round = ksRound()
     const types = round.map(s => s.type)
     const send = round.find(s => s.type === 'clickByText' && String(s.input.text) === '发送邀请')!
     expect(send).toBeTruthy()
-    expect(types).not.toContain('waitForUserConfirmation')
+    const gateIdx = types.indexOf('waitForUserConfirmation')
+    expect(gateIdx).toBeGreaterThan(-1)
+    expect(gateIdx).toBeLessThan(round.indexOf(send))
     // 关**抽屉**的那次校验必须在发送之后（现在还有一次"等商品弹窗消失"在前，要按选择器区分）
     const drawerGoneIdx = round.findIndex(s => s.type === 'waitForGone' && String(s.input.selector) === KS.scriptSelector)
     expect(drawerGoneIdx).toBeGreaterThan(round.indexOf(send))

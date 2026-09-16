@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { PLATFORM_CATALOG, findPlatform } from '../../packages/shared/src/constants/platforms'
+import { findPlatform } from '../../packages/shared/src/constants/platforms'
 
 // ---------- 发票中心入口数据 ----------
 // 这些地址是"发票中心"面板的跳转目标，属对外可见的功能数据，必须可校验、不许乱写。

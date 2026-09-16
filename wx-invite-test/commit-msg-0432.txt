@@ -1,0 +1,34 @@
+feat(browser): 店铺页面右键「重新加载 / 强制重新加载」+ 仓库目录整理；发布 0.4.32
+
+## 右键菜单（本次功能）
+店铺内嵌浏览器页面新增原生右键菜单：后退/前进、**重新加载**、**强制重新加载（不使用缓存）**、
+（链接上）在新标签页打开/复制链接、剪切/复制/粘贴/全选、在独立窗口打开当前标签页。
+
+为什么用原生菜单：店铺页面是原生 WebContentsView，永远画在渲染层 HTML 之上，
+自绘菜单要么被盖住、要么得先摘视图（页面白屏）。Electron Menu.popup 是系统级弹窗，不受此限。
+
+键盘兜底 Ctrl+R / Ctrl+Shift+R（macOS 走 Cmd）：右键菜单依赖页面没吞掉 contextmenu 事件
+（页面 preventDefault 就不会触发，这是 Electron/Chromium 既有行为）；键盘走 before-input-event，
+在页面拿到按键之前由主进程处理，不受页面脚本影响。工具条 ⟳ 仍在。
+
+新增 apps/desktop/src/main/browser/store-context-menu.ts（纯函数：菜单模板/动作分派/参数映射/
+Electron 模板翻译，单测无需起 Electron）；window-manager.ts 里挂到主窗口标签页与独立窗口。
+
+真机实测：
+- 原生菜单确实弹出（微信小店真实页面，抓桌面截图可见全部菜单项）。
+- context-menu 事件确实触发（插桩日志有据），页面未 preventDefault。
+- Ctrl+R 与 Ctrl+Shift+R 都真的重载（页面内埋标记 → 真实按键 → 标记被清除）。
+- 单测 24 项 + 变异测试：把 enabled: it.enabled !== false 误写成 !!it.enabled（会让两个
+  重载项双双置灰、功能报废）时测试会失败并指名「重新加载必须可点」——该缝隙由复核发现后补测。
+
+顺带加固（复核提出）：右键链接过协议白名单（抽出 assertNavigableUrl，与 navigateTab 一致）；
+弹菜单整段 try/catch（防主进程 uncaughtException，异常不再静默）；忽略 isAutoRepeat 防长按连重载；
+用物理键位 code 判断；独立窗口链接项文案改为「在当前窗口打开链接」。
+
+## 仓库目录整理（工作区既有改动，一并提交）
+根目录文档 → docs/、验收与维护脚本 → tools/、图片资源 → assets/；
+新增 .eslintrc.cjs 与各目录 README；删除遗留产物（FINAL_REPORT.md、plat-lines.txt、
+clean-cell-lines.txt、ui-task.js）；若干业务文件与单测的配套调整。
+发布脚本已同步适配新路径（ROOT=../..、docs/RELEASE_NOTES.md），release:full 可用。
+
+全仓 tsc --noEmit 0 错；vitest run 150/150 通过。

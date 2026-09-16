@@ -381,7 +381,7 @@
           <button
             v-for="st in TASK_SUB_TABS" :key="st.key"
             :class="['stab', { on: taskSubTab === st.key }]"
-            :data-test="'task-subtab-' + st.key"
+            :data-test="'task-tab-' + st.key"
             @click="taskSubTab = st.key"
           >{{ st.label }}<span v-if="st.pending" class="stab-dot" title="功能开发中"></span></button>
         </div>
@@ -613,7 +613,7 @@
                 </div>
                 <div class="env-note">
                   点「开始邀约」后<b>连续开批</b>：每批勾满 → 批量邀约 → {{ inviteProfile.goodsModal ? '选商品 → ' : '' }}填话术 → 发送；一批发完自动开下一批，
-                  <b>直到额度用完</b>或可选达人不足为止，然后自动停止。<b>不再弹二次确认</b>——发送即真实发出。
+                  <b>直到额度用完</b>或可选达人不足为止，然后自动停止；每批发送前会停下等待人工确认。
                 </div>
                 <div class="env-note" v-if="inviteProfile.quotaCheck === 'requireQuota'">
                   该平台在抽屉底部明示剩余额度（<b>{{ inviteProfile.quota?.textIncludes }}N…</b>），额度为 0 时会如实停止，不会硬发。
@@ -909,7 +909,7 @@
             <span v-if="r.manual" class="inv-vtag">手动</span>
             <span class="row-sub" style="margin-left:auto">
               {{ r.supported ? `待开票 ${r.count} 条` : '未支持抓取' }}
-              <template v-if="r.historyCount">　·　无需操作 {{ r.historyCount }} 条</template>
+              <template v-if="r.historyCount"> · 无需操作 {{ r.historyCount }} 条</template>
             </span>
             <button class="mini-btn" data-test="invoice-open-store" @click="openInvoiceFor(r)">
               {{ r.supported ? '打开发票页' : '打开后台' }}
@@ -1199,7 +1199,7 @@
     <!-- 新建任务对话框：**只从已实现的流程里挑**（当前＝达人邀约）。
          不给底层步骤编辑器——自己拼步骤必然拼出跑不通的半成品，失败还会以"任务失败"回抛。 -->
     <div v-if="taskDialogOpen" class="modal-mask" data-test="task-dialog" @click.self="taskDialogOpen = false">
-      <div class="modal" style="max-width:520px">
+      <div class="modal modal-wide task-create-modal">
         <h2>新建任务</h2>
         <div class="row-sub" style="margin-bottom:8px">
           任务只能由<b>已实测跑通的流程</b>创建（参数表单 + 内置确认门禁都由流程自己带），
@@ -1213,7 +1213,7 @@
           <span class="row-sub">{{ taskFlowCurrent?.desc }}</span>
         </label>
 
-        <template v-if="['navigate', 'invite'].includes(taskFlow)">
+        <template v-if="taskFlow === 'invite'">
           <!-- 邀约的参数在「达人邀约」页签里配置（同一份配置、同一份步骤构造），这里只做汇总 -->
           <div class="env-note" v-if="!taskFlowCurrent?.ready" data-test="task-flow-blocked">
             <b>暂时建不了</b>：{{ taskFlowCurrent?.needs }}
@@ -1423,7 +1423,7 @@ import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile, isAssistProfile } from '@shared/constants/invite'
 import { buildInviteSteps } from '@shared/invite-steps'
-import { invoiceProfileFor, INVOICE_COLUMNS } from '@shared/constants/invoice'
+import { invoiceProfileFor } from '@shared/constants/invoice'
 import { buildInvoiceCollectSteps } from '@shared/invoice-steps'
 import { BIZ_METRICS, businessProfileFor, BUSINESS_SUPPORTED_PLATFORMS } from '@shared/constants/business'
 import { buildBusinessCollectSteps } from '@shared/business-steps'
@@ -2122,7 +2122,8 @@ const taskSubTab = ref<'tasks' | 'invite' | 'todo'>('tasks')
 const INVITE_TASK_PREFIX = '达人邀约 ·'
 const SELF_MANAGED_TASK_PREFIXES = ['发票采集 ·', '经营数据采集 ·'] as const
 const storeTasks = computed(() => ws.tasks.filter(t =>
-  t.storeScope === ws.displayedStoreId &&
+  (t.storeScope === ws.displayedStoreId ||
+    (!t.storeScope && t.latestRun?.storeId === ws.displayedStoreId)) &&
   !SELF_MANAGED_TASK_PREFIXES.some(p => t.name.startsWith(p))
 ))
 const inviteHistory = computed(() => {
@@ -2554,7 +2555,7 @@ async function startInvite() {
   const started = await window.shopilot.task.run(created.data.id)
   if (!started.ok) { ws.toast('启动邀约任务失败: ' + started.error.message, 'error'); return }
   ws.toast(p.flow === 'batch-list'
-    ? '邀约任务已启动：将连续开批（每批勾满后直接发送），直到额度用完或可选达人不足'
+    ? '邀约任务已启动：每批发送前都会暂停等待人工确认，直到额度用完或可选达人不足'
     : '邀约任务已启动：点「发送」前会先停下让你确认', 'success')
   // 留在邀约面板：进行中状态与「停止邀约」按钮就地可见（任务详情在「任务列表」页签可查）
   await ws.refreshTasks()
@@ -3336,13 +3337,6 @@ const dc = reactive<any>({
   runs: { byStatus: [] as any[], recentIssues: [] as any[] }
 })
 
-function openDataCenter() {
-  dataCenterOpen.value = true
-  // 手动录入默认选中"当前显示的店铺"，减少一步选择
-  if (!manualDraft.storeId) manualDraft.storeId = ws.displayedStoreId || ws.stores[0]?.id || ''
-  void loadDataCenter()
-}
-
 /**
  * 单元格文本：换行压成空格（实测拼多多「订单号」把"逾期未开票"折在下一行，
  * 一个单元格多行会把整行撑到 170px+，表格看着像坏了），并去掉平台重复渲染的整段重复。
@@ -3791,7 +3785,7 @@ onBeforeUnmount(() => {
 .row-main { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-sub { font-size: 11px; color: var(--color-text-secondary); }
 /* 行内小按钮（删除/打开目录）。原实现把"绝对定位 + opacity:0 悬停显示"写在 .row-del 基类上，
-   导致 .proxy-item / .tc-head / .tstep 里的删除按钮既不可见、又相对 .modal-mask 跑到窗口右上角。
+   导致 .proxy-item / .tc-head 里的删除按钮既不可见、又相对 .modal-mask 跑到窗口右上角。
    现在：基类=可见的静态小按钮；仅 .row-item（列表行）保留悬停显示。 */
 .row-del { width: 22px; height: 22px; flex: 0 0 auto; border: 0; background: none; border-radius: 4px; color: var(--color-text-muted); opacity: .65; cursor: pointer; }
 .row-item .row-del { position: absolute; right: 8px; top: 10px; width: 20px; height: 20px; opacity: 0; }
@@ -4175,16 +4169,4 @@ onBeforeUnmount(() => {
 .ctx-sep { height: 1px; background: var(--color-border); margin: 4px 2px; }
 .store-pick { display: flex; align-items: center; gap: 8px; padding: 5px 2px; font-size: 12.5px; cursor: pointer; }
 .store-pick input { width: auto; margin: 0; }
-.tstep { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 8px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
-/* 注意：.modal input/select{width:100%} 会覆盖这里的宽度（实测超时/重试框被撑到 496px，
-   一行撑到 ~1100px 导致整行溢出、删除按钮被挤出可视区）——此处用 .tstep 前缀提高优先级 */
-.tstep .add-line { display: flex; align-items: center; gap: 6px; }
-.tstep .t-type { width: 168px; flex: 0 0 168px; }
-.tstep .f-port2 { width: 68px; flex: 0 0 68px; }
-.tstep .f-wide { width: 100%; flex: 1 1 auto; min-width: 0; }
-.tstep .mini-lab { font-size: 11px; color: var(--color-text-secondary); flex: 0 0 auto; }
-.tstep .row-del { margin-left: auto; }.t-type { flex: 1; }
-.f-port2 { width: 68px; flex-shrink: 0; }
-.f-wide { flex: 1; }
-.tpl-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
 </style>

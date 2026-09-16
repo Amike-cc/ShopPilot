@@ -1,6 +1,6 @@
 {
   "name": "shopilot",
-  "version": "0.4.31",
+  "version": "0.4.32",
   "description": "ShopPilot - 电商店铺浏览器工作台",
   "private": true,
   "main": "apps/desktop/out/main/index.js",
@@ -11,9 +11,9 @@
     "typecheck": "tsc --noEmit",
     "dist": "electron-vite build && electron-builder --win --x64",
     "dist:dir": "electron-vite build && electron-builder --win --x64 --dir",
-    "release:manifest": "node release-manifest.js",
-    "release:publish": "node publish-release.js",
-    "release:full": "pnpm run dist && node release-manifest.js && node publish-release.js",
+    "release:manifest": "node tools/release/release-manifest.js",
+    "release:publish": "node tools/release/publish-release.js",
+    "release:full": "pnpm run dist && node tools/release/release-manifest.js && node tools/release/publish-release.js",
     "lint": "eslint .",
     "test": "vitest",
     "test:e2e": "playwright test"

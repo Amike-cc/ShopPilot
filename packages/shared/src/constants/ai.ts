@@ -78,6 +78,11 @@ export function normalizeAiEndpoint(raw: string): string {
  * 两条正则分开写：合并时 (.*) 贪婪会把 "…/ai/chat/completions" 截成 "…/ai/chat"。
  */
 export function modelsUrlFromChat(chatUrl: string): string | null {
+  const raw = String(chatUrl ?? '').trim().replace(/\/+$/, '')
+  // A path that mentions "completions" but is not one of the two supported
+  // OpenAI endpoint forms is almost always a typo. Do not normalize it into a
+  // different URL and then report a misleading JSON/request failure.
+  if (/completions/i.test(raw) && !/\/(chat\/)?completions$/i.test(raw)) return null
   const ep = normalizeAiEndpoint(chatUrl)
   if (!ep) return null
   const m = /^(.*)\/chat\/completions$/i.exec(ep) || /^(.*)\/completions$/i.exec(ep)

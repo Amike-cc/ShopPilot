@@ -5,7 +5,6 @@
 
 import { getDatabase } from '../db/database'
 import { shell } from 'electron'
-import { dirname } from 'path'
 
 export interface Download {
   id: string

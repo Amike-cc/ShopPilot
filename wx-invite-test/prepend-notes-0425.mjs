@@ -78,13 +78,13 @@ TASK_TARGET_COVERED: 「可开票」被「unknown」遮挡，点不到
 ---
 
 `
-const old = fs.readFileSync('RELEASE_NOTES.md', 'utf8')
+const old = fs.readFileSync('docs/RELEASE_NOTES.md', 'utf8')
 if (old.startsWith('# ShopPilot 0.4.25')) {
   console.log('已经是 0.4.25，跳过')
 } else {
-  fs.writeFileSync('RELEASE_NOTES.md', NOTES + old, 'utf8')
+  fs.writeFileSync('docs/RELEASE_NOTES.md', NOTES + old, 'utf8')
   console.log('已插入 0.4.25 说明；文件长度', NOTES.length + old.length)
 }
-const check = fs.readFileSync('RELEASE_NOTES.md', 'utf8')
+const check = fs.readFileSync('docs/RELEASE_NOTES.md', 'utf8')
 console.log('首行:', check.slice(0, 40))
 console.log('含 0.4.24 历史:', check.includes('本次更新（0.4.24）'))

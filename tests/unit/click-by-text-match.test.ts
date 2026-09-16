@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SCOPE_FN, PICK_SORT_FN } from '../../apps/desktop/src/main/tasks/task-runner'
+import { PICK_SORT_FN } from '../../apps/desktop/src/main/tasks/task-runner'
 
 /**
  * 文案规范化 + 两级候选匹配，跑的是**注入页面的同一份源码**（PICK_SORT_FN 里的 __narrow）。

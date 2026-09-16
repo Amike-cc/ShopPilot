@@ -4,7 +4,7 @@
 
 ## 项目状态
 
-**版本**: v0.4.31 · **构建标签**: `INTERNAL_BUILD`（未做代码签名，§21.5）  
+**版本**: v0.4.32 · **构建标签**: `INTERNAL_BUILD`（未做代码签名，§21.5）  
 **里程碑**: M0 技术验证 ✅ · M1 工作台核心 ✅ · M2 环境/代理/备份 ✅ · M3 任务辅助 ✅ · M4 发布工程 ✅ · 自动更新（§21）✅  
 **验收**: 0.1.5 构建复跑通过：M1 108 + M3 111 + 安全 44 + 更新链路 16 + 单测 9 + M4 13 阶段；0.2.0 新增：单测 21（含邀约档案/两平台步骤序列/schema 白名单 12 项）+ 微信邀约流程仿真页端到端（门禁批准/拒绝/负例，可复跑 `wx-invite-test/`）；0.2.1：任务面板按店铺隔离（界面归属修正，切换店铺/列表过滤在下次应用重启后随包验证）。M2 29+8 是 0.1.0 构建上的结果，其后未复跑（改动未触及代理/指纹那条路径）。
 
@@ -12,12 +12,12 @@
 
 | 文档 | 内容 |
 |---|---|
-| [DEVELOPMENT_SPEC.md](./DEVELOPMENT_SPEC.md) | 开发设计文档（架构 / 数据模型 / IPC 契约 / 里程碑 / 验收标准） |
-| [FUNCTIONAL_SPEC.md](./FUNCTIONAL_SPEC.md) | 功能规格（MVP 9 项功能集） |
-| [STATUS_REPORT.md](./STATUS_REPORT.md) | 开发状态与验收明细（含已知边界如实声明） |
-| [RELEASE_NOTES.md](./RELEASE_NOTES.md) | 0.4.31 变更说明与回滚方式 |
-| [INSTALL.md](./INSTALL.md) | 受限环境依赖安装说明 |
-| [REVIEW.md](./REVIEW.md) | 早期审查报告（历史存档） |
+| [DEVELOPMENT_SPEC.md](./docs/DEVELOPMENT_SPEC.md) | 开发设计文档（架构 / 数据模型 / IPC 契约 / 里程碑 / 验收标准） |
+| [FUNCTIONAL_SPEC.md](./docs/FUNCTIONAL_SPEC.md) | 功能规格（MVP 9 项功能集） |
+| [STATUS_REPORT.md](./docs/STATUS_REPORT.md) | 开发状态与验收明细（含已知边界如实声明） |
+| [RELEASE_NOTES.md](./docs/RELEASE_NOTES.md) | 0.4.32 变更说明与回滚方式 |
+| [INSTALL.md](./docs/INSTALL.md) | 受限环境依赖安装说明 |
+| [REVIEW.md](./docs/REVIEW.md) | 早期审查报告（历史存档） |
 
 ## 核心能力
 
@@ -45,7 +45,7 @@
 
 ## 技术栈
 
-Electron 30.5.1（ABI 123）· Vue 3.4 + TypeScript 5.3 + Pinia · better-sqlite3 11.10（WAL）· electron-vite 2.0 · electron-builder 24.13 · electron-updater 6.6 · Vitest（单测）+ CDP 驱动验收脚本（E2E）
+Electron 30.5.1（ABI 123）· Vue 3.4 + TypeScript 5.3 + Pinia · better-sqlite3 11.10（WAL）· electron-vite 2.0 · electron-builder 24.13 · electron-updater 6.8.9 · Vitest（单测）+ CDP 驱动验收脚本（E2E）
 
 ## 项目结构
 
@@ -56,17 +56,27 @@ Electron 30.5.1（ABI 123）· Vue 3.4 + TypeScript 5.3 + Pinia · better-sqlite
 │   └── renderer/       # Vue 工作台（深色三栏 UI，§17）
 ├── packages/shared/    # IPC 契约、枚举、错误码、平台目录（主/渲染同源）
 ├── tests/unit/         # 纯逻辑单测（vitest）
-├── m1-runner.js … m4-runner.js / sec-runner.js / update-runner.js   # 验收套件
+├── docs/               # 开发规范、功能规格、安装、审查、状态与发布说明
+├── assets/             # 设计稿与平台图标等静态资源
+├── tools/
+│   ├── acceptance/     # M0–M4、安全验收与一键验收入口
+│   ├── release/        # 发布清单、上传与更新演练
+│   ├── ui/             # UI、窗口与几何探针
+│   └── maintenance/    # 图标生成、源码导出等维护工具
+├── wx-invite-test/     # 平台真机探针；静态实测留档在 evidence/
+├── artifacts/          # 本地截图、临时数据库和维护报告（不入 git）
+├── logs/               # 仓库级验收、构建与诊断日志
+├── build/              # electron-builder 构建资源
 └── release/            # 打包产物 + release.json 清单（不入 git）
 ```
 
 ## 运行与构建
 
 ```powershell
-pnpm install                                  # 依赖（受限环境见 INSTALL.md）
+pnpm install                                  # 依赖（受限环境见 docs/INSTALL.md）
 pnpm dev                                      # 开发模式
 pnpm dist                                     # 打包 → release/（NSIS + latest.yml）
-node release-manifest.js                      # 生成 release/release.json 清单
+node tools/release/release-manifest.js        # 生成 release/release.json 清单
 .\node_modules\electron\dist\electron.exe . --no-sandbox   # 直接跑生产构建
 start-shoppilot.cmd                           # 同上（快捷方式）
 ```
@@ -84,18 +94,18 @@ start-shoppilot.cmd                           # 同上（快捷方式）
 
 ```powershell
 pnpm exec vitest run        # 单测 108 项（会话包 / 邀约档案与步骤 / 发票档案、多方向采集步骤、表格行清洗、CSV 转义）
-node update-runner.js       # 更新链路 16 项（需先 pnpm dist；本地 feed 驱动真实安装包）
-node m1-runner.js           # 工作台 100 项（含设置弹窗/平台首页地址配置、首页按钮与配置优先级）
-node m2-runner.js stage1    # 代理/备份 29 项；stage2 指纹注入 8 项
-node m3-runner.js           # 任务引擎 82 项（含 4 种新增副作用步骤、达人邀约抖店面板与门禁拒绝）
-node sec-runner.js          # 安全能力 44 项
-node m4-runner.js           # 发布工程 13 阶段检查（含 NSIS 安装/升级/卸载）
-pwsh -File run-acceptance.ps1   # 以上全部串行 + 打包 + 清单（一键）
+node tools/release/update-runner.js       # 更新链路 16 项（需先 pnpm dist；本地 feed 驱动真实安装包）
+node tools/acceptance/m1-runner.js        # 工作台验收
+node tools/acceptance/m2-runner.js stage1 # 代理/备份；stage2 指纹注入
+node tools/acceptance/m3-runner.js        # 任务引擎验收
+node tools/acceptance/sec-runner.js       # 安全能力验收
+node tools/acceptance/m4-runner.js        # 发布工程验收（含 NSIS 安装/升级/卸载）
+pwsh -File tools/acceptance/run-acceptance.ps1 # 以上全部串行 + 打包 + 清单
 ```
 
 各套件使用独立临时 userData 与 CDP 端口（9223–9228、9232、9241、9245），跑前请退出运行中的 ShopPilot 实例。
 
-## 已知边界（如实声明，详见 STATUS_REPORT.md）
+## 已知边界（如实声明，详见 docs/STATUS_REPORT.md）
 
 - 未做代码签名：`INTERNAL_BUILD`；自动更新仅 SHA-512 哈希校验、无签名校验。Release v0.1.4 已发布于 GitHub Releases（仓库 public，打包态在线检查链路已实测）。
 - 会话导出包仅含 Cookie + 环境配置（不含 localStorage/IndexedDB）；跨机登录态需重登或经加密包导入（DPAPI 边界）。

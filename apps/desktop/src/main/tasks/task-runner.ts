@@ -1013,7 +1013,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       })()`)
       if (text == null) throw new Error(`TASK_SELECTOR_CHANGED: 未找到元素 ${String(input.selector)}`)
       if (input.metric) {
-        const num = parseFloat(String(text).replace(/[^\d.\-]/g, ''))
+        const num = parseFloat(String(text).replace(/[^\d.-]/g, ''))
         TaskStore.insertSnapshot(run.storeId, String(input.metric), Number.isFinite(num) ? num : text, run.runId)
       }
       return { kind: 'text', payload: { text, metric: input.metric || null } }
@@ -1250,7 +1250,6 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       // 而"点了发送按钮"很容易被误当成"已经发出去了"。
       // 所以：在给定窗口内轮询，出现就点；超时未出现就按"没有确认框"跳过，
       // 并把 clicked 如实记进步骤结果（事后能查出到底走没走确认流程）。
-      const wc = wcOrThrow(run)
       const needle = String(input.text)
       const deep = !!input.deep
       const nearText = input.nearText ? String(input.nearText) : ''
@@ -2023,8 +2022,10 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       if (totalClicked === 0 && selected <= 0) {
         throw new Error(`TASK_SELECTOR_CHANGED: 没有可用的目标（可见 ${skippedInvisible} 项不可见、${skippedDisabled} 项禁用，共 ${rounds} 轮）`)
       }
-      // 勾不满就必须在门禁之前如实失败：用户要的是 max 位，少勾还照发就是发错数量
-      if (selected < max) {
+      // 带滚动续选的达人批量流程要求严格凑满一批，否则不能进入发送门禁；
+      // 普通 clickAll 表示“最多点击 max 个”，列表只有较少可用项时应返回实际点击数，
+      // 让后续步骤自行决定是否满足业务条件（例如通用页面上的 3 个可用项 / max=10）。
+      if (scroll && selected < max) {
         throw new Error(`TASK_SELECTION_SHORTFALL: 本次只勾中 ${selected} 位（要求 ${max} 位；${exhausted ? '当前筛选下的可选达人已全部勾完' : '扫描未完成'}，其中 ${skippedDisabled} 位已邀约/禁用）。请减少本批数量或调整筛选项后重试`)
       }
       return { kind: 'executed', payload: { action: 'clickAll', target: sel || txt, clicked: totalClicked, pageSelected, initialSelected, selected, skippedDisabled, skippedInvisible, skippedChecked, retried, corrected, rounds, scrolled, requested: max, exhausted, samples } }
