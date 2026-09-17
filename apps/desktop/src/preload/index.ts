@@ -96,6 +96,8 @@ const api = {
     invoiceCenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_INVOICE_CENTER),
     /** 发票中心：把待开票清单导出为 CSV（弹保存框） */
     invoiceExport: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_INVOICE_EXPORT),
+    /** 店铺主体：把已采到的 entity.* 快照写进店铺营业执照（空则填；不一致不覆盖，如实回报） */
+    entityApply: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_ENTITY_APPLY),
     /** 手动录入经营指标（平台反抓取导致无法自动读取时，由用户看页面录入） */
     manualMetric: (storeId: string, metric: string, value: number): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_MANUAL_METRIC, { storeId, metric, value })

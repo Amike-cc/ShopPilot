@@ -99,6 +99,8 @@ export const IPC_CHANNELS = {
   OVERVIEW_INVOICE_CENTER: 'overview:invoiceCenter',
   // 发票中心：把当前待开票清单导出为 CSV（弹保存框；只写文件，不上传）
   OVERVIEW_INVOICE_EXPORT: 'overview:invoiceExport',
+  // 店铺主体：把已采到的 entity.* 快照写进店铺营业执照（空则填；与已填不一致**不覆盖**，如实回报）
+  OVERVIEW_ENTITY_APPLY: 'overview:entityApply',
   // 手动录入经营指标（平台用反抓取字体渲染数字时，由用户看页面自行录入，来源如实标记为"手动"）
   OVERVIEW_MANUAL_METRIC: 'overview:manualMetric',
 

@@ -16,8 +16,9 @@ import { getDatabase } from '../db/database'
 import { writeAudit, queryAudit } from '../services/audit-logger'
 import { invoiceProfileFor, INVOICE_COLUMNS, INVOICE_UNSUPPORTED_NOTE, normalizeCellText } from '@shared/constants/invoice'
 import type { InvoiceColumnKey } from '@shared/constants/invoice'
+import { ENTITY_METRIC_NAME, ENTITY_METRIC_NO, entityProfileFor, entityUnsupportedNote } from '@shared/constants/entity'
+import { decideLicenseWrite, normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
 import { buildInvoiceCsv, invoiceCsvRows } from '@shared/invoice-csv'
-import { normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
 import { randomUUID } from 'crypto'
 
 /**
@@ -34,6 +35,7 @@ function collectInvoiceRows(): any[] {
   const stores = db.prepare(
     `SELECT id, name, platform, status, admin_url, license_name, license_no FROM stores WHERE deleted_at IS NULL ORDER BY platform, name`
   ).all() as any[]
+  const entities = collectEntities()
 
   // 每店**每指标**取最新一条（指标名形如 invoice.<方向>）
   const snapRows = db.prepare(`
@@ -152,6 +154,12 @@ function collectInvoiceRows(): any[] {
       // 营业执照：发票按**开票主体**分账（同一个执照下常挂多家店），导出也带这两列
       licenseName: normalizeLicenseName(s.license_name) || null,
       licenseNo: normalizeLicenseNo(s.license_no) || null,
+      // 平台自己说这个店的主体是谁（采集到才有；界面在主体标签旁如实展示，用于核对）
+      entity: entities.get(s.id) || null,
+      /** 该平台能不能自动取主体（不能的照实说明原因） */
+      entitySupported: !!entityProfileFor(s.platform),
+      entityNote: entityProfileFor(s.platform)?.note || null,
+      entityUnsupported: entityProfileFor(s.platform) ? null : entityUnsupportedNote(s.platform),
       // 该平台是否有实测的发票档案（没有 = 抓不了，界面如实说明）
       supported: !!profile,
       unsupportedReason: profile ? null : (INVOICE_UNSUPPORTED_NOTE[s.platform] || '该平台尚未实测到可读取的发票页'),
@@ -169,6 +177,33 @@ function collectInvoiceRows(): any[] {
       loginRequired: fail ? String(fail.error_code || '').includes('LOGIN_REQUIRED') : false
     }
   })
+}
+
+/**
+ * 各店铺最近一次采到的**主体信息**（entity.name / entity.no 快照）——发票中心与主体写回共用。
+ * 没有就返回空表（界面如实显示"还没采集"），不做任何推断。
+ */
+function collectEntities(): Map<string, { name: string | null; no: string | null; capturedAt: number | null }> {
+  const db = getDatabase()
+  const rows = db.prepare(`
+    SELECT store_id, metric, value_json, captured_at FROM (
+      SELECT store_id, metric, value_json, captured_at,
+             ROW_NUMBER() OVER (PARTITION BY store_id, metric ORDER BY rowid DESC) AS rn
+      FROM store_snapshots WHERE metric IN (?, ?)
+    ) WHERE rn = 1
+  `).all(ENTITY_METRIC_NAME, ENTITY_METRIC_NO) as any[]
+  const out = new Map<string, { name: string | null; no: string | null; capturedAt: number | null }>()
+  for (const r of rows) {
+    let v: any = r.value_json
+    try { v = JSON.parse(r.value_json) } catch { /* 保底原样 */ }
+    const text = String(v ?? '').trim()
+    const hit = out.get(r.store_id) || { name: null, no: null, capturedAt: null }
+    if (r.metric === ENTITY_METRIC_NAME && text) hit.name = text
+    if (r.metric === ENTITY_METRIC_NO && text) hit.no = text
+    if (r.captured_at && (!hit.capturedAt || r.captured_at > hit.capturedAt)) hit.capturedAt = r.captured_at
+    out.set(r.store_id, hit)
+  }
+  return out
 }
 
 function generateRequestId(): string {
@@ -310,6 +345,56 @@ export function registerProfileAndMiscHandlers(): void {
       writeFileSync(res.filePath, csv, 'utf8')
       writeAudit('invoice.export', 'success', { requestId: JSON.stringify({ rows: dataRows.length }) })
       return success({ path: res.filePath, rows: dataRows.length }, requestId)
+    } catch (err: any) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+    }
+  })
+
+  /**
+   * overview:entityApply - 把**已经采到的**店铺主体（entity.name / entity.no 快照）写进
+   * stores.license_name / license_no，并如实回报每一家的情况。
+   *
+   * 写入规则（宁可少填，不可填错——错一个公司就是错票）：
+   *  - 店铺该字段空着 → 写入；
+   *  - 已填且与平台一致 → 不动，报 same；
+   *  - 已填但与平台不同 → **不覆盖**，把两个值都回报给界面，由用户判断；
+   *  - 平台给的是掩码 / 形态不对 → 不写，如实说明（实测微信的信用代码是掩码）。
+   * 只读快照、只改这两列，不做任何页面操作（采集在任务里）。
+   */
+  ipcMain.handle(IPC_CHANNELS.OVERVIEW_ENTITY_APPLY, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const db = getDatabase()
+      const stores = db.prepare(
+        `SELECT id, name, platform, license_name, license_no FROM stores WHERE deleted_at IS NULL ORDER BY platform, name`
+      ).all() as any[]
+      const entities = collectEntities()
+      const rows = stores.map(s => {
+        const profile = entityProfileFor(s.platform)
+        const base = { storeId: s.id, storeName: s.name, platform: s.platform }
+        if (!profile) {
+          return { ...base, status: 'unsupported' as const, note: entityUnsupportedNote(s.platform) }
+        }
+        const got = entities.get(s.id) || null
+        if (!got || (!got.name && !got.no)) {
+          return { ...base, status: 'no-data' as const, note: '还没有采到该店的主体信息（先点「获取主体营业执照」跑一次采集）' }
+        }
+        const decision = decideLicenseWrite({ licenseName: s.license_name, licenseNo: s.license_no }, got)
+        if (Object.keys(decision.write).length) {
+          StoreManager.updateStore({ storeId: s.id, patch: decision.write })
+        }
+        return {
+          ...base,
+          status: decision.action,
+          entity: { name: got.name, no: got.no, capturedAt: got.capturedAt, source: profile.pageUrl, measuredAt: profile.measuredAt },
+          written: decision.write,
+          conflicts: decision.conflicts,
+          rejected: decision.rejected
+        }
+      })
+      const filled = rows.filter(r => r.status === 'fill').length
+      writeAudit('store.licenseFromEntity', 'success', { requestId: JSON.stringify({ filled, total: rows.length }) })
+      return success({ appliedAt: Date.now(), filled, rows }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }

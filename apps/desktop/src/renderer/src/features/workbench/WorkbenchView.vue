@@ -920,11 +920,33 @@
             v-for="l in licenseSummary.items" :key="l.key"
             class="inv-lic-chip" :class="{ on: activeLicense === l.key, none: l.key === NO_LICENSE_KEY }"
             :data-test="'invoice-license-' + l.key"
-            :title="l.key === NO_LICENSE_KEY ? '这些店铺还没填营业执照——点店铺卡片上的主体标签补上' : (l.no ? '统一社会信用代码：' + l.no : '只填了主体名称，没有统一社会信用代码')"
+            :title="l.key === NO_LICENSE_KEY ? '这些店铺还没填营业执照——点店铺卡片上的主体标签手动补，或点右侧「获取主体营业执照」让软件去平台后台读回来' : (l.no ? '统一社会信用代码：' + l.no : '只填了主体名称，没有统一社会信用代码')"
             @click="invoiceLicense = activeLicense === l.key ? '' : l.key"
           >
             {{ l.label || '未填写营业执照' }} <i>{{ l.storeCount }} 家</i><template v-if="l.pendingCount"> · {{ l.pendingCount }} 条 · {{ l.amountText }}</template>
           </button>
+          <button
+            class="mini-btn" style="margin-left:auto" data-test="invoice-entity-fetch"
+            :disabled="entityCollecting" title="去各平台后台把本店自己的主体（营业执照）读回来；空着的主体自动填上，与已填不一致的只报告、不覆盖"
+            @click="collectStoreEntities()"
+          >
+            {{ entityCollecting ? '获取中…' : '获取主体营业执照' }}
+          </button>
+        </div>
+
+        <!-- 获取主体的逐店结果：填了谁、谁与已填不一致、哪些平台现在取不了——都照实说 -->
+        <div v-if="entityReport.length" class="inv-entity-report" data-test="invoice-entity-report">
+          <div class="inv-entity-report-h">
+            <b>获取主体营业执照 · 结果</b>
+            <button class="mini-btn" data-test="invoice-entity-report-close" @click="entityReport = []">收起</button>
+          </div>
+          <div v-for="r in entityReport" :key="r.storeId" class="inv-entity-row" :data-test="'invoice-entity-result-' + r.storeId">
+            <span class="inv-entity-store">{{ r.storeName }}</span>
+            <span class="row-sub">{{ r.platform }}</span>
+            <span :class="{ 'inv-entity-bad': r.status === 'conflict' || r.status === 'unsupported', 'inv-entity-ok': r.status === 'fill' || r.status === 'same' }">
+              {{ entityReportText(r) }}
+            </span>
+          </div>
         </div>
 
         <!-- 工具栏：搜索 + 只看有数据的 + 排序 -->
@@ -975,6 +997,16 @@
             <button class="mini-btn" data-test="invoice-open-store" @click="openInvoiceFor(r)">
               {{ r.supported ? '打开发票页' : '打开后台' }}
             </button>
+          </div>
+
+          <!-- 平台自己说这个店的主体是谁：与上方"你填的营业执照"并排显示，一眼能核对 -->
+          <div v-if="r.entity && (r.entity.name || r.entity.no)" class="inv-entity-line" :data-test="'invoice-platform-entity-' + r.storeId">
+            平台读到的主体：<b>{{ r.entity.name || '（没读到名称）' }}</b>
+            <template v-if="r.entity.no"> · {{ r.entity.no }}</template>
+            <template v-if="r.entity.capturedAt"> <span class="row-sub">（读于 {{ new Date(r.entity.capturedAt).toLocaleString() }}）</span></template>
+          </div>
+          <div v-else-if="!r.entitySupported" class="inv-entity-line off" :data-test="'invoice-entity-unsupported-' + r.storeId">
+            该平台暂不能自动获取主体：{{ r.entityUnsupported || '未实测到可读的主体信息页' }}
           </div>
 
           <!-- 行内补录营业执照：发票中心正是最容易发现"这家还没填主体"的地方，
@@ -1503,6 +1535,8 @@ import { buildInviteSteps } from '@shared/invite-steps'
 import { invoiceProfileFor } from '@shared/constants/invoice'
 import { buildInvoiceCollectSteps } from '@shared/invoice-steps'
 import { NO_LICENSE_KEY, groupStoresByLicense, licenseLabelOf } from '@shared/store-license'
+import { entityProfileFor } from '@shared/constants/entity'
+import { buildEntityCollectSteps } from '@shared/entity-steps'
 import { BIZ_METRICS, businessProfileFor, BUSINESS_SUPPORTED_PLATFORMS } from '@shared/constants/business'
 import { buildBusinessCollectSteps } from '@shared/business-steps'
 import {
@@ -3268,6 +3302,9 @@ const licenseEditingId = ref<string | null>(null)
 const licenseDraft = reactive({ name: '', no: '' })
 const licenseSaving = ref(false)
 const licenseEditError = ref('')
+/** 「获取主体营业执照」：采集进行中 + 逐店结果（填了哪些、哪些不一致、哪些平台取不了） */
+const entityCollecting = ref(false)
+const entityReport = ref<Array<Record<string, any>>>([])
 
 /**
  * 金额解析：各平台金额是**带符号的字符串**（¥14.89 / ￥9.49 / 2.02 / -），
@@ -3339,6 +3376,10 @@ const invoiceAllRows = computed(() => {
       licenseName: lic.licenseName,
       licenseNo: lic.licenseNo,
       licenseLabel: licenseLabelOf(lic),
+      // 平台自己说这个店的主体是谁（采到才有；卡片上如实展示，便于用户核对）
+      entity: got.entity || null,
+      entitySupported: got.entitySupported === true,
+      entityUnsupported: got.entityUnsupported || null,
       color: cat.find(p => p.name === s.platform)?.color || 'var(--color-primary)',
       supported: got.supported !== false,
       unsupportedReason: got.unsupportedReason || '该平台尚未实测到可读取的发票页',
@@ -3432,6 +3473,92 @@ async function saveLicense(r: any) {
   }
   licenseEditingId.value = null
   ws.toast('营业执照已保存', 'success')
+}
+
+/**
+ * 「获取主体营业执照」：去平台后台把**本店自己的主体**读回来，再写进店铺的营业执照字段。
+ *
+ * 两步分开（都复用既有机制）：
+ *  1. 采集：为每个"已实测主体页锚点"的店铺建一个只读采集任务（navigate → readLabelValue×N → 快照 entity.name/no）；
+ *  2. 写回：主进程按快照决定写不写——**空则填；与已填不一致就不覆盖**，把两边都报出来（错一个公司就是错票）。
+ * 未实测的平台（或登录态过期的）**不猜**，在结果里照实说明原因。
+ */
+async function collectStoreEntities() {
+  const supported = ws.stores.filter(s => !!entityProfileFor(s.platform))
+  if (!supported.length) {
+    ws.toast('还没有已实测主体信息页的平台——需先在真实登录态后台实测（不猜选择器），当前只有快手小店已登记', 'error')
+    return
+  }
+  entityCollecting.value = true
+  entityReport.value = []
+  const runIds: string[] = []
+  try {
+    for (const s of supported) {
+      const profile = entityProfileFor(s.platform)!
+      if (!ws.openStoreIds.includes(s.id)) {
+        // 引擎不静默拉起店铺浏览器（§4.4）：用户点这个按钮就是要采这几家 → 显式打开
+        try { await window.shopilot.browser.open(s.id) } catch { /* 打开失败就排队，下面如实汇报 */ }
+      }
+      const res = await window.shopilot.task.create({
+        name: `主体信息采集 · ${s.platform} · ${new Date().toLocaleDateString()}`,
+        storeScope: s.id,
+        steps: buildEntityCollectSteps(profile)
+      })
+      if (!res.ok) continue
+      const run = await window.shopilot.task.run(res.data.id)
+      if (run.ok && run.data?.runId) runIds.push(run.data.runId)
+    }
+    await ws.refreshTasks()
+    if (runIds.length) {
+      const deadline = Date.now() + 150000
+      for (;;) {
+        await new Promise(r => setTimeout(r, 3000))
+        const list = await window.shopilot.task.list()
+        const all = list.ok ? (list.data.tasks || list.data) : []
+        const done = runIds.every(id => {
+          const t = all.find((x: any) => x.latestRun?.id === id)
+          const st = t?.latestRun?.status
+          return st && ['succeeded', 'failed', 'cancelled'].includes(st)
+        })
+        if (done || Date.now() > deadline) break
+      }
+    }
+    // 写回：空则填、不一致不覆盖（主进程按快照决定，界面只展示结果）
+    const applied = await window.shopilot.overview.entityApply()
+    if (!applied.ok) { ws.toast('写回主体信息失败：' + applied.error.message, 'error'); return }
+    entityReport.value = applied.data.rows || []
+    const filled = applied.data.filled || 0
+    ws.toast(
+      filled ? `已按平台读到的主体填入 ${filled} 家店铺的营业执照` : '采集完成：没有需要新填的主体（详见下方结果）',
+      filled ? 'success' : 'info'
+    )
+    await Promise.all([ws.refreshStores(), loadInvoiceCenter()])
+  } finally {
+    entityCollecting.value = false
+  }
+}
+
+/** 结果里每行的一句话说明（照实说：填了什么、哪不一致、为什么取不了） */
+function entityReportText(r: any): string {
+  const w = r.written || {}
+  const parts: string[] = []
+  if (r.status === 'fill') {
+    if (w.licenseName) parts.push(`名称「${w.licenseName}」`)
+    if (w.licenseNo) parts.push(`统一社会信用代码「${w.licenseNo}」`)
+    return `已填入 ${parts.join(' + ')}`
+  }
+  if (r.status === 'same') return '平台读到的主体与已填一致，未改动'
+  if (r.status === 'conflict') {
+    return '平台读到的与你已填的不一致——没有覆盖你的填写，请自己核对：' +
+      (r.conflicts || []).map((c: any) => `${c.field === 'licenseName' ? '名称' : '信用代码'}：已填「${c.existing}」／平台「${c.fetched}」`).join('；')
+  }
+  if (r.status === 'nothing') {
+    if (!(r.rejected || []).length) return '平台页面上没读到主体信息——该店可能是个人店铺（本来没有营业执照），也可能页面已改版；没有写入任何值'
+    return '平台给的值不可用（未写入）：' + (r.rejected || []).map((x: any) => `${x.field === 'licenseName' ? '名称' : '信用代码'} ${x.raw}——${x.why}`).join('；')
+  }
+  if (r.status === 'no-data') return r.note || '还没有采到该店的主体信息'
+  if (r.status === 'unsupported') return '该平台暂不能自动获取：' + (r.note || '')
+  return String(r.status)
 }
 
 /** 「只看有数据的」筛选（搜索与排序已在 invoiceRows 里做过） */
@@ -4346,6 +4473,20 @@ onBeforeUnmount(() => {
 .inv-lic-edit input[data-test="invoice-license-name"] { flex: 1 1 240px; min-width: 180px; }
 .inv-lic-edit input[data-test="invoice-license-no"] { flex: 0 1 240px; min-width: 160px; }
 .inv-lic-err { font-size: 11px; color: #fca5a5; flex: 1 1 200px; }
+/* 平台读到的主体（与"你填的"并排展示，便于核对） */
+.inv-entity-line { font-size: 11px; color: var(--color-text-secondary); margin: 0 0 6px; }
+.inv-entity-line > b { color: var(--color-text-primary); font-weight: 600; }
+.inv-entity-line.off { color: var(--color-text-muted); font-style: normal; }
+/* 「获取主体营业执照」的逐店结果 */
+.inv-entity-report {
+  margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); background: var(--color-bg-tertiary);
+}
+.inv-entity-report-h { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 12px; }
+.inv-entity-row { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; padding: 2px 0; line-height: 1.5; }
+.inv-entity-store { font-weight: 600; flex: 0 0 auto; }
+.inv-entity-ok { color: #4ade80; }
+.inv-entity-bad { color: #d9a441; }
 .inv-dir {
   display: inline-flex; align-items: baseline; gap: 5px; font-size: 11px;
   padding: 3px 8px; border: 1px solid var(--color-border); border-radius: 20px;

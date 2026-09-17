@@ -302,7 +302,15 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * 该标签的值本来就不是数字（公司名 / "2026年05/06月"这类文本）→ 原样取用文本，
      * 不做数值抽取。默认 false = 必须取到数字（数据中心指标卡那种场景）。
      */
-    allowText: z.boolean().optional()
+    allowText: z.boolean().optional(),
+    /**
+     * 「页面上没有这一行」算通过（与 readTable 的 emptyOk 同一思路）。
+     * 用途：同一个信息的行文案随**主体类型**变（实测快手个体工商户是「个体工商户名称」、
+     * 企业应为「企业名称」），两个候选都读、谁在取谁；个人店铺本来就两行都没有。
+     * 注意它只豁免 NOT_FOUND（标签全文都不在页面上）；标签在、但旁白取不到值的
+     * NO_VALUE_SIBLING / VALUE_TOO_LONG 仍然如实失败——那才是"页面结构变了"。
+     */
+    absentOk: z.boolean().optional()
   }).strict(),
   // 显式等待（读型步骤，上限 2 分钟）：等 SPA 按新筛选条件刷新数据
   waitMs: z.object({ ms: z.number().int().min(100).max(120000) }).strict(),

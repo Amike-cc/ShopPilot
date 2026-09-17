@@ -73,7 +73,15 @@ declare global {
         lock: (storeId: string, locked: boolean) => Promise<IPCResult>
         copyConfig: (sourceStoreId: string, targetStoreIds: string[]) => Promise<IPCResult>
       }
-      overview: { stats: () => Promise<IPCResult> }
+      overview: {
+        stats: () => Promise<IPCResult>
+        datacenter: () => Promise<IPCResult>
+        invoiceCenter: () => Promise<IPCResult>
+        invoiceExport: () => Promise<IPCResult>
+        /** 店铺主体：把已采到的 entity.* 快照写进店铺营业执照（空则填；不一致不覆盖） */
+        entityApply: () => Promise<IPCResult>
+        manualMetric: (storeId: string, metric: string, value: number) => Promise<IPCResult>
+      }
       settings: {
         get: (key: string) => Promise<IPCResult>
         set: (key: string, value: any) => Promise<IPCResult>

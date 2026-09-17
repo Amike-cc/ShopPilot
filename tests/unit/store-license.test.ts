@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { storeCreateSchema, storeUpdateSchema } from '@shared/schemas/store'
 import {
   NO_LICENSE_KEY,
+  decideLicenseWrite,
   groupStoresByLicense,
   licenseKeyOf,
   licenseLabelOf,
@@ -118,6 +119,72 @@ describe('按营业执照归组（发票中心筛选条用）', () => {
     expect(groupStoresByLicense([
       { id: 'a', licenseName: '上海某某', licenseNo: '91310000MA1FL1234X' }
     ]).hasMissing).toBe(false)
+  })
+})
+
+describe('把平台读到的主体写回店铺营业执照', () => {
+  const fetched = { name: '夏邑县唯衣美服装工作室', no: '92411426MA9KEBPH6L' }
+
+  it('店铺空着 → 两项都填（这正是"自动获取主体"要的效果）', () => {
+    const d = decideLicenseWrite({}, fetched)
+    expect(d.action).toBe('fill')
+    expect(d.write).toEqual({ licenseName: fetched.name, licenseNo: fetched.no })
+    expect(d.conflicts).toEqual([])
+  })
+
+  it('已填且一致 → 不动，报 same（大小写/空格差异也算一致）', () => {
+    const d = decideLicenseWrite({ licenseName: '夏邑县唯衣美服装工作室', licenseNo: '92411426ma9kebph6l' }, fetched)
+    expect(d.action).toBe('same')
+    expect(d.write).toEqual({})
+  })
+
+  it('已填但与平台不同 → **绝不覆盖**，两个值都回报（错一个公司就是错票）', () => {
+    const d = decideLicenseWrite({ licenseName: '另一家公司', licenseNo: null }, fetched)
+    expect(d.action).toBe('fill')                                  // 代码是空的可填
+    expect(d.write).toEqual({ licenseNo: fetched.no })              // 名称不写
+    expect(d.conflicts).toEqual([{ field: 'licenseName', existing: '另一家公司', fetched: fetched.name }])
+    expect(d.write.licenseName).toBeUndefined()
+  })
+
+  it('只有名称冲突、没有可填字段 → 纯冲突', () => {
+    const d = decideLicenseWrite({ licenseName: '另一家公司', licenseNo: fetched.no }, { name: fetched.name })
+    expect(d.action).toBe('conflict')
+    expect(d.write).toEqual({})
+    expect(d.conflicts).toHaveLength(1)
+  })
+
+  it('平台给的是掩码 → 不写、如实说明（实测微信「9233**********D310」就是这个形态）', () => {
+    const d = decideLicenseWrite({}, { name: '东阳市花小朵电子商务商行', no: '9233**********D310' })
+    expect(d.action).toBe('fill')
+    expect(d.write).toEqual({ licenseName: '东阳市花小朵电子商务商行' })   // 名称可用、代码不可用
+    expect(d.rejected[0].field).toBe('licenseNo')
+    expect(d.rejected[0].why).toContain('打了码')
+  })
+
+  it('代码位数不对 → 不写（否则会被当成另一个主体另起一桶）', () => {
+    const d = decideLicenseWrite({}, { no: '92411426MA9KEBPH6' })
+    expect(d.action).toBe('nothing')
+    expect(d.write).toEqual({})
+    expect(d.rejected[0].why).toContain('18 位')
+  })
+
+  it('只读到名称（平台没给代码）→ 只填名称，绝不编造代码', () => {
+    const d = decideLicenseWrite({}, { name: '夏邑县唯衣美服装工作室' })
+    expect(d.write).toEqual({ licenseName: '夏邑县唯衣美服装工作室' })
+    expect(d.write.licenseNo).toBeUndefined()
+  })
+
+  it('一个字都没读到 → 什么都不写，并标出"可能个人店铺或页面改版"', () => {
+    const d = decideLicenseWrite({}, {})
+    expect(d.action).toBe('nothing')
+    expect(d.write).toEqual({})
+    expect(d.fetchedNothing).toBe(true)
+  })
+
+  it('名称过长（疑似爬到整块容器）→ 不写', () => {
+    const d = decideLicenseWrite({}, { name: '主'.repeat(121) })
+    expect(d.write).toEqual({})
+    expect(d.rejected[0].why).toContain('过长')
   })
 })
 

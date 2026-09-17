@@ -2660,6 +2660,9 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const label = String(input.label)
       const deep = !!input.deep
       const maxLen = input.maxValueLen == null ? 40 : Number(input.maxValueLen)
+      // absentOk：页面上**没有这一行**算通过（不是错误），与 readTable 的 emptyOk 同一思路。
+      // 只豁免 NOT_FOUND——标签在、值取不到的 NO_VALUE_SIBLING/VALUE_TOO_LONG 仍然如实失败。
+      const absentOk = input.absentOk === true
       const deadline = Date.now() + step.timeoutMs
       let res: any = null
       for (;;) {
@@ -2693,6 +2696,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           return { ok: false, reason: 'NO_VALUE_SIBLING' };
         })()`).catch(() => ({ ok: false, reason: 'ERR' }))
         if (res && res.ok) break
+        if (absentOk && res && res.reason === 'NOT_FOUND') break   // 没有这一行 → 正常收尾（见下）
         if (Date.now() >= deadline) {
           throw new Error(res && res.reason === 'VALUE_TOO_LONG'
             ? `TASK_SELECTOR_CHANGED: 「${label}」向上找到的容器文本过长（${String(res.cardText).slice(0, 60)}）——页面结构已改，未取到单值`
@@ -2701,6 +2705,17 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         await new Promise(r => setTimeout(r, 300))
       }
       guardSignals(run)
+      if (absentOk && (!res || !res.ok)) {
+        // 如实记录"页面上没有这一行"，且**不写快照**：不写就没有值，下游据此报"没读到"，
+        // 绝不会被当成"读到了空字符串"而覆盖掉用户已填的内容。
+        return {
+          kind: 'text',
+          payload: {
+            absent: true, label, reason: res?.reason || null, metric: input.metric || null,
+            note: `页面上没有「${label}」这一行（该主体类型没有这项，或尚未登记执照）`
+          }
+        }
+      }
       // 卡片文本常带"较上期/比上周 X%"等对比噪音（实测快手指标卡）：只取开头的"数字（可带货币
       // 符号与万/亿）"作为指标值，其余丢弃——绝不把对比数字当成指标值。
       const raw = String(res.value)

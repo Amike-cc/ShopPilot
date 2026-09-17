@@ -18,6 +18,8 @@ export type AuditAction =
   | 'update.check' | 'update.download' | 'update.install'
   | 'ai.keySet' | 'ai.keyClear' | 'ai.test' | 'ai.generate' | 'ai.models'
   | 'diagnostics.export' | 'audit.export' | 'invoice.export'
+  // 把平台读到的主体写回店铺营业执照（会改 stores 两列 → 留痕）
+  | 'store.licenseFromEntity'
 
 export type AuditResult = 'success' | 'failure'
 

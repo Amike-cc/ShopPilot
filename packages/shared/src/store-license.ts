@@ -76,8 +76,7 @@ export interface LicenseGrouping {
 
 /**
  * 把店铺按营业执照归组。`stores` 必须带 id（渲染层用店铺 id 反查归属）。
- */
-export function groupStoresByLicense(stores: Array<StoreLicenseFields & { id: string }>): LicenseGrouping {
+ */export function groupStoresByLicense(stores: Array<StoreLicenseFields & { id: string }>): LicenseGrouping {
   // 第一遍：有代码的店先定组，并把"名称 → 组"记下来，供只有名称的店认领
   const keyByStore = new Map<string, string>()
   const groups = new Map<string, LicenseGroup>()
@@ -129,4 +128,79 @@ export function groupStoresByLicense(stores: Array<StoreLicenseFields & { id: st
   })
   // 未填写的组不参与"真实主体"的排序，但没有名称也没有代码的店仍要能被筛出来
   return { groups: ordered, keyByStore, hasMissing: ordered.some(g => g.key === NO_LICENSE_KEY) }
+}
+
+/** 从平台读回来的主体信息（形状与 store_snapshots 的 entity.* 指标对齐） */
+export interface FetchedEntity {
+  name?: string | null
+  no?: string | null
+}
+
+export interface LicenseWriteDecision {
+  /** fill=有可写字段；same=与已填一致；conflict=读到的与已填不同（不覆盖）；nothing=读到的东西都不可用 */
+  action: 'fill' | 'same' | 'conflict' | 'nothing'
+  /** 只含**该写**的字段（已填且不一致的字段绝不会出现在这里） */
+  write: { licenseName?: string; licenseNo?: string }
+  /** 读到了但与已填不一致（界面要把两边都摆出来，让用户自己判断该信谁） */
+  conflicts: Array<{ field: 'licenseName' | 'licenseNo'; existing: string; fetched: string }>
+  /** 读到了但**不可用**（平台掩码、形态不对）——绝不能写进库 */
+  rejected: Array<{ field: 'licenseName' | 'licenseNo'; raw: string; why: string }>
+  /** 平台页面上一个字都没读到（个人店铺没营业执照，或页面改版）——界面要把这两种可能都说出来 */
+  fetchedNothing?: boolean
+}
+
+/** 平台把证件号打码了（实测微信「注册号/统一社会信用代码」= 9233**********D310） */
+const MASK_RE = /[*＊·•]{2,}/
+
+/**
+ * 决定「平台读到的主体」要不要写进店铺营业执照。规则（宁可少填，不可填错）：
+ *  - 掩码值、形态不合法（信用代码非 15/18 位字母数字）→ **不写**，如实说明原因；
+ *  - 店铺该字段**空着** → 写入（这正是"自动获取主体"要的效果）；
+ *  - 已填且与平台一致 → 不动，报"一致"；
+ *  - 已填但与平台不同 → **不覆盖**，把两个值都回报，由用户判断（错一个公司就是错票）。
+ */
+export function decideLicenseWrite(
+  store: StoreLicenseFields | null | undefined,
+  fetched: FetchedEntity | null | undefined
+): LicenseWriteDecision {
+  const write: LicenseWriteDecision['write'] = {}
+  const conflicts: LicenseWriteDecision['conflicts'] = []
+  const rejected: LicenseWriteDecision['rejected'] = []
+
+  const rawName = normalizeLicenseName(fetched?.name)
+  const rawNo = normalizeLicenseNo(fetched?.no)
+
+  const checkName = (): string | null => {
+    if (!rawName) return null
+    if (MASK_RE.test(rawName)) { rejected.push({ field: 'licenseName', raw: rawName, why: '平台对主体名称打了码' }); return null }
+    if (rawName.length > 120) { rejected.push({ field: 'licenseName', raw: rawName.slice(0, 40) + '…', why: '名称过长，疑似读到整块容器文本' }); return null }
+    return rawName
+  }
+  const checkNo = (): string | null => {
+    if (!rawNo) return null
+    if (MASK_RE.test(rawNo)) { rejected.push({ field: 'licenseNo', raw: rawNo, why: '平台对统一社会信用代码打了码（只显示头尾）' }); return null }
+    if (!/^(?:[0-9A-Z]{18}|[0-9]{15})$/.test(rawNo)) { rejected.push({ field: 'licenseNo', raw: rawNo, why: '不是 18 位（或旧税号 15 位）的字母数字' }); return null }
+    return rawNo
+  }
+
+  const name = checkName()
+  const no = checkNo()
+  // 一个字都没读到：可能是个人店铺（本来没有营业执照），也可能是页面改版——
+  // 两种可能都由界面照实说出来，绝不写任何值
+  const fetchedNothing = !rawName && !rawNo
+
+  const settle = (field: 'licenseName' | 'licenseNo', next: string | null, existingRaw: string | null | undefined): void => {
+    if (!next) return
+    const existing = field === 'licenseName' ? normalizeLicenseName(existingRaw) : normalizeLicenseNo(existingRaw)
+    if (!existing) { write[field] = next; return }
+    if (existing.toLowerCase() === next.toLowerCase()) return
+    conflicts.push({ field, existing, fetched: next })
+  }
+  settle('licenseName', name, store?.licenseName)
+  settle('licenseNo', no, store?.licenseNo)
+
+  const action: LicenseWriteDecision['action'] = Object.keys(write).length
+    ? 'fill'
+    : conflicts.length ? 'conflict' : (rejected.length || fetchedNothing) ? 'nothing' : 'same'
+  return { action, write, conflicts, rejected, fetchedNothing }
 }
