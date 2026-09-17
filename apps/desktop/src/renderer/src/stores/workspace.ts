@@ -20,6 +20,9 @@ export interface StoreRow {
   tags: string[]
   owner?: string | null
   region?: string | null
+  /** 营业执照主体名称与统一社会信用代码（发票按主体分账用；两字段都可为空 = 未填写） */
+  licenseName?: string | null
+  licenseNo?: string | null
   lastActiveAt: number | null
 }
 
@@ -35,6 +38,16 @@ function parseTags(row: any): string[] {
   try { return JSON.parse(row.tagsJson || '[]') } catch { return [] }
 }
 
+/**
+ * 店铺搜索的匹配文本：名称 / 平台 / 分组 / 标签 / 营业执照（名称与代码）。
+ * 带上营业执照是为了「按主体找店」——同一家公司开了好几家店时，搜公司名就能把它们全捞出来。
+ */
+function storeMatchesQuery(s: StoreRow, q: string): boolean {
+  return [
+    s.name, s.platform, s.groupName || '', s.tags.join(' '), s.licenseName || '', s.licenseNo || ''
+  ].join(' ').toLowerCase().includes(q)
+}
+
 function toRow(row: any): StoreRow {
   return {
     id: row.id, name: row.name, platform: row.platform, adminUrl: row.adminUrl,
@@ -42,6 +55,7 @@ function toRow(row: any): StoreRow {
     sortOrder: Number(row.sortOrder) || 0,
     groupName: row.groupName ?? null, tags: parseTags(row),
     owner: row.owner ?? null, region: row.region ?? null,
+    licenseName: row.licenseName ?? null, licenseNo: row.licenseNo ?? null,
     lastActiveAt: row.lastActiveAt ?? null
   }
 }
@@ -89,26 +103,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       let rows = state.stores
       if (state.filterPlatform) rows = rows.filter(s => s.platform === state.filterPlatform)
       const q = state.search.trim().toLowerCase()
-      if (q) {
-        rows = rows.filter(s =>
-          s.name.toLowerCase().includes(q) ||
-          s.platform.toLowerCase().includes(q) ||
-          (s.groupName || '').toLowerCase().includes(q) ||
-          s.tags.some(t => t.toLowerCase().includes(q)))
-      }
+      if (q) rows = rows.filter(s => storeMatchesQuery(s, q))
       return rows
     },
     platformCounts(): Record<string, number> {
       // 在应用平台筛选之前，按搜索后的结果统计各平台店铺数
       let rows = this.stores
       const q = this.search.trim().toLowerCase()
-      if (q) {
-        rows = rows.filter(s =>
-          s.name.toLowerCase().includes(q) ||
-          s.platform.toLowerCase().includes(q) ||
-          (s.groupName || '').toLowerCase().includes(q) ||
-          s.tags.some(t => t.toLowerCase().includes(q)))
-      }
+      if (q) rows = rows.filter(s => storeMatchesQuery(s, q))
       const counts: Record<string, number> = {}
       for (const s of rows) {
         counts[s.platform] = (counts[s.platform] || 0) + 1
@@ -374,6 +376,21 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.toast('创建失败: ' + res.error.message, 'error')
       }
       return res
+    },
+
+    /**
+     * 设置店铺的营业执照（发票中心 / 新建店铺共用）。
+     * 把主进程的**字段级**校验消息带回来（如信用代码位数不对），界面才能说清是哪儿填错了；
+     * 失败时**不**改本地列表：主体归属错一个公司就是开错票，宁可让人重试。
+     */
+    async setStoreLicense(storeId: string, licenseName: string, licenseNo: string): Promise<{ ok: boolean; message?: string }> {
+      const res = await window.shopilot.store.update({ storeId, patch: { licenseName, licenseNo } })
+      if (!res.ok) {
+        const detail = Array.isArray(res.error?.details) ? res.error.details[0]?.message : ''
+        return { ok: false, message: detail || res.error?.message || '保存失败' }
+      }
+      await this.refreshStores()
+      return { ok: true }
     },
 
     async archiveStore(storeId: string) {

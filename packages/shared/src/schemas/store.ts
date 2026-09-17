@@ -15,6 +15,22 @@ const adminUrlSchema = z.string().trim().max(2048, '后台地址不能超过 204
 const tagsSchema = z.array(z.string().trim().min(1).max(64)).max(50).optional()
 const optionalText = (max: number) => z.string().trim().max(max).optional()
 
+/**
+ * 营业执照主体名称（选填）。发票要按开票主体分账，所以它是店铺自身的属性，
+ * 而不是发票行里的"抬头/税号"（那是对方的）。
+ */
+const licenseNameSchema = z.string().trim().max(120, '营业执照主体名称不能超过 120 个字符').optional()
+/**
+ * 统一社会信用代码（选填）：18 位（三证合一后）或 15 位（旧税号/注册号）。
+ * 允许带空格与连字符（用户是从执照上连格式一起复制过来的），归一化在主进程落库前做。
+ */
+const licenseNoSchema = z.string().trim().max(64, '统一社会信用代码不能超过 64 个字符')
+  .refine(
+    v => v === '' || /^(?:[0-9A-Za-z]{18}|[0-9]{15})$/.test(v.replace(/[\s-]/g, '')),
+    '统一社会信用代码应为 18 位（旧税号为 15 位）字母或数字'
+  )
+  .optional()
+
 export const storeCreateSchema = z.object({
   name: storeNameSchema,
   platform: platformSchema,
@@ -23,7 +39,9 @@ export const storeCreateSchema = z.object({
   notes: optionalText(5000),
   externalCode: optionalText(256),
   owner: optionalText(120),
-  region: optionalText(120)
+  region: optionalText(120),
+  licenseName: licenseNameSchema,
+  licenseNo: licenseNoSchema
 }).strict()
 
 export const storeUpdateSchema = z.object({
@@ -37,7 +55,9 @@ export const storeUpdateSchema = z.object({
     externalCode: optionalText(256),
     owner: optionalText(120),
     region: optionalText(120),
-    groupName: z.string().trim().max(120).nullable().optional()
+    groupName: z.string().trim().max(120).nullable().optional(),
+    licenseName: licenseNameSchema,
+    licenseNo: licenseNoSchema
   }).strict()
 }).strict()
 
@@ -69,6 +89,10 @@ export interface Store {
   externalCode: string | null
   owner: string | null
   region: string | null
+  /** 营业执照主体名称（发票按主体分账用；老店铺为空 = 未填写） */
+  licenseName: string | null
+  /** 统一社会信用代码（同一执照下多家店靠它归组） */
+  licenseNo: string | null
   tagsJson: string
   notes: string | null
   lastActiveAt: number | null

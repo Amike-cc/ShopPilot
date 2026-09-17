@@ -11,6 +11,7 @@ import { getDatabase } from '../db/database'
 import { ensureProfileForStore } from './profile-manager'
 import { writeAudit } from '../services/audit-logger'
 import type { Store, StoreCreateInput, StoreUpdateInput } from '@shared/schemas/store'
+import { normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
 import { StoreStatus } from '@shared/enums/store-status'
 
 /**
@@ -63,6 +64,8 @@ function mapStoreRow(row: any): Store | null {
     externalCode: row.external_code ?? null,
     owner: row.owner ?? null,
     region: row.region ?? null,
+    licenseName: row.license_name ?? null,
+    licenseNo: row.license_no ?? null,
     tagsJson: row.tags_json,
     notes: row.notes ?? null,
     lastActiveAt: row.last_active_at ?? null,
@@ -130,6 +133,10 @@ export function createStore(input: StoreCreateInput): Store {
     externalCode: input.externalCode || null,
     owner: input.owner || null,
     region: input.region || null,
+    // 归一化后再落库：否则"上海 XX 有限公司"与"上海XX有限公司"会被当成两个主体，
+    // 发票中心按主体分账就会拆成两份（归一化规则见 shared/store-license.ts）
+    licenseName: normalizeLicenseName(input.licenseName) || null,
+    licenseNo: normalizeLicenseNo(input.licenseNo) || null,
     tagsJson: JSON.stringify(input.tags || []),
     notes: input.notes || null,
     lastActiveAt: null,
@@ -142,14 +149,16 @@ export function createStore(input: StoreCreateInput): Store {
     INSERT INTO stores (
       id, name, platform, admin_url, status, avatar_color,
       sort_order, group_name, external_code, owner, region,
+      license_name, license_no,
       tags_json, notes, last_active_at, created_at, updated_at, deleted_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   
   stmt.run(
     store.id, store.name, store.platform, store.adminUrl, store.status,
     store.avatarColor, store.sortOrder, store.groupName, store.externalCode,
-    store.owner, store.region, store.tagsJson, store.notes, store.lastActiveAt,
+    store.owner, store.region, store.licenseName, store.licenseNo,
+    store.tagsJson, store.notes, store.lastActiveAt,
     store.createdAt, store.updatedAt, store.deletedAt
   )
 
@@ -209,6 +218,15 @@ export function updateStore(input: StoreUpdateInput): Store | null {
   if (input.patch.groupName !== undefined) {
     updates.push('group_name = ?')
     values.push(input.patch.groupName)
+  }
+  // 营业执照：空串 = 清空（落到 NULL，界面据此显示"未填写"）
+  if (input.patch.licenseName !== undefined) {
+    updates.push('license_name = ?')
+    values.push(normalizeLicenseName(input.patch.licenseName) || null)
+  }
+  if (input.patch.licenseNo !== undefined) {
+    updates.push('license_no = ?')
+    values.push(normalizeLicenseNo(input.patch.licenseNo) || null)
   }
   
   if (updates.length === 0) {

@@ -352,6 +352,22 @@ export const migrations: Migration[] = [
       db.exec(`ALTER TABLE task_runs DROP COLUMN status_reason`)
       db.exec(`ALTER TABLE tasks DROP COLUMN last_fired_at`)
     }
+  },
+  {
+    // 店铺营业执照：发票要按**开票主体**分账，同一个执照下常挂多家店。
+    // 两个字段都可空（老店铺没有就是"未填写"，发票中心会单独列出来提醒补录，不硬塞默认值）。
+    // 这里用 ALTER 而不是改上面建表语句：建表语句只在全新库跑一次，
+    // 两边都写会让新库在本次迁移上报 duplicate column。
+    version: 3,
+    name: 'store_license_columns',
+    up: (db) => {
+      db.exec(`ALTER TABLE stores ADD COLUMN license_name TEXT`)
+      db.exec(`ALTER TABLE stores ADD COLUMN license_no TEXT`)
+    },
+    down: (db) => {
+      db.exec(`ALTER TABLE stores DROP COLUMN license_name`)
+      db.exec(`ALTER TABLE stores DROP COLUMN license_no`)
+    }
   }
 ]
 

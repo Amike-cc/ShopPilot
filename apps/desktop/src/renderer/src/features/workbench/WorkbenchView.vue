@@ -23,7 +23,7 @@
       <div class="sidebar-tools">
         <div class="search-box">
           <span class="search-ico">🔍</span>
-          <input v-model="ws.search" placeholder="搜索店铺 / 平台 / 标签" />
+          <input v-model="ws.search" placeholder="搜索店铺 / 平台 / 标签 / 营业执照" />
         </div>
         <button class="btn-new" @click="openCreateDialog()" title="新建店铺">+</button>
       </div>
@@ -909,6 +909,24 @@
           </span>
         </div>
 
+        <!-- 按营业执照筛选：发票是**按开票主体**开的，不是按平台账号开的。
+             同一个执照下常挂好几家店（同公司开了抖店 + 快手 + 微信小店），只看店铺会把一个主体的票拆成几份。 -->
+        <div class="inv-lic-bar" data-test="invoice-license-bar">
+          <span class="inv-lic-title">营业执照</span>
+          <button class="inv-lic-chip" :class="{ on: !activeLicense }" data-test="invoice-license-all" @click="invoiceLicense = ''">
+            全部 <i>{{ licenseSummary.storeCount }} 家</i><template v-if="licenseSummary.pendingCount"> · {{ licenseSummary.pendingCount }} 条 · {{ licenseSummary.amountText }}</template>
+          </button>
+          <button
+            v-for="l in licenseSummary.items" :key="l.key"
+            class="inv-lic-chip" :class="{ on: activeLicense === l.key, none: l.key === NO_LICENSE_KEY }"
+            :data-test="'invoice-license-' + l.key"
+            :title="l.key === NO_LICENSE_KEY ? '这些店铺还没填营业执照——点店铺卡片上的主体标签补上' : (l.no ? '统一社会信用代码：' + l.no : '只填了主体名称，没有统一社会信用代码')"
+            @click="invoiceLicense = activeLicense === l.key ? '' : l.key"
+          >
+            {{ l.label || '未填写营业执照' }} <i>{{ l.storeCount }} 家</i><template v-if="l.pendingCount"> · {{ l.pendingCount }} 条 · {{ l.amountText }}</template>
+          </button>
+        </div>
+
         <!-- 工具栏：搜索 + 只看有数据的 + 排序 -->
         <div class="inv-toolbar" data-test="invoice-toolbar">
           <input
@@ -940,6 +958,14 @@
             <span class="inv-dot" :style="{ background: r.color }"></span>
             <b>{{ r.storeName }}</b>
             <span class="row-sub">{{ r.platform }}</span>
+            <button
+              class="inv-lic-tag" :class="{ none: !r.licenseLabel }"
+              :data-test="'invoice-store-license-' + r.storeId"
+              :title="r.licenseNo ? '统一社会信用代码：' + r.licenseNo + '（点击修改）' : '点这里填营业执照（发票按主体分账）'"
+              @click="openLicenseEditor(r)"
+            >
+              {{ r.licenseLabel || '未填营业执照' }}<em v-if="r.licenseNo"> · {{ r.licenseNo }}</em>
+            </button>
             <span v-if="r.capturedAt" class="row-sub">· 采集于 {{ new Date(r.capturedAt).toLocaleString() }}</span>
             <span v-if="r.manual" class="inv-vtag">手动</span>
             <span class="row-sub" style="margin-left:auto">
@@ -949,6 +975,16 @@
             <button class="mini-btn" data-test="invoice-open-store" @click="openInvoiceFor(r)">
               {{ r.supported ? '打开发票页' : '打开后台' }}
             </button>
+          </div>
+
+          <!-- 行内补录营业执照：发票中心正是最容易发现"这家还没填主体"的地方，
+               在这里就能填，并且名称有下拉可选（同一个执照的多家店填成一致才不会拆成两个主体） -->
+          <div v-if="licenseEditingId === r.storeId" class="inv-lic-edit" :data-test="'invoice-license-edit-' + r.storeId">
+            <input v-model="licenseDraft.name" list="store-license-names" data-test="invoice-license-name" placeholder="营业执照主体名称（如：上海某某贸易有限公司）" />
+            <input v-model="licenseDraft.no" data-test="invoice-license-no" placeholder="统一社会信用代码（选填，18 位；旧税号 15 位）" />
+            <button class="mini-btn" data-test="invoice-license-save" :disabled="licenseSaving" @click="saveLicense(r)">{{ licenseSaving ? '保存中…' : '保存' }}</button>
+            <button class="mini-btn" data-test="invoice-license-cancel" @click="licenseEditingId = null">取消</button>
+            <span v-if="licenseEditError" class="inv-lic-err" data-test="invoice-license-error">{{ licenseEditError }}</span>
           </div>
 
           <div v-if="!r.supported" class="env-note" style="margin:0">{{ r.unsupportedReason }}</div>
@@ -1152,6 +1188,16 @@
           <span class="field-note" v-if="form.adminUrl">已按所选平台填入默认后台地址，可自行修改</span>
         </label>
         <label>标签（逗号分隔）<input v-model="form.tags" placeholder="主账号, 售后组" /></label>
+        <label>营业执照主体名称（选填）
+          <input v-model="form.licenseName" list="store-license-names" data-test="store-license-name" placeholder="例如：上海某某贸易有限公司" />
+          <span class="field-note">发票要按<b>开票主体</b>分账：同一个执照下开的多家店，填同一个主体名称/代码，发票中心就能按营业执照筛选与合计。</span>
+        </label>
+        <label>统一社会信用代码（选填）
+          <input v-model="form.licenseNo" data-test="store-license-no" placeholder="例如：91310000MA1FL1234X（旧税号 15 位）" />
+        </label>
+        <datalist id="store-license-names">
+          <option v-for="l in licenseOptions" :key="l.key" :value="l.label"></option>
+        </datalist>
         <label>备注<textarea v-model="form.notes" rows="2"></textarea></label>
         <div class="modal-actions">
           <button class="btn-ghost" @click="ws.createDialogOpen = false">取消</button>
@@ -1398,12 +1444,6 @@
           </div>
           <div class="about-row"><span>版本</span><b data-test="about-version">v{{ updateStatus.currentVersion || '—' }}</b></div>
           <div class="about-row"><span>构建标签</span><b>INTERNAL_BUILD</b></div>
-          <div class="about-row">
-            <span>仓库</span>
-            <b class="about-repo">github.com/Amike-cc/ShopPilot
-              <button class="mini-btn" @click="copyRepoUrl">复制</button>
-            </b>
-          </div>
           <div class="env-note">未做代码签名，按 §21.5 只能标记 INTERNAL_BUILD；自动更新仅做 SHA-512 哈希校验、无签名校验。</div>
 
           <div class="env-h" style="margin-top:14px">软件更新</div>
@@ -1462,6 +1502,7 @@ import type { CategoryNode } from '@shared/constants/invite'
 import { buildInviteSteps } from '@shared/invite-steps'
 import { invoiceProfileFor } from '@shared/constants/invoice'
 import { buildInvoiceCollectSteps } from '@shared/invoice-steps'
+import { NO_LICENSE_KEY, groupStoresByLicense, licenseLabelOf } from '@shared/store-license'
 import { BIZ_METRICS, businessProfileFor, BUSINESS_SUPPORTED_PLATFORMS } from '@shared/constants/business'
 import { buildBusinessCollectSteps } from '@shared/business-steps'
 import {
@@ -1866,16 +1907,6 @@ async function saveSettingsConfig() {
   settingsOpen.value = false
 }
 
-/** 复制仓库地址（不跳转外链：渲染层不做外部导航，避免被导航拦截策略挡住） */
-async function copyRepoUrl() {
-  try {
-    await navigator.clipboard.writeText('https://github.com/Amike-cc/ShopPilot')
-    ws.toast('已复制仓库地址', 'success')
-  } catch {
-    ws.toast('复制失败：github.com/Amike-cc/ShopPilot', 'info')
-  }
-}
-
 /**
  * 首页按钮的目标地址，按优先级：**设置里配置的平台首页 → 店铺自己的后台地址 → 平台目录默认 → 空**。
  * 配置值优先级最高是用户明确选择的（配了就以它为准）；未配置时仍尊重店铺自己填的后台地址，
@@ -1893,7 +1924,7 @@ function goHome() {
   if (homeUrl.value) ws.navigate(homeUrl.value)
 }
 
-const form = reactive({ name: '', platform: DEFAULT_PLATFORM, adminUrl: '', tags: '', notes: '' })
+const form = reactive({ name: '', platform: DEFAULT_PLATFORM, adminUrl: '', tags: '', notes: '', licenseName: '', licenseNo: '' })
 
 type UpdateState = 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
 const updateStatus = reactive<{ state: UpdateState; currentVersion: string; version?: string; percent?: number; error?: string }>({ state: 'idle', currentVersion: '' })
@@ -3224,11 +3255,19 @@ const invoiceCollecting = ref(false)
 const invoiceQuery = ref('')
 const invoiceOnlyWithData = ref(false)
 const invoiceSort = ref<'amountDesc' | 'amountAsc' | 'none'>('amountDesc')
+/** 按营业执照筛选（'' = 全部；NO_LICENSE_KEY = 未填写那一桶） */
+const invoiceLicense = ref('')
 const invoice = reactive<{ generatedAt: number | null; columns: Array<{ key: string; label: string }>; rows: any[] }>({
   generatedAt: null,
   columns: [],
   rows: []
 })
+
+/** 行内补录营业执照的编辑态（发票中心是发现"这家还没填主体"的第一现场） */
+const licenseEditingId = ref<string | null>(null)
+const licenseDraft = reactive({ name: '', no: '' })
+const licenseSaving = ref(false)
+const licenseEditError = ref('')
 
 /**
  * 金额解析：各平台金额是**带符号的字符串**（¥14.89 / ￥9.49 / 2.02 / -），
@@ -3247,7 +3286,12 @@ function fmtAmount(n: number): string {
   return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-const invoiceRows = computed(() => {
+/**
+ * 各店铺的发票行（**未按营业执照筛选**，只有搜索与行内排序）。
+ * 单独留这一份是因为「按营业执照」的合计要对每个主体各算一份：
+ * 若在筛选后的结果上算，一点某个主体，别的主体的数字全变 0，就没法横向比了。
+ */
+const invoiceAllRows = computed(() => {
   const cat = (window.shopilot.platforms || []) as Array<PlatformDef>
   const byStore = new Map(invoice.rows.map((r: any) => [r.storeId, r]))
   const q = invoiceQuery.value.trim().toLowerCase()
@@ -3285,10 +3329,16 @@ const invoiceRows = computed(() => {
     const got: any = byStore.get(s.id) || {}
     const sections = Array.isArray(got.sections) ? got.sections : []
     const visible = filterSections(s.name, s.platform, sections)
+    // 主进程也回了营业执照，但这里以**渲染层这份店铺列表**为准：
+    // 行内刚改完主体要立刻生效，不能等下一次「刷新」把发票数据重新拉一遍。
+    const lic = { licenseName: s.licenseName ?? got.licenseName ?? null, licenseNo: s.licenseNo ?? got.licenseNo ?? null }
     return {
       storeId: s.id,
       storeName: s.name,
       platform: s.platform,
+      licenseName: lic.licenseName,
+      licenseNo: lic.licenseNo,
+      licenseLabel: licenseLabelOf(lic),
       color: cat.find(p => p.name === s.platform)?.color || 'var(--color-primary)',
       supported: got.supported !== false,
       unsupportedReason: got.unsupportedReason || '该平台尚未实测到可读取的发票页',
@@ -3308,11 +3358,86 @@ const invoiceRows = computed(() => {
   })
 })
 
+/**
+ * 按营业执照分组的合计（每个主体各一行：几家店 / 待开票几条 / 可开金额）。
+ * 用 `invoiceAllRows` 算——**不受当前营业执照筛选影响**，否则点一个主体，别的全变 0。
+ * 金额口径与总合计一致：解析不出的不计入，但条数照数（界面在 chip 上标出未解析的条数）。
+ */
+const licenseGroups = computed(() => groupStoresByLicense(ws.stores.map(s => ({
+  id: s.id, licenseName: s.licenseName ?? null, licenseNo: s.licenseNo ?? null
+}))))
+
+const licenseSummary = computed(() => {
+  const items = licenseGroups.value.groups.map(l => ({
+    ...l, pendingCount: 0, historyCount: 0, amount: 0, unparsed: 0, amountText: '', stores: 0
+  }))
+  const byKey = new Map(items.map(l => [l.key, l]))
+  for (const r of invoiceAllRows.value) {
+    const hit = byKey.get(licenseGroups.value.keyByStore.get(r.storeId) || '')
+    if (!hit) continue
+    // "有几家店"数的是**有待办**的店（和总览的"有待办的店铺"同口径）；店铺归属另由 chip 的 storeCount 显示
+    if (r.sections.some((s: any) => s.pending !== false && s.items.length)) hit.stores++
+    for (const sec of r.sections) {
+      const isPending = sec.pending !== false
+      for (const it of sec.items) {
+        if (!isPending) { hit.historyCount++; continue }
+        hit.pendingCount++
+        const a = parseAmount(it.cells?.amount)
+        if (a == null) hit.unparsed++
+        else hit.amount += a
+      }
+    }
+  }
+  const withText = items.map(l => ({ ...l, amountText: l.amount ? '¥' + fmtAmount(l.amount) : '—' }))
+  return {
+    items: withText,
+    storeCount: ws.stores.length,
+    pendingCount: withText.reduce((a, l) => a + l.pendingCount, 0),
+    amountText: withText.some(l => l.amount) ? '¥' + fmtAmount(withText.reduce((a, l) => a + l.amount, 0)) : '—'
+  }
+})
+
+/** 选中的主体若已不存在（店铺被删/改了主体）就退回"全部"，避免界面卡在一个空列表上没法退出 */
+const activeLicense = computed(() => (
+  invoiceLicense.value && licenseSummary.value.items.some(l => l.key === invoiceLicense.value)
+    ? invoiceLicense.value
+    : ''
+))
+
+/** 发票行 = 上面那份（含搜索）再按营业执照筛一道（用统一的归属表，见 shared/store-license.ts） */
+const invoiceRows = computed(() => (
+  activeLicense.value
+    ? invoiceAllRows.value.filter(r => licenseGroups.value.keyByStore.get(r.storeId) === activeLicense.value)
+    : invoiceAllRows.value
+))
+
+/** 已在用的主体（给输入框做下拉候选：同一个执照的多家店要填成完全一致，才不会拆成两个主体） */
+const licenseOptions = computed(() => licenseSummary.value.items.filter(l => l.key !== NO_LICENSE_KEY))
+
+function openLicenseEditor(r: any) {
+  licenseEditingId.value = r.storeId
+  licenseDraft.name = r.licenseName || ''
+  licenseDraft.no = r.licenseNo || ''
+  licenseEditError.value = ''
+}
+
+async function saveLicense(r: any) {
+  licenseSaving.value = true
+  licenseEditError.value = ''
+  const res = await ws.setStoreLicense(r.storeId, licenseDraft.name.trim(), licenseDraft.no.trim())
+  licenseSaving.value = false
+  if (!res.ok) {
+    licenseEditError.value = res.message || '保存失败'
+    return
+  }
+  licenseEditingId.value = null
+  ws.toast('营业执照已保存', 'success')
+}
+
 /** 「只看有数据的」筛选（搜索与排序已在 invoiceRows 里做过） */
 const visibleInvoiceRows = computed(() =>
   invoiceOnlyWithData.value ? invoiceRows.value.filter(r => r.count > 0 || r.historyCount > 0) : invoiceRows.value
 )
-
 /**
  * 跨店铺合计（含**按方向**分开的合计）。金额口径如实处理：
  *  - 解析不出的**不计入**，并把条数报出来（界面注明），避免"合计比实际小"却看不出来；
@@ -3762,9 +3887,12 @@ async function submitCreate() {
     return
   }
   const tags = form.tags.split(',').map(t => t.trim()).filter(Boolean)
-  const res = await ws.createStore({ name, platform: form.platform, adminUrl, tags, notes: form.notes.trim() })
+  const res = await ws.createStore({
+    name, platform: form.platform, adminUrl, tags, notes: form.notes.trim(),
+    licenseName: form.licenseName.trim(), licenseNo: form.licenseNo.trim()
+  })
   if (res && res.ok) {
-    Object.assign(form, { name: '', platform: DEFAULT_PLATFORM, adminUrl: '', tags: '', notes: '' })
+    Object.assign(form, { name: '', platform: DEFAULT_PLATFORM, adminUrl: '', tags: '', notes: '', licenseName: '', licenseNo: '' })
   }
 }
 
@@ -4182,6 +4310,42 @@ onBeforeUnmount(() => {
 }
 /* 按开票方向的合计条：一行一个小胶囊，方向名浅色、数字加粗 */
 .inv-dirs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+/* 按营业执照筛选：发票按开票主体开，这一条是"给哪个公司开票"的入口。
+   可点即筛（再点一下取消），chip 上直接写着该主体有几家店、欠几张票、多少钱。 */
+.inv-lic-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;
+  padding: 6px 8px; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+}
+.inv-lic-title { font-size: 11px; color: var(--color-text-secondary); flex: 0 0 auto; }
+.inv-lic-chip {
+  display: inline-flex; align-items: baseline; gap: 5px; font-size: 11px; cursor: pointer;
+  padding: 3px 9px; border: 1px solid var(--color-border); border-radius: 20px;
+  background: var(--color-bg-elevated); color: var(--color-text-primary); white-space: nowrap;
+}
+.inv-lic-chip:hover { border-color: var(--color-primary); }
+.inv-lic-chip.on { border-color: var(--color-primary); background: rgba(59, 130, 246, .16); }
+.inv-lic-chip > i { font-style: normal; color: var(--color-text-secondary); }
+/* 未填写那一桶用警示色：它是"要补录"的待办，不是某个真实主体 */
+.inv-lic-chip.none { border-style: dashed; color: #d9a441; }
+.inv-lic-chip.none.on { background: rgba(217, 164, 65, .16); }
+/* 店铺卡片头上的主体标签（点击就地补录） */
+.inv-lic-tag {
+  font-size: 11px; padding: 1px 7px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--color-border); background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.inv-lic-tag:hover { border-color: var(--color-primary); color: var(--color-text-primary); }
+.inv-lic-tag.none { border-style: dashed; color: #d9a441; }
+.inv-lic-tag > em { font-style: normal; opacity: .75; }
+.inv-lic-edit { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.inv-lic-edit input {
+  box-sizing: border-box; background: var(--color-bg-tertiary); color: var(--color-text-primary);
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 5px 8px; font-size: 12px;
+}
+.inv-lic-edit input[data-test="invoice-license-name"] { flex: 1 1 240px; min-width: 180px; }
+.inv-lic-edit input[data-test="invoice-license-no"] { flex: 0 1 240px; min-width: 160px; }
+.inv-lic-err { font-size: 11px; color: #fca5a5; flex: 1 1 200px; }
 .inv-dir {
   display: inline-flex; align-items: baseline; gap: 5px; font-size: 11px;
   padding: 3px 8px; border: 1px solid var(--color-border); border-radius: 20px;
@@ -4368,7 +4532,6 @@ onBeforeUnmount(() => {
 .about-name { font-size: 15px; font-weight: 600; }
 .about-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; padding: 4px 0; }
 .about-row > span { width: 62px; flex: 0 0 62px; color: var(--color-text-secondary); }
-.about-repo { display: flex; align-items: center; gap: 8px; font-weight: 400; color: var(--color-text-primary); }
 .update-version { color: var(--color-text-secondary); font-size: 12px; margin: -8px 0 14px; }
 .update-message { min-height: 34px; font-size: 13px; line-height: 1.6; }
 .success-text { color: var(--color-success); }

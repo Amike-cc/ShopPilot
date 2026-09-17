@@ -16,6 +16,8 @@ import { getDatabase } from '../db/database'
 import { writeAudit, queryAudit } from '../services/audit-logger'
 import { invoiceProfileFor, INVOICE_COLUMNS, INVOICE_UNSUPPORTED_NOTE, normalizeCellText } from '@shared/constants/invoice'
 import type { InvoiceColumnKey } from '@shared/constants/invoice'
+import { buildInvoiceCsv, invoiceCsvRows } from '@shared/invoice-csv'
+import { normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
 import { randomUUID } from 'crypto'
 
 /**
@@ -30,7 +32,7 @@ import { randomUUID } from 'crypto'
 function collectInvoiceRows(): any[] {
   const db = getDatabase()
   const stores = db.prepare(
-    `SELECT id, name, platform, status, admin_url FROM stores WHERE deleted_at IS NULL ORDER BY platform, name`
+    `SELECT id, name, platform, status, admin_url, license_name, license_no FROM stores WHERE deleted_at IS NULL ORDER BY platform, name`
   ).all() as any[]
 
   // 每店**每指标**取最新一条（指标名形如 invoice.<方向>）
@@ -147,6 +149,9 @@ function collectInvoiceRows(): any[] {
       storeId: s.id,
       storeName: s.name,
       platform: s.platform,
+      // 营业执照：发票按**开票主体**分账（同一个执照下常挂多家店），导出也带这两列
+      licenseName: normalizeLicenseName(s.license_name) || null,
+      licenseNo: normalizeLicenseNo(s.license_no) || null,
       // 该平台是否有实测的发票档案（没有 = 抓不了，界面如实说明）
       supported: !!profile,
       unsupportedReason: profile ? null : (INVOICE_UNSUPPORTED_NOTE[s.platform] || '该平台尚未实测到可读取的发票页'),
@@ -287,28 +292,13 @@ export function registerProfileAndMiscHandlers(): void {
     const requestId = generateRequestId()
     try {
       const rows = collectInvoiceRows()
-      const dataRows = rows.flatMap((r: any) =>
-        (r.sections || []).flatMap((sec: any) =>
-          (sec.items || []).map((it: any) => ({
-            店铺: r.storeName,
-            平台: r.platform,
-            开票方向: sec.name,
-            ...Object.fromEntries(INVOICE_COLUMNS.map(c => [c.label, it.cells?.[c.key] ?? ''])),
-            其他信息: (it.extras || []).map((x: any) => `${x.label}：${x.value}`).join('；')
-          }))
-        )
-      )
+      // 行组装与转义都在 shared/invoice-csv.ts（纯函数、有单测）：导出的表是拿去报税/给代账的，
+      // 必须带「营业执照 / 统一社会信用代码」两列——代账按主体分账，光有店铺名他们得再问一遍。
+      const dataRows = invoiceCsvRows(rows, INVOICE_COLUMNS)
       if (!dataRows.length) {
         return error(ERROR_CODES.INVALID_ARGUMENT.code, '当前没有可导出的待开票数据（先点「抓取待开票信息」）', requestId)
       }
-      const headers = Object.keys(dataRows[0])
-      const esc = (v: unknown) => {
-        const s = String(v ?? '')
-        // CSV 转义：含逗号/引号/换行一律加引号，内部引号翻倍（换行是最常见的坑：
-        // 拼多多的"订单号"列就带换行）
-        return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-      }
-      const csv = '\uFEFF' + [headers.join(','), ...dataRows.map(r => headers.map(h => esc((r as any)[h])).join(','))].join('\r\n')
+      const csv = buildInvoiceCsv(dataRows)
       const stamp = new Date().toISOString().slice(0, 10)
       const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
       const res = await dialog.showSaveDialog(win, {
