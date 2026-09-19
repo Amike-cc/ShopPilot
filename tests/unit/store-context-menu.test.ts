@@ -32,6 +32,9 @@ function makeInput(over: Partial<StoreMenuInput> = {}): StoreMenuInput {
     canPaste: false,
     canSelectAll: false,
     linkUrl: '',
+    // 默认给一个落点：绝大多数用例不关心它，给上可避免"元素定位信息"项无谓置灰
+    // 干扰其它断言（专门测置灰的用例会显式覆盖成 undefined）
+    probePoint: { x: 10, y: 20 },
     ...over
   }
 }
@@ -55,15 +58,17 @@ function makeFakeDeps() {
   }
   const openedUrls: string[] = []
   const copiedTexts: string[] = []
+  const probedPoints: Array<{ x: number; y: number }> = []
   const box = { standaloneOpens: 0 }
   const deps: StoreMenuDeps = {
     wc,
     openUrl: url => { openedUrls.push(url) },
     copyText: text => { copiedTexts.push(text) },
+    probeElement: point => { probedPoints.push(point) },
     openStandalone: () => { box.standaloneOpens += 1 }
   }
   return {
-    deps, wcCalls, openedUrls, copiedTexts,
+    deps, wcCalls, openedUrls, copiedTexts, probedPoints,
     get standaloneOpens() { return box.standaloneOpens }
   }
 }
@@ -214,10 +219,11 @@ describe('右键菜单 · 动作分派（假 wc，不起 Electron）', () => {
     ]
     for (const [id, expected] of table) {
       const f = makeFakeDeps()
-      runStoreMenuAction(id, f.deps, { linkUrl: '' })
+      runStoreMenuAction(id, f.deps, { linkUrl: '', probePoint: { x: 1, y: 2 } })
       expect(f.wcCalls, `${id} 应调用 ${expected}()`).toEqual([expected])
       expect(f.openedUrls, `${id} 不该碰 openUrl`).toEqual([])
       expect(f.copiedTexts, `${id} 不该碰 copyText`).toEqual([])
+      expect(f.probedPoints, `${id} 不该碰元素采集`).toEqual([])
       expect(f.standaloneOpens, `${id} 不该开独立窗口`).toBe(0)
     }
   })
@@ -325,6 +331,75 @@ describe('toStoreMenuInput · 缺省值收敛', () => {
     for (const id of ['cut', 'copy', 'paste', 'selectAll'] as StoreMenuId[]) {
       expect(findByItemId(items, id)!.enabled, `${id} 应禁用`).toBe(false)
     }
+  })
+})
+
+// ---------- 元素定位信息（本次新增） ----------
+
+/**
+ * 「元素定位信息」是给**任务档案取选择器**用的：平台类名普遍带构建哈希，档案常量全靠实测，
+ * 此前要开 DevTools 翻 DOM。这一组钉住三件事：
+ *   ① 有落点才可点（用过期/缺失坐标采到的是别的元素，比不采集更误导人）；
+ *   ② 点它只调 probeElement，不碰导航/编辑/独立窗口；
+ *   ③ 坐标如实透传（不能四舍五入错、不能两个坐标搞反）。
+ */
+describe('右键菜单 · 元素定位信息', () => {
+  it('菜单里有该项，标签点明用途', () => {
+    const items = buildStoreContextMenu(makeInput())
+    const probe = findByItemId(items, 'elementProbe')
+    expect(probe, '缺「元素定位信息」项').toBeTruthy()
+    expect(probe!.label).toContain('元素定位信息')
+  })
+
+  it('有落点时可点；无落点（键盘唤出菜单）时置灰但仍出现', () => {
+    const withPoint = buildStoreContextMenu(makeInput({ probePoint: { x: 5, y: 6 } }))
+    expect(findByItemId(withPoint, 'elementProbe')!.enabled).toBe(true)
+
+    const noPoint = buildStoreContextMenu(makeInput({ probePoint: undefined }))
+    const item = findByItemId(noPoint, 'elementProbe')
+    expect(item, '无落点时该项应仍在菜单里（让用户知道重新右键即可）').toBeTruthy()
+    expect(item!.enabled, '无落点必须置灰').toBe(false)
+  })
+
+  it('点击只调 probeElement，坐标原样透传，且不碰任何其它动作', () => {
+    const f = makeFakeDeps()
+    runStoreMenuAction('elementProbe', f.deps, { linkUrl: '', probePoint: { x: 321, y: 654 } })
+    expect(f.probedPoints).toEqual([{ x: 321, y: 654 }])
+    expect(f.wcCalls, '采集元素不该触发导航/编辑').toEqual([])
+    expect(f.openedUrls).toEqual([])
+    expect(f.copiedTexts, '剪贴板由 probeElement 内部负责，分派层不该直接写').toEqual([])
+    expect(f.standaloneOpens).toBe(0)
+  })
+
+  it('无落点却误触发时是空操作（不采集、也不报错）', () => {
+    const f = makeFakeDeps()
+    runStoreMenuAction('elementProbe', f.deps, { linkUrl: '', probePoint: undefined })
+    expect(f.probedPoints, '没有落点就不该采集').toEqual([])
+    expect(f.wcCalls).toEqual([])
+  })
+
+  it('独立窗口里也有该项（独立窗口同样需要取锚点）', () => {
+    const items = buildStoreContextMenu(makeInput({ isStandalone: true }))
+    expect(findByItemId(items, 'elementProbe'), '独立窗口不该缺元素定位信息').toBeTruthy()
+    expect(findByItemId(items, 'standalone')).toBeUndefined()
+  })
+
+  it('toStoreMenuInput：x/y 齐备才产出 probePoint，缺一个或非数字都不产出', () => {
+    const nav = { canGoBack: false, canGoForward: false }
+
+    expect(toStoreMenuInput({ x: 12, y: 34 }, nav).probePoint).toEqual({ x: 12, y: 34 })
+    // 坐标是 0 也是合法落点（页面左上角），不能被当成"缺失"丢掉
+    expect(toStoreMenuInput({ x: 0, y: 0 }, nav).probePoint, '0,0 是合法落点').toEqual({ x: 0, y: 0 })
+
+    expect(toStoreMenuInput({ x: 12 }, nav).probePoint, '缺 y 不该产出落点').toBeUndefined()
+    expect(toStoreMenuInput({ y: 34 }, nav).probePoint, '缺 x 不该产出落点').toBeUndefined()
+    expect(toStoreMenuInput({}, nav).probePoint, '都没给不该产出落点').toBeUndefined()
+    expect(toStoreMenuInput({ x: NaN, y: 5 }, nav).probePoint, 'NaN 不是合法坐标').toBeUndefined()
+  })
+
+  it('收敛结果直接喂给菜单：缺落点 → 该项置灰', () => {
+    const items = buildStoreContextMenu(toStoreMenuInput({}, { canGoBack: false, canGoForward: false }))
+    expect(findByItemId(items, 'elementProbe')!.enabled).toBe(false)
   })
 })
 

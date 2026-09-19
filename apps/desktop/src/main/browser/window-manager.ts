@@ -19,6 +19,7 @@ import {
   buildStoreContextMenu, runStoreMenuAction, toStoreMenuInput, toElectronMenuTemplate,
   type StoreMenuId, type StoreContextMenuParams, type StoreMenuDeps
 } from './store-context-menu'
+import { buildElementProbeScript, formatElementProbe, type ElementProbeResult } from './element-probe'
 import { getDatabase } from '../db/database'
 import { updateStoreStatus, updateStoreLastActive } from '../stores/store-manager'
 import { StoreStatus } from '@shared/enums/store-status'
@@ -348,12 +349,13 @@ export function createTab(storeId: string, url?: string): string {
     emitTabs(storeId)
   })
 
-  // 右键菜单：导航 / 重新加载 / 强制重新加载 / 编辑 / 链接（原生菜单，见 store-context-menu.ts）
+  // 右键菜单：导航 / 重新加载 / 强制重新加载 / 编辑 / 链接 / 元素定位信息（原生菜单，见 store-context-menu.ts）
   attachStoreContextMenu(view.webContents, () => ({
     wc: view.webContents,
     // 链接地址来自页面（可能是 javascript: 之类），过一遍协议白名单再开
     openUrl: (u) => { try { createTab(storeId, assertNavigableUrl(u)) } catch { /* ignore */ } },
     copyText: (t) => clipboard.writeText(t),
+    probeElement: (pt) => { void probeElementAt(view.webContents, pt) },
     openStandalone: () => { try { openStandaloneWindow(storeId, tabId) } catch { /* ignore */ } }
   }))
   // 键盘兜底：页面即使封了右键，Ctrl+R / Ctrl+Shift+R 仍然可用
@@ -569,6 +571,35 @@ export function navigateTab(storeId: string, tabId: string, url: string): void {
 }
 
 /**
+ * 采集落点元素的定位信息（右键「元素定位信息」）。
+ *
+ * 做三件事：页面内高亮目标元素（让用户看清选中的是哪一层）、把整理好的锚点写进系统剪贴板
+ * （用户直接粘进档案常量文件）、并留一条日志（事后能查"当时采到的原始数据是什么"）。
+ *
+ * 为什么把结果写**剪贴板 + 日志**而不是弹对话框：
+ * ① 弹原生对话框要打断用户，而取锚点往往要连续采好几个元素，一次一弹很烦；
+ * ② 剪贴板是"抄进代码"最短的路径；
+ * ③ 日志保证剪贴板被覆盖后仍可追溯（写的是完整原始数据，剪贴板里是排版后的可读文本）。
+ */
+async function probeElementAt(wc: Electron.WebContents, point: { x: number; y: number }): Promise<void> {
+  try {
+    const result = await wc.executeJavaScript(buildElementProbeScript(point.x, point.y)) as ElementProbeResult
+    const text = formatElementProbe(result)
+    if (result.ok) {
+      clipboard.writeText(text)
+      logMain('info', `元素定位信息已采集并写入剪贴板 tab=${wc.id} tag=${result.tag} text=${JSON.stringify(result.textAnchor || '')} raw=${JSON.stringify(result)}`)
+    } else {
+      // 采集失败（落点没元素）不当异常：页面还没加载完、点到空白处都是正常情况，
+      // 留痕即可，别打断用户
+      logMain('warn', `元素定位信息采集未命中 tab=${wc.id} reason=${result.reason} point=${point.x},${point.y}`)
+    }
+  } catch (err) {
+    // 注入失败（页面正在导航/崩溃）如实留痕，不抛给 Electron 的事件回调
+    logMain('warn', `元素定位信息采集失败 tab=${wc.id}: ${String(err)}`)
+  }
+}
+
+/**
  * 给一个店铺页面挂上右键菜单（主窗口标签页与独立窗口共用）。
  *
  * `deps` 传函数而不是对象：动作要用的 wc 与回调都在运行期才确定（标签页会被切换/关闭），
@@ -596,7 +627,7 @@ function attachStoreContextMenu(
       const items = buildStoreContextMenu(input)
       // 翻译成 Electron 模板（enabled 契约见 toElectronMenuTemplate 的说明）
       const menu = Menu.buildFromTemplate(toElectronMenuTemplate(items, (id) => {
-        try { runStoreMenuAction(id, deps(), { linkUrl: input.linkUrl }) }
+        try { runStoreMenuAction(id, deps(), { linkUrl: input.linkUrl, probePoint: input.probePoint }) }
         catch (err) { logMain('warn', `store context menu action ${id} failed: ${String(err)}`) }
       }))
       menu.popup({ window: win })
@@ -679,7 +710,7 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
     return { action: 'deny' }
   })
 
-  // 独立窗口同样给右键菜单与重载快捷键：导航/重新加载/强制重新加载/编辑/链接。
+  // 独立窗口同样给右键菜单与重载快捷键：导航/重新加载/强制重新加载/编辑/链接/元素定位信息。
   // isStandalone=true → 不出现「在独立窗口打开当前标签页」（已经在这里了）。
   attachStoreContextMenu(win.webContents, () => ({
     wc: win.webContents,
@@ -687,6 +718,7 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
     // 同样过协议白名单
     openUrl: (u) => { try { win.loadURL(assertNavigableUrl(u)).catch(() => { /* 错误由页面呈现 */ }) } catch { /* ignore */ } },
     copyText: (t) => clipboard.writeText(t),
+    probeElement: (pt) => { void probeElementAt(win.webContents, pt) },
     openStandalone: () => { /* 已在独立窗口，无需再用 */ }
   }), { isStandalone: true })
   attachStoreReloadShortcuts(win.webContents)

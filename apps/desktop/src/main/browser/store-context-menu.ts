@@ -25,6 +25,7 @@ export type StoreMenuId =
   | 'selectAll'
   | 'openLinkNewTab'
   | 'copyLink'
+  | 'elementProbe'
   | 'standalone'
 
 export interface StoreMenuInput {
@@ -44,6 +45,15 @@ export interface StoreMenuInput {
    * 那项只在主窗口的标签页上有意义。
    */
   isStandalone?: boolean
+  /**
+   * 右键落点坐标（CSS 像素，页面坐标系）。
+   *
+   * 只有「元素定位信息」用得上，且它**不能**由页面自己提供：菜单在落点弹出后，
+   * 用户移动鼠标就会让"当前鼠标位置"失真，必须在 `context-menu` 事件里当场记下落点。
+   * 缺省（undefined）时该菜单项仍出现但置灰——宁可让用户看到"需要重新右键"，
+   * 也不要悄悄用一个过期坐标去采错元素。
+   */
+  probePoint?: { x: number; y: number }
 }
 
 export interface StoreMenuItem {
@@ -87,6 +97,15 @@ export function buildStoreContextMenu(input: StoreMenuInput): StoreMenuItem[] {
     { id: 'selectAll', label: '全选', enabled: input.canSelectAll }
   )
 
+  // 元素定位信息：任务引擎的档案常量（选择器/文案锚点）全靠真机实测得来，此前要开 DevTools 翻 DOM。
+  // 放在编辑块之后、窗口类操作之前——它是"取锚点"的开发期工具，不是日常浏览动作，
+  // 但不隐藏（藏在二级菜单里就没人会发现它）。
+  // 无落点坐标时置灰而不是隐藏：让用户知道"这项存在、重新右键即可"，比菜单项时有时无更好懂。
+  items.push(
+    { type: 'separator' },
+    { id: 'elementProbe', label: '元素定位信息（供任务步骤取选择器）', enabled: !!input.probePoint }
+  )
+
   if (!input.isStandalone) {
     items.push({ type: 'separator' }, { id: 'standalone', label: '在独立窗口打开当前标签页' })
   }
@@ -113,12 +132,24 @@ export interface StoreMenuDeps {
   openUrl(url: string): void
   /** 写系统剪贴板 */
   copyText(text: string): void
+  /**
+   * 采集落点元素的定位信息（高亮 + 写剪贴板 + 留痕）。
+   *
+   * 采集要注入脚本、必然异步，而本模块的动作分派刻意保持**同步纯分派**（便于单测用假 wc
+   * 断言"点了调哪个方法"），所以异步由 deps 这一侧承担：这里只负责把落点交出去，
+   * 不 await、不关心结果——菜单弹出期间阻塞主进程反而会让菜单卡住。
+   */
+  probeElement(point: { x: number; y: number }): void
   /** 在独立窗口打开当前标签页（独立窗口场景传空实现） */
   openStandalone(): void
 }
 
 /** 按菜单项 id 执行动作（纯分派，便于单测用假 wc 断言"点了调哪个方法"） */
-export function runStoreMenuAction(id: StoreMenuId, deps: StoreMenuDeps, ctx: { linkUrl: string }): void {
+export function runStoreMenuAction(
+  id: StoreMenuId,
+  deps: StoreMenuDeps,
+  ctx: { linkUrl: string; probePoint?: { x: number; y: number } }
+): void {
   switch (id) {
     case 'back': return deps.wc.goBack()
     case 'forward': return deps.wc.goForward()
@@ -130,6 +161,9 @@ export function runStoreMenuAction(id: StoreMenuId, deps: StoreMenuDeps, ctx: { 
     case 'selectAll': return deps.wc.selectAll()
     case 'openLinkNewTab': if (ctx.linkUrl) deps.openUrl(ctx.linkUrl); return
     case 'copyLink': if (ctx.linkUrl) deps.copyText(ctx.linkUrl); return
+    // 没有落点就什么都不做：用过期坐标采到的是**别的元素**，比不采集更糟
+    // （菜单项在这种情况下已被模板置灰，这里是第二道防线）
+    case 'elementProbe': if (ctx.probePoint) deps.probeElement(ctx.probePoint); return
     case 'standalone': return deps.openStandalone()
   }
 }
@@ -167,6 +201,9 @@ export interface StoreContextMenuParams {
   isEditable?: boolean
   linkURL?: string
   editFlags?: { canCopy?: boolean; canPaste?: boolean; canSelectAll?: boolean }
+  /** 落点坐标（CSS 像素）；Electron 给的是整数，缺失表示"非鼠标触发"（如键盘菜单键） */
+  x?: number
+  y?: number
 }
 
 /** 把 Electron 的 context-menu 参数收敛成模板输入（顺带把 undefined 兜成保守默认值） */
@@ -175,6 +212,9 @@ export function toStoreMenuInput(
   nav: { canGoBack: boolean; canGoForward: boolean },
   opts?: { isStandalone?: boolean }
 ): StoreMenuInput {
+  // 落点必须两个坐标都是有限数才算有效：Electron 在键盘唤出菜单时可能给 0/undefined，
+  // 拿 0,0 去探测会采到页面左上角那个元素——采错的锚点比没有锚点更误导人。
+  const hasPoint = Number.isFinite(params.x) && Number.isFinite(params.y)
   return {
     canGoBack: nav.canGoBack,
     canGoForward: nav.canGoForward,
@@ -183,6 +223,7 @@ export function toStoreMenuInput(
     canPaste: !!params.editFlags?.canPaste,
     canSelectAll: !!params.editFlags?.canSelectAll,
     linkUrl: String(params.linkURL || ''),
-    isStandalone: !!opts?.isStandalone
+    isStandalone: !!opts?.isStandalone,
+    probePoint: hasPoint ? { x: Number(params.x), y: Number(params.y) } : undefined
   }
 }
