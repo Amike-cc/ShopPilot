@@ -235,6 +235,27 @@ async function main() {
     check('② 空编排时报"至少要有一个步骤"', emptyState.issues.includes('至少要有一个步骤'), emptyState.issues.slice(0, 60))
     check('② 空编排时创建按钮置灰', emptyState.disabled === true)
 
+    // ②b 目录筛选：目录 22 项、栏内装不下（「点击元素」就在折叠线以下），
+    //     筛选是"找不到某一步"的出路——实测用户就是这么反馈的（问「点击元素怎么添加」）
+    const filterProbe = await ui.eval(`${DOM}
+      const col = q('.ct-palette-body');
+      const before = q('[data-test="custom-palette-click"]');
+      const cr = col.getBoundingClientRect();
+      const belowFold = before.getBoundingClientRect().bottom > cr.bottom;
+      setNativeValue(q('[data-test="custom-step-filter"]'), '点击');
+      await new Promise(r => setTimeout(r, 150));
+      const items = Array.from(document.querySelectorAll('[data-test^="custom-palette-"]'));
+      const cr2 = q('.ct-palette-body').getBoundingClientRect();
+      const labels = items.map(e => e.textContent.trim());
+      const allInView = items.every(e => { const r = e.getBoundingClientRect(); return r.top >= cr2.top && r.bottom <= cr2.bottom; });
+      setNativeValue(q('[data-test="custom-step-filter"]'), '');
+      await new Promise(r => setTimeout(r, 150));
+      return { belowFold, labels, allInView };
+    `)
+    check('②b 「点击元素」确实在折叠线以下（所以要靠筛选找）', filterProbe.belowFold === true)
+    check('②b 筛选「点击」后只剩点击类步骤', JSON.stringify(filterProbe.labels) === JSON.stringify(['点击元素', '按文案点击']), JSON.stringify(filterProbe.labels))
+    check('②b 筛选结果全部落在视野内（无需滚动）', filterProbe.allInView === true)
+
     // ③ 从左侧目录加一步「打开网址」并填网址
     //    三栏布局下：目录点即添加，添加后自动选中，参数渲染在右栏
     await ui.eval(`${DOM}

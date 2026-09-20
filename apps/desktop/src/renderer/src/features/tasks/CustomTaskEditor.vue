@@ -1,17 +1,29 @@
 <template>
   <div class="ct-editor" data-test="custom-editor">
     <!-- 左栏：步骤目录。常驻列表而不是下拉框——加步骤是编排里最高频的动作，
-         藏进下拉每次都要点开再找，真机验收时就因为下拉弹层点偏过两次。 -->
+         藏进下拉每次都要点开再找，真机验收时就因为下拉弹层点偏过两次。
+
+         筛选框是必须的：目录共 22 项、分 6 组，栏内可视高度装不下（实测 748px 内容 / 356px 可视），
+         而**没有任何提示说明还能往下滚**——实测反馈就是"点击元素怎么添加"（它在折叠线以下）。
+         加筛选后任何一步都能两步定位，也不再依赖窗口高度。 -->
     <section class="ct-col ct-palette">
       <div class="ct-col-h">
         <span>步骤目录</span>
-        <span class="row-sub">点即添加</span>
+        <span class="row-sub">{{ filteredTotal }} 项</span>
       </div>
+      <input
+        v-model="paletteQuery"
+        class="ct-filter"
+        type="text"
+        placeholder="筛选步骤…"
+        data-test="custom-step-filter"
+      />
       <div class="ct-palette-body">
-        <div v-for="g in groups" :key="g" class="ct-group">
-          <div class="ct-group-h">{{ g }}</div>
+        <div v-if="!filteredGroups.length" class="ct-empty">没有匹配的步骤</div>
+        <div v-for="g in filteredGroups" :key="g.name" class="ct-group">
+          <div class="ct-group-h">{{ g.name }}</div>
           <button
-            v-for="e in entriesOf(g)"
+            v-for="e in g.entries"
             :key="e.type"
             class="ct-pal-item"
             :title="e.desc"
@@ -214,6 +226,32 @@ const emit = defineEmits<{ (e: 'update:steps', v: CustomStepDraft[]): void }>()
 
 const groups = catalogGroups()
 
+/** 目录筛选关键词（按步骤名或分组名匹配——输「交互」也能把整组带出来） */
+const paletteQuery = ref('')
+
+/**
+ * 筛选后的目录。空关键词时就是完整目录（顺序与分组沿用 STEP_CATALOG）。
+ * 同时匹配分组名：用户往往记得"它在交互那一组"而不是准确步骤名。
+ */
+const filteredGroups = computed(() => {
+  const q = paletteQuery.value.trim().toLowerCase()
+  const out: Array<{ name: string; entries: typeof STEP_CATALOG }> = []
+  for (const name of groups) {
+    const all = STEP_CATALOG.filter(e => e.group === name)
+    const hit = !q
+      ? all
+      : all.filter(e => e.label.toLowerCase().includes(q) || e.type.toLowerCase().includes(q))
+    if (!hit.length) continue
+    // 分组名本身命中时，把该组整组给出（用户想看"交互里有什么"）
+    const groupHit = !!q && name.toLowerCase().includes(q)
+    out.push({ name, entries: (groupHit ? all : hit) as typeof STEP_CATALOG })
+  }
+  return out
+})
+
+/** 当前筛选结果里的步骤总数（给左栏表头显示） */
+const filteredTotal = computed(() => filteredGroups.value.reduce((n, g) => n + g.entries.length, 0))
+
 /** 当前编辑的是第几步（右栏参数只渲染它） */
 const selected = ref(0)
 
@@ -225,9 +263,6 @@ watch(() => props.steps.length, (n) => {
   else if (selected.value > n - 1) selected.value = n - 1
 })
 
-function entriesOf(group: string) {
-  return STEP_CATALOG.filter(e => e.group === group)
-}
 function entryOf(s: CustomStepDraft) {
   return findCatalogEntry(s.type)
 }
@@ -317,7 +352,8 @@ function move(i: number, delta: number) {
    min-height 让空态也有稳定的框，不至于三栏高低参差。 */
 .ct-editor {
   display: grid;
-  grid-template-columns: 156px minmax(200px, 1fr) 268px;
+  /* 左栏 176：目录条目名最长 9 个汉字（「切到已打开的标签页」），156 会折行 */
+  grid-template-columns: 176px minmax(190px, 1fr) 262px;
   gap: 10px;
   align-items: stretch;
   /* 撑满父容器给的剩余高度（对话框是 flex 列，只有这一块伸缩），
@@ -342,14 +378,22 @@ function move(i: number, delta: number) {
 .ct-params-body { display: flex; flex-direction: column; gap: 8px; }
 
 /* ---------- 左栏：目录 ---------- */
-.ct-group + .ct-group { margin-top: 8px; }
-.ct-group-h {
-  font-size: 10px; color: var(--color-text-muted); padding: 2px 2px 3px;
-  border-bottom: 1px dashed var(--color-border); margin-bottom: 3px;
+/* 筛选框钉在目录上方（不随列表滚动）：找不到某一步时它是最快的出路 */
+.ct-filter {
+  flex: 0 0 auto; margin: 6px 7px 0; padding: 4px 7px; font-size: 11px; font-family: inherit;
+  color: var(--color-text-primary); background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border); border-radius: 4px;
 }
+.ct-filter:focus { outline: none; border-color: var(--color-primary); }
+.ct-group + .ct-group { margin-top: 6px; }
+.ct-group-h {
+  font-size: 10px; color: var(--color-text-muted); padding: 1px 2px 2px;
+  border-bottom: 1px dashed var(--color-border); margin-bottom: 2px;
+}
+/* 条目压紧：目录共 22 项，栏内高度有限，能多露出一项就少一次滚动 */
 .ct-pal-item {
-  display: block; width: 100%; text-align: left; font-size: 11px;
-  padding: 4px 6px; border-radius: 4px; color: var(--color-text-secondary);
+  display: block; width: 100%; text-align: left; font-size: 11px; line-height: 1.35;
+  padding: 3px 6px; border-radius: 4px; color: var(--color-text-secondary);
   border: 1px solid transparent; background: none;
 }
 .ct-pal-item:hover { color: #fff; background: var(--color-bg-secondary); border-color: var(--color-primary); }
