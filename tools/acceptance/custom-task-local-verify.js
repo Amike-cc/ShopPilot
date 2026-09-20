@@ -19,6 +19,8 @@
  */
 const { spawn, execSync } = require('child_process')
 const fs = require('fs')
+const http = require('http')
+const crypto = require('crypto')
 const os = require('os')
 const path = require('path')
 
@@ -85,6 +87,70 @@ class CDP {
 
 async function fetchJson(url) { const r = await fetch(url); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() }
 
+/**
+ * 本地仿真页面：只提供"自定义任务真的跑起来"所需要的最小确定行为。
+ *
+ * 为什么必须真跑而不是只断言落库：创建与执行是两套代码（渲染层校验 + 主进程引擎），
+ * 落库正确不代表引擎认得这条步骤。这里用确定性的页面把每一步的**结果**钉住。
+ */
+function startSite() {
+  const state = { clicked: 0 }
+  const page = () => `<!doctype html><html><head><meta charset="utf-8"><title>自定义任务仿真页</title>
+    <style>body{font:14px sans-serif;margin:20px}.hidden{display:none}</style></head><body>
+    <h1 id="heading">自定义任务仿真页</h1>
+    <div id="metric">待巡检指标：<b>42</b></div>
+    <button id="do-click">执行动作</button>
+    <div id="done" class="hidden">动作已执行</div>
+    <script>
+      document.getElementById('do-click').addEventListener('click', () => {
+        fetch('/__click', { method: 'POST' });
+        document.getElementById('done').classList.remove('hidden');
+      });
+    </script></body></html>`
+
+  const server = http.createServer((req, res) => {
+    if (req.method === 'GET' && (req.url === '/' || req.url === '/inspect')) {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(page())
+      return
+    }
+    if (req.method === 'POST' && req.url === '/__click') {
+      state.clicked += 1
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"ok":true}')
+      return
+    }
+    res.writeHead(404)
+    res.end('not found')
+  })
+
+  return new Promise(resolve => {
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address()
+      resolve({
+        base: `http://127.0.0.1:${port}`,
+        state,
+        close: () => new Promise(r => server.close(r))
+      })
+    })
+  })
+}
+
+/** 轮询运行结果直到谓词满足（与 douyin 验收同一套路） */
+async function pollRun(api, runId, predicate, timeoutMs) {
+  const started = Date.now()
+  let last = null
+  while (Date.now() - started < timeoutMs) {
+    const result = await api.taskResults(runId)
+    if (result.ok) {
+      last = result.data
+      if (predicate(result.data)) return result.data
+    }
+    await sleep(400)
+  }
+  return last
+}
+
 async function waitForCDP(timeoutMs = 40000) {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
@@ -134,6 +200,7 @@ const waitFor = async (fn, ms = 6000) => {
 `
 
 async function main() {
+  const site = await startSite()
   const userData = path.join(os.tmpdir(), 'shopilot-custom-task-' + Date.now())
   fs.mkdirSync(userData, { recursive: true })
   freeDebugPort(CDP_PORT)
@@ -154,6 +221,13 @@ async function main() {
 
     await waitForCDP()
     ui = await connectUi()
+
+    const api = {
+      taskList: () => ui.eval(`return await window.shopilot.task.list();`),
+      taskResults: runId => ui.eval(`return await window.shopilot.task.results(${JSON.stringify(runId)});`),
+      taskRun: taskId => ui.eval(`return await window.shopilot.task.run(${JSON.stringify(taskId)});`),
+      taskDelete: taskId => ui.eval(`return await window.shopilot.task.delete(${JSON.stringify(taskId)});`)
+    }
 
     // 准备：建一个店铺并打开（自定义任务要求已打开店铺）
     const storeId = await ui.eval(`
@@ -278,6 +352,55 @@ async function main() {
     check('③ 加步骤后步数正确', afterNav.count.includes('1'), afterNav.count)
     check('③ 只有导航步骤时可创建（无阻断错误）', afterNav.disabled === false, afterNav.issues.slice(0, 80))
 
+    // ③b 网址格式：写错的地址必须在**客户端**就被拦下并说清原因。
+    //     修复前这里放行，点创建才被主进程 Zod 拒，用户看到的是引擎味的
+    //     TASK_INVALID_STEP: Invalid url——正是"表单填得好好的、点创建被拒"。
+    const badUrls = ['wx.qq.com/page', 'javascript:alert(1)', 'ftp://a.com', 'http://']
+    const urlFeedback = await ui.eval(`${DOM}
+      const input = q('[data-test="custom-f-0-url"]');
+      const seen = [];
+      for (const bad of ${JSON.stringify(badUrls)}) {
+        setNativeValue(input, bad);
+        await new Promise(r => setTimeout(r, 120));
+        seen.push({
+          url: bad,
+          disabled: q('[data-test="task-submit"]').disabled,
+          issues: (q('[data-test="custom-issues"]')?.textContent || '').trim()
+        });
+      }
+      setNativeValue(input, 'https://store.weixin.qq.com/shop/brandAndCat/qualification/home');
+      await new Promise(r => setTimeout(r, 150));
+      return { seen, recovered: q('[data-test="task-submit"]').disabled === false };
+    `)
+    const badUrlBlocked = urlFeedback.seen.every(s => s.disabled === true && s.issues.includes('网址'))
+    check('③b 写错的网址在客户端就被拦下且说明是网址问题',
+      badUrlBlocked, JSON.stringify(urlFeedback.seen.map(s => ({ url: s.url, disabled: s.disabled }))))
+    check('③b 改回合法网址后恢复可创建', urlFeedback.recovered === true)
+
+    // ③c 文本长度：超过主进程上限的值也必须在客户端拦下。
+    //     修复前 501 字符的选择器放行，创建时才报 too_big。
+    const lenProbe = await ui.eval(`${DOM}
+      q('[data-test="custom-palette-click"]').click();
+      await new Promise(r => setTimeout(r, 200));
+      const input = await waitFor(() => q('[data-test="custom-f-1-selector"]'));
+      if (!input) throw new Error('click 的 selector 字段没渲染出来');
+      setNativeValue(input, 'x'.repeat(501));
+      await new Promise(r => setTimeout(r, 150));
+      const over = { disabled: q('[data-test="task-submit"]').disabled, issues: (q('[data-test="custom-issues"]')?.textContent || '').trim() };
+      setNativeValue(input, 'button.submit');
+      await new Promise(r => setTimeout(r, 150));
+      const okLen = { disabled: q('[data-test="task-submit"]').disabled };
+      return { over, okLen };
+    `)
+    check('③c 超长选择器在客户端被拦下并给出上限',
+      lenProbe.over.disabled === true && lenProbe.over.issues.includes('最多 500'),
+      lenProbe.over.issues.slice(0, 90))
+    check('③c 长度合法后恢复可创建', lenProbe.okLen.disabled === false)
+
+    // 清掉 ③c 临时加的那一步，让后面的用例从"1 步导航"继续
+    await ui.eval(`${DOM} q('[data-test="custom-del-1"]').click(); return true;`)
+    await sleep(200)
+
     // ④ 加一步「按文案点击」、填文案、标记为提交动作 → 必须报错且置灰
     await ui.eval(`${DOM} q('[data-test="custom-palette-clickByText"]').click(); return true;`)
     await sleep(250)
@@ -360,8 +483,160 @@ async function main() {
       check('⑥ 编排器元数据（submit）没有混进引擎步骤', !('submit' in clickStep), JSON.stringify(clickStep))
       check('⑥ 任务绑定了店铺', created.storeScope === storeId, String(created.storeScope))
 
-      // 清理：删掉验收建的任务与店铺
+      // 清理：删掉这一步建的任务（后面还要用同一个店铺跑真正的执行验收）
       await ui.eval(`await window.shopilot.task.delete(${JSON.stringify(created.id)}); return true;`)
+    }
+
+    // ==================================================================
+    // ⑧ 创建 → 真实运行 → 步骤结果
+    //
+    // 前面 ①–⑦ 证明的是"编得对、落库对"，但创建与执行是两套代码：
+    // 落库对不代表引擎认得这条步骤、更不代表结果如实。这一段把创建出来的任务
+    // 真的跑在本地仿真页上，逐条断言**运行结果**（读到的值、点击是否真发生、
+    // 截图工件是否落盘且哈希对得上），以及失败时是否如实失败。
+    // ==================================================================
+    const inspectUrl = site.base + '/inspect'
+
+    const openCustomDialog = async () => {
+      await ui.eval(`${DOM} q('[data-test="task-new"]').click(); return true;`)
+      await ui.eval(`${DOM} await waitFor(() => q('[data-test="task-dialog"]')); return true;`)
+      await ui.eval(`${DOM} setSelect(q('[data-test="task-flow"]'), 'custom'); return true;`)
+      await ui.eval(`${DOM} await waitFor(() => q('[data-test="custom-editor"]')); return true;`)
+    }
+
+    const addStep = async (type, index, fields) => {
+      await ui.eval(`${DOM}
+        const item = q('[data-test="custom-palette-${type}"]');
+        if (!item) throw new Error('目录里没有 ${type}');
+        item.click();
+        return true;
+      `)
+      await sleep(180)
+      for (const [key, value] of Object.entries(fields)) {
+        await ui.eval(`${DOM}
+          const input = await waitFor(() => q('[data-test="custom-f-${index}-${key}"]'));
+          if (!input) throw new Error('第 ${index} 步的 ${key} 字段没渲染出来');
+          setNativeValue(input, ${JSON.stringify(value)});
+          return true;
+        `)
+        await sleep(120)
+      }
+    }
+
+    // ---------- ⑧-1 一个能跑通的任务：导航 → 等文案 → 读值 → 点击 → 截图 ----------
+    await openCustomDialog()
+    await ui.eval(`${DOM} setNativeValue(q('[data-test="custom-name"]'), '自定义任务验收 · 仿真巡检'); return true;`)
+    await addStep('navigate', 0, { url: inspectUrl })
+    await addStep('waitForText', 1, { text: '自定义任务仿真页' })
+    await addStep('readText', 2, { selector: '#metric b', metric: 'inspect.metric' })
+    await addStep('click', 3, { selector: '#do-click' })
+    await addStep('screenshot', 4, {})
+
+    const composed = await ui.eval(`${DOM}
+      return {
+        count: q('[data-test="custom-step-count"]').textContent.trim(),
+        disabled: q('[data-test="task-submit"]').disabled,
+        issues: (q('[data-test="custom-issues"]')?.textContent || '').trim()
+      };
+    `)
+    check('⑧ 五步编排完成且可创建', composed.count.includes('5') && composed.disabled === false,
+      JSON.stringify(composed).slice(0, 140))
+
+    await ui.eval(`${DOM} q('[data-test="task-submit"]').click(); return true;`)
+    await sleep(1800)
+
+    let runTask = null
+    for (let i = 0; i < 25 && !runTask; i++) {
+      const listed = await api.taskList()
+      if (listed.ok) runTask = (listed.data.tasks || listed.data || []).find(t => t.name === '自定义任务验收 · 仿真巡检')
+      if (!runTask) await sleep(300)
+    }
+    check('⑧ 仿真巡检任务创建成功', !!runTask, runTask ? runTask.id : '未找到')
+
+    if (runTask) {
+      const started = await api.taskRun(runTask.id)
+      check('⑧ 任务可启动（店铺浏览器已打开，不排队等待）',
+        started.ok && started.data?.waitingForStore !== true,
+        JSON.stringify(started.error || started.data))
+
+      const runId = started.ok ? started.data?.runId : null
+      const terminal = runId
+        ? await pollRun(api, runId, d => ['succeeded', 'failed', 'cancelled'].includes(d.run.status), 60000)
+        : null
+      check('⑧ 任务真实执行并成功收尾',
+        terminal?.run.status === 'succeeded',
+        terminal ? `${terminal.run.status} / ${terminal.run.errorMessage || terminal.run.statusReason || ''}` : 'no run data')
+
+      const results = terminal?.results || []
+      const byType = t => results.find(r => r.kind === t)
+
+      // readText 读到的必须是页面上真实的值（42），而不是空串或占位
+      const textResult = byType('text')
+      check('⑧ 读值步骤读回页面真实数值（42）',
+        textResult?.payload?.text === '42' && textResult?.payload?.metric === 'inspect.metric',
+        JSON.stringify(textResult?.payload))
+
+      // 点击必须真的落到页面上（仿真页自己计数）
+      check('⑧ 点击步骤真的作用到页面（仿真页收到 1 次点击）',
+        site.state.clicked === 1, `clicked=${site.state.clicked}`)
+
+      // 截图必须落盘、非空，且哈希与库里记录一致
+      const shot = results.find(r => r.artifactPath)
+      const artifactOk = (() => {
+        if (!shot?.artifactPath) return { ok: false, why: 'no artifact path' }
+        if (!fs.existsSync(shot.artifactPath)) return { ok: false, why: 'file missing' }
+        const buf = fs.readFileSync(shot.artifactPath)
+        const sha = crypto.createHash('sha256').update(buf).digest('hex')
+        return { ok: buf.length > 100 && sha === shot.artifactSha256, why: `${buf.length}B sha=${sha.slice(0, 12)}` }
+      })()
+      check('⑧ 截图工件落盘、非空且哈希与库记录一致', artifactOk.ok, artifactOk.why)
+
+      // 步骤结果要覆盖到每一个执行过的步骤（不是只记最后一条）
+      check('⑧ 步骤结果逐条落库（5 步都有记录）',
+        new Set(results.map(r => r.stepIndex)).size >= 5,
+        `records=${results.length} steps=${[...new Set(results.map(r => r.stepIndex))].length}`)
+
+      const deleted = await api.taskDelete(runTask.id)
+      check('⑧ 验收任务可删除（级联清理运行记录）', deleted.ok, JSON.stringify(deleted.error || deleted.data))
+    }
+
+    // ---------- ⑧-2 一个必然失败的任务：断言"不该出现的文案"确实出现了 ----------
+    // 只验证"能成功"是不够的：还要验证失败**如实报出来**，而不是静默记成成功。
+    await ui.eval(`${DOM} q('[data-test="task-new"]').click(); return true;`)
+    await ui.eval(`${DOM} await waitFor(() => q('[data-test="task-dialog"]')); return true;`)
+    await ui.eval(`${DOM} setSelect(q('[data-test="task-flow"]'), 'custom'); return true;`)
+    await ui.eval(`${DOM} await waitFor(() => q('[data-test="custom-editor"]')); return true;`)
+    await ui.eval(`${DOM} setNativeValue(q('[data-test="custom-name"]'), '自定义任务验收 · 预期失败'); return true;`)
+    await addStep('navigate', 0, { url: inspectUrl })
+    await addStep('requireTextAbsent', 1, { text: '自定义任务仿真页' })
+    await ui.eval(`${DOM} q('[data-test="task-submit"]').click(); return true;`)
+    await sleep(1800)
+
+    let failTask = null
+    for (let i = 0; i < 25 && !failTask; i++) {
+      const listed = await api.taskList()
+      if (listed.ok) failTask = (listed.data.tasks || listed.data || []).find(t => t.name === '自定义任务验收 · 预期失败')
+      if (!failTask) await sleep(300)
+    }
+    check('⑧ 预期失败的任务创建成功（说明断言步骤本身是合法编排）', !!failTask, failTask ? failTask.id : '未找到')
+
+    if (failTask) {
+      const started = await api.taskRun(failTask.id)
+      const runId = started.ok ? started.data?.runId : null
+      const terminal = runId
+        ? await pollRun(api, runId, d => ['succeeded', 'failed', 'cancelled'].includes(d.run.status), 60000)
+        : null
+      check('⑧ 断言不成立时任务如实失败（不静默记成功）',
+        terminal?.run.status === 'failed',
+        terminal ? `${terminal.run.status} / ${terminal.run.errorCode || terminal.run.errorMessage || ''}` : 'no run data')
+      // 错误码必须是真实原因，而不是被吞成 INTERNAL_ERROR——
+      // 界面直接把 error_code 这一列展示给用户，"内部错误"会让人以为软件坏了。
+      check('⑧ 失败错误码是真实原因 TASK_TEXT_PRESENT（不是 INTERNAL_ERROR）',
+        terminal?.run.errorCode === 'TASK_TEXT_PRESENT',
+        `${terminal?.run.errorCode || ''} ${String(terminal?.run.errorMessage || '').slice(0, 80)}`)
+
+      const deleted = await api.taskDelete(failTask.id)
+      check('⑧ 预期失败任务可删除', deleted.ok, JSON.stringify(deleted.error || deleted.data))
     }
   } catch (e) {
     check('验收过程未抛异常', false, String(e && e.message || e))
@@ -370,6 +645,7 @@ async function main() {
     killTree(app)
     await sleep(800)
     try { fs.rmSync(userData, { recursive: true, force: true }) } catch { /* 临时目录交给系统回收 */ }
+    try { await site.close() } catch { /* ignore */ }
   }
 
   const failed = results.filter(r => !r.ok)

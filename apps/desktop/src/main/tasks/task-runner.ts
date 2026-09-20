@@ -20,6 +20,7 @@ import type {
 } from '@shared/schemas/task'
 import * as TaskStore from './task-store'
 import { NON_RESUMABLE_TYPES, DEFAULT_STEP_TIMEOUT } from './task-store'
+import { classifyTaskError } from './error-classifier'
 import { writeAudit } from '../services/audit-logger'
 import { logMain } from '../services/logger'
 import { generateInviteScript } from '../services/ai-client'
@@ -356,60 +357,8 @@ async function execute(run: RunHandle): Promise<void> {
   }
 }
 
-function classifyError(e: any): string {
-  const msg = String(e?.message || e)
-  if (msg.startsWith('TASK_TIMEOUT')) return 'TASK_TIMEOUT'
-  if (msg.includes('TASK_SELECTOR_CHANGED')) return 'TASK_SELECTOR_CHANGED'
-  if (msg.includes('NAVIGATION_BLOCKED')) return 'NAVIGATION_BLOCKED'
-  if (msg.includes('TASK_CONFIRMATION_REQUIRED')) return 'TASK_CONFIRMATION_REQUIRED'
-  if (msg.includes('TASK_TARGET_DISABLED')) return 'TASK_TARGET_DISABLED'
-  // 微信小店（assist-form）流程专属：邀约页未打开 / 受信任写入未生效
-  if (msg.includes('TASK_INVITE_PAGE_NOT_OPEN')) return 'TASK_INVITE_PAGE_NOT_OPEN'
-  if (msg.includes('TASK_INPUT_NOT_APPLIED')) return 'TASK_INPUT_NOT_APPLIED'
-  // 额度预检不过（微信今日剩余不足 / 抖店确认发送禁用等）
-  if (msg.includes('TASK_QUOTA_EXCEEDED')) return 'TASK_QUOTA_EXCEEDED'
-  // 广场可选达人不足（要 40 位但池子里只有更少）——发送前中止，别发错数量
-  if (msg.includes('TASK_SELECTION_SHORTFALL')) return 'TASK_SELECTION_SHORTFALL'
-  // 当前分页里的候选都已处理过（微信广场每次加载都洗牌、分页 20 条/页）：
-  // 由 loop 的 onCode 恢复步骤「点下一页」消化掉；翻到最后一页仍取不出 → 由 stopOn 收工
-  if (msg.includes('TASK_PAGE_EXHAUSTED')) return 'TASK_PAGE_EXHAUSTED'
-  // 这一位达人的详情页打不开（微应用间歇性不渲染，「邀请带货」按钮不存在）：
-  // 由 loop 的 onCode restart 规则**退避后重试同一位**（连续多位都这样才会停）
-  if (msg.includes('TASK_DAREN_PAGE_UNOPENABLE')) return 'TASK_DAREN_PAGE_UNOPENABLE'
-  // 详情页打开了、页面也正常，但平台明说这一位**不满足合作条件**（微信「暂未到达合作门槛」）：
-  // 与上面那条是**相反**的处置——重试同一位永远没有用，必须跳过换下一位。
-  if (msg.includes('TASK_DAREN_NOT_INVITABLE')) return 'TASK_DAREN_NOT_INVITABLE'
-  // 「邀请带货」是禁用态且平台给出的原因是"已经邀约过"（实测微信悬浮说明
-  // 「你已经邀请过该达人，7天内不可再次发送带货邀约」）：同样要**跳过换下一位**——
-  // 一批发完之后紧接着再跑，广场里排在前面的往往正是刚邀过的人，不跳过就会当场中止。
-  if (msg.includes('TASK_DAREN_ALREADY_INVITED')) return 'TASK_DAREN_ALREADY_INVITED'
-  // 店铺视图当时未挂载（弹层遮挡导致摘除）：需要真实落点的步骤无法进行，明确报出来
-  if (msg.includes('TASK_VIEW_DETACHED')) return 'TASK_VIEW_DETACHED'
-  // 目标整块在视口外（多为平台弹层靠 rAF 定位、但页面被节流）：与"被遮挡"分开，
-  // 否则会把"页面被后台节流"误导成"窗口太窄"（实测快手级联弹层）
-  if (msg.includes('TASK_TARGET_OUT_OF_VIEWPORT')) return 'TASK_TARGET_OUT_OF_VIEWPORT'
-  // 邀约商品没真正选上（平台会因此拦下发送）：必须在发送前如实失败，
-  // 绝不能落进 stopOn（那会被当成"按预期收工"，静默地一位都没邀约）
-  if (msg.includes('TASK_PRODUCT_NOT_SELECTED')) return 'TASK_PRODUCT_NOT_SELECTED'
-  // 提交后页面上出现了平台给的**失败文案**（实测快手「部分邀约发送失败」）：
-  // 这是平台逐条给出的拒绝，必须如实失败——绝不能因为"抽屉还开着"就当成"平台还在处理"。
-  // 注意措辞是"部分"：同一批里其余人可能已经发送成功（实测 2 位里 1 位进了「邀约中」），
-  // 所以错误码与消息都不能暗示"整批都没发出去"——那会误导用户重发、造成重复邀约。
-  if (msg.includes('TASK_SEND_PARTIAL')) return 'TASK_SEND_PARTIAL'
-  // 页面被重定向到登录页（登录态失效）：用户能自己解决，必须与"页面慢/改版"区分开
-  if (msg.includes('TASK_LOGIN_REQUIRED')) return 'TASK_LOGIN_REQUIRED'
-  // 页签点了但没选中（平台同名页签数据不同：不校验就会把上一个页签的数据当成这个的）
-  if (msg.includes('TASK_TAB_NOT_ACTIVE')) return 'TASK_TAB_NOT_ACTIVE'
-  // 店铺浏览器/任务标签页被关闭（此前落进 INTERNAL_ERROR，看不出真实原因）
-  if (msg.includes('BROWSER_CLOSED')) return 'BROWSER_CLOSED'
-  // AI 相关的固定错误码：如实透出，便于界面区分"没配 Key / 地址不合法 / 超时 / 请求失败"
-  if (msg.includes('AI_NOT_CONFIGURED')) return 'AI_NOT_CONFIGURED'
-  if (msg.includes('AI_BAD_ENDPOINT')) return 'AI_BAD_ENDPOINT'
-  if (msg.includes('AI_EMPTY_SOURCE') || msg.includes('AI_EMPTY_OUTPUT')) return 'AI_EMPTY_OUTPUT'
-  if (msg.includes('AI_TIMEOUT')) return 'AI_TIMEOUT'
-  if (msg.includes('AI_REQUEST_FAILED')) return 'AI_REQUEST_FAILED'
-  return 'INTERNAL_ERROR'
-}
+/** 错误码分类见 ./error-classifier（独立成模块以便单测钉住"新错误码不许漏登记"） */
+const classifyError = classifyTaskError
 
 // ---------- 步骤执行器（全部预定义，无任意代码路径） ----------
 
@@ -1896,6 +1845,9 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           if (dis) { skippedDisabled++; continue }
           seen.add(key); seenNew.push(key);
           const label = el.closest('label, [class*="checkbox"]') || el;
+          // 每次点击都读取页面自己的计数：虚拟列表/框架重渲染可能让某次点击
+          // 静默失效或把已选项反选。若跳过中间校验，后续步骤可能带着少选的
+          // 达人/商品继续提交，造成任务结果与用户要求不一致。
           const before = read();
           label.click();
           await sleep(240);
@@ -1943,11 +1895,16 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         const before = Math.round(box.scrollTop);
         const maxTop = Math.max(0, box.scrollHeight - box.clientHeight);
         box.style.scrollBehavior = 'auto';
-        const target = Math.min(maxTop, before + Math.floor(box.clientHeight * 0.95));
+        // 2026-09-17 优化：动态滚动步长（1.2 屏而非固定 0.95 屏），减少滚动轮次
+        // 距离底部较远时滚动更多，接近底部时自动收敛，避免滚动过头
+        const remaining = maxTop - before;
+        const stepRatio = remaining > box.clientHeight * 2 ? 1.2 : 0.95;
+        const target = Math.min(maxTop, before + Math.floor(box.clientHeight * stepRatio));
         box.scrollTop = target;
         let settle = -1;
-        for (let i = 0; i < 20; i++) {
-          await new Promise(r => setTimeout(r, 80));
+        // 2026-09-17 优化：从 20 次减少到 10 次检测（仍有 1 秒等待），节省 ~0.8 秒/轮
+        for (let i = 0; i < 10; i++) {
+          await new Promise(r => setTimeout(r, 100));
           const now = Math.round(box.scrollTop);
           if (Math.abs(now - target) <= 2) { settle = now; break }
           if (now === settle) break

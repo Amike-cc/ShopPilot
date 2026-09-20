@@ -16,7 +16,6 @@ const path = require('path')
 const root = path.resolve(__dirname, '../..')
 const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
 const CDP_PORT = process.env.SHOPILOT_DOUYIN_CDP_PORT || '9261'
-const APP_PID = process.pid
 const SCRIPT_TEXT = '本地验收：诚邀达人合作带货，提供专属高佣与素材支持。'
 const results = []
 
@@ -309,12 +308,9 @@ async function main() {
       '--disable-backgrounding-occluded-windows'
     ], {
       cwd: root,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'ignore', 'ignore'],
       env: { ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1', SHOPILOT_DISABLE_CDP_FP: '1' }
     })
-    let appLog = ''
-    app.stdout.on('data', chunk => { appLog += chunk.toString() })
-    app.stderr.on('data', chunk => { appLog += chunk.toString() })
 
     await waitForCDP()
     focusAppWindow(app.pid)

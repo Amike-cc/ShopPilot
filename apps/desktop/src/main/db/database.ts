@@ -6,8 +6,9 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { migrate } from './migrations'
+import type Database from 'better-sqlite3'
 
-let db: any = null
+let db: Database.Database | null = null
 
 /**
  * 获取数据库路径
@@ -19,7 +20,7 @@ export function getDatabasePath(): string {
 /**
  * 初始化数据库连接
  */
-export function initDatabase(): any {
+export function initDatabase(): Database.Database {
   if (db) {
     return db
   }
@@ -28,7 +29,7 @@ export function initDatabase(): any {
   const Database = require('better-sqlite3')
   const dbPath = getDatabasePath()
   
-  db = new Database(dbPath)
+  db = new Database(dbPath) as Database.Database
 
   // §5 前言：连接级 PRAGMA，必须在事务外执行
   db.pragma('journal_mode = WAL')
@@ -43,7 +44,7 @@ export function initDatabase(): any {
 /**
  * 获取数据库实例
  */
-export function getDatabase(): any {
+export function getDatabase(): Database.Database {
   if (!db) {
     throw new Error('Database not initialized. Call initDatabase() first.')
   }

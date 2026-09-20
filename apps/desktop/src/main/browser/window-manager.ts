@@ -17,7 +17,7 @@ import { getStoreSession } from './session-manager'
 import { registerFingerprintTarget, unregisterFingerprintTarget } from './fingerprint-injector'
 import {
   buildStoreContextMenu, runStoreMenuAction, toStoreMenuInput, toElectronMenuTemplate,
-  type StoreMenuId, type StoreContextMenuParams, type StoreMenuDeps
+  type StoreContextMenuParams, type StoreMenuDeps
 } from './store-context-menu'
 import { buildElementProbeScript, formatElementProbe, type ElementProbeResult } from './element-probe'
 import { getDatabase } from '../db/database'

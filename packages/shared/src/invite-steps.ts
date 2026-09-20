@@ -217,9 +217,10 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
         sourceSelector: p.goodsSourceSelector || '',
         maxLen: p.scriptMaxLen
       },
-      timeoutMs: 90000,
+      timeoutMs: 120000,
       // 生成话术幂等（重跑=重新生成覆盖同一输入框）→ 允许瞬态重试，
       // 免得一次模型抖动把整批（可能已真实发出几十位）打掉。理由同 assist 流程那条注释。
+      // 2026-09-17 优化：从 90s 提升到 120s，减少因大模型推理慢导致的超时失败
       retryLimit: 2
     })
     // aiGenerate 的 payload 只有摘要（模型/长度/预览），完整话术靠 readText 落库——事后能查出"到底发了什么"
@@ -439,10 +440,11 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
     round.push({
       type: 'aiGenerate',
       input: { selector: p.selectors.script, sourceSelector: p.selectors.goodsSource, deep: true, maxLen: p.scriptMaxLen },
-      timeoutMs: 90000,
+      timeoutMs: 120000,
       // 生成话术是**幂等**的（重跑只是重新生成并覆盖同一个输入框），所以允许瞬态重试：
       // 真机实测第 25 轮 aiGenerate 超时 30s 直接把整单打掉，而前 24 位已真实发出——
       // 一次模型抖动不该让整批作废。aiGenerate 内部超时由 AI 客户端控制，重试由 loop 做。
+      // 2026-09-17 优化：从 90s 提升到 120s，减少因大模型推理慢导致的超时失败
       retryLimit: 2
     })
     round.push({ type: 'readText', input: { selector: p.selectors.script, metric: 'invite.script', deep: true }, timeoutMs: 15000 })

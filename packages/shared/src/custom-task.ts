@@ -41,6 +41,15 @@ export interface StepFieldDef {
   /** kind='number' 的范围，与 Zod 的 min/max 对齐（不一致会导致创建时被主进程拒） */
   min?: number
   max?: number
+  /**
+   * 文本长度上限，与 Zod 的 max 对齐。
+   * 不加这条就会出现"表单填得下、创建被拒"——主进程 strict() 校验里每个字符串都有 max，
+   * 而浏览器里的输入框没有长度上限（实测：600 字符的选择器能填进去，创建时报
+   * TASK_INVALID_STEP: selector too_big）。
+   */
+  maxLength?: number
+  /** 值的格式约束，与 Zod 对齐。'httpUrl' = 必须是合法的 http/https 网址。 */
+  format?: 'httpUrl'
   /** 新建该步骤时的初始值 */
   default?: string | number | boolean
 }
@@ -81,6 +90,15 @@ export interface CustomStepDraft {
   timeoutMs?: number
 }
 
+/**
+ * 整单步骤数上限，必须与主进程 taskCreateSchema 的 `.max(30)` 对齐。
+ * 不对齐的话第 31 步之前一切正常，点创建才会被 Zod 拒（用户看不到任何线索）。
+ */
+export const CUSTOM_TASK_MAX_STEPS = 30
+
+/** within 子字段的上限，与 Zod 的 within schema 对齐 */
+const WITHIN_LIMITS = { selector: 300, text: 60, climbMin: 0, climbMax: 6 } as const
+
 /** 创建前校验的一条问题 */
 export interface CustomStepIssue {
   level: 'error' | 'warning'
@@ -110,7 +128,10 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: true,
     fields: [
-      { key: 'url', label: '网址', kind: 'text', required: true, placeholder: 'https://…（仅 http/https）' }
+      {
+        key: 'url', label: '网址', kind: 'text', required: true,
+        placeholder: 'https://…（仅 http/https）', format: 'httpUrl'
+      }
     ]
   },
   {
@@ -122,8 +143,8 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     // 切标签页会改写运行态（tabId），重放没有意义 —— 与引擎的 NON_RESUMABLE_TYPES 一致
     idempotent: false,
     fields: [
-      { key: 'path', label: '按路径精确匹配', kind: 'text', placeholder: '/shop/xxx' },
-      { key: 'urlIncludes', label: '按地址包含匹配', kind: 'text', placeholder: 'finder-square' },
+      { key: 'path', label: '按路径精确匹配', kind: 'text', maxLength: 300, placeholder: '/shop/xxx' },
+      { key: 'urlIncludes', label: '按地址包含匹配', kind: 'text', maxLength: 300, placeholder: 'finder-square' },
       { key: 'closeCurrent', label: '切换前关掉当前标签页', kind: 'boolean', default: true }
     ],
     requiredOneOf: [['path', 'urlIncludes']]
@@ -137,7 +158,7 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     desc: '轮询当前地址包含指定片段。留空则只等加载完成。',
     sideEffect: false,
     idempotent: true,
-    fields: [{ key: 'urlIncludes', label: '地址包含', kind: 'text', placeholder: '例如 /qualification/home' }]
+    fields: [{ key: 'urlIncludes', label: '地址包含', kind: 'text', maxLength: 300, placeholder: '例如 /qualification/home' }]
   },
   {
     type: 'waitForSelector',
@@ -147,7 +168,7 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: true,
     fields: [
-      { key: 'selector', label: '选择器', kind: 'text', required: true, placeholder: 'tbody input[type=checkbox]' },
+      { key: 'selector', label: '选择器', kind: 'text', required: true, maxLength: 500, placeholder: 'tbody input[type=checkbox]' },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' }
     ]
   },
@@ -159,7 +180,7 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: true,
     fields: [
-      { key: 'text', label: '文案', kind: 'text', required: true, placeholder: '例如 邀请带货' },
+      { key: 'text', label: '文案', kind: 'text', required: true, maxLength: 200, placeholder: '例如 邀请带货' },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' },
       { key: 'within', label: '限定查找范围', kind: 'within' }
     ]
@@ -183,7 +204,7 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: true,
     fields: [
-      { key: 'selector', label: '选择器', kind: 'text', required: true },
+      { key: 'selector', label: '选择器', kind: 'text', required: true, maxLength: 500 },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' }
     ]
   },
@@ -197,8 +218,8 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: true,
     fields: [
-      { key: 'selector', label: '选择器', kind: 'text', required: true },
-      { key: 'metric', label: '指标名', kind: 'text', placeholder: '落库用的键名，如 invite.quota' },
+      { key: 'selector', label: '选择器', kind: 'text', required: true, maxLength: 500 },
+      { key: 'metric', label: '指标名', kind: 'text', maxLength: 60, placeholder: '落库用的键名，如 invite.quota' },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' }
     ]
   },
@@ -210,8 +231,8 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: true,
     fields: [
-      { key: 'label', label: '标签文案', kind: 'text', required: true, placeholder: '例如 成交金额' },
-      { key: 'metric', label: '指标名', kind: 'text' },
+      { key: 'label', label: '标签文案', kind: 'text', required: true, maxLength: 60, placeholder: '例如 成交金额' },
+      { key: 'metric', label: '指标名', kind: 'text', maxLength: 60 },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' },
       { key: 'allowText', label: '允许取非数字文本', kind: 'boolean' },
       { key: 'absentOk', label: '页面上没有这一行也算通过', kind: 'boolean' }
@@ -225,8 +246,8 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: true,
     fields: [
-      { key: 'selector', label: '表格选择器', kind: 'text', required: true, placeholder: 'table' },
-      { key: 'metric', label: '指标名', kind: 'text' },
+      { key: 'selector', label: '表格选择器', kind: 'text', required: true, maxLength: 500, placeholder: 'table' },
+      { key: 'metric', label: '指标名', kind: 'text', maxLength: 60 },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' },
       { key: 'keepRows', label: '保留整表行内容', kind: 'boolean' },
       { key: 'emptyOk', label: '表本来就可能没有（空表不算失败）', kind: 'boolean' }
@@ -250,7 +271,7 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     desc: '按选择器点击。',
     sideEffect: true,
     idempotent: false,
-    fields: [{ key: 'selector', label: '选择器', kind: 'text', required: true }]
+    fields: [{ key: 'selector', label: '选择器', kind: 'text', required: true, maxLength: 500 }]
   },
   {
     type: 'clickByText',
@@ -260,7 +281,7 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: true,
     idempotent: false,
     fields: [
-      { key: 'text', label: '文案', kind: 'text', required: true },
+      { key: 'text', label: '文案', kind: 'text', required: true, maxLength: 200 },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' },
       {
         key: 'mode', label: '点击方式', kind: 'select', default: 'js',
@@ -280,10 +301,10 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: true,
     idempotent: false,
     fields: [
-      { key: 'text', label: '文案', kind: 'text', required: true },
+      { key: 'text', label: '文案', kind: 'text', required: true, maxLength: 200 },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' },
       { key: 'waitMs', label: '等待毫秒', kind: 'number', min: 500, max: 60000, default: 8000 },
-      { key: 'nearText', label: '限定在含此文案的弹层内', kind: 'text', placeholder: '用于区分同名按钮' }
+      { key: 'nearText', label: '限定在含此文案的弹层内', kind: 'text', maxLength: 200, placeholder: '用于区分同名按钮' }
     ]
   },
   {
@@ -294,12 +315,12 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: true,
     idempotent: false,
     fields: [
-      { key: 'selector', label: '选择器', kind: 'text', placeholder: 'tbody input[type=checkbox]' },
-      { key: 'text', label: '文案', kind: 'text', placeholder: '与选择器二选一' },
+      { key: 'selector', label: '选择器', kind: 'text', maxLength: 500, placeholder: 'tbody input[type=checkbox]' },
+      { key: 'text', label: '文案', kind: 'text', maxLength: 200, placeholder: '与选择器二选一' },
       { key: 'max', label: '最多勾选', kind: 'number', required: true, min: 1, max: 40, default: 1 },
       { key: 'scroll', label: '滚动续选（虚拟滚动列表）', kind: 'boolean' },
       { key: 'maxRounds', label: '滚动最多轮数', kind: 'number', min: 1, max: 60 },
-      { key: 'counterIncludes', label: '计数文案必须包含', kind: 'text', placeholder: '用于区分页面上的多个"已选N"' }
+      { key: 'counterIncludes', label: '计数文案必须包含', kind: 'text', maxLength: 40, placeholder: '用于区分页面上的多个"已选N"' }
     ],
     requiredOneOf: [['selector', 'text']]
   },
@@ -311,8 +332,8 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: true,
     idempotent: true,
     fields: [
-      { key: 'selector', label: '选择器', kind: 'text', required: true },
-      { key: 'text', label: '内容', kind: 'text', required: true }
+      { key: 'selector', label: '选择器', kind: 'text', required: true, maxLength: 500 },
+      { key: 'text', label: '内容', kind: 'text', required: true, maxLength: 2000 }
     ]
   },
   {
@@ -323,8 +344,8 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: true,
     idempotent: true,
     fields: [
-      { key: 'selector', label: '选择器', kind: 'text', required: true },
-      { key: 'text', label: '内容', kind: 'text', required: true },
+      { key: 'selector', label: '选择器', kind: 'text', required: true, maxLength: 500 },
+      { key: 'text', label: '内容', kind: 'text', required: true, maxLength: 2000 },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' }
     ]
   },
@@ -352,10 +373,10 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: true,
     fields: [
-      { key: 'textIncludes', label: '文案包含', kind: 'text', required: true, placeholder: '例如 今日剩余' },
+      { key: 'textIncludes', label: '文案包含', kind: 'text', required: true, maxLength: 100, placeholder: '例如 今日剩余' },
       { key: 'min', label: '下限', kind: 'number', required: true, min: 0, max: 100000, default: 1 },
       { key: 'optional', label: '页面上没有这段文案则放行', kind: 'boolean' },
-      { key: 'hint', label: '失败时的提示', kind: 'text' }
+      { key: 'hint', label: '失败时的提示', kind: 'text', maxLength: 200 }
     ]
   },
   {
@@ -366,9 +387,9 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: true,
     fields: [
-      { key: 'text', label: '按钮文案', kind: 'text', required: true },
+      { key: 'text', label: '按钮文案', kind: 'text', required: true, maxLength: 200 },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' },
-      { key: 'hint', label: '失败时的提示', kind: 'text' }
+      { key: 'hint', label: '失败时的提示', kind: 'text', maxLength: 200 }
     ]
   },
   {
@@ -379,9 +400,9 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: true,
     fields: [
-      { key: 'text', label: '文案', kind: 'text', required: true, placeholder: '例如 部分邀约发送失败' },
+      { key: 'text', label: '文案', kind: 'text', required: true, maxLength: 200, placeholder: '例如 部分邀约发送失败' },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' },
-      { key: 'hint', label: '失败时的提示', kind: 'text' },
+      { key: 'hint', label: '失败时的提示', kind: 'text', maxLength: 300 },
       { key: 'waitMs', label: '命中前最长轮询毫秒', kind: 'number', min: 0, max: 60000 }
     ]
   },
@@ -395,7 +416,7 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     sideEffect: false,
     idempotent: false,
     fields: [
-      { key: 'message', label: '确认提示语', kind: 'text', required: true, placeholder: '确认向 40 位达人发送邀约？' }
+      { key: 'message', label: '确认提示语', kind: 'text', required: true, maxLength: 500, placeholder: '确认向 40 位达人发送邀约？' }
     ]
   }
 ]
@@ -429,11 +450,27 @@ export function makeDraftStep(type: string): CustomStepDraft {
 }
 
 /**
+ * 是否是合法的 http/https 网址（与主进程 Zod 的 `url().refine(仅 http/https)` 同义）。
+ * 用 WHATWG URL 解析而不是正则：`ftp://`、`javascript:`、`http://`（无主机）都要判否，
+ * 而这些正是用户手填地址时最容易写出来的。
+ */
+function isHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/**
  * 创建前校验。
  *
  * 只报"确定有问题"的为 error（拦住创建），其余为 warning（提示但不拦）。
  * 判据都来自主进程 schema 或本仓库已确立的规矩，不做主观发挥：
- *   - 字段必填 / 数值范围 / 互斥组：与 Zod 对齐，早报比创建时被拒好；
+ *   - 字段必填 / 数值范围 / 文本长度 / 网址格式 / 互斥组 / 步骤总数：与 Zod 对齐，
+ *     早报比创建时被拒好。**这几项必须是子集关系**：客户端放行的，主进程必须也放行，
+ *     否则用户看到的就是"表单说能用、点创建报 TASK_INVALID_STEP"；
  *   - 提交类动作前必须有门禁：这是本仓库对写型步骤的既定红线；
  *   - 副作用步骤不许设重试：重试 = 重复点击/重复提交（引擎 NON_RESUMABLE_TYPES 的同一道理）。
  */
@@ -443,6 +480,14 @@ export function validateCustomSteps(steps: CustomStepDraft[]): CustomStepIssue[]
   if (!Array.isArray(steps) || steps.length === 0) {
     issues.push({ level: 'error', message: '至少要有一个步骤' })
     return issues
+  }
+
+  // 总数上限与主进程 taskCreateSchema 对齐，早报在创建之前
+  if (steps.length > CUSTOM_TASK_MAX_STEPS) {
+    issues.push({
+      level: 'error',
+      message: `步骤最多 ${CUSTOM_TASK_MAX_STEPS} 步（当前 ${steps.length} 步），请拆分或合并`
+    })
   }
 
   let sawGate = false
@@ -474,11 +519,29 @@ export function validateCustomSteps(steps: CustomStepDraft[]): CustomStepIssue[]
         const n = Number(v)
         if (!Number.isFinite(n)) {
           issues.push({ level: 'error', stepIndex: i, message: `${where}「${entry.label}」：${f.label}必须是数字` })
+        } else if (!Number.isInteger(n)) {
+          // 主进程所有数值字段都是 .int()，小数会被拒（实测："3.5 秒"这种输入直接 TASK_INVALID_STEP）
+          issues.push({ level: 'error', stepIndex: i, message: `${where}「${entry.label}」：${f.label}必须是整数` })
         } else if ((f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max)) {
           const range = [f.min !== undefined ? `最小 ${f.min}` : '', f.max !== undefined ? `最大 ${f.max}` : '']
             .filter(Boolean).join('、')
           issues.push({ level: 'error', stepIndex: i, message: `${where}「${entry.label}」：${f.label}超出范围（${range}）` })
         }
+      }
+      // 文本长度上限：主进程 strict() 里每个字符串都有 max，表单没有上限就会
+      // "填得进去、创建被拒"（实测 600 字符选择器 → TASK_INVALID_STEP: too_big）
+      if (f.kind === 'text' && f.maxLength !== undefined && String(v).length > f.maxLength) {
+        issues.push({
+          level: 'error', stepIndex: i,
+          message: `${where}「${entry.label}」：${f.label}最多 ${f.maxLength} 个字（当前 ${String(v).length} 个）`
+        })
+      }
+      // 格式校验：与 Zod 的 httpUrl（url() + 仅 http/https）对齐
+      if (f.kind === 'text' && f.format === 'httpUrl' && !isHttpUrl(String(v))) {
+        issues.push({
+          level: 'error', stepIndex: i,
+          message: `${where}「${entry.label}」：${f.label}必须是完整网址（以 http:// 或 https:// 开头）`
+        })
       }
       if (f.kind === 'within' && typeof v === 'object') {
         const w = v as Record<string, unknown>
@@ -489,6 +552,27 @@ export function validateCustomSteps(steps: CustomStepDraft[]): CustomStepIssue[]
             level: 'error', stepIndex: i,
             message: `${where}「${entry.label}」：限定范围的选择器与文案必须二选一`
           })
+        }
+        if (hasSel && String(w.selector).length > WITHIN_LIMITS.selector) {
+          issues.push({
+            level: 'error', stepIndex: i,
+            message: `${where}「${entry.label}」：限定范围的选择器最多 ${WITHIN_LIMITS.selector} 个字`
+          })
+        }
+        if (hasText && String(w.text).length > WITHIN_LIMITS.text) {
+          issues.push({
+            level: 'error', stepIndex: i,
+            message: `${where}「${entry.label}」：限定范围的文案最多 ${WITHIN_LIMITS.text} 个字`
+          })
+        }
+        if (w.climb !== undefined && w.climb !== '') {
+          const c = Number(w.climb)
+          if (!Number.isFinite(c) || !Number.isInteger(c) || c < WITHIN_LIMITS.climbMin || c > WITHIN_LIMITS.climbMax) {
+            issues.push({
+              level: 'error', stepIndex: i,
+              message: `${where}「${entry.label}」：上溯层数必须是 ${WITHIN_LIMITS.climbMin}~${WITHIN_LIMITS.climbMax} 的整数`
+            })
+          }
         }
       }
     }

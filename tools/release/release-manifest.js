@@ -38,6 +38,24 @@ const yml = fs.existsSync(path.join(root, 'electron-builder.yml')) ? fs.readFile
 const hasSigning = !!process.env.CSC_LINK || !!process.env.WIN_CSC_LINK || /^\s*sign(ing)?:/m.test(yml)
 const buildLabel = hasSigning ? 'RELEASE' : 'INTERNAL_BUILD' // §21.5：无有效签名只能标记 INTERNAL_BUILD
 
+/**
+ * DB schema 版本：**从迁移源码里读**，不写常量。
+ *
+ * 此前这里是硬编码的 `2`，而 migrations.ts 已经到 v4——清单里的 schemaVersion 直接写错，
+ * 而这个字段正是运维判断"能不能回退旧版"的依据（§21 回滚说明）。硬编码注定会漂移，
+ * 所以改成解析 migrations.ts 的最后一个 version，解析不出来就**直接失败**，
+ * 免得再生成一份带着假数字的发布清单。
+ */
+function readDbSchemaVersion() {
+  const src = fs.readFileSync(path.join(root, 'apps', 'desktop', 'src', 'main', 'db', 'migrations.ts'), 'utf8')
+  const versions = [...src.matchAll(/^\s*version:\s*(\d+)\s*,/gm)].map(m => Number(m[1]))
+  if (versions.length === 0) {
+    console.error('无法从 migrations.ts 解析出 schema 版本，拒绝生成带错误版本的清单')
+    process.exit(1)
+  }
+  return Math.max(...versions)
+}
+
 const manifest = {
   product: 'ShopPilot',
   version: pkg.version,
@@ -45,7 +63,7 @@ const manifest = {
   labelReason: hasSigning ? '已配置签名，可进入发布候选' : '未配置代码签名证书（§21.5：无有效签名或验收记录的包只能标记 INTERNAL_BUILD）',
   generatedAt: new Date().toISOString(),
   electron: JSON.parse(fs.readFileSync(path.join(root, 'node_modules', 'electron', 'package.json'), 'utf8')).version,
-  dbSchemaVersion: 2,
+  dbSchemaVersion: readDbSchemaVersion(),
   acceptanceSuites: [
     'node tools/acceptance/store-drag-local-verify.js（10 项：店铺拖动状态、插入线、数据库顺序、刷新后持久化）',
     'node tools/acceptance/douyin-invite-local-verify.js（21 项：抖店三级类目读取、UI 配置、一级/二级/三级点击顺序、人工确认门禁、仿真发布）',

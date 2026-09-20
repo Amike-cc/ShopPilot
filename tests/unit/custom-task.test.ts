@@ -7,10 +7,11 @@ import {
   makeDraftStep,
   toEngineSteps,
   validateCustomSteps,
+  CUSTOM_TASK_MAX_STEPS,
   type CustomStepDraft
 } from '../../packages/shared/src/custom-task'
 import { TASK_STEP_TYPES } from '../../packages/shared/src/schemas/task'
-import { stepInputSchemas } from '../../apps/desktop/src/main/tasks/task-step-schemas'
+import { stepInputSchemas, taskCreateSchema } from '../../apps/desktop/src/main/tasks/task-step-schemas'
 
 /**
  * 自定义任务编排器的单测。
@@ -170,6 +171,159 @@ describe('自定义任务 · 目录与 Zod schema 必须一致（防漂移）', 
 
 // ---------- 提交门禁：这是开放步骤编辑器的前提条件 ----------
 
+/**
+ * 「客户端放行 ⇒ 主进程也放行」是这套两段校验的**唯一契约**：
+ * 客户端只做即时反馈，权威永远是主进程 Zod。两者一旦不一致，用户看到的就是
+ * "表单填得好好的、点创建被拒"，而错误还是引擎味的 TASK_INVALID_STEP——
+ * 正是当初决定不给步骤编辑器的理由。下面几条把已知的漂移面逐个钉死。
+ */
+describe('自定义任务 · 客户端校验不许比主进程更宽松（防"放行了却被拒"）', () => {
+  /** 造一条除待测字段外都合法的草稿 */
+  function inputWith(entry: (typeof STEP_CATALOG)[number], key: string, value: unknown): Record<string, unknown> {
+    const input: Record<string, unknown> = {}
+    const skip = new Set<string>()
+    for (const group of entry.requiredOneOf || []) {
+      if (group.includes(key)) for (const k of group) if (k !== key) skip.add(k)
+      else for (const k of group.slice(1)) skip.add(k)
+    }
+    const draft = sampleDraft(entry)
+    for (const f of entry.fields) {
+      if (f.kind === 'within' || skip.has(f.key)) continue
+      input[f.key] = f.key === key ? value : draft.input[f.key]
+    }
+    return input
+  }
+
+  function engineAccepts(entry: (typeof STEP_CATALOG)[number], input: Record<string, unknown>): boolean {
+    return stepInputSchemas[entry.type].safeParse(toEngineSteps([{ type: entry.type, input }])[0].input).success
+  }
+
+  it('每个文本字段：客户端放行的长度，主进程也必须接受（目录 maxLength 没写宽）', () => {
+    const probes = [1, 40, 60, 61, 100, 200, 201, 300, 500, 501, 2000, 2001]
+    for (const e of STEP_CATALOG) {
+      for (const f of e.fields) {
+        if (f.kind !== 'text' || f.format === 'httpUrl') continue
+        for (const n of probes) {
+          const value = 'x'.repeat(n)
+          const input = inputWith(e, f.key, value)
+          const clientOk = !hasBlockingIssues(validateCustomSteps([{ type: e.type, input }]))
+          if (!clientOk) continue
+          expect(
+            engineAccepts(e, input),
+            `${e.type}.${f.key} 填 ${n} 字：客户端放行但主进程拒绝（目录的 maxLength 与 Zod 不一致）`
+          ).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('每个数值字段：客户端放行的值，主进程也必须接受（含小数/科学计数法等手填写法）', () => {
+    const probes = ['1', '3.5', '0.5', '1e2', '1e-2', '-1', ' 5 ', '3000']
+    for (const e of STEP_CATALOG) {
+      for (const f of e.fields) {
+        if (f.kind !== 'number') continue
+        for (const v of probes) {
+          const input = inputWith(e, f.key, v)
+          const clientOk = !hasBlockingIssues(validateCustomSteps([{ type: e.type, input }]))
+          if (!clientOk) continue
+          expect(
+            engineAccepts(e, input),
+            `${e.type}.${f.key} 填 ${JSON.stringify(v)}：客户端放行但主进程拒绝`
+          ).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('网址字段：客户端放行的值必须是主进程认的 http/https（含各种手填错法）', () => {
+    const probeUrls = [
+      'https://example.com/page', 'http://localhost:8080/x', 'HTTPS://EXAMPLE.COM/X',
+      'https://例子.中国/资质页', 'https://a.com/?q=1#h',
+      'wx.qq.com/page', 'example.com', 'javascript:alert(1)', 'ftp://a.com', 'http://'
+    ]
+    const nav = findCatalogEntry('navigate')!
+    for (const url of probeUrls) {
+      const input = inputWith(nav, 'url', url)
+      const clientOk = !hasBlockingIssues(validateCustomSteps([{ type: 'navigate', input }]))
+      if (!clientOk) continue
+      expect(engineAccepts(nav, input), `url=${url}：客户端放行但主进程拒绝`).toBe(true)
+    }
+  })
+
+  it('明显写错的网址必须被客户端拦下（而不是留给主进程报错）', () => {
+    const nav = findCatalogEntry('navigate')!
+    for (const bad of ['wx.qq.com/page', 'javascript:alert(1)', 'ftp://a.com', 'http://', '   ']) {
+      const input = inputWith(nav, 'url', bad)
+      const issues = validateCustomSteps([{ type: 'navigate', input }])
+      expect(hasBlockingIssues(issues), `url=${JSON.stringify(bad)} 应当被客户端拦下`).toBe(true)
+      expect(issues.some(i => i.message.includes('网址'))).toBe(true)
+    }
+  })
+
+  it('超长文本必须被客户端拦下并说清上限', () => {
+    const click = findCatalogEntry('click')!
+    const input = inputWith(click, 'selector', 'x'.repeat(501))
+    const issues = validateCustomSteps([{ type: 'click', input }])
+    expect(hasBlockingIssues(issues)).toBe(true)
+    expect(issues.some(i => i.level === 'error' && i.message.includes('最多 500'))).toBe(true)
+  })
+
+  it('步骤总数：客户端上限与主进程 taskCreateSchema 一致', () => {
+    const at = (n: number): CustomStepDraft[] => {
+      const out: CustomStepDraft[] = [{ type: 'navigate', input: { url: 'https://example.com/a' } }]
+      while (out.length < n) out.push({ type: 'screenshot', input: {} })
+      return out
+    }
+    // 边界值本身合法：正好上限必须两边都放行
+    expect(hasBlockingIssues(validateCustomSteps(at(CUSTOM_TASK_MAX_STEPS))), '正好上限不该被拦').toBe(false)
+    expect(
+      taskCreateSchema.safeParse({ name: 'n', storeScope: 's', steps: toEngineSteps(at(CUSTOM_TASK_MAX_STEPS)) }).success
+    ).toBe(true)
+
+    // 超一步：客户端必须自己拦下，而不是等主进程拒
+    const over = at(CUSTOM_TASK_MAX_STEPS + 1)
+    expect(hasBlockingIssues(validateCustomSteps(over)), '超过上限应当被客户端拦下').toBe(true)
+    expect(validateCustomSteps(over).some(i => i.message.includes('最多') && i.message.includes('步'))).toBe(true)
+    expect(
+      taskCreateSchema.safeParse({ name: 'n', storeScope: 's', steps: toEngineSteps(over) }).success,
+      '主进程确实会拒 —— 所以客户端必须拦'
+    ).toBe(false)
+  })
+
+  it('within 子字段：客户端放行的长度/上溯层数，主进程也必须接受', () => {
+    const probes: Array<Record<string, unknown>> = [
+      { selector: 'x'.repeat(300) }, { selector: 'x'.repeat(301) },
+      { text: 'x'.repeat(60) }, { text: 'x'.repeat(61) },
+      { text: 'row', climb: 0 }, { text: 'row', climb: 6 },
+      { text: 'row', climb: 7 }, { text: 'row', climb: -1 }
+    ]
+    for (const within of probes) {
+      const draft: CustomStepDraft = { type: 'clickByText', input: { text: '确认', within } }
+      const clientOk = !hasBlockingIssues(validateCustomSteps([draft]))
+      if (!clientOk) continue
+      const ok = stepInputSchemas.clickByText.safeParse(toEngineSteps([draft])[0].input).success
+      expect(ok, `within=${JSON.stringify(within)}：客户端放行但主进程拒绝`).toBe(true)
+    }
+  })
+
+  it('within 的越界值必须被客户端拦下', () => {
+    for (const within of [{ selector: 'x'.repeat(301) }, { text: 'x'.repeat(61) }, { text: 'row', climb: 7 }]) {
+      const draft: CustomStepDraft = { type: 'clickByText', input: { text: '确认', within } }
+      expect(hasBlockingIssues(validateCustomSteps([draft])), `within=${JSON.stringify(within)} 应当被拦`).toBe(true)
+    }
+  })
+
+  it('每种步骤的目录字段都能构造出"两端都放行"的样本（没有字段把创建彻底堵死）', () => {
+    for (const e of STEP_CATALOG) {
+      const draft = sampleDraft(e)
+      const issues = validateCustomSteps([draft])
+      const blocking = issues.filter(i => i.level === 'error')
+      expect(blocking, `${e.type} 的样本草稿被客户端拦了：${blocking[0]?.message || ''}`).toEqual([])
+      expect(engineAccepts(e, draft.input), `${e.type} 的样本草稿主进程不接受`).toBe(true)
+    }
+  })
+})
+
 describe('自定义任务 · 提交动作必须前置人工确认门禁', () => {
   const gate = (): CustomStepDraft => ({ type: 'waitForUserConfirmation', input: { message: '确认发送？' } })
   const nav = (): CustomStepDraft => ({ type: 'navigate', input: { url: 'https://example.com/a' } })
@@ -250,6 +404,23 @@ describe('自定义任务 · 字段校验', () => {
   it('数字字段填非数字 → 报错', () => {
     const s: CustomStepDraft = { type: 'waitMs', input: { ms: 'abc' } }
     expect(validateCustomSteps([nav(), s]).some(i => i.level === 'error' && i.message.includes('必须是数字'))).toBe(true)
+  })
+
+  it('数字字段填小数 → 报错（主进程全是 .int()，放行会变成"创建被拒"）', () => {
+    for (const draft of [
+      { type: 'waitMs', input: { ms: '3.5' } },
+      { type: 'waitMs', input: { ms: 1.5 } },
+      { type: 'waitMs', input: { ms: '0.5' } }
+    ] as CustomStepDraft[]) {
+      const issues = validateCustomSteps([nav(), draft])
+      expect(issues.some(i => i.level === 'error' && i.message.includes('必须是整数')), JSON.stringify(draft)).toBe(true)
+      expect(hasBlockingIssues(issues)).toBe(true)
+    }
+    // 整数照常放行
+    expect(validateCustomSteps([nav(), { type: 'waitMs', input: { ms: 3000 } }]).filter(i => i.level === 'error')).toEqual([])
+    // 科学计数法解析出来是整数，引擎也接受，不该误报
+    expect(stepInputSchemas.waitMs.safeParse(toEngineSteps([{ type: 'waitMs', input: { ms: '1e3' } }])[0].input).success).toBe(true)
+    expect(validateCustomSteps([nav(), { type: 'waitMs', input: { ms: '1e3' } }]).filter(i => i.level === 'error')).toEqual([])
   })
 
   it('互斥组两个都填 / 都不填 → 报错（clickAll 的 selector 与 text）', () => {

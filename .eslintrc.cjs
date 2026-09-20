@@ -26,14 +26,14 @@ module.exports = {
     '.npm-cache/**'
   ],
   rules: {
-    'no-unused-vars': 'off',
-    'no-undef': 'off',
-    'no-empty': 'off',
-    'no-extra-semi': 'off',
-    'no-useless-escape': 'off',
+    'no-unused-vars': 'off', // 由 @typescript-eslint/no-unused-vars 接管
+    'no-undef': 'off', // TypeScript 编译器已检查
+    'no-empty': ['error', { allowEmptyCatch: true }], // 允许空 catch 块但其他空块报错
+    'no-extra-semi': 'warn',
+    'no-useless-escape': 'warn',
     'vue/multi-word-component-names': 'off',
-    '@typescript-eslint/no-explicit-any': 'off',
+    '@typescript-eslint/no-explicit-any': 'warn', // 鼓励使用具体类型
     '@typescript-eslint/no-var-requires': 'off',
-    '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }]
+    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }]
   }
 }

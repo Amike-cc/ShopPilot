@@ -77,8 +77,12 @@ let mainWindow: BrowserWindow | null = null
 /** 主窗口崩溃自动恢复的有界窗口（防崩溃-重载死循环） */
 const MAIN_RELOAD_MAX = 3
 const MAIN_RELOAD_WINDOW_MS = 5 * 60 * 1000
+const MAIN_RELOAD_ABSOLUTE_MAX = 10 // 24小时内绝对上限
+const MAIN_RELOAD_ABSOLUTE_WINDOW_MS = 24 * 60 * 60 * 1000
 let mainReloadCount = 0
 let mainReloadWindowStart = 0
+let mainReloadAbsoluteCount = 0
+let mainReloadAbsoluteWindowStart = 0
 
 /**
  * 崩溃类日志的限流：同类异常密集重复（如管道断开引发的异常风暴）时只记前若干条 +
@@ -196,20 +200,44 @@ function createWindow(): void {
 
   // 主窗口渲染进程崩溃：白屏=用户眼里的"闪退"。有界自动恢复（5 分钟内最多 3 次），
   // 超过则明确弹窗告知，不做无限重载（避免崩溃-重载死循环把 CPU 打满）
+  // 新增绝对上限：24小时内最多10次，防止在时间窗口边界反复重置计数器
   mainWindow.webContents.on('render-process-gone', (_ev, details) => {
     logMain('error', `renderer gone reason=${details.reason} exitCode=${details.exitCode}`)
     if (details.reason === 'clean-exit') return
     const now = Date.now()
+    
+    // 更新滑动窗口计数
     if (now - mainReloadWindowStart > MAIN_RELOAD_WINDOW_MS) {
       mainReloadWindowStart = now
       mainReloadCount = 0
     }
+    
+    // 更新绝对窗口计数
+    if (now - mainReloadAbsoluteWindowStart > MAIN_RELOAD_ABSOLUTE_WINDOW_MS) {
+      mainReloadAbsoluteWindowStart = now
+      mainReloadAbsoluteCount = 0
+    }
+    
     mainReloadCount++
+    mainReloadAbsoluteCount++
+    
+    // 检查绝对上限（优先级更高）
+    if (mainReloadAbsoluteCount > MAIN_RELOAD_ABSOLUTE_MAX) {
+      logMain('error', `主窗口渲染进程在 ${MAIN_RELOAD_ABSOLUTE_WINDOW_MS / 3600000}h 内崩溃 ${mainReloadAbsoluteCount} 次（已超绝对上限 ${MAIN_RELOAD_ABSOLUTE_MAX}），停止自动重载`)
+      try {
+        dialog.showErrorBox('ShopPilot 界面异常',
+          `界面进程在 24 小时内崩溃 ${mainReloadAbsoluteCount} 次（已超上限），已停止自动恢复。\n这可能表明存在严重问题，请到「设置 → 关于软件」导出诊断并联系技术支持。`)
+      } catch { /* ignore */ }
+      return
+    }
+    
+    // 检查滑动窗口限制
     if (mainReloadCount <= MAIN_RELOAD_MAX) {
-      logMain('warn', `主窗口渲染进程异常，自动重载（${mainReloadCount}/${MAIN_RELOAD_MAX}）`)
+      logMain('warn', `主窗口渲染进程异常，自动重载（窗口内 ${mainReloadCount}/${MAIN_RELOAD_MAX}，绝对计数 ${mainReloadAbsoluteCount}/${MAIN_RELOAD_ABSOLUTE_MAX}）`)
       try { mainWindow?.webContents.reload() } catch { /* ignore */ }
       return
     }
+    
     logMain('error', `主窗口渲染进程连续异常 ${mainReloadCount} 次（窗口 ${MAIN_RELOAD_WINDOW_MS / 1000}s 内），停止自动重载`)
     try {
       dialog.showErrorBox('ShopPilot 界面异常',

@@ -74,7 +74,7 @@ export function createBookmark(input: {
     SELECT MAX(order_index) as max_order 
     FROM bookmarks 
     WHERE store_id IS ? OR (store_id IS NULL AND ? IS NULL)
-  `).get(input.storeId || null, input.storeId || null)
+  `).get(input.storeId || null, input.storeId || null) as { max_order: number } | undefined
   
   const orderIndex = (maxOrder?.max_order ?? -1) + 1
   

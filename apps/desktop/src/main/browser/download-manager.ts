@@ -50,7 +50,7 @@ export function listDownloads(storeId: string, limit?: number): Download[] {
 export function showDownloadInFolder(downloadId: string): boolean {
   const db = getDatabase()
   
-  const download = db.prepare('SELECT file_path FROM downloads WHERE id = ?').get(downloadId)
+  const download = db.prepare('SELECT file_path FROM downloads WHERE id = ?').get(downloadId) as { file_path: string } | undefined
   
   if (!download || !download.file_path) {
     return false

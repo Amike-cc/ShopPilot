@@ -3019,6 +3019,12 @@ async function submitCustomTask() {
     schedule: tf.everyMin ? { everyMs: Math.max(1, Number(tf.everyMin)) * 60000 } : null
   })
   if (res.ok) {
+    // 创建成功后清掉草稿：任务已经进列表了，把同一份步骤继续留在对话框里
+    // 只会让下一次「新建任务」看起来像填好的、一点就建出个同名重复任务
+    // （验收实测：创建并删掉后重开，上一条的 3 步连同任务名还都在）。
+    // 取消不走这里——那是"还没建"，草稿留着是有用的。
+    customSteps.value = []
+    customTaskName.value = ''
     taskDialogOpen.value = false
     ws.toast('任务已创建，可在列表里点 ▶ 运行', 'success')
     await ws.refreshTasks()

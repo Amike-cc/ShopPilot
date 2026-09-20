@@ -110,7 +110,7 @@ function configureSession(sess: Session, storeId: string): void {
     SELECT user_agent, language, ua_client_hints_json
     FROM browser_profiles
     WHERE store_id = ?
-  `).get(storeId)
+  `).get(storeId) as { user_agent?: string; language?: string; ua_client_hints_json?: string } | undefined
   
   if (profile?.user_agent) {
     // UA 与 accept-languages 成对设置；UA-CH 请求头随之改写（§4.3：禁止只改 UA 造成自相矛盾）
@@ -147,7 +147,7 @@ function configureSession(sess: Session, storeId: string): void {
   sess.on('will-download', (_event, item, webContents) => {
     try {
       const db = getDatabase()
-      const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(storeId)
+      const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(storeId) as { name: string } | undefined
       const storeName = sanitizeForFilename(store?.name || storeId)
 
       const downloadDir = join(app.getPath('userData'), 'stores', storeId, 'downloads')
@@ -303,7 +303,7 @@ function configureProxy(sess: Session, storeId: string): void {
     FROM store_proxies sp
     LEFT JOIN proxies p ON sp.proxy_id = p.id
     WHERE sp.store_id = ?
-  `).get(storeId)
+  `).get(storeId) as { mode: string; type?: string; host?: string; port?: number; username_ref?: string; password_ref?: string } | undefined
   
   if (!binding || binding.mode === 'direct') {
     // 直连模式

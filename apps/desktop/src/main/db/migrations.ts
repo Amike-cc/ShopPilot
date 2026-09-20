@@ -5,11 +5,13 @@
  * 采用手写迁移系统，不依赖外部工具
  */
 
+import type Database from 'better-sqlite3'
+
 export interface Migration {
   version: number
   name: string
-  up: (db: any) => void
-  down: (db: any) => void
+  up: (db: Database.Database) => void
+  down: (db: Database.Database) => void
 }
 
 /**
@@ -242,6 +244,7 @@ export const migrations: Migration[] = [
 
       db.exec('CREATE INDEX idx_task_runs_task_id ON task_runs(task_id)')
       db.exec('CREATE INDEX idx_task_runs_store_id ON task_runs(store_id)')
+      db.exec('CREATE INDEX idx_task_runs_status ON task_runs(status, task_id)')
 
       // task_step_results 表 - §5.10
       db.exec(`
@@ -259,6 +262,7 @@ export const migrations: Migration[] = [
       `)
 
       db.exec('CREATE INDEX idx_task_step_results_run_id ON task_step_results(run_id)')
+      db.exec('CREATE INDEX idx_task_step_results_run_step ON task_step_results(run_id, step_index)')
 
       // store_snapshots 表 - §5.11
       db.exec(`
@@ -368,15 +372,30 @@ export const migrations: Migration[] = [
       db.exec(`ALTER TABLE stores DROP COLUMN license_name`)
       db.exec(`ALTER TABLE stores DROP COLUMN license_no`)
     }
+  },
+  {
+    // 为已经存在的 v1-v3 数据库补齐任务查询索引。
+    // 这些索引虽然也写在初始建表迁移里，但旧库不会重新执行 v1；
+    // IF NOT EXISTS 兼容已经由新 v1 创建过索引的全新数据库。
+    version: 4,
+    name: 'task_query_indexes',
+    up: (db) => {
+      db.exec('CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status, task_id)')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_task_step_results_run_step ON task_step_results(run_id, step_index)')
+    },
+    down: (db) => {
+      db.exec('DROP INDEX IF EXISTS idx_task_step_results_run_step')
+      db.exec('DROP INDEX IF EXISTS idx_task_runs_status')
+    }
   }
 ]
 
 /**
  * 获取当前数据库版本
  */
-export function getCurrentVersion(db: any): number {
+export function getCurrentVersion(db: Database.Database): number {
   try {
-    const row = db.prepare('SELECT MAX(version) as version FROM schema_migrations').get()
+    const row = db.prepare('SELECT MAX(version) as version FROM schema_migrations').get() as { version: number } | undefined
     return row?.version || 0
   } catch {
     return 0
@@ -386,7 +405,7 @@ export function getCurrentVersion(db: any): number {
 /**
  * 执行迁移
  */
-export function migrate(db: any, targetVersion?: number): void {
+export function migrate(db: Database.Database, targetVersion?: number): void {
   const currentVersion = getCurrentVersion(db)
   const target = targetVersion ?? migrations[migrations.length - 1].version
 
