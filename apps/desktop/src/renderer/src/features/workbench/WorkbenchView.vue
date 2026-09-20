@@ -1309,14 +1309,17 @@
       </div>
     </div>
 
-    <!-- 新建任务对话框：**只从已实现的流程里挑**（当前＝达人邀约）。
-         不给底层步骤编辑器——自己拼步骤必然拼出跑不通的半成品，失败还会以"任务失败"回抛。 -->
+    <!-- 新建任务对话框：从已实现的流程里挑，或自己编排步骤。
+         原先这里刻意只给流程、不给步骤编辑器，理由是"自己拼步骤必然拼出跑不通的半成品"。
+         0.4.37 按用户要求开放了自定义编排，但不是把那条理由无视掉，而是把它逐条堵上：
+         参数按目录渲染（拼不出 schema 之外的键）、副作用步骤必须显式标记"提交动作"、
+         标记了就必须有前置人工确认门禁（缺失直接拒绝创建）。详见 @shared/custom-task。 -->
     <div v-if="taskDialogOpen" class="modal-mask" data-test="task-dialog" @click.self="taskDialogOpen = false">
-      <div class="modal modal-wide task-create-modal">
+      <div class="modal modal-wide task-create-modal" :class="{ 'task-create-tall': taskFlow === 'custom' }">
         <h2>新建任务</h2>
         <div class="row-sub" style="margin-bottom:8px">
           任务只能由<b>已实测跑通的流程</b>创建（参数表单 + 内置确认门禁都由流程自己带），
-          这样建出来的任务一定是能跑的；以后新增流程会在这里多一项。
+          这样建出来的任务一定是能跑的；<b>自定义任务</b>则用步骤编排器自建（带创建前校验）。
         </div>
 
         <label>任务类型
@@ -1350,9 +1353,33 @@
           </template>
         </template>
 
+        <template v-else-if="taskFlow === 'custom'">
+          <div class="env-note" v-if="!ws.displayedStoreId" data-test="task-flow-blocked">
+            <b>暂时建不了</b>：请先打开一个店铺（任务要绑定店铺执行）
+          </div>
+          <template v-else>
+            <label>任务名称
+              <input v-model="customTaskName" type="text" maxlength="80" data-test="custom-name" placeholder="例如 每日巡检本店资质页" />
+            </label>
+
+            <CustomTaskEditor v-model:steps="customSteps" :issues="customIssues" />
+
+            <label>定时（分钟，留空 = 仅手动）
+              <input v-model.number="tf.everyMin" type="number" min="1" max="43200" data-test="task-every" placeholder="例如 60" />
+              <span class="row-sub">到点自动运行（店铺窗口没开时保持排队，不会静默拉起）</span>
+            </label>
+          </template>
+        </template>
+
         <div class="modal-actions">
           <button class="btn-ghost" data-test="task-cancel" @click="taskDialogOpen = false">取消</button>
-          <button class="btn-primary" data-test="task-submit" :disabled="!taskFlowCurrent?.ready" @click="submitTask">创建任务</button>
+          <button
+            class="btn-primary"
+            data-test="task-submit"
+            :disabled="submitDisabled"
+            :title="submitDisabledReason"
+            @click="submitTask"
+          >创建任务</button>
         </div>
       </div>
     </div>
@@ -1529,6 +1556,11 @@ import { reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } 
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import { moveStoreId, type StoreDropPosition } from '../../stores/store-order'
 import PlatformIcon from '../../components/PlatformIcon.vue'
+import CustomTaskEditor from '../tasks/CustomTaskEditor.vue'
+import {
+  hasBlockingIssues, toEngineSteps, validateCustomSteps,
+  type CustomStepDraft, type CustomStepIssue
+} from '@shared/custom-task'
 import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile, isAssistProfile } from '@shared/constants/invite'
 import type { CategoryNode } from '@shared/constants/invite'
 import { buildInviteSteps } from '@shared/invite-steps'
@@ -2843,13 +2875,31 @@ async function startInvite() {
  * 而失败会以"任务失败"的形式回抛——用户无从对应到"我少填了哪个字段"。
  * 每个**已实测跑通的流程**都有自己的参数表单与内置门禁，从这儿建出来的任务是"能跑的"。
  *
+ * 【0.4.37 变更】上面这条限制按用户要求放开了：新增「自定义任务」，用户可自己编排步骤。
+ * 放开的同时把当初的理由逐条堵上（参数按目录渲染、副作用步骤必须标记"提交动作"、
+ * 标记后强制前置人工确认门禁），详见 @shared/custom-task 的模块注释。
+ * **流程入口仍然保留且是默认项**——"能跑的"这条价值没变，自定义只是多一条出路。
+ *
  * 新增流程 = 在这里加一条（label/描述/是否可用/建法），面板结构不用动。
  */
-type TaskFlowKey = 'invite'
+type TaskFlowKey = 'invite' | 'custom'
 const taskFlow = ref<TaskFlowKey>('invite')
 
 /** 「新建任务」的定时输入（唯一还需要用户填的字段——其余参数都取自各流程自己的面板配置） */
 const tf = reactive({ everyMin: null as number | null })
+
+// ---------- 自定义任务（步骤编排） ----------
+/** 编排中的步骤草稿（submit/retryLimit 是编排器元数据，不进引擎，见 toEngineSteps） */
+const customSteps = ref<CustomStepDraft[]>([])
+const customTaskName = ref('')
+
+/**
+ * 创建前校验结果。
+ * 放在父组件算而不是编辑器组件内部算：创建按钮的可用性依赖它，
+ * 两处各算一遍会出现"按钮可点、点了却被拒"这种最让人困惑的组合。
+ */
+const customIssues = computed<CustomStepIssue[]>(() => validateCustomSteps(customSteps.value))
+const customReady = computed(() => !!ws.displayedStoreId && !hasBlockingIssues(customIssues.value))
 
 const taskFlowOptions = computed(() => {
   const p = inviteProfile.value
@@ -2872,10 +2922,45 @@ const taskFlowOptions = computed(() => {
         : (!p
             ? `平台「${(ws.stores.find(s => s.id === ws.displayedStoreId)?.platform) || '未知'}」尚未实现达人邀约`
             : '邀约参数还没填齐——请到「达人邀约」页签补齐必填项（联系方式 / 话术 / 商品等），再回来创建')
+    },
+    {
+      key: 'custom' as TaskFlowKey,
+      label: '自定义任务',
+      desc: '自己编排步骤（导航 / 等待 / 读取 / 交互 / 断言 / 门禁）',
+      /**
+       * 这里的 ready 只表示"这个流程能不能用"（= 有没有打开店铺），**不含**"步骤编好了没"。
+       *
+       * 为什么与邀约流程不同：邀约的参数在**另一个页签**里填，所以"没填齐"必须在下拉里就说清，
+       * 否则用户不知道该去哪儿补。自定义任务的步骤就在这个对话框里编，此时标成"（不可用）"
+       * 读起来像"这个功能用不了"，会把人挡在门外——而它其实点进去就能用。
+       * "步骤还没编好"由编辑器下方的校验清单 + 创建按钮置灰来表达（见 submitDisabled）。
+       */
+      ready: openStore,
+      needs: !openStore
+        ? '请先打开一个店铺（任务要绑定店铺执行）'
+        : (customIssues.value.find(i => i.level === 'error')?.message || '')
     }
   ]
 })
 const taskFlowCurrent = computed(() => taskFlowOptions.value.find(f => f.key === taskFlow.value) || taskFlowOptions.value[0])
+
+/**
+ * 「创建任务」是否置灰。
+ * 自定义流程要单独判：它的 ready 只到"流程可用"，真正的可创建性取决于步骤校验。
+ */
+const submitDisabled = computed(() => (
+  taskFlow.value === 'custom' ? !customReady.value : !taskFlowCurrent.value?.ready
+))
+
+/** 置灰原因（挂在按钮 title 上，鼠标悬停能看到到底缺什么） */
+const submitDisabledReason = computed(() => {
+  if (!submitDisabled.value) return ''
+  if (taskFlow.value === 'custom') {
+    if (!ws.displayedStoreId) return '请先打开一个店铺（任务要绑定店铺执行）'
+    return customIssues.value.find(i => i.level === 'error')?.message || '步骤编排里还有问题未解决'
+  }
+  return taskFlowCurrent.value?.needs || ''
+})
 
 const taskDialogOpen = ref(false)
 
@@ -2886,6 +2971,7 @@ function openTaskDialog() {
 }
 
 async function submitTask() {
+  if (taskFlow.value === 'custom') return submitCustomTask()
   if (taskFlow.value !== 'invite') { ws.toast('该流程尚未实现', 'error'); return }
   const payload = buildInviteTaskPayload()
   if (!payload) {
@@ -2906,6 +2992,41 @@ async function submitTask() {
     ws.toast('任务已创建，可在列表里点 ▶ 运行', 'success')
     await ws.refreshTasks()
   } else ws.toast('创建失败: ' + res.error.message, 'error')
+}
+
+/**
+ * 创建自定义任务。
+ *
+ * 提交前**再校验一次**（而不是只信按钮的 disabled）：按钮状态是渲染期的产物，
+ * 用户可能在两次校验之间改了步骤（例如删掉了那道确认门禁）。
+ * 这是"提交类动作必须有前置门禁"这条约束真正生效的地方。
+ */
+async function submitCustomTask() {
+  if (!ws.displayedStoreId) { ws.toast('请先打开一个店铺（任务要绑定店铺执行）', 'error'); return }
+
+  const issues = validateCustomSteps(customSteps.value)
+  const blocking = issues.filter(i => i.level === 'error')
+  if (blocking.length) {
+    ws.toast(`还有 ${blocking.length} 处需要修正：${blocking[0].message}`, 'error')
+    return
+  }
+
+  const name = customTaskName.value.trim() || `自定义任务 · ${new Date().toLocaleString()}`
+  const res = await window.shopilot.task.create({
+    name,
+    storeScope: ws.displayedStoreId,
+    steps: toEngineSteps(customSteps.value),
+    schedule: tf.everyMin ? { everyMs: Math.max(1, Number(tf.everyMin)) * 60000 } : null
+  })
+  if (res.ok) {
+    taskDialogOpen.value = false
+    ws.toast('任务已创建，可在列表里点 ▶ 运行', 'success')
+    await ws.refreshTasks()
+  } else {
+    // 走到这里说明主进程的 Zod 拒了（本模块的校验已放行）——如实报出来，
+    // 那意味着目录与引擎 schema 出现了漂移，是需要修的 bug，不该被含糊成"创建失败"
+    ws.toast('创建失败: ' + res.error.message, 'error')
+  }
 }
 
 async function runTask(t: any) {
@@ -4373,6 +4494,9 @@ onBeforeUnmount(() => {
 .log-box { margin-top: 8px; background: var(--color-bg-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 8px; max-height: 160px; overflow-y: auto; }
 .log-line { font-size: 11px; color: var(--color-text-secondary); font-family: Consolas, monospace; line-height: 1.6; word-break: break-all; }
 .modal-wide { width: 560px; max-width: 92vw; }
+/* 自定义任务的步骤编排器：每一步都是"标签 + 输入框"的竖排表单，560px 会把选择器/文案挤成一团，
+   给更宽的一档；高度交给 .modal 自带的 max-height + overflow 滚动 */
+.task-create-tall { width: 720px; max-width: 94vw; }
 /* ---------- 数据中心入口（左栏底部：独立一行） ---------- */
 .sidebar-dc { padding: 8px 12px 0; border-top: 1px solid var(--color-border); }
 .dc-entry-row {
