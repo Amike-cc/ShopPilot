@@ -1,139 +1,185 @@
 <template>
   <div class="ct-editor" data-test="custom-editor">
-    <div class="ct-bar">
-      <span class="ct-count" data-test="custom-step-count">共 {{ steps.length }} 步</span>
-      <span class="row-sub">每步只暴露引擎真正接受的字段，拼不出 schema 之外的键</span>
-    </div>
-
-    <div v-if="!steps.length" class="ct-empty" data-test="custom-empty">
-      还没有步骤。点下面的「添加步骤」开始——建议第一步先「打开网址」，
-      否则任务会从店铺当前停留的页面开始跑。
-    </div>
-
-    <div v-for="(s, i) in steps" :key="i" class="ct-step" :data-test="`custom-step-${i}`">
-      <div class="ct-step-head">
-        <span class="ct-idx">{{ i + 1 }}</span>
-        <span class="ct-label">{{ entryOf(s)?.label || s.type }}</span>
-        <span class="ct-group">{{ entryOf(s)?.group }}</span>
-        <span class="ct-grow"></span>
-        <button class="ct-mini" :disabled="i === 0" title="上移" :data-test="`custom-up-${i}`" @click="move(i, -1)">↑</button>
-        <button class="ct-mini" :disabled="i === steps.length - 1" title="下移" :data-test="`custom-down-${i}`" @click="move(i, 1)">↓</button>
-        <button class="ct-mini ct-del" title="删除这一步" :data-test="`custom-del-${i}`" @click="removeAt(i)">✕</button>
+    <!-- 左栏：步骤目录。常驻列表而不是下拉框——加步骤是编排里最高频的动作，
+         藏进下拉每次都要点开再找，真机验收时就因为下拉弹层点偏过两次。 -->
+    <section class="ct-col ct-palette">
+      <div class="ct-col-h">
+        <span>步骤目录</span>
+        <span class="row-sub">点即添加</span>
       </div>
-      <div class="ct-desc">{{ entryOf(s)?.desc }}</div>
+      <div class="ct-palette-body">
+        <div v-for="g in groups" :key="g" class="ct-group">
+          <div class="ct-group-h">{{ g }}</div>
+          <button
+            v-for="e in entriesOf(g)"
+            :key="e.type"
+            class="ct-pal-item"
+            :title="e.desc"
+            :data-test="`custom-palette-${e.type}`"
+            @click="add(e.type)"
+          >{{ e.label }}</button>
+        </div>
+      </div>
+    </section>
 
-      <div v-if="entryOf(s)?.fields.length" class="ct-fields">
-        <div v-for="f in entryOf(s)?.fields || []" :key="f.key" class="ct-field">
-          <span class="ct-flabel">
-            {{ f.label }}<em v-if="f.required" class="ct-req">必填</em>
+    <!-- 中栏：已编排的步骤序列 -->
+    <section class="ct-col ct-seq">
+      <div class="ct-col-h">
+        <span data-test="custom-step-count">共 {{ steps.length }} 步</span>
+        <span class="row-sub">点一步编辑它的参数</span>
+      </div>
+      <div class="ct-seq-body">
+        <div v-if="!steps.length" class="ct-empty" data-test="custom-empty">
+          还没有步骤。从左侧目录点一个开始——建议第一步先「打开网址」，
+          否则任务会从店铺当前停留的页面开始跑。
+        </div>
+        <div
+          v-for="(s, i) in steps"
+          :key="i"
+          :class="['ct-step', { on: i === selected }]"
+          :data-test="`custom-step-${i}`"
+          @click="selected = i"
+        >
+          <span class="ct-idx">{{ i + 1 }}</span>
+          <span class="ct-step-main">
+            <span class="ct-step-t">
+              {{ entryOf(s)?.label || s.type }}
+              <em v-if="s.submit" class="ct-tag-submit" title="已标记为提交动作">提交</em>
+            </span>
+            <span class="ct-step-s">{{ summarize(s) }}</span>
           </span>
+          <span class="ct-step-btns">
+            <button class="ct-mini" :disabled="i === 0" title="上移" :data-test="`custom-up-${i}`" @click.stop="move(i, -1)">↑</button>
+            <button class="ct-mini" :disabled="i === steps.length - 1" title="下移" :data-test="`custom-down-${i}`" @click.stop="move(i, 1)">↓</button>
+            <button class="ct-mini ct-del" title="删除这一步" :data-test="`custom-del-${i}`" @click.stop="removeAt(i)">✕</button>
+          </span>
+        </div>
+      </div>
+    </section>
 
-          <label v-if="f.kind === 'boolean'" class="ct-check">
-            <input
-              type="checkbox"
-              :checked="!!s.input[f.key]"
-              :data-test="`custom-f-${i}-${f.key}`"
-              @change="setField(i, f.key, ($event.target as HTMLInputElement).checked)"
-            />
-            <span class="row-sub">勾选启用</span>
-          </label>
+    <!-- 右栏：选中步骤的参数 + 整单校验 -->
+    <section class="ct-col ct-params">
+      <div class="ct-col-h">
+        <span>参数</span>
+        <span v-if="curStep" class="row-sub">{{ entryOf(curStep)?.group }}</span>
+      </div>
+      <div class="ct-params-body">
+        <div v-if="!curStep" class="ct-empty">
+          从左侧添加步骤，或在中栏点一步，这里显示它的参数。
+        </div>
+        <template v-else>
+          <div class="ct-params-title">{{ entryOf(curStep)?.label || curStep.type }}</div>
+          <div class="ct-desc">{{ entryOf(curStep)?.desc }}</div>
 
-          <select
-            v-else-if="f.kind === 'select'"
-            :value="s.input[f.key] ?? ''"
-            :data-test="`custom-f-${i}-${f.key}`"
-            @change="setField(i, f.key, ($event.target as HTMLSelectElement).value)"
-          >
-            <option value="">（未选）</option>
-            <option v-for="o in f.options || []" :key="o.value" :value="o.value">{{ o.label }}</option>
-          </select>
+          <div v-if="!entryOf(curStep)?.fields.length" class="ct-empty">这一步没有参数。</div>
+          <div v-else class="ct-fields">
+            <div v-for="f in entryOf(curStep)?.fields || []" :key="f.key" class="ct-field">
+              <span class="ct-flabel">
+                {{ f.label }}<em v-if="f.required" class="ct-req">必填</em>
+              </span>
 
-          <input
-            v-else-if="f.kind === 'number'"
-            type="number"
-            :min="f.min"
-            :max="f.max"
-            :value="s.input[f.key] ?? ''"
-            :placeholder="f.placeholder || (f.min !== undefined ? `${f.min} ~ ${f.max ?? '不限'}` : '')"
-            :data-test="`custom-f-${i}-${f.key}`"
-            @input="setField(i, f.key, ($event.target as HTMLInputElement).value)"
-          />
+              <label v-if="f.kind === 'boolean'" class="ct-check">
+                <input
+                  type="checkbox"
+                  :checked="!!curStep.input[f.key]"
+                  :data-test="`custom-f-${selected}-${f.key}`"
+                  @change="setField(selected, f.key, ($event.target as HTMLInputElement).checked)"
+                />
+                <span class="row-sub">勾选启用</span>
+              </label>
 
-          <!-- within：限定查找范围（选择器 与 文案+上溯 二选一） -->
-          <div v-else-if="f.kind === 'within'" class="ct-within">
-            <input
-              type="text"
-              placeholder="选择器（与下面的文案二选一）"
-              :value="withinOf(s, 'selector')"
-              :data-test="`custom-f-${i}-${f.key}-selector`"
-              @input="setWithin(i, f.key, 'selector', ($event.target as HTMLInputElement).value)"
-            />
-            <div class="ct-within-row">
+              <select
+                v-else-if="f.kind === 'select'"
+                :value="curStep.input[f.key] ?? ''"
+                :data-test="`custom-f-${selected}-${f.key}`"
+                @change="setField(selected, f.key, ($event.target as HTMLSelectElement).value)"
+              >
+                <option value="">（未选）</option>
+                <option v-for="o in f.options || []" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+
               <input
-                type="text"
-                placeholder="行标签文案"
-                :value="withinOf(s, 'text')"
-                :data-test="`custom-f-${i}-${f.key}-text`"
-                @input="setWithin(i, f.key, 'text', ($event.target as HTMLInputElement).value)"
-              />
-              <input
+                v-else-if="f.kind === 'number'"
                 type="number"
-                min="0"
-                max="6"
-                placeholder="上溯层数"
-                :value="withinOf(s, 'climb')"
-                :data-test="`custom-f-${i}-${f.key}-climb`"
-                @input="setWithin(i, f.key, 'climb', ($event.target as HTMLInputElement).value)"
+                :min="f.min"
+                :max="f.max"
+                :value="curStep.input[f.key] ?? ''"
+                :placeholder="f.placeholder || (f.min !== undefined ? `${f.min} ~ ${f.max ?? '不限'}` : '')"
+                :data-test="`custom-f-${selected}-${f.key}`"
+                @input="setField(selected, f.key, ($event.target as HTMLInputElement).value)"
               />
+
+              <!-- within：限定查找范围（选择器 与 文案+上溯 二选一） -->
+              <div v-else-if="f.kind === 'within'" class="ct-within">
+                <input
+                  type="text"
+                  placeholder="选择器（与下面的文案二选一）"
+                  :value="withinOf(curStep, 'selector')"
+                  :data-test="`custom-f-${selected}-${f.key}-selector`"
+                  @input="setWithin(selected, f.key, 'selector', ($event.target as HTMLInputElement).value)"
+                />
+                <div class="ct-within-row">
+                  <input
+                    type="text"
+                    placeholder="行标签文案"
+                    :value="withinOf(curStep, 'text')"
+                    :data-test="`custom-f-${selected}-${f.key}-text`"
+                    @input="setWithin(selected, f.key, 'text', ($event.target as HTMLInputElement).value)"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    max="6"
+                    placeholder="上溯"
+                    :value="withinOf(curStep, 'climb')"
+                    :data-test="`custom-f-${selected}-${f.key}-climb`"
+                    @input="setWithin(selected, f.key, 'climb', ($event.target as HTMLInputElement).value)"
+                  />
+                </div>
+              </div>
+
+              <input
+                v-else
+                type="text"
+                :value="curStep.input[f.key] ?? ''"
+                :placeholder="f.placeholder || ''"
+                :data-test="`custom-f-${selected}-${f.key}`"
+                @input="setField(selected, f.key, ($event.target as HTMLInputElement).value)"
+              />
+
+              <span v-if="f.hint" class="row-sub">{{ f.hint }}</span>
             </div>
           </div>
 
-          <input
-            v-else
-            type="text"
-            :value="s.input[f.key] ?? ''"
-            :placeholder="f.placeholder || ''"
-            :data-test="`custom-f-${i}-${f.key}`"
-            @input="setField(i, f.key, ($event.target as HTMLInputElement).value)"
-          />
+          <!-- 提交动作标记：这是开放步骤编辑器的安全前提，只有副作用步骤才出现 -->
+          <label v-if="entryOf(curStep)?.sideEffect" class="ct-submit">
+            <input
+              type="checkbox"
+              :checked="!!curStep.submit"
+              :data-test="`custom-submit-${selected}`"
+              @change="setSubmit(selected, ($event.target as HTMLInputElement).checked)"
+            />
+            <span>这一步是<b>提交动作</b>（发出后不可撤销）→ 系统会要求它前面有一道人工确认门禁</span>
+          </label>
+        </template>
+      </div>
 
-          <span v-if="f.hint" class="row-sub">{{ f.hint }}</span>
+      <!-- 校验固定为右栏页脚（不随参数滚动）。
+           它解释的是"为什么创建按钮是灰的"，参数一多若被挤出视野，用户就只看到按钮点不动、
+           不知道去哪儿改——这是从单列改成三栏时最容易丢掉的可用性。 -->
+      <div v-if="issues.length" class="ct-issues" data-test="custom-issues">
+        <div v-for="(is, k) in issues" :key="k" :class="['ct-issue', is.level]">
+          <b>{{ is.level === 'error' ? '✕' : '!' }}</b> {{ is.message }}
         </div>
       </div>
-
-      <!-- 提交动作标记：这是开放步骤编辑器的安全前提，只有副作用步骤才出现 -->
-      <label v-if="entryOf(s)?.sideEffect" class="ct-submit">
-        <input
-          type="checkbox"
-          :checked="!!s.submit"
-          :data-test="`custom-submit-${i}`"
-          @change="setSubmit(i, ($event.target as HTMLInputElement).checked)"
-        />
-        <span>这一步是<b>提交动作</b>（发出后不可撤销）→ 系统会要求它前面有一道人工确认门禁</span>
-      </label>
-    </div>
-
-    <div class="ct-add">
-      <select v-model="addType" data-test="custom-add-type">
-        <option value="">添加步骤…</option>
-        <optgroup v-for="g in groups" :key="g" :label="g">
-          <option v-for="e in entriesOf(g)" :key="e.type" :value="e.type">{{ e.label }}</option>
-        </optgroup>
-      </select>
-      <button class="ct-addbtn" :disabled="!addType" data-test="custom-add" @click="add">添加</button>
-    </div>
-
-    <div v-if="issues.length" class="ct-issues" data-test="custom-issues">
-      <div v-for="(is, k) in issues" :key="k" :class="['ct-issue', is.level]">
-        <b>{{ is.level === 'error' ? '✕' : '!' }}</b> {{ is.message }}
-      </div>
-    </div>
+      <div v-else-if="steps.length" class="ct-ok" data-test="custom-ok">✓ 校验通过，可以创建</div>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * 自定义任务的步骤编排器。
+ * 自定义任务的步骤编排器（三栏：目录 / 序列 / 参数）。
  *
  * 【它存在的理由与它必须防住的事】
  * 「新建任务」原先刻意不给步骤编辑器，因为让用户自己拼步骤必然拼出跑不通的半成品。
@@ -144,10 +190,16 @@
  *   - 副作用步骤要求用户**显式标记"提交动作"**，校验强制它前面有确认门禁
  *     → 不会拼出"无人值守直接发出不可撤销操作"的任务。
  *
+ * 【为什么是三栏】
+ * 加步骤、排顺序、改参数是三件**互相独立**的事，单列纵向堆叠时它们挤在一起：
+ * 步骤一多就要滚动，改中间某一步的参数得先滚到它；加步骤还得点开下拉再找（真机验收时
+ * 下拉弹层就点偏过两次）。拆成三栏后：左边常驻目录（点即加）、中间看全局顺序、右边只渲染
+ * **选中那一步**的参数——三件事各占一块，互不遮挡。
+ *
  * 校验结果由父组件传入（父组件要用它决定"创建"按钮是否可点），
  * 这里只负责展示——避免两处各算一遍导致"显示能点、点了却被拒"。
  */
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   STEP_CATALOG, catalogGroups, findCatalogEntry, makeDraftStep,
   type CustomStepDraft, type CustomStepIssue
@@ -161,13 +213,34 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'update:steps', v: CustomStepDraft[]): void }>()
 
 const groups = catalogGroups()
-const addType = ref('')
+
+/** 当前编辑的是第几步（右栏参数只渲染它） */
+const selected = ref(0)
+
+const curStep = computed<CustomStepDraft | null>(() => props.steps[selected.value] || null)
+
+// 步骤数变少（删除）时把选中项夹回范围内，否则右栏会空白且参数写到一个不存在的下标上
+watch(() => props.steps.length, (n) => {
+  if (n === 0) selected.value = 0
+  else if (selected.value > n - 1) selected.value = n - 1
+})
 
 function entriesOf(group: string) {
   return STEP_CATALOG.filter(e => e.group === group)
 }
 function entryOf(s: CustomStepDraft) {
   return findCatalogEntry(s.type)
+}
+
+/** 中栏的一行摘要：显示"这一步最关键的那个参数"，让不点开也能认出是哪一步 */
+function summarize(s: CustomStepDraft): string {
+  const e = entryOf(s)
+  if (!e) return s.type
+  for (const key of ['url', 'text', 'selector', 'label', 'textIncludes', 'message', 'urlIncludes', 'path', 'ms']) {
+    const v = s.input?.[key]
+    if (v !== undefined && v !== null && v !== '') return `${key}: ${String(v).slice(0, 40)}`
+  }
+  return e.desc
 }
 
 /** 每次都产出新数组再 emit：父组件持有的是 ref，原地改不会触发重渲染 */
@@ -216,10 +289,10 @@ function withinOf(s: CustomStepDraft, sub: string): string {
   return v === undefined || v === null ? '' : String(v)
 }
 
-function add() {
-  if (!addType.value) return
-  commit([...props.steps, makeDraftStep(addType.value)])
-  addType.value = ''
+/** 添加并选中它——加完紧接着就要填参数，不选中等于让用户再点一次 */
+function add(type: string) {
+  commit([...props.steps, makeDraftStep(type)])
+  selected.value = props.steps.length
 }
 
 function removeAt(i: number) {
@@ -233,48 +306,96 @@ function move(i: number, delta: number) {
   const [item] = next.splice(i, 1)
   next.splice(j, 0, item)
   commit(next)
+  // 跟着被移动的那一步走：移动后用户想继续编辑的仍是同一步，不是同一个位置
+  if (selected.value === i) selected.value = j
+  else if (selected.value === j) selected.value = i
 }
 </script>
 
 <style scoped>
-.ct-editor { display: flex; flex-direction: column; gap: 10px; }
-.ct-bar { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.ct-count { font-size: 13px; color: var(--color-text-primary); }
-.ct-empty {
-  padding: 14px; font-size: 12px; color: var(--color-text-secondary);
-  background: var(--color-bg-tertiary); border: 1px dashed var(--color-border); border-radius: var(--radius-sm);
+/* 三栏：目录定宽 / 序列自适应 / 参数定宽。
+   min-height 让空态也有稳定的框，不至于三栏高低参差。 */
+.ct-editor {
+  display: grid;
+  grid-template-columns: 156px minmax(200px, 1fr) 268px;
+  gap: 10px;
+  align-items: stretch;
+  /* 撑满父容器给的剩余高度（对话框是 flex 列，只有这一块伸缩），
+     再由各栏自己的 overflow 吸收超出——这样「创建任务」按钮与校验始终留在视野里。 */
+  flex: 1 1 auto;
+  min-height: 260px;
 }
-.ct-step {
+.ct-col {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
   border: 1px solid var(--color-border); border-radius: var(--radius-sm);
-  background: var(--color-bg-tertiary); padding: 10px;
+  background: var(--color-bg-tertiary); overflow: hidden;
 }
-.ct-step-head { display: flex; align-items: center; gap: 8px; }
+.ct-col-h {
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  padding: 7px 9px; border-bottom: 1px solid var(--color-border);
+  font-size: 12px; color: var(--color-text-primary); background: var(--color-bg-secondary);
+}
+.ct-col-h .row-sub { font-size: 10px; }
+.ct-palette-body, .ct-seq-body, .ct-params-body {
+  flex: 1 1 auto; overflow-y: auto; padding: 7px; min-height: 0;
+}
+.ct-params-body { display: flex; flex-direction: column; gap: 8px; }
+
+/* ---------- 左栏：目录 ---------- */
+.ct-group + .ct-group { margin-top: 8px; }
+.ct-group-h {
+  font-size: 10px; color: var(--color-text-muted); padding: 2px 2px 3px;
+  border-bottom: 1px dashed var(--color-border); margin-bottom: 3px;
+}
+.ct-pal-item {
+  display: block; width: 100%; text-align: left; font-size: 11px;
+  padding: 4px 6px; border-radius: 4px; color: var(--color-text-secondary);
+  border: 1px solid transparent; background: none;
+}
+.ct-pal-item:hover { color: #fff; background: var(--color-bg-secondary); border-color: var(--color-primary); }
+
+/* ---------- 中栏：序列 ---------- */
+.ct-step {
+  display: flex; align-items: flex-start; gap: 6px; padding: 6px 7px;
+  border: 1px solid var(--color-border); border-radius: 4px;
+  background: var(--color-bg-secondary); cursor: pointer;
+}
+.ct-step + .ct-step { margin-top: 5px; }
+.ct-step.on { border-color: var(--color-primary); background: var(--color-bg-elevated); }
 .ct-idx {
-  width: 20px; height: 20px; flex: 0 0 auto; border-radius: 50%;
-  background: var(--color-primary); color: #fff; font-size: 11px;
-  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex: 0 0 auto; border-radius: 50%;
+  background: var(--color-primary); color: #fff; font-size: 10px;
+  display: inline-flex; align-items: center; justify-content: center; margin-top: 1px;
 }
-.ct-label { font-size: 13px; color: #fff; }
-.ct-group {
-  font-size: 10px; color: var(--color-text-secondary);
-  border: 1px solid var(--color-border); border-radius: 3px; padding: 0 4px;
+.ct-step-main { flex: 1 1 auto; min-width: 0; }
+.ct-step-t { display: block; font-size: 12px; color: #fff; }
+.ct-step-s {
+  display: block; font-size: 10px; color: var(--color-text-muted); margin-top: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.ct-grow { flex: 1 1 auto; }
+.ct-tag-submit {
+  font-style: normal; font-size: 9px; color: var(--color-warning);
+  border: 1px solid var(--color-warning); border-radius: 3px; padding: 0 3px; margin-left: 4px;
+}
+.ct-step-btns { display: flex; gap: 3px; flex: 0 0 auto; }
 .ct-mini {
-  width: 22px; height: 22px; font-size: 12px; line-height: 1;
+  width: 20px; height: 20px; font-size: 11px; line-height: 1;
   color: var(--color-text-secondary); border: 1px solid var(--color-border);
-  border-radius: 4px; background: var(--color-bg-secondary);
+  border-radius: 4px; background: var(--color-bg-tertiary);
 }
 .ct-mini:hover:not(:disabled) { color: #fff; border-color: var(--color-primary); }
 .ct-mini:disabled { opacity: .35; cursor: not-allowed; }
 .ct-del:hover:not(:disabled) { color: #fff; border-color: var(--color-error); background: rgba(239, 68, 68, .18); }
-.ct-desc { font-size: 11px; color: var(--color-text-secondary); margin: 6px 0 8px 28px; }
-.ct-fields { display: flex; flex-direction: column; gap: 8px; margin-left: 28px; }
+
+/* ---------- 右栏：参数 ---------- */
+.ct-params-title { font-size: 12px; color: #fff; }
+.ct-desc { font-size: 10px; color: var(--color-text-secondary); line-height: 1.5; }
+.ct-fields { display: flex; flex-direction: column; gap: 8px; }
 .ct-field { display: flex; flex-direction: column; gap: 3px; }
 .ct-flabel { font-size: 11px; color: var(--color-text-secondary); }
 .ct-req { font-style: normal; color: var(--color-warning); margin-left: 4px; font-size: 10px; }
 .ct-field input[type="text"], .ct-field input[type="number"], .ct-field select, .ct-within input {
-  width: 100%; padding: 5px 8px; font-size: 12px; font-family: inherit;
+  width: 100%; padding: 5px 8px; font-size: 12px; font-family: inherit; box-sizing: border-box;
   color: var(--color-text-primary); background: var(--color-bg-secondary);
   border: 1px solid var(--color-border); border-radius: 4px;
 }
@@ -283,29 +404,32 @@ function move(i: number, delta: number) {
 .ct-within { display: flex; flex-direction: column; gap: 5px; }
 .ct-within-row { display: flex; gap: 5px; }
 .ct-within-row input:first-child { flex: 1 1 auto; }
-.ct-within-row input:last-child { flex: 0 0 92px; }
+.ct-within-row input:last-child { flex: 0 0 76px; }
 .ct-submit {
-  display: flex; align-items: flex-start; gap: 6px; margin: 9px 0 0 28px;
-  font-size: 11px; color: var(--color-warning); cursor: pointer;
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: 10px; color: var(--color-warning); cursor: pointer; line-height: 1.5;
 }
-.ct-submit input { margin-top: 1px; }
+.ct-submit input { margin-top: 2px; flex: 0 0 auto; }
 .ct-submit b { color: #fff; }
-.ct-add { display: flex; gap: 6px; }
-.ct-add select {
-  flex: 1 1 auto; padding: 6px 8px; font-size: 12px; font-family: inherit;
-  color: var(--color-text-primary); background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+
+/* ---------- 空态与校验 ---------- */
+.ct-empty {
+  font-size: 11px; color: var(--color-text-secondary); line-height: 1.6;
+  padding: 8px; border: 1px dashed var(--color-border); border-radius: 4px;
 }
-.ct-addbtn {
-  padding: 6px 14px; font-size: 12px; border-radius: var(--radius-sm);
-  color: #fff; background: var(--color-primary);
+.ct-issues {
+  display: flex; flex-direction: column; gap: 5px; flex: 0 0 auto;
+  max-height: 40%; overflow-y: auto;
+  padding: 7px; border-top: 1px solid var(--color-border); background: var(--color-bg-secondary);
 }
-.ct-addbtn:disabled { opacity: .4; cursor: not-allowed; }
-.ct-issues { display: flex; flex-direction: column; gap: 5px; }
 .ct-issue {
-  font-size: 11px; line-height: 1.55; padding: 6px 8px;
+  font-size: 10px; line-height: 1.55; padding: 6px 7px;
   border-radius: 4px; border: 1px solid transparent;
 }
 .ct-issue.error { color: #fca5a5; background: rgba(239, 68, 68, .12); border-color: rgba(239, 68, 68, .35); }
 .ct-issue.warning { color: #fcd34d; background: rgba(245, 158, 11, .1); border-color: rgba(245, 158, 11, .3); }
+.ct-ok {
+  flex: 0 0 auto; font-size: 10px; color: var(--color-success);
+  padding: 7px; border-top: 1px solid var(--color-border); background: var(--color-bg-secondary);
+}
 </style>

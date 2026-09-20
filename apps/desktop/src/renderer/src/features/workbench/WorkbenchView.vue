@@ -4494,9 +4494,21 @@ onBeforeUnmount(() => {
 .log-box { margin-top: 8px; background: var(--color-bg-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 8px; max-height: 160px; overflow-y: auto; }
 .log-line { font-size: 11px; color: var(--color-text-secondary); font-family: Consolas, monospace; line-height: 1.6; word-break: break-all; }
 .modal-wide { width: 560px; max-width: 92vw; }
-/* 自定义任务的步骤编排器：每一步都是"标签 + 输入框"的竖排表单，560px 会把选择器/文案挤成一团，
-   给更宽的一档；高度交给 .modal 自带的 max-height + overflow 滚动 */
-.task-create-tall { width: 720px; max-width: 94vw; }
+/* 自定义任务的步骤编排器是三栏（目录 156 + 序列 自适应 + 参数 268 + 间距），
+   560px 那一档会把参数表单挤成一团，单给更宽的一档。
+
+   高度上这一档**不能沿用 .modal 的"固定 80vh + 整体内滚动"**：三栏编排器本身较高，
+   整体滚动会把「创建任务」按钮和校验清单一起推到视野外（实测内容 887 > 可视 718），
+   用户只看到按钮点不动却找不到原因。改成 flex 列布局——标题/类型/名称/定时/按钮都是
+   固定项，只让中间的编排器滚动，按钮与校验始终在视野里。 */
+.task-create-tall {
+  width: 980px; max-width: 96vw; max-height: 88vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.task-create-tall > h2,
+.task-create-tall > .row-sub,
+.task-create-tall > label { flex: 0 0 auto; }
+.task-create-tall > .modal-actions { flex: 0 0 auto; margin-top: 12px; }
 /* ---------- 数据中心入口（左栏底部：独立一行） ---------- */
 .sidebar-dc { padding: 8px 12px 0; border-top: 1px solid var(--color-border); }
 .dc-entry-row {

@@ -95,18 +95,34 @@ async function api(url, token, opts = {}) {
   const uploadBase = String(rel.upload_url).split('{')[0]
   for (const a of ASSETS) {
     const buf = fs.readFileSync(path.join(REL_DIR, a.name))
-    const res = await fetch(`${uploadBase}?name=${encodeURIComponent(a.name)}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'User-Agent': 'shopilot-publish-release',
-        'Content-Type': a.ct
-      },
-      body: buf
-    })
-    if (!res.ok) throw new Error(`upload ${a.name} failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`)
-    const j = await res.json()
-    console.log(`uploaded ${a.name} (${j.size} B) → ${j.browser_download_url}`)
+    // 上传带重试：安装包 ~85MB，在经代理的网络（本机 DNS 指向虚拟网卡）上单次 POST 可能
+    // 中途被切断（实测 `fetch failed` / `Post …: EOF`，而 API 域名其实完全可达）。
+    // 没有重试时表现为"release 建好了但资产一个都没传"，客户端永远收不到更新——
+    // 而脚本自身只留下一行 fetch failed，很容易被当成代码问题查半天。
+    let lastErr = null
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch(`${uploadBase}?name=${encodeURIComponent(a.name)}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'User-Agent': 'shopilot-publish-release',
+            'Content-Type': a.ct
+          },
+          body: buf
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 300)}`)
+        const j = await res.json()
+        console.log(`uploaded ${a.name} (${j.size} B) → ${j.browser_download_url}`)
+        lastErr = null
+        break
+      } catch (e) {
+        lastErr = e
+        console.log(`upload ${a.name} 第 ${attempt} 次失败：${String(e && e.message || e)}`)
+        if (attempt < 3) await new Promise(r => setTimeout(r, 3000 * attempt))
+      }
+    }
+    if (lastErr) throw new Error(`upload ${a.name} 重试 3 次仍失败: ${String(lastErr.message || lastErr)}`)
   }
 
   const final = await api(`${base}/releases/${rel.id}`, token)

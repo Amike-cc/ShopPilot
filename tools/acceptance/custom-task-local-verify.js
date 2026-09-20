@@ -235,9 +235,14 @@ async function main() {
     check('② 空编排时报"至少要有一个步骤"', emptyState.issues.includes('至少要有一个步骤'), emptyState.issues.slice(0, 60))
     check('② 空编排时创建按钮置灰', emptyState.disabled === true)
 
-    // ③ 加一步「打开网址」并填网址
-    await ui.eval(`${DOM} setSelect(q('[data-test="custom-add-type"]'), 'navigate'); return true;`)
-    await ui.eval(`${DOM} q('[data-test="custom-add"]').click(); return true;`)
+    // ③ 从左侧目录加一步「打开网址」并填网址
+    //    三栏布局下：目录点即添加，添加后自动选中，参数渲染在右栏
+    await ui.eval(`${DOM}
+      const item = await waitFor(() => q('[data-test="custom-palette-navigate"]'));
+      if (!item) throw new Error('左侧目录里没有「打开网址」');
+      item.click();
+      return true;
+    `)
     await sleep(250)
     await ui.eval(`${DOM}
       const input = await waitFor(() => q('[data-test="custom-f-0-url"]'));
@@ -253,12 +258,11 @@ async function main() {
     check('③ 只有导航步骤时可创建（无阻断错误）', afterNav.disabled === false, afterNav.issues.slice(0, 80))
 
     // ④ 加一步「按文案点击」、填文案、标记为提交动作 → 必须报错且置灰
-    await ui.eval(`${DOM} setSelect(q('[data-test="custom-add-type"]'), 'clickByText'); return true;`)
-    await ui.eval(`${DOM} q('[data-test="custom-add"]').click(); return true;`)
+    await ui.eval(`${DOM} q('[data-test="custom-palette-clickByText"]').click(); return true;`)
     await sleep(250)
     await ui.eval(`${DOM}
       const t = await waitFor(() => q('[data-test="custom-f-1-text"]'));
-      if (!t) throw new Error('clickByText 的 text 字段没渲染出来');
+      if (!t) throw new Error('clickByText 的 text 字段没渲染出来（添加后应当自动选中它）');
       setNativeValue(t, '确认发送');
       return true;
     `)
@@ -275,8 +279,7 @@ async function main() {
     check('④ 且明确说明缺前置门禁', noGate.issues.includes('门禁'), noGate.issues.slice(0, 100))
 
     // ⑤ 加「人工确认门禁」并移到提交动作之前
-    await ui.eval(`${DOM} setSelect(q('[data-test="custom-add-type"]'), 'waitForUserConfirmation'); return true;`)
-    await ui.eval(`${DOM} q('[data-test="custom-add"]').click(); return true;`)
+    await ui.eval(`${DOM} q('[data-test="custom-palette-waitForUserConfirmation"]').click(); return true;`)
     await sleep(250)
     await ui.eval(`${DOM}
       const m = await waitFor(() => q('[data-test="custom-f-2-message"]'));
@@ -291,23 +294,23 @@ async function main() {
     await ui.eval(`${DOM} q('[data-test="custom-up-2"]').click(); return true;`)
     await sleep(300)
     const afterReorder = await ui.eval(`${DOM}
-      // 只取步骤容器（div.ct-step），别把「共 N 步」那个计数元素也算进来
+      // 只取中栏的步骤行（div.ct-step），别把「共 N 步」那个计数元素也算进来
       const labels = Array.from(document.querySelectorAll('div.ct-step[data-test^="custom-step-"]'))
-        .map(e => e.querySelector('.ct-label')?.textContent?.trim());
+        .map(e => e.querySelector('.ct-step-t')?.textContent?.replace('提交', '')?.trim());
       return { labels, disabled: q('[data-test="task-submit"]').disabled,
                issues: (q('[data-test="custom-issues"]')?.textContent || '').trim() };
     `)
     check('⑤ 上移后门禁排在提交动作之前', afterReorder.labels[1] === '人工确认门禁', JSON.stringify(afterReorder.labels))
     check('⑤ 顺序正确后创建按钮恢复可点', afterReorder.disabled === false, afterReorder.issues.slice(0, 100))
 
-    // ⑦ 目录之外的步骤类型塞不进去
+    // ⑦ 目录之外的步骤类型塞不进去（左栏按目录渲染，逐个 type 检查）
     const bannedRejected = await ui.eval(`${DOM}
-      const sel = q('[data-test="custom-add-type"]');
-      const values = Array.from(sel.options).map(o => o.value).filter(Boolean);
-      return { hasLoop: values.includes('loop'), hasEnsure: values.some(v => v.startsWith('ensureRows')), hasAi: values.includes('aiGenerate') };
+      const types = Array.from(document.querySelectorAll('[data-test^="custom-palette-"]'))
+        .map(e => e.getAttribute('data-test').replace('custom-palette-', ''));
+      return { types, hasLoop: types.includes('loop'), hasEnsure: types.some(v => v.startsWith('ensureRows')), hasAi: types.includes('aiGenerate') };
     `)
     check('⑦ 目录里不含 loop/ensureRows/aiGenerate 等高风险步骤',
-      !bannedRejected.hasLoop && !bannedRejected.hasEnsure && !bannedRejected.hasAi, JSON.stringify(bannedRejected))
+      !bannedRejected.hasLoop && !bannedRejected.hasEnsure && !bannedRejected.hasAi, JSON.stringify(bannedRejected.types))
 
     // ⑥ 填任务名并创建
     await ui.eval(`${DOM} setNativeValue(q('[data-test="custom-name"]'), '自定义任务验收 · 资质页巡检'); return true;`)
