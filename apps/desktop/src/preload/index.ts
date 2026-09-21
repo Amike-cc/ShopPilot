@@ -51,6 +51,9 @@ const api = {
     prepareInviteSquare: (storeId: string, input: any): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PREPARE_INVITE_SQUARE, { storeId, ...input }),
     clearData: (storeId: string, types: string[], origin?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLEAR_DATA, { storeId, types, origin }),
     capture: (storeId: string, tabId: string, format: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CAPTURE, { storeId, tabId, format }),
+    /** 编排器「拾取元素」：picker-mode 下在店铺页面上点一下，取回锚点填进参数框 */
+    pickElement: (storeId: string, mode: 'selector' | 'text'): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PICK_ELEMENT, { storeId, mode }),
     openWindow: (storeId: string, tabId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_OPEN_WINDOW, { storeId, tabId })
   },
   

@@ -24,8 +24,15 @@ function taskError(e: any, requestId: string): IPCResult {
   }
   if (msg.includes('TASK_NOT_FOUND')) return err(ERROR_CODES.TASK_NOT_FOUND.code, '任务或运行记录不存在', requestId)
   if (msg.includes('TASK_BAD_STATE')) {
-    const m = msg.replace('TASK_BAD_STATE:', '').replace(/^[^\n]*->[^ ]*\s*\(/, '').trim()
-    return err(ERROR_CODES.TASK_BAD_STATE.code, m || '当前任务状态不允许该操作', requestId)
+    // transition 抛的是 "TASK_BAD_STATE: from -> to (reason)"：from/to 是定位"为什么不让做"
+    // 的关键上下文（例如 paused 的 run 点"暂停"），此前正则把它们剥掉了，只剩 reason。
+    // 改为保留状态上下文，整体截断防超长。
+    const m = msg.replace('TASK_BAD_STATE:', '').trim().slice(0, 300)
+    const st = m.match(/^(\S+)\s*->\s*(\S+)\s*\((.*)\)\s*$/)
+    const friendly = st
+      ? `当前状态为「${st[1]}」，不允许该操作（${st[3]}）`
+      : (m || '当前任务状态不允许该操作')
+    return err(ERROR_CODES.TASK_BAD_STATE.code, friendly, requestId)
   }
   return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
 }

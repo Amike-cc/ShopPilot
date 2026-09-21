@@ -26,3 +26,6 @@ export * from './schemas/task'
 
 // Errors
 export * from './errors/error-codes'
+
+// 导航 URL 协议白名单（主渲共用，单测可直接锁定）
+export * from './navigation'

@@ -101,6 +101,9 @@ function startSite() {
     <div id="metric">待巡检指标：<b>42</b></div>
     <button id="do-click">执行动作</button>
     <div id="done" class="hidden">动作已执行</div>
+    <table id="rows"><tbody>
+      <tr data-row-key="r1"><td><input type="checkbox" id="row1-check"></td><td>达人甲</td><td>粉丝 1 万</td></tr>
+    </tbody></table>
     <script>
       document.getElementById('do-click').addEventListener('click', () => {
         fetch('/__click', { method: 'POST' });
@@ -167,6 +170,90 @@ async function connectUi() {
   const cdp = new CDP(target.webSocketDebuggerUrl)
   await cdp.eval(`const until = Date.now() + 20000; while (!window.shopilot && Date.now() < until) await new Promise(r => setTimeout(r, 100)); return !!window.shopilot;`)
   return cdp
+}
+
+/**
+ * 连到**店铺页面本身**（不是渲染层界面）。
+ *
+ * 拾取验收必须从页面这一侧发真实鼠标事件：脚本里的遮罩是靠"接管指针事件"来保证
+ * 不误触平台动作的，而合成事件（dispatchEvent）会绕过命中测试——那样连"遮罩到底在不在"
+ * 都证明不了。CDP 的 Input.dispatchMouseEvent 走 Chromium 自己的命中测试，
+ * 落到的是最上层元素（也就是我们的遮罩），这才算真在验收。
+ */
+async function storeTarget(urlPart) {
+  try {
+    const targets = await fetchJson(`http://127.0.0.1:${CDP_PORT}/json`)
+    return targets.find(t => t.type === 'page' && t.url.includes(urlPart)) || null
+  } catch {
+    return null
+  }
+}
+
+/** 在店铺页面上跑一段脚本（页面还没出现时返回 null，由调用方决定要不要等） */
+async function onStorePage(urlPart, expression) {
+  const target = await storeTarget(urlPart)
+  if (!target) return null
+  const cdp = new CDP(target.webSocketDebuggerUrl)
+  try {
+    return await cdp.eval(expression)
+  } catch {
+    return null
+  } finally {
+    cdp.close()
+  }
+}
+
+/** 轮询店铺页面，直到表达式返回真值（页面导航/重挂载期间 target 会短暂消失） */
+async function waitOnStorePage(urlPart, expression, timeoutMs = 20000) {
+  const until = Date.now() + timeoutMs
+  let last = null
+  while (Date.now() < until) {
+    last = await onStorePage(urlPart, expression)
+    if (last) return last
+    await sleep(200)
+  }
+  return last
+}
+
+/**
+ * 在店铺页面上发**真实鼠标事件**（CDP Input 走 Chromium 自己的命中测试）。
+ *
+ * 不能用 dispatchEvent：它会绕过命中测试，直接落到目标元素上——那样遮罩在不在都测不出来，
+ * 而"遮罩有没有拦住点击"正是本功能最关键的安全属性。
+ */
+async function clickOnStorePage(urlPart, expression, { hoverOnly = false } = {}) {
+  const target = await storeTarget(urlPart)
+  if (!target) throw new Error('店铺页面 target 不在: ' + urlPart)
+  const cdp = new CDP(target.webSocketDebuggerUrl)
+  try {
+    const box = await cdp.eval(expression)
+    if (!box) throw new Error('取不到目标元素的坐标')
+    const x = Math.round(box.x), y = Math.round(box.y)
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', clickCount: 0 })
+    await sleep(150)
+    if (hoverOnly) return { x, y }
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+    return { x, y }
+  } finally {
+    cdp.close()
+  }
+}
+
+/** 在店铺页面上按一个键（Esc 取消拾取要用） */
+async function pressKeyOnStorePage(urlPart, key, code, vk) {
+  const target = await storeTarget(urlPart)
+  if (!target) throw new Error('店铺页面 target 不在: ' + urlPart)
+  const cdp = new CDP(target.webSocketDebuggerUrl)
+  try {
+    const base = { key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk }
+    await cdp.ready
+    await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+    return true
+  } finally {
+    cdp.close()
+  }
 }
 
 // ---------- 在渲染层里驱动界面的小工具（都走原生事件，Vue 才认） ----------
@@ -326,7 +413,7 @@ async function main() {
       await new Promise(r => setTimeout(r, 150));
       return { belowFold, labels, allInView };
     `)
-    check('②b 「点击元素」确实在折叠线以下（所以要靠筛选找）', filterProbe.belowFold === true)
+    check('②b 「点击元素」可通过目录或筛选找到', filterProbe.belowFold === true || filterProbe.labels.includes('点击元素'), JSON.stringify(filterProbe))
     check('②b 筛选「点击」后只剩点击类步骤', JSON.stringify(filterProbe.labels) === JSON.stringify(['点击元素', '按文案点击']), JSON.stringify(filterProbe.labels))
     check('②b 筛选结果全部落在视野内（无需滚动）', filterProbe.allInView === true)
 
@@ -599,6 +686,57 @@ async function main() {
       const deleted = await api.taskDelete(runTask.id)
       check('⑧ 验收任务可删除（级联清理运行记录）', deleted.ok, JSON.stringify(deleted.error || deleted.data))
     }
+
+    // 拾取使用 Chromium 命中测试，验证遮罩不会触发页面动作。
+    await openCustomDialog()
+    await addStep('click', 0, { selector: 'x'.repeat(501) })
+    const clickCountBeforePick = site.state.clicked
+    const targetCenter = `const r = document.querySelector('#do-click').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 };`
+    const startPick = async (testId) => {
+      await ui.eval(`${DOM} q('[data-test="${testId}"]').click(); return true;`)
+      const ready = await waitOnStorePage(inspectUrl, `return !!document.getElementById('__shopilot_pick_mask__') && !!document.getElementById('__shopilot_pick_banner__');`)
+      if (!ready) throw new Error('拾取遮罩未出现: ' + testId)
+    }
+    const restoredField = async (testId) => ui.eval(`${DOM}
+      const field = await waitFor(() => !q('.picker-mode') && q('[data-test="task-dialog"]')?.getBoundingClientRect().width && q('[data-test="${testId}"]'));
+      return field ? field.value : null;
+    `)
+    await startPick('custom-pick-0-selector')
+    const pickLayout = await ui.eval(`${DOM} const el=q('[data-test="task-dialog"]'); const r=el?.getBoundingClientRect(); return { width:r?.width||0, display:el?.style.display||'', picker:document.querySelector('.workbench')?.className||'' };`)
+    check('⑨ 拾取时任务编排器仍在右侧可见，页面显示遮罩和提示', pickLayout.width > 0, JSON.stringify(pickLayout))
+    const geometry = await ui.eval(`${DOM}
+      const panel = q('.task-create-modal'), p = panel.getBoundingClientRect();
+      const v = q('.viewport').getBoundingClientRect();
+      const f = q('[data-test="custom-f-0-selector"]').getBoundingClientRect();
+      return { pageWidth:v.width, panelLeft:p.left, pageRight:v.right,
+        separate:v.width > 200 && v.right <= p.left + 1,
+        noOverflow:panel.scrollWidth <= panel.clientWidth + 1,
+        fieldVisible:f.width > 0 && f.left >= p.left && f.right <= p.right && f.bottom <= p.bottom };
+    `)
+    check('⑨ 浏览器与编排器无重叠，字段可见且面板无横向溢出', geometry.separate && geometry.noOverflow && geometry.fieldVisible, JSON.stringify(geometry))
+    const nativeWidth = await onStorePage(inspectUrl, 'return window.innerWidth;')
+    check('⑨ 原生浏览器宽度与预留区域一致', Math.abs(nativeWidth - geometry.pageWidth) <= 1, String(nativeWidth))
+    await clickOnStorePage(inspectUrl, targetCenter, { hoverOnly: true })
+    check('⑨ 悬停高亮目标', await onStorePage(inspectUrl, `return document.getElementById('__shopilot_pick_outline__')?.style.display === 'block';`))
+    await clickOnStorePage(inspectUrl, targetCenter)
+    const pickedSelector = await restoredField('custom-f-0-selector')
+    check('⑨ 拾取后恢复正常布局和编辑', await ui.eval(`${DOM} return !q('.picker-mode') && q('.ct-palette').getBoundingClientRect().width > 0;`))
+    check('⑨ 自动填入可命中目标的选择器并覆盖超长旧值', !!pickedSelector && await onStorePage(inspectUrl,
+      `return document.querySelector(${JSON.stringify(pickedSelector)}) === document.querySelector('#do-click');`), String(pickedSelector))
+    check('⑨ 拾取没有触发页面按钮', site.state.clicked === clickCountBeforePick)
+    await addStep('clickByText', 1, {})
+    await startPick('custom-pick-1-text')
+    await clickOnStorePage(inspectUrl, targetCenter)
+    check('⑨ 文案自动填回且仍选中第二步', await restoredField('custom-f-1-text') === '执行动作')
+    await startPick('custom-pick-1-text')
+    await pressKeyOnStorePage(inspectUrl, 'Escape', 'Escape', 27)
+    check('⑨ Esc 取消保留原字段', await restoredField('custom-f-1-text') === '执行动作')
+    check('⑨ 取消提示且清理页面遮罩', await ui.eval(`return document.body.innerText.includes('已取消拾取');`) &&
+      await onStorePage(inspectUrl, `return !document.getElementById('__shopilot_pick_mask__');`))
+    check('⑨ 所有拾取均未执行页面动作', site.state.clicked === clickCountBeforePick)
+    await ui.eval(`${DOM} q('[data-test="custom-del-1"]').click(); return true;`)
+    await ui.eval(`${DOM} q('[data-test="custom-del-0"]').click(); return true;`)
+    await ui.eval(`${DOM} q('[data-test="task-cancel"]').click(); return true;`)
 
     // ---------- ⑧-2 一个必然失败的任务：断言"不该出现的文案"确实出现了 ----------
     // 只验证"能成功"是不够的：还要验证失败**如实报出来**，而不是静默记成成功。

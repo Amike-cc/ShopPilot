@@ -20,9 +20,12 @@ import {
   type StoreContextMenuParams, type StoreMenuDeps
 } from './store-context-menu'
 import { buildElementProbeScript, formatElementProbe, type ElementProbeResult } from './element-probe'
+import { buildElementPickerScript, describePickResult, type ElementPickResult, type PickMode } from './element-picker'
 import { getDatabase } from '../db/database'
 import { updateStoreStatus, updateStoreLastActive } from '../stores/store-manager'
 import { StoreStatus } from '@shared/enums/store-status'
+import { assertNavigableUrl } from '@shared/navigation'
+export { assertNavigableUrl } from '@shared/navigation'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { logMain } from '../services/logger'
 import { randomBytes } from 'crypto'
@@ -311,6 +314,14 @@ export function createTab(storeId: string, url?: string): string {
     throw new Error('Browser not open for this store')
   }
 
+  // 建页入口收敛：IPC 参数 / window.open / DB 恢复的老 URL 都经此兜底，
+  // 非法 scheme 退化为空白页而非抛错中断（恢复路径抛错会让整个店铺打不开；
+  // 需要报错的调用点自己先调 assertNavigableUrl）。
+  let safeUrl = 'about:blank'
+  if (url) {
+    try { safeUrl = assertNavigableUrl(url) } catch { /* 非法地址退化为空白页 */ }
+  }
+
   const tabId = generateTabId()
   const session = getStoreSession(storeId)
 
@@ -336,7 +347,7 @@ export function createTab(storeId: string, url?: string): string {
   const tab: Tab = {
     id: tabId,
     storeId,
-    url: url || 'about:blank',
+    url: safeUrl,
     title: '新标签页',
     isPinned: false,
     orderIndex: state.tabs.size,
@@ -409,7 +420,7 @@ export function createTab(storeId: string, url?: string): string {
   }
 
   // 始终显式加载（含 about:blank）：确保文档提交、dom-ready 触发、executeJavaScript 可解析
-  view.webContents.loadURL(url || 'about:blank').catch(() => { /* 页面错误由视图内呈现 */ })
+  view.webContents.loadURL(safeUrl).catch(() => { /* 页面错误由视图内呈现 */ })
 
   saveTabToDatabase(tab)
   emitTabs(storeId)
@@ -536,26 +547,8 @@ export async function captureTab(storeId: string, tabId: string, format: string 
 }
 
 /**
- * 标签页导航（§10.1 scheme 白名单）
+ * 标签页导航（§10.1 scheme 白名单：assertNavigableUrl 见 @shared/navigation）
  */
-/**
- * 允许导航的协议白名单（§10.1）：页面给的地址（例如右键菜单里的 `linkURL`）也要过这一道，
- * 否则 `javascript:` / `file:` 这类地址会被直接交给 loadURL。
- * 返回规范化后的 URL；不合格就抛（调用方决定是报错还是忽略）。
- */
-function assertNavigableUrl(url: string): string {
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    throw new Error('Navigation blocked: invalid URL')
-  }
-  if (!['http:', 'https:', 'about:'].includes(parsed.protocol)) {
-    throw new Error('Navigation blocked: unsafe URL scheme')
-  }
-  return parsed.toString()
-}
-
 export function navigateTab(storeId: string, tabId: string, url: string): void {
   const state = browserStates.get(storeId)
   if (!state) throw new Error('Browser not open for this store')
@@ -596,6 +589,44 @@ async function probeElementAt(wc: Electron.WebContents, point: { x: number; y: n
   } catch (err) {
     // 注入失败（页面正在导航/崩溃）如实留痕，不抛给 Electron 的事件回调
     logMain('warn', `元素定位信息采集失败 tab=${wc.id}: ${String(err)}`)
+  }
+}
+
+/**
+ * 在店铺页面上启动「拾取元素」，等用户点一下目标元素后返回锚点。
+ *
+ * 与 probeElementAt（右键采集）的关系：两者共用同一份锚点提取逻辑（element-anchor-js），
+ * 保证"右键看到的"和"拾取填进去的"是同一条选择器。区别在触发方式——右键是即取即走，
+ * 拾取是编排器里的按钮，走 IPC 把结果送回渲染层直接填进参数框。
+ *
+ * 调用方（渲染层）负责先切到 picker-mode：编排器贴右保留，原生视图重挂并让出
+ * 右侧 560px。这里只做"页面里已经可见"之后的等待，不负责布局。
+ */
+export async function pickElementFromActiveTab(storeId: string, mode: PickMode): Promise<ElementPickResult> {
+  const state = browserStates.get(storeId)
+  if (!state) return { ok: false, reason: 'NO_STORE_PAGE' }
+  const tab = state.activeTabId ? state.tabs.get(state.activeTabId) : null
+  const wc = tab?.webContentsView?.webContents
+  if (!wc) return { ok: false, reason: 'NO_ACTIVE_TAB' }
+
+  try {
+    // 先把键盘焦点交给页面：拾取层挂在页面里，Esc 取消也只监听页面内的 keydown。
+    // 视图刚被重新挂上时焦点往往还在主窗口的渲染层上，不主动聚焦的话用户按 Esc
+    // 页面上毫无反应，只能干等到 120s 超时——而"以为按了取消、其实没有"是最糟的组合。
+    wc.focus()
+    const result = await wc.executeJavaScript(buildElementPickerScript(mode)) as ElementPickResult
+    logMain('info', `元素拾取 store=${storeId} mode=${mode} :: ${describePickResult(result, mode)}`)
+    return result
+  } catch (err) {
+    // 注入失败（页面正在导航/崩溃）如实返回原因，不让异常冒到 IPC 层变成 INTERNAL_ERROR
+    logMain('warn', `元素拾取失败 store=${storeId} mode=${mode}: ${String(err)}`)
+    return { ok: false, reason: 'INJECT_FAILED' }
+  } finally {
+    // 焦点交还工作台：拾取前把焦点给了页面，回填后用户要立刻在编排器里打字。
+    // 渲染层 finally 里也会 window.focus()，这里是主进程侧的双保险。
+    try {
+      if (hostWindow && !hostWindow.isDestroyed()) hostWindow.webContents.focus()
+    } catch { /* ignore */ }
   }
 }
 
@@ -704,9 +735,12 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
     }
   })
 
-  if (url) win.loadURL(url)
+  // tab.url 建页时已过白名单；window.open 的 targetUrl 来自页面，必须再过一遍
+  if (url) {
+    try { win.loadURL(assertNavigableUrl(url)).catch(() => { /* 错误由页面呈现 */ }) } catch { /* 非法地址保持空白窗口 */ }
+  }
   win.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    win.loadURL(targetUrl)
+    try { win.loadURL(assertNavigableUrl(targetUrl)).catch(() => { /* 错误由页面呈现 */ }) } catch { /* 非法地址忽略 */ }
     return { action: 'deny' }
   })
 

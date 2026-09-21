@@ -45,6 +45,8 @@ declare global {
         prepareInviteSquare: (storeId: string, input: any) => Promise<IPCResult>
         clearData: (storeId: string, types: string[], origin?: string) => Promise<IPCResult>
         capture: (storeId: string, tabId: string, format: string) => Promise<IPCResult>
+        /** 编排器「拾取元素」：picker-mode 下在店铺页面上点一下，取回锚点（对话框贴右保留） */
+        pickElement: (storeId: string, mode: 'selector' | 'text') => Promise<IPCResult>
         openWindow: (storeId: string, tabId?: string) => Promise<IPCResult>
         /** 弹层打开/关闭：让主进程摘除/恢复原生视图挂载 */
         setViewsObscured: (obscured: boolean) => Promise<IPCResult>

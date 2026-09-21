@@ -157,6 +157,70 @@ describe('自定义任务 · 目录与 Zod schema 必须一致（防漂移）', 
     expect(new Set(groups)).toEqual(all)
   })
 
+  /**
+   * 「拾取」标记的防漂移组。
+   *
+   * pick 决定哪个字段旁边出现「拾取」按钮。标错的两个方向都伤用户：
+   *   - 该标没标 → 用户只能手抄选择器，等于这个功能不存在（这正是本轮要解决的问题）；
+   *   - 不该标标了 → 按钮点了会在页面上点出一个跟该字段毫无关系的东西填进去，
+   *     用户拿到的锚点看着像对的（确实是个真选择器），任务却跑不通。
+   * 两种都不会有编译期信号，只能靠断言钉住。
+   */
+  it('页面上"已有的元素锚点"字段都给了拾取（选择器类）', () => {
+    // 这些字段的值全是"页面上某个元素的选择器"——用户不可能凭空写出来，只能从页面取
+    const selectorFields: Array<[string, string]> = [
+      ['waitForSelector', 'selector'], ['waitForGone', 'selector'], ['readText', 'selector'],
+      ['readTable', 'selector'], ['click', 'selector'], ['clickAll', 'selector'],
+      ['setInput', 'selector'], ['typeText', 'selector']
+    ]
+    for (const [type, key] of selectorFields) {
+      const f = findCatalogEntry(type)?.fields.find(x => x.key === key)
+      expect(f, `${type}.${key} 字段不存在`).toBeTruthy()
+      expect(f!.pick, `${type}.${key} 是页面元素锚点，应标 pick: 'selector'`).toBe('selector')
+    }
+  })
+
+  it('页面上"已有的文案锚点"字段都给了拾取（文案类）', () => {
+    const textFields: Array<[string, string]> = [
+      ['waitForText', 'text'], ['clickByText', 'text'], ['clickIfPresent', 'text'],
+      ['clickIfPresent', 'nearText'], ['clickAll', 'text'], ['clickAll', 'counterIncludes'],
+      ['readLabelValue', 'label'], ['requireEnabled', 'text'],
+      ['requireTextAbsent', 'text'], ['requireQuota', 'textIncludes']
+    ]
+    for (const [type, key] of textFields) {
+      const f = findCatalogEntry(type)?.fields.find(x => x.key === key)
+      expect(f, `${type}.${key} 字段不存在`).toBeTruthy()
+      expect(f!.pick, `${type}.${key} 是页面文案锚点，应标 pick: 'text'`).toBe('text')
+    }
+  })
+
+  it('"要写进去的值"与"目标地址"不给拾取（给了只会误导）', () => {
+    // navigate.url 是目标网址、setInput/typeText.text 是要写入的内容、waitForUserConfirmation.message
+    // 是给用户看的提示语——它们都不是"页面上已经存在的东西"，拾取按钮点出来的东西
+    // 与这些字段的语义完全对不上。
+    const notPickable: Array<[string, string]> = [
+      ['navigate', 'url'], ['setInput', 'text'], ['typeText', 'text'],
+      ['waitForUserConfirmation', 'message'], ['readText', 'metric'],
+      ['readTable', 'metric'], ['requireQuota', 'hint']
+    ]
+    for (const [type, key] of notPickable) {
+      const f = findCatalogEntry(type)?.fields.find(x => x.key === key)
+      expect(f, `${type}.${key} 字段不存在`).toBeTruthy()
+      expect(f!.pick, `${type}.${key} 不是页面上的锚点，不该给拾取按钮`).toBeUndefined()
+    }
+  })
+
+  it('pick 的值只有 selector / text 两种（拼错了会渲染出一个语义不明的按钮）', () => {
+    for (const e of STEP_CATALOG) {
+      for (const f of e.fields) {
+        if (f.pick === undefined) continue
+        expect(['selector', 'text'], `${e.type}.${f.key} 的 pick 值不合法`).toContain(f.pick)
+        // 标记了拾取的字段必须是文本输入（拾取产出的是字符串）
+        expect(f.kind, `${e.type}.${f.key} 标了拾取却不是文本字段`).toBe('text')
+      }
+    }
+  })
+
   it('makeDraftStep 带上默认值，且默认值能过 Zod', () => {
     for (const e of STEP_CATALOG) {
       const draft = makeDraftStep(e.type)
@@ -447,6 +511,43 @@ describe('自定义任务 · 字段校验', () => {
     expect(hasBlockingIssues(issues), '只是警告不该拦住').toBe(false)
     expect(issues.some(i => i.level === 'warning' && i.message.includes('导航'))).toBe(true)
   })
+
+  it('超时越界/非整数 → 报错并指到具体步骤（与主进程 500~3600000 对齐）', () => {
+    const nav = (): CustomStepDraft => ({ type: 'navigate', input: { url: 'https://example.com/a' } })
+    for (const bad of [499, 3600001, 1.5, 'abc', NaN] as unknown[]) {
+      const s: CustomStepDraft = { type: 'waitMs', input: { ms: 1000 }, timeoutMs: bad as number }
+      const issues = validateCustomSteps([nav(), s])
+      const err = issues.find(i => i.level === 'error' && i.stepIndex === 1)
+      expect(err?.message, `timeoutMs=${String(bad)} 应当被拦`).toContain('超时')
+      expect(hasBlockingIssues(issues)).toBe(true)
+    }
+    // 边界值放行
+    for (const good of [500, 3000, 3600000]) {
+      const s: CustomStepDraft = { type: 'waitMs', input: { ms: 1000 }, timeoutMs: good }
+      expect(
+        validateCustomSteps([nav(), s]).filter(i => i.level === 'error' && i.stepIndex === 1),
+        `timeoutMs=${good} 不该拦`
+      ).toEqual([])
+    }
+  })
+
+  it('重试次数越界/非整数 → 报错（与主进程 0~5 对齐）', () => {
+    const nav = (): CustomStepDraft => ({ type: 'navigate', input: { url: 'https://example.com/a' } })
+    for (const bad of [-1, 6, 1.5, 'abc'] as unknown[]) {
+      // 用可重放步骤，避免同时触发"副作用禁重试"那条，单独测范围
+      const s: CustomStepDraft = { type: 'waitForSelector', input: { selector: 'div' }, retryLimit: bad as number }
+      const issues = validateCustomSteps([nav(), s])
+      expect(
+        issues.some(i => i.level === 'error' && i.stepIndex === 1 && i.message.includes('重试')),
+        `retryLimit=${String(bad)} 应当被拦`
+      ).toBe(true)
+    }
+    expect(
+      validateCustomSteps([nav(), { type: 'waitForSelector', input: { selector: 'div' }, retryLimit: 3 }])
+        .filter(i => i.level === 'error'),
+      'retryLimit=3 不该拦'
+    ).toEqual([])
+  })
 })
 
 // ---------- 序列化：交给引擎的步骤必须干净 ----------
@@ -491,6 +592,15 @@ describe('自定义任务 · 序列化为引擎步骤', () => {
     }])
     expect(steps[0]).toEqual({ type: 'click', input: { selector: 'div' } })
     expect('submit' in steps[0], 'submit 是编排器元数据，不该发给引擎').toBe(false)
+  })
+
+  it('超时/重试字符串转数字，非数字丢掉不透传（非法值由 validate 报 error）', () => {
+    const a = toEngineSteps([{ type: 'waitMs', input: { ms: 1000 }, timeoutMs: '3000' as unknown as number }])
+    expect(a[0].timeoutMs).toBe(3000)
+    const b = toEngineSteps([{ type: 'waitMs', input: { ms: 1000 }, timeoutMs: 'abc' as unknown as number }])
+    expect('timeoutMs' in b[0], '非数字超时不应发给引擎').toBe(false)
+    const c = toEngineSteps([{ type: 'waitForSelector', input: { selector: 'div' }, retryLimit: '2' as unknown as number }])
+    expect(c[0].retryLimit).toBe(2)
   })
 
   it('序列化结果能过 Zod（端到端：表单 → 引擎）', () => {

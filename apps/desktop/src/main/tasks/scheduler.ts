@@ -35,7 +35,15 @@ function tick(): void {
       nextFireAt.set(t.id, now + t.schedule.everyMs)
       continue
     }
-    if (!nextFireAt.has(t.id)) nextFireAt.set(t.id, now + t.schedule.everyMs)
+    if (!nextFireAt.has(t.id)) {
+      // 重启后节拍锚定到上次真实触发（tasks.last_fired_at），而不是"重启时刻 + 周期"：
+      // 否则每次重启都把节拍重置一次，定时任务的触发时刻会越漂越远。
+      // 停机期间错过的周期不补偿（立即连发一堆积压 run 比晚一次危险得多），直接开新周期。
+      const anchored = typeof t.lastFiredAt === 'number' && t.lastFiredAt > 0
+        ? t.lastFiredAt + t.schedule.everyMs
+        : now + t.schedule.everyMs
+      nextFireAt.set(t.id, anchored > now ? anchored : now + t.schedule.everyMs)
+    }
     if (now >= nextFireAt.get(t.id)!) {
       nextFireAt.set(t.id, now + t.schedule.everyMs)
       fire(t.id)

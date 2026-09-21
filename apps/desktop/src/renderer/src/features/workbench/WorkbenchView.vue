@@ -1,5 +1,5 @@
 <template>
-  <div class="workbench">
+  <div class="workbench" :class="{ 'task-layout': taskDialogOpen && taskFlow === 'custom', 'picker-mode': customPicking }">
     <!-- 左栏：店铺侧边栏 - §8.2 StoreSidebar（可收起为窄轨：新建/回收站/设置仍可达） -->
     <aside class="sidebar" :class="{ collapsed: leftSidebarCollapsed }" data-test="sidebar">
       <div class="sidebar-rail" v-if="leftSidebarCollapsed">
@@ -1314,9 +1314,13 @@
          0.4.37 按用户要求开放了自定义编排，但不是把那条理由无视掉，而是把它逐条堵上：
          参数按目录渲染（拼不出 schema 之外的键）、副作用步骤必须显式标记"提交动作"、
          标记了就必须有前置人工确认门禁（缺失直接拒绝创建）。详见 @shared/custom-task。 -->
-    <div v-if="taskDialogOpen" class="modal-mask" data-test="task-dialog" @click.self="taskDialogOpen = false">
+    <!-- v-if 带 customPicking：拾取是跨进程异步等待，用户若中途关了对话框，
+         编辑器实例仍保留（v-show 隐藏），回填的 emit 才不会因卸载被 Vue 丢弃；
+         finally 不强制重开，尊重用户的关闭意图。 -->
+    <div v-if="taskDialogOpen || customPicking" v-show="taskDialogOpen" class="modal-mask" data-test="task-dialog" @click.self="taskDialogOpen = false">
       <div class="modal modal-wide task-create-modal" :class="{ 'task-create-tall': taskFlow === 'custom' }">
         <h2>新建任务</h2>
+        <div v-if="customPicking" class="env-note" data-test="picker-status">在左侧页面点击目标元素，结果会自动填回。按 Esc 取消拾取。</div>
         <div class="row-sub" style="margin-bottom:8px">
           任务只能由<b>已实测跑通的流程</b>创建（参数表单 + 内置确认门禁都由流程自己带），
           这样建出来的任务一定是能跑的；<b>自定义任务</b>则用步骤编排器自建（带创建前校验）。
@@ -1362,7 +1366,13 @@
               <input v-model="customTaskName" type="text" maxlength="80" data-test="custom-name" placeholder="例如 每日巡检本店资质页" />
             </label>
 
-            <CustomTaskEditor v-model:steps="customSteps" :issues="customIssues" />
+            <CustomTaskEditor
+              v-model:steps="customSteps"
+              v-model:selected="customSelectedStep"
+              :issues="customIssues"
+              :pick-element="pickElementForEditor"
+              @notify="onEditorNotify"
+            />
 
             <label>定时（分钟，留空 = 仅手动）
               <input v-model.number="tf.everyMin" type="number" min="1" max="43200" data-test="task-every" placeholder="例如 60" />
@@ -1561,6 +1571,7 @@ import {
   hasBlockingIssues, toEngineSteps, validateCustomSteps,
   type CustomStepDraft, type CustomStepIssue
 } from '@shared/custom-task'
+import { describePickResult, type ElementPickResult, type PickMode } from '@shared/element-pick'
 import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile, isAssistProfile } from '@shared/constants/invite'
 import type { CategoryNode } from '@shared/constants/invite'
 import { buildInviteSteps } from '@shared/invite-steps'
@@ -2964,6 +2975,132 @@ const submitDisabledReason = computed(() => {
 
 const taskDialogOpen = ref(false)
 
+/**
+ * 编排器当前选中第几步。
+ *
+ * 由父组件持有（v-model:selected）：拾取期间编辑器实例靠 v-if="taskDialogOpen"
+ * 保留（见模板：对话框不卸载，只是切到 picker-mode 贴右显示）。选中项若放在
+ * 子组件内部，一旦将来的改动导致拾取时卸载编辑器，选中会归零——用户在**第 7 步**
+ * 点拾取、回来却看到第 1 步，会以为"我刚才填的东西没了"。所以选中项必须活在父组件。
+ */
+const customSelectedStep = ref(0)
+// 拾取进行中：切到 picker-mode（编排器贴右、原生视图让出右侧 560px），
+// 异步返回后的回填 emit 才不会因组件卸载被 Vue 忽略。
+const customPicking = ref(false)
+
+/**
+ * 「拾取元素」：编排器贴右保留 → 浏览器视图让出右侧 560px → 在店铺页面上点一下取锚点。
+ *
+ * 店铺页面是原生 WebContentsView，永远画在 HTML 之上。对话框不关闭，而是靠
+ * picker-mode CSS 缩到右侧（width 560px + browser-col margin-right 560px），
+ * 页面让出的区域可点，避免用户在页面和窗口之间来回切换。
+ *
+ * 【为什么注入前要等】
+ *  ① 切到 picker-mode 只是改了渲染层布局，原生视图重挂是**主进程**的事
+ *    （refreshOverlayOcclusion → setViewsObscured IPC）。不等它生效就注入，
+ *     脚本会注进一个 0×0/旧 bounds 的视图——那时 elementFromPoint 一律返回 null，
+ *     用户看到的现象是"点了拾取、页面闪一下、什么都没发生"；
+ *  ② 重挂后还要把新的视口 bounds 同步给主进程（ResizeObserver 是异步的），
+ *     这里显式 await 一次 setViewport + 轮询本地布局，避免靠 180ms 猜；
+ *  ③ finally 只恢复"拾取前是什么样"：用户若在拾取中关了对话框，不强制弹回。
+ */
+
+/**
+ * 等 picker-mode 布局落定并把最新视口同步给主进程。
+ *
+ * 只等本地布局不够：ResizeObserver 上报是另一条异步 IPC，注入若抢在它前面，
+ * 主进程手里的还是旧 bounds。等本地宽度稳定后显式 await 一次 setViewport，
+ * 再注入，慢机上也不靠猜时延。
+ */
+async function waitForPickerViewport(timeoutMs = 2500): Promise<boolean> {
+  const start = Date.now()
+  let lastW = 0
+  let stable = 0
+  while (Date.now() - start < timeoutMs) {
+    await nextTick()
+    const el = viewportEl.value
+    const w = el ? Math.round(el.getBoundingClientRect().width) : 0
+    const h = el ? Math.round(el.getBoundingClientRect().height) : 0
+    if (w >= 50 && h >= 50 && Math.abs(w - lastW) < 2) {
+      stable += 1
+      if (stable >= 2) {
+        try {
+          const r = el!.getBoundingClientRect()
+          await window.shopilot.browser.setViewport({
+            x: Math.round(r.left), y: Math.round(r.top),
+            width: Math.max(0, Math.round(r.width)), height: Math.max(0, Math.round(r.height))
+          })
+        } catch { /* 同步失败就让 ResizeObserver 兜底，不阻塞拾取 */ }
+        return true
+      }
+    } else {
+      stable = 0
+    }
+    lastW = w
+    await new Promise(r => setTimeout(r, 50))
+  }
+  return false
+}
+async function pickElementForEditor(mode: PickMode): Promise<ElementPickResult> {
+  const storeId = ws.displayedStoreId
+  if (!storeId) {
+    ws.toast('请先打开一个店铺（拾取要在店铺页面上进行）', 'error')
+    return { ok: false, reason: 'NO_STORE_PAGE' }
+  }
+  if (!ws.activeTab) {
+    ws.toast('这个店铺还没有打开页面——先到左边点「打开浏览器」，再回来拾取', 'error')
+    return { ok: false, reason: 'NO_ACTIVE_TAB' }
+  }
+
+  let result: ElementPickResult = { ok: false, reason: 'INJECT_FAILED' }
+  let messaged = false
+  customPicking.value = true
+  try {
+    // 等遮挡解除的 IPC 真正落到主进程（watch 里也会触发，这里显式 await 一次，
+    // 不靠"睡 180ms 猜主进程已经挂好视图"——慢机上 ResizeObserver+IPC 回合可能更久）。
+    await refreshOverlayOcclusion()
+    await nextTick()
+    // 等 picker-mode 布局落定：视口宽度稳定且非零后再把最新 bounds 显式同步给主进程。
+    // ResizeObserver 上报是异步的，直接注入会注进旧 bounds，elementFromPoint 全 miss。
+    const vpReady = await waitForPickerViewport()
+    if (!vpReady) {
+      ws.toast('拾取准备超时：浏览器视图尚未让出，请重试', 'error')
+      return { ok: false, reason: 'INJECT_FAILED' }
+    }
+    const res = await window.shopilot.browser.pickElement(storeId, mode)
+    if (res.ok) {
+      result = res.data as ElementPickResult
+    } else {
+      // IPC 层就失败了：带上原始 message 才有排查价值（光看原因码说不清断在哪一步）
+      ws.toast('拾取失败: ' + res.error.message, 'error')
+      result = { ok: false, reason: 'INJECT_FAILED' }
+      messaged = true
+    }
+  } catch (e: any) {
+    ws.toast('拾取失败：' + String(e?.message || e), 'error')
+    result = { ok: false, reason: 'INJECT_FAILED' }
+    messaged = true
+  } finally {
+    // 只关 picker-mode，不碰 taskDialogOpen：用户若在拾取中手动关了对话框，
+    // 这里强制弹回等于抢回他的关闭意图。视图显隐由 watcher 按最新状态恢复。
+    customPicking.value = false
+    // 主进程拾取前把键盘焦点交给了页面（Esc 取消用），回来后交还给工作台，
+    // 否则用户回填后敲键盘没反应。主进程侧也会把焦点交还宿主窗口（双保险）。
+    try { window.focus() } catch { /* ignore */ }
+  }
+
+  await nextTick()
+  // 取消要单独说：它与"失败"是两回事，用失败的红字报"已取消"会让人以为出了问题
+  if (result.cancelled) ws.toast('已取消拾取', 'info')
+  else if (!result.ok && !messaged) ws.toast(describePickResult(result, mode), 'error')
+  return result
+}
+
+/** 编排器要说的提示（措辞在编辑器里定，这里只负责显示） */
+function onEditorNotify(text: string, kind: 'info' | 'success' | 'error') {
+  ws.toast(text, kind)
+}
+
 function openTaskDialog() {
   taskFlow.value = 'invite'
   tf.everyMin = null
@@ -4082,7 +4219,7 @@ let lastObscured = false
 let overlaySyncChain: Promise<void> = Promise.resolve()
 let overlayRevision = 0
 
-function refreshOverlayOcclusion() {
+function refreshOverlayOcclusion(): Promise<void> {
   const revision = ++overlayRevision
   overlaySyncChain = overlaySyncChain.then(async () => {
     await nextTick()
@@ -4097,15 +4234,20 @@ function refreshOverlayOcclusion() {
     } else {
       ctxOverlapViewport.value = false
     }
-    const shouldHide = modalOpen || ctxOverlapViewport.value
+    // 自定义任务拾取时，任务编排器停在右侧，浏览器视图已由 picker-mode 缩窄，
+    // 不应摘除原生视图，否则用户没有可点击的页面。
+    const otherModalOpen = !!(ws.createDialogOpen || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value || dataCenterOpen.value || invoiceCenterOpen.value)
+    const customTaskOpen = taskDialogOpen.value && taskFlow.value === 'custom'
+    const shouldHide = otherModalOpen || (modalOpen && !customPicking.value && !customTaskOpen) || ctxOverlapViewport.value
     if (shouldHide === lastObscured) return
     lastObscured = shouldHide
     await window.shopilot.browser.setViewsObscured(shouldHide)
   }).catch(() => {})
+  return overlaySyncChain
 }
 
 watch(
-  () => [ws.createDialogOpen, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value, invoiceCenterOpen.value, taskDialogOpen.value],
+  () => [ws.createDialogOpen, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value, invoiceCenterOpen.value, taskDialogOpen.value, taskFlow.value, customPicking.value],
   () => { refreshOverlayOcclusion() },
   { immediate: true }
 )
@@ -4210,6 +4352,12 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .workbench { display: flex; width: 100vw; height: 100vh; overflow: hidden; }
+.workbench.task-layout .sidebar,
+.workbench.task-layout .right-panel { display: none; }
+.workbench.task-layout .browser-col {
+  /* Keep the browser available for navigating to the next page while editing. */
+  margin-right: min(980px, 70vw);
+}
 
 /* 左栏 */
 .sidebar {
@@ -4418,6 +4566,24 @@ onBeforeUnmount(() => {
      explicitly opt out, otherwise mouse clicks are interpreted as window drag
      gestures and text fields never receive focus. */
   -webkit-app-region: no-drag;
+}
+.workbench.task-layout .modal-mask[data-test="task-dialog"] {
+  background: transparent;
+  align-items: stretch;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+.workbench.task-layout .modal-mask[data-test="task-dialog"] .task-create-modal {
+  pointer-events: auto;
+  width: min(980px, 70vw);
+  max-width: min(980px, 70vw);
+  box-sizing: border-box;
+  padding-top: 44px;
+  height: 100vh;
+  max-height: 100vh;
+  margin: 0;
+  border-radius: 0;
+  overflow-y: auto;
 }
 .modal, .modal * { -webkit-app-region: no-drag; }
 .modal { position: relative; z-index: 101; width: 420px; max-height: 80vh; overflow-y: auto; background: var(--color-bg-secondary); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 22px; }

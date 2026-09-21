@@ -39,34 +39,7 @@
  * 另外把"需要转义才能写进选择器"的类名（含 `[` `]` `:` `/`）单列出来：它们不是哈希，
  * 但直接拼进 CSS 选择器会失效，属于"可用但要小心"，与"别用"是两回事。
  */
-const HASHY_CLASS_JS = `
-  const __hashyClass = (cls) => {
-    const parts = String(cls || '').split(/\\s+/).filter(Boolean);
-    const isHashy = (p) => {
-      const digits = (p.match(/[0-9]/g) || []).length;
-      // ① 超长且**无分隔符**：人写的长类名一定有 - / _ 分隔（BEM 尤甚），
-      //    连成一片的长串才是随机标识。Tailwind 的 h-[44px] 带 -，不会走到这里。
-      if (p.length > 20 && !/[-_]/.test(p)) return true;
-      // ② 前缀 + 随机串（css-1x2y3z / btn_a1b2c3）：CSS-in-JS 与 CSS Modules 的典型形态。
-      //    要求随机段含 ≥2 位数字——这条把 icon-arrow2 / card-3 这类"带一位数字的语义类名"挡在外面。
-      //    注意随机串是**字母数字混合**（styled-components 用 [a-z0-9]、emotion 用 base36），
-      //    不能只认十六进制：真机样本 css-1x2y3z 含 x/y/z，只认 [0-9a-f] 会漏判。
-      if (/^[a-z]{1,5}[-_][a-z0-9]{5,}$/i.test(p) && digits >= 2) return true;
-      // ③ 纯随机串（a1b2c3d4）
-      if (/^[a-z0-9]{8,}$/i.test(p) && digits >= 2) return true;
-      return false;
-    };
-    // 含这些字符的类名写进 CSS 选择器必须转义，标出来但不算哈希
-    const needsEscape = (p) => /[\\[\\]:\\/]/.test(p);
-    const hashy = [], escape = [], stable = [];
-    for (const p of parts) {
-      if (isHashy(p)) hashy.push(p);
-      else if (needsEscape(p)) escape.push(p);
-      else stable.push(p);
-    }
-    return { hashy, escape, stable };
-  };
-`
+import { ANCHOR_HELPERS_JS } from './element-anchor-js'
 
 /**
  * 生成"高亮 + 采集元素信息"的注入脚本。
@@ -81,46 +54,25 @@ const HASHY_CLASS_JS = `
  */
 export function generateElementProbeScript(): string {
   return `(() => {
-    ${HASHY_CLASS_JS}
+    ${ANCHOR_HELPERS_JS}
     const OUTLINE_ID = '__shopilot_probe_outline__';
 
     // 清掉上一次的残留（连点多次不会叠一堆遮罩）
     const old = document.getElementById(OUTLINE_ID);
     if (old && old.parentNode) old.parentNode.removeChild(old);
 
-    // 取右键落点处的**最具体**元素。
-    // 用 elementFromPoint 而不是事件坐标做算术：页面里的浮层、iframe 边界、
-    // transform 都会让坐标换算失真，交给浏览器命中测试最可靠。
+    // 取右键落点处的**最具体**元素：命中测试交给浏览器（浮层/iframe/transform 会让手算坐标失真），
+    // 再穿透 ShadowRoot、向上收敛到可操作目标。三段逻辑与「拾取元素」共用（见 element-anchor-js）。
     const px = __PROBE_X__, py = __PROBE_Y__;
-    let el = document.elementFromPoint(px, py);
+    const el = __pierce(px, py);
     if (!el) return { ok: false, reason: 'NO_ELEMENT_AT_POINT' };
-
-    // 穿透开放 ShadowRoot（微信小店的页面在 micro-app 的 ShadowRoot 里，不穿透只能拿到宿主）
-    for (let i = 0; i < 12; i++) {
-      if (!el.shadowRoot) break;
-      const inner = el.shadowRoot.elementFromPoint(px, py);
-      if (!inner || inner === el) break;
-      el = inner;
-    }
-
-    // 从落点元素向上收敛到"最像可操作目标"的那个：
-    // 任务引擎点的是按钮/链接/输入框，而不是它外面那层 padding 包裹 div。
-    const INTERACTIVE = ['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT', 'LABEL'];
-    let target = el;
-    for (let i = 0, n = el; i < 6 && n; i++, n = n.parentElement) {
-      const tag = n.tagName;
-      const role = n.getAttribute && n.getAttribute('role');
-      if (INTERACTIVE.includes(tag) || role === 'button' || role === 'tab' || role === 'link') { target = n; break; }
-    }
-
-    const own = (e) => [...e.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
-    const norm = (s) => String(s == null ? '' : s).replace(/\\s+/g, ' ').trim();
+    const target = __converge(el);
 
     const rect = target.getBoundingClientRect();
 
     // ---- 第 1 层：文案锚点（引擎 clickByText / waitForText 的输入）----
-    const ownText = norm(own(target));
-    const fullText = norm(target.innerText);
+    const ownText = __ownText(target);
+    const fullText = __norm(target.innerText);
     // 自有文本适合当锚点；若只有 innerText（文本都在子元素里），只能当"包含匹配"的参考
     const textAnchor = ownText || (fullText.length <= 40 ? fullText : '');
 
@@ -134,27 +86,7 @@ export function generateElementProbeScript(): string {
 
     // ---- 第 3 层：CSS 路径（最后手段）----
     const cls = __hashyClass(target.className);
-    const cssPath = (e) => {
-      const segs = [];
-      let n = e;
-      for (let i = 0; i < 8 && n && n.nodeType === 1; i++) {
-        let seg = n.tagName.toLowerCase();
-        const idAttr = n.getAttribute && n.getAttribute('id');
-        if (idAttr && !/[0-9]{4,}/.test(idAttr)) { segs.unshift(seg + '#' + idAttr); break; }
-        // 类名只取"看起来稳定"的那些（哈希类名写进选择器等于埋雷；
-        // 含 [] : / 的原子类名同理跳过——它们需要转义，拼进去会直接失效）
-        const st = __hashyClass(n.className).stable;
-        if (st.length) seg += '.' + st.slice(0, 2).join('.');
-        const parent = n.parentElement;
-        if (parent) {
-          const sibs = Array.from(parent.children).filter(c => c.tagName === n.tagName);
-          if (sibs.length > 1) seg += ':nth-of-type(' + (sibs.indexOf(n) + 1) + ')';
-        }
-        segs.unshift(seg);
-        n = parent;
-      }
-      return segs.join(' > ');
-    };
+    const cssPath = __cssPath;
 
     // ---- 定位容器：给 within 用（引擎的 within 需要"能唯一框住目标"的范围）----
     // 优先取语义行容器（表格行/列表项），这是"点这一行里的按钮"最常用的范围锚点
@@ -162,7 +94,7 @@ export function generateElementProbeScript(): string {
     for (let i = 0, n = target; i < 8 && n; i++, n = n.parentElement) {
       if (/^(TR|LI)$/.test(n.tagName) || (n.getAttribute && n.getAttribute('data-row-key'))) { row = n; break; }
     }
-    const rowText = row === target ? '' : norm(row.innerText).slice(0, 200);
+    const rowText = row === target ? '' : __norm(row.innerText).slice(0, 200);
 
     // ---- 高亮：把选中的元素框出来，否则用户不知道工具选的是哪一层 ----
     try {

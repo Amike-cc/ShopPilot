@@ -85,6 +85,13 @@
 
           <div v-if="!entryOf(curStep)?.fields.length" class="ct-empty">这一步没有参数。</div>
           <div v-else class="ct-fields">
+            <!-- 拾取按钮存在时先说明它怎么用。不写这一句的话，用户看到「拾取」
+                 会以为是"在页面上找已经填好的东西"，而实际是"对话框会先收起、
+                 你去点一下目标元素、我替你填回来"。 -->
+            <div v-if="hasPickableField" class="ct-pick-hint" data-test="custom-pick-hint">
+              点字段旁的<b>拾取</b> → 编排器保留在右侧 → 在左侧店铺页面上点目标元素 →
+              自动填回来（按 Esc 取消）
+            </div>
             <div v-for="f in entryOf(curStep)?.fields || []" :key="f.key" class="ct-field">
               <span class="ct-flabel">
                 {{ f.label }}<em v-if="f.required" class="ct-req">必填</em>
@@ -123,21 +130,44 @@
 
               <!-- within：限定查找范围（选择器 与 文案+上溯 二选一） -->
               <div v-else-if="f.kind === 'within'" class="ct-within">
-                <input
-                  type="text"
-                  placeholder="选择器（与下面的文案二选一）"
-                  :value="withinOf(curStep, 'selector')"
-                  :data-test="`custom-f-${selected}-${f.key}-selector`"
-                  @input="setWithin(selected, f.key, 'selector', ($event.target as HTMLInputElement).value)"
-                />
-                <div class="ct-within-row">
+                <!-- within 的两个分支也都是"页面上的锚点"，所以也能拾取。
+                     点行内任意位置会取回**整行**（表格行/列表项）的锚点——这正是 within 要的东西，
+                     点按钮本身反而取到的是按钮。 -->
+                <div class="ct-pick-row">
                   <input
                     type="text"
-                    placeholder="行标签文案"
-                    :value="withinOf(curStep, 'text')"
-                    :data-test="`custom-f-${selected}-${f.key}-text`"
-                    @input="setWithin(selected, f.key, 'text', ($event.target as HTMLInputElement).value)"
+                    placeholder="选择器（与下面的文案二选一）"
+                    :value="withinOf(curStep, 'selector')"
+                    :data-test="`custom-f-${selected}-${f.key}-selector`"
+                    @input="setWithin(selected, f.key, 'selector', ($event.target as HTMLInputElement).value)"
                   />
+                  <button
+                    class="ct-pick"
+                    type="button"
+                    :disabled="picking"
+                    title="到店铺页面上点一下：取该行（表格行/列表项）的选择器"
+                    :data-test="`custom-pick-${selected}-${f.key}-selector`"
+                    @click="pick(selected, f.key, 'selector', 'selector')"
+                  >拾取</button>
+                </div>
+                <div class="ct-within-row">
+                  <div class="ct-pick-row">
+                    <input
+                      type="text"
+                      placeholder="行标签文案"
+                      :value="withinOf(curStep, 'text')"
+                      :data-test="`custom-f-${selected}-${f.key}-text`"
+                      @input="setWithin(selected, f.key, 'text', ($event.target as HTMLInputElement).value)"
+                    />
+                    <button
+                      class="ct-pick"
+                      type="button"
+                      :disabled="picking"
+                      title="到店铺页面上点一下：取该行的整行文案"
+                      :data-test="`custom-pick-${selected}-${f.key}-text`"
+                      @click="pick(selected, f.key, 'text', 'text')"
+                    >拾取</button>
+                  </div>
                   <input
                     type="number"
                     min="0"
@@ -148,6 +178,27 @@
                     @input="setWithin(selected, f.key, 'climb', ($event.target as HTMLInputElement).value)"
                   />
                 </div>
+              </div>
+
+              <!-- 文本字段：指向页面元素的那些（f.pick）旁边给一个「拾取」按钮。
+                   这是自定义任务最大的摩擦点——此前只能右键采一次、再去开 DevTools 抄，
+                   而新建任务对话框一打开页面就被原生视图摘掉了，根本没法边建边看。 -->
+              <div v-else-if="f.pick" class="ct-pick-row">
+                <input
+                  type="text"
+                  :value="curStep.input[f.key] ?? ''"
+                  :placeholder="f.placeholder || ''"
+                  :data-test="`custom-f-${selected}-${f.key}`"
+                  @input="setField(selected, f.key, ($event.target as HTMLInputElement).value)"
+                />
+                <button
+                  class="ct-pick"
+                  type="button"
+                  :disabled="picking"
+                  :title="f.pick === 'text' ? '到店铺页面上点一下：取该元素的文案' : '到店铺页面上点一下：取该元素的选择器'"
+                  :data-test="`custom-pick-${selected}-${f.key}`"
+                  @click="pick(selected, f.key, f.pick)"
+                >拾取</button>
               </div>
 
               <input
@@ -214,15 +265,28 @@
 import { computed, ref, watch } from 'vue'
 import {
   STEP_CATALOG, catalogGroups, findCatalogEntry, makeDraftStep,
+  WITHIN_LIMITS,
   type CustomStepDraft, type CustomStepIssue
 } from '@shared/custom-task'
+import { describePickResult, type ElementPickResult, type PickMode } from '@shared/element-pick'
 
 const props = defineProps<{
   steps: CustomStepDraft[]
   issues: CustomStepIssue[]
+  /**
+   * 发起一次拾取：父组件切到 picker-mode（编排器贴右、浏览器视图让出右侧 560px）
+   * → 调 IPC 在页面内挂拾取层 → 返回锚点。
+   *
+   * 为什么由父组件做：拾取要改的是 workbench 级布局（对话框位置、原生视图显隐、
+   * 遮挡状态），而"对话框开没开/选中第几步"是父组件的状态。编辑器只管"填到哪个字段"。
+   */
+  pickElement: (mode: PickMode) => Promise<ElementPickResult>
 }>()
 
-const emit = defineEmits<{ (e: 'update:steps', v: CustomStepDraft[]): void }>()
+const emit = defineEmits<{
+  (e: 'update:steps', v: CustomStepDraft[]): void
+  (e: 'notify', text: string, kind: 'info' | 'success' | 'error'): void
+}>()
 
 const groups = catalogGroups()
 
@@ -252,10 +316,25 @@ const filteredGroups = computed(() => {
 /** 当前筛选结果里的步骤总数（给左栏表头显示） */
 const filteredTotal = computed(() => filteredGroups.value.reduce((n, g) => n + g.entries.length, 0))
 
-/** 当前编辑的是第几步（右栏参数只渲染它） */
-const selected = ref(0)
+/**
+ * 当前编辑的是第几步（右栏参数只渲染它）。
+ *
+ * 由父组件持有（v-model:selected）：拾取期间编辑器实例靠 v-if 条件保留，
+ * 一旦条件写错导致卸载，子组件局部状态会清零。若选中项跟着归零，用户在**第 7 步**点拾取、
+ * 回来却看到第 1 步的参数，会以为"我填的东西没了"。所以选中项必须由父组件持有、活过拾取。
+ */
+const selected = defineModel<number>('selected', { default: 0 })
+
+/** 拾取进行中：期间按钮置灰，避免连点两次叠加两次让位 */
+const picking = ref(false)
 
 const curStep = computed<CustomStepDraft | null>(() => props.steps[selected.value] || null)
+
+/** 当前这一步是否有可拾取的字段（有才显示那句用法说明） */
+const hasPickableField = computed(() => {
+  const e = curStep.value ? entryOf(curStep.value) : null
+  return !!e && e.fields.some(f => !!f.pick || f.kind === 'within')
+})
 
 // 步骤数变少（删除）时把选中项夹回范围内，否则右栏会空白且参数写到一个不存在的下标上
 watch(() => props.steps.length, (n) => {
@@ -322,6 +401,67 @@ function withinOf(s: CustomStepDraft, sub: string): string {
   const w = (s.input.within as Record<string, unknown>) || {}
   const v = w[sub]
   return v === undefined || v === null ? '' : String(v)
+}
+
+/**
+ * 拾取一个锚点填进字段。
+ *
+ * 三种目标：普通选择器字段 / 普通文案字段 / within 的两个子字段。
+ * within 与其他不同：它要的是**整行**的锚点（表格行、列表项），所以优先取结果里的
+ * rowSelector / rowText，取不到才退回元素自身——用户点的往往是行内的按钮，
+ * 直接取按钮的选择器当"查找范围"会得到只有一个按钮那么大的范围，等于限定死了。
+ */
+async function pick(
+  stepIndex: number,
+  key: string,
+  mode: PickMode,
+  sub?: 'selector' | 'text'
+) {
+  if (picking.value) return
+  picking.value = true
+  try {
+    const r = await props.pickElement(mode)
+    if (!r || !r.ok) return  // 父组件已经提示过原因（取消/超时/注入失败）
+    if (sub) {
+      const wanted = sub === 'selector'
+        ? (r.rowSelector || r.selector || '')
+        : (r.rowText || r.text || '')
+      const limit = sub === 'selector' ? WITHIN_LIMITS.selector : WITHIN_LIMITS.text
+      if (!wanted) {
+        emit('notify', sub === 'selector'
+          ? '这个元素取不到可用于"限定范围"的选择器，请点它所在的那一行'
+          : '这个元素取不到文字，请点它所在的那一行', 'error')
+        return
+      }
+      if (wanted.length > limit) {
+        // 截断会得到一个永远匹配不上的锚点，比不填更糟——如实说明并让用户换目标
+        emit('notify', `这一行的${sub === 'selector' ? '选择器' : '文案'}太长（${wanted.length} 字，上限 ${limit}）` +
+          '，请点更靠近目标的那一行', 'error')
+        return
+      }
+      setWithin(stepIndex, key, sub, wanted)
+      emit('notify', describePickResult(r, mode), 'success')
+      return
+    }
+
+    const value = mode === 'text' ? (r.text || '') : (r.selector || '')
+    const f = entryOf(props.steps[stepIndex])?.fields.find(x => x.key === key)
+    if (!value) {
+      emit('notify', '这个元素取不到可用锚点，换个目标再试', 'error')
+      return
+    }
+    if (f?.maxLength !== undefined && value.length > f.maxLength) {
+      emit('notify', `拾取到的长度 ${value.length} 字超过该字段上限 ${f.maxLength}，` +
+        '请点更具体的目标元素（越小越准）', 'error')
+      return
+    }
+    setField(stepIndex, key, value)
+    emit('notify', describePickResult(r, mode), 'success')
+  } catch (e: any) {
+    emit('notify', '拾取失败：' + String(e?.message || e), 'error')
+  } finally {
+    picking.value = false
+  }
 }
 
 /** 添加并选中它——加完紧接着就要填参数，不选中等于让用户再点一次 */
@@ -435,6 +575,11 @@ function move(i: number, delta: number) {
 .ct-params-title { font-size: 12px; color: #fff; }
 .ct-desc { font-size: 10px; color: var(--color-text-secondary); line-height: 1.5; }
 .ct-fields { display: flex; flex-direction: column; gap: 8px; }
+.ct-pick-hint {
+  font-size: 10px; line-height: 1.55; color: var(--color-text-secondary);
+  padding: 6px 7px; border: 1px dashed var(--color-border); border-radius: 4px;
+}
+.ct-pick-hint b { color: var(--color-primary); }
 .ct-field { display: flex; flex-direction: column; gap: 3px; }
 .ct-flabel { font-size: 11px; color: var(--color-text-secondary); }
 .ct-req { font-style: normal; color: var(--color-warning); margin-left: 4px; font-size: 10px; }
@@ -445,10 +590,21 @@ function move(i: number, delta: number) {
 }
 .ct-field input:focus, .ct-field select:focus, .ct-within input:focus { outline: none; border-color: var(--color-primary); }
 .ct-check { display: flex; align-items: center; gap: 6px; }
+/* 输入框 + 拾取按钮同一行：按钮必须贴着它要填的输入框，
+   参数一多、按钮飘远就会出现"点了拾取却不知道填到哪一格"。 */
+.ct-pick-row { display: flex; gap: 5px; align-items: stretch; }
+.ct-pick-row input { flex: 1 1 0; width: auto; min-width: 0; }
+.ct-pick {
+  flex: 0 0 auto; padding: 0 9px; font-size: 11px; font-family: inherit; white-space: nowrap;
+  color: var(--color-text-primary); background: var(--color-bg-elevated);
+  border: 1px solid var(--color-primary); border-radius: 4px;
+}
+.ct-pick:hover { color: #fff; background: var(--color-primary); }
+.ct-pick:disabled { opacity: .45; cursor: not-allowed; border-color: var(--color-border); }
 .ct-within { display: flex; flex-direction: column; gap: 5px; }
 .ct-within-row { display: flex; gap: 5px; }
-.ct-within-row input:first-child { flex: 1 1 auto; }
-.ct-within-row input:last-child { flex: 0 0 76px; }
+.ct-within-row > .ct-pick-row { flex: 1 1 0; min-width: 0; }
+.ct-within-row > input { flex: 0 0 76px; }
 .ct-submit {
   display: flex; align-items: flex-start; gap: 6px;
   font-size: 10px; color: var(--color-warning); cursor: pointer; line-height: 1.5;

@@ -53,6 +53,8 @@ export const IPC_CHANNELS = {
   BROWSER_CLEAR_DATA: 'browser:clearData',
   BROWSER_CAPTURE: 'browser:capture',
   BROWSER_OPEN_WINDOW: 'browser:openWindow',
+  /** 编排器「拾取元素」：在店铺页面上点一下取锚点（自定义任务用） */
+  BROWSER_PICK_ELEMENT: 'browser:pickElement',
   /** 渲染层弹层遮挡时摘除原生视图挂载（WebContentsView 永远画在 HTML 之上） */
   BROWSER_SET_VIEWS_OBSCURED: 'browser:setViewsObscured',
 

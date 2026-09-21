@@ -232,13 +232,24 @@ export function startEngine(): void {
   if (!keepAliveTimer) keepAliveTimer = setInterval(schedulePump, 1500)
 }
 
-/** 进程重启：遗留的非终态 run 如实标记中断（跨进程原地恢复不在本轮范围） */
+/**
+ * 进程重启：遗留的非终态 run 如实标记中断（跨进程原地恢复不在本轮范围）。
+ *
+ * queued 与 running 必须分开说：queued 的 run 还没开始执行过任何步骤（内存队列
+ * 随进程一起没了，它不可能产生过副作用），而 running/waiting_confirmation/paused
+ * 可能停在任意步骤中间。混成一句"运行中断"会让用户以为 queued 的那次也跑了一半，
+ * 去对账一个根本不存在的部分执行。
+ */
 function reconcileOnStartup(): void {
   try {
     const db = getDatabase()
+    const now = Date.now()
     db.prepare(
-      "UPDATE task_runs SET status = 'failed', status_reason = '进程重启，运行中断（请重新运行任务）', finished_at = COALESCE(finished_at, ?) WHERE status IN ('queued','running','waiting_confirmation','paused')"
-    ).run(Date.now())
+      "UPDATE task_runs SET status = 'failed', status_reason = '进程重启，排队未开始（无任何步骤已执行，可直接重新运行）', finished_at = COALESCE(finished_at, ?) WHERE status = 'queued'"
+    ).run(now)
+    db.prepare(
+      "UPDATE task_runs SET status = 'failed', status_reason = '进程重启，运行中断（请重新运行任务）', finished_at = COALESCE(finished_at, ?) WHERE status IN ('running','waiting_confirmation','paused')"
+    ).run(now)
   } catch { /* 启动路径不因归档失败而中断 */ }
 }
 

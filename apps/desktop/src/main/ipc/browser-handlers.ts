@@ -225,7 +225,14 @@ export function registerBrowserHandlers(): void {
       const wc = WindowManager.getTabWebContents(input.storeId, tabId)
       if (!wc) return error(ERROR_CODES.BROWSER_CLOSED.code, '店铺标签页不可用', requestId)
       WindowManager.activateTab(input.storeId, tabId)
-      await wc.loadURL(input.url)
+      // input.url 来自渲染层，同样过协议白名单（与 navigateTab 一致）
+      let safeUrl: string
+      try {
+        safeUrl = WindowManager.assertNavigableUrl(String(input.url))
+      } catch (err: any) {
+        return error(ERROR_CODES.NAVIGATION_BLOCKED.code, ERROR_CODES.NAVIGATION_BLOCKED.message, requestId)
+      }
+      await wc.loadURL(safeUrl)
       await new Promise(r => setTimeout(r, 2000))
       if (input.loadCategoryTree) {
         const pageState = await wc.executeJavaScript(`(() => {
@@ -440,6 +447,21 @@ export function registerBrowserHandlers(): void {
     try {
       const dataUrl = await WindowManager.captureTab(input.storeId, input.tabId, input.format || 'png')
       return success({ format: input.format || 'png', data: dataUrl }, requestId)
+    } catch (err: any) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+    }
+  })
+
+  // browser:pickElement - 编排器「拾取元素」：在店铺页面上点一下取锚点（自定义任务用）
+  ipcMain.handle(IPC_CHANNELS.BROWSER_PICK_ELEMENT, async (_event: IpcMainInvokeEvent, input: { storeId: string, mode: 'selector' | 'text' }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      if (!input?.storeId) return error(ERROR_CODES.INVALID_ARGUMENT.code, '缺少 storeId', requestId)
+      if (input.mode !== 'selector' && input.mode !== 'text') {
+        return error(ERROR_CODES.INVALID_ARGUMENT.code, `非法的拾取模式: ${String(input.mode)}（应为 selector/text）`, requestId)
+      }
+      const result = await WindowManager.pickElementFromActiveTab(input.storeId, input.mode)
+      return success(result, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }
