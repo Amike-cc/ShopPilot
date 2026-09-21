@@ -107,7 +107,7 @@ export function registerTaskHandlers(): void {
   })
 
   // 诊断：立即触发定时任务（与到点触发同路径），便于验收与用户"立即运行一次"
-  ipcMain.handle(IPC_CHANNELS.TASK_CREATE + ':fire', async (_e: IpcMainInvokeEvent, input: { taskId: string }): Promise<IPCResult> => {
+  ipcMain.handle(IPC_CHANNELS.TASK_CREATE_FIRE, async (_e: IpcMainInvokeEvent, input: { taskId: string }): Promise<IPCResult> => {
     const requestId = rid()
     try { return ok(Scheduler.fireNow(input.taskId), requestId) } catch (e: any) { return taskError(e, requestId) }
   })

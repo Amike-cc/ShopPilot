@@ -24,6 +24,18 @@
  * 早期"含数字即哈希"的规则把 `h-[44px]` 也判成哈希，假警报让整个警告失去可信度。
  */
 export const HASHY_CLASS_JS = `
+  const __rawClass = (el) => {
+    // SVG 元素的 className 是 SVGAnimatedString：String() 会得到 "[object SVGAnimatedString]"，
+    // 一律优先读 getAttribute('class')
+    try {
+      const g = el.getAttribute && el.getAttribute('class');
+      if (typeof g === 'string') return g;
+    } catch {}
+    const c = el.className;
+    if (typeof c === 'string') return c;
+    if (c && typeof c.baseVal === 'string') return c.baseVal;
+    return '';
+  };
   const __hashyClass = (cls) => {
     const parts = String(cls || '').split(/\\s+/).filter(Boolean);
     const isHashy = (p) => {
@@ -57,7 +69,7 @@ export const CSS_PATH_JS = `
       let seg = n.tagName.toLowerCase();
       const idAttr = n.getAttribute && n.getAttribute('id');
       if (idAttr && !/[0-9]{4,}/.test(idAttr)) { segs.unshift(seg + '#' + idAttr); break; }
-      const st = __hashyClass(n.className).stable;
+      const st = __hashyClass(__rawClass(n)).stable;
       if (st.length) seg += '.' + st.slice(0, 2).join('.');
       const parent = n.parentElement;
       if (parent) {

@@ -37,6 +37,7 @@ export function describePickResult(r: ElementPickResult, mode: PickMode): string
     const why: Record<string, string> = {
       NO_ELEMENT_AT_POINT: '落点处没有元素',
       PICK_TIMEOUT: '拾取超时（长时间没有点击）',
+      PICK_NAVIGATED: '拾取期间页面跳转了（请重新导航到目标页再拾取）',
       NO_STORE_PAGE: '当前没有打开的店铺页面',
       NO_ACTIVE_TAB: '当前店铺没有活动标签页',
       INJECT_FAILED: '页面注入失败（页面可能正在跳转或已崩溃）',

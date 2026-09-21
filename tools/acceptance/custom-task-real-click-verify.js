@@ -257,13 +257,25 @@ async function main() {
       if (!rect.visible) throw new Error(`元素不在可视区内：${selector}（${label}）`)
       if (rect.disabled) throw new Error(`元素是禁用态：${selector}（${label}）`)
 
-      // 装监听器记录下一次真实点击是否受信任
+      // 装监听器记录下一次真实点击是否受信任。
+      // 监听器装在 document（capture）而非目标节点上：Vue 重渲染会替换按钮节点，
+      // 装在旧节点上的 once 监听器会被连带丢掉，表现为"落点正确但没触发"。
+      // 记录 mousedown→mouseup→click 全序列：只到 mousedown 说明按下被吞，
+      // 全都没有说明 OS 级点击根本没进渲染进程（原生视图遮挡）。
       await ui.eval(`
         window.__trustProbe = null;
-        const el = document.querySelector(${JSON.stringify(selector)});
-        el.addEventListener('click', (ev) => {
-          window.__trustProbe = { trusted: ev.isTrusted, tag: ev.target.tagName, cls: String(ev.target.className || '').slice(0, 40) };
-        }, { once: true, capture: true });
+        window.__trustSeq = [];
+        window.__trustSelector = ${JSON.stringify(selector)};
+        for (const t of ['mouseover', 'mousemove', 'mousedown', 'mouseup', 'click']) {
+          document.addEventListener(t, (ev) => {
+            const el = document.querySelector(window.__trustSelector);
+            const hit = el && (ev.target === el || el.contains(ev.target));
+            window.__trustSeq.push(t + ':' + (ev.isTrusted ? 'T' : 'F') + ':' + (hit ? 'HIT' : 'miss'));
+            if (t === 'click' && hit) {
+              window.__trustProbe = { trusted: ev.isTrusted, tag: ev.target.tagName, cls: String(ev.target.className || '').slice(0, 40) };
+            }
+          }, { capture: true });
+        }
         return true;
       `)
 
@@ -271,7 +283,33 @@ async function main() {
       runBatch(pid, [{ type: 'click', ...pt }])
       await sleep(220)
 
-      const probe = await ui.eval(`return window.__trustProbe;`)
+      let probe = await ui.eval(`return window.__trustProbe;`)
+      if (!probe) {
+        // 点击没落到目标上：先 Escape（关可能残留的 OS 级 select 弹层）再重查坐标点一次。
+        await sleep(400)
+        const retry = await ui.eval(`
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { left: r.left, top: r.top, width: r.width, height: r.height };
+        `)
+        if (retry) {
+          runBatch(pid, [{ type: 'key', key: 'Escape' }, { type: 'sleep', ms: 200 }, { type: 'click', ...toClientCss(retry) }])
+          await sleep(220)
+          probe = await ui.eval(`return window.__trustProbe;`)
+        }
+        if (!probe) {
+          const seq = await ui.eval(`return (window.__trustSeq || []).join(' ');`).catch(() => 'unknown')
+          const hit = await ui.eval(`
+            const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+            const x = r.left + r.width / 2, y = r.top + r.height / 2;
+            const el = document.elementFromPoint(x, y);
+            return (el ? (el.tagName + '.' + String(el.className || '').slice(0, 40)) : 'null')
+              + ' @ ' + Math.round(x) + ',' + Math.round(y);
+          `).catch(() => 'unknown')
+          console.log(`   [诊断] ${label} 落点实际命中: ${hit} | 事件序列: ${seq}`);
+        }
+      }
       return { probe, point: pt }
     }
 
@@ -386,6 +424,12 @@ async function main() {
     `)
     check('③ 真实键盘操作把任务类型切到「自定义任务」', flowNow.value === 'custom', JSON.stringify(flowNow))
     check('③ 切换后自定义编排器渲染出来', flowNow.editor === true)
+    // 原生 select 的下拉弹层是 OS 级菜单：Return 选中值后它可能还开着，一直盖住对话框、
+    // 吃掉后续全部 OS 点击（实测第④步事件序列全空、hasFocus=false、焦点还在 SELECT 上）。
+    // 按 Escape 确保它关闭，并把焦点还给页面。
+    runBatch(pid, [{ type: 'key', key: 'Escape' }, { type: 'sleep', ms: 250 }])
+    await ui.eval(`${DOM} if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); return true;`)
+    await sleep(200)
 
     // ------------------------------------------------------------------
     // ④ 真实点击左侧目录加一步「打开网址」

@@ -1,4 +1,16 @@
-# ShopPilot 0.4.42 变更说明（M0–M4）
+# ShopPilot 0.4.43 变更说明（M0–M4）
+
+> **构建标签：INTERNAL_BUILD** —— 本包未做代码签名，按 DEVELOPMENT_SPEC §21.5 不得标记为 RELEASE。可用于内部试用与验收，正式对外发布前需补签名证书与验收记录。
+
+## 本次更新（0.4.43）：真机验收挖出的原生视图遮挡 + 低优先级收尾
+
+- 修产品 bug：任务对话框打开（task-layout）后，原生店铺视图仍挂在旧 bounds 上，多出部分盖住对话框，OS 真实点击被店铺页面吃掉、HTML 收不到任何事件（CDP 合成事件不受影响，所以 CDP 验收一直是绿的）。对话框状态变化时显式上报一次视口，不依赖 ResizeObserver 时机。真机 SendInput 验收 37/37 通过为证。
+- 低优先级收尾：恒真式去重条件、reorder 缺员不再产生重复 order、closeTab 重排落库、调度器节拍泄漏清理、属性转义、SVG 类名、浏览器 IPC 错误码映射（不再一律 INTERNAL_ERROR）、`task:create:fire` 契约化、validate 未知键/climb 警告、number 字段存 Number、拾取导航取消通道（PICK_NAVIGATED）。
+- 验收脚本：realClick 加失败重试与落点诊断；win-input 加 `windowAt`（OS 视角查坐标归属窗口）。
+
+验证：单测 322/322；TypeScript 通过；本地 CDP 验收 54/54；SendInput 真机验收 37/37。ESLint 未跑（本机 eslint 插件缺失，干净树同样失败，属环境既有问题）。
+
+---
 
 > **构建标签：INTERNAL_BUILD** —— 本包未做代码签名，按 DEVELOPMENT_SPEC §21.5 不得标记为 RELEASE。可用于内部试用与验收，正式对外发布前需补签名证书与验收记录。
 

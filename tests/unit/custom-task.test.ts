@@ -512,6 +512,26 @@ describe('自定义任务 · 字段校验', () => {
     expect(issues.some(i => i.level === 'warning' && i.message.includes('导航'))).toBe(true)
   })
 
+  it('未知参数 → 警告（toEngineSteps 会静默丢弃，手误如 deeep 要提示）', () => {
+    const s: CustomStepDraft = {
+      type: 'click',
+      input: { selector: 'button', deeep: true } as unknown as Record<string, unknown>
+    }
+    const issues = validateCustomSteps([nav(), s])
+    expect(hasBlockingIssues(issues), '只是警告不该拦住').toBe(false)
+    expect(issues.some(i => i.level === 'warning' && i.message.includes('deeep'))).toBe(true)
+  })
+
+  it('选择器模式下填上溯层数 → 警告（climb 只在文案模式生效，会被丢掉）', () => {
+    const s: CustomStepDraft = {
+      type: 'clickByText',
+      input: { text: '确认', within: { selector: 'tr', climb: 2 } }
+    }
+    const issues = validateCustomSteps([nav(), s])
+    expect(hasBlockingIssues(issues), '只是警告不该拦住').toBe(false)
+    expect(issues.some(i => i.level === 'warning' && i.message.includes('上溯层数'))).toBe(true)
+  })
+
   it('超时越界/非整数 → 报错并指到具体步骤（与主进程 500~3600000 对齐）', () => {
     const nav = (): CustomStepDraft => ({ type: 'navigate', input: { url: 'https://example.com/a' } })
     for (const bad of [499, 3600001, 1.5, 'abc', NaN] as unknown[]) {

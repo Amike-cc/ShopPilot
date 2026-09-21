@@ -105,9 +105,16 @@ export function getBrowserHostWindow(): BrowserWindow | null {
 
 /** 渲染层上报 BrowserViewport 区域（DIP，相对内容区） */
 export function setViewportBounds(bounds: ViewportBounds): void {
-  viewport = bounds
+  // 渲染层数值直接透传 setBounds：NaN/Infinity 会抛错，先洗成有限数并限幅
+  const clean = (v: unknown) => Number.isFinite(v) ? Number(v) : 0
+  viewport = {
+    x: clean(bounds?.x),
+    y: clean(bounds?.y),
+    width: Math.min(Math.max(clean(bounds?.width), 0), 16384),
+    height: Math.min(Math.max(clean(bounds?.height), 0), 16384)
+  }
   if (mountedView) {
-    mountedView.setBounds({ x: bounds.x, y: bounds.y, width: Math.max(bounds.width, 0), height: Math.max(bounds.height, 0) })
+    mountedView.setBounds({ x: viewport.x, y: viewport.y, width: Math.max(viewport.width, 0), height: Math.max(viewport.height, 0) })
   }
 }
 
@@ -469,9 +476,14 @@ export function closeTab(storeId: string, tabId: string): void {
   state.tabs.delete(tabId)
   getDatabase().prepare('DELETE FROM tabs WHERE id = ?').run(tabId)
 
+  // 重排只改内存会让"重启恢复顺序"错乱：orderIndex 同步落库
+  const db = getDatabase()
+  const orderStmt = db.prepare('UPDATE tabs SET order_index = ?, updated_at = ? WHERE id = ?')
   let idx = 0
   for (const t of Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)) {
-    t.orderIndex = idx++
+    t.orderIndex = idx
+    try { orderStmt.run(idx, Date.now(), t.id) } catch { /* 落库失败不阻塞关闭 */ }
+    idx++
   }
 
   if (state.activeTabId === tabId) {
@@ -501,13 +513,24 @@ export function reorderTabs(storeId: string, orderedTabIds: string[]): void {
   if (!state) return
   const db = getDatabase()
   const stmt = db.prepare('UPDATE tabs SET order_index = ?, updated_at = ? WHERE id = ?')
-  orderedTabIds.forEach((tabId, index) => {
+  // 传入不完整时，未传入的按原顺序排后面——避免 order 重复导致恢复顺序错乱
+  const seen = new Set<string>()
+  let index = 0
+  for (const tabId of orderedTabIds) {
     const tab = state.tabs.get(tabId)
-    if (tab) {
+    if (tab && !seen.has(tabId)) {
+      seen.add(tabId)
       tab.orderIndex = index
       stmt.run(index, Date.now(), tabId)
+      index++
     }
-  })
+  }
+  for (const tab of Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)) {
+    if (seen.has(tab.id)) continue
+    tab.orderIndex = index
+    try { stmt.run(index, Date.now(), tab.id) } catch { /* ignore */ }
+    index++
+  }
   emitTabs(storeId)
 }
 
@@ -614,9 +637,25 @@ export async function pickElementFromActiveTab(storeId: string, mode: PickMode):
     // 视图刚被重新挂上时焦点往往还在主窗口的渲染层上，不主动聚焦的话用户按 Esc
     // 页面上毫无反应，只能干等到 120s 超时——而"以为按了取消、其实没有"是最糟的组合。
     wc.focus()
-    const result = await wc.executeJavaScript(buildElementPickerScript(mode)) as ElementPickResult
-    logMain('info', `元素拾取 store=${storeId} mode=${mode} :: ${describePickResult(result, mode)}`)
-    return result
+    // 拾取期间页面导航（用户点了链接/页面自己跳）会让注入的等待层丢失，
+    // 主进程侧没有取消通道，只能等 120s 超时。监听导航并在页面里主动 finish，
+    // 让拾取立刻返回 PICK_NAVIGATED 而不是干等两分钟。
+    const NAVIGATED_RESULT = '__shopilot_pick_navigated__'
+    const onNav = () => {
+      try {
+        void wc.executeJavaScript(
+          `(window.${NAVIGATED_RESULT} && window.${NAVIGATED_RESULT}({ ok: false, reason: 'PICK_NAVIGATED' }))`
+        ).catch(() => undefined)
+      } catch { /* 页面已销毁就等注入 promise 自然失败 */ }
+    }
+    wc.on('did-start-navigation', onNav)
+    try {
+      const result = await wc.executeJavaScript(buildElementPickerScript(mode, 120000, NAVIGATED_RESULT)) as ElementPickResult
+      logMain('info', `元素拾取 store=${storeId} mode=${mode} :: ${describePickResult(result, mode)}`)
+      return result
+    } finally {
+      wc.removeListener('did-start-navigation', onNav)
+    }
   } catch (err) {
     // 注入失败（页面正在导航/崩溃）如实返回原因，不让异常冒到 IPC 层变成 INTERNAL_ERROR
     logMain('warn', `元素拾取失败 store=${storeId} mode=${mode}: ${String(err)}`)

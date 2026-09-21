@@ -32,8 +32,12 @@ export { describePickResult } from '@shared/element-pick'
  *
  * `executeJavaScript` 会 await 这个 Promise，所以主进程侧调用一次即可拿到结果，
  * 不需要轮询。
+ *
+ * finishHook（可选）：主进程在导航时从外部主动结束拾取的通道名。
+ * 页面导航会让注入的等待层丢失、主进程侧又没有取消通道，只能干等超时；
+ * 主进程监听 did-start-navigation 后调这个 hook，让拾取立刻返回 PICK_NAVIGATED。
  */
-export function buildElementPickerScript(mode: PickMode, timeoutMs = 120000): string {
+export function buildElementPickerScript(mode: PickMode, timeoutMs = 120000, finishHook = ''): string {
   return `(() => {
     ${ANCHOR_HELPERS_JS}
     const BANNER_ID = '__shopilot_pick_banner__';
@@ -50,6 +54,8 @@ export function buildElementPickerScript(mode: PickMode, timeoutMs = 120000): st
 
     return new Promise((resolve) => {
       let settled = false;
+      // 外部结束通道名（主进程导航监听用；空串 = 不注册）
+      const HOOK = ${JSON.stringify(finishHook)};
 
       // ---- 遮罩：接管全部指针事件，页面收不到任何点击（见文件头"安全属性"） ----
       const mask = document.createElement('div');
@@ -85,6 +91,7 @@ export function buildElementPickerScript(mode: PickMode, timeoutMs = 120000): st
           if (el && el.parentNode) el.parentNode.removeChild(el);
         }
         window.removeEventListener('keydown', onKey, true);
+        try { if (HOOK) delete window[HOOK]; } catch {}
       };
 
       const finish = (payload) => {
@@ -92,8 +99,16 @@ export function buildElementPickerScript(mode: PickMode, timeoutMs = 120000): st
         settled = true;
         clearTimeout(timer);
         cleanup();
+        try { delete window[HOOK]; } catch {}
         resolve(payload);
       };
+
+      // 外部结束通道：主进程监听到页面导航时调 window[HOOK](payload)，
+      // 让拾取立刻返回而不是干等到超时。导航后页面上下文会销毁，
+      // 调不到就等注入 promise 自然失败（INJECT_FAILED），语义同样是"没拾到"。
+      if (HOOK) {
+        try { window[HOOK] = (payload) => finish(payload); } catch {}
+      }
 
       // ---- 命中：遮罩临时让开一下，用 elementFromPoint 拿真实元素 ----
       const hitAt = (x, y) => {
@@ -134,7 +149,7 @@ export function buildElementPickerScript(mode: PickMode, timeoutMs = 120000): st
         const ownText = __ownText(t);
         const innerText = __norm(t.innerText);
         const textAnchor = ownText || (innerText.length <= 40 ? innerText : '');
-        const cls = __hashyClass(t.className);
+        const cls = __hashyClass(__rawClass(t));
 
         // 所在行（表格行 / 列表项）：给 within 用。行文本截断到 200 字再过 IPC：
         // 整表行 innerText 可能上万字，不过 IPC 又大又没用（within 上限 60 字，

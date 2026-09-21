@@ -42,7 +42,9 @@ param(
   [Parameter(Mandatory = $true)][string]$Action,
   [int]$TargetPid = 0,
   [string]$Spec = '',
-  [string]$SpecB64 = ''
+  [string]$SpecB64 = '',
+  [int]$X = 0,
+  [int]$Y = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -109,6 +111,7 @@ public class ShopilotInput
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     [DllImport("user32.dll")] public static extern IntPtr GetFocus();
     [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
@@ -273,6 +276,17 @@ switch ($Action) {
     'geometry' { (Get-Geometry (Get-TargetHandle)) | ConvertTo-Json -Compress }
     'foreground' { (Get-ForegroundInfo) | ConvertTo-Json -Compress }
     'focus' { (Invoke-Focus) | ConvertTo-Json -Compress }
+    'windowAt' {
+        # 点击坐标处的顶层窗口归属：OS 点击被谁吃了，用这个查（HTML 的 elementFromPoint 看不见 OS 级遮挡）
+        $pt = New-Object ShopilotInput+POINT
+        $pt.X = $X; $pt.Y = $Y
+        $h = [ShopilotInput]::WindowFromPoint($pt)
+        $wpid = 0
+        [void][ShopilotInput]::GetWindowThreadProcessId($h, [ref]$wpid)
+        $name = ''
+        try { $name = (Get-Process -Id $wpid -ErrorAction Stop).ProcessName } catch { $name = '?' }
+        [pscustomobject]@{ x = $X; y = $Y; pid = $wpid; name = $name } | ConvertTo-Json -Compress
+    }
     'batch' {
         if (-not $SpecB64) { throw 'SpecB64 is required for batch' }
         $json = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($SpecB64))

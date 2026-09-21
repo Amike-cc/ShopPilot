@@ -4,9 +4,9 @@
 
 ## 项目状态
 
-**版本**: v0.4.42 · **构建标签**: `INTERNAL_BUILD`（未做代码签名，§21.5）
+**版本**: v0.4.43 · **构建标签**: `INTERNAL_BUILD`（未做代码签名，§21.5）
 **里程碑**: M0 技术验证 ✅ · M1 工作台核心 ✅ · M2 环境/代理/备份 ✅ · M3 任务辅助 ✅ · M4 发布工程 ✅ · 自动更新（§21）✅
-**验收**: 单测 319/319（含导航 URL 协议白名单、调度器节拍锚定、启动对账分工、TASK_BAD_STATE 友好化、拾取原因码全覆盖）；自定义任务本地 CDP 验收与 SendInput 真机验收随包（`pnpm run test:custom-local` / `test:custom-realclick`，需真机 Electron 环境）。历史构建结果见 `docs/RELEASE_NOTES.md`；M1/M2/安全/更新链路的最近结果见 `release/release.json`。M2 29+8 是 0.1.0 构建上的结果，其后未复跑（改动未触及代理/指纹那条路径）。
+**验收**: 单测 322/322；本地 CDP 自定义任务验收 54/54；SendInput 真机验收 37/37。历史构建结果见 `docs/RELEASE_NOTES.md`；M1/M2/安全/更新链路的最近结果见 `release/release.json`。M2 29+8 是 0.1.0 构建上的结果，其后未复跑（改动未触及代理/指纹那条路径）。
 
 ## 文档索引
 

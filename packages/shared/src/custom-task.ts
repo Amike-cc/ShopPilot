@@ -516,6 +516,14 @@ export function validateCustomSteps(steps: CustomStepDraft[]): CustomStepIssue[]
       return
     }
 
+    // 未知键 warning：toEngineSteps 会静默丢弃目录之外的键（如手误 deeep:true），
+    // 运行时以缺省行为失败却看不出原因。这里提示但不拦创建（可能是前向兼容的新字段）。
+    for (const k of Object.keys(s.input || {})) {
+      if (!entry.fields.some(f => f.key === k)) {
+        issues.push({ level: 'warning', stepIndex: i, message: `${where}「${entry.label}」：未知参数「${k}」会被忽略（是否手误？）` })
+      }
+    }
+
     if (entry.type === 'waitForUserConfirmation') sawGate = true
     if (entry.type === 'navigate' || entry.type === 'useTab') sawNavigation = true
 
@@ -584,6 +592,13 @@ export function validateCustomSteps(steps: CustomStepDraft[]): CustomStepIssue[]
             issues.push({
               level: 'error', stepIndex: i,
               message: `${where}「${entry.label}」：上溯层数必须是 ${WITHIN_LIMITS.climbMin}~${WITHIN_LIMITS.climbMax} 的整数`
+            })
+          } else if (hasSel) {
+            // climb 只在文案模式下生效（引擎按文本找行再上溯；选择器模式直接命中无需上溯，
+            // toEngineSteps 会丢掉它）。这里提示但不拦，避免用户以为"填了就有用"。
+            issues.push({
+              level: 'warning', stepIndex: i,
+              message: `${where}「${entry.label}」：选择器模式下上溯层数不生效（只在文案模式下用），会被忽略`
             })
           }
         }

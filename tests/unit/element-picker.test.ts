@@ -37,6 +37,17 @@ describe('拾取元素 · 注入脚本', () => {
     expect(script, '超时必须走 finish()，且带上可识别的原因码').toContain("PICK_TIMEOUT")
   })
 
+  it('导航结束通道按参数注册（页面跳转时立刻返回，不干等超时）', () => {
+    const withHook = buildElementPickerScript('selector', 120000, '__shopilot_pick_navigated__')
+    expect(() => new Function(withHook)).not.toThrow()
+    // 通道名进脚本、挂到 window 上可供主进程调用；reason 由主进程侧传入（PICK_NAVIGATED 登记在 element-pick）
+    expect(withHook).toContain('__shopilot_pick_navigated__')
+    expect(withHook).toContain('window[HOOK]')
+    // 不传 hook 时不注册空通道
+    const plain = buildElementPickerScript('selector')
+    expect(plain).toContain('const HOOK = ""')
+  })
+
   it('用户点击后取的是锚点、**不是**把点击转发给页面', () => {
     const script = buildElementPickerScript('selector')
     // 拾取时用户点的往往正是「确认发送」「提交」这类不可逆按钮。事件一旦落到页面上，
@@ -150,6 +161,7 @@ describe('拾取元素 · 结果措辞', () => {
     const allReasons = [
       'NO_ELEMENT_AT_POINT',
       'PICK_TIMEOUT',
+      'PICK_NAVIGATED',
       'NO_STORE_PAGE',
       'NO_ACTIVE_TAB',
       'INJECT_FAILED',

@@ -4248,7 +4248,17 @@ function refreshOverlayOcclusion(): Promise<void> {
 
 watch(
   () => [ws.createDialogOpen, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value, invoiceCenterOpen.value, taskDialogOpen.value, taskFlow.value, customPicking.value],
-  () => { refreshOverlayOcclusion() },
+  () => {
+    refreshOverlayOcclusion()
+    // task-layout 切换（任务对话框开/关、自定义/邀约切换）会改变视口尺寸：
+    // 原生视图挂在主进程手里的旧 bounds 上，多出来的部分会盖住对话框（实测 776 宽旧视图
+    // 盖住 523 处的目录按钮，OS 点击被店铺页面吃掉、HTML 收不到任何事件）。
+    // ResizeObserver 理论上会报，但布局与上报是两条异步链，时序一错就盖住；
+    // 这里等一帧让布局落定后显式上报一次，不靠 RO 时机。
+    nextTick(() => {
+      requestAnimationFrame(() => reportViewport())
+    })
+  },
   { immediate: true }
 )
 

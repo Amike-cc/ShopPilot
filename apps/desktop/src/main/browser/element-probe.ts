@@ -85,7 +85,10 @@ export function generateElementProbeScript(): string {
     }
 
     // ---- 第 3 层：CSS 路径（最后手段）----
-    const cls = __hashyClass(target.className);
+    // 类名读取走 __rawClass：SVG 元素的 className 是 SVGAnimatedString 而非字符串，
+    // 直接 String() 会得到 "[object SVGAnimatedString]"（与 element-anchor-js 同一逻辑）
+    const rawClass = __rawClass(target);
+    const cls = __hashyClass(rawClass);
     const cssPath = __cssPath;
 
     // ---- 定位容器：给 within 用（引擎的 within 需要"能唯一框住目标"的范围）----
@@ -121,7 +124,7 @@ export function generateElementProbeScript(): string {
       innerText: fullText.slice(0, 200),
       attrs,
       cssPath: cssPath(target),
-      className: String(target.className || '').slice(0, 300),
+      className: __rawClass(target).slice(0, 300),
       hashyClasses: cls.hashy,
       escapeClasses: cls.escape,
       stableClasses: cls.stable,
@@ -204,7 +207,9 @@ export function formatElementProbe(r: ElementProbeResult): string {
     for (const [k, v] of attrs) {
       lines.push(`  ${k}="${v}"`)
       if (k.startsWith('data-') || k === 'name' || k === 'aria-label') {
-        lines.push(`    → waitForSelector: { selector: '[${k}="${v}"]' }`)
+        // 属性值里的双引号/反斜杠必须转义，否则拼出来的是非法选择器（仅文档文本，不执行）
+        const esc = String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+        lines.push(`    → waitForSelector: { selector: '[${k}="${esc}"]' }`)
       }
     }
   }

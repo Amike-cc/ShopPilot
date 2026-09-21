@@ -661,7 +661,7 @@ async function findTextTarget(
     let hit = cands[0].el;
     let picked = 'best';
     let rowKey = null;
-    if (roundIdx != null || visited.size >= 0 && dedupNs) {
+    if (roundIdx != null || dedupNs) {
       const rowOf = (el) => el.closest('tr, li, [data-row-key], [class*="card"], [class*="dorami"]') || el.parentElement || el;
       const keyOf = (el) => {
         const row = rowOf(el);

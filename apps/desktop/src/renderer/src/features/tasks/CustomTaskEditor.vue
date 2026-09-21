@@ -125,7 +125,7 @@
                 :value="curStep.input[f.key] ?? ''"
                 :placeholder="f.placeholder || (f.min !== undefined ? `${f.min} ~ ${f.max ?? '不限'}` : '')"
                 :data-test="`custom-f-${selected}-${f.key}`"
-                @input="setField(selected, f.key, ($event.target as HTMLInputElement).value)"
+                @input="setField(selected, f.key, ($event.target as HTMLInputElement).value === '' ? '' : Number(($event.target as HTMLInputElement).value))"
               />
 
               <!-- within：限定查找范围（选择器 与 文案+上溯 二选一） -->

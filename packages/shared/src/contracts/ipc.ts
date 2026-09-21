@@ -108,6 +108,8 @@ export const IPC_CHANNELS = {
 
   // 任务 - §6.4, §6.6
   TASK_CREATE: 'task:create',
+  /** 测试/诊断用：立即触发某任务（与调度器到点触发同一路径） */
+  TASK_CREATE_FIRE: 'task:create:fire',
   TASK_LIST: 'task:list',
   TASK_RUN: 'task:run',
   TASK_PAUSE: 'task:pause',

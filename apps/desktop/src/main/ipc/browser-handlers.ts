@@ -28,6 +28,24 @@ function error(code: string, message: string, requestId: string, details?: any):
   }
 }
 
+/**
+ * 浏览器层错误映射：window-manager 抛的是人话 Error，
+ * 这里按关键字归到契约错误码，别一律 INTERNAL_ERROR。
+ */
+function browserError(err: any, requestId: string): IPCResult {
+  const msg = String(err?.message || err)
+  if (msg.includes('Navigation blocked')) {
+    return error(ERROR_CODES.NAVIGATION_BLOCKED.code, ERROR_CODES.NAVIGATION_BLOCKED.message, requestId)
+  }
+  if (msg.includes('Tab not found')) {
+    return error(ERROR_CODES.TASK_INVALID_STEP.code, '标签页不存在（可能已被关闭）', requestId)
+  }
+  if (msg.includes('Browser not open') || msg.includes('Host window not available')) {
+    return error(ERROR_CODES.BROWSER_CLOSED.code, '店铺浏览器未打开', requestId)
+  }
+  return error(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+}
+
 type JsonRecord = Record<string, any>
 
 function optionLabel(value: any): string {
@@ -122,7 +140,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.openStoreBrowser(input.storeId)
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
   
@@ -134,7 +152,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.closeStoreBrowser(input.storeId)
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
   
@@ -146,7 +164,7 @@ export function registerBrowserHandlers(): void {
       const tabId = WindowManager.createTab(input.storeId, input.url)
       return success({ tabId }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
   
@@ -158,7 +176,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.activateTab(input.storeId, input.tabId)
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
   
@@ -170,7 +188,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.closeTab(input.storeId, input.tabId)
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
   
@@ -182,7 +200,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.setTabPinned(input.storeId, input.tabId, input.pinned)
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
   
@@ -194,7 +212,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.reorderTabs(input.storeId, input.orderedTabIds)
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
   
@@ -206,10 +224,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.navigateTab(input.storeId, input.tabId, input.url)
       return success({ success: true }, requestId)
     } catch (err: any) {
-      if (err.message.includes('Navigation blocked')) {
-        return error(ERROR_CODES.NAVIGATION_BLOCKED.code, ERROR_CODES.NAVIGATION_BLOCKED.message, requestId)
-      }
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
   
@@ -436,7 +451,7 @@ export function registerBrowserHandlers(): void {
       await clearStoreData(input.storeId, input.types, input.origin)
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
   
@@ -448,7 +463,7 @@ export function registerBrowserHandlers(): void {
       const dataUrl = await WindowManager.captureTab(input.storeId, input.tabId, input.format || 'png')
       return success({ format: input.format || 'png', data: dataUrl }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
 
@@ -463,7 +478,7 @@ export function registerBrowserHandlers(): void {
       const result = await WindowManager.pickElementFromActiveTab(input.storeId, input.mode)
       return success(result, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
 
@@ -476,7 +491,7 @@ export function registerBrowserHandlers(): void {
       }))
       return success({ tabs }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
 
@@ -487,7 +502,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.openStandaloneWindow(input.storeId, input.tabId)
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
 
@@ -498,7 +513,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.displayStore(input.storeId)
       return success({ success: true, displayedStoreId: WindowManager.getDisplayedStoreId() }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
 
@@ -509,7 +524,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.setViewportBounds({ x: input.x, y: input.y, width: input.width, height: input.height })
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
 
@@ -520,7 +535,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.setBrowserViewsObscured(input?.obscured === true)
       return success({ obscured: input?.obscured === true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
 
@@ -531,7 +546,7 @@ export function registerBrowserHandlers(): void {
       WindowManager.tabNavigationControl(input.storeId, input.tabId, input.action)
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return browserError(err, requestId)
     }
   })
 }

@@ -2,7 +2,7 @@
 
 **报告时间**: 2026-09-22
 **开发阶段**: M0 ✅ + M1 工作台核心 ✅ + M2 环境·代理·备份 ✅ + M3 任务辅助 ✅ + M4 发布工程 ✅ + 自动更新（§21）✅
-**当前状态**: ✅ 应用可运行，单测 319/319 全部通过；版本 v0.4.41（INTERNAL_BUILD）。历史里程碑结果见下表与 `docs/RELEASE_NOTES.md`。
+**当前状态**: ✅ 应用可运行，单测 322/322、本地 CDP 验收 54/54、SendInput 真机验收 37/37 全部通过；版本 v0.4.43（INTERNAL_BUILD）。历史里程碑结果见下表与 `docs/RELEASE_NOTES.md`。
 
 ---
 
@@ -20,7 +20,7 @@
 | 单元测试：会话包格式与加解密（9 项） | ✅ **9/9** | `pnpm test`（vitest，`tests/unit/session-package.test.ts`） |
 | M4：发布工程（打包/安装/升级/卸载/诊断包/日志/单实例） | ✅ **13/13 阶段检查**（内含打包态对话链路 19/19、单实例互斥、安装版 3/3、升级 4/4） | `tools/acceptance/m4-runner.js` + `m4-cdp-verify.js`（win-unpacked 解包版 + NSIS 静默安装/升级/卸载） |
 | 自动更新：本地 feed 驱动真实安装包（16 项） | ✅ **16/16** | `tools/release/update-runner.js`（打包态 + `SHOPPILOT_UPDATE_FEED` 本地 feed：检查/SHA-512 下载校验/pending 落盘/审计/双通道/故障路径/重启自动检查） |
-| 审查修复轮（2026-09-22，v0.4.41 之后） | ✅ **单测 319/319** | `pnpm exec vitest run`：导航 URL 协议白名单（`javascript:`/`file:`/`data:` 拦截，白名单下沉 `@shared/navigation`）、调度器重启节拍锚定、启动对账 queued/running 分工、TASK_BAD_STATE 友好化、拾取原因码全覆盖；注入脚本三拷贝收敛（删死模块 `text-target-finder`，`injected-scripts` 转发 task-runner 唯一来源）；`restoreTabs` 旧 id→新 id 映射；click/setInput/typeText/fillDraft 共享步骤 deadline（最坏 1× 超时）；轮询注入失败先查存活（BROWSER_CLOSED 立刻报）；自定义任务本地验收接入 `run-acceptance.ps1`（custom-local），真机 SendInput 验收可手动跑（`test:custom-realclick`，需前台） |
+| 审查修复轮（2026-09-22，v0.4.41→0.4.43） | ✅ **单测 322/322、本地 CDP 54/54、真机 SendInput 37/37** | 导航白名单/调度锚定/对账分工/BAD_STATE 友好化/拾取原因码全覆盖；注入脚本收敛；restoreTabs 旧 id 映射；共享 deadline；轮询销毁检查；原生视图遮挡对话框修复（task-layout 切换时显式上报视口）；低优先级收尾（reorder/closeTab 落库、节拍泄漏、转义、SVG、IPC 错误映射、fire 通道契约化、validate 警告、number 类型、PICK_NAVIGATED）；run-acceptance 接入 custom-local |
 
 ## 技术选型结论（M0 实测）
 

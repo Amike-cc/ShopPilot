@@ -42,6 +42,13 @@ function tick(): void {
     return // 数据库正在恢复等瞬态
   }
   const now = Date.now()
+  // 已删除任务的节拍必须清理，否则常驻内存越积越多
+  if (nextFireAt.size > tasks.length) {
+    const alive = new Set(tasks.map(t => t.id))
+    for (const id of nextFireAt.keys()) {
+      if (!alive.has(id)) nextFireAt.delete(id)
+    }
+  }
   for (const t of tasks) {
     if (t.status !== 'active' || !t.schedule?.everyMs) continue
     if (!t.storeScope) continue // 未绑定店铺的任务不自动触发
