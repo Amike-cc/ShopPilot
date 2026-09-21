@@ -4,9 +4,9 @@
 
 ## 项目状态
 
-**版本**: v0.4.35 · **构建标签**: `INTERNAL_BUILD`（未做代码签名，§21.5）
+**版本**: v0.4.42 · **构建标签**: `INTERNAL_BUILD`（未做代码签名，§21.5）
 **里程碑**: M0 技术验证 ✅ · M1 工作台核心 ✅ · M2 环境/代理/备份 ✅ · M3 任务辅助 ✅ · M4 发布工程 ✅ · 自动更新（§21）✅
-**验收**: 0.4.35 构建复跑通过：单测 200/200、获取主体营业执照真实库实测 13/13（快手店主体已自动填入，其余平台如实说明原因）；0.4.34 构建通过：发票中心营业执照本地端到端 26/26、真实店铺库 7/7；0.4.33 构建通过：M3 113/113、店铺拖动排序 10/10、抖店邀约 21/21、M4 打包态核心 19/19；本机应用控制策略阻止执行 electron-builder 重写后的测试 EXE，因此 M4 安装/升级/卸载阶段未在本机复跑。M1/M2/安全/更新链路的最近结果见 `release/release.json`。M2 29+8 是 0.1.0 构建上的结果，其后未复跑（改动未触及代理/指纹那条路径）。
+**验收**: 单测 319/319（含导航 URL 协议白名单、调度器节拍锚定、启动对账分工、TASK_BAD_STATE 友好化、拾取原因码全覆盖）；自定义任务本地 CDP 验收与 SendInput 真机验收随包（`pnpm run test:custom-local` / `test:custom-realclick`，需真机 Electron 环境）。历史构建结果见 `docs/RELEASE_NOTES.md`；M1/M2/安全/更新链路的最近结果见 `release/release.json`。M2 29+8 是 0.1.0 构建上的结果，其后未复跑（改动未触及代理/指纹那条路径）。
 
 ## 文档索引
 
@@ -15,7 +15,7 @@
 | [DEVELOPMENT_SPEC.md](./docs/DEVELOPMENT_SPEC.md) | 开发设计文档（架构 / 数据模型 / IPC 契约 / 里程碑 / 验收标准） |
 | [FUNCTIONAL_SPEC.md](./docs/FUNCTIONAL_SPEC.md) | 功能规格（MVP 9 项功能集） |
 | [STATUS_REPORT.md](./docs/STATUS_REPORT.md) | 开发状态与验收明细（含已知边界如实声明） |
-| [RELEASE_NOTES.md](./docs/RELEASE_NOTES.md) | 0.4.32 变更说明与回滚方式 |
+| [RELEASE_NOTES.md](./docs/RELEASE_NOTES.md) | 版本变更说明与回滚方式 |
 | [INSTALL.md](./docs/INSTALL.md) | 受限环境依赖安装说明 |
 | [REVIEW.md](./docs/REVIEW.md) | 早期审查报告（历史存档） |
 
@@ -95,14 +95,16 @@ start-shoppilot.cmd                           # 同上（快捷方式）
 ## 验收（可复跑）
 
 ```powershell
-pnpm exec vitest run        # 单测 108 项（会话包 / 邀约档案与步骤 / 发票档案、多方向采集步骤、表格行清洗、CSV 转义）
+pnpm exec vitest run        # 单测（导航白名单 / 调度器 / 对账 / 错误分类 / 拾取 / 邀约与发票档案等）
+pnpm run test:custom-local  # 自定义任务本地 CDP 验收（合成事件驱动，需 Electron 环境）
+pnpm run test:custom-realclick # 自定义任务真机 SendInput 验收（真实桌面输入，需前台窗口）
 node tools/release/update-runner.js       # 更新链路 16 项（需先 pnpm dist；本地 feed 驱动真实安装包）
 node tools/acceptance/m1-runner.js        # 工作台验收
 node tools/acceptance/m2-runner.js stage1 # 代理/备份；stage2 指纹注入
 node tools/acceptance/m3-runner.js        # 任务引擎验收
 node tools/acceptance/sec-runner.js       # 安全能力验收
 node tools/acceptance/m4-runner.js        # 发布工程验收（含 NSIS 安装/升级/卸载）
-pwsh -File tools/acceptance/run-acceptance.ps1 # 以上全部串行 + 打包 + 清单
+pwsh -File tools/acceptance/run-acceptance.ps1 # 以上全部串行 + 自定义任务本地验收 + 打包 + 清单
 ```
 
 各套件使用独立临时 userData 与 CDP 端口（9223–9228、9232、9241、9245），跑前请退出运行中的 ShopPilot 实例。

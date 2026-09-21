@@ -239,17 +239,20 @@ export function startEngine(): void {
  * 随进程一起没了，它不可能产生过副作用），而 running/waiting_confirmation/paused
  * 可能停在任意步骤中间。混成一句"运行中断"会让用户以为 queued 的那次也跑了一半，
  * 去对账一个根本不存在的部分执行。
+ *
+ * 两条语句拆开且导出给单测：必须同时存在（queued 一条、running 系一条），
+ * 合并或漏掉任一条都会让某类遗留 run 永远卡在非终态。单测扫这两条常量断言。
  */
+export const RECONCILE_QUEUED_SQL =
+  "UPDATE task_runs SET status = 'failed', status_reason = '进程重启，排队未开始（无任何步骤已执行，可直接重新运行）', finished_at = COALESCE(finished_at, ?) WHERE status = 'queued'"
+export const RECONCILE_ACTIVE_SQL =
+  "UPDATE task_runs SET status = 'failed', status_reason = '进程重启，运行中断（请重新运行任务）', finished_at = COALESCE(finished_at, ?) WHERE status IN ('running','waiting_confirmation','paused')"
 function reconcileOnStartup(): void {
   try {
     const db = getDatabase()
     const now = Date.now()
-    db.prepare(
-      "UPDATE task_runs SET status = 'failed', status_reason = '进程重启，排队未开始（无任何步骤已执行，可直接重新运行）', finished_at = COALESCE(finished_at, ?) WHERE status = 'queued'"
-    ).run(now)
-    db.prepare(
-      "UPDATE task_runs SET status = 'failed', status_reason = '进程重启，运行中断（请重新运行任务）', finished_at = COALESCE(finished_at, ?) WHERE status IN ('running','waiting_confirmation','paused')"
-    ).run(now)
+    db.prepare(RECONCILE_QUEUED_SQL).run(now)
+    db.prepare(RECONCILE_ACTIVE_SQL).run(now)
   } catch { /* 启动路径不因归档失败而中断 */ }
 }
 
@@ -407,6 +410,18 @@ async function withTimeout<T>(fn: () => Promise<T>, run: RunHandle, ms: number, 
   }
 }
 
+/** 页签存活检查：轮询里 executeJavaScript 失败可能是"页签已销毁"，
+ * 不能一律吞成 false 空转到超时——销毁了就立刻报 BROWSER_CLOSED */
+function throwIfDestroyed(wc: Electron.WebContents): void {
+  try {
+    if (wc.isDestroyed()) throw new Error('BROWSER_CLOSED: 店铺浏览器或任务标签页已被关闭')
+  } catch (e: any) {
+    if (String(e?.message).startsWith('BROWSER_CLOSED')) throw e
+    // isDestroyed 自身抛错（如句柄失效）同样视为已销毁
+    throw new Error('BROWSER_CLOSED: 店铺浏览器或任务标签页已被关闭')
+  }
+}
+
 /** 轮询式等待（每 300ms 检查一次，支持暂停/取消协作式打断） */
 async function pollUntil(run: RunHandle, cond: () => Promise<boolean> | boolean, timeoutMs: number, label: string): Promise<void> {
   await withTimeout(async () => {
@@ -419,8 +434,9 @@ async function pollUntil(run: RunHandle, cond: () => Promise<boolean> | boolean,
 }
 
 /** 轮询等待选择器出现；超时抛 TASK_SELECTOR_CHANGED（区别于纯超时）。
- *  deep = 穿透 ShadowRoot 查询（微信小店整页在 <micro-app shadowdom> 里，普通 querySelector 不可见） */
-async function waitForSelector(wc: Electron.WebContents, sel: string, run: RunHandle, timeoutMs: number, deep = false): Promise<void> {
+ *  deep = 穿透 ShadowRoot 查询（微信小店整页在 <micro-app shadowdom> 里，普通 querySelector 不可见）；
+ *  deadline = 可选的绝对截止时间（与后续执行共享步骤超时，避免"等待一个 timeout + 执行一个 timeout"的双倍耗时） */
+async function waitForSelector(wc: Electron.WebContents, sel: string, run: RunHandle, timeoutMs: number, deep = false, deadline = 0): Promise<void> {
   const expr = deep
     ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().some(el => { try { return el.matches(${JSON.stringify(sel)}) } catch { return false } }) })()`
     : `!!document.querySelector(${JSON.stringify(sel)})`
@@ -428,15 +444,27 @@ async function waitForSelector(wc: Electron.WebContents, sel: string, run: RunHa
     await withTimeout(async () => {
       for (;;) {
         guardSignals(run)
-        const found = await wc.executeJavaScript(expr).catch(() => false)
+        if (deadline > 0 && Date.now() >= deadline) throw new Error(`TASK_TIMEOUT: 等待选择器 ${sel} 超过步骤时限`)
+        // 注入失败先查存活：页签已销毁就立刻报 BROWSER_CLOSED，
+        // 别吞成 false 空转到整步超时再报 SELECTOR_CHANGED
+        const found = await wc.executeJavaScript(expr).catch(() => { throwIfDestroyed(wc); return false })
         if (found) return
         await new Promise(r => setTimeout(r, 300))
       }
     }, run, timeoutMs, `等待选择器 ${sel}`)
   } catch (e: any) {
+    if (String(e?.message).startsWith('BROWSER_CLOSED')) throw e
     if (String(e?.message).startsWith('TASK_TIMEOUT')) throw new Error(`TASK_SELECTOR_CHANGED: 超时未出现元素 ${sel}`)
     throw e
   }
+}
+
+/** 共享截止版 withTimeout：等待与执行共用一个步骤时限，避免双倍超时 */
+async function withDeadline<T>(fn: () => Promise<T>, run: RunHandle, deadline: number, label: string): Promise<T> {
+  guardSignals(run)
+  const remain = deadline - Date.now()
+  if (remain <= 0) throw new Error(`TASK_TIMEOUT: ${label} 超过步骤时限`)
+  return withTimeout(fn, run, remain, label)
 }
 
 // ---------- ShadowRoot 穿透与受信任输入（微信小店 assist-form 流程的基础设施） ----------
@@ -445,7 +473,7 @@ async function waitForSelector(wc: Electron.WebContents, sel: string, run: RunHa
  * 枚举主文档与所有开放 ShadowRoot 的元素（文档序深度优先，宿主先于其 Shadow 内容）。
  * 以字符串注入 executeJavaScript 使用；只声明注入脚本自身的常量，不碰页面全局。
  */
-const ENUM_DEEP_FN = `
+export const ENUM_DEEP_FN = `
   const __enumDeep = () => {
     const out = []
     const walk = (r) => {
@@ -1139,7 +1167,11 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
     }
     case 'fillDraft': {
       const wc = wcOrThrow(run)
-      const okFilled = await wc.executeJavaScript(`(() => {
+      // 草稿填充同样先等元素出现：SPA 未渲染时单发 querySelector 会立刻报 SELECTOR_CHANGED（flaky）
+      const deadline = Date.now() + step.timeoutMs
+      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, false, deadline)
+      guardSignals(run)
+      const okFilled = await withDeadline(() => wc.executeJavaScript(`(() => {
         const el = document.querySelector(${JSON.stringify(String(input.selector))});
         if (!el) return false;
         const text = ${JSON.stringify(String(input.text ?? ''))};
@@ -1152,7 +1184,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
         return true;
-      })()`)
+      })()`), run, deadline, 'fillDraft')
       if (!okFilled) throw new Error(`TASK_SELECTOR_CHANGED: 未找到填充目标 ${String(input.selector)}`)
       // §4.5：payload 只存摘要与长度，绝不存表单完整值
       return { kind: 'text', payload: { filled: true, selector: String(input.selector), length: String(input.text ?? '').length } }
@@ -1187,9 +1219,11 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
     case 'click': {
       const wc = wcOrThrow(run)
       const sel = String(input.selector)
-      await waitForSelector(wc, sel, run, step.timeoutMs)
+      // 等待与执行共享一个步骤时限：最坏耗时 1× timeout，而非 2×
+      const deadline = Date.now() + step.timeoutMs
+      await waitForSelector(wc, sel, run, step.timeoutMs, false, deadline)
       guardSignals(run)
-      const res = await withTimeout(() => wc.executeJavaScript(`(() => {
+      const res = await withDeadline(() => wc.executeJavaScript(`(() => {
         const el = document.querySelector(${JSON.stringify(sel)});
         if (!el) return { ok: false, reason: 'NOT_FOUND' };
         let dis = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
@@ -1201,7 +1235,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         const target = el.closest('button, a, label, [role="button"]') || el;
         target.click();
         return { ok: true, text: String(target.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40) };
-      })()`), run, step.timeoutMs, 'click')
+      })()`), run, deadline, 'click')
       if (!res || !res.ok) throw new Error(res && res.reason === 'DISABLED'
         ? `TASK_TARGET_DISABLED: 目标为禁用态，平台不允许该操作 ${sel}`
         : `TASK_SELECTOR_CHANGED: 未找到可点击元素 ${sel}`)
@@ -2022,10 +2056,12 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
     case 'setInput': {
       const wc = wcOrThrow(run)
       const sel = String(input.selector)
-      await waitForSelector(wc, sel, run, step.timeoutMs)
+      // 等待与执行共享一个步骤时限（同 click）
+      const deadline = Date.now() + step.timeoutMs
+      await waitForSelector(wc, sel, run, step.timeoutMs, false, deadline)
       guardSignals(run)
       // 受控组件必须用原生 value setter + 派发 input 事件，直接赋 .value 不会更新框架状态
-      const okFilled = await withTimeout(() => wc.executeJavaScript(`(() => {
+      const okFilled = await withDeadline(() => wc.executeJavaScript(`(() => {
         const el = document.querySelector(${JSON.stringify(sel)});
         if (!el) return false;
         const text = ${JSON.stringify(String(input.text ?? ''))};
@@ -2038,7 +2074,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
         return true;
-      })()`), run, step.timeoutMs, 'setInput')
+      })()`), run, deadline, 'setInput')
       if (!okFilled) throw new Error(`TASK_SELECTOR_CHANGED: 未找到输入目标 ${sel}`)
       guardSignals(run)
       // §4.5：payload 只存摘要与长度，绝不存写入的完整文本
@@ -2217,8 +2253,10 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
     case 'typeText': {
       // 受信任文本写入（见 trustedWrite 注释）：点击聚焦 → Ctrl+A → Delete → insertText → 回读校验
       const wc = wcOrThrow(run)
-      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, !!input.deep)
-      await trustedWrite(wc, run, String(input.selector), !!input.deep, String(input.text ?? ''), step.timeoutMs, 'typeText')
+      // 等待与写入共享一个步骤时限（同 click；写入至少保留 1s 预算，避免等待耗尽后立刻超时）
+      const deadline = Date.now() + step.timeoutMs
+      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, !!input.deep, deadline)
+      await trustedWrite(wc, run, String(input.selector), !!input.deep, String(input.text ?? ''), Math.max(deadline - Date.now(), 1000), 'typeText')
       // §4.5：payload 只存摘要与长度，不存写入的完整文本
       return { kind: 'executed', payload: { action: 'typeText', selector: String(input.selector), length: String(input.text ?? '').length } }
     }

@@ -1,6 +1,6 @@
 {
   "name": "shopilot",
-  "version": "0.4.41",
+  "version": "0.4.42",
   "description": "ShopPilot - 电商店铺浏览器工作台",
   "private": true,
   "main": "apps/desktop/out/main/index.js",
@@ -16,7 +16,8 @@
     "release:full": "pnpm run dist && node tools/release/release-manifest.js && node tools/release/publish-release.js",
     "lint": "eslint .",
     "test": "vitest",
-    "test:e2e": "playwright test"
+    "test:custom-local": "node tools/acceptance/custom-task-local-verify.js",
+    "test:custom-realclick": "node tools/acceptance/custom-task-real-click-verify.js"
   },
   "dependencies": {
     "better-sqlite3": "11.10.0",

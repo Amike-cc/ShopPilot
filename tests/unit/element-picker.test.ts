@@ -144,4 +144,21 @@ describe('拾取元素 · 结果措辞', () => {
     expect(describePickResult({ ok: false, reason: 'INJECT_FAILED' }, 'selector')).toContain('注入失败')
     expect(describePickResult({ ok: false, reason: 'SOMETHING_NEW' }, 'selector')).toContain('SOMETHING_NEW')
   })
+
+  it('全部原因码都有人话（新增原因码必须登记，漏了这里失败）', () => {
+    // pickElementFromActiveTab 的返回 + 注入脚本的 finish()，两处的原因码全集
+    const allReasons = [
+      'NO_ELEMENT_AT_POINT',
+      'PICK_TIMEOUT',
+      'NO_STORE_PAGE',
+      'NO_ACTIVE_TAB',
+      'INJECT_FAILED',
+      'NO_VALUE'
+    ]
+    for (const reason of allReasons) {
+      const msg = describePickResult({ ok: false, reason }, 'selector')
+      expect(msg, reason).not.toContain('未知原因')
+      expect(msg, reason).not.toContain(reason)
+    }
+  })
 })

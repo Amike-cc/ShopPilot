@@ -38,6 +38,7 @@ Run-Step 'm2-stage2' 'node tools/acceptance/m2-runner.js stage2'
 Run-Step 'm3' 'node tools/acceptance/m3-runner.js'
 Run-Step 'sec' 'node tools/acceptance/sec-runner.js'
 Run-Step 'm4-full' 'node tools/acceptance/m4-runner.js'
+Run-Step 'custom-local' 'node tools/acceptance/custom-task-local-verify.js'
 Run-Step 'manifest' 'node tools/release/release-manifest.js'
 Kill-ShopPilot
 

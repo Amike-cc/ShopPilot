@@ -814,8 +814,12 @@ function restoreTabs(storeId: string): void {
   // 恢复会生成新 tabId；先清掉本店铺的旧行，避免每次重开累积翻倍
   db.prepare('DELETE FROM tabs WHERE store_id = ?').run(storeId)
 
+  // 恢复生成的是新 tabId，旧 savedTab.id 已失效：建旧→新映射，
+  // 否则 lastActive 用旧 id 查新表永远取不到，重启后活动页恢复退化成第一个。
+  const idMap = new Map<string, string>()
   savedTabs.forEach((savedTab: any) => {
     const tabId = createTab(storeId, savedTab.url === 'about:blank' ? undefined : savedTab.url)
+    idMap.set(String(savedTab.id), tabId)
     const tab = state.tabs.get(tabId)
     if (tab) {
       tab.isPinned = savedTab.is_pinned === 1
@@ -824,7 +828,8 @@ function restoreTabs(storeId: string): void {
   })
 
   const lastActive = savedTabs.find((t: any) => t.last_active_at) || savedTabs[0]
-  const first = state.tabs.get(lastActive?.id) || Array.from(state.tabs.values())[0]
+  const first = (lastActive && state.tabs.get(idMap.get(String(lastActive.id)) || ''))
+    || Array.from(state.tabs.values())[0]
   if (first) {
     state.activeTabId = first.id
     mountTab(first)

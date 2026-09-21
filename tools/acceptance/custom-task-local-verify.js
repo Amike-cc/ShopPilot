@@ -15,7 +15,13 @@
  *   ④ **标记"提交动作"但没有前置门禁 → 报错 + 创建按钮置灰**（本功能最关键的安全约束）；
  *   ⑤ 补上门禁并排到它前面 → 报错消失、按钮恢复；
  *   ⑥ 创建成功，且落库的步骤类型/参数与编排一致；
- *   ⑦ 目录之外的步骤类型塞不进去（白名单没被绕过）。
+ *   ⑦ 目录之外的步骤类型塞不进去（白名单没被绕过）；
+ *   ⑧ 真跑仿真页：点击/断言/失败错误码如实落库（TASK_TEXT_PRESENT 不被吞成 INTERNAL_ERROR）；
+ *   ⑨ 连续拾取：编排器常驻右侧、跨页面拾取、无重叠、截图与执行落库。
+ *
+ * 在流水线中的位置：run-acceptance.ps1 的 m4 之后、manifest 之前（custom-local）。
+ * 真实桌面像素点击由 custom-task-real-click-verify.js 覆盖（需前台窗口，不进自动流水线，
+ * 用 `pnpm run test:custom-realclick` 手动跑）。
  */
 const { spawn, execSync } = require('child_process')
 const fs = require('fs')

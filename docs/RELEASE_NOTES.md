@@ -1,4 +1,18 @@
-# ShopPilot 0.4.41 变更说明（M0–M4）
+# ShopPilot 0.4.42 变更说明（M0–M4）
+
+> **构建标签：INTERNAL_BUILD** —— 本包未做代码签名，按 DEVELOPMENT_SPEC §21.5 不得标记为 RELEASE。可用于内部试用与验收，正式对外发布前需补签名证书与验收记录。
+
+## 本次更新（0.4.42）：审查修复轮（安全 / 调度 / 超时 / 文档）
+
+- 安全：导航 URL 协议白名单下沉 `@shared/navigation` 并回归单测锁定；建页/独立窗口/邀约广场入口全部收敛，非法 scheme 建页退化为空白页。
+- 调度与对账：重启节拍锚定 `anchorNextFire`（停机不补偿）；启动对账 queued/running 分语句归档并单测锁定分工。
+- 超时：click/setInput/typeText/fillDraft 等待与执行共享步骤 deadline（最坏 1× 超时）；轮询注入失败先查页签存活，销毁立刻报 BROWSER_CLOSED。
+- 注入脚本三拷贝收敛：删死模块 `text-target-finder`，`injected-scripts` 转发 task-runner 唯一来源；修 `restoreTabs` 旧 id 导致活动页恢复失效。
+- 验收接线：自定义任务本地验收接入 `run-acceptance.ps1`（custom-local），真机 SendInput 验收可手动跑；删死脚本 `test:e2e`（playwright 无配置）；README/STATUS_REPORT 跟进到当前版本。
+
+验证：单测 319/319；TypeScript 通过。ESLint 未跑（本机 eslint 插件缺失，干净树同样失败，属环境既有问题）。
+
+---
 
 > **构建标签：INTERNAL_BUILD** —— 本包未做代码签名，按 DEVELOPMENT_SPEC §21.5 不得标记为 RELEASE。可用于内部试用与验收，正式对外发布前需补签名证书与验收记录。
 

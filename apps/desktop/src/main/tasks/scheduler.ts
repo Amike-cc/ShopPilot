@@ -20,6 +20,20 @@ export function stopScheduler(): void {
   if (timer) { clearInterval(timer); timer = null }
 }
 
+/**
+ * 重启后首次节拍的锚定计算（纯函数，单测锁定）。
+ *
+ * 锚到上次真实触发（tasks.last_fired_at）而不是"重启时刻 + 周期"，
+ * 否则每次重启都把节拍重置一次，触发时刻越漂越远。
+ * 停机期间错过的周期不补偿（立即连发一堆积压 run 比晚一次危险得多），直接开新周期。
+ */
+export function anchorNextFire(lastFiredAt: unknown, everyMs: number, now: number): number {
+  const anchored = typeof lastFiredAt === 'number' && lastFiredAt > 0
+    ? lastFiredAt + everyMs
+    : now + everyMs
+  return anchored > now ? anchored : now + everyMs
+}
+
 function tick(): void {
   let tasks
   try {
@@ -36,13 +50,7 @@ function tick(): void {
       continue
     }
     if (!nextFireAt.has(t.id)) {
-      // 重启后节拍锚定到上次真实触发（tasks.last_fired_at），而不是"重启时刻 + 周期"：
-      // 否则每次重启都把节拍重置一次，定时任务的触发时刻会越漂越远。
-      // 停机期间错过的周期不补偿（立即连发一堆积压 run 比晚一次危险得多），直接开新周期。
-      const anchored = typeof t.lastFiredAt === 'number' && t.lastFiredAt > 0
-        ? t.lastFiredAt + t.schedule.everyMs
-        : now + t.schedule.everyMs
-      nextFireAt.set(t.id, anchored > now ? anchored : now + t.schedule.everyMs)
+      nextFireAt.set(t.id, anchorNextFire(t.lastFiredAt, t.schedule.everyMs, now))
     }
     if (now >= nextFireAt.get(t.id)!) {
       nextFireAt.set(t.id, now + t.schedule.everyMs)
