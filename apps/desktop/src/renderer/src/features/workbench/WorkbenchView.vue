@@ -491,15 +491,17 @@
 
           <template v-else>
           <div class="env-sec">
-            <div class="env-h">达人邀约 · {{ inviteProfile.platform }}
-              <span class="row-sub" style="margin-left:8px">配置按店铺独立保存</span>
-              <button
-                class="mini-btn" style="margin-left:auto"
-                data-test="invite-save-config"
-                :disabled="inviteSaving"
-                @click="saveInviteConfigNow()"
-              >{{ inviteSaving ? '保存中…' : '保存配置' }}</button>
-              <button class="mini-btn" data-test="invite-open-page" @click="openInvitePage">打开达人广场</button>
+            <div class="env-h inv-head">达人邀约 · {{ inviteProfile.platform }}
+              <span class="row-sub inv-head-sub">配置按店铺独立保存</span>
+              <span class="inv-head-btns">
+                <button
+                  class="mini-btn"
+                  data-test="invite-save-config"
+                  :disabled="inviteSaving"
+                  @click="saveInviteConfigNow()"
+                >{{ inviteSaving ? '保存中…' : '保存配置' }}</button>
+                <button class="mini-btn" data-test="invite-open-page" @click="openInvitePage">打开达人广场</button>
+              </span>
             </div>
             <div class="env-note" style="margin-top:0">
               这里的配置（类目/等级/数量/主营/联系方式…）<b>按店铺各存一份</b>：改动会自动保存，
@@ -509,23 +511,29 @@
 
             <!-- batch-list（抖店 / 快手小店）：广场筛选 → 勾满一批 → 批量邀约 → 填话术 → 发送 -->
             <template v-if="inviteProfile.flow === 'batch-list'">
+            <!-- 步骤总览：三步各配了什么，一眼核对（细项在下面卡片里改） -->
+            <div class="inv-overview" data-test="invite-overview">
+              <span class="inv-ov-item"><i>1 选人</i>{{ overviewStep1 }}</span>
+              <span class="inv-ov-item"><i>2 内容</i>{{ overviewStep2 }}</span>
+              <span class="inv-ov-item"><i>3 运行</i>{{ overviewStep3 }}</span>
+            </div>
             <div class="inv-card">
               <div class="inv-card-h"><span class="inv-step">1</span><span class="inv-card-t">选人范围</span><span class="row-sub">对应广场筛选项 · 每轮都会重新应用</span></div>
 
               <div class="inv-grid2" :class="{ 'inv-grid3': inviteProfile.categoryDepth === 3 }">
-                <label class="inv-row inv-col">{{ inviteProfile.categoryLabelText || '主推类目' }}
+                <label class="inv-row inv-col"><span class="inv-field">{{ inviteProfile.categoryLabelText || '主推类目' }}</span>
                   <select v-model="invite.category" data-test="invite-category">
                     <option value="">不筛选（全部）</option>
                     <option v-for="c in categoryOptions" :key="c" :value="c">{{ c }}</option>
                   </select>
                 </label>
-                <label class="inv-row inv-col">二级类目
+                <label class="inv-row inv-col"><span class="inv-field">二级类目</span>
                   <select v-model="invite.subcategory" data-test="invite-subcategory" :disabled="!invite.category">
                     <option value="">不限</option>
                     <option v-for="s in subCategoryOptions" :key="s" :value="s">{{ s }}</option>
                   </select>
                 </label>
-                <label v-if="inviteProfile.categoryDepth === 3" class="inv-row inv-col">三级类目
+                <label v-if="inviteProfile.categoryDepth === 3" class="inv-row inv-col"><span class="inv-field">三级类目</span>
                   <select v-model="invite.category3" data-test="invite-category3" :disabled="!invite.subcategory || !thirdCategoryOptions.length">
                     <option value="">不限</option>
                     <option v-for="s in thirdCategoryOptions" :key="s" :value="s">{{ s }}</option>
@@ -534,7 +542,7 @@
               </div>
               <div class="env-note" style="margin-top:4px">
                 <template v-if="inviteProfile.categoryDepth === 3">
-                  可选到「一级/二级/三级」（如 {{ invite.category || '个护家清' }}/{{ invite.subcategory || subCategoryOptions[0] || '家清纸品' }}/{{ invite.category3 || thirdCategoryOptions[0] || '待读取' }}）。三级名称由打开达人广场时的平台筛选接口实时读取，不写死、不猜测。
+                  可选到「一级/二级/三级」（如 {{ categoryExampleText }}）。三级名称由打开达人广场时的平台筛选接口实时读取，不写死、不猜测。
                 </template>
                 <template v-else>
                   选二级后按「一级/二级」精确筛选（如 {{ invite.category || '个护家清' }}/{{ invite.subcategory || subCategoryOptions[0] || '家清纸品' }}）；二级名以平台级联实测为准，个别过长名称平台侧有截断，执行时按包含匹配。
@@ -560,7 +568,7 @@
               </div>
 
               <!-- 达人等级：快手没有这一维（等级是达人自身属性）→ 档案 levels 为空则不显示 -->
-              <div v-if="inviteProfile.levels.length" class="inv-row inv-block">达人等级
+              <div v-if="inviteProfile.levels.length" class="inv-row inv-block"><span class="inv-field">达人等级 <b class="inv-req" title="至少选一个，否则开始按钮是灰的">*</b></span>
                 <span class="inv-chips">
                   <label
                     v-for="lv in inviteProfile.levels" :key="lv"
@@ -575,7 +583,11 @@
               </div>
 
               <label class="inv-row"><span class="inv-label">本批数量</span>
-                <input type="number" :min="inviteProfile.minSelect || 1" :max="inviteProfile.maxBatch" v-model.number="invite.count" class="inv-num" data-test="invite-count" />
+                <span class="inv-stepper">
+                  <button class="mini-btn inv-step-btn" data-test="invite-count-dec" :disabled="invite.count <= Math.max(1, inviteProfile.minSelect || 1)" @click="stepInviteCount(-1)" title="减 1">−</button>
+                  <input type="number" :min="inviteProfile.minSelect || 1" :max="inviteProfile.maxBatch" v-model.number="invite.count" class="inv-num" data-test="invite-count" />
+                  <button class="mini-btn inv-step-btn" data-test="invite-count-inc" :disabled="invite.count >= inviteProfile.maxBatch" @click="stepInviteCount(1)" title="加 1">＋</button>
+                </span>
                 <span class="row-sub">
                   上限 {{ inviteProfile.maxBatch }} 位（平台限制）
                   <template v-if="inviteProfile.minSelect && inviteProfile.minSelect > 1">・平台要求至少 {{ inviteProfile.minSelect }} 位</template>
@@ -596,13 +608,13 @@
                   平台抽屉里这些字段<b>必填</b>（{{ batchContactFields.join(' / ') }}）。平台会记住上次填的，这里填了就以这里为准。
                 </div>
                 <div class="inv-grid2">
-                  <label v-if="inviteProfile.contactSelectors.contact" class="inv-row inv-col">联系人
+                  <label v-if="inviteProfile.contactSelectors.contact" class="inv-row inv-col"><span class="inv-field">联系人 <b class="inv-req" title="必填">*</b></span>
                     <input type="text" v-model="invite.batchContact" maxlength="30" data-test="invite-batch-contact" placeholder="如 刘涛" />
                   </label>
-                  <label v-if="inviteProfile.contactSelectors.phone" class="inv-row inv-col">手机号
+                  <label v-if="inviteProfile.contactSelectors.phone" class="inv-row inv-col"><span class="inv-field">手机号 <b class="inv-req" title="必填">*</b></span>
                     <input type="text" v-model="invite.batchPhone" maxlength="20" data-test="invite-batch-phone" placeholder="11 位手机号" />
                   </label>
-                  <label v-if="inviteProfile.contactSelectors.wechat" class="inv-row inv-col">微信号
+                  <label v-if="inviteProfile.contactSelectors.wechat" class="inv-row inv-col"><span class="inv-field">微信号 <b class="inv-req" title="必填">*</b></span>
                     <input type="text" v-model="invite.batchWechat" maxlength="40" data-test="invite-batch-wechat" placeholder="如 amike688" />
                   </label>
                 </div>
@@ -610,7 +622,7 @@
 
               <!-- 主营下拉（抖店改版抽屉：邀约消息里的"主营<此处>"填空）。留空也能发送，只是消息缺一句 -->
               <template v-if="inviteProfile.drawerForm?.mainCategory">
-                <label class="inv-row inv-col">主营（消息里的填空，可留空）
+                <label class="inv-row inv-col"><span class="inv-field">主营 <span class="inv-opt" title="可留空">选填</span></span>
                   <select v-model="invite.mainCategory" data-test="invite-main-category">
                     <option value="">不填</option>
                     <option v-for="p2 in mainCategoryPaths" :key="p2" :value="p2">{{ p2 }}</option>
@@ -661,7 +673,7 @@
               </div>
 
               <!-- 核心优势（抖店改版抽屉的复选框组；快手没有 → 不显示） -->
-              <div v-if="inviteProfile.strengths" class="inv-row inv-block">{{ inviteProfile.strengths.label }}（可多选）
+              <div v-if="inviteProfile.strengths" class="inv-row inv-block"><span class="inv-field">{{ inviteProfile.strengths.label }} <span class="row-sub">可多选 · 最多 {{ inviteProfile.strengths.maxSelect }} 项</span></span>
                 <span class="inv-chips">
                   <label
                     v-for="s in inviteProfile.strengths.options" :key="s"
@@ -672,7 +684,7 @@
                 </span>
               </div>
 
-              <div class="inv-row inv-block">{{ inviteProfile.benefitsLabelText || '专属权益' }}（可多选）
+              <div class="inv-row inv-block"><span class="inv-field">{{ inviteProfile.benefitsLabelText || '专属权益' }} <span class="row-sub">可多选</span></span>
                 <span class="inv-chips">
                   <label
                     v-for="b in inviteProfile.benefits" :key="b"
@@ -686,12 +698,16 @@
             </div>
 
             <div class="inv-card inv-run-bar">
-              <div class="inv-card-h"><span class="inv-step">3</span><span class="inv-card-t">运行</span><span class="row-sub" v-if="inviteRun">进行中 · {{ statusLabel(inviteRun.status) }}</span></div>
+              <div class="inv-card-h"><span class="inv-step">3</span><span class="inv-card-t">运行</span><span class="row-sub" v-if="inviteRun">进行中 · {{ statusLabel(inviteRun.status) }}</span><span class="row-sub" v-else-if="inviteReady">就绪，可开始</span><span class="row-sub inv-warn-t" v-else>还缺 {{ inviteMissingItems.length }} 项</span></div>
+              <!-- 缺项清单：按钮灰的时候直接告诉用户差什么（判据与 inviteReady 同一套） -->
+              <ul v-if="!inviteReady && !inviteRun" class="inv-missing" data-test="invite-missing">
+                <li v-for="m in inviteMissingItems" :key="m">{{ m }}</li>
+              </ul>
               <div class="cf-btns">
-                <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="startInvite">{{ inviteSubmitting ? '正在启动…' : '开始邀约' }}</button>
+                <button v-if="!inviteRun" class="mini-btn primary inv-start" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="startInvite">{{ inviteSubmitting ? '正在启动…' : '▶ 开始邀约' }}</button>
                 <button v-else class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
-                <span v-if="!inviteReady && !inviteRun" class="row-sub">补齐必填项后可开始</span>
               </div>
+              <div class="inv-danger" data-test="invite-no-confirm">点下即真实发送 · 无二次确认 · 发出不可撤回</div>
               <details class="inv-help">
                 <summary>执行说明（点开）</summary>
                 <div class="env-note" style="margin-top:4px">
@@ -2731,6 +2747,91 @@ watch(() => invite.category, () => {
 watch(() => invite.subcategory, () => {
   if (invite.category3 && !thirdCategoryOptions.value.includes(invite.category3)) invite.category3 = ''
 })
+
+/**
+ * 方案A重构：开始按钮下方直接列出"还缺什么"（替代原来一句含糊的"补齐必填项后可开始"）。
+ * 与 inviteReady 同一套判据：这里缺一项，inviteReady 就为 false——两边永远一致，
+ * 不会出现"清单说齐了但按钮还是灰的"。
+ */
+const inviteMissingItems = computed((): string[] => {
+  const p = inviteProfile.value
+  if (!p || !ws.displayedStoreId) return ['请先打开一个店铺']
+  if (p.flow === 'assist-form') {
+    const miss: string[] = []
+    if (invite.scriptMode === 'manual' ? !invite.script.trim() : !aiReady.value) {
+      miss.push(invite.scriptMode === 'manual' ? '合作说明还没写' : 'AI 还没配置好')
+    }
+    if (!invite.contact.trim()) miss.push('邀约联系人没填')
+    if (!invite.wechat.trim()) miss.push('微信号没填')
+    if (!invite.phone.trim()) miss.push('手机号码没填')
+    if (inviteProducts.value.length > 30) miss.push('商品 ID 太多（最多 30 个）')
+    return miss
+  }
+  const miss: string[] = []
+  if (p.levels.length && !invite.levels.length) miss.push('达人等级至少选一个')
+  const cs = p.contactSelectors
+  if (cs?.contact && !invite.batchContact.trim()) miss.push('联系人没填')
+  if (cs?.phone && !invite.batchPhone.trim()) miss.push('手机号没填')
+  if (cs?.wechat && !invite.batchWechat.trim()) miss.push('微信号没填')
+  if (!(Number.isInteger(invite.count) && invite.count >= 1 && invite.count <= p.maxBatch)) {
+    miss.push(`本批数量填 1–${p.maxBatch} 之间的整数`)
+  }
+  if (p.scriptSelector) {
+    if (invite.scriptMode === 'manual' ? !invite.script.trim() : !aiReady.value) {
+      miss.push(invite.scriptMode === 'manual' ? '邀约话术还没写' : 'AI 还没配置好')
+    }
+  }
+  return miss
+})
+
+/**
+ * 方案A重构：步骤总览第 1/2 行的文案（模板里写三元嵌套会被 SFC 解析器误伤，抽到这里）。
+ * 第 1 行：类目路径 · 等级 · 每批数量；第 2 行：联系方式填没填 + 优势/权益/主营个数。
+ */
+/** 类目说明里的举例文案（同上：模板里的 `/` 会被当成选择器组合子，抽出来） */
+const categoryExampleText = computed(() => {
+  const a = invite.category || '个护家清'
+  const b = invite.subcategory || subCategoryOptions.value[0] || '家清纸品'
+  const c = invite.category3 || thirdCategoryOptions.value[0] || '待读取'
+  return `${a}/${b}/${c}`
+})
+/** 步骤总览第 3 行：进行中 / 就绪 / 还缺几项（模板里的三元嵌套同理抽出来） */
+const overviewStep3 = computed(() => {
+  if (inviteRun.value) return `进行中 · ${statusLabel(inviteRun.value.status)}`
+  if (inviteReady.value) return '就绪，可开始'
+  return `还缺 ${inviteMissingItems.value.length} 项`
+})
+const overviewStep1 = computed(() => {
+  const cat = invite.category || '全部类目'
+  const sub = invite.subcategory ? `/${invite.subcategory}` : ''
+  const third = invite.subcategory && invite.category3 ? `/${invite.category3}` : ''
+  const lv = invite.levels.length ? invite.levels.join('/') : '等级未选'
+  return `${cat}${sub}${third} · ${lv} · ${invite.count}位/批`
+})
+const overviewStep2 = computed(() => {
+  const bits: string[] = batchContactFields.value.map(f => {
+    if (f === '联系人') return invite.batchContact.trim() ? '联系人✓' : '联系人✗'
+    if (f === '手机号') return invite.batchPhone.trim() ? '手机✓' : '手机✗'
+    return invite.batchWechat.trim() ? '微信✓' : '微信✗'
+  })
+  if (!bits.length) bits.push('无联系方式要求')
+  if (invite.strengths.length) bits.push(`优势${invite.strengths.length}`)
+  if (invite.benefits.length) bits.push(`权益${invite.benefits.length}`)
+  if (invite.mainCategory) bits.push('主营✓')
+  return bits.join(' · ')
+})
+
+/**
+ * 方案A重构：本批数量步进器（替代裸数字框）。
+ *  magic 数字都在这里收敛：步长 1，下限是平台硬门槛（minSelect，无则 1），上限是平台单次上限。
+ */
+function stepInviteCount(delta: 1 | -1) {
+  const p = inviteProfile.value
+  if (!p || !isBatchProfile(p)) return
+  const lo = Math.max(1, p.minSelect || 1)
+  const cur = Number.isInteger(invite.count) ? invite.count : lo
+  invite.count = Math.min(p.maxBatch, Math.max(lo, cur + delta))
+}
 
 /**
  * 额外筛选行的多选切换（快手：内容标签 / 合作信息）。
@@ -5291,14 +5392,60 @@ onBeforeUnmount(() => {
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 10px; font-weight: 700; color: #fff; background: var(--color-primary);
 }
-/* 配置摘要：一行一个键值对，长文本截断（细节在下面卡片里） */
-.inv-summary {
-  display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 8px;
-  padding: 6px 8px; border: 1px dashed var(--color-border); border-radius: var(--radius-sm);
-  font-size: 11px; color: var(--color-text-primary);
+/* 面板头：标题 + 独立保存说明 + 两个按钮。右栏只有 320px，
+   envelope `.env-h` 默认是单行 flex，按钮会被挤成竖排——改成可换行，
+   按钮组整体靠右、换行后也在右侧（实测截图里两个按钮各占一行很难看）。 */
+[data-test="invite-panel"] .inv-head { flex-wrap: wrap; row-gap: 6px; }
+[data-test="invite-panel"] .inv-head-sub { margin-left: 8px; }
+[data-test="invite-panel"] .inv-head-btns {
+  display: inline-flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end;
 }
-.inv-sum-item { display: inline-flex; gap: 4px; align-items: baseline; min-width: 0; }
-.inv-sum-item > i { font-style: normal; color: var(--color-text-secondary); flex: 0 0 auto; }
+/* 步骤总览：三步各配了什么，一眼核对（细项在下面卡片里改）。
+   放在三张卡片上面：右栏 320px 宽，每项一行、长文本省略号（细节在下面卡片里能看到全的）。 */
+.inv-overview {
+  display: flex; flex-direction: column; gap: 3px; margin: 0 0 8px;
+  padding: 6px 8px; border: 1px dashed var(--color-border); border-radius: var(--radius-sm);
+  font-size: 11px; color: var(--color-text-primary); background: var(--color-bg-tertiary);
+}
+.inv-ov-item {
+  display: flex; gap: 6px; align-items: baseline; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.inv-ov-item > i { font-style: normal; font-weight: 700; color: var(--color-primary); flex: 0 0 auto; }
+/* 字段名行：左标签 + 右说明（必填标红色星号、选填灰色），320px 下不折行挤布局 */
+[data-test="invite-panel"] .inv-field {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--color-text-secondary); white-space: nowrap;
+}
+[data-test="invite-panel"] .inv-req { font-style: normal; color: #f87171; font-weight: 700; }
+[data-test="invite-panel"] .inv-opt { font-style: normal; font-size: 10px; color: var(--color-text-muted); border: 1px solid var(--color-border); border-radius: 8px; padding: 0 5px; }
+/* 缺项清单：按钮灰的时候直接告诉用户差什么（判据与 inviteReady 同一套，见 inviteMissingItems） */
+[data-test="invite-panel"] .inv-missing {
+  margin: 0 0 6px; padding: 5px 8px 5px 22px; font-size: 11px; color: #fca5a5;
+  background: rgba(248, 113, 113, .08); border: 1px solid rgba(248, 113, 113, .3);
+  border-radius: var(--radius-sm); list-style: disc;
+}
+[data-test="invite-panel"] .inv-missing > li { margin: 1px 0; }
+/* 运行卡标题右侧状态：缺项数用红色，平时灰色 */
+[data-test="invite-panel"] .inv-warn-t { color: #fca5a5; }
+/* 开始按钮放大一号：这是整块面板唯一不可撤回的动作 */
+[data-test="invite-panel"] .inv-start { font-size: 13px; padding: 7px 18px; }
+/* 红色警示条：无二次确认，点下即真实发送（常驻，不折叠） */
+[data-test="invite-panel"] .inv-danger {
+  margin-top: 6px; padding: 5px 8px; font-size: 11px; text-align: center;
+  color: #fca5a5; background: rgba(248, 113, 113, .1);
+  border: 1px solid rgba(248, 113, 113, .35); border-radius: var(--radius-sm);
+}
+/* 本批数量步进器：− [数字] ＋，替代裸数字框（手机端习惯，右栏也更顺手）。
+   数字框本身保留可直接输入；按钮用 mini-btn 统一样式，只收紧内边距。 */
+[data-test="invite-panel"] .inv-stepper { display: inline-flex; align-items: stretch; gap: 4px; }
+[data-test="invite-panel"] .inv-stepper .inv-num { text-align: center; }
+[data-test="invite-panel"] .inv-step-btn { padding: 5px 10px; font-size: 13px; line-height: 1; }
+/* 数字框去掉浏览器自带上下箭头：有了 −/＋ 按钮就不需要它，还占 320px 的宽度。
+   注意：伪元素选择器（::-webkit-*-spin-button）不能进 scoped 样式
+   （构建时的选择器解析器会报 "Unexpected '/'"），所以只保留 Firefox 这条；
+   Chrome 的箭头靠步进器按钮盖住即可，不影响使用。 */
+[data-test="invite-panel"] .inv-stepper input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 /* 长说明默认折叠：整块说明文字实测占 648px，展开才看，日常不挡操作 */
 .inv-help { margin: 0 0 8px; }
 .inv-help > summary {

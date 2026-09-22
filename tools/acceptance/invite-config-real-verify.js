@@ -131,6 +131,58 @@ const PANEL = `return {
     check('打开店铺的邀约面板', opened)
     if (!opened) throw new Error('邀约面板未就绪（店铺没选中？）——后续断言无意义，直接停')
 
+    // 方案A视觉验收：面板截两张图（配置齐态 / 缺项态），存 artifacts 备查
+    const shotDir = path.join(root, 'artifacts', 'invite-ui-design')
+    fs.mkdirSync(shotDir, { recursive: true })
+    const shotEl = async (sel, file) => {
+      const box = await ui.eval(`
+        const el = document.querySelector(${JSON.stringify(sel)});
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      `)
+      if (!box) return null
+      const png = await ui.send('Page.captureScreenshot', { format: 'png', clip: { x: box.x, y: box.y, width: Math.min(box.width, 480), height: Math.min(box.height, 1400), scale: 1 } })
+      const out = path.join(shotDir, file)
+      fs.writeFileSync(out, Buffer.from(png.data, 'base64'))
+      return out
+    }
+    const shot1 = await shotEl('[data-test="invite-panel"]', 'real-panel-filled.png')
+    note('配置齐态截图：' + shot1)
+    // 缺项态：把手机号清空 → 缺项清单与灰按钮应该出现
+    await ui.eval(`
+      const el = document.querySelector('[data-test="invite-batch-phone"]');
+      const proto = HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, '');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 900));
+      return true;
+    `)
+    const missingState = await ui.eval(`return {
+      missing: [...document.querySelectorAll('[data-test="invite-missing"] li')].map(x => x.textContent.trim()),
+      startDisabled: (document.querySelector('[data-test="invite-start"]') || {}).disabled,
+      danger: (document.querySelector('[data-test="invite-no-confirm"]') || {}).textContent || null,
+      overview: (document.querySelector('[data-test="invite-overview"]') || {}).innerText || null
+    };`)
+    check('缺项清单：手机号清空后列出缺项、开始按钮变灰',
+      missingState.missing.some(t => t.includes('手机号')) && missingState.startDisabled === true,
+      JSON.stringify(missingState.missing))
+    check('红色警示条常驻（无二次确认）', /无二次确认/.test(missingState.danger || ''), JSON.stringify(missingState.danger))
+    check('步骤总览三行都在（选人/内容/运行）', /1 选人/.test(missingState.overview || '') && /2 内容/.test(missingState.overview || '') && /3 运行/.test(missingState.overview || ''),
+      JSON.stringify((missingState.overview || '').slice(0, 160)))
+    const shot2 = await shotEl('[data-test="invite-panel"]', 'real-panel-missing.png')
+    note('缺项态截图：' + shot2)
+    // 恢复手机号（界面自动保存会写回，值与原来一致，不污染配置）
+    await ui.eval(`
+      const el = document.querySelector('[data-test="invite-batch-phone"]');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, '15057937334');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 900));
+      return true;
+    `)
+
     const panel1 = await ui.eval(PANEL)
     check('面板有「保存配置」按钮', panel1.hasSaveBtn === true, JSON.stringify(panel1.hasSaveBtn))
     const afterOpen = await readSetting(storeKey)
