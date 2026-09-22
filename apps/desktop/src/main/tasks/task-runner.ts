@@ -1286,6 +1286,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             ${deep ? ENUM_DEEP_FN : ''}
             ${VISIBLE_JS}
             const needle = ${JSON.stringify(needle)};
+            const exact = ${!!input.exact};
             const anchor = ${JSON.stringify(nearText)};
             const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
             const ownOf = (el) => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
@@ -2276,13 +2277,14 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             ${SCOPE_FN}
             ${PICK_SORT_FN}
             const needle = ${JSON.stringify(needle)};
+            const exact = ${!!input.exact};
             const within = ${JSON.stringify(within || null)};
             const roots = within ? __scopeRoots(within) : null;
             if (within && !roots) return false;
             const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
             for (const el of scope) {
               const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
-              if (!own.includes(needle)) continue;
+              if (exact ? own !== needle : !own.includes(needle)) continue;
               if (!__inScope(roots, el)) continue;
               if (__visible(el)) return true;
             }
@@ -2294,7 +2296,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
               if (!__inScope(roots, el)) continue;
               if (!__visible(el)) continue;
               const it = __narrow(el.innerText);
-              if (!it.includes(nw)) continue;
+              if (exact ? it !== nw : !it.includes(nw)) continue;
               if (it.length > nw.length + 12) continue;
               return true;
             }

@@ -157,6 +157,9 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   // 否则宁可现在失败，也别把错类目的人邀了。
   // 定位方式按档案：有 filteredScope 用选择器（快手那条标记整段是子元素、无自有文本），
   // 否则按锚点文案上溯（抖店）。
+  // 类目生效校验用**包含匹配**（不能用 exact）：标记行是"已筛选 + 类目名拼在一起"的结构
+  // （抖店「已筛选」是自有文本、类目名在子 span 里；快手整行都是子元素、无自有文本），
+  // 自有文本精确等于类目名的元素根本不存在，exact 会让邀约永远卡死在这一步（本地验收复现）。
   if (opts.category) {
     const scope = p.filteredScope
       ? { selector: p.filteredScope }

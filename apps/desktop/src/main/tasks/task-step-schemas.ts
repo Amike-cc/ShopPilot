@@ -220,7 +220,7 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   // ---------- 微信小店（assist-form）----------
   mirrorTabUrl: z.object({ urlIncludes: z.string().min(1).max(300) }).strict(),
   typeText: z.object({ selector, text: z.string().max(2000), deep: z.boolean().optional() }).strict(),
-  waitForText: z.object({ text: z.string().min(1).max(200), deep: z.boolean().optional(), within: within.optional() }).strict(),
+  waitForText: z.object({ text: z.string().min(1).max(200), deep: z.boolean().optional(), exact: z.boolean().optional(), within: within.optional() }).strict(),
   ensureRows: z.object({
     rowsSelector: selector,
     checkboxSelector: selector,

@@ -304,7 +304,7 @@ const filteredGroups = computed(() => {
     const all = STEP_CATALOG.filter(e => e.group === name)
     const hit = !q
       ? all
-      : all.filter(e => e.label.toLowerCase().includes(q) || e.type.toLowerCase().includes(q))
+      : all.filter(e => name.toLowerCase().includes(q) || e.label.toLowerCase().includes(q) || e.type.toLowerCase().includes(q))
     if (!hit.length) continue
     // 分组名本身命中时，把该组整组给出（用户想看"交互里有什么"）
     const groupHit = !!q && name.toLowerCase().includes(q)

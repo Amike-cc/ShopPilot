@@ -1,6 +1,6 @@
 {
   "name": "shopilot",
-  "version": "0.4.43",
+  "version": "0.4.44",
   "description": "ShopPilot - 电商店铺浏览器工作台",
   "private": true,
   "main": "apps/desktop/out/main/index.js",
@@ -17,6 +17,7 @@
     "lint": "eslint .",
     "test": "vitest",
     "test:custom-local": "node tools/acceptance/custom-task-local-verify.js",
+    "test:invite-live-log": "node tools/acceptance/invite-live-log-verify.js",
     "test:custom-realclick": "node tools/acceptance/custom-task-real-click-verify.js"
   },
   "dependencies": {

@@ -421,7 +421,7 @@
           <div v-if="ws.displayedStoreId && storeTasks.length === 0" class="empty-hint" data-test="task-empty" style="padding:14px 8px">
             当前店铺暂无任务。点右上角「+ 新建任务」创建——任务只能由<b>已实测跑通的流程</b>创建
             （当前支持「达人邀约」，参数取「达人邀约」页签里的配置）。<br>
-            达人邀约的运行也会出现在这里；想看邀约业务明细（发给谁/额度/留档截图）请去「达人邀约」页签的「邀约记录」。
+            达人邀约的运行也会出现在这里；想看状态、卡在哪一步、实时日志，请去「达人邀约」页签的「达人邀约实时日志」。
           </div>
 
           <div v-for="t in storeTasks" :key="t.id" class="env-sec task-card" :class="{ on: detailTaskId === t.id }" data-test="task-card">
@@ -439,6 +439,13 @@
                 :title="isTaskActive(t) ? '当前运行未结束，不能重复启动' : '立即运行'"
                 @click.stop="runTask(t)"
               >▶</button>
+              <button
+                class="mini-btn"
+                data-test="task-copy"
+                title="复制为新的自定义任务"
+                @click.stop="copyTask(t)"
+              >复制</button>
+              <button class="mini-btn" title="保存为自定义任务模板" @click.stop="saveTaskTemplate(t)">模板</button>
               <button class="row-del" title="删除任务" @click.stop="delTask(t.id)">×</button>
             </div>
 
@@ -634,7 +641,7 @@
             <div class="inv-card inv-run-bar">
               <div class="inv-card-h"><span class="inv-step">3</span><span class="inv-card-t">运行</span><span class="row-sub" v-if="inviteRun">进行中 · {{ statusLabel(inviteRun.status) }}</span></div>
               <div class="cf-btns">
-                <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
+                <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="startInvite">{{ inviteSubmitting ? '正在启动…' : '开始邀约' }}</button>
                 <button v-else class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
                 <span v-if="!inviteReady && !inviteRun" class="row-sub">补齐必填项后可开始</span>
               </div>
@@ -765,7 +772,7 @@
             <div class="inv-card inv-run-bar" data-test="invite-run-bar">
               <div class="inv-card-h"><span class="inv-step">4</span><span class="inv-card-t">运行</span><span class="row-sub" v-if="inviteRun">进行中 · {{ statusLabel(inviteRun.status) }}</span></div>
               <div class="cf-btns">
-                <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady" @click="startInvite">开始邀约</button>
+                  <button v-if="!inviteRun" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="startInvite">{{ inviteSubmitting ? '正在启动…' : '开始邀约' }}</button>
                 <button v-else class="mini-btn" data-test="invite-stop" @click="stopInvite">停止邀约</button>
                 <span v-if="!inviteReady && !inviteRun" class="row-sub">补齐必填项后可开始</span>
               </div>
@@ -775,41 +782,35 @@
           </div>
 
           <div class="env-sec">
-            <div class="env-h">邀约记录<span class="row-sub" v-if="inviteHistory.length"> · 近 {{ inviteHistory.length }} 次</span></div>
-            <div class="env-note">达人邀约是独立功能，邀约运行不出现在「任务列表」；这里保留本店铺的邀约运行明细（步骤结果、门禁日志、截图工件）。</div>
-            <div v-if="!inviteHistory.length" class="empty-hint" style="padding:8px 4px">本店铺还没有邀约记录</div>
-            <div v-for="t in inviteHistory" :key="t.id" class="task-card" :class="{ on: detailTaskId === t.id }" data-test="invite-history-card">
-              <div class="tc-head" @click="toggleTaskDetail(t)">
-                <div class="p-info">
-                  <div class="row-main">{{ t.name.replace('达人邀约 · ', '') }}</div>
-                  <div class="row-sub">
-                    {{ runTimeLabel(t) }} · {{ t.steps.length }} 步<template v-if="liveStatus(t)"> · {{ statusLabel(liveStatus(t)) }}</template>
-                  </div>
-                </div>
-                <button class="mini-btn" v-if="['running','paused','queued','waiting_confirmation'].includes(liveStatus(t))" @click.stop="runOp(t, 'cancel')" data-test="invite-history-stop">停止</button>
-                <button class="row-del" title="删除记录" @click.stop="delTask(t.id)">×</button>
+            <div class="env-h">达人邀约实时日志<span class="row-sub" v-if="inviteLatest"> · {{ statusLabel(liveStatus(inviteLatest)) }}</span></div>
+            <div class="env-note">只跟当前店铺<b>最近一次</b>邀约运行：状态、卡在哪一步、实时日志都在这里，不再保留历史记录列表。</div>
+            <div v-if="!inviteLatest" class="empty-hint" style="padding:8px 4px" data-test="invite-live-empty">本店铺还没有邀约运行，点「开始邀约」后这里会实时显示进度。</div>
+            <template v-else>
+              <div class="p-info">
+                <div class="row-main">{{ inviteLatest.name.replace('达人邀约 · ', '') }}</div>
+                <div class="row-sub" data-test="invite-live-stuck">{{ inviteStuckText }}</div>
               </div>
-              <template v-if="detailTaskId === t.id">
-                <div class="step-row" v-for="(s, i) in t.steps" :key="i">
-                  <span class="s-ico">{{ stepIcon(t, i) }}</span>
-                  <div class="p-info">
-                    <div class="row-main">{{ i + 1 }}. {{ s.type }}<span class="row-sub"> · {{ s.timeoutMs / 1000 }}s</span></div>
-                    <div class="row-sub">{{ stepInputBrief(s) }}<template v-if="stepResultBrief(t, i)"> ⇒ {{ stepResultBrief(t, i) }}</template></div>
-                    <div class="row-sub" v-if="s.type === 'loop' && loopSkipSummary(t)" data-test="invite-loop-summary">{{ loopSkipSummary(t) }}</div>
-                  </div>
+              <div class="step-row" v-for="(s, i) in inviteLatest.steps" :key="i">
+                <span class="s-ico">{{ stepIcon(inviteLatest, i) }}</span>
+                <div class="p-info">
+                  <div class="row-main">{{ i + 1 }}. {{ s.type }}<span class="row-sub"> · {{ s.timeoutMs / 1000 }}s</span></div>
+                  <div class="row-sub">{{ stepInputBrief(s) }}<template v-if="stepResultBrief(inviteLatest, i)"> ⇒ {{ stepResultBrief(inviteLatest, i) }}</template></div>
+                  <div class="row-sub" v-if="s.type === 'loop' && loopSkipSummary(inviteLatest)" data-test="invite-loop-summary">{{ loopSkipSummary(inviteLatest) }}</div>
                 </div>
-                <div class="tc-btns" v-if="detailRunId(t)">
-                  <button class="mini-btn" v-if="liveStatus(t) === 'failed'" @click="runOp(t, 'retry')" title="跳过已成功步骤，副作用步骤不可恢复">从失败步骤继续</button>
-                  <button class="mini-btn" @click="loadTaskDetail(t)">刷新</button>
+              </div>
+              <div class="tc-btns" v-if="detailRunId(inviteLatest)">
+                <button class="mini-btn" v-if="['running','paused','queued','waiting_confirmation'].includes(liveStatus(inviteLatest))" @click="runOp(inviteLatest, 'cancel')" data-test="invite-live-stop">停止</button>
+                <button class="mini-btn" v-if="liveStatus(inviteLatest) === 'failed'" @click="runOp(inviteLatest, 'retry')" title="跳过已成功步骤，副作用步骤不可恢复">从失败步骤继续</button>
+                <button class="mini-btn" @click="loadTaskDetail(inviteLatest)">刷新</button>
+              </div>
+              <div class="row-sub" v-if="liveMessage(inviteLatest)" style="padding:2px 0">{{ liveMessage(inviteLatest) }}</div>
+              <div class="log-box invite-live-log" ref="inviteLiveLogEl" data-test="invite-live-log">
+                <div v-if="!ws.taskLogs[detailRunId(inviteLatest)]?.length" class="log-line">等待运行输出…开始邀约后，这里的日志会实时滚动，卡住时看停在最后几行。</div>
+                <div class="log-line" v-for="(l, i) in ws.taskLogs[detailRunId(inviteLatest)]" :key="i">
+                  {{ new Date(l.at || Date.now()).toLocaleTimeString() }} [{{ l.phase }}]{{ l.stepType ? ' ' + l.stepType : '' }} {{ l.message || '' }}
                 </div>
-                <div class="row-sub" v-if="liveMessage(t)" style="padding:2px 0">{{ liveMessage(t) }}</div>
-                <div class="log-box" v-if="ws.taskLogs[detailRunId(t)]?.length">
-                  <div class="log-line" v-for="(l, i) in ws.taskLogs[detailRunId(t)]" :key="i">
-                    {{ new Date(l.at || Date.now()).toLocaleTimeString() }} [{{ l.phase }}]{{ l.stepType ? ' ' + l.stepType : '' }} {{ l.message || '' }}
-                  </div>
-                </div>
-              </template>
-            </div>
+              </div>
+            </template>
           </div>
 
           <div class="env-sec">
@@ -817,7 +818,7 @@
               <summary>执行说明（点开）</summary>
               <template v-if="inviteProfile.flow === 'batch-list'">
                 <div class="env-note">
-                  一轮动作（<b>独立功能，不进任务列表</b>；运行明细见下方「邀约记录」）：进入达人广场 → 选类目（点类目 chip 后还要点级联里的「不限」叶子，<b>并校验「已筛选」里真的出现该类目</b>，否则不勾人）→ 选等级 → 搜索 → <b>逐个勾</b> {{ invite.count }} 位（不够就向下滚动加载更多）→ 批量邀约带货 → <b>先检测可邀约额度</b>（以抽屉「确认发送」是否可用来判定）→ 填话术（手填或 AI 生成）→ 勾权益 → 点「确认发送」→ <b>校验抽屉已关闭</b>（没关闭=平台没接受，如实失败）→ 截图留档。
+                  一轮动作（<b>独立功能，不进任务列表</b>；运行明细见下方「达人邀约实时日志」）：进入达人广场 → 选类目（点类目 chip 后还要点级联里的「不限」叶子，<b>并校验「已筛选」里真的出现该类目</b>，否则不勾人）→ 选等级 → 搜索 → <b>逐个勾</b> {{ invite.count }} 位（不够就向下滚动加载更多）→ 批量邀约带货 → <b>先检测可邀约额度</b>（以抽屉「确认发送」是否可用来判定）→ 填话术（手填或 AI 生成）→ 勾权益 → 点「确认发送」→ <b>校验抽屉已关闭</b>（没关闭=平台没接受，如实失败）→ 截图留档。
                 </div>
                 <div class="env-note">
                   一批发完<b>自动开下一批</b>，直到额度用完或可选达人不足 {{ invite.count }} 位为止（这两种都算正常收尾，运行显示成功并在步骤结果里写明停止原因）；单次运行最多 20 批（400–800 位的安全阀）。<b>抖店没有二次确认</b>：点「开始邀约」即开始真实发送，发出去不可撤回。
@@ -828,7 +829,7 @@
               </template>
               <template v-else>
                 <div class="env-note">
-                  一轮动作（<b>独立功能，不进任务列表</b>；运行明细见下方「邀约记录」）：进广场应用筛选 → 取一位<b>还没邀约过</b>的达人
+                  一轮动作（<b>独立功能，不进任务列表</b>；运行明细见下方「达人邀约实时日志」）：进广场应用筛选 → 取一位<b>还没邀约过</b>的达人
                   （列表每次加载都会重新排序，所以按"是否处理过"去重，不会重复邀同一人）→ 进详情页点「邀请带货」→
                   进邀约表单 → <b>先读「今日剩余 N 次」</b>（为 0 则正常收尾）→ 代填联系方式与合作说明 → 按商品 ID 添加商品 →
                   点「发送邀约」→ 在平台「确认发送邀约」弹窗上点「确认」→ <b>校验表单已被平台清空</b>（没清空=没提交成功，如实失败）→ 截图留档。
@@ -1317,13 +1318,14 @@
     <!-- v-if 带 customPicking：拾取是跨进程异步等待，用户若中途关了对话框，
          编辑器实例仍保留（v-show 隐藏），回填的 emit 才不会因卸载被 Vue 丢弃；
          finally 不强制重开，尊重用户的关闭意图。 -->
-    <div v-if="taskDialogOpen || customPicking" v-show="taskDialogOpen" class="modal-mask" data-test="task-dialog" @click.self="taskDialogOpen = false">
+    <div v-if="taskDialogOpen || customPicking" v-show="taskDialogOpen" class="modal-mask" data-test="task-dialog" @click.self="!taskSubmitting && (taskDialogOpen = false)">
       <div class="modal modal-wide task-create-modal" :class="{ 'task-create-tall': taskFlow === 'custom' }">
         <h2>新建任务</h2>
+        <fieldset :disabled="taskSubmitting" style="border:0;padding:0;margin:0;min-width:0">
         <div v-if="customPicking" class="env-note" data-test="picker-status">在左侧页面点击目标元素，结果会自动填回。按 Esc 取消拾取。</div>
         <div class="row-sub" style="margin-bottom:8px">
-          任务只能由<b>已实测跑通的流程</b>创建（参数表单 + 内置确认门禁都由流程自己带），
-          这样建出来的任务一定是能跑的；<b>自定义任务</b>则用步骤编排器自建（带创建前校验）。
+          选择内置流程，或用<b>自定义任务</b>编排步骤。创建后可手动运行；设置定时后会自动触发。
+          实际执行结果取决于店铺登录状态、页面和参数配置。
         </div>
 
         <label>任务类型
@@ -1365,6 +1367,16 @@
             <label>任务名称
               <input v-model="customTaskName" type="text" maxlength="80" data-test="custom-name" placeholder="例如 每日巡检本店资质页" />
             </label>
+            <div class="env-note task-template-bar">
+              <label>从模板加载
+                <select v-model="selectedTemplateId" data-test="task-template-select">
+                  <option value="">（不使用模板）</option>
+                  <option v-for="tpl in taskTemplates" :key="tpl.id" :value="tpl.id">{{ tpl.name }}</option>
+                </select>
+              </label>
+              <button class="mini-btn" type="button" :disabled="!selectedTemplateId" @click="loadTaskTemplate">套用模板</button>
+              <button class="mini-btn" type="button" :disabled="!customSteps.length" @click="saveDraftTemplate">保存为模板</button>
+            </div>
 
             <CustomTaskEditor
               v-model:steps="customSteps"
@@ -1381,6 +1393,10 @@
           </template>
         </template>
 
+        <div v-if="scheduleIssue" class="env-note" role="alert" data-test="task-schedule-error">{{ scheduleIssue }}</div>
+        <label class="ct-check" style="margin:8px 0" data-test="task-run-after-create">
+          <input v-model="runAfterCreate" type="checkbox" /> 创建后立即试运行一次
+        </label>
         <div class="modal-actions">
           <button class="btn-ghost" data-test="task-cancel" @click="taskDialogOpen = false">取消</button>
           <button
@@ -1389,8 +1405,9 @@
             :disabled="submitDisabled"
             :title="submitDisabledReason"
             @click="submitTask"
-          >创建任务</button>
+          >{{ taskSubmitting ? '正在创建…' : '创建任务' }}</button>
         </div>
+        </fieldset>
       </div>
     </div>
 
@@ -1569,7 +1586,7 @@ import PlatformIcon from '../../components/PlatformIcon.vue'
 import CustomTaskEditor from '../tasks/CustomTaskEditor.vue'
 import {
   hasBlockingIssues, toEngineSteps, validateCustomSteps,
-  type CustomStepDraft, type CustomStepIssue
+  findCatalogEntry, type CustomStepDraft, type CustomStepIssue
 } from '@shared/custom-task'
 import { describePickResult, type ElementPickResult, type PickMode } from '@shared/element-pick'
 import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile, isAssistProfile } from '@shared/constants/invite'
@@ -2369,8 +2386,8 @@ const taskSubTab = ref<'tasks' | 'invite' | 'todo'>('tasks')
  *  未打开店铺时显示历史遗留的"未绑定店铺"任务（新任务一律绑定店铺）。
  *
  * **达人邀约也进任务列表**（用户明确要求）：它由「新建任务 → 达人邀约」创建，与其它任务一样
- * 能看进度、运行/停止/删除；同时在「达人邀约」页签保留「邀约记录」视图（同一份运行，
- * 两个入口两种视角：这里看"任务整体状态"，那边看"邀约业务明细"）。
+ * 能看进度、运行/停止/删除；同时在「达人邀约」页签保留「达人邀约实时日志」视图（同一份运行，
+ * 两个入口两种视角：这里看"任务整体状态"，那边看"实时状态、卡在哪一步与实时日志"，不保留历史记录）。
  *
  * 「发票采集 / 经营数据采集」仍**不**列进来：它们由各自面板发起、且结果就在那个面板里，
  * 混进来只会让人对着两份视图找同一个结果。
@@ -2382,18 +2399,68 @@ const storeTasks = computed(() => ws.tasks.filter(t =>
     (!t.storeScope && t.latestRun?.storeId === ws.displayedStoreId)) &&
   !SELF_MANAGED_TASK_PREFIXES.some(p => t.name.startsWith(p))
 ))
-const inviteHistory = computed(() => {
+/**
+ * 达人邀约实时日志只跟本店**最近一次**邀约运行（不做历史记录列表）。
+ * 任务列表按创建时间倒序，第一条即最新。
+ */
+const inviteLatest = computed(() => {
   const sid = ws.displayedStoreId
-  if (!sid) return []
-  return ws.tasks.filter(t => t.storeScope === sid && t.name.startsWith(INVITE_TASK_PREFIX)).slice(0, 5)
+  if (!sid) return null
+  return ws.tasks.find(t => t.storeScope === sid && t.name.startsWith(INVITE_TASK_PREFIX)) || null
 })
-/** 邀约记录行的时间标签：取最近一次运行的结束/开始/创建时间 */
-function runTimeLabel(t: any): string {
-  const run = t.latestRun
-  const ts = run?.finishedAt || run?.startedAt || t.createdAt
-  if (!ts) return ''
-  const d = new Date(ts)
-  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+/** 卡点行：状态 + 卡在第几步（步骤类型）+ 最新消息，一行就能看出停在哪。 */
+const inviteStuckText = computed(() => {
+  const t: any = inviteLatest.value
+  if (!t) return ''
+  const st = liveStatus(t)
+  const label = st ? statusLabel(st) : '未知状态'
+  const live = t.latestRun ? ws.runLive[t.latestRun.id] : null
+  const at = live?.stepIndex ?? t.latestRun?.currentStep
+  const total = t.steps.length
+  let pos = ''
+  if (typeof at === 'number' && total) {
+    const step = t.steps[at]
+    pos = step ? ` · 卡在第 ${at + 1}/${total} 步（${step.type}）` : ` · 步骤 ${at + 1}/${total}`
+  }
+  const msg = liveMessage(t)
+  return `${label}${pos}${msg ? ` · ${msg}` : ''}`
+})
+/** 实时日志框：有新日志就滚到底，卡住时最后几行始终可见。 */
+const inviteLiveLogEl = ref<HTMLElement | null>(null)
+function scrollInviteLiveLog() {
+  nextTick(() => {
+    const el = inviteLiveLogEl.value as unknown as { scrollTop: number; scrollHeight: number } | null
+    if (el && typeof el.scrollTop === 'number') el.scrollTop = el.scrollHeight
+  })
+}
+/** 最新邀约运行变化（新开一轮 / 切店铺）→ 拉一次步骤结果，并滚日志到底。 */
+watch(inviteLatest, (t) => {
+  if (t) {
+    void loadTaskDetail(t)
+    scrollInviteLiveLog()
+  }
+})
+/** 运行中日志追加时保持滚到底（只在达人邀约页签可见时做，避免抢其它页签的滚动）。 */
+watch(() => {
+  const t: any = inviteLatest.value
+  const rid = t?.latestRun?.id
+  return rid ? (ws.taskLogs[rid]?.length || 0) : 0
+}, () => {
+  if (taskSubTab.value === 'invite') {
+    scrollInviteLiveLog()
+    // 步骤结果（✅/⏳）只在任务切换时拉一次：运行中每来一批日志顺带刷一次，
+    // 否则已完成的步骤图标一直停在"·"，看起来像卡住（防抖 2s，避免日志刷屏时连打 IPC）。
+    void refreshInviteDetailThrottled()
+  }
+})
+let inviteDetailTimer: ReturnType<typeof setTimeout> | null = null
+function refreshInviteDetailThrottled() {
+  if (inviteDetailTimer) return
+  inviteDetailTimer = setTimeout(() => {
+    inviteDetailTimer = null
+    const t: any = inviteLatest.value
+    if (t && ['running', 'waiting_confirmation', 'paused'].includes(liveStatus(t))) void loadTaskDetail(t)
+  }, 2000)
 }
 // ---------- 达人邀约：按「当前店铺的平台」匹配平台档案（平台流程相互独立） ----------
 const inviteProfile = computed(() => {
@@ -2716,7 +2783,7 @@ const inviteReady = computed(() => {
     invite.batchContact.trim().length > 0
   return levelsOk &&
     contactsOk &&
-    invite.count >= 1 && invite.count <= p.maxBatch &&
+    Number.isInteger(invite.count) && invite.count >= 1 && invite.count <= p.maxBatch &&
     scriptOk
 })
 
@@ -2785,6 +2852,7 @@ async function openInvitePage() {
  */
 /** 当前店铺是否有邀约任务在途（排队/运行/等确认/暂停）：有则面板显示「停止邀约」并禁用「开始」 */
 const ACTIVE_RUN_STATES = ['queued', 'running', 'waiting_confirmation', 'paused']
+const inviteSubmitting = ref(false)
 const inviteRun = computed(() => {
   const sid = ws.displayedStoreId
   if (!sid) return null
@@ -2863,8 +2931,11 @@ function buildInviteTaskPayload(): { name: string; storeScope: string; steps: un
 }
 
 async function startInvite() {
+  if (inviteSubmitting.value) return
   const p = inviteProfile.value
   if (!p || !inviteReady.value) return
+  inviteSubmitting.value = true
+  try {
   const payload = buildInviteTaskPayload()
   if (!payload) { ws.toast('邀约配置不完整，无法创建任务', 'error'); return }
   const created = await window.shopilot.task.create(payload)
@@ -2876,6 +2947,9 @@ async function startInvite() {
     : '邀约任务已启动：点「发送」前会先停下让你确认', 'success')
   // 留在邀约面板：进行中状态与「停止邀约」按钮就地可见（任务详情在「任务列表」页签可查）
   await ws.refreshTasks()
+  } finally {
+    inviteSubmitting.value = false
+  }
 }
 
 /**
@@ -2897,12 +2971,69 @@ type TaskFlowKey = 'invite' | 'custom'
 const taskFlow = ref<TaskFlowKey>('invite')
 
 /** 「新建任务」的定时输入（唯一还需要用户填的字段——其余参数都取自各流程自己的面板配置） */
-const tf = reactive({ everyMin: null as number | null })
+const tf = reactive({ everyMin: null as number | string | null })
+const taskSubmitting = ref(false)
+const scheduleIssue = computed(() => {
+  if (tf.everyMin === null || tf.everyMin === '') return ''
+  const minutes = Number(tf.everyMin)
+  return Number.isInteger(minutes) && minutes >= 1 && minutes <= 43200
+    ? '' : '定时请输入 1～43200 的整数分钟；留空表示仅手动运行'
+})
 
 // ---------- 自定义任务（步骤编排） ----------
 /** 编排中的步骤草稿（submit/retryLimit 是编排器元数据，不进引擎，见 toEngineSteps） */
 const customSteps = ref<CustomStepDraft[]>([])
 const customTaskName = ref('')
+const runAfterCreate = ref(false)
+const selectedTemplateId = ref('')
+type TaskTemplate = { id: string; name: string; steps: CustomStepDraft[]; everyMin: number | null }
+const taskTemplates = ref<TaskTemplate[]>([])
+const TEMPLATE_KEY = 'shopilot.task-templates.v1'
+const DRAFT_KEY = 'shopilot.custom-task-draft.v1'
+function draftStorageKey() { return `${DRAFT_KEY}.${ws.displayedStoreId || 'none'}` }
+function readTaskTemplates() {
+  try { taskTemplates.value = JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '[]') } catch { taskTemplates.value = [] }
+}
+function persistTaskTemplates() {
+  try { localStorage.setItem(TEMPLATE_KEY, JSON.stringify(taskTemplates.value.slice(0, 20))) } catch { /* storage unavailable */ }
+}
+function saveDraftTemplate() {
+  if (!customSteps.value.length) return
+  const name = customTaskName.value.trim() || `自定义模板 · ${new Date().toLocaleString()}`
+  taskTemplates.value.unshift({ id: `tpl_${Date.now()}`, name, steps: structuredClone(customSteps.value), everyMin: typeof tf.everyMin === 'number' ? tf.everyMin : null })
+  persistTaskTemplates(); readTaskTemplates(); selectedTemplateId.value = taskTemplates.value[0]?.id || ''
+  ws.toast('模板已保存', 'success')
+}
+function saveTaskTemplate(t: any) {
+  const unsupported = (t.steps || []).find((s: any) => !findCatalogEntry(s.type))
+  if (unsupported) return ws.toast(`该任务包含暂不支持模板化的步骤：${unsupported.type}`, 'error')
+  taskTemplates.value.unshift({ id: `tpl_${Date.now()}`, name: String(t.name), steps: structuredClone(t.steps), everyMin: t.schedule ? Math.round(t.schedule.everyMs / 60000) : null })
+  persistTaskTemplates(); readTaskTemplates(); ws.toast('模板已保存', 'success')
+}
+function loadTaskTemplate() {
+  const tpl = taskTemplates.value.find(x => x.id === selectedTemplateId.value)
+  if (!tpl) return
+  customTaskName.value = `${tpl.name} · 新任务`
+  customSteps.value = structuredClone(tpl.steps)
+  tf.everyMin = tpl.everyMin
+  customSelectedStep.value = 0
+  ws.toast('已套用模板，请检查参数后创建', 'info')
+}
+function persistCustomDraft() {
+  try {
+    localStorage.setItem(draftStorageKey(), JSON.stringify({ name: customTaskName.value, steps: customSteps.value, everyMin: tf.everyMin }))
+  } catch { /* storage unavailable */ }
+}
+function restoreCustomDraft() {
+  try {
+    const d = JSON.parse(localStorage.getItem(draftStorageKey()) || 'null')
+    if (d?.steps?.length) { customTaskName.value = d.name || ''; customSteps.value = d.steps; tf.everyMin = d.everyMin ?? null }
+  } catch { /* ignore malformed draft */ }
+}
+watch([customSteps, customTaskName, () => tf.everyMin], persistCustomDraft, { deep: true })
+watch(() => ws.displayedStoreId, () => {
+  if (!taskDialogOpen.value) restoreCustomDraft()
+})
 
 /**
  * 创建前校验结果。
@@ -2960,12 +3091,16 @@ const taskFlowCurrent = computed(() => taskFlowOptions.value.find(f => f.key ===
  * 自定义流程要单独判：它的 ready 只到"流程可用"，真正的可创建性取决于步骤校验。
  */
 const submitDisabled = computed(() => (
-  taskFlow.value === 'custom' ? !customReady.value : !taskFlowCurrent.value?.ready
+  taskSubmitting.value || customPicking.value || !!scheduleIssue.value ||
+  (taskFlow.value === 'custom' ? !customReady.value : !taskFlowCurrent.value?.ready)
 ))
 
 /** 置灰原因（挂在按钮 title 上，鼠标悬停能看到到底缺什么） */
 const submitDisabledReason = computed(() => {
   if (!submitDisabled.value) return ''
+  if (taskSubmitting.value) return '正在创建，请稍候'
+  if (customPicking.value) return '请先完成或取消元素拾取'
+  if (scheduleIssue.value) return scheduleIssue.value
   if (taskFlow.value === 'custom') {
     if (!ws.displayedStoreId) return '请先打开一个店铺（任务要绑定店铺执行）'
     return customIssues.value.find(i => i.level === 'error')?.message || '步骤编排里还有问题未解决'
@@ -3107,7 +3242,42 @@ function openTaskDialog() {
   taskDialogOpen.value = true
 }
 
+/** 将已有任务复制为可编辑的自定义任务草稿，避免重复搭建相同步骤。 */
+function copyTask(t: any) {
+  if (!ws.displayedStoreId) return ws.toast('请先打开一个店铺', 'error')
+  const unsupported = (t.steps || []).find((s: any) => !findCatalogEntry(s.type))
+  if (unsupported) {
+    ws.toast(`该任务包含暂不支持复制编辑的步骤：${unsupported.type}`, 'error')
+    return
+  }
+  taskFlow.value = 'custom'
+  tf.everyMin = t.schedule ? Math.round(t.schedule.everyMs / 60000) : null
+  customTaskName.value = `${String(t.name).slice(0, 70)} · 副本`
+  customSteps.value = (t.steps || []).map((s: any) => ({
+    type: s.type,
+    input: { ...(s.input || {}) },
+    timeoutMs: s.timeoutMs,
+    retryLimit: s.retryLimit
+  }))
+  customSelectedStep.value = 0
+  taskDialogOpen.value = true
+  ws.toast('已复制任务，请检查参数后创建', 'info')
+}
+
 async function submitTask() {
+  if (taskSubmitting.value || customPicking.value) return
+  if (scheduleIssue.value) { ws.toast(scheduleIssue.value, 'error'); return }
+  taskSubmitting.value = true
+  try {
+    await submitTaskFlow()
+  } catch (e) {
+    ws.toast('创建请求异常，请核对任务列表后重试：' + (e instanceof Error ? e.message : String(e)), 'error')
+  } finally {
+    taskSubmitting.value = false
+  }
+}
+
+async function submitTaskFlow() {
   if (taskFlow.value === 'custom') return submitCustomTask()
   if (taskFlow.value !== 'invite') { ws.toast('该流程尚未实现', 'error'); return }
   const payload = buildInviteTaskPayload()
@@ -3122,12 +3292,13 @@ async function submitTask() {
   // 用面板里配置好的名称（与「开始邀约」建的完全一致），定时由这里补
   const res = await window.shopilot.task.create({
     ...payload,
-    schedule: tf.everyMin ? { everyMs: Math.max(1, Number(tf.everyMin)) * 60000 } : null
+    schedule: tf.everyMin === null || tf.everyMin === '' ? null : { everyMs: Number(tf.everyMin) * 60000 }
   })
   if (res.ok) {
     taskDialogOpen.value = false
     ws.toast('任务已创建，可在列表里点 ▶ 运行', 'success')
     await ws.refreshTasks()
+    await runCreatedTaskIfRequested(res.data?.id)
   } else ws.toast('创建失败: ' + res.error.message, 'error')
 }
 
@@ -3153,7 +3324,7 @@ async function submitCustomTask() {
     name,
     storeScope: ws.displayedStoreId,
     steps: toEngineSteps(customSteps.value),
-    schedule: tf.everyMin ? { everyMs: Math.max(1, Number(tf.everyMin)) * 60000 } : null
+    schedule: tf.everyMin === null || tf.everyMin === '' ? null : { everyMs: Number(tf.everyMin) * 60000 }
   })
   if (res.ok) {
     // 创建成功后清掉草稿：任务已经进列表了，把同一份步骤继续留在对话框里
@@ -3165,11 +3336,22 @@ async function submitCustomTask() {
     taskDialogOpen.value = false
     ws.toast('任务已创建，可在列表里点 ▶ 运行', 'success')
     await ws.refreshTasks()
+    try { localStorage.removeItem(draftStorageKey()) } catch { /* ignore */ }
+    await runCreatedTaskIfRequested(res.data?.id)
   } else {
     // 走到这里说明主进程的 Zod 拒了（本模块的校验已放行）——如实报出来，
     // 那意味着目录与引擎 schema 出现了漂移，是需要修的 bug，不该被含糊成"创建失败"
     ws.toast('创建失败: ' + res.error.message, 'error')
   }
+}
+
+async function runCreatedTaskIfRequested(taskId?: string) {
+  if (!runAfterCreate.value || !taskId) return
+  runAfterCreate.value = false
+  const run = await window.shopilot.task.run(taskId)
+  if (run.ok) ws.toast(run.data?.waitingForStore ? '任务已创建并排队，店铺打开后运行' : '任务已创建并开始试运行', 'success')
+  else ws.toast('任务已创建，但试运行启动失败：' + run.error.message, 'error')
+  await ws.refreshTasks()
 }
 
 async function runTask(t: any) {
@@ -4305,6 +4487,8 @@ async function submitCreate() {
 function showInFolder(id: string) { window.shopilot.download.showInFolder(id) }
 
 onMounted(async () => {
+  readTaskTemplates()
+  restoreCustomDraft()
   updateEventHandler = (payload: any) => applyUpdateStatus(payload)
   window.shopilot.on('update:statusChanged', updateEventHandler)
   window.shopilot.on('update:progress', updateEventHandler)
@@ -4675,6 +4859,9 @@ onBeforeUnmount(() => {
 .tc-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .log-box { margin-top: 8px; background: var(--color-bg-primary); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 6px 8px; max-height: 160px; overflow-y: auto; }
 .log-line { font-size: 11px; color: var(--color-text-secondary); font-family: Consolas, monospace; line-height: 1.6; word-break: break-all; }
+/* 达人邀约实时日志是该页签的主视图（替代原来的邀约记录列表）：给更高的可视高度，
+   卡住时最后几行不用翻页就能看到。 */
+.invite-live-log { max-height: 340px; }
 .modal-wide { width: 560px; max-width: 92vw; }
 /* 自定义任务的步骤编排器是三栏（目录 156 + 序列 自适应 + 参数 268 + 间距），
    560px 那一档会把参数表单挤成一团，单给更宽的一档。
