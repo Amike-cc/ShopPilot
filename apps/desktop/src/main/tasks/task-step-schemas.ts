@@ -74,13 +74,26 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   fillDraft: z.object({ selector, text: z.string().max(20000) }).strict(),
   waitForUserConfirmation: z.object({ message: z.string().min(1).max(500) }).strict(),
   // 副作用步骤（点击/写入）：参数仍然只有选择器与文本，无任何代码入口
-  click: z.object({ selector }).strict(),
+  click: z.object({
+    selector,
+    // mode:'real' = 受信任鼠标点击（按选择器定位 → sendInputEvent）。
+    // 用途：没有稳定文案、且合成 click 不响应的控件——实测抖店抽屉「主营」级联的触发器
+    // （合成 click 打不开下拉），而它的文案会随平台记忆变化，只能按选择器定位。
+    mode: z.enum(['js', 'real']).optional()
+  }).strict(),
   // mode:'real' = 受信任鼠标点击（定位元素中心 → 滚动可见 → sendInputEvent），
   // 用于框架对合成 click 不响应的目标；deep 同上穿透 ShadowRoot；within = 限定查找范围
   clickByText: z.object({
     text: z.string().min(1).max(200),
     deep: z.boolean().optional(),
     mode: z.enum(['js', 'real']).optional(),
+    exact: z.boolean().optional(),
+    /**
+     * 已勾选就跳过（不点）。用于**平台会记住上次填写**的复选组/级联项：
+     * 批量循环第 2 轮起抽屉里是带记忆的状态，照旧点一遍会把上一轮的勾选**取消掉**
+     * （实测抖店抽屉：核心优势/权益/主营都会保留，重复点击等于反选）。
+     */
+    skipIfChecked: z.boolean().optional(),
     within: within.optional(),
     /**
      * 找不到目标时用的错误码（默认 TASK_SELECTOR_CHANGED）。
@@ -178,6 +191,23 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      */
     nearText: z.string().min(1).max(200).optional()
   }).strict(),
+  /**
+   * 悬停：把鼠标移到文案为 text 的元素上（**不点击**），用于展开多列级联菜单的下一列。
+   *
+   * 实测动因（抖店达人广场「主推类目」，2026-09-22 真机）：
+   *   · 点一级 chip 只展开第一列（二级项）；
+   *   · 二级项**悬停**才渲染出第三列（三级项）；
+   *   · 直接点二级项 = 只应用「一级/二级」并把整个弹层收起——于是"点二级、再点三级"
+   *     这条老路径必然失败（弹层已收，三级项不可见）。
+   * 所以三级筛选的正确手势是：悬停二级 → 点三级。悬停不改变平台数据，可安全重放。
+   * exact：整段精确匹配（避免「纸品」命中「纸品用品」）；within：限定在哪一列/哪个弹层里悬停。
+   */
+  hover: z.object({
+    text: z.string().min(1).max(200),
+    deep: z.boolean().optional(),
+    exact: z.boolean().optional(),
+    within: within.optional()
+  }).strict(),
   // 按键（白名单只允许 Escape）：用于收起页面上残留的下拉浮层。
   // 实测快手选完「带货类目」后级联下拉仍展开，会盖住后续要点的按钮（商品弹窗的「确 认」）。
   pressKey: z.object({
@@ -220,7 +250,16 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   // ---------- 微信小店（assist-form）----------
   mirrorTabUrl: z.object({ urlIncludes: z.string().min(1).max(300) }).strict(),
   typeText: z.object({ selector, text: z.string().max(2000), deep: z.boolean().optional() }).strict(),
-  waitForText: z.object({ text: z.string().min(1).max(200), deep: z.boolean().optional(), exact: z.boolean().optional(), within: within.optional() }).strict(),
+  waitForText: z.object({
+    text: z.string().min(1).max(200),
+    deep: z.boolean().optional(),
+    exact: z.boolean().optional(),
+    token: z.boolean().optional(),
+    within: within.optional()
+  }).strict().refine(input => !(input.exact && input.token), {
+    message: 'exact 与 token 不能同时启用',
+    path: ['token']
+  }),
   ensureRows: z.object({
     rowsSelector: selector,
     checkboxSelector: selector,
@@ -395,6 +434,7 @@ export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
   requireQuota: 30000,
   requireEnabled: 20000,
   clickIfPresent: 30000,
+  hover: 15000,
   pressKey: 10000,
   readLabelValue: 25000,
   waitMs: 120000,

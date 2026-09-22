@@ -84,6 +84,12 @@ describe('自定义任务 · 目录与 Zod schema 必须一致（防漂移）', 
     }
   })
 
+  it('精确匹配与完整词元匹配在编排器中可配置', () => {
+    expect(findCatalogEntry('clickByText')?.fields.some(f => f.key === 'exact')).toBe(true)
+    expect(findCatalogEntry('waitForText')?.fields.some(f => f.key === 'exact')).toBe(true)
+    expect(findCatalogEntry('waitForText')?.fields.some(f => f.key === 'token')).toBe(true)
+  })
+
   it('按目录填出的样本，必须能通过主进程的 Zod 校验（字段名/类型/必填/互斥全对齐）', () => {
     for (const e of STEP_CATALOG) {
       const steps = toEngineSteps([sampleDraft(e)])

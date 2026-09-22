@@ -194,6 +194,8 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     fields: [
       { key: 'text', label: '文案', kind: 'text', required: true, maxLength: 200, placeholder: '例如 邀请带货', pick: 'text' },
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' },
+      { key: 'exact', label: '整段精确匹配', kind: 'boolean', default: false },
+      { key: 'token', label: '匹配完整词元', kind: 'boolean', default: false },
       { key: 'within', label: '限定查找范围', kind: 'within' }
     ]
   },
@@ -283,7 +285,16 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     desc: '按选择器点击。',
     sideEffect: true,
     idempotent: false,
-    fields: [{ key: 'selector', label: '选择器', kind: 'text', required: true, maxLength: 500, pick: 'selector' }]
+    fields: [
+      { key: 'selector', label: '选择器', kind: 'text', required: true, maxLength: 500, pick: 'selector' },
+      {
+        key: 'mode', label: '点击方式', kind: 'select', default: 'js',
+        options: [
+          { value: 'js', label: 'JS 点击（默认，不受遮挡影响）' },
+          { value: 'real', label: '真实鼠标（合成点击打不开的控件用）' }
+        ]
+      }
+    ]
   },
   {
     type: 'clickByText',
@@ -302,6 +313,11 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
           { value: 'real', label: '真实鼠标（框架对合成点击不响应时用）' }
         ]
       },
+      { key: 'exact', label: '整段精确匹配', kind: 'boolean', default: false },
+      {
+        key: 'skipIfChecked', label: '已勾选就跳过', kind: 'boolean', default: false,
+        help: '平台会记住上次填写时用：重复点已勾选的项等于反选'
+      },
       { key: 'within', label: '限定查找范围', kind: 'within' }
     ]
   },
@@ -317,6 +333,20 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
       { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' },
       { key: 'waitMs', label: '等待毫秒', kind: 'number', min: 500, max: 60000, default: 8000 },
       { key: 'nearText', label: '限定在含此文案的弹层内', kind: 'text', maxLength: 200, placeholder: '用于区分同名按钮', pick: 'text' }
+    ]
+  },
+  {
+    type: 'hover',
+    label: '鼠标悬停',
+    group: '交互',
+    desc: '把鼠标移到目标上但不按下。用于展开多列级联菜单的下一列——抖店「主推类目」的第三列只有悬停二级项才出现。',
+    sideEffect: false,
+    idempotent: true,
+    fields: [
+      { key: 'text', label: '文案', kind: 'text', required: true, maxLength: 200, pick: 'text' },
+      { key: 'deep', label: '穿透 ShadowRoot', kind: 'boolean' },
+      { key: 'exact', label: '整段精确匹配', kind: 'boolean', default: false },
+      { key: 'within', label: '限定查找范围', kind: 'within' }
     ]
   },
   {

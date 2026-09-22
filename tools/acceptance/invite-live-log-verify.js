@@ -111,6 +111,7 @@ async function main() {
   freeDebugPort(CDP_PORT)
   let app = null
   let ui = null
+  let idleInviteTaskId = null
   try {
     app = spawn(electronExe, ['.', `--remote-debugging-port=${CDP_PORT}`, '--user-data-dir=' + userData, '--no-sandbox'], {
       cwd: root,
@@ -224,6 +225,39 @@ async function main() {
     check('③ 实时日志有运行输出', liveState.logLines.length > 1, JSON.stringify(liveState.logLines))
     check('③ 运行中可就地停止', liveState.stopBtn === true)
 
+    // 新建但未运行的邀约任务不能盖住正在执行的运行：否则面板会错误回到空态，用户看不到卡点也停不掉。
+    const idleInvite = await ui.eval(`
+      return await window.shopilot.task.create({
+        name: '达人邀约 · 抖店 · 未运行验收',
+        storeScope: ${JSON.stringify(storeId)},
+        steps: [{ type: 'waitMs', input: { ms: 300 }, timeoutMs: 10000 }]
+      });
+    `)
+    idleInviteTaskId = idleInvite?.ok ? idleInvite.data?.id : null
+    check('③ 可创建一条未运行的邀约任务', !!idleInviteTaskId, JSON.stringify(idleInvite?.error || idleInvite?.data))
+    await ui.eval(`${DOM}
+      const ptab = byText('.ptab', '任务');
+      if (ptab) ptab.click();
+      await new Promise(r => setTimeout(r, 800));
+      const tasks = document.querySelector('[data-test="task-tab-tasks"]');
+      if (tasks) tasks.click();
+      await new Promise(r => setTimeout(r, 800));
+      const inv = document.querySelector('[data-test="task-tab-invite"]');
+      if (inv) inv.click();
+      return true;
+    `)
+    await sleep(600)
+    const activeStillVisible = await ui.eval(`return {
+      empty: !!document.querySelector('[data-test="invite-live-empty"]'),
+      stuck: String(document.querySelector('[data-test="invite-live-stuck"]')?.innerText || ''),
+      stop: !!document.querySelector('[data-test="invite-live-stop"]')
+    };`)
+    check('③ 未运行的新任务不会遮住活动邀约实时日志',
+      activeStillVisible.empty === false &&
+        /卡在第 2\/2 步/.test(activeStillVisible.stuck) &&
+        activeStillVisible.stop === true,
+      JSON.stringify(activeStillVisible))
+
     // ④ 日志框自动滚到底
     const scrolled = await ui.eval(`${DOM}
       const box = document.querySelector('[data-test="invite-live-log"]');
@@ -236,6 +270,7 @@ async function main() {
     await ui.eval(`await window.shopilot.task.cancel(${JSON.stringify(created.runId)}); return true;`)
     await sleep(800)
     await ui.eval(`await window.shopilot.task.delete(${JSON.stringify(created.taskId)}); return true;`)
+    if (idleInviteTaskId) await ui.eval(`await window.shopilot.task.delete(${JSON.stringify(idleInviteTaskId)}); return true;`)
     check('收尾：验收运行已停止并删除', true)
   } catch (error) {
     check('验收执行未中断', false, String(error?.stack || error))

@@ -1,3 +1,4 @@
+import { matchesTextToken } from '@shared/text-match'
 /**
  * TaskRunner - §4.4 / §9.2
  * 只执行预定义步骤（不接受网页或渲染层的任意代码）；
@@ -599,8 +600,15 @@ async function findTextTarget(
    * 命中时**立刻**返回 reason:'ABSENT'——不要等到超时：这两件事的处置完全相反
    * （页面没渲染出来 → 等一下/重试同一位；这位对象天生不可用 → 立刻换下一位）。
    */
-  absentTexts?: string[]
-): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string; rowKey?: string; picked?: string; viaBlocker?: string; transport?: 'trusted-mouse' | 'js-fallback'; absentText?: string; disabledReason?: string }> {
+  absentTexts?: string[],
+  exact = false,
+  /**
+   * 已勾选就跳过（不点）。用途：平台会**记住上次填写**的复选组/级联项——
+   * 批量邀请第 2 轮起抽屉里是带记忆的状态，照旧点一遍会把上一轮的勾选**取消掉**
+   * （实测抖店抽屉：核心优势/权益/主营都会保留，重复点击等于反选）。
+   */
+  skipIfChecked = false
+): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string; rowKey?: string; picked?: string; viaBlocker?: string; transport?: 'trusted-mouse' | 'js-fallback'; absentText?: string; disabledReason?: string; skipped?: 'checked' }> {
   return withTimeout(() => wc.executeJavaScript(`(() => {
     ${deep ? ENUM_DEEP_FN : ''}
     ${VISIBLE_JS}
@@ -626,7 +634,7 @@ async function findTextTarget(
     const narrowNeedle = __narrow(needle);
     for (const el of scope) {
       const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
-      if (!own.includes(needle)) continue;
+      if (${exact} ? __narrow(own) !== narrowNeedle : !own.includes(needle)) continue;
       if (!__inScope(roots, el)) continue;
       if (!__visible(el)) continue;
       cands.push({ el, len: own.length });
@@ -698,6 +706,18 @@ async function findTextTarget(
         picked = 'unvisited';
       }
     }
+    // 已勾选就跳过：平台的"记住上次填写"会让重复点击变成**反选**，见 findTextTarget 的 skipIfChecked 说明。
+    if (${skipIfChecked ? 'true' : 'false'}) {
+      const cb = (hit.querySelector && hit.querySelector('input[type=checkbox]')) ||
+        (hit.closest && hit.closest('label') ? hit.closest('label').querySelector('input[type=checkbox]') : null);
+      if (cb && cb.checked) {
+        return {
+          ok: true, skipped: 'checked',
+          clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40),
+          candidates: cands.length, picked, rowKey
+        };
+      }
+    }
     let dis = hit.disabled === true || hit.getAttribute('aria-disabled') === 'true';
     // 从**元素自身**开始查禁用类：平台普遍用 class 表达禁用（实测微信：「发送邀约」在字段齐备前
     // 是 weui-desktop-btn_disabled，没有 disabled 属性；末页的「下一页」同理）——
@@ -757,7 +777,12 @@ async function findTextTarget(
     // 自身/其后代/同一 label；全被遮挡则如实报 COVERED（由调用方决定重试或失败）。
     const deepAt = (x, y) => { let el = document.elementFromPoint(x, y); while (el && el.shadowRoot) { const inner = el.shadowRoot.elementFromPoint(x, y); if (!inner || inner === el) break; el = inner } return el };
     const labelEl = hit.closest('label') || hit.parentElement || hit;
-    const xs = [0.12, 0.3, 0.5, 0.7, 0.88].map(f => Math.round(r.left + r.width * f));
+    // 采样点**从中心开始**，再向两侧退。
+    // 为什么不从左往右扫（改前是 0.12→0.88）：左侧 12% 处常常正好压在行内的**复选框**上——
+    // 实测抖店抽屉「主营」多选级联（2026-09-22 真机）：点复选框只勾选、**不展开子列**，
+    // 于是"点一级展开二级"这一步看着成功、下一级却怎么都找不到（TASK_SELECTOR_CHANGED）；
+    // 而点条目中部（文字区）才会展开。中心点也是人点这类条目的自然落点，对按钮/页签同样安全。
+    const xs = [0.5, 0.3, 0.7, 0.12, 0.88].map(f => Math.round(r.left + r.width * f));
     const ys = [0.5, 0.25, 0.75].map(f => Math.round(r.top + r.height * f));
     for (const x of xs) {
       for (const y of ys) {
@@ -1223,6 +1248,37 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const deadline = Date.now() + step.timeoutMs
       await waitForSelector(wc, sel, run, step.timeoutMs, false, deadline)
       guardSignals(run)
+      // mode:'real'：按选择器发**受信任鼠标点击**。
+      // 用途：目标没有稳定文案、只有合成 click 不响应的控件——实测抖店抽屉「主营」级联的
+      // 触发器（`.auxo-cascader-multiple-wrapper`）：合成 click 打不开下拉，真实鼠标才展开；
+      // 而且它的文案会随平台记住的上次填写变化（「请下拉选择」→「个护家清/家清纸品」），
+      // 按文案找第二轮就会失效，只能按选择器定位。
+      if (input.mode === 'real') {
+        await assertViewMounted(wc, `click ${sel}`)
+        const point = await withDeadline(() => wc.executeJavaScript(`(() => {
+          const el = document.querySelector(${JSON.stringify(sel)});
+          if (!el) return { ok: false, reason: 'NOT_FOUND' };
+          let dis = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
+          let p = el.parentElement;
+          for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
+            if (/disabled/i.test(String(p.className || ''))) dis = true;
+          }
+          if (dis) return { ok: false, reason: 'DISABLED' };
+          el.scrollIntoView({ block: 'center' });
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) return { ok: false, reason: 'INVISIBLE' };
+          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+        })()`), run, deadline, 'click')
+        if (!point || !point.ok) {
+          throw new Error(point && point.reason === 'DISABLED'
+            ? `TASK_TARGET_DISABLED: 目标为禁用态，平台不允许该操作 ${sel}`
+            : `TASK_SELECTOR_CHANGED: 未找到可点击元素 ${sel}`)
+        }
+        guardSignals(run)
+        realClick(wc, point.x, point.y)
+        guardSignals(run)
+        return { kind: 'executed', payload: { action: 'click', selector: sel, mode: 'real', x: point.x, y: point.y } }
+      }
       const res = await withDeadline(() => wc.executeJavaScript(`(() => {
         const el = document.querySelector(${JSON.stringify(sel)});
         if (!el) return { ok: false, reason: 'NOT_FOUND' };
@@ -1241,6 +1297,120 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         : `TASK_SELECTOR_CHANGED: 未找到可点击元素 ${sel}`)
       guardSignals(run)
       return { kind: 'executed', payload: { action: 'click', selector: sel, clickedText: res.text || null } }
+    }
+    case 'hover': {
+      // 悬停展开多列级联菜单的下一列（**不点击**）。实测抖店「主推类目」：点一级 chip 只有第一列，
+      // 二级项悬停才渲染第三列；直接点二级只应用两级并收起弹层，所以三级必须"先悬停再点"。
+      //
+      // 用 JS 派发指针事件而不是受信任鼠标移动：级联列靠 mouseover/mouseenter 触发（React 的
+      // onMouseEnter 由根节点上的 mouseover 派生），实测派发即可开列；不依赖窗口是否在前台，
+      // 也不受"下一列可能落在视口外"影响（真机实测弹层会自动左翻，但列的位置要等开列后才知道）。
+      // 目标定位与 clickByText 同一套两级匹配（自有文本 → 规范化 innerText），保证"点得到就能悬得到"。
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      const deep = !!input.deep
+      const exact = !!input.exact
+      const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
+      const result = await withTimeout(() => wc.executeJavaScript(`(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${VISIBLE_JS}
+        ${SCOPE_FN}
+        ${PICK_SORT_FN}
+        const needle = ${JSON.stringify(needle)};
+        const exact = ${!!exact};
+        const within = ${JSON.stringify(within || null)};
+        const roots = within ? __scopeRoots(within) : null;
+        if (within && !roots) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
+        const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+        const cands = [];
+        const narrowNeedle = __narrow(needle);
+        for (const el of scope) {
+          const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+          if (exact ? __narrow(own) !== narrowNeedle : !own.includes(needle)) continue;
+          if (!__inScope(roots, el)) continue;
+          if (!__visible(el)) continue;
+          cands.push({ el, len: own.length });
+        }
+        if (!cands.length && narrowNeedle) {
+          const pool = [];
+          if (roots) for (const r of roots) { pool.push(r); for (const c of r.querySelectorAll('*')) pool.push(c) }
+          else for (const el of scope) pool.push(el);
+          for (const c of pool) {
+            const tag = c.tagName;
+            if (!(tag === 'LI' || tag === 'BUTTON' || tag === 'A' || tag === 'LABEL' || tag === 'SPAN' ||
+                  (c.getAttribute && (c.getAttribute('role') === 'menuitem' || c.getAttribute('role') === 'button')))) continue;
+            if (!__visible(c)) continue;
+            if (__narrow(c.innerText) !== narrowNeedle) continue;
+            cands.push({ el: c, len: narrowNeedle.length, viaText: true });
+          }
+        }
+        if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
+        cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
+        const hit = cands[0].el;
+        // 开列证据：悬停前后"可见的候选条目"数量（级联菜单项/选项这类小元素），
+        // 数量变多说明下一列真的渲染出来了；没变也如实记录，让后面的点击步骤去报错。
+        const countVisibleItems = () => {
+          let n = 0;
+          const rootsNow = roots || [document];
+          for (const r of rootsNow) {
+            for (const e of r.querySelectorAll('li, [role=menuitem], [class*="menu-item"], [class*="option"]')) {
+              if (__visible(e)) n++;
+            }
+          }
+          return n;
+        };
+        const before = countVisibleItems();
+        const rect = hit.getBoundingClientRect();
+        const opts = { bubbles: true, cancelable: true, view: window, clientX: Math.round(rect.left + rect.width / 2), clientY: Math.round(rect.top + rect.height / 2) };
+        for (const t of ['pointerover', 'mouseover', 'mouseenter', 'mousemove']) {
+          try {
+            const Ctor = (t.indexOf('pointer') === 0 && typeof PointerEvent === 'function') ? PointerEvent : MouseEvent;
+            hit.dispatchEvent(new Ctor(t, opts));
+          } catch { /* 个别环境无 PointerEvent，退回 MouseEvent 即可 */ }
+        }
+        return { ok: true, before };
+      })()`).then(async (r: any) => {
+        if (!r || !r.ok) return r
+        // 等下一列渲染出来（平台是同步渲染，给一小段稳定期；拿可见条目数当判据，最多等 2.4s）
+        const deadline = Date.now() + 2400
+        let after = r.before
+        for (;;) {
+          await new Promise(res => setTimeout(res, 300))
+          after = await wc.executeJavaScript(`(() => {
+            ${VISIBLE_JS}
+            const within = ${JSON.stringify(within || null)};
+            ${SCOPE_FN}
+            const roots = within ? (__scopeRoots(within) || []) : [];
+            let n = 0;
+            for (const r of (roots.length ? roots : [document])) {
+              for (const e of r.querySelectorAll('li, [role=menuitem], [class*="menu-item"], [class*="option"]')) {
+                if (__visible(e)) n++;
+              }
+            }
+            return n;
+          })()`).catch(() => after)
+          if (typeof after === 'number' && after > r.before) break
+          if (Date.now() >= deadline) break
+        }
+        return { ok: true, hoveredText: needle, visibleItemsBefore: r.before, visibleItemsAfter: after, expanded: after > r.before }
+      }), run, step.timeoutMs, `悬停「${needle}」`)
+      guardSignals(run)
+      if (!result || !result.ok) {
+        if (result && result.reason === 'SCOPE_NOT_FOUND') {
+          throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${needle}」的限定范围（${JSON.stringify(within)}）`)
+        }
+        throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可悬停元素`)
+      }
+      return {
+        kind: 'executed',
+        payload: {
+          action: 'hover',
+          text: result.hoveredText,
+          visibleItemsBefore: result.visibleItemsBefore,
+          visibleItemsAfter: result.visibleItemsAfter,
+          expanded: result.expanded
+        }
+      }
     }
     case 'pressKey': {
       // 只支持 Escape：收起页面上残留的下拉浮层/弹层。
@@ -1376,7 +1546,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       if (input.mode === 'real') {
         for (;;) {
           guardSignals(run)
-          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, pick, allowJsWhenDetached, absentTexts)
+          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, pick, allowJsWhenDetached, absentTexts, !!input.exact, input.skipIfChecked === true)
           if (hit.ok) break
           if (hit.reason === 'DISABLED') {
             // 把平台给的禁用原因一并报出来（读到了就带，读不到退回默认文案）
@@ -1426,7 +1596,9 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         const follow = input.followTab as { urlIncludes?: string; closeOld?: boolean } | undefined
         const beforeTabIds = follow ? new Set(getStoreTabs(run.storeId).map(t => t.id)) : null
         if (unvisited && hit.rowKey) run.visitedRows.add(hit.rowKey)
-        performHitClick(wc, hit)
+        // skipIfChecked 命中时**不点**：那份 hit 里没有坐标（没走遮挡采样），
+        // 硬发受信任鼠标会带着 undefined 坐标下去（Electron 直接抛 "Invalid event object"）。
+        if (hit.skipped !== 'checked') performHitClick(wc, hit)
         guardSignals(run)
         if (follow && beforeTabIds) {
           const openedId = await followOpenedTab(run, beforeTabIds, follow.urlIncludes, step.timeoutMs)
@@ -1461,8 +1633,8 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             if (done) break
             // 还没跳 → 再点一次（重新定位，避免元素重排后坐标失效）
             guardSignals(run)
-            const again = await findTextTarget(wcOrThrow(run), run, needle, deep, step.timeoutMs, 'clickByText waitUrl', within, pick, allowJsWhenDetached)
-            if (again.ok) { performHitClick(wcOrThrow(run), again) }
+            const again = await findTextTarget(wcOrThrow(run), run, needle, deep, step.timeoutMs, 'clickByText waitUrl', within, pick, allowJsWhenDetached, undefined, !!input.exact, input.skipIfChecked === true)
+            if (again.ok && again.skipped !== 'checked') { performHitClick(wcOrThrow(run), again) }
           }
           if (!done) {
             throw new Error(`TASK_TIMEOUT: 点击「${needle}」${attempts} 次后地址仍未变为含「${waitUrl.includes}」的页面`)
@@ -1514,6 +1686,8 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             // 视图当时没挂载 → 只能降级为 JS 点击。如实记下来：这种点击对
             // "未接收合成事件"的框架按钮可能不生效，排查时一眼能看出走了哪条路。
             transport: hit.transport ?? 'trusted-mouse',
+            // 已勾选而跳过（skipIfChecked）：如实记录"这一项本来就选着"，重复运行时不动作
+            ...(hit.skipped === 'checked' ? { skipped: 'checked' } : {}),
             ...(verifyActive ? { verifiedActive: true } : {}),
             ...(hit.rowKey ? { picked: hit.picked ?? 'best', rowKey: hit.rowKey } : {}),
             ...(follow ? { followedTab: run.tabId } : {})
@@ -1527,6 +1701,8 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         ${SCOPE_FN}
         ${PICK_SORT_FN}
         const needle = ${JSON.stringify(needle)};
+        const exact = ${!!input.exact};
+        const narrowNeedle = __narrow(needle);
         const within = ${JSON.stringify(within || null)};
         const roots = within ? __scopeRoots(within) : null;
         if (within && !roots) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
@@ -1534,7 +1710,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         const cands = [];
         for (const el of scope) {
           const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
-          if (!own.includes(needle)) continue;
+          if (exact ? __narrow(own) !== narrowNeedle : !own.includes(needle)) continue;
           if (!__inScope(roots, el)) continue;
           const r = el.getBoundingClientRect();
           if (!(r.width > 0 && r.height > 0)) continue;
@@ -1543,7 +1719,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         // 兜底：规范化 innerText（文案被拆进子 span 的平台，如快手「确 认」）。
         // 与 mode:'real' 分支同一套规则，保证两条路径行为一致。
         if (!cands.length) {
-          const nw = __narrow(needle);
+          const nw = narrowNeedle;
           const pool = [];
           if (roots) for (const rt of roots) { pool.push(rt); for (const c of rt.querySelectorAll('*')) pool.push(c) }
           else for (const el of scope) pool.push(el);
@@ -1566,13 +1742,26 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           if (/disabled/i.test(String(p.className || ''))) dis = true;
         }
         if (dis) return { ok: false, reason: 'DISABLED' };
+        if (${input.skipIfChecked === true ? 'true' : 'false'}) {
+          const cb = (hit.querySelector && hit.querySelector('input[type=checkbox]')) ||
+            (hit.closest && hit.closest('label') ? hit.closest('label').querySelector('input[type=checkbox]') : null);
+          if (cb && cb.checked) {
+            return { ok: true, skipped: 'checked', clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length };
+          }
+        }
         const target = hit.closest('button, a, label, [role="button"], [class*="btn"]') || hit;
         target.click();
         return { ok: true, matched: needle, clickedText: String(target.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length };
       })()`), run, Math.min(step.timeoutMs, 10000), 'clickByText')
         if (res && res.ok) {
           guardSignals(run)
-          return { kind: 'executed', payload: { action: 'clickByText', matched: needle, clickedText: res.clickedText, candidates: res.candidates } }
+          return {
+            kind: 'executed',
+            payload: {
+              action: 'clickByText', matched: needle, clickedText: res.clickedText, candidates: res.candidates,
+              ...(res.skipped === 'checked' ? { skipped: 'checked' } : {})
+            }
+          }
         }
         if (res && res.reason === 'DISABLED') {
           throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`)
@@ -2278,13 +2467,15 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             ${PICK_SORT_FN}
             const needle = ${JSON.stringify(needle)};
             const exact = ${!!input.exact};
+            const inputToken = ${!!input.token};
+            const matchesTextToken = ${matchesTextToken.toString()};
             const within = ${JSON.stringify(within || null)};
             const roots = within ? __scopeRoots(within) : null;
             if (within && !roots) return false;
             const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
             for (const el of scope) {
               const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
-              if (exact ? own !== needle : !own.includes(needle)) continue;
+              if (inputToken ? !matchesTextToken(own, needle) : exact ? own !== needle : !own.includes(needle)) continue;
               if (!__inScope(roots, el)) continue;
               if (__visible(el)) return true;
             }
@@ -2296,7 +2487,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
               if (!__inScope(roots, el)) continue;
               if (!__visible(el)) continue;
               const it = __narrow(el.innerText);
-              if (exact ? it !== nw : !it.includes(nw)) continue;
+              if (inputToken ? !matchesTextToken(el.innerText, needle) : exact ? it !== nw : !it.includes(nw)) continue;
               if (it.length > nw.length + 12) continue;
               return true;
             }

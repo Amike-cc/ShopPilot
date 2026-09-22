@@ -6,7 +6,7 @@
 import { ipcMain, IpcMainInvokeEvent } from 'electron'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
-import type { CategoryNode } from '@shared/constants/invite'
+import { normalizeDouyinCategoryTree } from '@shared/douyin-category-tree'
 import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as WindowManager from '../browser/window-manager'
 import { clearStoreData } from '../browser/session-manager'
@@ -44,88 +44,6 @@ function browserError(err: any, requestId: string): IPCResult {
     return error(ERROR_CODES.BROWSER_CLOSED.code, '店铺浏览器未打开', requestId)
   }
   return error(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
-}
-
-type JsonRecord = Record<string, any>
-
-function optionLabel(value: any): string {
-  if (typeof value === 'string') return value.trim()
-  if (!value || typeof value !== 'object') return ''
-  for (const key of ['label', 'name', 'text', 'title', 'show_name', 'value_name', 'option_name', 'cate_name', 'category_name']) {
-    const v = value[key]
-    if (typeof v === 'string' && v.trim()) return v.trim()
-  }
-  return ''
-}
-
-function optionChildren(value: any): any[] {
-  if (!value || typeof value !== 'object') return []
-  for (const key of ['children', 'enums', 'options', 'values', 'sub', 'sub_items', 'child', 'list', 'items']) {
-    if (Array.isArray(value[key]) && value[key].length > 0) return value[key]
-    const nested = value[key]
-    if (nested && typeof nested === 'object') {
-      for (const nestedKey of ['options', 'children', 'enums', 'values', 'list', 'items']) {
-        if (Array.isArray(nested[nestedKey]) && nested[nestedKey].length > 0) return nested[nestedKey]
-      }
-    }
-  }
-  return []
-}
-
-function findFirstOptionArray(value: any, depth = 0): any[] {
-  if (depth > 4 || value == null) return []
-  if (Array.isArray(value)) {
-    if (value.some(x => optionLabel(x))) return value
-    for (const item of value) {
-      const found = findFirstOptionArray(item, depth + 1)
-      if (found.length) return found
-    }
-    return []
-  }
-  if (typeof value !== 'object') return []
-  for (const key of ['options', 'children', 'enums', 'values', 'items', 'list', 'cascader', 'data']) {
-    const found = findFirstOptionArray((value as JsonRecord)[key], depth + 1)
-    if (found.length) return found
-  }
-  return []
-}
-
-/**
- * 抖店筛选接口返回的是动态配置，字段名会随版本变化。
- * 这里只做结构归一化，不硬编码任何类目名称；找不到“主推类目”就返回空数组并如实报错。
- */
-function normalizeDoudianCategoryTree(payload: any): CategoryNode[] {
-  const headers = payload?.data?.headers || payload?.data?.header || payload?.data?.filter_headers || []
-  if (!Array.isArray(headers) || headers.length === 0) return []
-  const header = headers.find((h: any) => {
-    const identity = [h?.key, h?.name, h?.title, h?.label, h?.type].filter(Boolean).join(' ')
-    return /main_cate|主推类目/i.test(identity)
-  }) || headers.find((h: any) => /main_cate|主推类目/i.test(JSON.stringify(h).slice(0, 2000)))
-  if (!header) return []
-
-  const roots = findFirstOptionArray(header)
-  const cleanNames = (values: any[]) => values
-    .map(optionLabel)
-    .filter(name => name && !['不限', '全部', '暂无数据'].includes(name))
-
-  return roots
-    .map((first: any): CategoryNode | null => {
-      const firstName = optionLabel(first)
-      if (!firstName) return null
-      const secondItems = optionChildren(first)
-      const grandchildren = secondItems
-        .map((second: any) => ({
-          name: optionLabel(second),
-          children: cleanNames(optionChildren(second))
-        }))
-        .filter(second => second.name && second.children.length > 0)
-      return {
-        name: firstName,
-        children: cleanNames(secondItems),
-        ...(grandchildren.length ? { grandchildren } : {})
-      }
-    })
-    .filter((node): node is CategoryNode => !!node && node.children.length > 0)
 }
 
 /**
@@ -299,7 +217,7 @@ export function registerBrowserHandlers(): void {
           return error(ERROR_CODES.INTERNAL_ERROR.code, `读取抖店类目失败：${detail}`, requestId)
         }
         const payload = raw.attempts.find(a => a.json?.code === 0)?.json
-        const categoryTree = normalizeDoudianCategoryTree(payload)
+        const categoryTree = normalizeDouyinCategoryTree(payload)
         if (!categoryTree.length) {
           return error(ERROR_CODES.INTERNAL_ERROR.code, '抖店筛选接口已返回，但未找到「主推类目」三级数据', requestId)
         }

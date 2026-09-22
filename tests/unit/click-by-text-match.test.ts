@@ -28,8 +28,8 @@ function makeEl(tag: string, own: string, opts: { innerText?: string; cls?: stri
   return self
 }
 
-/** 复刻 findTextTarget 的两级候选收集（与 task-runner 里的逻辑同构） */
-function collect(all: El[], needle: string, roots: El[] | null): El[] {
+/** 复刻 findTextTarget / JS clickByText 的两级候选收集（与 task-runner 里的逻辑同构） */
+function collect(all: El[], needle: string, roots: El[] | null, exact = false): El[] {
   const fn = new Function(`${PICK_SORT_FN}; return { __narrow };`)()
   const narrow = fn.__narrow
   const nw = narrow(needle)
@@ -37,7 +37,7 @@ function collect(all: El[], needle: string, roots: El[] | null): El[] {
   const cands: El[] = []
   // ① 自有文本
   for (const el of all) {
-    if (!el.own.includes(needle)) continue
+    if (exact ? narrow(el.own) !== nw : !el.own.includes(needle)) continue
     if (!inScope(el)) continue
     if (!el.visible) continue
     cands.push(el)
@@ -91,5 +91,13 @@ describe('clickByText 文案匹配：自有文本优先，规范化 innerText �
     expect(collect([makeEl('BUTTON', '别的文案')], '确认', null)).toHaveLength(0)
     // 部分匹配不行：②要求整段规范化后**完全相等**
     expect(collect([makeEl('BUTTON', '', { innerText: '确认发送邀请' })], '确认', null)).toHaveLength(0)
+  })
+
+  it('exact 在默认 JS 与真实点击共用的候选逻辑中都排除相似叶子', () => {
+    const near = makeEl('BUTTON', '纸品用品')
+    const exact = makeEl('BUTTON', '纸品')
+    expect(collect([near], '纸品', null, true)).toHaveLength(0)
+    expect(collect([near, exact], '纸品', null, true)).toEqual([exact])
+    expect(collect([near], '纸品', null)).toEqual([near])
   })
 })

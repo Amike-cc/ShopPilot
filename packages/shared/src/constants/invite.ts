@@ -52,6 +52,56 @@ export interface CategoryNode {
 }
 
 /**
+ * 抽屉里的**结构化表单**（抖店 2026-09-22 真机实测的改版抽屉）。
+ *
+ * 平台把邀约消息文案从"自由话术"改成了**选项拼装**：消息预览是
+ * 「这里是XX旗舰店，主营<下拉> 我们的核心优势：<勾选> 我们可为您提供的服务：<勾选> 期待与您携手合作！」。
+ * 抽屉里**没有 textarea**（旧档案的 scriptSelector:'textarea' 已必然超时失败），
+ * 取而代之的是下面这些控件，全部用文案/占位锚点定位：
+ *   · 主营（多选级联，可留空）：点开只出第一列，二级项**悬停**才出下一列——复用 hover 步骤；
+ *   · 核心优势（复选框组，最多选 5 项）；
+ *   · 权益（复选框组，最多选 3 项，平台对第 4 项静默拒绝）；
+ *   · 联系方式（必填，见 contactSelectors 的 #phone / #wechat）；
+ *   · 专属推荐商品（必填，打开「使用平台推荐商品」开关即自动挂上平台匹配的商品，
+ *     实测每次打开抽屉都重置为关，所以"点一下"天然幂等）。
+ */
+export interface BatchDrawerForm {
+  /**
+   * 主营多选级联：执行时"真实点开下拉 → 点一级（子列这时才展开）→ 点二级"。
+   * 未配置该字段 = 不填主营（平台不拦，但消息读起来缺一句）。
+   *
+   * ⚠️ 平台会**记住上次填写**：第 2 轮起触发器上显示的是上次的值而不是占位文案，
+   * 所以触发元素只能按选择器定位（triggerSelector），不能按「请下拉选择」这类文案找。
+   */
+  mainCategory?: {
+    /**
+     * 触发器选择器（实测 `.auxo-cascader-multiple-wrapper`）。
+     * 不用文案：那个文案会随平台记忆在「请下拉选择」与上次的值之间变化（真机踩过）。
+     */
+    triggerSelector: string
+    /**
+     * 下拉面板的容器选择器（实测 `.auxo-cascader-menus`）。
+     * **必须单独给**：实测这个面板是渲染在 `document.body` 下的浮层（portal），
+     * 并不在抽屉元素里面 —— 用抽屉当限定范围去找选项会一个都找不到
+     * （真机踩过：hover「个护家清」报 TASK_SELECTOR_CHANGED，而面板明明已经展开）。
+     */
+    popoverSelector: string
+    /** 最多选几个二级（实测平台允许多选，但每多选一个就多一次开合，默认只选 1 个） */
+    maxSelect: number
+  }
+  /**
+   * 推荐商品开关（"专属推荐商品"是必填项）。点一下开关，平台会自动挂上匹配商品；
+   * 然后用 `已添加 N/M` 断言真的挂上了——没挂上宁可失败，也别发出一个没有推荐商品的邀约。
+   */
+  goodsSwitch: {
+    label: string
+    /** "已选商品数"的文案锚点（实测「已添加 0/5」） */
+    selectedMarker: string
+    min: number
+  }
+}
+
+/**
  * 批量勾选流档案（抖店 / 快手小店）。
  * 字段说明沿用实测注释；选择器只依赖 tbody/checkbox 这类稳定结构，
  * 文案点击靠 clickByText（页面无稳定 data-test）。
@@ -126,13 +176,30 @@ export interface BatchInviteProfile extends InviteProfileBase {
   benefits: readonly string[]
   /** 表格行复选框（thead 里的是"全选"，必须排除） */
   rowCheckboxSelector: string
-  /** 邀约抽屉里的话术输入框 */
-  scriptSelector: string
+  /**
+   * 邀约抽屉里的话术输入框。
+   * **留空 = 该平台抽屉里没有可写的话术框**（实测抖店 2026-09-22 改版：消息文案改由
+   * 「主营 + 核心优势 + 权益」结构化拼装，textarea 已被移除），此时流程跳过全部话术步骤。
+   */
+  scriptSelector?: string
+  /**
+   * 邀约抽屉的**根容器**（仅"打开时"命中的选择器，实测抖店 `.auxo-drawer-open`）。
+   * 话术框存在时它可省（沿用 scriptSelector 当抽屉判据）；话术框没有时**必须给**——
+   * 否则"抽屉开没开 / 关没关"这两个事实校验（提交前后的关键判据）就无从谈起。
+   */
+  drawerSelector?: string
+  /** 抽屉里的结构化表单（抖店改版抽屉；快手的老式抽屉没有这些控件 → 不定义） */
+  drawerForm?: BatchDrawerForm
+  /** 抽屉里的「核心优势」复选框组（抖店改版抽屉特有）。面板据此渲染，执行时逐个按文案点。 */
+  strengths?: { label: string; options: readonly string[]; maxSelect: number }
+  /** 权益组的最多可选数（实测抖店「最多选 3 项」；不定义 = 不限） */
+  benefitsMax?: number
   /**
    * 抽屉里的必填联系方式输入框（实测快手要求联系人/手机号/微信号三项必填，
-   * 且平台会记住上次填的）。抖店无此字段 → 不定义。
+   * 且平台会记住上次填的；抖店改版抽屉要求手机号/微信号必填，联系人没有这一项）。
+   * 不定义 = 该平台的抽屉不要联系方式。
    */
-  contactSelectors?: { contact: string; phone?: string; wechat?: string }
+  contactSelectors?: { contact?: string; phone?: string; wechat?: string }
   /**
    * 邀约抽屉里「推荐商品」区域的读取源（用于 AI 生成话术时参考商品）。
    * 留空 = 运行时从话术框向上找最近的「固定定位浮层」（抽屉本体）再读其可见文本；
@@ -334,13 +401,49 @@ const DOUDIAN: BatchInviteProfile = {
   ],
   levels: ['LV0', 'LV1', 'LV2', 'LV3', 'LV4', 'LV5', 'LV6'],
   levelsWithQuotaHint: ['LV0', 'LV1', 'LV2', 'LV3'],
-  benefits: ['专属高佣', '免费申样', '视频素材支持', '优质视频投放'],
+  /**
+   * 抽屉「我们可以为您提供的权益」复选框组（实测 2026-09-22 改版：7 项两分组，
+   * **最多选 3 项**——实测点第 4 项被平台静默忽略，所以面板与流程都要按 3 收敛）。
+   * 旧档案里的「免费申样 / 视频素材支持 / 优质视频投放」是改版前的叫法，已失效。
+   */
+  benefits: ['专属高佣', '免费样品', '佣金可谈', '机制可谈', '优质视频投流', '视频素材/脚本支持', '带货指导/陪跑'],
+  benefitsMax: 3,
+  benefitsLabelText: '权益（最多选 3 项）',
+  /**
+   * 抽屉「我们的核心优势」复选框组（实测 2026-09-22 改版新增，**最多选 5 项**）：
+   * 列表按平台自己的分组顺序（店铺 2 / 供应链 3 / 商品 4 / 服务 4）。
+   * 勾选影响邀约消息里的「我们的核心优势：」那一段，不勾也能发送。
+   */
+  strengths: {
+    label: '核心优势（最多选 5 项）',
+    maxSelect: 5,
+    options: [
+      '行业知名度高', '其他平台知名度高',
+      '源头工厂', '货源充足', '品类丰富',
+      '用户口碑高', '多款爆款', '商品品质高', '多项专利',
+      '48h发货', '现货现发', '七天无理由退货', '售后无忧'
+    ]
+  },
   rowCheckboxSelector: 'tbody input[type=checkbox]',
-  scriptSelector: 'textarea',
+  // 改版抽屉没有话术框（消息由「主营 + 核心优势 + 权益」拼装）→ scriptSelector 留空，
+  // 抽屉的开关判据改用根容器（打开时才带 auxo-drawer-open 类）。
+  drawerSelector: '.auxo-drawer-open',
   categoryChipScope: '.quick-filter-button-enums',
   categoryPopoverSelector: '.quick-filter-cascader-popover',
   // 留空 = 运行时用「话术框最近的固定定位浮层」当商品来源（见接口注释：不写死哈希类名）
   goodsSourceSelector: '',
+  drawerForm: {
+    // 「主营」是消息里的填空（你好，这里是X店，主营<此处>）——不填平台不拦，但消息会缺一句
+    mainCategory: { triggerSelector: '.auxo-cascader-multiple-wrapper', popoverSelector: '.auxo-cascader-menus', maxSelect: 1 },
+    // 「专属推荐商品」是必填项：打开这个开关，平台自动挂上与达人匹配的商品（实测每次重置为关）
+    goodsSwitch: { label: '使用平台推荐商品', selectedMarker: '已添加', min: 1 }
+  },
+  /**
+   * 联系方式（实测必填，带 * 号）：手机号 maxlength=11、微信号 maxlength=20，
+   * 两个输入框的 placeholder 都是「请输入」、class 也相同——只有 **id** 能区分，
+   * 所以按 id 定位（`#phone` / `#wechat`）。不填平台会在提交时拦下。
+   */
+  contactSelectors: { phone: '#phone', wechat: '#wechat' },
   texts: {
     levelTrigger: '达人等级',
     search: '搜索',

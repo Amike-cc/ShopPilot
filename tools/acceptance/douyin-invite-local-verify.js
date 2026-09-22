@@ -2,8 +2,15 @@
  * 抖店达人邀约本地端到端验收。
  *
  * 使用独立临时 userData 和本地仿真达人广场，完整走一遍：
- * UI 创建抖店邀约任务 -> 批量勾选 -> 打开邀约抽屉 -> 写话术
+ * UI 创建抖店邀约任务 -> 勾选 -> 打开邀约抽屉（**改版后的结构化表单**）
  * -> 停在中国式人工确认门禁 -> 确认 -> 仿真平台接收 -> 下一轮额度用尽收尾。
+ *
+ * 仿真站点按 2026-09-22 真机实测的抖店行为建模，三处"照着真实平台来"是刻意的：
+ *  ① 类目级联：**点二级 = 只应用「一级/二级」且弹层收起**；三级列只在**悬停**二级项时才渲染
+ *     —— 于是"点二级再点三级"这条老路径在这里必然失败（与真机一致）；
+ *  ② 抽屉：没有话术 textarea，改由「主营下拉 + 核心优势 + 权益 + 手机号/微信号 + 推荐商品开关」
+ *     拼装邀约消息，其中联系方式与推荐商品是必填项；
+ *  ③ 「批量邀约带货」按钮只在**已有勾选**时才出现（真机它就在「已选择N位达人」那条提示里）。
  *
  * 不连接真实抖店，不会向真实达人发送邀约。
  */
@@ -16,7 +23,8 @@ const path = require('path')
 const root = path.resolve(__dirname, '../..')
 const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
 const CDP_PORT = process.env.SHOPILOT_DOUYIN_CDP_PORT || '9261'
-const SCRIPT_TEXT = '本地验收：诚邀达人合作带货，提供专属高佣与素材支持。'
+const CONTACT_PHONE = '15057937334'
+const CONTACT_WECHAT = 'jiaoe988'
 const results = []
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
@@ -56,8 +64,32 @@ function focusAppWindow(pid) {
   } catch { /* 页面可见性断言会如实暴露 */ }
 }
 
+const STRENGTH_OPTIONS = [
+  '行业知名度高', '其他平台知名度高', '源头工厂', '货源充足', '品类丰富',
+  '用户口碑高', '多款爆款', '商品品质高', '多项专利',
+  '48h发货', '现货现发', '七天无理由退货', '售后无忧'
+]
+const BENEFIT_OPTIONS = ['专属高佣', '免费样品', '佣金可谈', '机制可谈', '优质视频投流', '视频素材/脚本支持', '带货指导/陪跑']
+
 function startSite() {
-  const state = { sentBatches: 0, sentCount: 0, quotaExhausted: false }
+  const state = {
+    sentBatches: 0,
+    sentCount: 0,
+    quotaExhausted: false,
+    /** 每次发送时的抽屉快照（用于比对"第 2 轮有没有把记住的选项点掉"） */
+    sends: [],
+    /** 已邀约的达人行（真机：发出去的达人在下一次打开广场时复选框是 disabled，不允许重复邀约） */
+    invitedKeys: [],
+    /** 三级列的展开次数（悬停二级项触发）——证明"悬停开列"这条手势真的发生了 */
+    hoverExpands: 0,
+    /** 二级项被**点击**的次数：真机点二级=只应用两级并收起弹层，所以这里必须是 0 */
+    secondLevelClicks: 0,
+    /**
+     * 抽屉表单（**平台会记住上次填写**：真机实测第 2 轮打开抽屉时，主营/核心优势/权益
+     * 都还是上次的值，连触发器上的文案都变成上次选的类目，不再是「请下拉选择」）。
+     */
+    drawer: { mainCategory: '', strengths: [], benefits: [], phone: '', wechat: '', goodsAdded: 0 }
+  }
 
   function page() {
     const disabled = state.quotaExhausted ? 'disabled' : ''
@@ -66,63 +98,247 @@ function startSite() {
         body { font: 14px sans-serif; margin: 20px; }
         table { border-collapse: collapse; margin: 16px 0; }
         td, th { border: 1px solid #ccc; padding: 8px 14px; }
-        #drawer { display:none; position:fixed; right:0; top:0; width:420px; height:100%; padding:20px; box-sizing:border-box; background:#fff; border-left:1px solid #ddd; }
-        #drawer.open { display:block; }
+        .drawer { display:none; }
+        .drawer.open { display:block; position:fixed; left:0; top:0; width:100%; height:100%; padding:20px; box-sizing:border-box; background:#fff; overflow:auto; }
         textarea { width:100%; height:100px; box-sizing:border-box; }
         button { padding:8px 14px; }
+        .auxo-cascader-menu-item { padding:6px 10px; border:1px solid #eee; cursor:pointer; display:block; width:200px; }
+        .auxo-cascader-multiple-wrapper { border:1px solid #ddd; padding:6px; width:200px; display:inline-block; cursor:pointer; }
       </style></head><body>
       <h1>抖店达人广场（本地验收）</h1>
-      <div class="quick-filter-button-enums"><button id="category-chip">个护家清</button><button>生鲜</button></div>
+      <div class="quick-filter-button-enums"><button id="category-chip"><span>个护家清</span></button><button><span>生鲜</span></button></div>
       <div class="quick-filter-cascader-popover" style="display:none">
-        <button id="category-any">不限</button>
-        <button id="category-leaf">家清纸品</button>
-        <button id="category-third-leaf" style="display:none">纸品</button>
+        <ul class="auxo-cascader-menu" id="col1">
+          <li class="auxo-cascader-menu-item" id="category-any">不限</li>
+          <li class="auxo-cascader-menu-item auxo-cascader-menu-item-expand" id="category-sub-2" data-sub="个人护理">个人护理</li>
+          <li class="auxo-cascader-menu-item auxo-cascader-menu-item-expand" id="category-sub" data-sub="家清纸品">家清纸品</li>
+        </ul>
+        <ul class="auxo-cascader-menu" id="col2" style="display:none"></ul>
       </div>
       <div id="filtered-row"><span>已筛选</span><span id="filtered-value"></span></div>
       <div>达人等级 <button>LV0</button><button>LV1</button><button>LV2</button><button>LV3</button></div>
       <div><button>搜索</button></div>
-      <div id="selected-count">已选择 <b>0</b> 位达人</div>
+      <div id="selected-bar" style="display:none">已选择 <b id="selected-count">0</b> 位达人 <button class="auxo-btn auxo-btn-link" id="batch-invite"><span>批量邀约带货</span></button></div>
       <table><thead><tr><th><input type="checkbox" id="all"></th><th>达人</th></tr></thead><tbody>
-        <tr data-row-key="daren-1"><td><label><input type="checkbox" class="daren"></label></td><td>达人A</td></tr>
-        <tr data-row-key="daren-2"><td><label><input type="checkbox" class="daren"></label></td><td>达人B</td></tr>
-        <tr data-row-key="daren-3"><td><label><input type="checkbox" class="daren"></label></td><td>达人C</td></tr>
+        ${['A', 'B', 'C', 'D', 'E', 'F'].map((name, i) => `<tr data-row-key="daren-${i + 1}"><td><label><input type="checkbox" class="daren"${state.invitedKeys.includes('daren-' + (i + 1)) ? ' disabled' : ''}></label></td><td>达人${name}${state.invitedKeys.includes('daren-' + (i + 1)) ? '（已邀约）' : ''}</td></tr>`).join('')}
       </tbody></table>
-      <button id="batch-invite">批量邀约带货</button>
-      <div id="drawer">
-        <h2>批量邀约</h2>
-        <textarea placeholder="请输入邀约话术"></textarea>
-        <p><button id="confirm-send" ${disabled}>确认发送</button></p>
+      <div class="auxo-drawer auxo-drawer-right" id="drawer">
+        <h2>批量沟通 · 邀约信息</h2>
+        <p>你好，这里是本地验收店, 主营
+          <span class="auxo-cascader-multiple-wrapper" id="drawer-main-trigger"><span class="auxo-cascader-multiple-placeholder">请下拉选择</span></span>
+        </p>
+        <p>我们的核心优势：最多选 5 项</p>
+        <div id="strengths">${STRENGTH_OPTIONS.map((s, i) => `<label style="display:inline-block;margin:2px 8px"><input type="checkbox" class="strength" data-name="${s}" data-idx="${i}">${s}</label>`).join('')}</div>
+        <p>我们可以为您提供的权益：最多选 3 项</p>
+        <div id="benefits">${BENEFIT_OPTIONS.map((b, i) => `<label style="display:inline-block;margin:2px 8px"><input type="checkbox" class="benefit" data-name="${b}" data-idx="${i}">${b}</label>`).join('')}</div>
+        <p>* 联系方式</p>
+        <div><label for="phone">手机号</label><input id="phone" class="auxo-input" placeholder="请输入" maxlength="11" type="text" value=""></div>
+        <div><label for="wechat">微信号</label><input id="wechat" class="auxo-input" placeholder="请输入" maxlength="20" type="text" value=""></div>
+        <p>* 专属推荐商品</p>
+        <div><label id="goods-switch-label"><span class="auxo-switch auxo-switch-small" id="goods-switch"></span>使用平台推荐商品</label>
+          <span id="goods-count">已添加 0/5</span></div>
+        <p><button id="confirm-send" ${disabled}>确认发送</button> <button id="cancel-send">取消</button></p>
         ${state.quotaExhausted ? '<p id="quota-hint">今日邀约额度已用尽</p>' : ''}
       </div>
       <script>
         const state = ${JSON.stringify(state)};
+        // 暴露给验收脚本直接读（经典脚本里的 const 不挂在 window 上）
+        window.__gesture = (window.__gesture = state);
+        const drawer = document.getElementById('drawer');
+        const popover = document.querySelector('.quick-filter-cascader-popover');
+        const col2 = document.getElementById('col2');
         const checks = [...document.querySelectorAll('tbody input[type=checkbox]')];
         const count = () => checks.filter(x => x.checked).length;
-        const counter = document.getElementById('selected-count');
-        const redraw = () => { counter.innerHTML = '已选择 <b>' + count() + '</b> 位达人'; };
+        const redraw = () => {
+          const n = count();
+          document.getElementById('selected-count').textContent = String(n);
+          // 真机：按钮就在「已选择N位达人」这条提示里，没勾选时压根不在 DOM
+          document.getElementById('selected-bar').style.display = n > 0 ? 'block' : 'none';
+        };
         for (const c of checks) c.addEventListener('change', redraw);
-        document.getElementById('batch-invite').addEventListener('click', () => {
-          document.getElementById('drawer').classList.add('open');
-        });
+
+        // ---- 类目级联：点一级 chip 开合弹层；悬停二级项才渲染三级列；**点二级 = 两级 + 收起** ----
+        const closePopover = () => { popover.style.display = 'none'; col2.style.display = 'none'; col2.innerHTML = ''; };
         document.getElementById('category-chip').addEventListener('click', () => {
-          document.querySelector('.quick-filter-cascader-popover').style.display = 'block';
+          if (popover.style.display === 'none') { popover.style.display = 'block'; col2.style.display = 'none'; col2.innerHTML = ''; }
+          else closePopover();
         });
+        const renderThird = (sub) => {
+          if (col2.dataset.sub === sub && col2.style.display !== 'none') return;
+          col2.dataset.sub = sub;
+          col2.style.display = 'block';
+          col2.innerHTML = '';
+          if (sub !== '家清纸品') return;
+          // 先出现相似叶子，真正的「纸品」稍后才渲染，逼真覆盖异步级联场景
+          const near = document.createElement('li');
+          near.className = 'auxo-cascader-menu-item';
+          near.id = 'category-third-near';
+          near.textContent = '纸品用品';
+          near.addEventListener('click', () => {
+            document.getElementById('filtered-value').textContent = ' 个护家清 / 家清纸品（纸品用品）';
+            closePopover();
+          });
+          col2.appendChild(near);
+          setTimeout(() => {
+            const leaf = document.createElement('li');
+            leaf.className = 'auxo-cascader-menu-item';
+            leaf.id = 'category-third-leaf';
+            leaf.textContent = '纸品';
+            leaf.addEventListener('click', () => {
+              document.getElementById('filtered-value').textContent = ' 个护家清 / 家清纸品（纸品）';
+              closePopover();
+            });
+            col2.appendChild(leaf);
+          }, 650);
+        };
+        for (const li of document.querySelectorAll('#col1 .auxo-cascader-menu-item')) {
+          // 悬停（真实鼠标会给 mouseover/mouseenter；引擎的 hover 步骤也一样）
+          li.addEventListener('mouseover', () => {
+            const sub = li.dataset.sub;
+            if (!sub) return;
+            state.hoverExpands += 1;
+            renderThird(sub);
+          });
+          li.addEventListener('mouseenter', () => {
+            const sub = li.dataset.sub;
+            if (!sub) return;
+            renderThird(sub);
+          });
+          li.addEventListener('click', (ev) => {
+            if (!li.dataset.sub) return;
+            // 真机实测：点二级项 = 立刻应用「一级/二级」并把弹层收起（三级列随之消失）
+            state.secondLevelClicks += 1;
+            document.getElementById('filtered-value').textContent = ' 个护家清 ' + li.dataset.sub;
+            ev.stopPropagation();
+            closePopover();
+          });
+        }
         document.getElementById('category-any').addEventListener('click', () => {
           document.getElementById('filtered-value').textContent = ' 个护家清';
+          closePopover();
         });
-        document.getElementById('category-leaf').addEventListener('click', () => {
-          document.getElementById('filtered-value').textContent = ' 个护家清 家清纸品';
-          document.getElementById('category-third-leaf').style.display = 'block';
+
+        // ---- 抽屉（改版后的结构化表单）----
+        // 真机口径：打开抽屉时**平台会带上上次填写的内容**（主营/核心优势/权益/联系方式都保留），
+        // 所以这里也按 state.drawer 预填——第 2 轮才可能出现"重复点击=反选"这类问题。
+        const goodsCount = document.getElementById('goods-count');
+        let goodsAdded = 0;
+        const prefill = () => {
+          const d = state.drawer || {};
+          document.querySelector('.auxo-cascader-multiple-placeholder').textContent = d.mainCategory || '请下拉选择';
+          for (const cb of document.querySelectorAll('.strength')) cb.checked = (d.strengths || []).includes(cb.dataset.name);
+          for (const cb of document.querySelectorAll('.benefit')) cb.checked = (d.benefits || []).includes(cb.dataset.name);
+          document.getElementById('phone').value = d.phone || '';
+          document.getElementById('wechat').value = d.wechat || '';
+        };
+        document.getElementById('batch-invite').addEventListener('click', () => {
+          drawer.classList.add('open', 'auxo-drawer-open');
+          // 平台每次打开抽屉都把"推荐商品"开关重置为关（实测：上轮开过也不保留）
+          goodsAdded = 0;
+          goodsCount.textContent = '已添加 0/5';
+          document.getElementById('goods-switch').className = 'auxo-switch auxo-switch-small';
+          prefill();
         });
-        document.getElementById('category-third-leaf').addEventListener('click', () => {
-          document.getElementById('filtered-value').textContent = ' 个护家清 家清纸品 纸品';
+        document.getElementById('cancel-send').addEventListener('click', () => {
+          drawer.classList.remove('open', 'auxo-drawer-open');
         });
+        document.getElementById('goods-switch-label').addEventListener('click', () => {
+          const sw = document.getElementById('goods-switch');
+          const on = sw.className.includes('auxo-switch-checked');
+          sw.className = 'auxo-switch auxo-switch-small' + (on ? '' : ' auxo-switch-checked');
+          goodsAdded = on ? 0 : 2;   // 平台按达人匹配：实测开一次挂 2 个
+          goodsCount.textContent = '已添加 ' + goodsAdded + '/5';
+        });
+
+        // 主营（多选级联）：**必须真实鼠标点击**才展开；**点一级项**才出二级列（悬停不出，真机实测）；
+        // 点二级后触发器显示「一级/二级」。
+        // 面板是 body 级浮层（.auxo-cascader-menus 挂在 body 下、**不在抽屉里**）——真机实测如此，
+        // 流程若用抽屉当查找范围就会一个选项都找不到（这里是那条 bug 的回归网）。
+        const mainPop = document.createElement('div');
+        mainPop.className = 'auxo-cascader-menus';
+        // 真机的面板是浮层且**在视口内**（悬停/点击都要能点到）——这里用 fixed 定位还原
+        mainPop.style.cssText = 'display:none;position:fixed;left:320px;top:120px;z-index:60;background:#fff;border:1px solid #ddd;padding:6px;';
+        document.body.appendChild(mainPop);
+        document.getElementById('drawer-main-trigger').addEventListener('mousedown', (ev) => {
+          // 真机：合成 click 打不开它，只有鼠标按下（受信任输入）才展开
+          if (!ev.isTrusted) return;
+          if (mainPop.style.display === 'none') {
+            mainPop.style.display = 'block';
+            mainPop.innerHTML = '';
+            // 真机的级联项**每项都带复选框**（多选级联），选中态就是那个复选框——
+            // 引擎的 skipIfChecked 正是读它来判断"这项已经选着了"，所以仿真必须如实带上。
+            const remembered = state.drawer.mainCategory === '个护家清/家清纸品';
+            const mk = (text, id, checked) => {
+              const li = document.createElement('li');
+              li.className = 'auxo-cascader-menu-item auxo-cascader-menu-item-expand';
+              li.id = id;
+              li.innerHTML = '<span class="auxo-checkbox-wrapper"><input type="checkbox"' + (checked ? ' checked' : '') + '></span>' + text;
+              return li;
+            };
+            const root = mk('个护家清', 'drawer-main-root', remembered);
+            const sub = mk('家清纸品', 'drawer-main-sub', remembered);
+            sub.style.display = 'none';
+            // 真机：点一级项才展开子列（悬停无效）
+            root.addEventListener('click', (e) => {
+              if (!e.isTrusted) return;
+              sub.style.display = 'block';
+            });
+            // 真机：点已勾选的二级项 = **反选**（所以流程要用 skipIfChecked 幂等填写）
+            sub.addEventListener('click', () => {
+              const cb = sub.querySelector('input');
+              const next = !cb.checked;
+              cb.checked = next;
+              root.querySelector('input').checked = next;
+              state.drawer.mainCategory = next ? '个护家清/家清纸品' : '';
+              document.querySelector('.auxo-cascader-multiple-placeholder').textContent = state.drawer.mainCategory || '请下拉选择';
+              mainPop.style.display = 'none';
+            });
+            mainPop.appendChild(root);
+            mainPop.appendChild(sub);
+          } else mainPop.style.display = 'none';
+        });
+
+        // 核心优势/权益：平台对超量勾选**静默忽略**（实测权益第 4 项点了不生效）
+        for (const cb of document.querySelectorAll('.strength')) {
+          cb.addEventListener('click', (ev) => {
+            const chosen = [...document.querySelectorAll('.strength')].filter(x => x.checked && x !== cb).length;
+            if (!cb.checked && chosen >= 5) { ev.preventDefault(); return }
+          });
+        }
+        for (const cb of document.querySelectorAll('.benefit')) {
+          cb.addEventListener('click', (ev) => {
+            const chosen = [...document.querySelectorAll('.benefit')].filter(x => x.checked && x !== cb).length;
+            if (!cb.checked && chosen >= 3) { ev.preventDefault(); return }
+          });
+        }
+
         document.getElementById('confirm-send').addEventListener('click', () => {
           if (${state.quotaExhausted}) return;
-          const n = count();
-          fetch('/__send', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({ count: n }), keepalive: true });
-          document.getElementById('drawer').classList.remove('open');
+          const phone = document.getElementById('phone').value;
+          const wechat = document.getElementById('wechat').value;
+          const strengths = [...document.querySelectorAll('.strength')].filter(x => x.checked).map(x => x.dataset.name);
+          const benefits = [...document.querySelectorAll('.benefit')].filter(x => x.checked).map(x => x.dataset.name);
+          // 平台把这次填写**记住**（下一轮打开抽屉时预填）
+          state.drawer = { mainCategory: state.drawer.mainCategory, strengths, benefits, phone, wechat, goodsAdded };
+          const keys = [...document.querySelectorAll('tbody tr')]
+            .filter(tr => { const cb = tr.querySelector('input.daren'); return cb && cb.checked })
+            .map(tr => tr.getAttribute('data-row-key'));
+          fetch('/__send', {
+            method: 'POST',
+            headers: {'content-type':'application/json'},
+            keepalive: true,
+            body: JSON.stringify({
+              count: count(),
+              keys,
+              // 级联手势的证据（这两个计数只在页面里累加，必须回传，否则服务端看不到）
+              hoverExpands: state.hoverExpands,
+              secondLevelClicks: state.secondLevelClicks,
+              drawer: state.drawer
+            })
+          });
+          drawer.classList.remove('open', 'auxo-drawer-open');
         });
+        redraw();
       </script></body></html>`
   }
 
@@ -170,7 +386,17 @@ function startSite() {
           const parsed = JSON.parse(body || '{}')
           state.sentBatches += 1
           state.sentCount += Number(parsed.count) || 0
-          state.quotaExhausted = true
+          if (typeof parsed.hoverExpands === 'number') state.hoverExpands = parsed.hoverExpands
+          if (typeof parsed.secondLevelClicks === 'number') state.secondLevelClicks = parsed.secondLevelClicks
+          if (parsed.drawer) state.drawer = parsed.drawer
+          // 发出去的达人进入"已邀约"（下次打开广场时复选框 disabled，真机口径）
+          for (const k of (Array.isArray(parsed.keys) ? parsed.keys : [])) {
+            if (!state.invitedKeys.includes(k)) state.invitedKeys.push(k)
+          }
+          // 每批的抽屉快照：第 2 批与第 1 批必须一致（平台记住上次填写 + 幂等填写）
+          state.sends.push({ count: Number(parsed.count) || 0, keys: parsed.keys || [], drawer: parsed.drawer || null })
+          // 两批之后额度用尽：第 3 轮走到"确认发送可用性预检"就会干净收尾（TASK_QUOTA_EXCEEDED）
+          if (state.sentBatches >= 2) state.quotaExhausted = true
         } catch { /* 验收会在状态断言里暴露 */ }
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end('{"ok":true}')
@@ -323,7 +549,8 @@ async function main() {
       taskConfirm: (runId, approved) => ui.eval(`return await window.shopilot.task.confirm(${JSON.stringify(runId)}, ${approved});`),
       taskDelete: taskId => ui.eval(`return await window.shopilot.task.delete(${JSON.stringify(taskId)});`),
       settingsSet: (key, value) => ui.eval(`return await window.shopilot.settings.set(${JSON.stringify(key)}, ${JSON.stringify(value)});`),
-      storeCreate: input => ui.eval(`return await window.shopilot.store.create(${JSON.stringify(input)});`)
+      storeCreate: input => ui.eval(`return await window.shopilot.store.create(${JSON.stringify(input)});`),
+      state: () => fetchJson(site.base + '/__state')
     }
 
     const settings = await api.settingsSet('invite.squareUrls', { '抖店': site.base + '/daren-square' })
@@ -366,6 +593,21 @@ async function main() {
     `)
     check('抖店达人邀约面板可打开', panelReady)
 
+    const panelShape = await ui.eval(`return {
+      hasScript: !!document.querySelector('[data-test="invite-script"]'),
+      scriptMode: !!document.querySelector('[data-test="invite-script-mode-manual"]'),
+      hasPhone: !!document.querySelector('[data-test="invite-batch-phone"]'),
+      hasWechat: !!document.querySelector('[data-test="invite-batch-wechat"]'),
+      hasContact: !!document.querySelector('[data-test="invite-batch-contact"]'),
+      hasMainCategory: !!document.querySelector('[data-test="invite-main-category"]'),
+      strengthCount: document.querySelectorAll('[data-test^="invite-strength-"]').length
+    };`)
+    check('改版抽屉的面板形态：无话术区、有手机号/微信号/主营、无"联系人"、核心优势 13 项',
+      panelShape.hasScript === false && panelShape.scriptMode === false &&
+      panelShape.hasPhone && panelShape.hasWechat && panelShape.hasContact === false &&
+      panelShape.hasMainCategory && panelShape.strengthCount === 13,
+      JSON.stringify(panelShape))
+
     const configured = await ui.eval(`
       const openPage = document.querySelector('[data-test="invite-open-page"]');
       if (!openPage) return { error: 'missing-open-page' };
@@ -376,8 +618,8 @@ async function main() {
       const subcategory = document.querySelector('[data-test="invite-subcategory"]');
       const category3 = document.querySelector('[data-test="invite-category3"]');
       const count = document.querySelector('[data-test="invite-count"]');
-      const script = document.querySelector('[data-test="invite-script"]');
-      if (!level || !category || !subcategory || !category3 || !count || !script) return { error: 'missing-controls' };
+      const mainCategory = document.querySelector('[data-test="invite-main-category"]');
+      if (!level || !category || !subcategory || !category3 || !count || !mainCategory) return { error: 'missing-controls' };
       if (!level.checked) level.click();
       const setValue = (el, value) => {
         const proto = el.tagName === 'TEXTAREA'
@@ -395,9 +637,22 @@ async function main() {
       await new Promise(r => setTimeout(r, 300));
       setValue(category3, '纸品');
       setValue(count, '2');
-      setValue(script, ${JSON.stringify(SCRIPT_TEXT)});
+      setValue(mainCategory, '个护家清/家清纸品');
+      setValue(document.querySelector('[data-test="invite-batch-phone"]'), ${JSON.stringify(CONTACT_PHONE)});
+      setValue(document.querySelector('[data-test="invite-batch-wechat"]'), ${JSON.stringify(CONTACT_WECHAT)});
+      // 核心优势 5 项 + 权益 3 项（平台上限），再多点一个权益验证面板会拦住
+      for (const s of ['源头工厂', '品类丰富', '多款爆款', '商品品质高', '售后无忧']) {
+        document.querySelector('[data-test="invite-strength-' + s + '"]').click();
+        await new Promise(r => setTimeout(r, 60));
+      }
+      for (const b of ['专属高佣', '免费样品', '佣金可谈']) {
+        document.querySelector('[data-test="invite-benefit-' + b + '"]').click();
+        await new Promise(r => setTimeout(r, 60));
+      }
+      document.querySelector('[data-test="invite-benefit-机制可谈"]').click();
       await new Promise(r => setTimeout(r, 700));
       const start = document.querySelector('[data-test="invite-start"]');
+      const pickedBenefits = [...document.querySelectorAll('[data-test^="invite-benefit-"]')].filter(x => x.checked).map(x => x.getAttribute('data-test').replace('invite-benefit-', ''));
       return {
         level: level.checked,
         category: category.value,
@@ -405,24 +660,31 @@ async function main() {
         category3: category3.value,
         category3Options: [...category3.options].map(x => x.value),
         count: count.value,
-        script: script.value,
+        mainCategory: mainCategory.value,
+        pickedBenefits,
         startDisabled: start ? start.disabled : null
       };
     `)
-    check('面板读取真实三级类目并配置可用（个护家清/家清纸品/纸品、LV0、每批 2 位、手填话术）',
+    check('面板读取真实三级类目并配置可用（个护家清/家清纸品/纸品、LV0、每批 2 位、主营、联系方式）',
       configured.level === true &&
       configured.category === '个护家清' &&
       configured.subcategory === '家清纸品' &&
       configured.category3 === '纸品' &&
       configured.category3Options.includes('纸品') &&
       configured.count === '2' &&
-      configured.script === SCRIPT_TEXT &&
+      configured.mainCategory === '个护家清/家清纸品' &&
       configured.startDisabled === false,
       JSON.stringify(configured))
+    check('权益按平台上限收敛在 3 项（第 4 项被面板拦下）',
+      Array.isArray(configured.pickedBenefits) &&
+      configured.pickedBenefits.length === 3 &&
+      !configured.pickedBenefits.includes('机制可谈'),
+      JSON.stringify(configured.pickedBenefits))
 
     const clicked = await ui.eval(`
       const start = document.querySelector('[data-test="invite-start"]');
       if (!start || start.disabled) return false;
+      start.click();
       start.click();
       await new Promise(r => setTimeout(r, 1000));
       return true;
@@ -435,74 +697,142 @@ async function main() {
       if (listed.ok) task = (listed.data || []).find(t => t.storeScope === storeId && String(t.name).startsWith('达人邀约 · 抖店'))
       if (!task) await sleep(300)
     }
+    const allTasks = await api.taskList()
+    check('快速双击仅创建一个邀约任务', allTasks.ok && allTasks.data.filter(t => t.storeScope === storeId && t.name.startsWith('达人邀约 · 抖店')).length === 1)
     check('任务列表出现抖店邀约任务', !!task, task ? `${task.name} / ${task.latestRun?.status}` : 'not found')
     if (!task?.latestRun?.id) throw new Error('invite task not created')
     const runId = task.latestRun.id
 
-    const atGate = await pollRun(api, runId, data => data.run.status === 'waiting_confirmation', 90000)
-    check('完整执行到发送前人工确认门禁', atGate?.run.status === 'waiting_confirmation',
-      atGate ? `${atGate.run.status} / step=${atGate.run.currentStep}` : 'no run data')
+    // 步骤定义直接来自任务本身（无门禁后不再有"跑到门禁停下来看步骤"这个时机）
+    const innerSteps = (task.steps && task.steps[0] && task.steps[0].input && task.steps[0].input.steps) || []
+    const types = innerSteps.map(s => s.type)
+    check('任务定义里没有人工确认门禁（用户要求：达人邀约不需要人工允许，直接执行）',
+      !types.includes('waitForUserConfirmation'),
+      JSON.stringify(types))
 
-    const page = await connectPage('/daren-square')
-    const pageState = await page.eval(`
-      const checked = document.querySelectorAll('tbody input[type=checkbox]:checked').length;
-      const drawer = document.getElementById('drawer');
-      const script = document.querySelector('textarea');
-      return {
-        checked,
-        counter: document.getElementById('selected-count')?.innerText || '',
-        filtered: document.getElementById('filtered-value')?.innerText || '',
-        script: script?.value || '',
-        drawerOpen: !!drawer && getComputedStyle(drawer).display !== 'none'
-      };
-    `)
-    check('仿真广场真实勾满 2 位且页面计数同步',
-      pageState.checked === 2 && /已选择\s*2\s*位达人/.test(pageState.counter),
-      JSON.stringify(pageState))
-    check('邀约抽屉打开且话术写入正确',
-      pageState.drawerOpen && pageState.script === SCRIPT_TEXT,
-      JSON.stringify({ drawerOpen: pageState.drawerOpen, scriptLength: pageState.script.length }))
-    check('仿真平台三级类目筛选真实生效',
-      /个护家清/.test(pageState.filtered) && /家清纸品/.test(pageState.filtered) && /纸品/.test(pageState.filtered),
-      JSON.stringify({ filtered: pageState.filtered }))
-
-    const gateVisible = await ui.eval(`return !!document.querySelector('[data-test="task-confirm"]');`)
-    check('UI 确认门禁可见', gateVisible)
-
-    const clickAllDefinition = atGate?.steps?.[0]?.input?.steps?.find(s => s.type === 'clickAll')
+    const clickAllDefinition = innerSteps.find(s => s.type === 'clickAll')
     check('邀约任务包含抖店批量勾选步骤（最多 2 位、允许滚动续选）',
       clickAllDefinition?.input?.selector === 'tbody input[type=checkbox]' &&
       clickAllDefinition?.input?.max === 2 &&
       clickAllDefinition?.input?.scroll === true,
       JSON.stringify(clickAllDefinition?.input || null))
-    const innerSteps = atGate?.steps?.[0]?.input?.steps || []
-    const categoryClicks = innerSteps
-      .filter(s => s.type === 'clickByText')
-      .map(s => String(s.input?.text || ''))
-    check('邀约任务按一级 → 二级 → 三级顺序点击',
-      categoryClicks.indexOf('个护家清') >= 0 &&
-      categoryClicks.indexOf('家清纸品') > categoryClicks.indexOf('个护家清') &&
-      categoryClicks.indexOf('纸品') > categoryClicks.indexOf('家清纸品'),
-      JSON.stringify(categoryClicks))
+    const hoverStep = innerSteps.find(s => s.type === 'hover')
+    check('三级类目：悬停二级（限定在级联弹层内）→ 再真实点击三级叶子',
+      hoverStep?.input?.text === '家清纸品' &&
+        hoverStep?.input?.within?.selector === '.quick-filter-cascader-popover' &&
+        innerSteps.find(s => s.type === 'clickByText' && s.input?.text === '纸品')?.input?.exact === true &&
+        innerSteps.findIndex(s => s.type === 'hover') < innerSteps.findIndex(s => s.type === 'clickByText' && s.input?.text === '纸品'),
+      JSON.stringify({ hover: hoverStep?.input || null }))
+    check('改版抽屉：没有写话术的步骤；抽屉判据用根容器',
+      !types.includes('aiGenerate') &&
+        !types.includes('readText') &&
+        !innerSteps.some(s => s.type === 'waitForSelector' && String(s.input?.selector) === 'textarea') &&
+        innerSteps.some(s => s.type === 'waitForSelector' && String(s.input?.selector).includes('auxo-drawer')) &&
+        innerSteps.some(s => s.type === 'waitForGone' && String(s.input?.selector).includes('auxo-drawer')),
+      JSON.stringify(types))
+    const drawerContacts = innerSteps.filter(s => s.type === 'setInput').map(s => String(s.input.selector))
+    const goodsAssert = innerSteps.find(s => s.type === 'requireQuota' && String(s.input?.textIncludes) === '已添加')
+    check('必填项都在发送前处理：手机号/微信号 + 推荐商品开关（错误码不是额度类）',
+      drawerContacts.includes('#phone') && drawerContacts.includes('#wechat') &&
+        goodsAssert?.input?.code === 'TASK_PRODUCT_NOT_SELECTED' &&
+        innerSteps.some(s => s.type === 'clickByText' && String(s.input?.text) === '使用平台推荐商品'),
+      JSON.stringify({ drawerContacts, goods: goodsAssert?.input || null }))
+    check('平台"记住上次填写"的字段都按幂等方式填（skipIfChecked / 触发器按选择器真点）',
+      innerSteps.some(s => s.type === 'click' && s.input?.selector === '.auxo-cascader-multiple-wrapper' && s.input?.mode === 'real') &&
+        innerSteps.filter(s => s.type === 'clickByText' && s.input?.skipIfChecked === true).length >= 5,
+      JSON.stringify({
+        trigger: innerSteps.find(s => s.type === 'click')?.input || null,
+        skipCount: innerSteps.filter(s => s.type === 'clickByText' && s.input?.skipIfChecked === true).length
+      }))
 
-    const confirmed = await api.taskConfirm(runId, true)
-    check('人工确认放行', confirmed.ok, JSON.stringify(confirmed.error || confirmed.data))
+    // ---------- 无人工确认门禁：点下「开始邀约」后直接连续发送，跑到额度用完为止 ----------
+    const started = await pollRun(api, runId, data => data.run.status === 'running', 30000)
+    check('任务直接开跑（用户要求：不设人工确认门禁，点下即真实发送）',
+      !!started && started.steps?.[0]?.input?.steps?.some(s => s.type === 'waitForUserConfirmation') === false,
+      JSON.stringify({ status: started?.run?.status }))
 
-    const terminal = await pollRun(api, runId, data => ['succeeded', 'failed', 'cancelled'].includes(data.run.status), 90000)
+    let terminal = null
+    const t0 = Date.now()
+    for (;;) {
+      const data = await api.taskResults(runId)
+      const st = data && data.ok && data.data ? data.data.run.status : null
+      // 出现等待确认就说明门禁还在（用户明确不要）——如实失败，别让它静静停着
+      if (st === 'waiting_confirmation') {
+        check('运行不应停在人工确认门禁', false, '仍出现了 waiting_confirmation')
+        await api.taskConfirm(runId, true)
+      }
+      if (['succeeded', 'failed', 'cancelled'].includes(st)) { terminal = data.data; break }
+      if (Date.now() - t0 > 150000) break
+      await sleep(600)
+    }
     check('仿真发送后任务成功收尾', terminal?.run.status === 'succeeded',
       terminal ? `${terminal.run.status} / ${terminal.run.errorMessage || terminal.run.statusReason || ''}` : 'no run data')
 
     await sleep(1000)
-    check('仿真平台仅收到 1 批、共 2 位，不重复发送',
-      site.state.sentBatches === 1 && site.state.sentCount === 2,
-      JSON.stringify(site.state))
+    const finalState = await api.state()
+    check('仿真平台收到 2 批（每批 2 位），不重复发送',
+      finalState.sentBatches === 2 && finalState.sentCount === 4,
+      JSON.stringify({ sentBatches: finalState.sentBatches, sentCount: finalState.sentCount }))
+    check('两批邀约的是**不同**的达人（发出去的达人在下一轮变成禁用态，不会被重复邀约）',
+      finalState.invitedKeys.length === 4 &&
+        JSON.stringify(finalState.sends[0].keys) !== JSON.stringify(finalState.sends[1].keys),
+      JSON.stringify({ invitedKeys: finalState.invitedKeys, keys1: finalState.sends[0].keys, keys2: finalState.sends[1].keys }))
+    const drawerOk = (d) => d &&
+      d.mainCategory === '个护家清/家清纸品' &&
+      JSON.stringify(d.strengths) === JSON.stringify(['源头工厂', '品类丰富', '多款爆款', '商品品质高', '售后无忧']) &&
+      JSON.stringify(d.benefits) === JSON.stringify(['专属高佣', '免费样品', '佣金可谈']) &&
+      d.phone === CONTACT_PHONE &&
+      d.wechat === CONTACT_WECHAT &&
+      d.goodsAdded >= 1
+    check('抽屉里的结构化表单按面板配置真的填好了（主营/核心优势/权益/联系方式/推荐商品）',
+      drawerOk(finalState.sends[0] && finalState.sends[0].drawer),
+      JSON.stringify(finalState.sends[0] && finalState.sends[0].drawer))
+    // 第 2 轮的抽屉是"平台记住上次填写"的状态：流程若不带 skipIfChecked / 按文案找触发器，
+    // 这里就会看到已选项被点掉（真机踩到的正是这个）。
+    check('第 2 轮复发：记住的填写没有被"再点一遍"取消（幂等填写）',
+      drawerOk(finalState.sends[1] && finalState.sends[1].drawer) &&
+        JSON.stringify(finalState.sends[1].drawer) === JSON.stringify(finalState.sends[0].drawer),
+      JSON.stringify(finalState.sends[1] && finalState.sends[1].drawer))
     check('发送后下一轮额度用尽并触发正常停止',
-      site.state.quotaExhausted === true,
-      JSON.stringify(site.state))
+      finalState.quotaExhausted === true,
+      JSON.stringify({ quotaExhausted: finalState.quotaExhausted }))
+
+    // 页面侧取证：跑完之后广场上仍留着本轮筛选的痕迹（每轮都会重新筛选一次）
+    const page = await connectPage('/daren-square')
+    const pageState = await page.eval(`
+      const third = document.getElementById('category-third-leaf');
+      return {
+        filtered: (document.getElementById('filtered-value') || {}).innerText || '',
+        thirdVisible: !!third && getComputedStyle(third).display !== 'none',
+        scriptTextarea: !!document.querySelector('#drawer textarea'),
+        drawerOpen: !!document.querySelector('#drawer.auxo-drawer-open')
+      };
+    `)
+    check('仿真平台三级类目筛选真实生效（三级靠悬停展开、点二级不会生效）',
+      /个护家清/.test(pageState.filtered) &&
+        /家清纸品/.test(pageState.filtered) &&
+        /（纸品）/.test(pageState.filtered) &&
+        !/纸品用品/.test(pageState.filtered),
+      JSON.stringify({ filtered: pageState.filtered }))
+    // 只断言"没有话术框"：**抽屉停在打开态是预期的**——最后一轮是走到"确认发送可用性预检"
+    // 才因额度用尽收工的（那时抽屉刚打开、还没发送），下一次运行开头的 navigate 会重新加载页面。
+    // "发送后抽屉关闭"由每轮里的 waitForGone 校验（没关就不会成功收尾，见上面那条断言）。
+    check('改版抽屉里没有话术 textarea（消息由选项拼装）',
+      pageState.scriptTextarea === false,
+      JSON.stringify({ textarea: pageState.scriptTextarea, drawerOpen: pageState.drawerOpen }))
+    const gesture = await page.eval(`return {
+      hoverExpands: window.__gesture ? window.__gesture.hoverExpands : null,
+      secondLevelClicks: window.__gesture ? window.__gesture.secondLevelClicks : null
+    };`)
+    // 三级列在选中后随弹层一起收起（真机也是如此），所以判据是"悬停次数 > 0 且从未点过二级项"
+    // —— 点二级项会只应用两级并收起弹层，那样三级就永远点不到
+    check('三级列是靠**悬停**展开的，全程没有点过二级项（点二级=只应用两级并收起弹层）',
+      gesture.hoverExpands > 0 && gesture.secondLevelClicks === 0,
+      JSON.stringify(gesture))
 
     const loopResult = terminal?.results?.find(r => r.kind === 'executed' && r.payload?.action === 'loop')
-    check('循环结果记录额度用尽停止原因',
-      loopResult?.payload?.stopReason === 'TASK_QUOTA_EXCEEDED',
+    check('循环结果记录额度用尽停止原因（跑满 2 批）',
+      loopResult?.payload?.stopReason === 'TASK_QUOTA_EXCEEDED' && loopResult?.payload?.completedRounds === 2,
       JSON.stringify(loopResult?.payload ? {
         completedRounds: loopResult.payload.completedRounds,
         stopReason: loopResult.payload.stopReason

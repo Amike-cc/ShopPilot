@@ -3,13 +3,14 @@
  *
  * 由面板配置生成任务步骤序列。放在 shared：渲染层调用、单测覆盖，两端不漂移。
  * 每个平台流程相互独立（见 constants/invite.ts 顶部说明）：
- *   - batch-list（抖店）：广场筛选 → 批量勾选 → 抽屉话术 → 门禁 → 确认发送；
- *   - assist-form（微信小店）：镜像人工打开的邀约表单页 → 代填联系方式/话术 →
- *     确保邀约商品 → 门禁 → 发送 → 等平台确认框 → 确认 → 截图留档。
+ *   - batch-list（抖店/快手小店）：广场筛选 → 批量勾选 → 打开邀约抽屉 → 填必填项 → 确认发送；
+ *   - assist-form（微信小店）：广场逐个取人 → 详情 → 邀约表单 → 代填联系方式/话术 →
+ *     确保邀约商品 → 发送 → 等平台确认框 → 确认 → 截图留档。
  *
  * 红线：文案/选择器失配时任务引擎报 TASK_SELECTOR_CHANGED，绝不静默重试或假装成功；
- * 批量流的「确认发送」前必须有一道 waitForUserConfirmation 门禁，拒绝即整单取消。
- * 辅助填单流的最终确认由平台「确认发送邀约」对话框完成，并按档案步骤校验结果。
+ * **不设人工确认门禁**（用户明确要求：达人邀约"不需要人工允许，直接执行"）——
+ * 发送类动作前的保护改为三道程序化判据：额度/可用性预检、平台必填项校验、发送后结果校验。
+ * 点「开始邀约」即开始真实发送，不可撤回。
  */
 
 import type { AssistInviteProfile, BatchInviteProfile, InviteProfile } from './constants/invite'
@@ -42,14 +43,49 @@ export interface BatchInviteOptions {
   scriptMode: 'manual' | 'ai'
   benefits: string[]
   /**
+   * 抽屉「核心优势」组的勾选（抖店改版抽屉特有；快手没有 → 空数组即不勾）。
+   * 与 benefits 一样是"按文案点击"，平台对超量勾选是**静默忽略**（实测最多选 5 项），
+   * 所以面板按 maxSelect 收敛、流程不做重试。
+   */
+  strengths?: string[]
+  /**
+   * 抽屉「主营」下拉的选择（`一级/二级`；留空 = 不填）。
+   * 实测该级联是**真实鼠标**才能点开的多列菜单：一级项悬停出二级列，点二级才算选中。
+   */
+  mainCategory?: string
+  /**
    * 额外的筛选行选择（快手特有）：`{ '内容标签': ['美妆'], '合作信息': ['有联系方式'] }`。
    * 这些是**页面上独立的多选筛选行**，与类目是不同维度，可以同时生效。
    */
   extraFilters?: Record<string, string[]>
-  /** 抽屉里的必填联系方式（快手要求必填；抖店无此字段 → 空数组即不填） */
+  /** 抽屉里的必填联系方式（快手要求必填；抖店只要手机号/微信号 → 传对应两项即可） */
   contacts?: { selector: string; text: string }[]
   /** 邀约商品自动添加的个数（快手商品在弹窗里选；0 = 不添加） */
   productCount?: number
+}
+
+export interface BatchContactValues {
+  contact?: string
+  phone?: string
+  wechat?: string
+}
+
+/**
+ * Check every contact field declared as required by a batch-invite profile.
+ * 抖店的改版抽屉只要手机号/微信号（没有"联系人"这一项），快手三项都要——
+ * 所以按档案声明逐个校验，**没声明的字段不参与判断**（否则抖店会被永远拦住）。
+ */
+export function hasRequiredBatchContacts(
+  profile: Pick<BatchInviteProfile, 'contactSelectors'>,
+  contacts: BatchContactValues
+): boolean {
+  if (!profile.contactSelectors) return true
+  const required = [
+    ...(profile.contactSelectors.contact ? [contacts.contact] : []),
+    ...(profile.contactSelectors.phone ? [contacts.phone] : []),
+    ...(profile.contactSelectors.wechat ? [contacts.wechat] : [])
+  ]
+  return required.every(value => typeof value === 'string' && value.trim().length > 0)
 }
 
 export interface AssistInviteOptions {
@@ -88,13 +124,13 @@ export function urlPathHint(url: string): string {
  * - 行复选框用 tbody 限定，避免点到表头的"全选"；勾选是**逐个点**（clickAll 不碰表头全选）；
  * - 类目是「chip + 级联叶子」两步（实测只点 chip 筛选不生效，详见 constants/invite.ts 注释），
  *   点完还要校验生效标记里真的出现该类目——平台改版时宁可在勾人前失败；
- * - 一轮 = 筛选 → 逐个勾 count 位 → 批量邀约 → 额度预检 → 填话术（+必填联系方式/商品）→ 发送 → 抽屉关闭校验；
+ * - 一轮 = 筛选 → 逐个勾 count 位 → 批量邀约 → 额度预检 → 填必填项（+话术/联系方式/商品）→ 发送 → 抽屉关闭校验；
  * - 一轮外面套 loop：**循环到额度用完或可选达人不足为止**（stopOn 命中=干净停止，不算失败）；
- * - 发送类动作前保留人工确认门禁：额度预检 + 人工确认 + 发送后抽屉关闭校验，
- *   三道判据共同保证不会把一次误触当成真实邀约。
+ * - **无人工确认门禁**（用户明确要求直接执行）：发送前的保护改为额度预检 + 平台必填项校验 +
+ *   发送后抽屉关闭校验——三道程序化判据，确保"点了发送"与"真的发出去了"不是一回事。
  *
  * 两个平台的差异全部走**档案字段**驱动，不在这里写 `if (platform === ...)`：
- *   minSelect / quotaCheck / goodsModal / benefits / contacts / postSendConfirmTexts。
+ *   minSelect / quotaCheck / goodsModal / benefits / strengths / contacts / postSendConfirmTexts。
  */
 export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions, squareUrl: string): StepDraft[] {
   const round: StepDraft[] = [
@@ -118,15 +154,23 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
     // 级联项必须用受信任鼠标点击（mode:'real'）：有下级的二级项吃合成 click 时只展开下一列、
     // 不选中（真机实测抖店「休闲食品」点了没反应）；真实鼠标点在文字上=用户操作，直接生效。
     //
+    // ⚠️ 三级类目（2026-09-22 真机复测，抖店）：这一列的手势**与二级不同**——
+    //   · 点二级项 = 应用「一级/二级」并把整个弹层收起（实测「已筛选 主推类目：个护家清/家清纸品」）；
+    //   · 三级列只在**悬停**二级项时才渲染出来，所以"先点二级、再点三级"必然失败
+    //     （点上二级时弹层已收起，三级项不可见 → 白等到超时）。
+    //   正确手势：悬停二级（hover 步骤，JS 事件即可开列）→ 再真实点击三级叶子。
+    //   因此配了三级时**不点二级**，由三级叶子一次性把三级都选中。
+    //
     // 这里**不要**开 jsClickWhenOffscreen（试过，已回退）：快手把这个级联弹层定位在屏幕外
     // （`.…select-dropdown` 停在 -9999,-9999），JS 点击虽然"点得到"，但平台只记下了一级类目
     // （实测标记只有「已选1个 个护家清: 清空」，**没有**子类），会被后面的 waitForText 校验拦下——
     // 于是"点不到"变成"校验超时"，诊断反而更难。离屏时如实报 TASK_TARGET_OUT_OF_VIEWPORT
     // （提示把店铺窗口放到前台）才是对用户最有用的信息。
-    round.push({ type: 'clickByText', input: { text: sub || p.texts.categoryAnyLeaf, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
-    // 有三级类目时，二级项真实点击后展开第三列；再点三级叶子才真正选中。
     if (third) {
-      round.push({ type: 'clickByText', input: { text: third, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
+      round.push({ type: 'hover', input: { text: sub, within: { selector: p.categoryPopoverSelector } }, timeoutMs: 20000 })
+      round.push({ type: 'clickByText', input: { text: third, exact: true, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
+    } else {
+      round.push({ type: 'clickByText', input: { text: sub || p.texts.categoryAnyLeaf, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
     }
     // 选完类目后**把下拉收起来**：实测这个级联下拉会一直展开着，盖住后面要点的按钮
     // （快手：商品弹窗的「确 认」就被它压住，点了没反应）。Escape 是页面级的收起手势。
@@ -168,7 +212,7 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
     const sub = (opts.subcategory || '').trim()
     if (sub) round.push({ type: 'waitForText', input: { text: sub, within: scope }, timeoutMs: 25000 })
     const third = sub ? (opts.category3 || '').trim() : ''
-    if (third) round.push({ type: 'waitForText', input: { text: third, within: scope }, timeoutMs: 25000 })
+    if (third) round.push({ type: 'waitForText', input: { text: third, token: true, within: scope }, timeoutMs: 25000 })
   }
   // 勾选数下限（实测快手：只勾 1 位点「批量邀约」静默无反应）→ 不足就把本批要的人数抬到下限，
   // 否则每轮都会白跑一次"点了没反应"。count 本身已由面板按 maxBatch 收过口。
@@ -192,7 +236,12 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   // 所以这里**不需要**再加一道"按钮可用性预检"——那道预检看着更保险，实际会因页面上的
   // 类目下拉挡住按钮而误报"找不到「批量邀约」"（真机踩到）。
   round.push({ type: 'clickByText', input: { text: p.texts.batchInvite } })
-  round.push({ type: 'waitForSelector', input: { selector: p.scriptSelector }, timeoutMs: 30000 })
+  // 抽屉已打开的判据：优先用**根容器**（抖店改版抽屉没有话术框，只有根容器这一条可用判据），
+  // 没有根容器时退回话术框（快手）。两者都没有属于档案写错——构造阶段就明确报出来，
+  // 别等到运行时拿一个 undefined 选择器去空等超时。
+  const drawerSelector = p.drawerSelector || p.scriptSelector
+  if (!drawerSelector) throw new Error(`batch-list 档案「${p.platform}」缺少抽屉判据：drawerSelector 与 scriptSelector 至少要有一个`)
+  round.push({ type: 'waitForSelector', input: { selector: drawerSelector }, timeoutMs: 30000 })
   // 额度先行（按档案选择方式）：
   //  - requireEnabled：平台不展示剩余额度，额度用尽表现为抽屉确认按钮禁用（抖店）；
   //  - requireQuota  ：页面**明示**剩余额度（快手「今日剩余N条发送邀请机会」），取数字判断。
@@ -206,30 +255,79 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   } else if (p.texts.drawerConfirm) {
     round.push({ type: 'requireEnabled', input: { text: p.texts.drawerConfirm, hint: p.quotaNote }, timeoutMs: 30000 })
   }
-  // 必填联系方式（快手要求联系人/手机号/微信号；抖店无此字段 → contacts 为空则整段跳过）。
+  /**
+   * 抽屉里的「主营」级联（抖店改版抽屉）：**两步都要真实鼠标点击**。
+   * 实测（2026-09-22 真机，逐条量过）：
+   *   · 合成 click / mousedown+mouseup+click **打不开**下拉（点了没反应）→ 触发器只能真点；
+   *   · 子列**不是悬停出来的**：JS 派发指针事件、真实光标移动（含在项内换位置）都试过，
+   *     第二列始终不出现；**点一级项**才展开它的子列（多选级联，选中态在点二级时落定）；
+   *   · 点二级后触发器显示「个护家清/家清纸品」，抽屉里那句「主营 <此处>」随之补全。
+   *   · 平台会**记住上次填写**：第 2 轮起触发器显示的是上次的值，"按文案找触发器"会失败，
+   *     所以按选择器定位；二级项则用 skipIfChecked（已选就跳过——重复点等于反选）。
+   * 二级名可能被平台截断（如「摩托车/电动车/自行...」）→ 按包含匹配点（不传 exact）。
+   *
+   * ⚠️ 触发元素在抽屉里，但**下拉面板是 body 级浮层（portal）**：所以"点开"限定在抽屉内，
+   * 而"点一级/点二级"必须限定在面板自己的容器（popoverSelector）里——实测用抽屉当范围
+   * 会一个选项都找不到（面板明明展开着，报 TASK_SELECTOR_CHANGED）。
+   */
+  if (p.drawerForm?.mainCategory && opts.mainCategory?.trim()) {
+    const g = p.drawerForm.mainCategory
+    const [root, sub] = opts.mainCategory.split('/').map(s => s.trim())
+    // 触发器：按选择器真点（平台记住上次填写后，文案不再是占位符）
+    round.push({ type: 'click', input: { selector: g.triggerSelector, mode: 'real' }, timeoutMs: 20000 })
+    const popScope = { selector: g.popoverSelector }
+    // 一级：真点一下，展开它的子列
+    round.push({ type: 'clickByText', input: { text: root, within: popScope, mode: 'real' }, timeoutMs: 20000 })
+    if (sub) {
+      round.push({
+        type: 'clickByText',
+        input: { text: sub, within: popScope, mode: 'real', skipIfChecked: true },
+        timeoutMs: 20000
+      })
+    }
+    // 选完收起下拉（它是常驻浮层，留着会盖住下面的控件）
+    round.push({ type: 'pressKey', input: { key: 'Escape' }, timeoutMs: 10000 })
+  }
+  // 核心优势 / 权益：两组复选框，按文案逐个点。平台对超量勾选是**静默忽略**
+  // （权益第 4 项点了不生效），所以数量在面板与档案里收敛，这里不重试。
+  // skipIfChecked：平台会记住上次填写 —— 第 2 轮起这些项本来就是勾着的，再点等于反选，
+  // 会把上一轮配好的卖点从消息里删掉（真机踩到）。
+  if (p.strengths) {
+    for (const s of (opts.strengths || []).slice(0, p.strengths.maxSelect)) {
+      round.push({ type: 'clickByText', input: { text: s, within: { selector: drawerSelector }, skipIfChecked: true }, timeoutMs: 20000 })
+    }
+  }
+  // 必填联系方式（快手三项；抖店改版抽屉要手机号+微信号）。
   // 用 setInput（合成 input 事件）：实测快手这三个框吃合成事件；微信那种不吃的是 typeText 流程。
   for (const c of (opts.contacts || [])) {
     if (!c.text) continue
     round.push({ type: 'setInput', input: { selector: c.selector, text: c.text }, timeoutMs: 20000 })
   }
-  if (opts.scriptMode === 'ai') {
-    round.push({
-      type: 'aiGenerate',
-      input: {
-        selector: p.scriptSelector,
-        sourceSelector: p.goodsSourceSelector || '',
-        maxLen: p.scriptMaxLen
-      },
-      timeoutMs: 120000,
-      // 生成话术幂等（重跑=重新生成覆盖同一输入框）→ 允许瞬态重试，
-      // 免得一次模型抖动把整批（可能已真实发出几十位）打掉。理由同 assist 流程那条注释。
-      // 2026-09-17 优化：从 90s 提升到 120s，减少因大模型推理慢导致的超时失败
-      retryLimit: 2
-    })
-    // aiGenerate 的 payload 只有摘要（模型/长度/预览），完整话术靠 readText 落库——事后能查出"到底发了什么"
-    round.push({ type: 'readText', input: { selector: p.scriptSelector, metric: 'invite.script' }, timeoutMs: 15000 })
-  } else {
-    round.push({ type: 'setInput', input: { selector: p.scriptSelector, text: opts.script.trim() } })
+  if (p.scriptSelector) {
+    if (opts.scriptMode === 'ai') {
+      round.push({
+        type: 'aiGenerate',
+        input: {
+          selector: p.scriptSelector,
+          sourceSelector: p.goodsSourceSelector || '',
+          maxLen: p.scriptMaxLen
+        },
+        timeoutMs: 120000,
+        // 生成话术幂等（重跑=重新生成覆盖同一输入框）→ 允许瞬态重试，
+        // 免得一次模型抖动把整批（可能已真实发出几十位）打掉。理由同 assist 流程那条注释。
+        // 2026-09-17 优化：从 90s 提升到 120s，减少因大模型推理慢导致的超时失败
+        retryLimit: 2
+      })
+      // aiGenerate 的 payload 只有摘要（模型/长度/预览），完整话术靠 readText 落库——事后能查出"到底发了什么"
+      round.push({ type: 'readText', input: { selector: p.scriptSelector, metric: 'invite.script' }, timeoutMs: 15000 })
+    } else {
+      round.push({ type: 'setInput', input: { selector: p.scriptSelector, text: opts.script.trim() } })
+    }
+  }
+  // 权益（抖店改版抽屉的权益也在复选框组里，与快手的老式抽屉同一个"按文案点击"机制）。
+  // skipIfChecked 的理由同核心优势：平台记住上次填写后，重复点击会把已勾选的项取消掉。
+  for (const b of opts.benefits) {
+    round.push({ type: 'clickByText', input: { text: b, within: { selector: drawerSelector }, skipIfChecked: true }, timeoutMs: 20000 })
   }
   // 商品：快手**必须选商品**才能发送（实测点「发送邀请」会提示「请选择商品」），
   // 而抽屉里那份商品表永远是空的 → 必须点「选择商品」进**弹窗**选，再点弹窗「确 认」回到抽屉。
@@ -286,12 +384,36 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
       timeoutMs: 30000
     })
   }
-  for (const b of opts.benefits) round.push({ type: 'clickByText', input: { text: b } })
-  round.push({
-    type: 'waitForUserConfirmation',
-    input: { message: `确认向 ${need} 位达人发送邀约？` },
-    timeoutMs: 3600000
-  })
+  // 抖店改版抽屉的「专属推荐商品」是**必填项**（带 * 号）：打开「使用平台推荐商品」开关，
+  // 平台自动挂上与这位达人匹配的推广商品。实测该开关每次打开抽屉都重置为关 → 点一下幂等。
+  // 勾选后必须**复核真的挂上了**（用「已添加 N/5」断言）：
+  // 商品是平台侧要求的前置条件，没挂上宁可在这里失败，也别把一次没有商品的邀约发出去。
+  if (p.drawerForm?.goodsSwitch) {
+    const g = p.drawerForm.goodsSwitch
+    round.push({
+      type: 'clickByText',
+      input: { text: g.label, within: { selector: drawerSelector } },
+      timeoutMs: 20000
+    })
+    round.push({
+      type: 'requireQuota',
+      input: {
+        textIncludes: g.selectedMarker,
+        min: g.min,
+        code: 'TASK_PRODUCT_NOT_SELECTED',
+        hint: '推荐商品没挂上——平台要求必选商品才能发送，已在发送前中止'
+      },
+      timeoutMs: 30000
+    })
+  }
+  // ⚠️ 这里**不再有** waitForUserConfirmation 门禁：用户明确要求达人邀约"不需要人工允许，直接执行"
+  // （微信辅助流一直就是直接发送的平台确认弹窗流程）。发送类动作前的三道判据仍在，
+  // 只是不再停下等人点确认：
+  //   ① 额度预检（requireQuota / requireEnabled）：额度用尽或平台拦截时绝不硬发；
+  //   ② 必填项校验（联系方式、推荐商品）：平台必填项没填齐就不提交；
+  //   ③ 发送后校验（抽屉关闭 / 平台失败文案）：把"点了发送"和"真的发出去了"分开。
+  // 代价要说清楚：点下「开始邀约」后，批量流的邀约是**真实发出且不可撤回**的——
+  // 面板与运行卡片都已如实写明这一点。
   round.push({ type: 'clickByText', input: { text: p.texts.confirmSend } })
   // 发送后**可能**弹二次确认框（平台行为未定时的兜底）：出现就点、没出现就跳过，如实记录。
   // 不硬等（白等超时会把成功报成失败），也不假设没有（真弹了没人点其实没发出去）。
@@ -336,7 +458,7 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
       timeoutMs: 20000
     })
   }
-  round.push({ type: 'waitForGone', input: { selector: p.scriptSelector }, timeoutMs: p.postSendGoneTimeoutMs ?? 180000 })
+  round.push({ type: 'waitForGone', input: { selector: drawerSelector }, timeoutMs: p.postSendGoneTimeoutMs ?? 180000 })
   // 截图留档：每轮发送后的达人侧状态（最后一轮的工件会挂在本步骤上）
   round.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
 

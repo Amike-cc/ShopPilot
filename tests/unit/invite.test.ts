@@ -3,7 +3,10 @@ import {
   INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, inviteProfileFor,
   isBatchProfile, isAssistProfile
 } from '../../packages/shared/src/constants/invite'
-import { buildInviteSteps, buildAssistSteps, buildBatchSteps, urlPathHint } from '../../packages/shared/src/invite-steps'
+import {
+  buildInviteSteps, buildAssistSteps, buildBatchSteps,
+  hasRequiredBatchContacts, urlPathHint
+} from '../../packages/shared/src/invite-steps'
 import { stepInputSchemas, taskCreateSchema } from '../../apps/desktop/src/main/tasks/task-step-schemas'
 
 // ---------- 平台档案（每个平台的达人邀约功能相互独立） ----------
@@ -28,6 +31,31 @@ describe('达人邀约平台档案', () => {
       // categories 与树的一级一一对应
       expect(p.categories).toEqual(p.categoryTree.map(c => c.name))
     }
+  })
+
+  it('抖店改版抽屉（2026-09-22 真机）：无话术框、结构化表单与必填项都入档', () => {
+    const p = inviteProfileFor('抖店')!
+    if (!isBatchProfile(p)) throw new Error('抖店应为 batch-list')
+    // 抽屉里已没有 textarea → 话术相关字段必须缺席，抽屉判据改用根容器
+    expect(p.scriptSelector).toBeUndefined()
+    expect(p.drawerSelector).toBe('.auxo-drawer-open')
+    // 权益：改版后的 7 项（旧档案的「免费申样/视频素材支持/优质视频投放」已失效），上限 3
+    expect(p.benefits).toEqual(['专属高佣', '免费样品', '佣金可谈', '机制可谈', '优质视频投流', '视频素材/脚本支持', '带货指导/陪跑'])
+    expect(p.benefitsMax).toBe(3)
+    // 核心优势：13 项、上限 5
+    expect(p.strengths?.maxSelect).toBe(5)
+    expect(p.strengths?.options.length).toBe(13)
+    expect(p.strengths?.options).toContain('源头工厂')
+    expect(p.strengths?.options).toContain('售后无忧')
+    // 主营（消息里的填空）+ 推荐商品开关（必填项的满足方式）
+    expect(p.drawerForm?.mainCategory).toEqual({
+      triggerSelector: '.auxo-cascader-multiple-wrapper',
+      popoverSelector: '.auxo-cascader-menus',
+      maxSelect: 1
+    })
+    expect(p.drawerForm?.goodsSwitch).toEqual({ label: '使用平台推荐商品', selectedMarker: '已添加', min: 1 })
+    // 联系方式只有手机号/微信号（没有"联系人"这一项）
+    expect(p.contactSelectors?.contact).toBeUndefined()
   })
 
   it('微信小店为 assist-form 流程，实测参数入档', () => {
@@ -336,7 +364,7 @@ describe('抖店（batch-list）步骤构造', () => {
     expect(taskCreateSchema.safeParse({ name: '达人邀约 · 抖店', storeScope: 'store_x', steps }).success).toBe(true)
   })
 
-  it('一轮内部顺序：广场 → 类目(chip+级联项+校验) → 等级 → 搜索 → 逐个勾选 → 抽屉 → 额度预检 → 话术 → 确认发送 → 抽屉关闭校验 → 截图', () => {
+  it('一轮内部顺序：广场 → 类目(chip+级联项+校验) → 等级 → 搜索 → 逐个勾选 → 抽屉 → 额度预检 → 必填项 → 确认发送 → 抽屉关闭校验 → 截图', () => {
     const round = roundSteps(build())
     const types = round.map(s => s.type)
     expect(types[0]).toBe('navigate')
@@ -358,22 +386,113 @@ describe('抖店（batch-list）步骤构造', () => {
     const clickAll = round.find(s => s.type === 'clickAll')!
     expect(clickAll.input).toMatchObject({ selector: 'tbody input[type=checkbox]', max: 40, scroll: true })
 
+    // 抽屉打开的判据是**根容器**：抖店改版抽屉没有话术框（textarea 已不存在），只有根容器这一条
+    const drawerOpen = round.find(s => s.type === 'waitForSelector' && String(s.input.selector).includes('auxo-drawer'))!
+    expect(String(drawerOpen.input.selector)).toBe(DD.drawerSelector)
+
     // 抽屉打开后、发送前先做「确认发送」可用性（额度）预检
     const requireEnabled = round.find(s => s.type === 'requireEnabled')!
     expect(String(requireEnabled.input.text)).toBe('确认发送')
     expect(types.indexOf('requireEnabled')).toBeLessThan(types.lastIndexOf('clickByText'))
 
-    // 批量发送前必须经过软件人工确认门禁，防止误触发不可撤回的邀约。
-    const gateIdx = types.indexOf('waitForUserConfirmation')
-    expect(gateIdx).toBeGreaterThan(-1)
-    expect(gateIdx).toBeLessThan(types.lastIndexOf('clickByText'))
+    // 发送前的保护改为程序化判据（用户明确要求达人邀约**不设人工确认门禁**，点下即真实发送）：
+    // 门禁步骤必须缺席，但"发送"与"结果校验"照旧
+    expect(types).not.toContain('waitForUserConfirmation')
+    const sendIdx = round.findIndex(s => s.type === 'clickByText' && String(s.input.text) === DD.texts.confirmSend)
+    expect(sendIdx).toBeGreaterThan(types.indexOf('requireEnabled'))
 
     // 发送后必须校验结果（抽屉关闭）并截图留档
-    expect(types.indexOf('waitForGone')).toBeGreaterThan(types.lastIndexOf('clickByText'))
+    const gone = round.find(s => s.type === 'waitForGone')!
+    expect(String(gone.input.selector)).toBe(DD.drawerSelector)
+    expect(types.indexOf('waitForGone')).toBeGreaterThan(sendIdx)
     expect(types[types.length - 1]).toBe('screenshot')
 
-    // 不应出现微信专属步骤
-    for (const t of ['mirrorTabUrl', 'typeText', 'ensureRows', 'requireQuota']) expect(types).not.toContain(t)
+    // 不应出现微信专属步骤（requireQuota 除外：抖店用它做"推荐商品真的挂上了"的复核）
+    for (const t of ['mirrorTabUrl', 'typeText', 'ensureRows']) expect(types).not.toContain(t)
+  })
+
+  it('用户要求：整条批量流里没有人工确认门禁（点下「开始邀约」即真实发送）', () => {
+    const ddRound = roundSteps(build())
+    expect(ddRound.map(s => s.type)).not.toContain('waitForUserConfirmation')
+    // 快手同样是批量流，一起确认（微信辅助流本来就走平台确认弹窗，不带门禁）
+    const KS2 = inviteProfileFor('快手小店')!
+    const ksSteps = buildBatchSteps(KS2 as any, {
+      category: '个护家清', subcategory: '', levels: [], count: 2,
+      script: 'x', scriptMode: 'manual', benefits: [], productCount: 1
+    } as any, 'https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro')
+    expect(((ksSteps[0].input as any).steps as any[]).map(s => s.type)).not.toContain('waitForUserConfirmation')
+  })
+
+  it('改版抽屉没有话术框 → 不生成任何写话术的步骤，且抽屉里的必填项都在发送前处理好', () => {
+    const round = roundSteps(build({
+      scriptMode: 'manual',
+      script: '这段文案不该被写进页面',
+      contacts: [
+        { selector: '#phone', text: '15057937334' },
+        { selector: '#wechat', text: 'jiaoe988' }
+      ]
+    }))
+    const types = round.map(s => s.type)
+    // 抖店档案已无 scriptSelector：aiGenerate / setInput(话术) / readText 一律不生成
+    expect(DD.scriptSelector).toBeUndefined()
+    expect(types).not.toContain('aiGenerate')
+    expect(types).not.toContain('readText')
+    expect(round.some(s => s.type === 'setInput' && String(s.input.text).includes('这段文案'))).toBe(false)
+
+    // 联系方式（手机号/微信号，实测必填）按档案选择器写入，且都在发送之前
+    const sendStepIdx = round.findIndex(s => s.type === 'clickByText' && String(s.input.text) === DD.texts.confirmSend)
+    expect(sendStepIdx).toBeGreaterThan(-1)
+    const setInputs = round.filter(s => s.type === 'setInput')
+    expect(setInputs.map(s => String(s.input.selector)).sort()).toEqual(['#phone', '#wechat'])
+    expect(Math.max(...setInputs.map(s => round.indexOf(s)))).toBeLessThan(sendStepIdx)
+
+    // 推荐商品（必填项）：开关点一下 + 复核真的挂上了（错误码必须是 TASK_PRODUCT_NOT_SELECTED，
+    // 不能是默认的额度错误码——那会被 loop 当"正常收工"，一位都没邀约却报成功）
+    const goodsSwitch = round.find(s => s.type === 'clickByText' && String(s.input.text) === DD.drawerForm!.goodsSwitch.label)!
+    expect(goodsSwitch.input.within).toEqual({ selector: DD.drawerSelector })
+    const goodsAssert = round.find(s => s.type === 'requireQuota' && String(s.input.textIncludes) === DD.drawerForm!.goodsSwitch.selectedMarker)!
+    expect(goodsAssert.input).toMatchObject({ min: 1, code: 'TASK_PRODUCT_NOT_SELECTED' })
+    expect(round.indexOf(goodsAssert)).toBeLessThan(sendStepIdx)
+  })
+
+  it('核心优势 / 权益：按文案在抽屉范围内点（已选则跳过），且都在发送之前', () => {
+    const round = roundSteps(build({
+      benefits: ['专属高佣', '免费样品'],
+      strengths: ['源头工厂', '品类丰富']
+    }))
+    const sendStepIdx = round.findIndex(s => s.type === 'clickByText' && String(s.input.text) === DD.texts.confirmSend)
+    expect(sendStepIdx).toBeGreaterThan(-1)
+    for (const text of ['源头工厂', '品类丰富', '专属高佣', '免费样品']) {
+      const step = round.find(s => s.type === 'clickByText' && String(s.input.text) === text)
+      expect(step, `缺少勾选「${text}」的步骤`).toBeTruthy()
+      expect(step!.input).toMatchObject({ within: { selector: DD.drawerSelector }, skipIfChecked: true })
+      expect(round.indexOf(step!)).toBeLessThan(sendStepIdx)
+    }
+    // 不勾就不生成（不会去点一堆没选的标签）
+    const bare = roundSteps(build({ benefits: [], strengths: [] }))
+    expect(bare.some(s => s.type === 'clickByText' && String(s.input.text) === '源头工厂')).toBe(false)
+
+    // 主营：按选择器真点开下拉 → 真点一级（子列这时才展开）→ 点二级（已选则跳过）→ Escape。
+    // 三条真机教训都钉在这里：
+    //  ① 触发器不能按文案找（平台记住上次填写后文案不再是「请下拉选择」）→ 用 click + selector + real；
+    //  ② 下拉面板是 body 级 portal，不能拿抽屉当范围 → 选项步的 within 是 popoverSelector；
+    //  ③ 重复点已勾选的项等于反选 → 二级项带 skipIfChecked。
+    const withMain = roundSteps(build({ mainCategory: '个护家清/家清纸品' }))
+    const mainCfg = DD.drawerForm!.mainCategory!
+    const trigger = withMain.find(s => s.type === 'click' && String(s.input.selector) === mainCfg.triggerSelector)!
+    expect(trigger.input).toMatchObject({ mode: 'real' })
+    expect(withMain.some(s => s.type === 'hover')).toBe(false)
+    const rootClick = withMain.find(s => s.type === 'clickByText' && String(s.input.text) === '个护家清')!
+    expect(rootClick.input).toMatchObject({ mode: 'real', within: { selector: mainCfg.popoverSelector } })
+    const pick = withMain.find(s => s.type === 'clickByText' && String(s.input.text) === '家清纸品')!
+    expect(pick.input).toMatchObject({ mode: 'real', within: { selector: mainCfg.popoverSelector }, skipIfChecked: true })
+    // 顺序：点开下拉 → 点一级（展开子列）→ 点二级 → Esc 收起
+    expect(withMain.indexOf(trigger)).toBeLessThan(withMain.indexOf(rootClick))
+    expect(withMain.indexOf(rootClick)).toBeLessThan(withMain.indexOf(pick))
+    const pickIdx = withMain.indexOf(pick)
+    expect(withMain.findIndex((s, i) => i > pickIdx && s.type === 'pressKey')).toBeGreaterThan(pickIdx)
+    // 面板范围必须与抽屉范围不同，否则真机上必然找不到选项
+    expect(mainCfg.popoverSelector).not.toBe(DD.drawerSelector)
   })
 
   it('二级类目：选了二级就点二级项并连带校验；不选则点「不限」', () => {
@@ -402,22 +521,45 @@ describe('抖店（batch-list）步骤构造', () => {
     expect(round3.some(s => s.type === 'clickByText' && String(s.input.text) === '不限')).toBe(false)
   })
 
-  it('三级类目：二级展开后继续点三级，并校验一级/二级/三级都生效', () => {
+  it('三级类目：悬停二级展开第三列后点三级，并校验一级/二级/三级都生效', () => {
     const steps = build({
       category: '个护家清',
       subcategory: '家清纸品',
       category3: '纸品'
     })
     const round = roundSteps(steps)
-    const texts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
-    expect(texts.slice(0, 3)).toEqual(['个护家清', '家清纸品', '纸品'])
-    const verifies = round.filter(s => s.type === 'waitForText').map(s => String(s.input.text))
+    // 真机实测（2026-09-22）：直接点二级 = 只应用「一级/二级」并把弹层收起，
+    // 三级列只在**悬停**二级项时才渲染 → 所以配了三级就**不点二级**，改为 hover + 点三级。
+    const clickTexts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(clickTexts).toContain('个护家清')
+    expect(clickTexts).not.toContain('家清纸品')
+    const hoverStep = round.find(s => s.type === 'hover')!
+    expect(hoverStep.input).toMatchObject({ text: '家清纸品', within: { selector: DD.categoryPopoverSelector } })
+    const thirdClick = round.find(s => s.type === 'clickByText' && s.input.text === '纸品')!
+    expect(thirdClick.input).toMatchObject({
+      exact: true,
+      mode: 'real',
+      within: { selector: DD.categoryPopoverSelector }
+    })
+    // 悬停必须在点三级之前（顺序反了就点不到）
+    expect(round.indexOf(hoverStep)).toBeLessThan(round.indexOf(thirdClick))
+    const verificationSteps = round.filter(s => s.type === 'waitForText')
+    const verifies = verificationSteps.map(s => String(s.input.text))
     expect(verifies).toEqual(['个护家清', '家清纸品', '纸品'])
+    expect(verificationSteps.find(s => s.input.text === '纸品')!.input).toMatchObject({ token: true })
     expect(String(steps[0].input.label)).toContain('个护家清/家清纸品/纸品')
 
-    // 没有三级值时仍保留原来的两级行为，不额外猜测叶子。
+    // 没有三级值时仍保留原来的两级行为：直接点二级（不悬停、不猜叶子）
     const twoLevel = roundSteps(build({ category: '个护家清', subcategory: '家清纸品', category3: '' }))
+    expect(twoLevel.map(s => s.type)).not.toContain('hover')
     expect(twoLevel.filter(s => s.type === 'waitForText').map(s => String(s.input.text))).toEqual(['个护家清', '家清纸品'])
+    // 快手（两级平台）同样不生成 hover
+    const KS2 = inviteProfileFor('快手小店')!
+    const ksSteps = buildBatchSteps(KS2 as any, {
+      category: '个护家清', subcategory: '纸品湿巾', levels: [], count: 2,
+      script: 'x', scriptMode: 'manual', benefits: [], productCount: 1
+    } as any, 'https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro')
+    expect(((ksSteps[0].input as any).steps as any[]).map(s => s.type)).not.toContain('hover')
   })
 
   it('不选类目时不生成类目相关步骤（不猜、不多点）', () => {
@@ -427,13 +569,15 @@ describe('抖店（batch-list）步骤构造', () => {
     expect(round.some(s => s.type === 'clickByText' && String(s.input.text) === '不限')).toBe(false)
   })
 
-  it('AI 模式在轮内走 aiGenerate + readText 留档（不在门禁后）', () => {
+  it('改版抽屉没有话术框 → AI 模式也不会生成 aiGenerate（话术步骤整段按档案跳过）', () => {
     const round = roundSteps(build({ scriptMode: 'ai' }))
     const types = round.map(s => s.type)
-    expect(types).toContain('aiGenerate')
-    expect(types).toContain('readText')
-    expect(types.indexOf('aiGenerate')).toBeGreaterThan(types.indexOf('requireEnabled'))
-    expect(types.indexOf('aiGenerate')).toBeLessThan(types.lastIndexOf('clickByText'))
+    expect(types).not.toContain('aiGenerate')
+    expect(types).not.toContain('readText')
+    // 话术步骤缺席不影响发送：发送与结果校验照旧（且没有人工确认门禁）
+    expect(types).not.toContain('waitForUserConfirmation')
+    expect(types).toContain('waitForGone')
+    expect(round.some(s => s.type === 'clickByText' && String(s.input.text) === DD.texts.confirmSend)).toBe(true)
   })
 })
 
@@ -456,6 +600,20 @@ describe('快手小店（batch-list）步骤构造', () => {
   )
   const ksRound = (over: Partial<Parameters<typeof buildBatchSteps>[1]> = {}) =>
     (ksBuild(over)[0].input as any).steps as Array<{ type: string; input: Record<string, any>; timeoutMs?: number }>
+
+  it('开跑前要求填写档案声明的全部联系方式（快手三项，抖店改版抽屉只要手机号+微信号）', () => {
+    expect(hasRequiredBatchContacts(KS as any, { contact: '刘涛' })).toBe(false)
+    expect(hasRequiredBatchContacts(KS as any, { contact: '刘涛', phone: '13800000000' })).toBe(false)
+    expect(hasRequiredBatchContacts(KS as any, {
+      contact: '刘涛', phone: '13800000000', wechat: 'amike688'
+    })).toBe(true)
+    // 抖店：档案没有 contact（改版抽屉没有"联系人"这一项）→ 只校验手机号/微信号
+    expect(hasRequiredBatchContacts(DD as any, {})).toBe(false)
+    expect(hasRequiredBatchContacts(DD as any, { phone: '13800000000' })).toBe(false)
+    expect(hasRequiredBatchContacts(DD as any, { phone: '13800000000', wechat: 'amike688' })).toBe(true)
+    // 手机号/微信号的锚点：两个输入框 placeholder 与 class 完全相同，只有 id 能区分
+    expect(DD.contactSelectors).toEqual({ phone: '#phone', wechat: '#wechat' })
+  })
 
   it('任务能过创建校验（步骤都在白名单内、loop 不带 timeoutMs）', () => {
     const steps = ksBuild()
@@ -591,14 +749,12 @@ describe('快手小店（batch-list）步骤构造', () => {
     // 抖店没有商品弹窗 → 不该有"等弹窗消失"那一步
     expect((ddSteps[0].input as any).steps.some((s: any) => s.type === 'waitForGone' && String(s.input.selector).includes('modal-body'))).toBe(false)
   })
-  it('发送前保留人工确认门禁；发送后：发送邀请 → 关抽屉校验 → 截图', () => {
+  it('没有人工确认门禁（用户要求直接执行）；发送后：发送邀请 → 关抽屉校验 → 截图', () => {
     const round = ksRound()
     const types = round.map(s => s.type)
     const send = round.find(s => s.type === 'clickByText' && String(s.input.text) === '发送邀请')!
     expect(send).toBeTruthy()
-    const gateIdx = types.indexOf('waitForUserConfirmation')
-    expect(gateIdx).toBeGreaterThan(-1)
-    expect(gateIdx).toBeLessThan(round.indexOf(send))
+    expect(types).not.toContain('waitForUserConfirmation')
     // 关**抽屉**的那次校验必须在发送之后（现在还有一次"等商品弹窗消失"在前，要按选择器区分）
     const drawerGoneIdx = round.findIndex(s => s.type === 'waitForGone' && String(s.input.selector) === KS.scriptSelector)
     expect(drawerGoneIdx).toBeGreaterThan(round.indexOf(send))
@@ -675,6 +831,21 @@ describe('生成的步骤必须能真的创建任务（形状与白名单一致�
       '抖店',
       inviteProfileFor('抖店'),
       { category: '个护家清', subcategory: '家清纸品', category3: '纸品', levels: ['LV0', 'LV1'], count: 40, script: '话术', scriptMode: 'manual', benefits: ['专属高佣'] }
+    ],
+    [
+      '抖店（改版抽屉全字段：主营 + 核心优势 + 权益 + 手机号/微信号）',
+      inviteProfileFor('抖店'),
+      {
+        category: '个护家清', subcategory: '家清纸品', category3: '纸品',
+        levels: ['LV2'], count: 2, script: '', scriptMode: 'manual',
+        strengths: ['源头工厂', '品类丰富', '多款爆款', '商品品质高', '售后无忧'],
+        benefits: ['专属高佣', '免费样品', '佣金可谈'],
+        mainCategory: '个护家清/家清纸品',
+        contacts: [
+          { selector: '#phone', text: '15057937334' },
+          { selector: '#wechat', text: 'jiaoe988' }
+        ]
+      }
     ],
     [
       '快手小店',
@@ -760,6 +931,8 @@ describe('任务步骤输入 schema', () => {
     expect(stepInputSchemas.mirrorTabUrl.safeParse({ urlIncludes: 'initiate-invite' }).success).toBe(true)
     expect(stepInputSchemas.typeText.safeParse({ selector: 'textarea', text: 'hi', deep: true }).success).toBe(true)
     expect(stepInputSchemas.waitForText.safeParse({ text: '确认发送邀约', deep: true }).success).toBe(true)
+    expect(stepInputSchemas.waitForText.safeParse({ text: '纸品', token: true }).success).toBe(true)
+    expect(stepInputSchemas.waitForText.safeParse({ text: '纸品', exact: true, token: true }).success).toBe(false)
     expect(stepInputSchemas.ensureRows.safeParse({
       rowsSelector: 'tbody tr', checkboxSelector: 'tbody label',
       addText: '添加商品', confirmText: '确认', min: 1, max: 3, deep: true
@@ -768,7 +941,7 @@ describe('任务步骤输入 schema', () => {
       rowsSelector: 'tbody tr', checkboxSelector: 'tbody label',
       addText: '添加商品', confirmText: '确认', productIds: ['10000687986563'], deep: true
     }).success).toBe(true)
-    expect(stepInputSchemas.clickByText.safeParse({ text: '发送邀约', deep: true, mode: 'real' }).success).toBe(true)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '发送邀约', deep: true, mode: 'real', exact: true }).success).toBe(true)
     expect(stepInputSchemas.requireQuota.safeParse({ textIncludes: '今日剩余', min: 1, metric: 'invite.quota', deep: true }).success).toBe(true)
     expect(stepInputSchemas.requireEnabled.safeParse({ text: '确认发送', hint: '额度用尽' }).success).toBe(true)
   })
@@ -779,6 +952,32 @@ describe('任务步骤输入 schema', () => {
     expect(stepInputSchemas.ensureRows.safeParse({ rowsSelector: 'a', max: 1 }).success).toBe(false)
     expect(stepInputSchemas.requireQuota.safeParse({ textIncludes: 'x' }).success).toBe(false)
     expect(stepInputSchemas.requireEnabled.safeParse({ text: 'x', extra: 1 }).success).toBe(false)
+  })
+
+  it('skipIfChecked / click.mode：平台"记住上次填写"时的幂等点击参数可建', () => {
+    expect(stepInputSchemas.clickByText.safeParse({ text: '源头工厂', skipIfChecked: true }).success).toBe(true)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '源头工厂', skipIfChecked: 'yes' }).success).toBe(false)
+    expect(stepInputSchemas.click.safeParse({ selector: '.auxo-cascader-multiple-wrapper', mode: 'real' }).success).toBe(true)
+    expect(stepInputSchemas.click.safeParse({ selector: 'a', mode: 'trusted' }).success).toBe(false)
+    expect(stepInputSchemas.click.safeParse({ selector: 'a', extra: 1 }).success).toBe(false)
+  })
+
+  it('hover（悬停展开级联列）：文案必填、within/exact 可选、拒绝多余键', () => {    expect(stepInputSchemas.hover.safeParse({ text: '服装' }).success).toBe(true)
+    expect(stepInputSchemas.hover.safeParse({
+      text: '服装', deep: true, exact: true, within: { selector: '.quick-filter-cascader-popover' }
+    }).success).toBe(true)
+    expect(stepInputSchemas.hover.safeParse({ text: '服装', within: { text: '行标签', climb: 2 } }).success).toBe(true)
+    expect(stepInputSchemas.hover.safeParse({}).success).toBe(false)
+    expect(stepInputSchemas.hover.safeParse({ text: '服装', click: true }).success).toBe(false)
+    // 悬停不是提交动作：loop 里也能用（且同样受白名单约束）
+    expect(stepInputSchemas.loop.safeParse({
+      label: 'x', maxRounds: 2, stopOn: ['TASK_QUOTA_EXCEEDED'],
+      steps: [{ type: 'hover', input: { text: '服装' } }]
+    }).success).toBe(true)
+    expect(stepInputSchemas.loop.safeParse({
+      label: 'x', maxRounds: 2, stopOn: ['TASK_QUOTA_EXCEEDED'],
+      steps: [{ type: 'hoverSomewhere', input: { text: '服装' } }]
+    }).success).toBe(false)
   })
 
   it('followTab（点完跟到新标签页）：可选、键受白名单约束', () => {
