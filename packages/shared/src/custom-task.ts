@@ -316,7 +316,7 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
       { key: 'exact', label: '整段精确匹配', kind: 'boolean', default: false },
       {
         key: 'skipIfChecked', label: '已勾选就跳过', kind: 'boolean', default: false,
-        help: '平台会记住上次填写时用：重复点已勾选的项等于反选'
+        hint: '平台会记住上次填写时用：重复点已勾选的项等于反选'
       },
       { key: 'within', label: '限定查找范围', kind: 'within' }
     ]

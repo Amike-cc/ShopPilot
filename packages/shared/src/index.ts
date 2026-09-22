@@ -17,6 +17,8 @@ export * from './constants/ai'
 
 // 邀约步骤构造（渲染层与单测共用）
 export * from './invite-steps'
+// 邀约配置的存储键（按店铺独立保存）
+export * from './invite-config'
 // 经营指标采集步骤构造
 export * from './business-steps'
 

@@ -492,7 +492,19 @@
           <template v-else>
           <div class="env-sec">
             <div class="env-h">达人邀约 · {{ inviteProfile.platform }}
-              <button class="mini-btn" style="margin-left:auto" data-test="invite-open-page" @click="openInvitePage">打开达人广场</button>
+              <span class="row-sub" style="margin-left:8px">配置按店铺独立保存</span>
+              <button
+                class="mini-btn" style="margin-left:auto"
+                data-test="invite-save-config"
+                :disabled="inviteSaving"
+                @click="saveInviteConfigNow()"
+              >{{ inviteSaving ? '保存中…' : '保存配置' }}</button>
+              <button class="mini-btn" data-test="invite-open-page" @click="openInvitePage">打开达人广场</button>
+            </div>
+            <div class="env-note" style="margin-top:0">
+              这里的配置（类目/等级/数量/主营/联系方式…）<b>按店铺各存一份</b>：改动会自动保存，
+              点「保存配置」可立即落库。切换店铺时各自读自己的那份，互不覆盖。
+              <template v-if="inviteSavedAtText"><br>最近一次保存：{{ inviteSavedAtText }}</template>
             </div>
 
             <!-- batch-list（抖店 / 快手小店）：广场筛选 → 勾满一批 → 批量邀约 → 填话术 → 发送 -->
@@ -1628,6 +1640,7 @@ import { describePickResult, type ElementPickResult, type PickMode } from '@shar
 import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile, isAssistProfile } from '@shared/constants/invite'
 import type { CategoryNode } from '@shared/constants/invite'
 import { buildInviteSteps, hasRequiredBatchContacts } from '@shared/invite-steps'
+import { inviteConfigKey, legacyInviteConfigKey } from '@shared/invite-config'
 import { invoiceProfileFor } from '@shared/constants/invoice'
 import { buildInvoiceCollectSteps } from '@shared/invoice-steps'
 import { NO_LICENSE_KEY, groupStoresByLicense, licenseLabelOf } from '@shared/store-license'
@@ -2539,7 +2552,6 @@ const invite = reactive({
   /** 指定邀约商品 ID，逗号/空格/换行分隔 */
   productIds: '',
   productCount: 1,
-  // ---- batch-list 平台间的差异字段（快手用；抖店留空即不生效）----
   /** 额外筛选行（快手：内容标签 / 合作信息）→ { 行标签: [已选项] } */
   extraFilters: {} as Record<string, string[]>,
   /** 抽屉里的必填联系方式（快手要求联系人/手机号/微信号都填） */
@@ -2547,9 +2559,7 @@ const invite = reactive({
   batchPhone: '',
   batchWechat: '',
   /** 邀约商品数（快手必选商品才能发送；默认 1 个） */
-  batchProductCount: 1,
-  /** 跨平台不共话术：切到不同平台的店铺时清空脚本（抖店/微信的话术口径不同） */
-  platformKey: ''
+  batchProductCount: 1
 })
 const categoryOptions = computed(() => {
   const p = inviteProfile.value
@@ -2732,15 +2742,32 @@ function toggleExtraFilter(rowLabel: string, opt: string) {
   const next = cur.includes(opt) ? cur.filter(x => x !== opt) : [...cur, opt]
   invite.extraFilters = { ...invite.extraFilters, [rowLabel]: next }
 }
-// 店铺/平台变化时把可选项重置为该平台档案的默认值，随后**合并该平台保存过的配置**
-// （用户要求：主推类目/达人等级/数量/话术要能记住，不能每次重启都重置）
-watch(inviteProfile, (p) => {
+/**
+ * 当前邀约面板的**作用域键**：店铺 + 平台。
+ *
+ * 为什么不能用 `watch(inviteProfile)`：同一平台可以有多家店铺（实测账号里两家抖店），
+ * `inviteProfileFor(platform)` 对它们返回的是**同一个档案对象**——computed 值不变、
+ * watch 不触发，于是"从 A 店切到 B 店"不会重新读取配置：面板还停在 A 店的号码上，
+ * 点开始邀约就把 A 店的手机号发给了 B 店的达人（真机口径的严重错误）。
+ * 所以作用域键必须带上 storeId。
+ */
+const inviteScopeKey = computed(() => `${ws.displayedStoreId || ''}::${inviteProfile.value?.platform || ''}`)
+
+// 店铺/平台变化时把可选项重置为该平台档案的默认值，随后**合并该店铺保存过的配置**
+// （用户要求：每个店铺的配置相互独立，只要配置一次就能一直用）
+watch(inviteScopeKey, () => {
+  const p = inviteProfile.value
   if (!p) return
-  if (invite.platformKey !== p.platform) {
-    invite.script = ''
-    invite.scriptMode = 'manual'
-    invite.platformKey = p.platform
-  }
+  const storeId = ws.displayedStoreId || ''
+  // 切店铺（含同平台换店）时先清掉上一家的**自由文本**类配置，免得把 A 店的话术/号码带进 B 店。
+  // 联系方式/主营/优势等字段会在下面被本店铺的存档覆盖（没有存档就是档案默认值）。
+  invite.script = ''
+  invite.scriptMode = 'manual'
+  invite.batchContact = ''
+  invite.batchPhone = ''
+  invite.batchWechat = ''
+  invite.mainCategory = ''
+  invite.strengths = []
   if (p.flow === 'batch-list') {
     const tree = inviteCategoryTreeFor(p)
     invite.category = tree[2]?.name || tree[0]?.name || p.categories[2] || p.categories[0] || ''
@@ -2757,12 +2784,17 @@ watch(inviteProfile, (p) => {
     // 微信流程商品固定按 ID 指定（留空则自动加 1 个），不再有可调数量
     invite.productCount = 1
   }
-  void loadInviteConfig(p)
+  void loadInviteConfig(p, storeId)
 }, { immediate: true })
 
-// ---------- 邀约配置持久化（按平台各存一份到 settings 表） ----------
-const INVITE_CFG_KEY = (platform: string) => `invite.config.${platform}`
-/** 已完成"读取→合并"的平台：此后的变更才回写，防止启动时的默认值把存档覆盖掉 */
+// ---------- 邀约配置持久化（**按店铺各存一份**到 settings 表） ----------
+/**
+ * 键按 storeId 走：同一个平台可以有多家店铺（实测账号里有两家抖店），
+ * 而配置里装的是**店铺自己的**联系人/手机号/微信号、主营类目、核心优势——
+ * 按平台存会互相覆盖（B 店会把 A 店的手机号发出去，真机上就是这么错的）。
+ * 旧版本按平台存的键不删，给"还没有自己配置的店铺"当初始值（迁移），见 loadInviteConfig。
+ */
+/** 已完成"读取→合并"的店铺：此后的变更才回写，防止启动时的默认值把存档覆盖掉 */
 const inviteCfgLoaded = new Set<string>()
 
 function inviteCfgFields(flow: 'batch-list' | 'assist-form'): readonly string[] {
@@ -2776,90 +2808,153 @@ function inviteCfgFields(flow: 'batch-list' | 'assist-form'): readonly string[] 
     : ['contact', 'wechat', 'phone', 'finderType', 'finderCategories', 'finderOtherFilters', 'productIds', 'script', 'scriptMode']
 }
 
-async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFor>>) {
-  const key = p.platform
-  try {
-    const res = await window.shopilot.settings.get(INVITE_CFG_KEY(key))
-    // 等待期间用户切走了店铺/平台 → 丢弃，避免把 A 平台的配置灌进 B 平台
-    if (inviteProfile.value?.platform !== key) return
-    // settings.get 的返回是 { key, value } 包装，配置本体在 .value 里（漏拆包装=永远读不到存档）
-    const raw = res.ok && res.data && typeof res.data === 'object' ? (res.data as Record<string, unknown>).value : null
-    const saved = raw && typeof raw === 'object' ? raw as Record<string, unknown> : null
-    if (saved) {
-      const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : null)
-      if (p.flow === 'batch-list') {
-        const tree = inviteCategoryTreeFor(p)
-        const cat = str(saved.category, 40)
-        if (cat !== null && (cat === '' || tree.some(c => c.name === cat))) invite.category = cat
-        const sub = str(saved.subcategory, 40)
-        const catNode = cat ? tree.find(c => c.name === cat) : undefined
-        const kids = catNode?.children ?? []
-        // 二级只在属于该一级的子类列表时才恢复，否则回「不限」
-        if (sub !== null && (sub === '' || kids.includes(sub))) invite.subcategory = sub
-        const third = str(saved.category3, 40)
-        const thirdKids = catNode?.grandchildren?.find(c => c.name === invite.subcategory)?.children ?? []
-        if (third !== null && (third === '' || thirdKids.includes(third))) invite.category3 = third
-        if (Array.isArray(saved.levels)) invite.levels = saved.levels.filter((x): x is string => typeof x === 'string' && p.levels.includes(x))
-        if (typeof saved.count === 'number' && Number.isFinite(saved.count)) invite.count = Math.max(1, Math.min(Math.round(saved.count), p.maxBatch))
-        const sc = str(saved.script, p.scriptMaxLen)
-        if (sc !== null) invite.script = sc
-        if (saved.scriptMode === 'ai' || saved.scriptMode === 'manual') invite.scriptMode = saved.scriptMode
-        if (Array.isArray(saved.benefits)) invite.benefits = saved.benefits.filter((x): x is string => typeof x === 'string' && p.benefits.includes(x))
-        // 核心优势 / 主营（抖店改版抽屉；没有这两项的档案恢复成默认空值）
-        const strengthOpts = p.strengths?.options ?? []
-        if (Array.isArray(saved.strengths)) {
-          invite.strengths = saved.strengths.filter((x): x is string => typeof x === 'string' && strengthOpts.includes(x))
-        }
-        const mainCat = str(saved.mainCategory, 60)
-        if (mainCat !== null && (mainCat === '' || mainCategoryPaths.value.includes(mainCat))) invite.mainCategory = mainCat
-        // 快手那几项（抖店存档里没有 → 保持默认）
-        if (saved.extraFilters && typeof saved.extraFilters === 'object') {
-          const out: Record<string, string[]> = {}
-          for (const row of (p.extraFilterRows || [])) {
-            const v = (saved.extraFilters as any)[row.label]
-            // 只收该行**确实存在**的选项（平台改版/换平台后不残留无效项）
-            if (Array.isArray(v)) out[row.label] = v.filter((x: unknown): x is string => typeof x === 'string' && row.options.includes(x))
-          }
-          invite.extraFilters = out
-        }
-        const bc = str(saved.batchContact, 60); if (bc !== null) invite.batchContact = bc
-        const bp = str(saved.batchPhone, 40); if (bp !== null) invite.batchPhone = bp
-        const bw = str(saved.batchWechat, 60); if (bw !== null) invite.batchWechat = bw
-        if (typeof saved.batchProductCount === 'number' && Number.isFinite(saved.batchProductCount)) {
-          // 快手必选商品 → 下限 1（存档里的 0 会被抬到 1）
-          invite.batchProductCount = Math.max(1, Math.min(Math.round(saved.batchProductCount), p.maxProducts))
-        }
-      } else {
-        const c = str(saved.contact, 60); if (c !== null) invite.contact = c
-        const w = str(saved.wechat, 60); if (w !== null) invite.wechat = w
-        const ph = str(saved.phone, 40); if (ph !== null) invite.phone = ph
-        if (typeof saved.finderType === 'string' && p.finderTypes.includes(saved.finderType)) invite.finderType = saved.finderType
-        if (Array.isArray(saved.finderCategories)) invite.finderCategories = saved.finderCategories.filter((x): x is string => typeof x === 'string' && p.finderCategories.includes(x))
-        if (Array.isArray(saved.finderOtherFilters)) invite.finderOtherFilters = saved.finderOtherFilters.filter((x): x is string => typeof x === 'string' && p.finderOtherFilters.includes(x))
-        const ids = str(saved.productIds, 4000); if (ids !== null) invite.productIds = ids
-        const sc = str(saved.script, p.scriptMaxLen); if (sc !== null) invite.script = sc
-        if (saved.scriptMode === 'ai' || saved.scriptMode === 'manual') invite.scriptMode = saved.scriptMode
-        // 不再恢复 productCount：面板已去掉该输入项，商品固定按 ID 指定（留空则加 1 个）
-      }
+/** 把一份存档（本店铺的，或旧版按平台的那份）合并进面板状态 */
+function mergeInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFor>>, saved: Record<string, unknown>) {
+  const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : null)
+  if (p.flow === 'batch-list') {
+    const tree = inviteCategoryTreeFor(p)
+    const cat = str(saved.category, 40)
+    if (cat !== null && (cat === '' || tree.some(c => c.name === cat))) invite.category = cat
+    const sub = str(saved.subcategory, 40)
+    const catNode = cat ? tree.find(c => c.name === cat) : undefined
+    const kids = catNode?.children ?? []
+    // 二级只在属于该一级的子类列表时才恢复，否则回「不限」
+    if (sub !== null && (sub === '' || kids.includes(sub))) invite.subcategory = sub
+    const third = str(saved.category3, 40)
+    const thirdKids = catNode?.grandchildren?.find(c => c.name === invite.subcategory)?.children ?? []
+    if (third !== null && (third === '' || thirdKids.includes(third))) invite.category3 = third
+    if (Array.isArray(saved.levels)) invite.levels = saved.levels.filter((x): x is string => typeof x === 'string' && p.levels.includes(x))
+    if (typeof saved.count === 'number' && Number.isFinite(saved.count)) invite.count = Math.max(1, Math.min(Math.round(saved.count), p.maxBatch))
+    const sc = str(saved.script, p.scriptMaxLen)
+    if (sc !== null) invite.script = sc
+    if (saved.scriptMode === 'ai' || saved.scriptMode === 'manual') invite.scriptMode = saved.scriptMode
+    if (Array.isArray(saved.benefits)) invite.benefits = saved.benefits.filter((x): x is string => typeof x === 'string' && p.benefits.includes(x))
+    // 核心优势 / 主营（抖店改版抽屉；没有这两项的档案恢复成默认空值）
+    const strengthOpts = p.strengths?.options ?? []
+    if (Array.isArray(saved.strengths)) {
+      invite.strengths = saved.strengths.filter((x): x is string => typeof x === 'string' && strengthOpts.includes(x))
     }
-  } catch { /* 读不到就按默认值走，不阻塞面板 */ }
-  inviteCfgLoaded.add(key)
+    const mainCat = str(saved.mainCategory, 60)
+    if (mainCat !== null && (mainCat === '' || mainCategoryPaths.value.includes(mainCat))) invite.mainCategory = mainCat
+    // 快手那几项（抖店存档里没有 → 保持默认）
+    if (saved.extraFilters && typeof saved.extraFilters === 'object') {
+      const out: Record<string, string[]> = {}
+      for (const row of (p.extraFilterRows || [])) {
+        const v = (saved.extraFilters as any)[row.label]
+        // 只收该行**确实存在**的选项（平台改版/换平台后不残留无效项）
+        if (Array.isArray(v)) out[row.label] = v.filter((x: unknown): x is string => typeof x === 'string' && row.options.includes(x))
+      }
+      invite.extraFilters = out
+    }
+    const bc = str(saved.batchContact, 60); if (bc !== null) invite.batchContact = bc
+    const bp = str(saved.batchPhone, 40); if (bp !== null) invite.batchPhone = bp
+    const bw = str(saved.batchWechat, 60); if (bw !== null) invite.batchWechat = bw
+    if (typeof saved.batchProductCount === 'number' && Number.isFinite(saved.batchProductCount)) {
+      // 快手必选商品 → 下限 1（存档里的 0 会被抬到 1）
+      invite.batchProductCount = Math.max(1, Math.min(Math.round(saved.batchProductCount), p.maxProducts))
+    }
+  } else {
+    const c = str(saved.contact, 60); if (c !== null) invite.contact = c
+    const w = str(saved.wechat, 60); if (w !== null) invite.wechat = w
+    const ph = str(saved.phone, 40); if (ph !== null) invite.phone = ph
+    if (typeof saved.finderType === 'string' && p.finderTypes.includes(saved.finderType)) invite.finderType = saved.finderType
+    if (Array.isArray(saved.finderCategories)) invite.finderCategories = saved.finderCategories.filter((x): x is string => typeof x === 'string' && p.finderCategories.includes(x))
+    if (Array.isArray(saved.finderOtherFilters)) invite.finderOtherFilters = saved.finderOtherFilters.filter((x): x is string => typeof x === 'string' && p.finderOtherFilters.includes(x))
+    const ids = str(saved.productIds, 4000); if (ids !== null) invite.productIds = ids
+    const sc = str(saved.script, p.scriptMaxLen); if (sc !== null) invite.script = sc
+    if (saved.scriptMode === 'ai' || saved.scriptMode === 'manual') invite.scriptMode = saved.scriptMode
+    // 不再恢复 productCount：面板已去掉该输入项，商品固定按 ID 指定（留空则加 1 个）
+  }
 }
 
+/** 读设置值并拆包装（settings.get 返回 { key, value }；漏拆包装=永远读不到存档） */
+async function readSettingObject(key: string): Promise<Record<string, unknown> | null> {
+  const res = await window.shopilot.settings.get(key)
+  const raw = res.ok && res.data && typeof res.data === 'object' ? (res.data as Record<string, unknown>).value : null
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : null
+}
+
+/**
+ * 读**本店铺**的邀约配置并合并进面板。
+ * 本店铺还没有存档时，退回旧版"按平台"的那份当**初始值**（迁移老用户的配置）；
+ * 但那只是初始值，之后这家店的改动会写到自己的键上，各店互不影响。
+ */
+async function loadInviteConfig(p: NonNullable<ReturnType<typeof inviteProfileFor>>, storeId: string) {
+  const key = inviteConfigKey(storeId)
+  try {
+    let saved = await readSettingObject(key)
+    // 等待期间用户切走了店铺 → 丢弃，避免把 A 店的配置灌进 B 店
+    if ((ws.displayedStoreId || '') !== storeId) return
+    let fromLegacy = false
+    if (!saved) {
+      const legacy = await readSettingObject(legacyInviteConfigKey(p.platform))
+      if ((ws.displayedStoreId || '') !== storeId) return
+      if (legacy) { saved = legacy; fromLegacy = true }
+    }
+    if (saved) {
+      mergeInviteConfig(p, saved)
+      // 迁移只发生在"这家店还没自己的配置"时：把旧平台存档落成这家店自己的键，
+      // 这样 B 店第一次打开也会各自拿到一份初始值，而 A 店之后的修改不再影响 B 店。
+      if (fromLegacy) await saveInviteConfigNow({ silent: true })
+    }
+  } catch { /* 读不到就按默认值走，不阻塞面板 */ }
+  inviteCfgLoaded.add(storeId)
+}
+
+/** 面板改动自动落库（防抖 500ms；打字/连点等级时不要每敲一键就写一次库） */
 let inviteSaveTimer: ReturnType<typeof setTimeout> | null = null
-watch(invite, () => {
-  const p = inviteProfile.value
-  if (!p || !inviteCfgLoaded.has(p.platform)) return
-  if (inviteSaveTimer) clearTimeout(inviteSaveTimer)
-  // 防抖 500ms：打字/连点等级时不要每敲一键就写一次库
-  inviteSaveTimer = setTimeout(() => {
-    const cur = inviteProfile.value
-    if (!cur || cur.platform !== p.platform) return
-    const snapshot: Record<string, unknown> = {}
-    for (const f of inviteCfgFields(cur.flow)) snapshot[f] = (invite as any)[f]
+const inviteSaving = ref(false)
+const inviteSavedAt = ref(0)
+/** 最近一次保存的时间（只在本次会话内显示；不落库——落库的只有配置本身） */
+const inviteSavedAtText = computed(() => inviteSavedAt.value
+  ? new Date(inviteSavedAt.value).toLocaleTimeString('zh-CN', { hour12: false })
+  : '')
+
+/**
+ * 立即把当前面板配置写到**本店铺**的键上。
+ * 显式保存（按钮）与自动保存（防抖）共用这一条路径——两处各写一遍必然漂移。
+ * silent=true 用于迁移落库（不弹提示、不打"已保存"时间）。
+ */
+async function saveInviteConfigNow(opts: { silent?: boolean } = {}): Promise<boolean> {
+  const cur = inviteProfile.value
+  const storeId = ws.displayedStoreId || ''
+  if (!cur || !storeId) return false
+  if (!opts.silent && !inviteCfgLoaded.has(storeId)) return false
+  const snapshot: Record<string, unknown> = {}
+  for (const f of inviteCfgFields(cur.flow)) snapshot[f] = (invite as any)[f]
+  inviteSaving.value = true
+  try {
     // 必须转纯对象再过 IPC：快照里的 levels/benefits 是 Vue 响应式 Proxy，
     // Electron 结构化克隆不认（真机实测抛 "An object could not be cloned"，写入静默失败）
-    void window.shopilot.settings.set(INVITE_CFG_KEY(cur.platform), JSON.parse(JSON.stringify(snapshot)))
+    const res = await window.shopilot.settings.set(inviteConfigKey(storeId), JSON.parse(JSON.stringify(snapshot)))
+    if (!res.ok) {
+      if (!opts.silent) ws.toast('保存邀约配置失败: ' + res.error.message, 'error')
+      return false
+    }
+    inviteSavedAt.value = Date.now()
+    if (!opts.silent) {
+      const name = ws.stores.find(s => s.id === storeId)?.name || storeId
+      ws.toast(`已保存「${name}」的邀约配置（切到别的店铺各用各的）`, 'success')
+    }
+    return true
+  } catch (e: any) {
+    if (!opts.silent) ws.toast('保存邀约配置失败: ' + String(e?.message || e), 'error')
+    return false
+  } finally {
+    inviteSaving.value = false
+  }
+}
+
+watch(invite, () => {
+  const p = inviteProfile.value
+  const storeId = ws.displayedStoreId || ''
+  // 未完成"读取→合并"的店铺不回写：否则启动时的默认值会把存档覆盖掉
+  if (!p || !storeId || !inviteCfgLoaded.has(storeId)) return
+  if (inviteSaveTimer) clearTimeout(inviteSaveTimer)
+  inviteSaveTimer = setTimeout(() => {
+    // 防抖期间又切了店铺 → 丢弃这次快照（写下去就是张冠李戴）
+    if ((ws.displayedStoreId || '') !== storeId) return
+    void saveInviteConfigNow({ silent: true })
   }, 500)
 }, { deep: true })
 
@@ -2956,8 +3051,8 @@ async function openInvitePage() {
       const tree = (res.data as any)?.categoryTree as CategoryNode[] | undefined
       if (tree?.length) {
         await saveInviteCategoryTree(p.platform, tree)
-        // 首次读取完成后重新合并该平台存档，让已保存的三级类目恢复出来。
-        await loadInviteConfig(p)
+        // 首次读取完成后重新合并本店铺存档，让已保存的三级类目恢复出来。
+        await loadInviteConfig(p, ws.displayedStoreId || '')
         ws.toast(`达人广场已打开，已读取 ${tree.length} 个一级类目的完整三级结构`, 'success')
       } else {
         ws.toast('达人广场已打开，但平台未返回三级类目', 'info')

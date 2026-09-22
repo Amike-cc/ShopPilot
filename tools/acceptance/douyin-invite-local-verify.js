@@ -681,6 +681,122 @@ async function main() {
       !configured.pickedBenefits.includes('机制可谈'),
       JSON.stringify(configured.pickedBenefits))
 
+    // ---------- 配置按店铺独立保存（用户要求：每店一份，配置一次就够了） ----------
+    const readSetting = (key) => ui.eval(`const r = await window.shopilot.settings.get(${JSON.stringify(key)}); return r.ok ? r.data.value : null;`)
+    const writeSetting = (key, value) => ui.eval(`const r = await window.shopilot.settings.set(${JSON.stringify(key)}, ${JSON.stringify(value)}); return r.ok;`)
+    const openStoreByName = async (name) => {
+      // 刚 reload 完店铺卡片可能还没渲染 → 轮询等一下再点（点不到就会读到空面板）
+      for (let i = 0; i < 20; i++) {
+        const st = await ui.eval(`
+          const cards = [...document.querySelectorAll('.store-card')];
+          const card = cards.find(x => x.textContent.includes(${JSON.stringify(name)}));
+          if (!card) return { step: 'no-card', cards: cards.length };
+          (card.querySelector('.store-action') || card).click();
+          await new Promise(r => setTimeout(r, 1200));
+          const taskTab = [...document.querySelectorAll('.ptab')].find(x => x.textContent.trim() === '任务');
+          if (taskTab) taskTab.click();
+          await new Promise(r => setTimeout(r, 500));
+          const inv = document.querySelector('[data-test="task-tab-invite"]');
+          if (inv) inv.click();
+          await new Promise(r => setTimeout(r, 800));
+          return { step: 'done', panel: !!document.querySelector('[data-test="invite-panel"]') };
+        `)
+        if (st && st.step === 'done') { await sleep(800); return true }
+        await sleep(800)
+      }
+      return false
+    }
+
+    const storeAKey = 'invite.config.store.' + storeId
+    // 显式点「保存配置」→ 立刻落库（不依赖 500ms 防抖）
+    const savedNow = await ui.eval(`
+      const b = document.querySelector('[data-test="invite-save-config"]');
+      if (!b) return { error: 'missing-save-button' };
+      b.click();
+      await new Promise(r => setTimeout(r, 1200));
+      return { clicked: true };
+    `)
+    check('面板有「保存配置」按钮', savedNow && savedNow.clicked === true, JSON.stringify(savedNow))
+    const savedA = await readSetting(storeAKey)
+    check('「保存配置」把配置写进**本店铺**的键（invite.config.store.<storeId>）',
+      !!savedA && savedA.category === '个护家清' && savedA.subcategory === '家清纸品' && savedA.category3 === '纸品' &&
+        savedA.count === 2 && savedA.mainCategory === '个护家清/家清纸品' &&
+        savedA.batchPhone === CONTACT_PHONE && savedA.batchWechat === CONTACT_WECHAT &&
+        JSON.stringify(savedA.benefits) === JSON.stringify(['专属高佣', '免费样品', '佣金可谈']) &&
+        JSON.stringify(savedA.strengths) === JSON.stringify(['源头工厂', '品类丰富', '多款爆款', '商品品质高', '售后无忧']),
+      JSON.stringify({ key: storeAKey, saved: savedA }))
+
+    // 旧版本按平台存的键（invite.config.抖店）：给"还没有自己配置的店铺"当初始值
+    await writeSetting('invite.config.抖店', {
+      category: '个护家清', subcategory: '家清纸品', category3: '', levels: ['LV2'], count: 7, script: '', scriptMode: 'manual',
+      benefits: ['免费样品'], strengths: ['多项专利'], mainCategory: '', extraFilters: {},
+      batchContact: '', batchPhone: '13900000000', batchWechat: 'legacy_wx', batchProductCount: 1
+    })
+    const storeB = await api.storeCreate({ name: '抖店验收二号店', platform: '抖店', adminUrl: site.base + '/' })
+    check('创建第二家抖店店铺（同平台，用来验证配置互不覆盖）', storeB.ok && !!storeB.data?.id, JSON.stringify(storeB.error || storeB.data))
+    const storeBId = storeB.ok ? storeB.data.id : null
+    await ui.eval(`location.reload(); return true;`)
+    await sleep(3500)
+    focusAppWindow(app.pid)
+    ui = await connectUi()
+    const openedB = await openStoreByName('抖店验收二号店')
+    const panelB = await ui.eval(`return {
+      category: (document.querySelector('[data-test="invite-category"]') || {}).value,
+      subcategory: (document.querySelector('[data-test="invite-subcategory"]') || {}).value,
+      count: (document.querySelector('[data-test="invite-count"]') || {}).value,
+      phone: (document.querySelector('[data-test="invite-batch-phone"]') || {}).value,
+      wechat: (document.querySelector('[data-test="invite-batch-wechat"]') || {}).value
+    };`)
+    check('新店铺首次打开：用旧版按平台的存档做初始值（迁移老配置）',
+      openedB && panelB.category === '个护家清' && panelB.subcategory === '家清纸品' &&
+        panelB.count === '7' && panelB.phone === '13900000000' && panelB.wechat === 'legacy_wx',
+      JSON.stringify(panelB))
+    const migratedB = await readSetting('invite.config.store.' + storeBId)
+    check('迁移后 B 店写出自己的键（此后与 A 店各自独立）',
+      !!migratedB && migratedB.count === 7 && migratedB.batchPhone === '13900000000',
+      JSON.stringify({ key: 'invite.config.store.' + storeBId, saved: migratedB }))
+
+    // B 店改成自己的配置 → A 店那份不能被改动
+    await ui.eval(`
+      const setV = (el, v) => {
+        const proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      setV(document.querySelector('[data-test="invite-count"]'), '3');
+      setV(document.querySelector('[data-test="invite-batch-phone"]'), '13811112222');
+      setV(document.querySelector('[data-test="invite-batch-wechat"]'), 'store_b_wx');
+      await new Promise(r => setTimeout(r, 1500));
+      return true;
+    `)
+    await sleep(1200)
+    const savedAAfter = await readSetting(storeAKey)
+    const savedBAfter = await readSetting('invite.config.store.' + storeBId)
+    check('B 店改动只写自己的键：A 店那份一字未动',
+      !!savedAAfter && savedAAfter.count === 2 && savedAAfter.batchPhone === CONTACT_PHONE &&
+        savedAAfter.category3 === '纸品' &&
+        !!savedBAfter && savedBAfter.count === 3 && savedBAfter.batchPhone === '13811112222',
+      JSON.stringify({ a: { count: savedAAfter && savedAAfter.count, phone: savedAAfter && savedAAfter.batchPhone }, b: { count: savedBAfter && savedBAfter.count, phone: savedBAfter && savedBAfter.batchPhone } }))
+
+    // 切回 A 店 → 面板恢复 A 店自己的配置（这才是"配置一次就够"的实际体验）
+    focusAppWindow(app.pid)
+    const openedA = await openStoreByName('抖店邀约本地验收')
+    const panelA = await ui.eval(`return {
+      category: (document.querySelector('[data-test="invite-category"]') || {}).value,
+      subcategory: (document.querySelector('[data-test="invite-subcategory"]') || {}).value,
+      category3: (document.querySelector('[data-test="invite-category3"]') || {}).value,
+      count: (document.querySelector('[data-test="invite-count"]') || {}).value,
+      mainCategory: (document.querySelector('[data-test="invite-main-category"]') || {}).value,
+      phone: (document.querySelector('[data-test="invite-batch-phone"]') || {}).value,
+      strengths: [...document.querySelectorAll('[data-test^="invite-strength-"]')].filter(x => x.checked).length
+    };`)
+    check('切回 A 店：面板恢复 A 店自己的配置（含三级类目/主营/联系方式/核心优势）',
+      openedA && panelA.category === '个护家清' && panelA.subcategory === '家清纸品' && panelA.category3 === '纸品' &&
+        panelA.count === '2' && panelA.mainCategory === '个护家清/家清纸品' &&
+        panelA.phone === CONTACT_PHONE && panelA.strengths === 5,
+      JSON.stringify(panelA))
+
     const clicked = await ui.eval(`
       const start = document.querySelector('[data-test="invite-start"]');
       if (!start || start.disabled) return false;
