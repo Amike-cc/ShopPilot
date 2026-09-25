@@ -136,6 +136,8 @@ export const IPC_CHANNELS = {
   AGENT_SKILL_UPDATE: 'agent:skill:update',
   AGENT_PACK_EXPORT: 'agent:pack:export',
   AGENT_PACK_IMPORT: 'agent:pack:import',
+  /** Job 结束后自动续办（把结果交给智能体回合判断下一步）。 */
+  AGENT_JOB_FOLLOW_UP: 'agent:job:followUp',
 
   /** 数据中心：订单明细汇总（读订单页整表快照）。 */
   OVERVIEW_ORDERS: 'overview:orders',

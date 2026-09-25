@@ -85,6 +85,23 @@ function generateTabId(): string {
   return `tab_${randomBytes(16).toString('hex')}`
 }
 
+/**
+ * 页面**主动**导航的白名单判定（§10.1）：站点内跳转、登录重定向都是 http(s)，
+ * 交给 assertNavigableUrl 判定即可；file:/javascript:/data: 一律不放行。
+ *
+ * 不抛错是刻意的：本函数跑在 Electron 的 will-navigate 回调里，异常逃出去会变成主进程
+ * uncaughtException（表现为"点链接应用崩"）。空值/无法解析的目标按"未知即拒绝"处理。
+ */
+function isAllowedPageNavigation(targetUrl: string): boolean {
+  if (!targetUrl) return false
+  try {
+    assertNavigableUrl(targetUrl)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** 标签页崩溃自动重载的节流表（tabId → 上次自动重载时间），防崩溃-重载死循环 */
 const TAB_RELOAD_MIN_INTERVAL_MS = 5 * 60 * 1000
 const tabReloadGuard = new Map<string, number>()
@@ -361,6 +378,15 @@ export function createTab(storeId: string, url?: string): string {
     return { action: 'deny' }
   })
 
+  // 页面主动导航（点链接 / location 赋值 / 服务端重定向）不走 IPC 与 window.open，
+  // 必须在 will-navigate 拦一道，否则页面能把自己导航到 file:/javascript:/data:。
+  // 注意 will-navigate 不会为 loadURL/goBack 这类主进程发起的导航触发，正常流程不受影响。
+  view.webContents.on('will-navigate', (event, targetUrl) => {
+    if (isAllowedPageNavigation(targetUrl)) return
+    event.preventDefault()
+    logMain('warn', `[nav] 页面主动跳转被拦截 store=${storeId} tab=${tabId} target=${String(targetUrl).slice(0, 200)}`)
+  })
+
   const tab: Tab = {
     id: tabId,
     storeId,
@@ -605,7 +631,8 @@ export function navigateTab(storeId: string, tabId: string, url: string): void {
  * 为什么把结果写**剪贴板 + 日志**而不是弹对话框：
  * ① 弹原生对话框要打断用户，而取锚点往往要连续采好几个元素，一次一弹很烦；
  * ② 剪贴板是"抄进代码"最短的路径；
- * ③ 日志保证剪贴板被覆盖后仍可追溯（写的是完整原始数据，剪贴板里是排版后的可读文本）。
+ * ③ 日志记一条**结构化摘要**（命中/未命中 + 锚点数量）保证"采过"这件事可追溯——
+ *    原始 DOM 文本与页面 URL 不进日志（那是把店铺业务数据写进日志文件）。
  */
 async function probeElementAt(wc: Electron.WebContents, point: { x: number; y: number }): Promise<void> {
   try {
@@ -613,16 +640,24 @@ async function probeElementAt(wc: Electron.WebContents, point: { x: number; y: n
     const text = formatElementProbe(result)
     if (result.ok) {
       clipboard.writeText(text)
-      logMain('info', `元素定位信息已采集并写入剪贴板 tab=${wc.id} tag=${result.tag} text=${JSON.stringify(result.textAnchor || '')} raw=${JSON.stringify(result)}`)
+      // 只记结构化摘要：原始结果含页面 DOM 文本与整段 URL，落盘即是把业务数据写进日志
+      logMain('info', `[probe] 元素定位信息已采集并写入剪贴板 tab=${wc.id} hit=true tag=${result.tag || ''} anchors=${countProbeAnchors(result)}`)
     } else {
       // 采集失败（落点没元素）不当异常：页面还没加载完、点到空白处都是正常情况，
       // 留痕即可，别打断用户
-      logMain('warn', `元素定位信息采集未命中 tab=${wc.id} reason=${result.reason} point=${point.x},${point.y}`)
+      logMain('warn', `[probe] 元素定位信息采集未命中 tab=${wc.id} hit=false reason=${result.reason || 'unknown'} point=${point.x},${point.y}`)
     }
   } catch (err) {
     // 注入失败（页面正在导航/崩溃）如实留痕，不抛给 Electron 的事件回调
-    logMain('warn', `元素定位信息采集失败 tab=${wc.id}: ${String(err)}`)
+    logMain('warn', `[probe] 元素定位信息采集失败 tab=${wc.id}: ${String(err)}`)
   }
+}
+
+/** 探针可用锚点计数（文案/属性/稳定类名三层），只用于日志摘要 */
+function countProbeAnchors(result: ElementProbeResult): number {
+  return (result.textAnchor ? 1 : 0)
+    + Object.keys(result.attrs || {}).length
+    + (result.stableClasses || []).length
 }
 
 /**
@@ -791,6 +826,12 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
   win.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     try { win.loadURL(assertNavigableUrl(targetUrl)).catch(() => { /* 错误由页面呈现 */ }) } catch { /* 非法地址忽略 */ }
     return { action: 'deny' }
+  })
+  // 独立窗口的页面同样能主动导航：与主窗口标签页同一套白名单
+  win.webContents.on('will-navigate', (event, targetUrl) => {
+    if (isAllowedPageNavigation(targetUrl)) return
+    event.preventDefault()
+    logMain('warn', `[nav] 独立窗口页面主动跳转被拦截 store=${storeId} target=${String(targetUrl).slice(0, 200)}`)
   })
 
   // 独立窗口同样给右键菜单与重载快捷键：导航/重新加载/强制重新加载/编辑/链接/元素定位信息。

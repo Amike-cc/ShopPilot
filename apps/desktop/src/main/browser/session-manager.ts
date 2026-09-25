@@ -10,6 +10,7 @@ import { mkdirSync, existsSync } from 'fs'
 import { recordDownload, updateDownloadState } from './download-manager'
 import { getProxyCredentials } from '../services/credential-store'
 import { writeAudit } from '../services/audit-logger'
+import { logMain } from '../services/logger'
 import { clearStoreSessionSnapshot, trackStoreSession, untrackStoreSession, snapshotStoreSession } from '../services/session-persistence'
 import { parseUaClientHints } from './fingerprint-injector'
 
@@ -138,11 +139,16 @@ function configureSession(sess: Session, storeId: string): void {
   
   // 配置权限处理 - §27 默认拒绝
   sess.setPermissionRequestHandler((webContents, permission, callback) => {
-    // 地理位置、通知、摄像头、麦克风、剪贴板默认拒绝
-    const allowedPermissions = ['clipboard-read', 'clipboard-write']
-    callback(allowedPermissions.includes(permission))
+    // 只放行剪贴板**写入**（页面"复制"按钮需要）；剪贴板读取一律拒绝——
+    // 剪贴板里可能是用户刚复制的密码/验证码/订单信息，页面没有理由能读到它。
+    // 注意：Electron 30 的权限枚举里写入叫 clipboard-sanitized-write（无 clipboard-write 这个名字），
+    // 原先写死的 'clipboard-write' 永远匹配不上 —— 等于写入也被拒，名字两个都列上避免再踩。
+    const allowed = ['clipboard-sanitized-write', 'clipboard-write'].includes(String(permission))
+    let origin = 'unknown'
+    try { origin = new URL(webContents.getURL()).origin } catch { /* 页面还没 URL（about:blank）时按 unknown 记 */ }
+    logMain('info', `[permission] ${allowed ? 'allow' : 'deny'} permission=${permission} origin=${origin} store=${storeId}`)
+    callback(allowed)
   })
-  
   // 配置下载处理 - §5.9 下载按店铺归档
   sess.on('will-download', (_event, item, webContents) => {
     try {
@@ -184,7 +190,7 @@ function configureSession(sess: Session, storeId: string): void {
         }
       })
     } catch (err) {
-      console.error('will-download error:', err)
+      logMain('error', `[download] will-download 处理失败 store=${storeId}: ${String(err)}`)
     }
   })
 }
@@ -223,7 +229,8 @@ function looksLikeProxyChallenge(details: LoginDetails): boolean {
 
 /** 为一个店铺处理认证挑战：代理挑战 → 注入绑定代理凭据；否则取消 */
 function handleLoginChallenge(storeId: string, details: LoginDetails, callback: (u?: string, p?: string) => void): void {
-  console.log(`[login] store=${storeId} proxy=${looksLikeProxyChallenge(details)} first=${details.firstAuthAttempt} url=${details.url}`)
+  // 走统一日志（logMain）：URL 查询参数值与 user= 的值在写入前被值级脱敏，不再直接写标准输出
+  logMain('info', `[login] proxy challenge store=${storeId} isProxy=${looksLikeProxyChallenge(details)} first=${details.firstAuthAttempt} url=${details.url}`)
   if (!looksLikeProxyChallenge(details)) {
     callback() // 页面 HTTP Basic：取消，不弹窗不注入
     return
@@ -238,7 +245,7 @@ function handleLoginChallenge(storeId: string, details: LoginDetails, callback: 
       "SELECT proxy_id FROM store_proxies WHERE store_id = ? AND mode != 'direct'"
     ).get(storeId) as any
     const cred = binding?.proxy_id ? getProxyCredentials(binding.proxy_id) : null
-    console.log(`[login] binding=${JSON.stringify(binding)} credFound=${!!cred} user=${cred?.username}`)
+    logMain('info', `[login] proxy credential resolved store=${storeId} proxy=${String(binding?.proxy_id || '')} found=${!!cred} user=${cred?.username || ''}`)
     if (cred && cred.username) {
       lastProxyAuth.set(storeId, { at: Date.now(), username: cred.username, proxyId: binding.proxy_id })
       callback(cred.username, cred.password)
@@ -246,7 +253,7 @@ function handleLoginChallenge(storeId: string, details: LoginDetails, callback: 
       callback() // 无凭据 → 取消认证（请求将 407 失败，不弹系统框）
     }
   } catch (err) {
-    console.error('proxy login injection failed:', err)
+    logMain('error', `[login] 代理凭据注入失败 store=${storeId}: ${String(err)}`)
     callback()
   }
 }
@@ -283,10 +290,10 @@ function ensureGlobalLoginHandler(): void {
     event.preventDefault()
     const storeId = resolveStoreIdFromWebContents(webContents)
     const loginDetails: LoginDetails = { ...details, isProxy: authInfo?.isProxy === true || details?.isProxy === true }
-    console.log(`[login:app] resolved store=${storeId} url=${details.url} proxyChallenge=${looksLikeProxyChallenge(loginDetails)}`)
+    logMain('info', `[login] app-level challenge resolved store=${String(storeId || '')} proxy=${looksLikeProxyChallenge(loginDetails)} url=${details.url}`)
     if (!storeId) { callback(); return }
     if (isDuplicateChallenge(details.url)) {
-      console.log(`[login:app] dedup cancel url=${details.url}`)
+      logMain('info', `[login] 1s 内重复挑战，直接取消 store=${storeId}`)
       callback()
       return
     }
@@ -324,7 +331,7 @@ function configureProxy(sess: Session, storeId: string): void {
     mode: 'fixed_servers',
     proxyRules
   }).catch(err => {
-    console.error('setProxy failed:', err)
+    logMain('error', `[proxy] setProxy 失败 store=${storeId} rules=${proxyRules}: ${String(err)}`)
   })
 }
 

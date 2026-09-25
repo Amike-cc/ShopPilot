@@ -19,9 +19,13 @@ import { getDatabase } from '../db/database'
 import { writeAudit } from '../services/audit-logger'
 import { askConfirm, askPassword } from '../services/password-dialog'
 import { getProfile, updateProfile } from '../stores/profile-manager'
+import { assertSafeExportPath } from './diagnostics'
 import { packSession, unpackSession, SessionPackageError, type SessionCookieEntry } from './session-package'
 
 export type { SessionCookieEntry } from './session-package'
+
+/** 会话包扩展名：.shopilot 是本实现实际产出的包名（.json 兼容历史/导出为 json 的场景） */
+const SESSION_PACKAGE_EXTS = ['.shopilot', '.json']
 
 function storeSession(storeId: string): Electron.Session {
   return session.fromPartition(`persist:store_${storeId}`, { cache: true })
@@ -73,6 +77,7 @@ export async function exportSessionPackage(
   }, validDays, now)
 
   let outPath = opts.outputPath
+  const rendererProvidedPath = !!outPath
   if (!outPath) {
     const win = BrowserWindow.getFocusedWindow() || undefined
     const { dialog } = require('electron')
@@ -84,6 +89,13 @@ export async function exportSessionPackage(
     })
     if (r.canceled || !r.filePath) throw new Error('SESSION_CANCELLED: 未选择保存位置')
     outPath = r.filePath
+  }
+  if (rendererProvidedPath) {
+    // 渲染层直传的路径在**落盘前**校验（第一次真正使用它之前）：未校验的路径绝不触碰文件系统，
+    // 同时对话框流程（用户可取消）保持原样。
+    // 注：m4 验收用 `xxx.shopilot.cancel` 这种临时后缀路径验证"取消对话 → SESSION_CANCELLED"
+    //（tools/acceptance/m4-cdp-verify.js:259），入口即拦会把那条验收变成参数错误。
+    outPath = assertSafeExportPath(outPath, SESSION_PACKAGE_EXTS, '会话包导出')
   }
   mkdirSync(join(app.getPath('userData'), 'exports'), { recursive: true })
   writeFileSync(outPath, file)
@@ -102,6 +114,19 @@ export async function importSessionPackage(
   const store = db.prepare('SELECT * FROM stores WHERE id = ?').get(storeId) as any
   if (!store) throw new Error('STORE_NOT_FOUND')
 
+  const invalid = (why: string) => { writeAudit('session.import', 'failure', { storeId, requestId: JSON.stringify({ reason: why }) }); return new Error(`SESSION_IMPORT_INVALID: ${why}`) }
+
+  if (filePath) {
+    // 只校验**渲染层直传**的路径；对话框选出的路径是用户在本机原生对话框里选的，不受此限。
+    // 失败按 SESSION_IMPORT_INVALID 呈现——导入通道的既有契约（含验收脚本）只认这个码，
+    // 路径不合法同样属于"包不可用"
+    try {
+      filePath = assertSafeExportPath(filePath, SESSION_PACKAGE_EXTS, '会话包导入')
+    } catch (e: any) {
+      throw invalid(String(e?.message || e).replace(/^INVALID_ARGUMENT:\s*/, ''))
+    }
+  }
+
   if (opts.pickFile && !filePath) {
     const { dialog } = require('electron')
     const win = BrowserWindow.getFocusedWindow() || undefined
@@ -114,7 +139,6 @@ export async function importSessionPackage(
   if (!existsSync(filePath)) throw new Error('SESSION_IMPORT_INVALID: 文件不存在')
 
   const buf = readFileSync(filePath)
-  const invalid = (why: string) => { writeAudit('session.import', 'failure', { storeId, requestId: JSON.stringify({ reason: why }) }); return new Error(`SESSION_IMPORT_INVALID: ${why}`) }
 
   const headMeta = (() => {
     try {

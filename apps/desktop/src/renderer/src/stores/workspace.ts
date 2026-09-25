@@ -6,7 +6,19 @@
 
 import { defineStore } from 'pinia'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import { PLATFORM_CATALOG } from '@shared/constants/platforms'
 import type { TabInfo } from '../env'
+
+/**
+ * 「其他」平台筛选项的哨兵值：内置平台目录之外的自定义平台聚合成一个 chip
+ * （同名值必须与 WorkbenchView 的 availablePlatforms 一致，否则筛选条件永远匹配不到店铺）。
+ */
+export const OTHER_PLATFORM_FILTER = '__other__'
+
+const BUILTIN_PLATFORM_NAMES = new Set(PLATFORM_CATALOG.map(p => p.name))
+
+/** 事件监听只挂一次：热重载/重复 init 时重复挂会让每个事件被处理多遍（重复 toast、重复刷新） */
+let eventsSubscribed = false
 
 export interface StoreRow {
   id: string
@@ -73,11 +85,15 @@ export const useWorkspaceStore = defineStore('workspace', {
     /** 各店铺标签页（事件驱动） */
     tabsByStore: {} as Record<string, TabInfo[]>,
     activeTabIdByStore: {} as Record<string, string | null>,
-    loadingTab: null as string | null,
+    /** 各店铺正在加载的标签页（`storeId:tabId`）：loadingTab 必须按店铺区分，
+     *  否则 A 店的加载结束会把 B 店的转圈清掉 */
+    loadingTabs: [] as string[],
     /** 右栏 */
     rightPanel: 'bookmarks' as 'bookmarks' | 'downloads' | 'env' | 'tasks',
     bookmarks: [] as any[],
+    bookmarksStoreId: null as string | null,
     downloads: [] as any[],
+    downloadsStoreId: null as string | null,
     /** 任务引擎 - §6.4/§6.6（事件驱动实时态） */
     tasks: [] as any[],
     runLive: {} as Record<string, any>,
@@ -101,7 +117,12 @@ export const useWorkspaceStore = defineStore('workspace', {
   getters: {
     filteredStores(state): StoreRow[] {
       let rows = state.stores
-      if (state.filterPlatform) rows = rows.filter(s => s.platform === state.filterPlatform)
+      // 「其他」比较的是**平台是否属于内置目录**，不能拿哨兵值与 s.platform 直接比相等
+      if (state.filterPlatform === OTHER_PLATFORM_FILTER) {
+        rows = rows.filter(s => !BUILTIN_PLATFORM_NAMES.has(s.platform))
+      } else if (state.filterPlatform) {
+        rows = rows.filter(s => s.platform === state.filterPlatform)
+      }
       const q = state.search.trim().toLowerCase()
       if (q) rows = rows.filter(s => storeMatchesQuery(s, q))
       return rows
@@ -150,6 +171,8 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     subscribeEvents() {
+      if (eventsSubscribed) return
+      eventsSubscribed = true
       window.shopilot.on(EVENT_CHANNELS.BROWSER_TAB_UPDATED, (payload: any) => {
         if (!payload || !payload.storeId) return
         this.tabsByStore[payload.storeId] = payload.tabs || []
@@ -162,13 +185,22 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
       })
       window.shopilot.on(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, (payload: any) => {
-        this.loadingTab = payload.isLoading ? payload.tabId : null
+        const key = `${payload?.storeId || ''}:${payload?.tabId || ''}`
+        if (payload.isLoading) {
+          if (!this.loadingTabs.includes(key)) this.loadingTabs = [...this.loadingTabs, key]
+        } else {
+          this.loadingTabs = this.loadingTabs.filter(k => k !== key)
+        }
       })
       window.shopilot.on(EVENT_CHANNELS.BROWSER_CRASHED, (payload: any) => {
         this.toast(`页面异常已恢复（${payload.reason}）`, 'error')
       })
       window.shopilot.on(EVENT_CHANNELS.BROWSER_DOWNLOAD_PROGRESS, (payload: any) => {
-        if (this.downloads.some(d => d.id === payload.id)) this.refreshDownloads()
+        // 进度事件的 downloads 列表属于**哪个店铺**只由 refreshDownloads 自己知道：
+        // 切店后旧列表可能还在，这里先核对当前显示店铺与列表来源一致再刷
+        if (!this.downloads.some(d => d.id === payload.id)) return
+        if (this.downloadsStoreId !== this.displayedStoreId) return
+        this.refreshDownloads()
       })
       // ---- 任务事件 - §6.6 ----
       window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, (ev: any) => {
@@ -238,13 +270,57 @@ export const useWorkspaceStore = defineStore('workspace', {
       // 回收站徽标（左栏底栏 / 收起后的窄轨角标）依赖 trashStores，必须启动就加载，
       // 否则库里已有回收站店铺时徽标仍是空的（原先只在点开抽屉时才拉）。
       await this.refreshTrash()
+      // 渲染层重载/崩溃恢复后主进程仍持有已打开的店铺视图，但事件是"发过就没了"，
+      // 必须主动补齐一次，否则左栏会显示"未打开"、点店铺只回欢迎页（页面却还在上面盖着）。
+      await this.hydrateBrowserState()
       this.ready = true
+    },
+
+    /**
+     * 与主进程对齐"哪些店铺已打开、有哪些标签页"。
+     * 用 tab.list 作为判据：主进程打开店铺时一定会建至少一个标签页；未打开的店铺拿不到标签页。
+     */
+    async hydrateBrowserState() {
+      const results = await Promise.all(this.stores.map(async store => {
+        const res = await window.shopilot.browser.tab.list(store.id)
+        const tabs: TabInfo[] = res.ok ? ((res.data as any)?.tabs || []) : []
+        return { storeId: store.id, tabs }
+      }))
+      for (const { storeId, tabs } of results) {
+        if (!tabs.length) continue
+        this.tabsByStore[storeId] = tabs
+        this.activeTabIdByStore[storeId] = this.activeTabIdByStore[storeId] || tabs.find(t => t.isPinned)?.id || tabs[0].id
+        if (!this.openStoreIds.includes(storeId)) this.openStoreIds.push(storeId)
+      }
+      // 主进程当前显示的店铺没有查询接口：已打开的店铺里取最近活跃的那家作为显示店铺，
+      // 再显式 display 一次让两侧一致（这一步幂等，主进程已经显示它时就是空操作）。
+      if (!this.displayedStoreId && this.openStoreIds.length) {
+        const openRows = this.stores.filter(s => this.openStoreIds.includes(s.id))
+        const adopted = openRows.sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0))[0]
+        if (adopted) {
+          this.displayedStoreId = adopted.id
+          this.selectedStoreId = adopted.id
+          await window.shopilot.browser.display(adopted.id)
+          await Promise.all([this.refreshBookmarks(), this.refreshDownloads()])
+        }
+      }
     },
 
     async refreshStores() {
       const res = await window.shopilot.store.list()
       if (res.ok) this.stores = (res.data || []).map(toRow)
       else this.toast('加载店铺失败: ' + res.error.message, 'error')
+      // 彻底删除 / 备份恢复后店铺可能已经不在了：留下旧的 selected/displayed 会让界面
+      // 显示一个不存在的店铺（右栏、首页地址、显示中的原生视图都对不上）
+      const alive = new Set(this.stores.map(s => s.id))
+      if (this.selectedStoreId && !alive.has(this.selectedStoreId)) this.selectedStoreId = null
+      if (this.displayedStoreId && !alive.has(this.displayedStoreId)) {
+        this.displayedStoreId = null
+        this.openStoreIds = this.openStoreIds.filter(id => alive.has(id))
+        this.downloads = []
+        this.downloadsStoreId = null
+        void window.shopilot.browser.display(null)
+      }
     },
 
     async reorderStores(orderedStoreIds: string[]): Promise<boolean> {
@@ -275,14 +351,19 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async refreshBookmarks() {
-      const res = await window.shopilot.bookmark.list(this.displayedStoreId || undefined)
-      if (res.ok) this.bookmarks = res.data || []
+      const sid = this.displayedStoreId || null
+      const res = await window.shopilot.bookmark.list(sid || undefined)
+      // 请求期间可能已经切到别的店铺：迟到的应答不能覆盖当前店铺的收藏
+      if (this.displayedStoreId !== sid) return
+      if (res.ok) { this.bookmarks = res.data || []; this.bookmarksStoreId = sid }
     },
 
     async refreshDownloads() {
-      if (!this.displayedStoreId) { this.downloads = []; return }
-      const res = await window.shopilot.download.list(this.displayedStoreId, 50)
-      if (res.ok) this.downloads = res.data || []
+      const sid = this.displayedStoreId
+      if (!sid) { this.downloads = []; this.downloadsStoreId = null; return }
+      const res = await window.shopilot.download.list(sid, 50)
+      if (this.displayedStoreId !== sid) return
+      if (res.ok) { this.downloads = res.data || []; this.downloadsStoreId = sid }
     },
 
     async refreshTrash() {
@@ -327,10 +408,16 @@ export const useWorkspaceStore = defineStore('workspace', {
         delete this.tabsByStore[storeId]
         if (this.displayedStoreId === storeId) {
           const next = this.openStoreIds[0] || null
-          if (next) await this.showStore(next)
-          else {
+          if (next) {
+            // showStore 只管显示，不管选中态：按下标选中的左栏高亮必须一起改，
+            // 否则关闭后高亮留在已关闭的店铺上、显示的却是另一家
+            this.selectedStoreId = next
+            await this.showStore(next)
+          } else {
             this.displayedStoreId = null
+            this.selectedStoreId = null
             this.downloads = []
+            this.downloadsStoreId = null
           }
         }
         await this.refreshStores()
@@ -402,11 +489,25 @@ export const useWorkspaceStore = defineStore('workspace', {
     async moveToTrash(storeId: string) {
       const res = await window.shopilot.store.deletePermanent(storeId)
       if (res.ok) {
+        // 主进程侧已关闭该店铺的浏览器与会话，这边要把本地状态一起收干净：
+        // 只清 displayedStoreId 会留下已打开的标签页缓存，且若它正是显示中的店铺，
+        // 原生视图仍挂在窗口上盖住欢迎页（display(null) 才是摘除动作）。
+        this.openStoreIds = this.openStoreIds.filter(id => id !== storeId)
+        delete this.tabsByStore[storeId]
+        delete this.activeTabIdByStore[storeId]
+        if (this.displayedStoreId === storeId) {
+          this.displayedStoreId = null
+          this.selectedStoreId = null
+          this.downloads = []
+          this.downloadsStoreId = null
+          this.bookmarks = []
+          this.bookmarksStoreId = null
+          void window.shopilot.browser.display(null)
+        }
         // 必须同时刷新回收站列表：徽标计数来自 trashStores，只刷店铺列表会让刚移入的店铺不计数
         await Promise.all([this.refreshStores(), this.refreshTrash()])
         this.toast('已移入回收站', 'success')
-        if (this.displayedStoreId === storeId) { this.displayedStoreId = null }
-      } else this.toast('移入回收站失败', 'error')
+      } else this.toast('移入回收站失败: ' + res.error.message, 'error')
     },
 
     async restoreStore(storeId: string) {

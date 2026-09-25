@@ -172,6 +172,11 @@ declare global {
           | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; pendingGoal?: string; thought?: string; requiresApproval: boolean }
           | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; jobIds?: string[]; executed?: string[] }
         >>
+        /** Job 结束后自动续办：把用户目标与 Job 结果交给智能体回合判断下一步。 */
+        jobFollowUp: (goal: string, jobIds: string[], history?: Array<{ role: 'user' | 'assistant'; text: string }>) => Promise<IPCResult<
+          | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; thought?: string; requiresApproval: boolean }
+          | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; jobIds?: string[]; executed?: string[] }
+        >>
         validatePlan: (plan: AgentPlan) => Promise<IPCResult>
         softwareContext: () => Promise<IPCResult<AgentSoftwareContext>>
         validateSoftwarePlan: (plan: AgentSoftwarePlan) => Promise<IPCResult>

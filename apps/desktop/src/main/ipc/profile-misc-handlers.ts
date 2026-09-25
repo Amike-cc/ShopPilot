@@ -14,6 +14,7 @@ import * as TaskStore from '../tasks/task-store'
 import { verifyStoreFingerprint } from '../browser/fingerprint-injector'
 import { getDatabase } from '../db/database'
 import { writeAudit, queryAudit } from '../services/audit-logger'
+import { logMain } from '../services/logger'
 import { invoiceProfileFor, INVOICE_COLUMNS, INVOICE_UNSUPPORTED_NOTE, normalizeCellText } from '@shared/constants/invoice'
 import type { InvoiceColumnKey } from '@shared/constants/invoice'
 import { ENTITY_METRIC_NAME, ENTITY_METRIC_NO, entityProfileFor, entityUnsupportedNote } from '@shared/constants/entity'
@@ -218,6 +219,71 @@ function success<T>(data: T, requestId: string): IPCResult<T> {
 
 function error(code: string, message: string, requestId: string): IPCResult {
   return { ok: false, error: { code, message }, requestId }
+}
+
+// ---------- 通用 settings 通道的键/值策略 ----------
+
+const SETTING_KEY_MAX = 200
+const SETTING_VALUE_MAX_BYTES = 64 * 1024
+
+/**
+ * 敏感键前缀黑名单：这些键都有各自的专用通道，或干脆只允许主进程内部维护，
+ * 通用 settings 通道放行就等于绕开那些通道的校验（例如把已加密凭据改成明文）。
+ * 'securi' 同时覆盖 'security.'（应用锁）与主密码键（该键名不以 security. 开头）。
+ */
+const SETTING_DENY_PREFIXES = ['securi', 'ai_cred', 'ai.', 'proxy_cred', 'agent.']
+
+/**
+ * 黑名单例外（都有现行调用方，不能一刀切）：
+ * - security.idleMinutes：设置页用它维护空闲锁定分钟数（renderer WorkbenchView.vue:2445）；
+ * - invite.config.*：邀约面板的活动键，且渲染层按平台旧键做初始值迁移
+ *   （renderer WorkbenchView.vue:3051；验收脚本 tools/acceptance/douyin-invite-local-verify.js:730
+ *   也依赖旧键可写可读）。这些是店铺业务键，不是主进程独占凭据，故整族放行。
+ */
+const SETTING_ALLOW_EXCEPTIONS = ['security.idleMinutes', 'invite.config.']
+
+type SettingKeyCheck = { ok: true; value: string } | { ok: false; sensitive: boolean; reason: string }
+
+function checkSettingKey(raw: unknown): SettingKeyCheck {
+  if (typeof raw !== 'string' || raw.length === 0) {
+    return { ok: false, sensitive: false, reason: '设置键不合法（需为非空字符串）' }
+  }
+  if (raw.length > SETTING_KEY_MAX) {
+    return { ok: false, sensitive: false, reason: `设置键过长（上限 ${SETTING_KEY_MAX} 字符）` }
+  }
+  const allowed = SETTING_ALLOW_EXCEPTIONS.some(p => raw.startsWith(p))
+  if (!allowed && SETTING_DENY_PREFIXES.some(p => raw.startsWith(p))) {
+    return { ok: false, sensitive: true, reason: '该设置为敏感键，不允许通过通用设置通道读写' }
+  }
+  return { ok: true, value: raw }
+}
+
+/**
+ * 敏感键返回权限错误（而非参数错误）：键本身合法，只是这个通道没有权限碰它。
+ * 共享错误码枚举里没有通用权限码，最接近的是 AGENT_PERMISSION_DENIED，沿用其码值。
+ */
+function keyError(check: { sensitive: boolean; reason: string }, requestId: string): IPCResult {
+  return check.sensitive
+    ? error(ERROR_CODES.AGENT_PERMISSION_DENIED.code, check.reason, requestId)
+    : error(ERROR_CODES.INVALID_ARGUMENT.code, check.reason, requestId)
+}
+
+function checkSettingValue(value: unknown): { ok: true; json: string } | { ok: false; reason: string } {
+  if (value === undefined) return { ok: false, reason: 'value 不合法（undefined 无法 JSON 序列化）' }
+  if (typeof value === 'function' || typeof value === 'symbol') {
+    return { ok: false, reason: 'value 不合法（必须是可 JSON 序列化的对象）' }
+  }
+  let json: string | undefined
+  try {
+    json = JSON.stringify(value)
+  } catch {
+    return { ok: false, reason: 'value 不合法（无法 JSON 序列化，可能含循环引用）' }
+  }
+  if (typeof json !== 'string') return { ok: false, reason: 'value 不合法（必须是可 JSON 序列化的对象）' }
+  if (Buffer.byteLength(json, 'utf8') > SETTING_VALUE_MAX_BYTES) {
+    return { ok: false, reason: `value 过大（序列化后上限 ${SETTING_VALUE_MAX_BYTES / 1024}KB）` }
+  }
+  return { ok: true, json }
 }
 
 export function registerProfileAndMiscHandlers(): void {
@@ -591,8 +657,10 @@ export function registerProfileAndMiscHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, async (_e: IpcMainInvokeEvent, input: { key: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
-      const row = getDatabase().prepare('SELECT value_json FROM app_settings WHERE key = ?').get(input.key) as any
-      return success({ key: input.key, value: row ? JSON.parse(row.value_json) : null }, requestId)
+      const key = checkSettingKey(input?.key)
+      if (!key.ok) return keyError(key, requestId)
+      const row = getDatabase().prepare('SELECT value_json FROM app_settings WHERE key = ?').get(key.value) as any
+      return success({ key: key.value, value: row ? JSON.parse(row.value_json) : null }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }
@@ -601,10 +669,19 @@ export function registerProfileAndMiscHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SETTINGS_SET, async (_e: IpcMainInvokeEvent, input: { key: string, value: any }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
+      const key = checkSettingKey(input?.key)
+      if (!key.ok) return keyError(key, requestId)
+      const value = checkSettingValue(input?.value)
+      if (!value.ok) return error(ERROR_CODES.INVALID_ARGUMENT.code, value.reason, requestId)
+
       getDatabase().prepare(`
         INSERT INTO app_settings (key, value_json, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
-      `).run(input.key, JSON.stringify(input.value), Date.now())
+      `).run(key.value, value.json, Date.now())
+
+      // 每次写入留痕：设置项直接决定主进程行为，事后要能查到写过哪个键；
+      // 只记键名与体积，值可能含业务数据（如店铺名单）不落日志
+      logMain('info', `[settings] set key=${key.value} bytes=${Buffer.byteLength(value.json, 'utf8')}`)
       return success({ success: true }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)

@@ -273,6 +273,13 @@ export const agentPackImportInputSchema = z.object({
   confirmed: z.boolean().default(false)
 }).strict()
 
+/** Job 结束后自动续办：把用户目标与 Job 结果交给智能体回合，让它判断并给出下一步。 */
+export const agentJobFollowUpInputSchema = z.object({
+  goal: z.string().trim().min(1).max(500),
+  jobIds: z.array(z.string().min(1).max(80)).min(1).max(10),
+  history: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().max(2000) })).max(12).default([])
+}).strict()
+
 /** 本地备份摘要：只给 id、时间、大小和恢复状态，不带文件路径。 */
 export const agentSoftwareBackupSchema = z.object({
   id: z.string().min(1).max(100),

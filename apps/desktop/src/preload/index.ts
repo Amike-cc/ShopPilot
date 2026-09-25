@@ -197,6 +197,12 @@ const api = {
       | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; executed?: string[]; jobIds?: string[] }
     >> =>
       ipcRenderer.invoke(IPC_CHANNELS.AGENT_PLAN_GENERATE, { goal, history: history ? JSON.parse(JSON.stringify(history)) : [] }),
+    /** Job 结束后自动续办：把用户目标与 Job 结果交给智能体回合判断下一步。 */
+    jobFollowUp: (goal: string, jobIds: string[], history?: Array<{ role: 'user' | 'assistant'; text: string }>): Promise<IPCResult<
+      | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; thought?: string; requiresApproval: boolean }
+      | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; executed?: string[]; jobIds?: string[] }
+    >> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_FOLLOW_UP, JSON.parse(JSON.stringify({ goal, jobIds, history: history || [] }))),
     validatePlan: (plan: AgentPlan): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PLAN_VALIDATE, JSON.parse(JSON.stringify(plan))),
     softwareContext: (): Promise<IPCResult<AgentSoftwareContext>> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SOFTWARE_CONTEXT),
     validateSoftwarePlan: (plan: AgentSoftwarePlan): Promise<IPCResult> =>

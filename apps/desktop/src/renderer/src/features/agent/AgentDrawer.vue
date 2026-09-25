@@ -24,6 +24,8 @@
           <span class="todo-icon">{{ item.icon }}</span>
           <span class="todo-text">{{ item.text }}</span>
         </button>
+        <!-- Job 与浏览器任务不是同一套 id：点不进去时必须说清去哪儿处理，而不是静默无反应 -->
+        <p v-if="jobHint" class="todo-hint" role="status" data-test="agent-job-hint">{{ jobHint }}</p>
       </section>
       <AgentMessageList :messages="agent.messages" :busy="agent.busy" :status-label="agent.stateLabel" />
       <div v-if="agent.error" class="agent-error" role="alert"><strong>{{ agent.error.code }}</strong><span>{{ agent.error.message }}</span></div>
@@ -124,9 +126,42 @@ const todoItems = computed<TodoItem[]>(() => {
   if (memoryCount > 0) items.push({ key: 'memory-review', kind: 'memory', icon: '🧠', text: `记忆待审核：${memoryCount} 条`, panel: 'agents' })
   return items.slice(0, 8)
 })
+/** Job 待办的处理指引：Job id 不能当任务 id 用，点不进去时要把去哪儿处理写清楚 */
+const jobHint = ref('')
+
+/**
+ * Job 待办点击。
+ *
+ * 父组件（WorkbenchView.viewAgentTask）只把传入的 id 当**任务 id**去 `ws.tasks` 里查，
+ * 而待办里的是 `ajob_…`（Job id），直接 emit 必然查不到、点了没有任何反应。
+ * 软件上下文里的 Job 摘要也不带浏览器任务 id（agentSoftwareJobSchema 无该字段），
+ * 所以这里先向 Main 要一次完整 Job：
+ *  - 有 browserTaskId（浏览器 Job）→ 它才是 `ws.tasks` 里的任务 id，沿用现有 view-task 事件即可定位；
+ *  - 没有（纯模型 Job / 记录已清理）→ 不冒充任务：打开 Agent 团队（Job 看板所在处）并给出 id 指引。
+ */
+async function openJobTodo(jobId: string) {
+  let browserTaskId = ''
+  let failure = ''
+  try {
+    const res = await window.shopilot.agentDomain.jobGet(jobId)
+    if (res.ok) browserTaskId = String((res.data as any)?.browserTaskId || '')
+    else failure = `${res.error.code}：${res.error.message}`
+  } catch (e: any) { failure = String(e?.message || e) }
+  if (browserTaskId) {
+    jobHint.value = ''
+    emit('view-task', browserTaskId)
+    return
+  }
+  jobHint.value = failure
+    ? `读取 Job ${jobId} 失败（${failure}）；可在「设置 → Agent 团队 → Job 看板」按此 id 查看`
+    : `Job ${jobId} 没有对应的浏览器任务（模型 Job）；请在「设置 → Agent 团队 → Job 看板」查看和处理`
+  emit('view-agents')
+}
+
 function onTodoClick(item: TodoItem) {
-  if (item.jobId) emit('view-task', item.jobId)
-  else if (item.panel === 'agents') emit('view-agents')
+  if (item.jobId) { void openJobTodo(item.jobId); return }
+  jobHint.value = ''
+  if (item.panel === 'agents') emit('view-agents')
   else scrollToLatest() // 待确认计划：卡片就在消息列表下方，滚到底即可看到
 }
 function onEscape(event: KeyboardEvent) { if (event.key === 'Escape') { event.preventDefault(); emit('close') } }
@@ -138,9 +173,12 @@ function onEscape(event: KeyboardEvent) { if (event.key === 'Escape') { event.pr
  * 满了之后是「shift + push」——长度恒定，watcher 不再触发，对话就不会跟着滚（用户实测报告）。
  * 所以用「最后一条的 id/文本 + 思考中 + 计划卡/任务卡/软件上下文」拼出签名：
  * 任何会在底部新增内容的变化都会改变签名，从而滚到底。
+ * 软件上下文的计数也必须进签名：Job/待办/Agent/未审核数变化时底部会多出待办区与上下文条目，
+ * 只盯最后一条消息的话这些新增既不滚动、也不会亮出「有新消息」。
  */
 const scrollSignature = computed(() => {
   const last = agent.messages[agent.messages.length - 1]
+  const jobs = agent.softwareContext?.jobs || []
   return [
     agent.messages.length,
     last?.id || '',
@@ -152,7 +190,13 @@ const scrollSignature = computed(() => {
     agent.task?.id || '',
     agent.task?.status || '',
     agent.task?.currentStep ?? '',
-    agent.softwareContext?.displayedStoreId || ''
+    agent.softwareContext?.displayedStoreId || '',
+    jobs.length,
+    jobs.reduce((n, job) => n + Number(job.unapprovedCount || 0), 0),
+    agent.softwareContext?.agents.length || 0,
+    agent.softwareContext?.recentTasks.length || 0,
+    todoItems.value.length,
+    Number(agent.softwareContext?.pendingMemoryReview || 0)
   ].join('|')
 })
 /** 直接贴底 + 下一帧再补一次（smooth 动画/晚到的布局都可能在第一次滚动后才撑高内容）。 */
@@ -215,6 +259,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEscape))
 .todo-item { display:flex;align-items:flex-start;gap:6px;width:100%;margin:3px 0;padding:5px 6px;border:1px solid var(--color-border);border-radius:6px;background:rgba(255,255,255,.03);color:var(--color-text-primary);font-size:10px;line-height:1.45;text-align:left;cursor:pointer; }
 .todo-item:hover { background:rgba(255,255,255,.07); }
 .todo-icon { flex:0 0 14px;text-align:center; }.todo-text { min-width:0;overflow-wrap:anywhere; }
+.todo-hint { margin:5px 0 1px;color:#f4cf78;font-size:9px;line-height:1.5;overflow-wrap:anywhere; }
 .todo-item.confirm .todo-icon,.todo-item.waiting .todo-icon { color:#f4cf78; }.todo-item.failed .todo-icon { color:#ffaaa4; }.todo-item.review .todo-icon,.todo-item.memory .todo-icon { color:#9fd2ff; }.agent-error,.task-error { display:flex;flex-direction:column;gap:4px;margin:4px 10px 8px;padding:9px;border:1px solid rgba(225,92,92,.34);border-radius:8px;background:rgba(150,43,43,.11);color:#ffb7b0;font-size:10px;overflow-wrap:anywhere; }.agent-error strong,.task-error strong { font-size:10px; }
 .agent-task-card { margin:4px 10px 10px;padding:10px;border:1px solid var(--color-border);border-radius:10px;background:rgba(255,255,255,.025); }.task-card-head { display:flex;justify-content:space-between;align-items:center;gap:8px; }.task-card-head>div { min-width:0;display:flex;flex-direction:column;gap:3px; }.task-card-head strong { font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }.task-card-head span,.task-identifiers { color:var(--color-text-muted);font-size:9px; }.task-identifiers { margin-top:7px;line-height:1.5;overflow-wrap:anywhere; }.task-progress-track { height:5px;margin-top:8px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden; }.task-progress-track span { display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#3697ec,#9a65e7);transition:width .2s; }.task-progress-meta { display:flex;justify-content:space-between;margin-top:4px;color:var(--color-text-muted);font-size:9px; }.task-message { margin:6px 0;color:var(--color-text-secondary);font-size:10px;line-height:1.5; }
 .agent-confirm-card { margin-top:8px;padding:9px;border:1px solid rgba(239,189,78,.5);border-radius:8px;background:rgba(214,161,41,.1); }.agent-confirm-card strong { color:#f4cf78;font-size:11px; }.agent-confirm-card p { max-height:75px;overflow:auto;color:var(--color-text-primary);font-size:10px;line-height:1.5; }.agent-confirm-card>div { display:flex;gap:6px; }.agent-confirm-card button,.task-ops button { border:1px solid var(--color-border);border-radius:6px;padding:6px 8px;background:rgba(255,255,255,.06);color:var(--color-text-primary);font-size:10px;cursor:pointer; }.agent-confirm-card .approve { border:0;background:#39896e; }.task-ops { display:flex;gap:6px;flex-wrap:wrap;margin-top:7px; }.task-ops button:disabled,.agent-confirm-card button:disabled { opacity:.5; }

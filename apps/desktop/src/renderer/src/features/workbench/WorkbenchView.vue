@@ -1686,7 +1686,7 @@
 
 <script setup lang="ts">
 import { reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
+import { useWorkspaceStore, OTHER_PLATFORM_FILTER, type StoreRow } from '../../stores/workspace'
 import { useAgentStore } from '../../stores/agent'
 import { moveStoreId, type StoreDropPosition } from '../../stores/store-order'
 import PlatformIcon from '../../components/PlatformIcon.vue'
@@ -1833,7 +1833,8 @@ const availablePlatforms = computed(() => {
   }
   const result = [...known]
   if (otherCount > 0) {
-    result.push({ name: '__other__', shortName: '其他', platform: '', color: '#8B5CF6', count: otherCount })
+    // 哨兵值必须与 workspace.filteredStores 的判定一致（它按"是否内置平台"过滤，而不是比相等）
+    result.push({ name: OTHER_PLATFORM_FILTER, shortName: '其他', platform: '', color: '#8B5CF6', count: otherCount })
   }
   return result
 })
@@ -2709,6 +2710,18 @@ watch(() => invite.strengths, (now) => {
   if (clipped) invite.strengths = clipped
 }, { deep: true })
 
+/**
+ * 邀约商品数按平台上限收敛。
+ * 输入框的 max 只是浏览器提示，手输 11 照样进状态与载荷；而构造器只按自己的口径夹一次
+ * （历史上是 20），与平台上限（快手 10）不一致，等于把超限配置交给了执行器。
+ */
+watch(() => [invite.batchProductCount, inviteProfile.value] as const, () => {
+  const p = inviteProfile.value
+  if (!p || !isBatchProfile(p) || !p.goodsModal) return
+  const want = Math.min(p.maxProducts, Math.max(1, Math.round(Number(invite.batchProductCount) || 1)))
+  if (want !== invite.batchProductCount) invite.batchProductCount = want
+})
+
 // ---------- 微信邀约面板的展示态（只影响观感，不参与执行） ----------
 /** 带货类目默认折叠：34 项铺开要占 13 行（实测 314px），默认只显示已选 + 前若干项 */
 const inviteCatsExpanded = ref(false)
@@ -2833,8 +2846,13 @@ const inviteMissingItems = computed((): string[] => {
   if (cs?.contact && !invite.batchContact.trim()) miss.push('联系人没填')
   if (cs?.phone && !invite.batchPhone.trim()) miss.push('手机号没填')
   if (cs?.wechat && !invite.batchWechat.trim()) miss.push('微信号没填')
-  if (!(Number.isInteger(invite.count) && invite.count >= 1 && invite.count <= p.maxBatch)) {
-    miss.push(`本批数量填 1–${p.maxBatch} 之间的整数`)
+  // 下限用平台硬门槛（快手勾 1 位点批量邀约是静默无反应），与步进器/步骤构造器同一口径
+  const countFloor = Math.max(1, p.minSelect || 1)
+  if (!(Number.isInteger(invite.count) && invite.count >= countFloor && invite.count <= p.maxBatch)) {
+    miss.push(`本批数量填 ${countFloor}–${p.maxBatch} 之间的整数`)
+  }
+  if (p.goodsModal && !(Number.isInteger(invite.batchProductCount) && invite.batchProductCount >= 1 && invite.batchProductCount <= p.maxProducts)) {
+    miss.push(`邀约商品数填 1–${p.maxProducts} 之间的整数`)
   }
   if (p.scriptSelector) {
     if (invite.scriptMode === 'manual' ? !invite.script.trim() : !aiReady.value) {
@@ -3161,9 +3179,15 @@ const inviteReady = computed(() => {
     phone: invite.batchPhone,
     wechat: invite.batchWechat
   })
+  // 人数下限＝平台硬门槛（minSelect）：面板与步骤构造器必须同一口径，
+  // 否则面板显示 1 位、引擎按 2 位执行，用户以为只发 1 条
+  const countFloor = Math.max(1, p.minSelect || 1)
+  const productsOk = !p.goodsModal ||
+    (Number.isInteger(invite.batchProductCount) && invite.batchProductCount >= 1 && invite.batchProductCount <= p.maxProducts)
   return levelsOk &&
     contactsOk &&
-    Number.isInteger(invite.count) && invite.count >= 1 && invite.count <= p.maxBatch &&
+    productsOk &&
+    Number.isInteger(invite.count) && invite.count >= countFloor && invite.count <= p.maxBatch &&
     scriptOk
 })
 
@@ -3364,30 +3388,63 @@ const taskTemplates = ref<TaskTemplate[]>([])
 const TEMPLATE_KEY = 'shopilot.task-templates.v1'
 const DRAFT_KEY = 'shopilot.custom-task-draft.v1'
 function draftStorageKey() { return `${DRAFT_KEY}.${ws.displayedStoreId || 'none'}` }
+/**
+ * 模板来自 localStorage：旧版本写下的步骤类型可能已经不在目录里、也可能被手工改坏。
+ * 读的时候按目录重新清洗一遍，否则会把 unknown 步骤带进创建流程，直到主进程校验才报错。
+ */
+function sanitizeTemplate(raw: any): TaskTemplate | null {
+  if (!raw || typeof raw !== 'object') return null
+  const steps = (Array.isArray(raw.steps) ? raw.steps : [])
+    .filter((s: any) => s && typeof s === 'object' && !!findCatalogEntry(String(s.type)))
+    .slice(0, 40)
+  if (!steps.length) return null
+  const everyMin = Number.isFinite(Number(raw.everyMin)) && Number(raw.everyMin) >= 1
+    ? Math.min(43200, Math.round(Number(raw.everyMin)))
+    : null
+  return {
+    id: String(raw.id || `tpl_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`),
+    name: String(raw.name || '未命名模板').slice(0, 60),
+    steps,
+    everyMin
+  }
+}
 function readTaskTemplates() {
-  try { taskTemplates.value = JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '[]') } catch { taskTemplates.value = [] }
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '[]')
+    const list = Array.isArray(parsed) ? parsed : []
+    taskTemplates.value = list.map(sanitizeTemplate).filter((t): t is TaskTemplate => t !== null).slice(0, 20)
+  } catch { taskTemplates.value = [] }
 }
 function persistTaskTemplates() {
   try { localStorage.setItem(TEMPLATE_KEY, JSON.stringify(taskTemplates.value.slice(0, 20))) } catch { /* storage unavailable */ }
 }
+/**
+ * 把任意来源的数据转成"能过 IPC 的纯对象"。
+ * 不能直接用 structuredClone：草稿/步骤是 Vue 响应式 Proxy，结构化克隆会抛 DataCloneError，
+ * 表现为点了按钮什么也没发生（保存失败且无提示）。JSON 往返对这类纯数据足够（无 Date/Map）。
+ */
+function plainClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
 function saveDraftTemplate() {
   if (!customSteps.value.length) return
   const name = customTaskName.value.trim() || `自定义模板 · ${new Date().toLocaleString()}`
-  taskTemplates.value.unshift({ id: `tpl_${Date.now()}`, name, steps: structuredClone(customSteps.value), everyMin: typeof tf.everyMin === 'number' ? tf.everyMin : null })
+  taskTemplates.value.unshift({ id: `tpl_${Date.now()}`, name, steps: plainClone(customSteps.value), everyMin: typeof tf.everyMin === 'number' ? tf.everyMin : null })
   persistTaskTemplates(); readTaskTemplates(); selectedTemplateId.value = taskTemplates.value[0]?.id || ''
   ws.toast('模板已保存', 'success')
 }
 function saveTaskTemplate(t: any) {
   const unsupported = (t.steps || []).find((s: any) => !findCatalogEntry(s.type))
   if (unsupported) return ws.toast(`该任务包含暂不支持模板化的步骤：${unsupported.type}`, 'error')
-  taskTemplates.value.unshift({ id: `tpl_${Date.now()}`, name: String(t.name), steps: structuredClone(t.steps), everyMin: t.schedule ? Math.round(t.schedule.everyMs / 60000) : null })
-  persistTaskTemplates(); readTaskTemplates(); ws.toast('模板已保存', 'success')
+  taskTemplates.value.unshift({ id: `tpl_${Date.now()}`, name: String(t.name), steps: plainClone(t.steps), everyMin: t.schedule ? Math.round(t.schedule.everyMs / 60000) : null })
+  persistTaskTemplates(); readTaskTemplates(); selectedTemplateId.value = taskTemplates.value[0]?.id || ''
+  ws.toast('模板已保存', 'success')
 }
 function loadTaskTemplate() {
   const tpl = taskTemplates.value.find(x => x.id === selectedTemplateId.value)
   if (!tpl) return
   customTaskName.value = `${tpl.name} · 新任务`
-  customSteps.value = structuredClone(tpl.steps)
+  customSteps.value = plainClone(tpl.steps)
   tf.everyMin = tpl.everyMin
   customSelectedStep.value = 0
   ws.toast('已套用模板，请检查参数后创建', 'info')
@@ -3875,13 +3932,12 @@ async function confirmRun(runId: string, approved: boolean) {
 async function onCapture() {
   if (!ws.activeTab || !ws.displayedStoreId) return
   const res = await window.shopilot.browser.capture(ws.displayedStoreId, ws.activeTab.id, 'png')
-  if (res.ok) {
-    const a = document.createElement('a')
-    a.href = 'data:image/png;base64,' + res.data.data
-    a.download = `capture-${Date.now()}.png`
-    a.click()
-    ws.toast('已截图并保存', 'success')
-  } else ws.toast('截图失败: ' + res.error.message, 'error')
+  if (!res.ok) { ws.toast('截图失败: ' + res.error.message, 'error'); return }
+  // 只有主进程确认写完文件后才说"已保存"。
+  // 此前是"派发 <a download> 就提示已保存"：保存对话框被取消时并没有文件，提示却是成功。
+  const saved = (res.data as any)?.savedPath
+  if (saved) ws.toast('截图已保存：' + saved, 'success')
+  else ws.toast('截图失败：主进程未返回保存路径', 'error')
 }
 
 /**
@@ -4047,8 +4103,31 @@ function onDocMouseDown(ev: MouseEvent) {
   if (el && el.closest && el.closest('[data-test="store-ctx"]')) return
   closeCtx()
 }
+/**
+ * Esc 关闭最上层浮层（自上层往下，一次只关一个）。
+ *
+ * 为什么要有：这些弹层此前只有"点遮罩/点取消"两条退路，键盘用户按 Esc 完全没反应
+ * （全局 keydown 只处理了右键菜单）。拾取（customPicking）不在这里关：那时键盘焦点
+ * 在店铺页面上，取消由主进程注入的 Esc 监听负责，这里抢着关会把状态搞乱。
+ */
+function closeTopmostOverlay(): boolean {
+  if (customPicking.value) return false
+  if (confirmBox.open) { confirmBox.open = false; return true }
+  if (rename.open) { rename.open = false; return true }
+  if (copycfg.open) { copycfg.open = false; return true }
+  if (ctx.open) { closeCtx(); return true }
+  if (settingsOpen.value) { settingsOpen.value = false; return true }
+  if (invoiceCenterOpen.value) { invoiceCenterOpen.value = false; return true }
+  if (dataCenterOpen.value) { dataCenterOpen.value = false; return true }
+  if (ws.trashOpen) { ws.trashOpen = false; return true }
+  if (ws.createDialogOpen) { ws.createDialogOpen = false; return true }
+  // 创建任务进行中不允许关（关掉就看不见创建结果了），与遮罩点击的行为保持一致
+  if (taskDialogOpen.value && !taskSubmitting.value) { taskDialogOpen.value = false; return true }
+  if (agent.ui.drawerOpen) { agent.setDrawerOpen(false); return true }
+  return false
+}
 function onDocKey(ev: KeyboardEvent) {
-  if (ev.key === 'Escape') closeCtx()
+  if (ev.key === 'Escape') closeTopmostOverlay()
   // Ctrl+Shift+B：收起/展开右侧栏（与 Ctrl+Shift+L 锁定同一套快捷键约定）
   if (ev.ctrlKey && ev.shiftKey && (ev.key === 'B' || ev.key === 'b')) { ev.preventDefault(); togglePanel() }
   // Ctrl+Shift+E：收起/展开左侧栏

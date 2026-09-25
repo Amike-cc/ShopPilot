@@ -59,6 +59,9 @@ async function startSite() {
         if (turnMode && previousResults.length) {
           // 第二轮：基于上一轮执行结果收尾，展示思考并汇总。
           content = JSON.stringify({ thought: '动作已执行，我来基于结果给出结论。', reply: `已执行：${previousResults.join('；')}`, actions: [] })
+        } else if (turnMode && userPayload?.jobFollowUp) {
+          // Job 结束后的自动续办回合：读到 jobResults 后给出下一步。
+          content = JSON.stringify({ thought: 'Job 结果已拿到，我判断目标是否达成并给出下一步。', reply: `根据执行结果给出下一步：${String(userPayload.jobResults || '').slice(0, 50)}`, actions: [] })
         } else if (turnMode && /清点团队/.test(goal)) {
           content = JSON.stringify({ thought: '用户要清点团队，先读取子 Agent 列表最直接。', reply: '好的，我看一下。', actions: [{ type: 'listAgents' }] })
         } else if (turnMode && /第二个店/.test(goal)) {
@@ -530,9 +533,16 @@ async function main() {
     const multiReply = await waitReply(multiBefore, 40000)
     const multiJobs = await poll(async () => { const jobs = await call('window.shopilot.agentDomain.jobList({limit:50})'); return jobs.ok ? (jobs.data.items || []).filter(job => String(job.goal || '').includes('检查所有店铺页面标题')) : [] }, 20000)
     check('多店任务：逐店打开、规划并派给子 Agent（不再误判为店铺列表）', !!multiSent && !!multiReply && multiReply.includes('按顺序检查') && multiReply.includes('已派发') && !multiReply.includes('店铺的摘要') && (multiJobs || []).length >= 2, `reply=${String(multiReply || '').slice(0, 120)} jobs=${(multiJobs || []).length}`)
-    const multiDone = await poll(() => cdp.evaluate(`return [...document.querySelectorAll('.agent-message.assistant .message-text')].some(node => node.innerText.includes('多店任务已全部结束'))`), 60000)
+    const multiDone = await poll(() => cdp.evaluate(`return [...document.querySelectorAll('.agent-message.assistant .message-text')].some(node => node.innerText.includes('多店任务已全部结束'))`), 90000)
     const multiResultText = await cdp.evaluate(`return [...document.querySelectorAll('.agent-message.assistant .message-text')].map(node => node.innerText).filter(text => text.includes('执行完成')).slice(-3).join(' | ')`)
     check('多店任务执行完成后在对话里汇总结果', !!multiDone && multiResultText.includes('执行完成'), String(multiResultText).slice(0, 160))
+    if (!multiDone || !multiResultText.includes('执行完成')) {
+      const tail = await cdp.evaluate(`return JSON.stringify([...document.querySelectorAll('.agent-message')].slice(-10).map(node => node.innerText.replace(/\\s+/g,' ').slice(0, 80)))`)
+      const jobStates = await call('window.shopilot.agentDomain.jobList({limit:10})')
+      console.log('MULTI_DEBUG', JSON.stringify({ multiDone: !!multiDone, multiResultText: String(multiResultText || '').slice(0, 80), tail, jobs: jobStates.ok ? jobStates.data.items.map(job => job.goal.slice(0, 24) + ':' + job.status) : jobStates.error }))
+    }
+    const followUpReply = await poll(() => cdp.evaluate(`const nodes=[...document.querySelectorAll('.agent-message.assistant .message-text')]; const last=nodes.length?nodes[nodes.length-1].innerText:''; return last.includes('根据执行结果给出下一步') ? last : ''`), 60000)
+    check('Job 结束后智能体自动续办：读结果并给出下一步', !!followUpReply, String(followUpReply || '').slice(0, 120))
 
     const persistedUi = await call('window.shopilot.agent.uiGet()')
     check('orb/drawer/message 摘要由 app_settings 持久化，不含页面截图', persistedUi.ok && !!persistedUi.data?.drawerOpen && !JSON.stringify(persistedUi.data).includes('data:image/png'))

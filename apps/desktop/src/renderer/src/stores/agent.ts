@@ -13,6 +13,22 @@ import { statusForJob, planStatusForJob, type AgentUiStatus } from '../features/
 
 let initializePromise: Promise<void> | null = null
 
+/**
+ * UI 快照持久化用「单飞 + 最新值优先」的串行写：uiSet 是整份状态覆盖写，
+ * 并发写会让旧快照后到并盖掉新快照（快速连续 addMessage/setOrbPosition/setDrawerOpen 时实测丢抽屉开合）。
+ * 只在渲染层排队，不改 IPC 契约。模块级即可：store 是单例，与 initializePromise 同理。
+ */
+let uiWriteInFlight = false
+let uiPendingSnapshot: AgentUiState | null = null
+
+/**
+ * 软件上下文的后台刷新节流窗口。
+ * Job 进度事件会随日志刷屏，每条都打一次 IPC 既浪费又会让抽屉里的 Agent/待办计数来回跳。
+ */
+const SOFTWARE_CONTEXT_THROTTLE_MS = 2000
+let softwareContextRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let softwareContextRefreshedAt = 0
+
 type AgentMessage = { id: string; role: 'user' | 'assistant'; text: string; at: number; thought?: boolean }
 
 export const useAgentStore = defineStore('agent', {
@@ -36,6 +52,10 @@ export const useAgentStore = defineStore('agent', {
     },
     completionAnnouncedRunId: '',
     recapAnnouncedJobId: '' as string,
+    /** 最近一次用户目标（Job 结束后自动续办时带回去，让智能体知道要解决什么问题）。 */
+    lastGoal: '' as string,
+    /** 续办已触发标记（同一批 Job 只续办一次）。 */
+    followUpInFlight: false,
   }),
 
   getters: {
@@ -55,7 +75,11 @@ export const useAgentStore = defineStore('agent', {
         this.initialized = true
         window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, (event: any) => { void this.onTaskProgress(event) })
         window.shopilot.on(EVENT_CHANNELS.TASK_CONFIRMATION_REQUIRED, (event: any) => this.onTaskConfirmation(event))
-        window.shopilot.on(EVENT_CHANNELS.AGENT_JOB_PROGRESS, (event: any) => { void this.onJobProgress(event) })
+        window.shopilot.on(EVENT_CHANNELS.AGENT_JOB_PROGRESS, (event: any) => {
+          void this.onJobProgress(event)
+          // 所有 Job（不只当前 task 的）都会改变抽屉里的 Job/待办/未审核计数，统一走节流刷新。
+          this.refreshSoftwareContextSoon()
+        })
         // 组织状态变化（激活/暂停/恢复/退休、自动供给）后刷新软件上下文，抽屉里的 Agent 列表保持最新。
         window.shopilot.on(EVENT_CHANNELS.AGENT_STATUS_CHANGED, () => { void this.refreshSoftwareContext() })
       }
@@ -93,8 +117,24 @@ export const useAgentStore = defineStore('agent', {
       }))
       // Store state and preload return values are Vue/ContextBridge proxies. Clone in Renderer
       // before crossing contextBridge; cloning inside preload is too late for proxy arguments.
-      const serializable = JSON.parse(JSON.stringify(this.ui)) as AgentUiState
-      void window.shopilot.agent.uiSet(serializable)
+      uiPendingSnapshot = JSON.parse(JSON.stringify(this.ui)) as AgentUiState
+      // 单飞 + 最新值优先：写入进行中只更新 pending，写完后若有新值再写一次。
+      // 快照是整份 UI 状态，丢掉中间态不会丢信息，但最后一次状态必须落库（否则抽屉开合/球位置回退）。
+      if (!uiWriteInFlight) void this.flushUiWrites()
+    },
+
+    async flushUiWrites() {
+      if (uiWriteInFlight) return
+      uiWriteInFlight = true
+      try {
+        while (uiPendingSnapshot) {
+          const snapshot = uiPendingSnapshot
+          uiPendingSnapshot = null
+          try {
+            await window.shopilot.agent.uiSet(snapshot)
+          } catch { /* 后台持久化失败不改对话状态：UI 仍可用，下一次写入会带上最新快照 */ }
+        }
+      } finally { uiWriteInFlight = false }
     },
 
     addMessage(role: AgentMessage['role'], text: string, options: { thought?: boolean } = {}) {
@@ -142,9 +182,37 @@ export const useAgentStore = defineStore('agent', {
       }
     },
 
+    /**
+     * 节流刷新软件上下文：Job 进度、任务终态后调用（2 秒内最多一次 IPC）。
+     *
+     * 为什么尾部还要补一次：一串进度事件里最后一条往往正是「失败 / 等待人工确认 / 出现待审核证据」，
+     * 只做首端节流的话这个窗口内的后续变化要等下一次事件才刷新，没事件就长期停在旧状态——
+     * 那正是抽屉里「等待人工确认 / 失败 / 待办」过期的原因。
+     * 为什么失败不写 this.error、不进对话：这是后台刷新，失败多半是瞬时抖动，
+     * 写进对话会淹没真正的错误；用户点「查看软件」走 refreshSoftwareContext 仍能看到真实报错。
+     */
+    refreshSoftwareContextSoon() {
+      const elapsed = Date.now() - softwareContextRefreshedAt
+      if (elapsed >= SOFTWARE_CONTEXT_THROTTLE_MS) { void this.refreshSoftwareContextQuietly(); return }
+      if (softwareContextRefreshTimer) return
+      softwareContextRefreshTimer = setTimeout(() => {
+        softwareContextRefreshTimer = null
+        void this.refreshSoftwareContextQuietly()
+      }, SOFTWARE_CONTEXT_THROTTLE_MS - elapsed)
+    },
+
+    async refreshSoftwareContextQuietly() {
+      softwareContextRefreshedAt = Date.now()
+      try {
+        const result = await window.shopilot.agent.softwareContext()
+        if (result.ok && result.data) this.softwareContext = result.data
+      } catch { /* 见 refreshSoftwareContextSoon 的说明：后台失败不改状态 */ }
+    },
+
     async generatePlan(goal: string, options: { echo?: boolean } = {}) {
       const trimmed = goal.trim()
       if (!trimmed || this.busy) return
+      this.lastGoal = trimmed
       // 只带最近几轮的脱敏文本，让模型能消除“它/刚才/继续”的指代；思考块不进上下文。
       const history = this.messages.filter(message => !message.thought).slice(-8).map(message => ({ role: message.role, text: message.text.slice(0, 500) }))
       if (options.echo !== false) this.addMessage('user', trimmed)
@@ -159,7 +227,7 @@ export const useAgentStore = defineStore('agent', {
           this.softwarePlan = null
           for (const thought of result.data.thoughts || []) this.addMessage('assistant', thought, { thought: true })
           this.addMessage('assistant', String(result.data.text || '当前没有打开的店铺页面。页面任务需要先打开店铺；打开后我可以生成计划并派给子 Agent。'))
-          if (Array.isArray(result.data.jobIds) && result.data.jobIds.length) void this.watchDelegatedJobs(result.data.jobIds.map(String))
+          if (Array.isArray(result.data.jobIds) && result.data.jobIds.length) void this.watchDelegatedJobs(result.data.jobIds.map(String), trimmed)
         } else if (result.data.kind === 'software') {
           if (result.data.thought) this.addMessage('assistant', result.data.thought, { thought: true })
           this.softwarePlan = result.data.plan
@@ -213,7 +281,7 @@ export const useAgentStore = defineStore('agent', {
         this.softwareContext = data.context
         this.status = 'succeeded'
         this.addMessage('assistant', `软件操作已完成。${(data.messages || []).join('；') || 'Main 已返回成功状态。'}`)
-        if (Array.isArray(data.jobIds) && data.jobIds.length) void this.watchDelegatedJobs(data.jobIds.map(String))
+        if (Array.isArray(data.jobIds) && data.jobIds.length) void this.watchDelegatedJobs(data.jobIds.map(String), this.lastGoal)
         continueGoal = this.pendingGoal
       } catch (error: any) {
         this.error = { code: error?.code || 'AGENT_SOFTWARE_FAILED', message: error?.message || '软件操作失败' }
@@ -304,6 +372,8 @@ export const useAgentStore = defineStore('agent', {
         if (this.plan) this.plan.status = planStatusForJob(status)
         this.announceJobRecap(job, status, last)
         if (this.task.runId) await this.loadTaskResults()
+        // 终态才会产出「待审核证据」这类待办，计数必须以 Main 的最新数据为准（节流合并连发事件）。
+        this.refreshSoftwareContextSoon()
         return
       }
       if (['blocked_permission', 'blocked_budget', 'recovery_required', 'expired'].includes(status)) {
@@ -312,6 +382,8 @@ export const useAgentStore = defineStore('agent', {
         this.status = 'failed'
         if (this.plan) this.plan.status = 'failed'
         this.announceJobRecap(job, status, last)
+        // 阻塞/失败会在待办区新增一条，同样刷新一次软件上下文。
+        this.refreshSoftwareContextSoon()
         return
       }
       this.status = this.task.confirmation ? this.status : 'running'
@@ -336,10 +408,12 @@ export const useAgentStore = defineStore('agent', {
       await this.refreshJob()
     },
 
-    /** 多店任务：派发后在后台轮询，逐个把执行结果汇总回对话。 */
-    async watchDelegatedJobs(jobIds: string[]) {
+    /** 多店任务/采集：派发后在后台轮询，逐个把执行结果汇总回对话；全部结束后让智能体自动续办（判断目标、给下一步）。 */
+    async watchDelegatedJobs(jobIds: string[], goal = '') {
       const pending = new Set(jobIds)
       const deadline = Date.now() + 10 * 60 * 1000
+      // 续办前检查：用户在这批 Job 结束后没有再发新消息（发了就以新消息为准，不打扰）。
+      const lastUserAt = [...this.messages].reverse().find(message => message.role === 'user')?.at || 0
       while (pending.size && Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 3000))
         for (const jobId of [...pending]) {
@@ -348,8 +422,8 @@ export const useAgentStore = defineStore('agent', {
           const job = result.data
           if (!['succeeded', 'failed', 'cancelled', 'expired', 'blocked_budget', 'blocked_permission', 'recovery_required'].includes(job.status)) continue
           pending.delete(jobId)
-          const goal = String(job.goal || '')
-          const storeName = /店铺：([^）)]+)/.exec(goal)?.[1] || (goal.includes('·') ? goal.split('·').pop()!.trim() : goal) || jobId
+          const jobGoal = String(job.goal || '')
+          const storeName = /店铺：([^）)]+)/.exec(jobGoal)?.[1] || (jobGoal.includes('·') ? jobGoal.split('·').pop()!.trim() : jobGoal) || jobId
           const evidence = Array.isArray(job.results) ? job.results.length : 0
           if (job.status === 'succeeded') {
             const summaries = (job.results || []).map((item: any) => String(item.summary || '').slice(0, 60)).filter(Boolean)
@@ -362,6 +436,35 @@ export const useAgentStore = defineStore('agent', {
       }
       if (!pending.size) this.addMessage('assistant', '多店任务已全部结束，详情和证据可在 Job 看板查看。')
       else this.addMessage('assistant', `还有 ${pending.size} 个 Job 超过 10 分钟未结束，已停止轮询；可在 Job 看板查看进度或恢复。`)
+      // 自动续办：把结果交回智能体判断「目标是否达成 / 下一步怎么解决」（失败与成功都会续办一次）。
+      if (!goal || this.followUpInFlight) return
+      const currentLastUserAt = [...this.messages].reverse().find(message => message.role === 'user')?.at || 0
+      if (currentLastUserAt !== lastUserAt) return
+      this.followUpInFlight = true
+      try {
+        const history = this.messages.filter(message => !message.thought).slice(-8).map(message => ({ role: message.role, text: message.text.slice(0, 500) }))
+        const result = await window.shopilot.agent.jobFollowUp(goal, jobIds.slice(0, 10), history)
+        if (!result.ok) throw result.error
+        if (result.data.kind === 'software') {
+          if (result.data.thought) this.addMessage('assistant', result.data.thought, { thought: true })
+          this.softwarePlan = result.data.plan
+          this.softwareContext = result.data.context
+          this.status = 'plan_ready'
+          this.addMessage('assistant', result.data.requiresApproval === true
+            ? '看完执行结果，我生成了下一步计划；这一步需要你确认后执行。'
+            : '看完执行结果，我生成了下一步计划并自动执行。')
+          if (result.data.requiresApproval !== true) await this.executeSoftwarePlan()
+        } else {
+          for (const thought of result.data.thoughts || []) this.addMessage('assistant', thought, { thought: true })
+          this.addMessage('assistant', String(result.data.text || '执行结果已看完。'))
+        }
+        await this.refreshSoftwareContextQuietly()
+      } catch (error: any) {
+        // 续办失败不影响已回报的结果；如实说明即可。
+        this.addMessage('assistant', `执行结果已回报；自动续办失败（${error?.code || 'AGENT_JOB_FOLLOW_UP_FAILED'}）：${error?.message || '未知错误'}`)
+      } finally {
+        this.followUpInFlight = false
+      }
     },
 
     /** Job 终态复盘：结果/失败原因/下一步建议；不代替人工审核，也不自动重派。 */
@@ -400,6 +503,8 @@ export const useAgentStore = defineStore('agent', {
         // 浏览器运行先到终态，Job 需要显式刷新一次才会落终态并触发复盘。
         if (this.task.jobId) await this.refreshJob()
         await this.loadTaskResults()
+        // 任务终态同样会改变软件上下文里的任务/待办计数。
+        this.refreshSoftwareContextSoon()
       } else {
         this.status = statusForJob(this.task.status)
         if (this.plan && this.task.status === 'waiting_confirmation') this.plan.status = 'waiting_confirmation'
@@ -468,30 +573,44 @@ export const useAgentStore = defineStore('agent', {
     async confirmTask(approved: boolean) {
       if (!this.task || !this.task.confirmation || this.busy) return
       this.busy = true
-      const confirmation = this.task.confirmation
+      const task = this.task
+      const confirmation = task.confirmation
+      const action = approved ? '确认' : '拒绝'
       try {
         if (confirmation.kind === 'job') {
-          const result = await window.shopilot.agentDomain.jobApprove(this.task.jobId, approved, confirmation.id || undefined)
+          const result = await window.shopilot.agentDomain.jobApprove(task.jobId, approved, confirmation.id || undefined)
           if (!result.ok) throw result.error
-          this.task.confirmation = null
           if (approved) {
-            const started = await window.shopilot.agentDomain.jobRun(this.task.jobId)
+            // jobApprove 只是放行门禁；真正继续执行要靠 jobRun，两者都成功才算整个确认流程成功。
+            const started = await window.shopilot.agentDomain.jobRun(task.jobId)
             if (!started.ok) throw started.error
-            this.task.message = '已确认，子 Agent 继续执行'
-          } else {
-            this.task.message = '已拒绝，Job 已取消'
           }
-          await this.refreshJob()
-          return
+          // 只有到这里（确认 + 启动都成功）才能清空确认卡：
+          // 此前先清后跑，jobRun 失败时确认卡消失而 Job 仍停在等待确认，用户就再没有入口了。
+          task.confirmation = null
+          task.message = approved ? '已确认，子 Agent 继续执行' : '已拒绝，Job 已取消'
+        } else {
+          // task 门禁同样只在 confirm 成功后才清空；没有运行实例时按失败处理，保留确认态。
+          if (!task.runId) throw Object.assign(new Error('任务还没有运行实例，确认无法送达 TaskRunner；请重新派发任务'), { code: 'AGENT_TASK_RUN_MISSING' })
+          const result = await window.shopilot.task.confirm(task.runId, approved)
+          if (!result.ok) throw result.error
+          task.confirmation = null
+          task.message = approved ? '已确认，TaskRunner 将继续' : '已拒绝，TaskRunner 将取消并停止后续步骤'
         }
-        if (!this.task.runId) return
-        const result = await window.shopilot.task.confirm(this.task.runId, approved)
-        if (!result.ok) throw result.error
-        this.task.confirmation = null
-        this.task.message = approved ? '已确认，TaskRunner 将继续' : '已拒绝，TaskRunner 将取消并停止后续步骤'
         await this.refreshJob()
       } catch (error: any) {
-        this.error = { code: error?.code || 'AGENT_CONFIRM_FAILED', message: error?.message || '确认失败' }
+        const failure = { code: String(error?.code || 'AGENT_CONFIRM_FAILED'), message: String(error?.message || `${action}失败`) }
+        this.error = failure
+        // 失败可能只发生在 jobRun/task.confirm 这一步（Job 仍停在等待确认），先按 Main 的最新状态
+        // 重建一次：若 Job 真的还在等确认，确认卡会重新出现；若其实已放行/已取消，它会随之消失。
+        // refreshJob 自身失败也不能让异常从 catch 里逃出去（会变成未处理的 rejected promise）。
+        try { await this.refreshJob() } catch { /* refreshJob 已把失败写进 task.errorCode/errorMessage */ }
+        if (this.task === task) {
+          // 提示写在这里（而不是 refreshJob 之前）：refreshJob 会用 Job 真实状态重写 message。
+          task.message = task.confirmation
+            ? `${action}未完成（${failure.code}）：${failure.message}；可再次${action}`
+            : `${action}未完成（${failure.code}）：${failure.message}；已按 Job 最新状态刷新，请到 Job 看板处理`
+        }
       } finally { this.busy = false }
     },
 

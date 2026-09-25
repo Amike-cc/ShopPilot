@@ -27,6 +27,7 @@
             :key="e.type"
             class="ct-pal-item"
             :title="e.desc"
+            :disabled="picking"
             :data-test="`custom-palette-${e.type}`"
             @click="add(e.type)"
           >{{ e.label }}</button>
@@ -48,9 +49,9 @@
         <div
           v-for="(s, i) in steps"
           :key="i"
-          :class="['ct-step', { on: i === selected }]"
+          :class="['ct-step', { on: i === selected, locked: picking }]"
           :data-test="`custom-step-${i}`"
-          @click="selected = i"
+          @click="selectStep(i)"
         >
           <span class="ct-idx">{{ i + 1 }}</span>
           <span class="ct-step-main">
@@ -61,9 +62,9 @@
             <span class="ct-step-s">{{ summarize(s) }}</span>
           </span>
           <span class="ct-step-btns">
-            <button class="ct-mini" :disabled="i === 0" title="上移" :data-test="`custom-up-${i}`" @click.stop="move(i, -1)">↑</button>
-            <button class="ct-mini" :disabled="i === steps.length - 1" title="下移" :data-test="`custom-down-${i}`" @click.stop="move(i, 1)">↓</button>
-            <button class="ct-mini ct-del" title="删除这一步" :data-test="`custom-del-${i}`" @click.stop="removeAt(i)">✕</button>
+            <button class="ct-mini" :disabled="i === 0 || picking" title="上移" :data-test="`custom-up-${i}`" @click.stop="move(i, -1)">↑</button>
+            <button class="ct-mini" :disabled="i === steps.length - 1 || picking" title="下移" :data-test="`custom-down-${i}`" @click.stop="move(i, 1)">↓</button>
+            <button class="ct-mini ct-del" :disabled="picking" title="删除这一步" :data-test="`custom-del-${i}`" @click.stop="removeAt(i)">✕</button>
           </span>
         </div>
       </div>
@@ -89,8 +90,12 @@
                  会以为是"在页面上找已经填好的东西"，而实际是"对话框会先收起、
                  你去点一下目标元素、我替你填回来"。 -->
             <div v-if="hasPickableField" class="ct-pick-hint" data-test="custom-pick-hint">
-              点字段旁的<b>拾取</b> → 编排器保留在右侧 → 在左侧店铺页面上点目标元素 →
-              自动填回来（按 Esc 取消）
+              <template v-if="picking"><b>拾取中…</b>在左侧页面上点目标元素，结果会自动填回；按 Esc 取消。
+                此间步骤的增删、排序与切换已锁定——避免锚点填到别的步骤上。</template>
+              <template v-else>
+                点字段旁的<b>拾取</b> → 编排器保留在右侧 → 在左侧店铺页面上点目标元素 →
+                自动填回来（按 Esc 取消）
+              </template>
             </div>
             <div v-for="f in entryOf(curStep)?.fields || []" :key="f.key" class="ct-field">
               <span class="ct-flabel">
@@ -410,6 +415,14 @@ function withinOf(s: CustomStepDraft, sub: string): string {
  * within 与其他不同：它要的是**整行**的锚点（表格行、列表项），所以优先取结果里的
  * rowSelector / rowText，取不到才退回元素自身——用户点的往往是行内的按钮，
  * 直接取按钮的选择器当"查找范围"会得到只有一个按钮那么大的范围，等于限定死了。
+ *
+ * 【为什么拾取期间要锁住步骤的增删/排序/切换】
+ * 回填用的是**发起拾取时的 stepIndex**，而这个 await 可能持续数秒。草稿步骤没有稳定 id
+ * （CustomStepDraft 只有 type/input/submit 等，且每次改字段都会 `{...s}` 造出新对象，引用一编辑即失效），
+ * 所以"回来按 id 重定位"没有依据。让下标在拾取期间保持不变，回填就必然落在用户点拾取时那一步上；
+ * 这也是唯一不会写错步骤的做法（见 selectStep/add/move/removeAt 的 picking 守卫）。
+ * 锁定之外的兜底：父组件可以在等待期间整份替换 steps（如"套用模板"），
+ * 那种情况编辑器锁不住，所以回来时再核对"拾取开始时的那个步骤对象"是否仍在原下标上，不在就丢弃并提示。
  */
 async function pick(
   stepIndex: number,
@@ -419,9 +432,15 @@ async function pick(
 ) {
   if (picking.value) return
   picking.value = true
+  const stepAtStart = props.steps[stepIndex]
   try {
     const r = await props.pickElement(mode)
     if (!r || !r.ok) return  // 父组件已经提示过原因（取消/超时/注入失败）
+    if (props.steps[stepIndex] !== stepAtStart) {
+      // 下标已指向别的步骤：宁可不填，也不能把锚点写到用户没在编辑的那一步上
+      emit('notify', '步骤在拾取期间被替换或删除了，这次拾取结果已丢弃；请确认当前步骤后再拾取一次', 'error')
+      return
+    }
     if (sub) {
       const wanted = sub === 'selector'
         ? (r.rowSelector || r.selector || '')
@@ -466,15 +485,31 @@ async function pick(
 
 /** 添加并选中它——加完紧接着就要填参数，不选中等于让用户再点一次 */
 function add(type: string) {
+  if (picking.value) return
   commit([...props.steps, makeDraftStep(type)])
   selected.value = props.steps.length
 }
 
+/** 切换选中步（拾取期间锁定：回填下标必须保持有效，见 pick 的说明） */
+function selectStep(i: number) {
+  if (picking.value) return
+  selected.value = i
+}
+
 function removeAt(i: number) {
-  commit(props.steps.filter((_, k) => k !== i))
+  if (picking.value) return
+  const next = props.steps.filter((_, k) => k !== i)
+  commit(next)
+  // 父组件只按新长度夹位（watch steps.length），删除"非当前步"时右栏会错位一格：
+  // 这里让选中项跟着"用户原本正在编辑的那一步"走——删的是当前步就退到相邻步，
+  // 删的是它前面的步就整体前移一格。
+  const cur = selected.value
+  if (cur === i) selected.value = Math.max(0, Math.min(i, next.length - 1))
+  else if (cur > i) selected.value = cur - 1
 }
 
 function move(i: number, delta: number) {
+  if (picking.value) return
   const j = i + delta
   if (j < 0 || j >= props.steps.length) return
   const next = props.steps.slice()
@@ -537,6 +572,8 @@ function move(i: number, delta: number) {
   border: 1px solid transparent; background: none;
 }
 .ct-pal-item:hover { color: #fff; background: var(--color-bg-secondary); border-color: var(--color-primary); }
+/* 拾取期间目录新增被锁定，必须看得出来是禁用而不是"点了没反应" */
+.ct-pal-item:disabled { opacity: .45; cursor: not-allowed; border-color: transparent; color: var(--color-text-muted); }
 
 /* ---------- 中栏：序列 ---------- */
 .ct-step {
@@ -546,6 +583,8 @@ function move(i: number, delta: number) {
 }
 .ct-step + .ct-step { margin-top: 5px; }
 .ct-step.on { border-color: var(--color-primary); background: var(--color-bg-elevated); }
+/* 拾取期间点击步骤行不再切换选中（见 selectStep），光标也说明这一点 */
+.ct-step.locked { cursor: default; }
 .ct-idx {
   width: 18px; height: 18px; flex: 0 0 auto; border-radius: 50%;
   background: var(--color-primary); color: #fff; font-size: 10px;

@@ -477,6 +477,9 @@ async function main() {
     const budgetRestored = await cdp.eval(`return await window.shopilot.agentDomain.orgUpdate({actorAgentId:'root-ceo',agentId:'root-ceo',confirmed:true,dailyBudget:null})`)
     const chatAfterRestore = budgetRestored?.ok ? await cdp.eval(`return await window.shopilot.agent.generatePlan('你好')`) : null
     check('恢复日预算后聊天恢复可用', budgetRestored?.ok === true && chatAfterRestore?.ok === true, chatAfterRestore?.error?.code || JSON.stringify(chatAfterRestore?.data?.kind || ''))
+    // Job 结束后自动续办：把结果交回合判断下一步（此时 AI Key 已配置）。
+    const followUp = delegatedJobId ? await cdp.eval(`return await window.shopilot.agent.jobFollowUp('读取本地只读页面标题并形成证据', [${JSON.stringify(delegatedJobId)}], [])`) : null
+    check('Job 结束后自动续办：把结果交回合判断下一步', followUp?.ok === true && (followUp.data.kind === 'chat' || followUp.data.kind === 'software'), followUp?.error?.code || JSON.stringify(followUp?.data?.kind || ''))
 
     // Prepare a real in-flight Main-only model request, then kill the process.
     // Startup recovery must mark it recovery_required; it must not fabricate a

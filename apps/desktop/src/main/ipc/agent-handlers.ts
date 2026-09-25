@@ -16,6 +16,7 @@ import { AgentPlanningError } from '../services/agent-planner'
 import {
   AgentSoftwareError,
   executeAgentSoftwarePlan,
+  followUpAgentJob,
   generateAgentPlan,
   getAgentSoftwareContext,
   getAgentUiState,
@@ -114,6 +115,18 @@ export function registerAgentHandlers(): void {
         : result.kind === 'software' ? (result.context.displayedStoreId || undefined)
         : undefined
       writeAudit('agent.plan', 'success', { storeId, requestId: 'agent.plan' })
+      return success(result, requestId)
+    } catch (error) { return errorResponse(error, requestId, 'agent.plan', storeId) }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.AGENT_JOB_FOLLOW_UP, async (event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const requestId = randomUUID()
+    let storeId: string | undefined
+    try {
+      assertTrustedRenderer(event)
+      const result = await followUpAgentJob(raw)
+      storeId = result.kind === 'software' ? (result.context.displayedStoreId || undefined) : undefined
+      writeAudit('agent.plan', 'success', { storeId, requestId: 'agent.job.followUp' })
       return success(result, requestId)
     } catch (error) { return errorResponse(error, requestId, 'agent.plan', storeId) }
   })

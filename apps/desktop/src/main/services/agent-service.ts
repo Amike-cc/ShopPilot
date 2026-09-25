@@ -3,6 +3,7 @@ import { getDatabase } from '../db/database'
 import {
   AGENT_PACK_FORMAT,
   AGENT_PACK_VERSION,
+  agentJobFollowUpInputSchema,
   agentPackExportInputSchema,
   agentPackImportInputSchema,
   agentPackSchema,
@@ -26,7 +27,7 @@ import { redactAgentText, sanitizeAgentUrl } from '@shared/agent-privacy'
 import { parseAgentTurnOutput, isMoneyActionText, softwareActionNeedsApproval } from '@shared/agent-domain-rules'
 import { AGENT_TOOL_CATALOG, buildToolWhitelistText, isSkillStepAllowed, toolApprovalRequired } from '@shared/agent-tools'
 import type { AgentPlugin, AgentSkill, AgentSkillStep } from '@shared/schemas/agent'
-import { chatCompleteForAgent, delegateAgentTask, approveAgentJob, runAgentJob, listAgents, listRecentAgentJobSummaries, createAgent as createAgentRecord, activateAgent as activateAgentRecord, pauseAgent as pauseAgentRecord, resumeAgent as resumeAgentRecord, retireAgent as retireAgentRecord } from './agent-runtime'
+import { chatCompleteForAgent, delegateAgentTask, approveAgentJob, runAgentJob, getAgentJob, listAgents, listRecentAgentJobSummaries, createAgent as createAgentRecord, activateAgent as activateAgentRecord, pauseAgent as pauseAgentRecord, resumeAgent as resumeAgentRecord, retireAgent as retireAgentRecord } from './agent-runtime'
 import { buildApprovedMemoryContext, searchMemories, writeMemory } from './agent-memory'
 import { ROOT_AGENT_ID } from '@shared/schemas/agent-domain'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
@@ -684,7 +685,7 @@ const AGENT_TURN_MAX_ROUNDS = 3
  * 每轮模型输出 {thought, reply, actions}；需要确认的动作整体作为计划交给用户，
  * 只读动作执行后把结果回传给模型继续思考，最后由模型用 reply 收尾。
  */
-async function runAgentTurn(goal: string, context: AgentSoftwareContext, history: Array<{ role: 'user' | 'assistant'; text: string }> = []): Promise<
+async function runAgentTurn(goal: string, context: AgentSoftwareContext, history: Array<{ role: 'user' | 'assistant'; text: string }> = [], extra: { instruction?: string; jobResults?: string; jobFollowUp?: boolean } = {}): Promise<
   | { kind: 'chat'; text: string; model: string; elapsedMs: number; executed: string[]; thoughts: string[]; jobIds: string[] }
   | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; thought: string; requiresApproval: boolean }
 > {
@@ -696,9 +697,10 @@ async function runAgentTurn(goal: string, context: AgentSoftwareContext, history
   let elapsedMs = 0
   for (let round = 0; round < AGENT_TURN_MAX_ROUNDS; round++) {
     const response = await chatCompleteForAgent(ROOT_AGENT_ID, {
-      system: agentTurnSystemPrompt(hasUsablePageContext()),
+      system: `${agentTurnSystemPrompt(hasUsablePageContext())}${extra.instruction ? `\n${extra.instruction}` : ''}`,
       user: JSON.stringify({
         goal: redactAgentText(goal, 500),
+        ...(extra.jobFollowUp ? { jobFollowUp: true, jobResults: redactAgentText(extra.jobResults || '', 2400) } : {}),
         stores: context.stores.map(store => ({
           id: store.id, name: store.name, platform: store.platform, isOpen: store.isOpen, isDisplayed: store.isDisplayed,
           tabs: store.tabs.map(tab => ({ id: tab.id, title: tab.title, isActive: tab.isActive }))
@@ -861,6 +863,42 @@ export async function generateAgentPlan(raw: unknown): Promise<
     // 自治运营：非资金任务自动派发；只有资金动作需要用户审批。
     requiresApproval: isMoneyActionText({ goal, steps: planned.plan.steps.map(step => ({ description: step.description, input: step.input })) })
   }
+}
+
+/**
+ * Job 结束后自动续办（「我提出问题，智能体想办法解决」的闭环）：
+ * 把用户目标 + 你之前派发的 Job 结果交给智能体回合，让它判断目标是否达成：
+ * 达成 → 给结论；未达成 → 看失败原因给下一步（能换办法就换办法，需要用户配合就说清）。
+ * 只读动作立即执行；资金/需确认动作仍走计划卡；页面任务需要用户确认后另派。
+ */
+export async function followUpAgentJob(raw: unknown): Promise<
+  | { kind: 'chat'; text: string; model: string; elapsedMs: number; executed: string[]; thoughts: string[]; jobIds: string[] }
+  | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; thought: string; requiresApproval: boolean }
+> {
+  const input = agentJobFollowUpInputSchema.parse(raw)
+  const context = getAgentSoftwareContext()
+  const lines: string[] = []
+  let hasFailure = false
+  for (const jobId of input.jobIds.slice(0, 10)) {
+    let job: any = null
+    try { job = getAgentJob(jobId) } catch { continue }
+    if (!job) continue
+    const status = String(job.status || '')
+    if (['failed', 'cancelled', 'expired', 'recovery_required', 'blocked_budget', 'blocked_permission'].includes(status)) hasFailure = true
+    const summaries = (job.results || []).slice(0, 3)
+      .map((item: any) => redactAgentText(String(item.summary || ''), 160))
+      .filter(Boolean)
+    const reason = redactAgentText(String(job.events?.at?.(-1)?.reason || ''), 160)
+    lines.push(`${redactAgentText(String(job.goal || ''), 120)} → ${status}${reason ? `（${reason}）` : ''}${summaries.length ? `；结果：${summaries.join('；')}` : ''}`)
+  }
+  if (!lines.length) softwareError('AGENT_JOB_NOT_FOUND', '没有可续办的 Job 结果')
+  const instruction = [
+    '这是你之前派发任务的执行结果回报（jobResults），不是新的用户请求。',
+    '先判断用户目标是否达成：达成 → 用 reply 给结论和关键数字；未达成 → 看结果里的失败原因，给出下一步：能用工具就直接给 actions（例如换采集方式、先打开目标店铺、改派其它店铺、查看已采集数据）；需要用户配合（扫码登录、补配置、补邀约信息）就说清要做什么，不要假装已经解决。',
+    '不要重复已经完成的动作；失败原因里说明是环境问题的，换一个可行路径或如实说明阻塞。',
+    hasFailure ? '注意：本次有任务未成功，优先给出可执行的补救步骤。' : ''
+  ].filter(Boolean).join('\n')
+  return runAgentTurn(input.goal, context, input.history, { instruction, jobResults: lines.join('\n').slice(0, 2400), jobFollowUp: true })
 }
 
 /** 单店页面计划：观察有界摘要 + 最近对话 + 已审核记忆 → 模型计划 → 严格解析。 */

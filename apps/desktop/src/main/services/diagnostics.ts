@@ -8,6 +8,8 @@
 import { app } from 'electron'
 import { createHash } from 'crypto'
 import { existsSync, writeFileSync, readFileSync } from 'fs'
+import { homedir, tmpdir } from 'os'
+import { extname, isAbsolute, resolve, sep } from 'path'
 import { getDatabase } from '../db/database'
 import * as ProxyManager from '../browser/proxy-manager'
 import { queryAudit } from './audit-logger'
@@ -80,6 +82,46 @@ export function zipStore(entries: Array<{ name: string; data: Buffer }>): Buffer
   return Buffer.concat([...parts, centralBuf, eocd])
 }
 
+// ---------- 导出路径校验 ----------
+
+/**
+ * 校验渲染层直传的导出/导入路径（会话包、诊断包、审计导出共用这一份规则）。
+ *
+ * 为什么必须有：outputPath/filePath 由渲染层给，等于让页面指定主进程的写盘/读盘位置。
+ * 只允许写进用户目录或系统临时目录（tools/acceptance 就传 TEMP 下的路径），
+ * 扩展名按各功能实际使用的类型收口，且显式拒绝 `..` 跳过段——大小写与分隔符差异
+ * 由 path.resolve 归一后再比前缀解决。
+ *
+ * 放在 diagnostics 的原因：services 目录里会话导出与诊断导出共用同一套规则，
+ * 两份各自实现的安全校验迟早会漂移。校验失败抛 INVALID_ARGUMENT 前缀，
+ * 由 IPC 层映射成参数错误（导入通道仍按 SESSION_IMPORT_INVALID 呈现，见 session-security-handlers）。
+ */
+export function assertSafeExportPath(rawPath: string, allowedExts: string[], what: string): string {
+  const p = String(rawPath || '').trim()
+  if (!p) throw new Error(`INVALID_ARGUMENT: ${what}路径为空`)
+  if (p.includes('\0')) throw new Error(`INVALID_ARGUMENT: ${what}路径含非法字符`)
+  // Windows 上 '\' 与 '/' 都是分隔符，`..` 跳过段两种写法都要拦
+  if (p.split(/[\\/]+/).some(seg => seg === '..')) {
+    throw new Error(`INVALID_ARGUMENT: ${what}路径不允许包含 .. 跳过段`)
+  }
+  if (!isAbsolute(p)) throw new Error(`INVALID_ARGUMENT: ${what}路径必须是绝对路径`)
+
+  const resolved = resolve(p)
+  const roots = [resolve(homedir()), resolve(tmpdir())]
+  const inAllowedRoot = roots.some(root => {
+    const cmp = process.platform === 'win32' ? resolved.toLowerCase() : resolved
+    const base = process.platform === 'win32' ? root.toLowerCase() : root
+    return cmp === base || cmp.startsWith(base.endsWith(sep) ? base : base + sep)
+  })
+  if (!inAllowedRoot) throw new Error(`INVALID_ARGUMENT: ${what}路径必须位于用户目录或系统临时目录下`)
+
+  const ext = extname(resolved).toLowerCase()
+  if (!allowedExts.includes(ext)) {
+    throw new Error(`INVALID_ARGUMENT: ${what}扩展名不被允许（仅支持 ${allowedExts.join(' / ')}）`)
+  }
+  return resolved
+}
+
 /** 供验收解析：列出 zip 内文件名与大小 */
 export function zipList(buf: Buffer): Array<{ name: string; size: number }> {
   const out: Array<{ name: string; size: number }> = []
@@ -101,6 +143,10 @@ export function zipList(buf: Buffer): Array<{ name: string; size: number }> {
 
 const SETTING_WHITELIST_PREFIX = ['ui.', 'proxy.', 'task.', 'security.idleMinutes', 'app.']
 const SETTING_DENY = ['security.master', 'proxy_cred.', 'ai_cred.']
+
+/** 渲染层可指定路径的导出类型：扩展名与实现实际产出的文件类型对齐（诊断包 ZIP / 审计 JSONL） */
+export const DIAGNOSTICS_EXTS = ['.zip', '.json']
+export const AUDIT_EXPORT_EXTS = ['.jsonl', '.json']
 
 function jdata(obj: unknown): Buffer {
   return Buffer.from(JSON.stringify(obj, null, 2), 'utf8')
@@ -149,39 +195,41 @@ export function buildDiagnosticsPackage(): { zip: Buffer; manifest: Record<strin
 }
 
 export function exportDiagnostics(outputPath?: string): { path: string; files: Record<string, number>; sha256: string } {
+  // 渲染层直传的路径先用后信：校验不过直接返回参数错误，连包都不构建
+  const out = outputPath ? assertSafeExportPath(outputPath, DIAGNOSTICS_EXTS, '诊断包导出') : ''
   const { zip, manifest } = buildDiagnosticsPackage()
-  let out = outputPath
-  if (!out) {
+  let target = out
+  if (!target) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    out = require('electron').dialog.showSaveDialogSync(null as any, {
+    target = require('electron').dialog.showSaveDialogSync(null as any, {
       title: '导出诊断包',
       defaultPath: require('path').join(app.getPath('documents'), `shopilot-diagnostics-${stamp}.zip`),
       filters: [{ name: 'ZIP', extensions: ['zip'] }]
     }) || ''
-    if (!out) throw new Error('DIAG_CANCELLED: 未选择保存位置')
+    if (!target) throw new Error('DIAG_CANCELLED: 未选择保存位置')
   }
-  writeFileSync(out, zip)
+  writeFileSync(target, zip)
   const sha256 = createHash('sha256').update(zip).digest('hex')
   writeAudit('diagnostics.export', 'success')
-  return { path: out, files: manifest, sha256 }
+  return { path: target, files: manifest, sha256 }
 }
 
 /** audit:export - §6.7 */
 export function exportAuditLogs(filter: any, outputPath?: string): { path: string; rows: number } {
   const rows = queryAudit(filter)
-  let out = outputPath
-  if (!out) {
+  let target = outputPath ? assertSafeExportPath(outputPath, AUDIT_EXPORT_EXTS, '审计导出') : ''
+  if (!target) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    out = require('electron').dialog.showSaveDialogSync(null as any, {
+    target = require('electron').dialog.showSaveDialogSync(null as any, {
       title: '导出审计日志',
       defaultPath: require('path').join(app.getPath('documents'), `shopilot-audit-${stamp}.jsonl`),
       filters: [{ name: 'JSONL', extensions: ['jsonl'] }]
     }) || ''
-    if (!out) throw new Error('DIAG_CANCELLED: 未选择保存位置')
+    if (!target) throw new Error('DIAG_CANCELLED: 未选择保存位置')
   }
-  writeFileSync(out, rows.map(r => JSON.stringify(r)).join('\n'), 'utf8')
+  writeFileSync(target, rows.map(r => JSON.stringify(r)).join('\n'), 'utf8')
   writeAudit('audit.export', 'success')
-  return { path: out, rows: rows.length }
+  return { path: target, rows: rows.length }
 }
 
 void existsSync

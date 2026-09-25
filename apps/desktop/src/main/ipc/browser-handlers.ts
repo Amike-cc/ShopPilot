@@ -3,7 +3,7 @@
  * §6.2 浏览器和标签页接口
  */
 
-import { ipcMain, IpcMainInvokeEvent } from 'electron'
+import { ipcMain, IpcMainInvokeEvent, app } from 'electron'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import { normalizeDouyinCategoryTree } from '@shared/douyin-category-tree'
@@ -11,6 +11,8 @@ import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as WindowManager from '../browser/window-manager'
 import { clearStoreData } from '../browser/session-manager'
 import { randomUUID } from 'crypto'
+import { mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
 
 function generateRequestId(): string {
   return randomUUID()
@@ -373,13 +375,23 @@ export function registerBrowserHandlers(): void {
     }
   })
   
-  // browser:capture - 真实截图（返回 base64 PNG/JPEG）
+  // browser:capture - 真实截图：落盘到该店铺的 artifacts 目录，并回报真实路径。
+  // 为什么在主进程写：渲染层此前用 <a download> 触发保存对话框，无论用户是否保存都会立刻
+  // 提示"已截图并保存"（取消保存框也报成功）。写文件必须由拿到像素的一侧完成才能如实回报。
   ipcMain.handle(IPC_CHANNELS.BROWSER_CAPTURE, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, format: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
-      const dataUrl = await WindowManager.captureTab(input.storeId, input.tabId, input.format || 'png')
-      return success({ format: input.format || 'png', data: dataUrl }, requestId)
+      const format = input.format || 'png'
+      const dataUrl = await WindowManager.captureTab(input.storeId, input.tabId, format)
+      const base64 = String(dataUrl || '').replace(/^data:image\/\w+;base64,/, '')
+      const buf = Buffer.from(base64, 'base64')
+      if (!buf.length) return error(ERROR_CODES.INTERNAL_ERROR.code, 'CAPTURE_EMPTY: 视口未渲染，截图为空', requestId)
+      const dir = join(app.getPath('userData'), 'stores', input.storeId, 'artifacts')
+      mkdirSync(dir, { recursive: true })
+      const savedPath = join(dir, `capture_${Date.now()}.png`)
+      writeFileSync(savedPath, buf)
+      return success({ format, data: dataUrl, savedPath, bytes: buf.length }, requestId)
     } catch (err: any) {
       return browserError(err, requestId)
     }

@@ -1,6 +1,7 @@
 /**
  * 主进程日志 - §22：日志按天落 userData/logs/app-YYYY-MM-DD.log，默认保留 14 天。
- * 写入前做脱敏：疑似凭据行整行掩码，绝不把明文密码/Cookie 写进日志。
+ * 写入前做两级脱敏：先把 URL 查询值/账号口令/认证头/Cookie 的值就地掩码（保留键名与上下文），
+ * 再对"关键词出现但没被值级规则覆盖"的行整行掩码兜底，绝不把明文密码/Cookie 写进日志。
  * 崩溃报告上传默认关闭（规范要求用户主动开启才上传；本版本仅本地落盘，未提供上传通道）。
  */
 
@@ -11,6 +12,8 @@ import { join } from 'path'
 const MAX_BYTES = 5 * 1024 * 1024
 const RETENTION_DAYS = 14
 const SECRET_LINE = /(password|passwd|secret|token|cookie|authorization|credential)/i
+/** 值级脱敏的占位符：出现即代表该行的敏感值已就地掩码，无需再整行丢弃 */
+const SECRET_MASK = '[已隐藏]'
 
 let dir: string | null = null
 let pruned = false
@@ -71,9 +74,37 @@ function pruneOld(): void {
 
 export function logFile(): string { return join(logDir(), `app-${dayStamp()}.log`) }
 
+/**
+ * 值级脱敏：把**值**就地掩码、保留键名与上下文，而不是把整行丢掉。
+ *
+ * 为什么需要它：只按整行关键词脱敏时，一条含 `?token=…` 的导航/代理认证日志会被整行
+ * 替换成占位串，事后完全没有线索；反过来，日志里出现 `sessionid=…` 这类不在关键词表里的
+ * 参数又会被原样落盘。这里按"参数名保留、参数值一律掩码"处理，两类问题一起解决：
+ * URL 查询参数值、username/password/token 之类键值、Authorization/Proxy-Authorization/Cookie
+ * 头值、裸 Basic/Bearer 令牌。
+ */
+export function redactSecretValues(input: unknown): string {
+  let text = String(input ?? '')
+  // 认证头与 Cookie：值可能是整条 header，掩码到行尾（Cookie 内含多个 name=value，按单个值切会漏）
+  text = text.replace(/\b((?:proxy-authorization|authorization|set-cookie|cookie)\s*[:=]\s*)[^\n]*/gi, `$1${SECRET_MASK}`)
+  // 裸令牌：Basic/Bearer 之后的一段凭据
+  text = text.replace(/\b(Basic|Bearer)\s+[A-Za-z0-9._~+/=-]{4,}/gi, `$1 ${SECRET_MASK}`)
+  // 账号口令类键值对（渲染层/主进程都可能把用户输入拼进日志）
+  text = text.replace(
+    /\b((?:username|user|password|passwd|pwd|token|secret|credential)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"'<>]+)/gi,
+    `$1${SECRET_MASK}`
+  )
+  // URL 查询串：参数名保留，值一律掩码（sessionid/code/state 这类不在关键词表里的也不漏）
+  text = text.replace(/([?&][^=&\s"'<>]+)=([^&\s"'<>]*)/g, `$1=${SECRET_MASK}`)
+  return text
+}
+
 function redact(msg: string): string {
-  if (!SECRET_LINE.test(msg)) return msg
-  return '[REDACTED-SENSITIVE-LINE] ' + msg.slice(0, 40).replace(/[^\x20-\x7e]/g, '?') + '…'
+  const masked = redactSecretValues(msg)
+  if (!SECRET_LINE.test(masked)) return masked
+  // 值已掩码，剩下的关键词只是键名 → 保留整行，日志才有排查价值
+  if (masked.includes(SECRET_MASK)) return masked
+  return '[REDACTED-SENSITIVE-LINE] ' + masked.slice(0, 40).replace(/[^\x20-\x7e]/g, '?') + '…'
 }
 
 export function logMain(level: 'info' | 'warn' | 'error', msg: string): void {

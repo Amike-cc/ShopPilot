@@ -52,6 +52,18 @@ function invalidInput(requestId: string, issues: Array<{ path: PropertyKey[]; me
 }
 
 /**
+ * 删除/彻底删除时浏览器运行时没收敛：按店铺浏览器运行中的错误码返回，
+ * 让界面提示"先关闭该店铺浏览器"而不是 INTERNAL_ERROR 这种没法行动的错误
+ */
+function runtimeCloseError(err: any, requestId: string): IPCResult {
+  const msg = String(err?.message || err)
+  if (msg.includes('PROFILE_IN_USE')) {
+    return error(ERROR_CODES.PROFILE_IN_USE.code, msg.replace(/^PROFILE_IN_USE:\s*/, ''), requestId)
+  }
+  return error(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+}
+
+/**
  * 注册所有店铺相关的 IPC 处理器
  */
 export function registerStoreHandlers(): void {
@@ -166,9 +178,10 @@ export function registerStoreHandlers(): void {
     const requestId = generateRequestId()
     
     try {
-      // TODO: 清理 profile、下载和备份引用
       const parsed = storeIdInputSchema.safeParse(input)
       if (!parsed.success) return invalidInput(requestId, parsed.error.issues)
+      // 店铺的浏览器视图/会话在 store-manager 内先收敛（releaseStoreRuntime）；
+      // profile 与下载**记录**随 stores 级联删除，下载目录与 session partition 在彻底删除时清理（见 purgeStore）
       const success = StoreManager.deleteStorePermanent(parsed.data.storeId)
       
       if (!success) {
@@ -177,7 +190,7 @@ export function registerStoreHandlers(): void {
       
       return { ok: true, data: { success: true }, requestId }
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return runtimeCloseError(err, requestId)
     }
   })
   
@@ -203,7 +216,7 @@ export function registerStoreHandlers(): void {
       }
       return success({ success: true }, requestId)
     } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+      return runtimeCloseError(err, requestId)
     }
   })
 

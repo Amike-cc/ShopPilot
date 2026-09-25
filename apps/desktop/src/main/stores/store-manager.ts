@@ -10,6 +10,8 @@ import { join } from 'path'
 import { getDatabase } from '../db/database'
 import { ensureProfileForStore } from './profile-manager'
 import { writeAudit } from '../services/audit-logger'
+import { closeStoreBrowser, getOpenStoreIds } from '../browser/window-manager'
+import { closeStoreSession, getActiveSessions } from '../browser/session-manager'
 import type { Store, StoreCreateInput, StoreUpdateInput } from '@shared/schemas/store'
 import { normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
 import { StoreStatus } from '@shared/enums/store-status'
@@ -277,11 +279,35 @@ export function archiveStore(storeId: string): boolean {
 }
 
 /**
+ * 收敛店铺的浏览器运行时（视图 + 会话）：删除记录前必须做，否则内存里会留下
+ * 指向已删店铺的 browserStates/activeSessions 残留（页面还能跑、任务引擎还会排队），
+ * 且 session partition 的清理会被活动会话挡住。
+ *
+ * 关闭失败一律抛错而不是留下半删状态：调用方按错误返回，用户可以先关浏览器再重试。
+ * 错误前缀用 PROFILE_IN_USE（"店铺浏览器正在运行"），IPC 层据此给出可行动提示。
+ */
+export function releaseStoreRuntime(storeId: string): void {
+  try {
+    closeStoreBrowser(storeId)
+    closeStoreSession(storeId)
+  } catch (error: any) {
+    throw new Error(`PROFILE_IN_USE: 店铺运行环境未能关闭（${String(error?.message || error)}），已中止删除`)
+  }
+  if (getOpenStoreIds().includes(storeId) || getActiveSessions().has(storeId)) {
+    throw new Error('PROFILE_IN_USE: 店铺浏览器仍在运行，已中止删除；请先关闭该店铺浏览器')
+  }
+}
+
+/**
  * 移入回收站（软删除）- §6.1 store:deletePermanent
  */
 export function deleteStorePermanent(storeId: string): boolean {
   const db = getDatabase()
-  
+
+  // 先收敛浏览器运行时：店铺被移出列表后用户就没有关闭入口了，留下的视图/会话
+  // 会继续跑（任务引擎也会继续往这个店铺派单）
+  releaseStoreRuntime(storeId)
+
   // 软删除标记
   const stmt = db.prepare(`
     UPDATE stores 
@@ -302,6 +328,9 @@ export async function purgeStore(storeId: string): Promise<boolean> {
   const db = getDatabase()
   const row = db.prepare('SELECT id FROM stores WHERE id = ? AND deleted_at IS NOT NULL').get(storeId)
   if (!row) return false
+
+  // 删记录前先收敛运行时（视图/会话），否则 partition 被活动会话占着清不干净
+  releaseStoreRuntime(storeId)
 
   // 先写审计（此时 stores 行仍在，满足 audit_logs.store_id 外键；
   // 删除 store 后该行 store_id 依 ON DELETE SET NULL 置空，审计记录本身保留）

@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto'
 import * as SessionExporter from '../services/session-exporter'
 import * as Security from '../services/security-manager'
 import * as Diagnostics from '../services/diagnostics'
+import * as StoreManager from '../stores/store-manager'
 import { emitToRenderer, setBrowserViewsVisible } from '../browser/window-manager'
 import { writeAudit } from '../services/audit-logger'
 
@@ -23,8 +24,20 @@ function sessionError(e: any, requestId: string): IPCResult {
   if (msg.startsWith('SESSION_PACKAGE_EXPIRED')) return err(ERROR_CODES.SESSION_PACKAGE_EXPIRED.code, '会话包已过期，拒绝导入', requestId)
   if (msg.startsWith('SESSION_IMPORT_INVALID')) return err(ERROR_CODES.SESSION_IMPORT_INVALID.code, msg.replace('SESSION_IMPORT_INVALID: ', '会话包校验失败：'), requestId)
   if (msg.startsWith('APP_LOCKED')) return err(ERROR_CODES.APP_LOCKED.code, msg.replace('APP_LOCKED: ', ''), requestId)
-  if (msg.includes('STORE_NOT_FOUND')) return err(ERROR_CODES.INTERNAL_ERROR.code, '店铺不存在', requestId)
+  if (msg.includes('STORE_NOT_FOUND')) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
+  if (msg.includes('INVALID_ARGUMENT')) return err(ERROR_CODES.INVALID_ARGUMENT.code, msg.replace(/^.*INVALID_ARGUMENT:\s*/, ''), requestId)
   return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+}
+
+/**
+ * 带 storeId 的会话通道先确认店铺存在：partition 名是 `persist:store_<storeId>`，
+ * 渲染层若塞任意字符串就能读写到别的分区（或凭空造出一个永不回收的 partition）。
+ * 返回校验后的 storeId（拼 partition 只用它），店铺不存在返回 null。
+ */
+function requireStoreId(raw: unknown): string | null {
+  const storeId = typeof raw === 'string' ? raw : ''
+  if (!storeId) return null
+  return StoreManager.getStore(storeId) ? storeId : null
 }
 
 function storeSession(storeId: string): Electron.Session {
@@ -36,14 +49,18 @@ export function registerSessionAndSecurityHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SESSION_EXPORT, async (_e: IpcMainInvokeEvent, input: { storeId: string; outputPath?: string; validDays?: number }): Promise<IPCResult> => {
     const requestId = rid()
     try {
-      return ok(await SessionExporter.exportSessionPackage(input.storeId, { outputPath: input.outputPath, validDays: input.validDays }), requestId)
+      const storeId = requireStoreId(input?.storeId)
+      if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
+      return ok(await SessionExporter.exportSessionPackage(storeId, { outputPath: input.outputPath, validDays: input.validDays }), requestId)
     } catch (e: any) { return sessionError(e, requestId) }
   })
 
   ipcMain.handle(IPC_CHANNELS.SESSION_IMPORT, async (_e: IpcMainInvokeEvent, input: { storeId: string; filePath?: string; pickFile?: boolean }): Promise<IPCResult> => {
     const requestId = rid()
     try {
-      return ok(await SessionExporter.importSessionPackage(input.storeId, input.filePath || '', { pickFile: input.pickFile }), requestId)
+      const storeId = requireStoreId(input?.storeId)
+      if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
+      return ok(await SessionExporter.importSessionPackage(storeId, input.filePath || '', { pickFile: input.pickFile }), requestId)
     } catch (e: any) { return sessionError(e, requestId) }
   })
 
@@ -51,7 +68,9 @@ export function registerSessionAndSecurityHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SESSION_COOKIES, async (_e: IpcMainInvokeEvent, input: { storeId: string; search?: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
-      const all = await storeSession(input.storeId).cookies.get({})
+      const storeId = requireStoreId(input?.storeId)
+      if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
+      const all = await storeSession(storeId).cookies.get({})
       let list = all.map((c: any) => ({
         name: c.name, domain: c.domain, path: c.path,
         valuePreview: String(c.value || '').slice(0, 24) + (String(c.value || '').length > 24 ? '…' : ''),
@@ -71,8 +90,10 @@ export function registerSessionAndSecurityHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SESSION_DELETE_COOKIE, async (_e: IpcMainInvokeEvent, input: { storeId: string; name: string; domain: string; path: string; secure?: boolean }): Promise<IPCResult> => {
     const requestId = rid()
     try {
+      const storeId = requireStoreId(input?.storeId)
+      if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
       const url = `${input.secure ? 'https' : 'http'}://${input.domain.replace(/^\./, '')}${input.path || '/'}`
-      await storeSession(input.storeId).cookies.remove(url, input.name)
+      await storeSession(storeId).cookies.remove(url, input.name)
       return ok({ removed: true }, requestId)
     } catch (e: any) { return sessionError(e, requestId) }
   })
@@ -80,8 +101,10 @@ export function registerSessionAndSecurityHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SESSION_CLEAR_COOKIES, async (_e: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
-      await storeSession(input.storeId).clearStorageData({ storages: ['cookies'] })
-      writeAudit('browser.clearData', 'success', { storeId: input.storeId, requestId: JSON.stringify({ what: 'cookies' }) })
+      const storeId = requireStoreId(input?.storeId)
+      if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
+      await storeSession(storeId).clearStorageData({ storages: ['cookies'] })
+      writeAudit('browser.clearData', 'success', { storeId, requestId: JSON.stringify({ what: 'cookies' }) })
       return ok({ cleared: true }, requestId)
     } catch (e: any) { return sessionError(e, requestId) }
   })
@@ -94,6 +117,7 @@ export function registerSessionAndSecurityHandlers(): void {
     } catch (e: any) {
       const msg = String(e?.message || e)
       if (msg.startsWith('DIAG_CANCELLED')) return err(ERROR_CODES.SESSION_CANCELLED.code, '已取消导出', requestId)
+      if (msg.includes('INVALID_ARGUMENT')) return err(ERROR_CODES.INVALID_ARGUMENT.code, msg.replace(/^.*INVALID_ARGUMENT:\s*/, ''), requestId)
       return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
     }
   })
@@ -105,6 +129,7 @@ export function registerSessionAndSecurityHandlers(): void {
     } catch (e: any) {
       const msg = String(e?.message || e)
       if (msg.startsWith('DIAG_CANCELLED')) return err(ERROR_CODES.SESSION_CANCELLED.code, '已取消导出', requestId)
+      if (msg.includes('INVALID_ARGUMENT')) return err(ERROR_CODES.INVALID_ARGUMENT.code, msg.replace(/^.*INVALID_ARGUMENT:\s*/, ''), requestId)
       return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
     }
   })
