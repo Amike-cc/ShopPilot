@@ -180,6 +180,17 @@ async function main() {
     check('技能：不能嵌套技能或插件管理动作', skillSuite?.nested?.ok === false && skillSuite.nested.error.code === 'AGENT_INVALID_SKILL_STEP', skillSuite?.nested?.error?.code || '')
     check('插件：createPlugin 打包技能并可被列出', !!skillSuite?.plugin?.ok && !!skillSuite?.pluginList?.ok && String(skillSuite.pluginList.data.messages.join('；')).includes('插件'), skillSuite?.plugin?.error?.code || JSON.stringify(skillSuite?.pluginList?.data?.messages || '').slice(0, 160))
     check('技能：运行未知技能如实报错', skillSuite?.missing?.ok === false && skillSuite.missing.error.code === 'AGENT_SKILL_NOT_FOUND', skillSuite?.missing?.error?.code || '')
+    const skillLifecycle = await cdp.eval(`
+      const lib = await window.shopilot.agentDomain.skillList()
+      const skill = (lib.ok ? lib.data.skills : []).find(item => item.name === 'Domain 巡检技能')
+      const plan = (action) => ({ id: 'plan_' + Math.random().toString(36).slice(2), name: '技能生命周期', goal: '技能生命周期', steps: [{ id: 'step_' + Math.random().toString(36).slice(2), action, description: '技能生命周期', risk: 'read', requiresConfirmation: false }], requiresConfirmation: false, status: 'draft' })
+      const disabled = skill ? await window.shopilot.agent.executeSoftwarePlan(plan({ type: 'updateSkill', skillId: skill.id, status: 'disabled' }), true) : null
+      const runDisabled = skill ? await window.shopilot.agent.executeSoftwarePlan(plan({ type: 'runSkill', skillId: skill.id }), true) : null
+      const enabled = skill ? await window.shopilot.agent.executeSoftwarePlan(plan({ type: 'updateSkill', skillId: skill.id, status: 'enabled' }), true) : null
+      const runEnabled = skill ? await window.shopilot.agent.executeSoftwarePlan(plan({ type: 'runSkill', skillId: skill.id }), true) : null
+      return { disabled: disabled?.ok === true, disabledMsg: String(disabled?.data?.messages?.join('；') || disabled?.error?.code || ''), runDisabledCode: runDisabled?.ok === false ? runDisabled.error.code : 'ran', enabled: enabled?.ok === true, runEnabled: runEnabled?.ok === true }
+    `)
+    check('技能：可停用/启用，停用后拒绝运行', skillLifecycle?.disabled === true && skillLifecycle.disabledMsg.includes('停用') && skillLifecycle.runDisabledCode === 'AGENT_SKILL_NOT_FOUND' && skillLifecycle.enabled === true && skillLifecycle.runEnabled === true, JSON.stringify(skillLifecycle || '').slice(0, 220))
     const packSuite = await cdp.eval(`
       const exported = await window.shopilot.agentDomain.packExport({ skillNames: ['Domain 巡检技能'] })
       const unconfirmed = await window.shopilot.agentDomain.packImport(exported.ok ? exported.data.json : '{}', false)
@@ -240,7 +251,7 @@ async function main() {
     check('Job 载荷嵌套超限时如实拒绝（不静默替换结构）', tooDeep?.ok === false && tooDeep.error.code === 'AGENT_JOB_PAYLOAD_TOO_DEEP', tooDeep?.error?.code || JSON.stringify(tooDeep?.data || ''))
     // 订单明细：未实测平台不猜锚点；登记实测覆盖后整表采集并落行。
     await cdp.eval(`return await window.shopilot.browser.open(${JSON.stringify(storeId)})`).catch(() => null)
-    const ordersBefore = await cdp.eval(`return await window.shopilot.agent.generatePlan('查看订单明细')`)
+    const ordersBefore = await cdp.eval(`return await window.shopilot.agent.generatePlan('采集订单明细')`)
     check('订单明细：未实测平台不猜锚点（如实未派发）', ordersBefore?.ok === true && String(ordersBefore.data.text || '').includes('未派发'), ordersBefore?.error?.code || String(ordersBefore?.data?.text || '').slice(0, 120))
     const ordersSuite = await cdp.eval(`
       const ordersUrl = ${JSON.stringify(pageUrl)}.replace('/read-only', '/orders')
@@ -252,7 +263,7 @@ async function main() {
       } })
       const readBack = await window.shopilot.settings.get('orders.profiles')
       const ctx = await window.shopilot.agent.softwareContext()
-      const planned = await window.shopilot.agent.generatePlan('查看订单明细')
+      const planned = await window.shopilot.agent.generatePlan('采集订单明细')
       const jobIds = planned.ok && Array.isArray(planned.data.jobIds) ? planned.data.jobIds : []
       let finished = null
       for (let i = 0; i < 60 && jobIds.length; i++) {
@@ -262,10 +273,30 @@ async function main() {
       }
       const results = finished?.browserRunId ? await window.shopilot.task.results(finished.browserRunId) : null
       const table = results?.ok ? (results.data.results || []).find(item => item.kind === 'table') : null
-      await window.shopilot.settings.set('orders.profiles', {})
       return { seeded: !!seeded?.ok, readBack: readBack.ok ? Object.keys(readBack.data.value || {}) : readBack.error, displayed: ctx.ok ? ctx.data.displayedStoreId : null, stores: ctx.ok ? ctx.data.stores.map(s => s.name + ':' + s.platform) : [], plannedText: planned.ok ? planned.data.text : JSON.stringify(planned.error), jobIds, status: finished?.status || null, rows: table?.payload?.rows?.length ?? null, metric: table?.payload?.metric ?? null }
     `)
     check('订单明细：按实测档案整表采集并逐行落库', !!ordersSuite?.seeded && ordersSuite.status === 'succeeded' && ordersSuite.rows >= 2 && ordersSuite.metric === 'orders.detail', ordersSuite?.plannedText?.slice(0, 100) || JSON.stringify(ordersSuite || ''))
+    const ordersOverview = await cdp.eval(`
+      const res = await window.shopilot.overview.orders()
+      if (!res.ok) return { error: res.error }
+      const row = (res.data.stores || []).find(item => item.storeName === 'Agent Domain 临时店')
+      return row ? { supported: row.supported, columns: row.columns.map(c => c.label), rows: row.rows.length, first: row.rows[0]?.cells || null } : { error: 'store-not-found' }
+    `)
+    check('订单明细：数据中心按实测列映射（行/列可读）', ordersOverview?.supported === true && ordersOverview.rows >= 2 && ordersOverview.columns.includes('订单号') && ordersOverview.first?.orderNo === 'O-1001', JSON.stringify(ordersOverview || {}).slice(0, 220))
+    // 读型意图：直接读已采集的快照（不派单），买家列不进上下文。
+    const ordersRead = await cdp.eval(`
+      const planned = await window.shopilot.agent.generatePlan('查看订单明细')
+      const kind = planned.ok ? planned.data.kind : 'error'
+      let text = planned.ok ? String(planned.data.text || '') : String(planned.error?.code || '')
+      if (planned.ok && planned.data.kind === 'software') {
+        const executed = await window.shopilot.agent.executeSoftwarePlan(planned.data.plan, true)
+        text = executed.ok ? String((executed.data.messages || []).join('；')) : ('执行失败：' + executed.error.code)
+      }
+      await window.shopilot.settings.set('orders.profiles', {})
+      return { kind, text: text.slice(0, 260) }
+    `)
+    const ordersReadText = String(ordersRead?.text || '')
+    check('订单明细：读型意图直接查已采集快照（不派单、不含买家列）', ordersRead?.kind === 'software' && ordersReadText.includes('O-1001') && ordersReadText.includes('最近') && !ordersReadText.includes('买家'), JSON.stringify(ordersRead || '').slice(0, 240))
 
     const snapshotJob = childId ? await cdp.eval(`return await window.shopilot.agentDomain.jobCreate({createdByAgentId:'root-ceo',assignedAgentId:${JSON.stringify(childId)},storeId:null,goal:'验证 Job 权限快照不能随 Agent 扩权而改变',inputSummary:{source:'local-permission-snapshot-fixture'},priority:40,requiresConfirmation:false,idempotencyKey:'domain-permission-snapshot-${Date.now()}',browserTask:null})`) : null
     const widenedScope = childId ? await cdp.eval(`return await window.shopilot.agentDomain.orgUpdate({actorAgentId:'root-ceo',agentId:${JSON.stringify(childId)},confirmed:true,memoryScope:{agentIds:[${JSON.stringify(childId)}],includeShared:true,write:false}})`) : null

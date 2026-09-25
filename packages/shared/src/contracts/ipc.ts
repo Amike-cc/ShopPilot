@@ -133,8 +133,12 @@ export const IPC_CHANNELS = {
   /** 技能/插件库与 JSON 分享包（导入导出只含声明式定义）。 */
   AGENT_SKILL_LIST: 'agent:skill:list',
   AGENT_SKILL_DELETE: 'agent:skill:delete',
+  AGENT_SKILL_UPDATE: 'agent:skill:update',
   AGENT_PACK_EXPORT: 'agent:pack:export',
   AGENT_PACK_IMPORT: 'agent:pack:import',
+
+  /** 数据中心：订单明细汇总（读订单页整表快照）。 */
+  OVERVIEW_ORDERS: 'overview:orders',
 
   // 多 Agent 组织、模型、Job 和本地记忆（A-M0～A-M4）
   AGENT_ORG_LIST: 'agent:org:list',

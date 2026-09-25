@@ -90,7 +90,7 @@
         <div class="admin-card-head"><strong>{{ skill.name }}</strong><span :class="['status-pill', skill.status]">{{ skill.status }}</span></div>
         <div class="admin-meta">{{ skill.id }} · {{ skill.source }} · {{ skill.steps.length }} 步 · {{ skill.pluginId ? `插件 ${skill.pluginId}` : '独立技能' }}</div>
         <div class="admin-meta">{{ skill.description || skill.intent || '无描述' }} · {{ skill.steps.map(step => step.type).join(' → ') }}</div>
-        <div class="admin-actions"><button class="mini-btn" @click="exportSkillNames = skill.name; exportPack()">导出此技能</button><button class="mini-btn danger-btn" @click="removeSkill(skill.id)">删除</button></div>
+        <div class="admin-actions"><button class="mini-btn" @click="exportSkillNames = skill.name; exportPack()">导出此技能</button><button class="mini-btn" @click="toggleSkill(skill)">{{ skill.status === 'enabled' ? '停用' : '启用' }}</button><button class="mini-btn danger-btn" @click="removeSkill(skill.id)">删除</button></div>
       </div>
       <div v-for="plugin in skillLibrary.plugins" :key="plugin.id" class="admin-card">
         <div class="admin-card-head"><strong>{{ plugin.name }}</strong><span class="status-pill">{{ plugin.skillIds.length }} 技能</span></div>
@@ -170,6 +170,7 @@ async function exportPack() { const names = exportSkillNames.value.split(/[,，\
 async function copyExport() { try { await navigator.clipboard.writeText(exportJson.value); skillMessage.value = '分享包 JSON 已复制到剪贴板。' } catch { skillMessage.value = '剪贴板不可用，请手动全选复制文本框内容。' } }
 async function importPack() { const res = await window.shopilot.agentDomain.packImport(importJson.value, true); if (!res.ok) { skillMessage.value = `导入失败（${res.error.code}）：${res.error.message}`; return } skillMessage.value = `导入完成：新增 ${res.data.importedSkills}，更新 ${res.data.updatedSkills}，插件 ${res.data.importedPlugins}${res.data.errors?.length ? `；注意：${res.data.errors.join('；')}` : ''}`; importJson.value = ''; await loadSkillLibrary() }
 async function removeSkill(skillId: string) { if (!window.confirm('确认删除该技能？')) return; const res = await window.shopilot.agentDomain.skillDelete(skillId); if (!res.ok) { skillMessage.value = `删除失败（${res.error.code}）：${res.error.message}`; return } skillMessage.value = '技能已删除'; await loadSkillLibrary() }
+async function toggleSkill(skill: any) { const next = skill.status === 'enabled' ? 'disabled' : 'enabled'; const res = await window.shopilot.agentDomain.skillUpdate({ skillId: skill.id, status: next }); if (!res.ok) { skillMessage.value = `更新失败（${res.error.code}）：${res.error.message}`; return } skillMessage.value = `技能「${res.data.name}」已${next === 'enabled' ? '启用' : '停用'}`; await loadSkillLibrary() }
 function agentDraft(agent: any): AgentDraft {
   return agentDrafts[agent.id] || (agentDrafts[agent.id] = {
     maxConcurrency: Number(agent.maxConcurrency || 1),

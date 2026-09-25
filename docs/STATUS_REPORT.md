@@ -12,6 +12,8 @@
 
 **Agent 能力扩展轮（2026-09-25，未提交）**: ①聊天/回合日预算硬阻断（与 Job 同口径，`AGENT_BUDGET_BLOCKED`）；②达人邀约发送接入智能体（`runInvite`，面板与 Main 共用 `@shared/invite-task` 构造器，缺项/未实测如实报错，发送类不进技能）；③逐条订单明细采集（`collectOrders` + `@shared/orders-steps`，实测档案红线 + 设置 `orders.profiles` 即时登记 + 整表逐行落库）；④连带修复：Job 载荷清洗嵌套上限 6→16 层且超限如实报错（旧实现把邀约 loop 载荷第 6 层静默替换成字符串 → `TASK_INVALID_STEP`）、凭据不可解密不再让应用启动失败、显式指定店铺全部无效时如实说明。验证：typecheck、单测 34 文件/391、lint 0 errors（831 warnings）、Agent 域 CDP 78/78、可见智能体 CDP 61/61、M3 113/113、dist:dir + 打包 smoke 6/6。
 
+**Agent 完善轮（2026-09-25，未提交）**: ①数据中心新增「订单明细」区块（`overview:orders`：表头文案匹配映射统一列、多余列进 extras、无表头退回列序；一键采集复用面板/智能体同一步骤构造器；可展开全部行）；②智能体新增只读工具 `getOrderDetails`（读最近一次快照、最多 20 条、买家列不进上下文），意图路由区分「采集/查看」；③技能生命周期 `updateSkill`（改名/描述/启用停用 + `agent:skill:update` + 设置面板按钮，停用后 runSkill 如实拒绝）。验证：typecheck、单测 34 文件/392、lint 0 errors（844 warnings）、Agent 域 CDP 81/81、可见智能体 CDP 61/61、M1 108/108、M3 113/113、dist:dir + 打包 smoke 6/6。
+
 ---
 
 ## 验收摘要

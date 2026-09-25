@@ -6,7 +6,7 @@ import { getBrowserHostWindow } from '../browser/window-manager'
 import { isAppLocked } from '../services/security-manager'
 import { AgentRuntimeError, activateAgent, addJobFeedback, bindAgentModel, cancelAgentJob, createAgent, createAgentJob, delegateAgentTask, deleteModelProfile, ensureAgentRuntimeBootstrap, getAgent, getAgentJob, listAgentJobs, listAgentsPage, listModelProfilesPage, markRecoverableJobsOnStartup, pauseAgent, previewHr, qualityMetrics, qualityReviewSummary, resumeAgent, resumeAgentJob, retireAgent, runAgentJob, setModelProfile, testModelProfile, updateAgent, approveAgentJob, reviewAgentJobResult, startAgentRuntimeLeaseSweeper } from '../services/agent-runtime'
 import { buildApprovedMemoryContext, createMemorySnapshot, inspectMemorySnapshot, listMemories, rebuildMemoryIndex, restoreMemorySnapshot, reviewMemory, searchMemories, writeMemory } from '../services/agent-memory'
-import { deleteAgentSkill, exportAgentPack, importAgentPack, listAgentSkillLibrary } from '../services/agent-service'
+import { deleteAgentSkill, exportAgentPack, importAgentPack, listAgentSkillLibrary, updateAgentSkill } from '../services/agent-service'
 
 function requestId(): string { return `req_${randomUUID()}` }
 function ok<T>(data: T, rid: string): IPCResult<T> { return { ok: true, data, requestId: rid } }
@@ -122,6 +122,7 @@ export function registerAgentDomainHandlers(): void {
   register(IPC_CHANNELS.AGENT_MEMORY_SNAPSHOT_RESTORE, (_event, raw) => restoreMemorySnapshot({ path: String((raw as any)?.path || ''), actorAgentId: String((raw as any)?.actorAgentId || 'root-ceo'), confirmed: !!(raw as any)?.confirmed }))
   register(IPC_CHANNELS.AGENT_SKILL_LIST, () => listAgentSkillLibrary())
   register(IPC_CHANNELS.AGENT_SKILL_DELETE, (_event, raw) => deleteAgentSkill(String((raw as any)?.skillId || '')))
+  register(IPC_CHANNELS.AGENT_SKILL_UPDATE, (_event, raw) => updateAgentSkill(raw || {}))
   register(IPC_CHANNELS.AGENT_PACK_EXPORT, (_event, raw) => exportAgentPack(raw || {}))
   register(IPC_CHANNELS.AGENT_PACK_IMPORT, (_event, raw) => importAgentPack(raw || {}))
   register(IPC_CHANNELS.AGENT_QUALITY_METRICS, () => qualityMetrics())

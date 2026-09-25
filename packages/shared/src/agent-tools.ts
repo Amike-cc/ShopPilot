@@ -49,6 +49,7 @@ export const AGENT_TOOL_CATALOG: readonly AgentToolSpec[] = [
   { type: 'collectBusiness', label: '采集经营数据', description: '采集订单/销量/销售额/退款指标', example: '{"type":"collectBusiness","storeIds":[]}' },
   { type: 'collectEntity', label: '采集主体信息', description: '采集店铺营业执照主体', example: '{"type":"collectEntity","storeIds":[]}' },
   { type: 'collectOrders', label: '采集订单明细', description: '逐条读取订单列表整表（仅已实测订单页的平台；明细落在任务结果里）', example: '{"type":"collectOrders","storeIds":[]}' },
+  { type: 'getOrderDetails', label: '查看订单明细', description: '读取最近一次采集到的订单明细（只读；买家列不进入上下文）', example: '{"type":"getOrderDetails","storeId":"...","limit":5}' },
   { type: 'listDownloads', label: '查看下载列表', description: '读取店铺下载记录', example: '{"type":"listDownloads"}' },
   { type: 'listBookmarks', label: '查看书签', description: '读取店铺书签', example: '{"type":"listBookmarks"}' },
   { type: 'createBookmark', label: '新建书签', description: '为店铺新建书签', example: '{"type":"createBookmark","storeId":"...","title":"...","url":"..."}' },
@@ -59,6 +60,7 @@ export const AGENT_TOOL_CATALOG: readonly AgentToolSpec[] = [
   { type: 'listSkills', label: '查看技能', description: '列出已创建的技能', example: '{"type":"listSkills"}' },
   { type: 'createSkill', label: '制作技能', description: '用现有工具组合一个新技能（只能包含自动执行类工具）', example: '{"type":"createSkill","name":"每日巡检","description":"...","intent":"...","steps":[{"type":"collectBusiness","input":{"storeIds":[]}},{"type":"listJobs","input":{}}]}' },
   { type: 'runSkill', label: '运行技能', description: '按顺序执行技能里的工具', example: '{"type":"runSkill","skillId":"skill_..."}' },
+  { type: 'updateSkill', label: '更新技能', description: '改名/改描述/启用或停用技能', example: '{"type":"updateSkill","skillId":"skill_...","status":"disabled"}' },
   { type: 'deleteSkill', label: '删除技能', description: '删除技能', example: '{"type":"deleteSkill","skillId":"skill_..."}' },
   { type: 'createPlugin', label: '制作插件', description: '把多个技能打包成插件', example: '{"type":"createPlugin","name":"店铺日报","description":"...","skillIds":["skill_..."]}' },
   { type: 'listPlugins', label: '查看插件', description: '列出插件及其技能', example: '{"type":"listPlugins"}' },
@@ -66,7 +68,7 @@ export const AGENT_TOOL_CATALOG: readonly AgentToolSpec[] = [
 ] as const
 
 /** 技能步骤禁止嵌套技能/插件管理，也禁止提交类动作（邀约发送必须每次由用户明确要求）。 */
-export const AGENT_SKILL_FORBIDDEN_STEPS: readonly string[] = ['createSkill', 'runSkill', 'deleteSkill', 'createPlugin', 'listPlugins', 'listSkills', 'listTools', 'runInvite']
+export const AGENT_SKILL_FORBIDDEN_STEPS: readonly string[] = ['createSkill', 'runSkill', 'updateSkill', 'deleteSkill', 'createPlugin', 'listPlugins', 'listSkills', 'listTools', 'runInvite']
 
 export function isSkillStepAllowed(type: string): boolean {
   return !AGENT_SKILL_FORBIDDEN_STEPS.includes(type)

@@ -68,6 +68,7 @@ export const AGENT_SOFTWARE_ACTION_TYPES = [
   'collectBusiness',
   'collectEntity',
   'collectOrders',
+  'getOrderDetails',
   'listDownloads',
   'listBookmarks',
   'createBookmark',
@@ -79,6 +80,7 @@ export const AGENT_SOFTWARE_ACTION_TYPES = [
   'listSkills',
   'createSkill',
   'runSkill',
+  'updateSkill',
   'deleteSkill',
   'createPlugin',
   'listPlugins',
@@ -349,6 +351,8 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('collectBusiness'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
   z.object({ type: z.literal('collectEntity'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
   z.object({ type: z.literal('collectOrders'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
+  /** 读取已采集的订单明细快照（只读；买家列不进上下文）。 */
+  z.object({ type: z.literal('getOrderDetails'), storeId: z.string().max(80).optional(), limit: z.number().int().min(1).max(20).optional() }).strict(),
   z.object({ type: z.literal('createBackup'), label: z.string().trim().max(80).default('') }).strict(),
   z.object({ type: z.literal('restoreBackup'), backupId: z.string().min(1).max(100) }).strict(),
   z.object({ type: z.literal('writeMemory'), title: z.string().trim().min(1).max(200), content: z.string().min(1).max(8000) }).strict(),
@@ -362,6 +366,14 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
     steps: z.array(z.object({ type: z.string().min(1).max(60), input: z.record(z.unknown()).default({}) }).strict()).min(1).max(8)
   }).strict(),
   z.object({ type: z.literal('runSkill'), skillId: z.string().max(80).optional(), skillName: z.string().max(80).optional() }).strict(),
+  /** 更新技能：改名/描述/启用停用（设置面板与对话共用）。 */
+  z.object({
+    type: z.literal('updateSkill'),
+    skillId: z.string().min(1).max(80),
+    name: z.string().trim().min(1).max(80).optional(),
+    description: z.string().trim().max(500).optional(),
+    status: z.enum(['enabled', 'disabled']).optional()
+  }).strict(),
   z.object({ type: z.literal('deleteSkill'), skillId: z.string().min(1).max(80) }).strict(),
   z.object({
     type: z.literal('createPlugin'),

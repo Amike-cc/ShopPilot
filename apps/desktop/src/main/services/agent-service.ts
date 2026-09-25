@@ -45,7 +45,7 @@ import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig } f
 import { buildEntityCollectSteps } from '@shared/entity-steps'
 import { entityProfileFor } from '@shared/constants/entity'
 import { ordersProfileFor, type OrdersProfile } from '@shared/constants/orders'
-import { buildOrdersCollectSteps } from '@shared/orders-steps'
+import { buildOrdersCollectSteps, mapOrdersRows, orderColumnLabel } from '@shared/orders-steps'
 import { listBookmarks, createBookmark, deleteBookmark } from '../browser/bookmark-manager'
 import { listDownloads } from '../browser/download-manager'
 import {
@@ -277,9 +277,9 @@ const SOFTWARE_ACTION_LABELS: Record<AgentSoftwareAction['type'], string> = {
   createStore: '新建店铺', updateStore: '修改店铺', archiveStore: '移入回收站', restoreStore: '恢复店铺', deleteStorePermanent: '彻底删除店铺',
   deleteTask: '删除任务', runTask: '派单运行任务', cancelTaskRun: '取消任务运行', pauseTaskRun: '暂停任务运行', resumeTaskRun: '恢复任务运行',
   listDownloads: '查看下载列表', listBookmarks: '查看书签', createBookmark: '新建书签', deleteBookmark: '删除书签',
-  listTools: '查看工具', listSkills: '查看技能', createSkill: '制作技能', runSkill: '运行技能', deleteSkill: '删除技能', createPlugin: '制作插件', listPlugins: '查看插件',
+  listTools: '查看工具', listSkills: '查看技能', createSkill: '制作技能', runSkill: '运行技能', updateSkill: '更新技能', deleteSkill: '删除技能', createPlugin: '制作插件', listPlugins: '查看插件',
   runInvite: '发送达人邀约',
-  collectInvoices: '采集发票', collectBusiness: '采集经营数据', collectEntity: '采集主体信息', collectOrders: '采集订单明细',
+  collectInvoices: '采集发票', collectBusiness: '采集经营数据', collectEntity: '采集主体信息', collectOrders: '采集订单明细', getOrderDetails: '查看订单明细',
   createBackup: '创建备份', restoreBackup: '恢复备份', writeMemory: '写入记忆'
 }
 
@@ -300,7 +300,9 @@ function describeSoftwareAction(action: AgentSoftwareAction): string {
   if (action.type === 'createSkill' || action.type === 'createPlugin') return `${label}「${action.name}」`
   if (action.type === 'runSkill') return `${label}（${action.skillId || action.skillName || ''}）`
   if (action.type === 'deleteSkill') return `${label}（${action.skillId}）`
+  if (action.type === 'updateSkill') return `${label}（${action.skillId}${action.status ? ` → ${action.status}` : ''}）`
   if (action.type === 'runInvite') return `${label}${action.storeId ? `（${action.storeId}）` : ''}`
+  if (action.type === 'getOrderDetails') return `${label}${action.storeId ? `（${action.storeId}）` : ''}`
   if (action.type === 'searchMemory') return `${label}「${action.query}」`
   if (action.type === 'writeMemory') return `${label}「${action.title}」`
   if (action.type === 'createBackup') return `${label}${action.label ? `「${action.label}」` : ''}`
@@ -474,6 +476,30 @@ function inviteSquareUrlFor(platform: string): string {
     if (configured) return configured
   } catch { /* fall through to the profile default */ }
   return String(inviteProfileFor(platform)?.pageUrl || '')
+}
+
+/** 更新技能：改名/描述/启用停用（设置面板与对话里的 updateSkill 共用）。 */
+export function updateAgentSkill(raw: unknown): AgentSkill {
+  const input = raw as { skillId?: string; name?: string; description?: string; status?: string }
+  const skill = findAgentSkill(String(input?.skillId || ''))
+  if (!skill) softwareError('AGENT_SKILL_NOT_FOUND', '技能不存在')
+  const name = input.name === undefined ? skill.name : redactAgentText(String(input.name).trim(), 80)
+  if (!name) softwareError('AGENT_INVALID_INPUT', '技能名称不能为空')
+  const status = input.status === undefined ? skill.status : String(input.status)
+  if (status !== 'enabled' && status !== 'disabled') softwareError('AGENT_INVALID_INPUT', '技能状态只能是 enabled 或 disabled')
+  const db = getDatabase()
+  if (name !== skill.name) {
+    const clash = db.prepare('SELECT id FROM agent_skills WHERE name=? AND id<>?').get(name, skill.id) as any
+    if (clash) softwareError('AGENT_INVALID_INPUT', `技能名「${name}」已被占用`)
+  }
+  db.prepare('UPDATE agent_skills SET name=?,description=?,status=?,updated_at=? WHERE id=?').run(
+    name,
+    input.description === undefined ? skill.description : redactAgentText(String(input.description).trim(), 500),
+    status,
+    Date.now(),
+    skill.id
+  )
+  return mapSkillRow(db.prepare('SELECT * FROM agent_skills WHERE id=?').get(skill.id))
 }
 
 /** 删除技能（设置面板；对话里的 deleteSkill 走软件动作）。 */
@@ -753,6 +779,24 @@ export async function generateAgentPlan(raw: unknown): Promise<
   const explicitPageWords = /(当前页面|这个页面|本页|页面标题|表格|选择器)/.test(normalizedGoal)
   // 逐条订单明细优先于经营指标：两者都含"订单"，但明细走订单页整表采集。
   if (!explicitPageWords && /(订单明细|逐条订单|订单列表|每一条订单|订单数据|订单记录)/.test(normalizedGoal)) {
+    const readIntent = /(查看|看看|列出|有哪些|最近|显示|读取)/.test(normalizedGoal) && !/(采集|抓取|拉取|更新|同步)/.test(normalizedGoal)
+    if (readIntent) {
+      // 读型：直接读最近一次采集到的快照（只读、不派单、不打开页面）
+      const store = resolveStoreMention(goal, softwareContext)
+        || (softwareContext.displayedStoreId ? softwareContext.stores.find(item => item.id === softwareContext.displayedStoreId) || null : null)
+        || (softwareContext.stores.length === 1 ? softwareContext.stores[0] : null)
+      if (store) {
+        return {
+          kind: 'software',
+          plan: planFromActions([{ type: 'getOrderDetails', storeId: store.id }], goal),
+          context: softwareContext,
+          model: '内置订单明细查询器',
+          elapsedMs: 0,
+          requiresApproval: false
+        }
+      }
+      return { kind: 'chat', text: '要看哪家店的订单明细？先打开店铺或说出店名。', model: '内置订单明细查询器', elapsedMs: 0, executed: [], thoughts: ['订单明细是读型请求，但当前没有可定位的店铺。'], jobIds: [] }
+    }
     const messages: string[] = []
     const jobIds: string[] = []
     const displayed = getDisplayedStoreId()
@@ -1095,12 +1139,12 @@ function validateSoftwareAction(action: AgentSoftwareAction): void {
   if (action.type === 'createBookmark' && !getStore(action.storeId)) {
     softwareError('AGENT_STORE_NOT_AUTHORIZED', '目标店铺不存在或已移入回收站')
   }
-  if (action.type === 'runInvite' && action.storeId) softwareStore(action.storeId)
+  if ((action.type === 'runInvite' || action.type === 'getOrderDetails') && action.storeId) softwareStore(action.storeId)
   if (action.type === 'restoreBackup' && !BackupManager.getBackup(action.backupId)) {
     softwareError('AGENT_BACKUP_NOT_FOUND', '目标备份不存在')
   }
   if (action.type === 'createSkill') validateSkillSteps(action.steps)
-  if (action.type === 'runSkill' || action.type === 'deleteSkill') {
+  if (action.type === 'runSkill' || action.type === 'deleteSkill' || action.type === 'updateSkill') {
     const skill = action.type === 'runSkill'
       ? (action.skillId ? findAgentSkill(action.skillId) : action.skillName ? findAgentSkill(action.skillName) : null)
       : findAgentSkill(action.skillId)
@@ -1387,6 +1431,32 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
       case 'collectOrders':
         await dispatchCollectJobs('orders', step.action.storeIds, messages, jobIds)
         break
+      case 'getOrderDetails': {
+        const storeId = step.action.storeId || getDisplayedStoreId()
+        if (!storeId) softwareError('AGENT_STORE_NOT_OPEN', '请先打开要查看订单的店铺，或指出店铺名称')
+        const store = softwareStore(storeId)
+        const profile = ordersProfileFor(store.platform, readOrdersProfileOverrides())
+        if (!profile) softwareError('AGENT_ORDERS_UNSUPPORTED', `店铺「${store.name}」的平台（${store.platform}）尚未实测订单页`)
+        const snapshot = getDatabase().prepare("SELECT value_json, captured_at FROM store_snapshots WHERE store_id=? AND metric='orders.detail' ORDER BY rowid DESC LIMIT 1").get(store.id) as any
+        if (!snapshot?.value_json) {
+          messages.push(`店铺「${store.name}」还没有订单明细快照；先让我采集一次（“采集订单明细”），或到数据中心的「订单明细」区块手动采集`)
+          break
+        }
+        const mapped = mapOrdersRows(profile.columns, parseJsonSafe(snapshot.value_json, null))
+        if (!mapped.length) {
+          messages.push(`店铺「${store.name}」最近一次订单明细采集没有数据行（${new Date(Number(snapshot.captured_at)).toLocaleString()}）`)
+          break
+        }
+        const limit = Math.min(20, Math.max(1, Number(step.action.limit) || 5))
+        const shown = mapped.slice(0, limit)
+        // 买家列不进模型上下文（隐私红线）；其余列按统一标签拼行。
+        const lines = shown.map(item => profile.columns
+          .filter(column => column.key !== 'buyer')
+          .map(column => `${orderColumnLabel(column.key)}：${item.cells[column.key] || '—'}`)
+          .join('，'))
+        messages.push(`店铺「${store.name}」最近 ${shown.length} 条订单（共 ${mapped.length} 条，采集于 ${new Date(Number(snapshot.captured_at)).toLocaleString()}）：${lines.join('；')}`)
+        break
+      }
       case 'createBackup': {
         try {
           const record = await BackupManager.createBackup(step.action.label || `智能体备份`)
@@ -1463,6 +1533,16 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
         if (!skill) softwareError('AGENT_SKILL_NOT_FOUND', '技能不存在')
         getDatabase().prepare('DELETE FROM agent_skills WHERE id=?').run(skill.id)
         messages.push(`技能「${skill.name}」已删除`)
+        break
+      }
+      case 'updateSkill': {
+        const updated = updateAgentSkill({
+          skillId: step.action.skillId,
+          name: step.action.name,
+          description: step.action.description,
+          status: step.action.status
+        })
+        messages.push(`技能「${updated.name}」已更新（${updated.status === 'enabled' ? '启用' : '停用'}）`)
         break
       }
       case 'createPlugin': {

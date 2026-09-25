@@ -224,6 +224,11 @@ export const ERROR_CODES = {
     message: '达人邀约配置不完整，请先在“达人邀约”面板补全',
     retryable: false
   },
+  AGENT_ORDERS_UNSUPPORTED: {
+    code: 'AGENT_ORDERS_UNSUPPORTED',
+    message: '该平台尚未实测订单页锚点',
+    retryable: false
+  },
   AGENT_JOB_PAYLOAD_TOO_DEEP: {
     code: 'AGENT_JOB_PAYLOAD_TOO_DEEP',
     message: 'Job 载荷嵌套层级超过上限',

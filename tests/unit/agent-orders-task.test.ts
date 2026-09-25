@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ordersProfileFor, type OrdersProfile } from '@shared/constants/orders'
-import { buildOrdersCollectSteps } from '@shared/orders-steps'
+import { buildOrdersCollectSteps, mapOrdersRows, orderColumnLabel } from '@shared/orders-steps'
 
 const measured: OrdersProfile = {
   platform: '测试平台',
@@ -39,5 +39,20 @@ describe('Orders detail collection (measured-profile only)', () => {
     const steps = buildOrdersCollectSteps({ ...measured, periodText: undefined, periodSettleMs: 4000 })
     expect(steps.map(step => step.type)).toEqual(['navigate', 'waitForPage', 'waitMs', 'readTable'])
     expect((steps[2].input as any).ms).toBe(4000)
+  })
+
+  it('maps raw rows by header text, skips the header row and keeps extras', () => {
+    const mapped = mapOrdersRows(
+      [{ key: 'orderNo', header: '订单号' }, { key: 'status', header: '订单状态' }],
+      [['订单号', '订单状态', '备注'], ['O-1001', '已发货', '备注 A'], ['O-1002', '', ''], ['', '', '']]
+    )
+    expect(mapped).toHaveLength(2)
+    expect(mapped[0].cells).toEqual({ orderNo: 'O-1001', status: '已发货' })
+    expect(mapped[0].extras).toEqual(['备注 A'])
+    expect(mapped[1].cells).toEqual({ orderNo: 'O-1002', status: '' })
+    expect(orderColumnLabel('orderNo')).toBe('订单号')
+    expect(mapOrdersRows([], 'not-a-table')).toEqual([])
+    // 没有可识别的表头（老数据）时退回按档案列顺序映射
+    expect(mapOrdersRows([{ key: 'orderNo', header: '订单号' }], [['x'], ['O-9']])[0].cells.orderNo).toBe('O-9')
   })
 })

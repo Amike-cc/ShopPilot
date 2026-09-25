@@ -19,6 +19,8 @@ import type { InvoiceColumnKey } from '@shared/constants/invoice'
 import { ENTITY_METRIC_NAME, ENTITY_METRIC_NO, entityProfileFor, entityUnsupportedNote } from '@shared/constants/entity'
 import { decideLicenseWrite, normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
 import { buildInvoiceCsv, invoiceCsvRows } from '@shared/invoice-csv'
+import { ordersProfileFor } from '@shared/constants/orders'
+import { mapOrdersRows, orderColumnLabel } from '@shared/orders-steps'
 import { randomUUID } from 'crypto'
 
 /**
@@ -295,6 +297,72 @@ export function registerProfileAndMiscHandlers(): void {
         bookmarks: (db.prepare('SELECT COUNT(*) c FROM bookmarks').get() as any).c
       }
       return success(stats, requestId)
+    } catch (err: any) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+    }
+  })
+
+  /**
+   * overview:orders - 订单明细：汇总各店铺**最近一次**订单页整表采集的行（只读）。
+   *
+   * 数据来源：订单明细采集任务 readTable(keepRows, metric='orders.detail') 落下的快照。
+   * 列按平台**实测档案**的列顺序映射到统一列（见 shared/constants/orders.ts 的红线）；
+   * 未实测的平台如实返回 supported:false（界面显示"未实测"），绝不估算或伪造。
+   */
+  ipcMain.handle(IPC_CHANNELS.OVERVIEW_ORDERS, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const db = getDatabase()
+      let overrides: Record<string, any> = {}
+      try {
+        const row = db.prepare('SELECT value_json FROM app_settings WHERE key=?').get('orders.profiles') as any
+        if (row?.value_json) overrides = JSON.parse(row.value_json)
+      } catch { /* 覆盖配置损坏时按内置档案走 */ }
+      const stores = db.prepare('SELECT id, name, platform FROM stores WHERE deleted_at IS NULL ORDER BY platform, name').all() as any[]
+      const snaps = db.prepare(`
+        SELECT store_id, value_json, captured_at FROM (
+          SELECT store_id, value_json, captured_at, ROW_NUMBER() OVER (PARTITION BY store_id ORDER BY rowid DESC) AS rn
+          FROM store_snapshots WHERE metric = 'orders.detail'
+        ) WHERE rn = 1
+      `).all() as any[]
+      const snapByStore = new Map(snaps.map(item => [item.store_id, item]))
+      const rows = stores.map(store => {
+        const profile = ordersProfileFor(store.platform, overrides)
+        const snapshot = snapByStore.get(store.id)
+        let raw: unknown = null
+        if (snapshot?.value_json) { try { raw = JSON.parse(snapshot.value_json) } catch { raw = null } }
+        const columns = profile ? profile.columns.map(column => ({ key: column.key, label: orderColumnLabel(column.key), header: column.header })) : []
+        const mapped = profile && Array.isArray(raw) ? mapOrdersRows(profile.columns, raw) : []
+        return {
+          storeId: store.id,
+          storeName: store.name,
+          platform: store.platform,
+          supported: !!profile,
+          measuredAt: profile?.measuredAt || null,
+          note: profile?.note || null,
+          columns,
+          rows: mapped,
+          capturedAt: snapshot?.captured_at || null
+        }
+      })
+      // 最近一次采集失败：只有最近一次确实是失败才回报（不把已被成功覆盖的旧失败一直挂着）
+      const lastRuns = db.prepare(`
+        SELECT s.id AS storeId, r.status, r.error_code, r.error_message FROM task_runs r
+        JOIN tasks t ON t.id = r.task_id
+        JOIN stores s ON s.id = r.store_id
+        WHERE t.name LIKE '订单明细采集 ·%'
+        ORDER BY r.rowid DESC
+      `).all() as any[]
+      const failByStore = new Map<string, any>()
+      for (const run of lastRuns) {
+        if (failByStore.has(run.storeId)) continue
+        failByStore.set(run.storeId, run.status === 'failed' ? run : null)
+      }
+      for (const row of rows) {
+        const fail = failByStore.get(row.storeId)
+        if (fail) (row as any).error = { code: fail.error_code, message: fail.error_message }
+      }
+      return success({ generatedAt: Date.now(), stores: rows }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }

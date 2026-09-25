@@ -1226,6 +1226,30 @@
           经营指标的页面锚点<b>尚未实测</b>：本应用没有平台官方 API，只能从各平台后台页面读取（走任务的「指标快照」机制）。实测一个平台登记一个——未登记的平台不会拿猜测的选择器去试。已登记：<b>暂无</b>。
         </div>
 
+        <div class="env-h">订单明细<span class="row-sub"> · 订单列表页整表读取（每店取最近一次；列按平台实测档案映射，未实测平台不猜锚点）</span>
+          <button class="mini-btn" style="margin-left:auto" data-test="datacenter-orders-collect" :disabled="dcOrdersCollecting" @click="collectOrdersData()">采集订单明细</button>
+        </div>
+        <div v-for="row in dcOrders.stores" :key="row.storeId" class="dc-orders-store">
+          <div class="dc-orders-head">
+            <b>{{ row.storeName }}</b>
+            <span class="row-sub">{{ row.platform }} · {{ row.supported ? `实测 ${row.measuredAt}` : '未实测' }} · {{ row.capturedAt ? new Date(row.capturedAt).toLocaleString() : '还没采集' }} · {{ row.rows.length }} 行</span>
+            <button v-if="row.rows.length > 5" class="mini-btn" @click="dcOrdersExpanded[row.storeId] = !dcOrdersExpanded[row.storeId]">{{ dcOrdersExpanded[row.storeId] ? '收起' : `展开全部 ${row.rows.length} 行` }}</button>
+          </div>
+          <div v-if="row.error" class="env-note">最近一次采集失败：{{ row.error.code }} {{ row.error.message }}</div>
+          <table class="dc-table" v-if="row.supported && row.rows.length">
+            <thead><tr><th v-for="c in row.columns" :key="c.key">{{ c.label }}</th><th v-if="row.rows.some((r: any) => r.extras.length)">其他列</th></tr></thead>
+            <tbody>
+              <tr v-for="(r, i) in (dcOrdersExpanded[row.storeId] ? row.rows : row.rows.slice(0, 5))" :key="i">
+                <td v-for="c in row.columns" :key="c.key">{{ r.cells[c.key] || '—' }}</td>
+                <td v-if="row.rows.some((x: any) => x.extras.length)" class="row-sub">{{ r.extras.join(' · ') || '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else-if="row.supported" class="empty-hint">还没有采集到订单明细（点右上「采集订单明细」；需要该店铺浏览器已打开）</div>
+          <div v-else class="env-note">该平台（{{ row.platform }}）的订单页锚点尚未实测：不猜选择器；实测后登记档案即可采集。</div>
+        </div>
+        <div v-if="!dcOrders.stores.length" class="empty-hint">还没有店铺</div>
+
         <div class="env-h">指标快照<span class="row-sub"> · 任务 readText/readTable 步骤按「指标名」落库；每店每指标取最新一条</span></div>
         <table class="dc-table" v-if="dc.snapshots.length">
           <thead><tr><th>店铺</th><th>指标</th><th>值</th><th>采集时间</th></tr></thead>
@@ -1685,6 +1709,8 @@ import { NO_LICENSE_KEY, groupStoresByLicense, licenseLabelOf } from '@shared/st
 import { entityProfileFor } from '@shared/constants/entity'
 import { buildEntityCollectSteps } from '@shared/entity-steps'
 import { BIZ_METRICS, businessProfileFor, BUSINESS_SUPPORTED_PLATFORMS } from '@shared/constants/business'
+import { ordersProfileFor } from '@shared/constants/orders'
+import { buildOrdersCollectSteps } from '@shared/orders-steps'
 import { buildBusinessCollectSteps } from '@shared/business-steps'
 import {
   DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
@@ -4559,6 +4585,10 @@ async function openInvoiceFor(row: { storeId: string; storeName: string }) {
 const dataCenterOpen = ref(false)
 const dcLoading = ref(false)
 const dcCollecting = ref(false)
+/** 订单明细汇总（数据中心「订单明细」区块；未实测平台 supported:false） */
+const dcOrders = ref<{ generatedAt: number; stores: any[] }>({ generatedAt: 0, stores: [] })
+const dcOrdersCollecting = ref(false)
+const dcOrdersExpanded = ref<Record<string, boolean>>({})
 
 /** 经营指标矩阵：按店铺汇总五个指标的最新快照值（值从 store_snapshots 的 biz.* 指标名来），
  *  并带上"上一次采集值"用于显示增减 */
@@ -4678,12 +4708,16 @@ function openInvoiceCenter() {
 async function loadDataCenter() {
   dcLoading.value = true
   try {
-    const res = await window.shopilot.overview.datacenter()
+    const [res, ordersRes] = await Promise.all([
+      window.shopilot.overview.datacenter(),
+      window.shopilot.overview.orders()
+    ])
     if (res.ok) {
       Object.assign(dc, res.data)
     } else {
       ws.toast('数据中心加载失败: ' + res.error.message, 'error')
     }
+    if (ordersRes.ok) dcOrders.value = ordersRes.data
   } finally {
     dcLoading.value = false
   }
@@ -4766,6 +4800,47 @@ async function collectBusinessData() {
     await loadDataCenter()
   } finally {
     dcCollecting.value = false
+  }
+}
+
+/**
+ * 采集订单明细：为每个「订单页已实测」的店铺各创建一个只读采集任务并立即运行
+ * （navigate 订单页 → readTable keepRows，整表行落 store_snapshots 的 orders.detail）。
+ * 实测档案可来自内置登记或设置 `orders.profiles` 的实测覆盖；未实测平台不猜锚点。
+ */
+async function collectOrdersData() {
+  const overridesRes = await window.shopilot.settings.get('orders.profiles')
+  const overrides = overridesRes.ok && overridesRes.data?.value && typeof overridesRes.data.value === 'object' && !Array.isArray(overridesRes.data.value)
+    ? overridesRes.data.value as Record<string, any>
+    : {}
+  const supported = ws.stores.filter(s => !!ordersProfileFor(s.platform, overrides))
+  if (!supported.length) {
+    ws.toast('还没有已实测订单页锚点的平台——需要先在真实登录态后台实测订单页（不猜选择器）；实测后可在设置里登记 orders.profiles', 'error')
+    return
+  }
+  dcOrdersCollecting.value = true
+  let created = 0
+  const skipped: string[] = []
+  try {
+    for (const s of supported) {
+      const profile = ordersProfileFor(s.platform, overrides)!
+      const steps = buildOrdersCollectSteps(profile)
+      const res = await window.shopilot.task.create({
+        name: `订单明细采集 · ${s.platform} · ${new Date().toLocaleDateString()}`,
+        storeScope: s.id,
+        steps
+      })
+      if (!res.ok) { skipped.push(`${s.name}（创建失败）`); continue }
+      const run = await window.shopilot.task.run(res.data.id)
+      if (!run.ok) { skipped.push(`${s.name}（启动失败）`); continue }
+      created++
+    }
+    await ws.refreshTasks()
+    ws.toast(`已启动 ${created} 个订单明细采集任务${skipped.length ? `；跳过：${skipped.join('、')}` : ''}`, created ? 'success' : 'error')
+    // 采集要跑十几秒：等运行结束后刷新明细，避免界面停在旧数据上。
+    setTimeout(() => { void loadDataCenter() }, 12000)
+  } finally {
+    dcOrdersCollecting.value = false
   }
 }
 
@@ -5298,6 +5373,9 @@ onBeforeUnmount(() => {
   background: var(--color-bg-tertiary); border: 1px solid var(--color-border); color: var(--color-text-secondary);
 }
 .dc-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 10px; }
+.dc-orders-store { margin: 4px 0 10px; }
+.dc-orders-head { display: flex; gap: 8px; align-items: baseline; margin: 2px 0 4px; }
+.dc-orders-head .mini-btn { margin-left: auto; }
 .dc-table th {
   text-align: left; padding: 5px 6px; color: var(--color-text-secondary);
   border-bottom: 1px solid var(--color-border); font-weight: 500;

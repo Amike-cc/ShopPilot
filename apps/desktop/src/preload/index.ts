@@ -104,6 +104,7 @@ const api = {
     stats: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_STATS),
     /** 数据中心：所有店铺的汇总数据（只读） */
     datacenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_DATACENTER),
+    orders: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_ORDERS),
     /** 发票中心：各店铺的待开票信息（来自发票页 readTable 快照） */
     invoiceCenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_INVOICE_CENTER),
     /** 发票中心：把待开票清单导出为 CSV（弹保存框） */
@@ -216,6 +217,7 @@ const api = {
     orgRetire: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_RETIRE, { agentId, actorAgentId: 'root-ceo', confirmed }),
     skillList: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_LIST),
     skillDelete: (skillId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_DELETE, { skillId }),
+    skillUpdate: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_UPDATE, JSON.parse(JSON.stringify(input))),
     packExport: (input: Record<string, unknown> = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PACK_EXPORT, JSON.parse(JSON.stringify(input))),
     packImport: (json: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PACK_IMPORT, JSON.parse(JSON.stringify({ json, confirmed }))),
     hrPreview: (role: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_HR_PREVIEW, { mode: 'hr', role, actorAgentId: 'root-ceo' }),
