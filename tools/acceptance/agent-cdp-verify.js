@@ -93,8 +93,19 @@ async function startSite() {
         } else if (chatMode && /暗号/.test(goal)) {
           const historyText = Array.isArray(userPayload?.conversationHistory) ? userPayload.conversationHistory.map(turn => String(turn.text || '')).join(' ') : ''
           content = historyText.includes('蓝鲸七号') ? '你刚才说的暗号是：蓝鲸七号。' : '我还没收到暗号。'
+        } else if (chatMode && /稍后回复/.test(goal)) {
+          // 延迟 1.5s 再回复：验收「上翻阅读时新消息到达」的确定性时序
+          content = '延迟回复到了：' + String(goal).slice(0, 20)
         } else if (chatMode && previousResults.length) {
           content = `已执行：${previousResults.join('；')}`
+        }
+        const delayed = /稍后回复/.test(goal) ? 1500 : 0
+        if (delayed) {
+          setTimeout(() => {
+            response.writeHead(200, { 'Content-Type': 'application/json' })
+            response.end(JSON.stringify({ model: 'local-agent-fixture', choices: [{ message: { content } }] }))
+          }, delayed)
+          return
         }
         response.writeHead(200, { 'Content-Type': 'application/json' })
         response.end(JSON.stringify({ model: 'local-agent-fixture', choices: [{ message: { content } }] }))
@@ -530,6 +541,19 @@ async function main() {
       const atBottom = await poll(() => cdp.evaluate(`const area=document.querySelector('.agent-scroll-area'); if(!area) return false; return area.scrollHeight - area.scrollTop - area.clientHeight < 14`), 8000)
       const scrollDebug = atBottom ? '' : await cdp.evaluate(`const area=document.querySelector('.agent-scroll-area'); return JSON.stringify({ messages: document.querySelectorAll('.agent-message').length, top: area?.scrollTop, height: area?.scrollHeight, client: area?.clientHeight })`)
       check('对话自动滚动到最新消息（消息满 40 条上限后仍生效）', cappedCount === 40 && !!scrollSent && !!scrollReply && atBottom === true, `messages=${cappedCount} atBottom=${atBottom} ${scrollDebug}`)
+
+      // 上翻阅读时不打断：发一条 1.5s 后才回复的消息，立刻翻到顶部，新内容只提示按钮，点击回到最新。
+      const awayBefore = await lastAssistant()
+      const awaySent = await sendGoal('稍后回复')
+      await sleep(250)
+      await cdp.evaluate(`const area=document.querySelector('.agent-scroll-area'); if(area) area.scrollTop = 0; return true;`)
+      const awayReply = await waitReply(awayBefore, 30000)
+      const awayDebug = await cdp.evaluate(`const area=document.querySelector('.agent-scroll-area'); const nodes=[...document.querySelectorAll('.agent-message')]; const last=nodes[nodes.length-1]; return JSON.stringify({ top: area?.scrollTop, h: area?.scrollHeight, c: area?.clientHeight, lastRole: last?.className || '', lastText: (last?.innerText||'').slice(0,30), jump: !!document.querySelector('[data-test="agent-jump-latest"]') })`)
+      const jumpShown = await poll(() => cdp.evaluate(`return !!document.querySelector('[data-test="agent-jump-latest"]')`), 10000)
+      const stayedAway = await cdp.evaluate(`const area=document.querySelector('.agent-scroll-area'); return area ? area.scrollTop < 60 : false`)
+      await cdp.evaluate(`document.querySelector('[data-test="agent-jump-latest"]')?.click(); return true;`)
+      const backToLatest = await poll(() => cdp.evaluate(`const area=document.querySelector('.agent-scroll-area'); if(!area) return false; return area.scrollHeight - area.scrollTop - area.clientHeight < 14`), 8000)
+      check('上翻阅读时不打断：新消息显示「有新消息」按钮，点击回到最新', !!awaySent && !!awayReply && jumpShown === true && stayedAway === true && backToLatest === true, `jump=${jumpShown} away=${stayedAway} back=${backToLatest} ${awayDebug}`)
     }
 
     const keyNotInDom = await cdp.evaluate(`return !document.documentElement.outerHTML.includes('temporary-agent-cdp-key-123456')`)

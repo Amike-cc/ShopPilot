@@ -17,7 +17,7 @@
       <button type="button" :disabled="agent.busy" @click="agent.refreshSoftwareContext()">▦ 查看软件</button>
       <button type="button" @click="$emit('view-tasks')">☷ 查看任务</button>
     </nav>
-    <div ref="scrollArea" class="agent-scroll-area">
+    <div ref="scrollArea" class="agent-scroll-area" @scroll.passive="onScroll">
       <details v-if="agent.observation?.screenshot.available && agent.observation.screenshot.dataUrl" class="agent-preview">
         <summary>本次页面截图预览 · 临时保留</summary>
         <img :src="agent.observation.screenshot.dataUrl" alt="当前页面截图预览" />
@@ -68,6 +68,7 @@
         </div>
       </section>
     </div>
+    <button v-if="showJumpLatest" type="button" class="agent-jump-latest" data-test="agent-jump-latest" @click="jumpToLatest()">有新消息 ↓</button>
     <AgentComposer ref="composer" :disabled="agent.busy" @send="agent.generatePlan" />
     <footer class="agent-footer">AI Key 仅存于主进程 · 智能体负责对话与软件操作，页面任务由子 Agent 通过现有 TaskRunner 执行</footer>
   </section>
@@ -129,16 +130,49 @@ function scrollToLatest() {
     const area = scrollArea.value
     if (!area) return
     area.scrollTop = area.scrollHeight
-    requestAnimationFrame(() => { if (scrollArea.value) scrollArea.value.scrollTop = scrollArea.value.scrollHeight })
+    // 补滚只在仍"跟随最新"时执行：用户手动上翻后不再被拉回底部（不打断阅读）。
+    requestAnimationFrame(() => { if (scrollArea.value && stickToBottom.value) scrollArea.value.scrollTop = scrollArea.value.scrollHeight })
   })
 }
-watch(scrollSignature, () => scrollToLatest(), { flush: 'post' })
-onMounted(() => { window.addEventListener('keydown', onEscape); scrollToLatest() })
+
+/**
+ * 上翻阅读时不打断：用户主动往上翻（离开底部）后，新内容不再强拉到底，
+ * 只显示「有新消息 ↓」按钮；自己发消息仍然直接跟到底（那是用户刚做的动作）。
+ */
+const stickToBottom = ref(true)
+const hasNewWhileAway = ref(false)
+const showJumpLatest = computed(() => !stickToBottom.value && hasNewWhileAway.value)
+function onScroll() {
+  const area = scrollArea.value
+  if (!area) return
+  const nearBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 40
+  stickToBottom.value = nearBottom
+  if (nearBottom) hasNewWhileAway.value = false
+}
+function jumpToLatest() {
+  stickToBottom.value = true
+  hasNewWhileAway.value = false
+  scrollToLatest()
+}
+watch(scrollSignature, () => {
+  const last = agent.messages[agent.messages.length - 1]
+  const userJustActed = last?.role === 'user'
+  if (stickToBottom.value || userJustActed) {
+    stickToBottom.value = true
+    hasNewWhileAway.value = false
+    scrollToLatest()
+  } else {
+    hasNewWhileAway.value = true
+  }
+}, { flush: 'post' })
+onMounted(() => { window.addEventListener('keydown', onEscape); stickToBottom.value = true; scrollToLatest() })
 onBeforeUnmount(() => window.removeEventListener('keydown', onEscape))
 </script>
 
 <style scoped>
 .agent-drawer { position:relative;display:flex;flex-direction:column;min-width:0;width:100%;height:100%;overflow:hidden;color:var(--color-text-primary);background:var(--color-bg-secondary); }
+.agent-jump-latest { position:absolute;left:50%;bottom:104px;z-index:6;transform:translateX(-50%);border:1px solid rgba(126,110,226,.65);border-radius:99px;padding:5px 12px;background:rgba(58,48,120,.92);color:#efeaff;font-size:10px;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.35); }
+.agent-jump-latest:hover { background:rgba(74,62,150,.96); }
 .agent-header { display:flex;align-items:center;gap:9px;flex:0 0 auto;padding:9px 12px;border-bottom:1px solid var(--color-border); }.agent-title-mark { display:grid;place-items:center;width:30px;height:30px;border-radius:10px;background:linear-gradient(145deg,#2e86e9,#8150d9);color:white;font-size:18px; }.agent-title { display:flex;flex-direction:column;gap:2px; }.agent-title strong { font-size:13px; }.agent-presence { color:#77c9ac;font-size:9px; }.agent-presence.working { color:#eac36b; }.agent-close { margin-left:auto;width:26px;height:26px;border:0;border-radius:7px;background:transparent;color:var(--color-text-secondary);font-size:18px;cursor:pointer; }
 .agent-context-strip { flex:0 0 auto;padding:8px 12px;border-bottom:1px solid var(--color-border); }.agent-context-strip>div { display:flex;align-items:center;gap:7px;margin:3px 0;font-size:10px; }.context-icon { display:grid;place-items:center;flex:0 0 18px;height:18px;border-radius:5px;background:rgba(121,102,222,.15);color:#c8c0ff;font-size:9px; }.context-main { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-text-primary); }.drawer-url { margin:5px 0 0 25px;color:var(--color-text-muted);font-size:9px;overflow-wrap:anywhere;line-height:1.4; }
 .agent-shortcuts { flex:0 0 auto;display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--color-border); }.agent-shortcuts button,.task-card-head button { border:1px solid var(--color-border);border-radius:7px;padding:6px 7px;background:rgba(255,255,255,.035);color:var(--color-text-secondary);font-size:10px;white-space:nowrap;cursor:pointer; }.agent-shortcuts button:disabled { opacity:.45;cursor:default; }
