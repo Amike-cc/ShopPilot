@@ -148,6 +148,251 @@ export const ERROR_CODES = {
     code: 'INTERNAL_ERROR',
     message: '未分类内部错误',
     retryable: false
+  },
+  AGENT_PERMISSION_DENIED: {
+    code: 'AGENT_PERMISSION_DENIED',
+    message: '当前 Agent 没有执行该操作的权限',
+    retryable: false
+  },
+  AGENT_FORBIDDEN: {
+    code: 'AGENT_FORBIDDEN',
+    message: '当前调用方不能访问 Agent IPC',
+    retryable: false
+  },
+  AGENT_INTERNAL_ERROR: {
+    code: 'AGENT_INTERNAL_ERROR',
+    message: 'Agent 操作失败',
+    retryable: false
+  },
+  AGENT_CONFIRMATION_REQUIRED: {
+    code: 'AGENT_CONFIRMATION_REQUIRED',
+    message: '该 Agent 操作需要人工确认',
+    retryable: false
+  },
+  AGENT_CONFIRMATION_INVALID: {
+    code: 'AGENT_CONFIRMATION_INVALID',
+    message: '人工确认凭证不匹配',
+    retryable: false
+  },
+  AGENT_ROOT_IMMUTABLE: {
+    code: 'AGENT_ROOT_IMMUTABLE',
+    message: 'root-ceo 是固定根 Agent，不能删除、退休或改名',
+    retryable: false
+  },
+  AGENT_ROOT_CANNOT_EXECUTE: {
+    code: 'AGENT_ROOT_CANNOT_EXECUTE',
+    message: '主 Agent 只负责对话、拆分和派单，不执行任务；需要执行的任务必须派给子 Agent',
+    retryable: false
+  },
+  AGENT_NO_EXECUTOR: {
+    code: 'AGENT_NO_EXECUTOR',
+    message: '没有可用的 active 子 Agent；请先在“设置 → Agent 团队”创建并激活执行岗位',
+    retryable: false
+  },
+  AGENT_INVALID_STATE: {
+    code: 'AGENT_INVALID_STATE',
+    message: 'Agent 状态转移不合法',
+    retryable: false
+  },
+  AGENT_NOT_FOUND: {
+    code: 'AGENT_NOT_FOUND',
+    message: 'Agent 不存在',
+    retryable: false
+  },
+  AGENT_SKILL_NOT_FOUND: {
+    code: 'AGENT_SKILL_NOT_FOUND',
+    message: '技能不存在或已停用',
+    retryable: false
+  },
+  AGENT_INVALID_SKILL_STEP: {
+    code: 'AGENT_INVALID_SKILL_STEP',
+    message: '技能步骤不在允许的自动执行工具内',
+    retryable: false
+  },
+  AGENT_PACK_INVALID: {
+    code: 'AGENT_PACK_INVALID',
+    message: '技能/插件包格式不合法或包含不允许的动作',
+    retryable: false
+  },
+  AGENT_INVITE_UNSUPPORTED: {
+    code: 'AGENT_INVITE_UNSUPPORTED',
+    message: '该平台尚未实测达人邀约',
+    retryable: false
+  },
+  AGENT_INVITE_CONFIG_INCOMPLETE: {
+    code: 'AGENT_INVITE_CONFIG_INCOMPLETE',
+    message: '达人邀约配置不完整，请先在“达人邀约”面板补全',
+    retryable: false
+  },
+  AGENT_JOB_PAYLOAD_TOO_DEEP: {
+    code: 'AGENT_JOB_PAYLOAD_TOO_DEEP',
+    message: 'Job 载荷嵌套层级超过上限',
+    retryable: false
+  },
+  AGENT_MODEL_NOT_FOUND: {
+    code: 'AGENT_MODEL_NOT_FOUND',
+    message: '模型 Profile 不存在或已停用',
+    retryable: false
+  },
+  AGENT_MODEL_KEY_REQUIRED: {
+    code: 'AGENT_MODEL_KEY_REQUIRED',
+    message: '该模型 Profile 尚未配置 API Key',
+    retryable: false
+  },
+  AGENT_INVALID_INPUT: {
+    code: 'AGENT_INVALID_INPUT',
+    message: 'Agent 输入不合法',
+    retryable: false
+  },
+  AGENT_OPERATION_NOT_ALLOWED: {
+    code: 'AGENT_OPERATION_NOT_ALLOWED',
+    message: '该操作不在 Agent 允许的能力范围内',
+    retryable: false
+  },
+  AGENT_SOFTWARE_TARGET_REQUIRED: {
+    code: 'AGENT_SOFTWARE_TARGET_REQUIRED',
+    message: '请指出要操作的店铺或标签页名称，Agent 不会猜测软件对象',
+    retryable: false
+  },
+  AGENT_STORE_NOT_AUTHORIZED: {
+    code: 'AGENT_STORE_NOT_AUTHORIZED',
+    message: '目标店铺不存在、已移入回收站或不在授权范围',
+    retryable: false
+  },
+  AGENT_STORE_NOT_OPEN: {
+    code: 'AGENT_STORE_NOT_OPEN',
+    message: '目标店铺浏览器尚未打开',
+    retryable: false
+  },
+  AGENT_TAB_CLOSED: {
+    code: 'AGENT_TAB_CLOSED',
+    message: '目标标签页不存在或已关闭',
+    retryable: false
+  },
+  AGENT_INVALID_SOFTWARE_ACTION: {
+    code: 'AGENT_INVALID_SOFTWARE_ACTION',
+    message: '软件操作不在允许列表中',
+    retryable: false
+  },
+  AGENT_INVALID_PLAN: {
+    code: 'AGENT_INVALID_PLAN',
+    message: '计划结构不合法',
+    retryable: false
+  },
+  AGENT_BAD_PLAN_STATE: {
+    code: 'AGENT_BAD_PLAN_STATE',
+    message: '计划状态不允许该操作',
+    retryable: false
+  },
+  AGENT_PLAN_TOO_LARGE: {
+    code: 'AGENT_PLAN_TOO_LARGE',
+    message: '计划内容超过大小限制',
+    retryable: false
+  },
+  AGENT_BOOKMARK_NOT_FOUND: {
+    code: 'AGENT_BOOKMARK_NOT_FOUND',
+    message: '目标书签不存在',
+    retryable: false
+  },
+  AGENT_BACKUP_NOT_FOUND: {
+    code: 'AGENT_BACKUP_NOT_FOUND',
+    message: '目标备份不存在',
+    retryable: false
+  },
+  AGENT_JOB_DUPLICATE: {
+    code: 'AGENT_JOB_DUPLICATE',
+    message: '幂等键已对应其他 Job',
+    retryable: false
+  },
+  AGENT_JOB_NOT_FOUND: {
+    code: 'AGENT_JOB_NOT_FOUND',
+    message: 'Agent Job 不存在',
+    retryable: false
+  },
+  AGENT_JOB_BAD_STATE: {
+    code: 'AGENT_JOB_BAD_STATE',
+    message: 'Agent Job 状态不允许该操作',
+    retryable: false
+  },
+  AGENT_JOB_CONFLICT: {
+    code: 'AGENT_JOB_CONFLICT',
+    message: 'Agent Job 已被其他执行者更新',
+    retryable: true
+  },
+  AGENT_JOB_LEASE_LOST: {
+    code: 'AGENT_JOB_LEASE_LOST',
+    message: 'Agent Job 租约已失效，拒绝写回旧 Worker 结果',
+    retryable: false
+  },
+  AGENT_DAG_LIMIT: {
+    code: 'AGENT_DAG_LIMIT',
+    message: 'Agent Job DAG 超出深度或节点上限',
+    retryable: false
+  },
+  AGENT_JOB_RESULT_NOT_FOUND: {
+    code: 'AGENT_JOB_RESULT_NOT_FOUND',
+    message: 'Agent Job 结果不存在',
+    retryable: false
+  },
+  AGENT_JOB_DEPENDENCY_WAITING: {
+    code: 'AGENT_JOB_DEPENDENCY_WAITING',
+    message: 'Agent Job 依赖尚未完成',
+    retryable: true
+  },
+  AGENT_JOB_DEPENDENCY_FAILED: {
+    code: 'AGENT_JOB_DEPENDENCY_FAILED',
+    message: 'Agent Job 依赖未成功完成',
+    retryable: false
+  },
+  AGENT_MEMORY_PATH_INVALID: {
+    code: 'AGENT_MEMORY_PATH_INVALID',
+    message: '记忆目录路径不安全',
+    retryable: false
+  },
+  AGENT_MEMORY_SENSITIVE: {
+    code: 'AGENT_MEMORY_SENSITIVE',
+    message: '记忆内容包含禁止保存的敏感字段',
+    retryable: false
+  },
+  AGENT_MEMORY_NOT_FOUND: {
+    code: 'AGENT_MEMORY_NOT_FOUND',
+    message: '记忆记录不存在',
+    retryable: false
+  },
+  AGENT_MEMORY_TOO_LARGE: {
+    code: 'AGENT_MEMORY_TOO_LARGE',
+    message: '记忆正文超过允许上限',
+    retryable: false
+  },
+  AGENT_MEMORY_SNAPSHOT_UNAVAILABLE: {
+    code: 'AGENT_MEMORY_SNAPSHOT_UNAVAILABLE',
+    message: '系统安全存储不可用，不能操作记忆快照',
+    retryable: false
+  },
+  AGENT_MEMORY_SNAPSHOT_INVALID: {
+    code: 'AGENT_MEMORY_SNAPSHOT_INVALID',
+    message: '记忆快照格式、密文或完整性校验失败',
+    retryable: false
+  },
+  AGENT_MEMORY_IO_FAILED: {
+    code: 'AGENT_MEMORY_IO_FAILED',
+    message: '记忆写入未完成，已回滚文件和索引状态',
+    retryable: true
+  },
+  AGENT_MODEL_KEY_STORAGE_UNAVAILABLE: {
+    code: 'AGENT_MODEL_KEY_STORAGE_UNAVAILABLE',
+    message: '系统安全存储不可用，拒绝保存模型 API Key',
+    retryable: false
+  },
+  AGENT_BUDGET_BLOCKED: {
+    code: 'AGENT_BUDGET_BLOCKED',
+    message: 'Agent 或模型预算不足',
+    retryable: false
+  },
+  AGENT_CONCURRENCY_LIMIT: {
+    code: 'AGENT_CONCURRENCY_LIMIT',
+    message: 'Agent 或模型 Profile 已达到并发上限',
+    retryable: true
   }
 } as const
 

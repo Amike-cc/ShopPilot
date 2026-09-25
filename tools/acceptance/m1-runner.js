@@ -22,7 +22,10 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
  * 用同一调试端口再启动时会互相干扰），所以走 taskkill /T；非 Windows 回退 SIGKILL。
  */
 function killTree(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  // The Electron parent can exit before Chromium renderers do.  Do not use
+  // exitCode/signalCode as a proxy for a clean process tree; taskkill /T must
+  // still run while the original PID is known.
+  if (!child || !child.pid) return
   try {
     if (process.platform === 'win32' && child.pid) execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' })
     else child.kill('SIGKILL')

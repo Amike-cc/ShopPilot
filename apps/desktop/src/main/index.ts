@@ -17,6 +17,8 @@ import { registerTaskHandlers } from './ipc/task-handlers'
 import { registerSessionAndSecurityHandlers } from './ipc/session-security-handlers'
 import { registerUpdateHandlers } from './ipc/update-handlers'
 import { registerAiHandlers } from './ipc/ai-handlers'
+import { registerAgentHandlers } from './ipc/agent-handlers'
+import { registerAgentDomainHandlers } from './ipc/agent-domain-handlers'
 import { scheduleStartupCheck } from './services/update-manager'
 import { installLockGate, startBackgroundServices } from './services/bg-services'
 import * as Security from './services/security-manager'
@@ -287,6 +289,8 @@ async function initialize(): Promise<void> {
     registerSessionAndSecurityHandlers()
     registerUpdateHandlers()
     registerAiHandlers()
+    registerAgentHandlers()
+    registerAgentDomainHandlers()
     console.log('IPC handlers registered')
 
     // 锁定动作的统一善后（手动锁定与空闲自动锁定同路径）- §189

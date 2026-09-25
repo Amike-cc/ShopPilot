@@ -8,10 +8,19 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS, EVENT_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import { PLATFORM_CATALOG } from '@shared/constants/platforms'
+import type {
+  AgentPlan,
+  AgentSoftwareContext,
+  AgentSoftwarePlan,
+  AgentUiState
+} from '@shared/schemas/agent'
+import type { AgentJobCreate, AgentJobFeedback, AgentJobResultReview, AgentMemoryReview, AgentMemoryWrite, AgentTaskDelegate, ModelProfileInput } from '@shared/schemas/agent-domain'
 
 /**
  * 暴露给渲染进程的安全 API
  */
+const eventListenerWrappers = new Map<string, Map<(...args: any[]) => void, (...args: any[]) => void>>()
+
 const api = {
   // 店铺管理
   store: {
@@ -35,7 +44,7 @@ const api = {
     display: (storeId: string | null): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_DISPLAY, { storeId }),
     setViewport: (bounds: { x: number, y: number, width: number, height: number }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SET_VIEWPORT, bounds),
     /** 弹层打开/关闭：让主进程摘除/恢复原生视图挂载（否则弹窗被店铺页面盖住） */
-    setViewsObscured: (obscured: boolean): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, { obscured }),
+    setViewsObscured: (obscured: boolean, reason: 'modal' | 'agent' = 'modal'): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, { obscured, reason }),
     
     tab: {
       create: (storeId: string, url?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_TAB_CREATE, { storeId, url }),
@@ -174,6 +183,69 @@ const api = {
     fireScheduled: (taskId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_CREATE_FIRE, { taskId })
   },
 
+  // Agent 只暴露受控观察、结构化计划、软件白名单动作和 UI 设置；
+  // 不能访问 WebContents、数据库、文件系统、Shell 或源码，任务继续走上方现有 task API。
+  agent: {
+    uiGet: (): Promise<IPCResult<AgentUiState>> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_UI_GET),
+    // Pinia 对象是 Proxy，Electron structured clone 无法直接序列化；只复制 Agent schema 中的 JSON 值。
+    uiSet: (state: AgentUiState): Promise<IPCResult<AgentUiState>> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_UI_SET, JSON.parse(JSON.stringify(state))),
+    observe: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PAGE_OBSERVE),
+    generatePlan: (goal: string, history?: Array<{ role: 'user' | 'assistant'; text: string }>): Promise<IPCResult<
+      | { kind: 'task'; plan: AgentPlan; observation: any; model: string; elapsedMs: number; requiresApproval: boolean }
+      | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; pendingGoal?: string; thought?: string; requiresApproval: boolean }
+      | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; executed?: string[]; jobIds?: string[] }
+    >> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AGENT_PLAN_GENERATE, { goal, history: history ? JSON.parse(JSON.stringify(history)) : [] }),
+    validatePlan: (plan: AgentPlan): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PLAN_VALIDATE, JSON.parse(JSON.stringify(plan))),
+    softwareContext: (): Promise<IPCResult<AgentSoftwareContext>> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SOFTWARE_CONTEXT),
+    validateSoftwarePlan: (plan: AgentSoftwarePlan): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AGENT_SOFTWARE_VALIDATE, JSON.parse(JSON.stringify(plan))),
+    executeSoftwarePlan: (plan: AgentSoftwarePlan, confirmed = false): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AGENT_SOFTWARE_EXECUTE, { plan: JSON.parse(JSON.stringify(plan)), confirmed })
+  },
+
+  // 多 Agent 管理 API：写操作只通过 Main 的组织、模型、Job、记忆服务。
+  agentDomain: {
+    orgList: (query: Record<string, unknown> = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_LIST, JSON.parse(JSON.stringify(query))),
+    orgGet: (agentId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_GET, { agentId }),
+    orgCreate: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_CREATE, JSON.parse(JSON.stringify(input))),
+    orgUpdate: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_UPDATE, JSON.parse(JSON.stringify(input))),
+    orgActivate: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_ACTIVATE, { agentId, actorAgentId: 'root-ceo', confirmed }),
+    orgPause: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_PAUSE, { agentId, actorAgentId: 'root-ceo', confirmed }),
+    orgResume: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_RESUME, { agentId, actorAgentId: 'root-ceo', confirmed }),
+    orgRetire: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_RETIRE, { agentId, actorAgentId: 'root-ceo', confirmed }),
+    skillList: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_LIST),
+    skillDelete: (skillId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_DELETE, { skillId }),
+    packExport: (input: Record<string, unknown> = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PACK_EXPORT, JSON.parse(JSON.stringify(input))),
+    packImport: (json: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PACK_IMPORT, JSON.parse(JSON.stringify({ json, confirmed }))),
+    hrPreview: (role: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_HR_PREVIEW, { mode: 'hr', role, actorAgentId: 'root-ceo' }),
+    modelList: (query: Record<string, unknown> = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_LIST, JSON.parse(JSON.stringify(query))),
+    modelSet: (profile: ModelProfileInput): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_SET, { profile: JSON.parse(JSON.stringify(profile)), actorAgentId: 'root-ceo' }),
+    modelDelete: (profileId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_DELETE, { profileId, actorAgentId: 'root-ceo' }),
+    modelTest: (profileId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_TEST, { profileId, actorAgentId: 'root-ceo' }),
+    modelBind: (agentId: string, modelProfileId: string | null): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_BIND, { agentId, modelProfileId, actorAgentId: 'root-ceo' }),
+    jobCreate: (input: AgentJobCreate): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_CREATE, JSON.parse(JSON.stringify(input))),
+    jobDelegate: (input: AgentTaskDelegate): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_DELEGATE, JSON.parse(JSON.stringify(input))),
+    jobList: (query: Record<string, unknown> = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_LIST, JSON.parse(JSON.stringify(query))),
+    jobGet: (jobId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_GET, { jobId }),
+    jobRun: (jobId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_RUN, { jobId, actorAgentId: 'root-ceo' }),
+    jobCancel: (jobId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_CANCEL, { jobId, actorAgentId: 'root-ceo' }),
+    jobApprove: (jobId: string, approved: boolean, confirmationId?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_APPROVE, { jobId, approved, confirmationId, actorAgentId: 'root-ceo' }),
+    jobResultReview: (input: AgentJobResultReview): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_RESULT_REVIEW, JSON.parse(JSON.stringify(input))),
+    jobFeedback: (input: AgentJobFeedback): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_FEEDBACK, JSON.parse(JSON.stringify(input))),
+    jobResume: (jobId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_RESUME, { jobId, actorAgentId: 'root-ceo' }),
+    memoryList: (query: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_LIST, JSON.parse(JSON.stringify(query))),
+    memorySearch: (query: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_SEARCH, JSON.parse(JSON.stringify(query))),
+    memoryWrite: (input: AgentMemoryWrite): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_WRITE, JSON.parse(JSON.stringify(input))),
+    memoryReview: (input: AgentMemoryReview): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_REVIEW, JSON.parse(JSON.stringify(input))),
+    memoryRebuild: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_REBUILD),
+    memorySnapshot: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_SNAPSHOT),
+    memorySnapshotInspect: (path: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_SNAPSHOT_INSPECT, { path }),
+    memorySnapshotRestore: (path: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_SNAPSHOT_RESTORE, { path, confirmed, actorAgentId: 'root-ceo' }),
+    qualityMetrics: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_QUALITY_METRICS),
+    qualityReview: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_QUALITY_REVIEW)
+  },
+
   // 店铺指标快照 - §5.11
   snapshot: {
     list: (storeId: string, limit?: number): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SNAPSHOT_LIST, { storeId, limit })
@@ -208,26 +280,32 @@ const api = {
   on: (channel: string, callback: (...args: any[]) => void): void => {
     // 只允许白名单事件
     const allowedChannels: string[] = Object.values(EVENT_CHANNELS)
-    if (allowedChannels.includes(channel)) {
-      ipcRenderer.on(channel, (_event, ...args) => callback(...args))
-    }
+    if (!allowedChannels.includes(channel) || typeof callback !== 'function') return
+    const wrapped = (_event: unknown, ...args: any[]) => callback(...args)
+    let byCallback = eventListenerWrappers.get(channel)
+    if (!byCallback) { byCallback = new Map(); eventListenerWrappers.set(channel, byCallback) }
+    const previous = byCallback.get(callback)
+    if (previous) ipcRenderer.removeListener(channel, previous as any)
+    byCallback.set(callback, wrapped)
+    ipcRenderer.on(channel, wrapped as any)
   },
   
   // 移除事件监听
   off: (channel: string, callback: (...args: any[]) => void): void => {
     const allowedChannels: string[] = Object.values(EVENT_CHANNELS)
-    if (allowedChannels.includes(channel)) {
-      ipcRenderer.removeListener(channel, callback)
-    }
+    if (!allowedChannels.includes(channel) || typeof callback !== 'function') return
+    const byCallback = eventListenerWrappers.get(channel)
+    const wrapped = byCallback?.get(callback)
+    if (!wrapped) return
+    ipcRenderer.removeListener(channel, wrapped as any)
+    byCallback?.delete(callback)
+    if (byCallback?.size === 0) eventListenerWrappers.delete(channel)
   }
 }
 
+// Keep the wrapper created by `on` so `off` can actually detach it.  The
+// previous anonymous wrapper was impossible to remove with the caller's
+// original callback and accumulated duplicate progress events after view
+// remounts.
 // 暴露 API 到渲染进程 - §10.1 只通过 preload 暴露白名单 API
 contextBridge.exposeInMainWorld('shopilot', api)
-
-// 类型声明（给 TypeScript 使用）
-declare global {
-  interface Window {
-    shopilot: typeof api
-  }
-}

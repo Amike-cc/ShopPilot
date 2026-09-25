@@ -1,8 +1,16 @@
 # ShopPilot 开发状态报告
 
-**报告时间**: 2026-09-22
+**报告时间**: 2026-09-24
 **开发阶段**: M0 ✅ + M1 工作台核心 ✅ + M2 环境·代理·备份 ✅ + M3 任务辅助 ✅ + M4 发布工程 ✅ + 自动更新（§21）✅
-**当前状态**: ✅ 应用可运行，单测 322/322、达人邀约实时日志验收 14/14、本地 CDP 验收 54/54、SendInput 真机验收 37/37 全部通过；版本 v0.4.44（INTERNAL_BUILD）。历史里程碑结果见下表与 `docs/RELEASE_NOTES.md`。
+**当前状态**: ✅ v0.4.47 本地构建与验收通过：全量单测 370/370（33 个文件）、Agent 域 Electron/CDP 55/55、可见智能体 CDP 54/54、M1 108/108、M2 阶段1 30/30 且阶段2 必需指纹字段 verified、M3 113/113、安全 44/44、M4 13/13、更新 16/16、店铺拖动 10/10、抖店邀约本地 36/36、发票主体本地 26/26、自定义任务 54/54、邀约实时日志 16/16。构建标签为 `INTERNAL_BUILD`（未做代码签名）。
+
+**Agent 扩展（2026-09-24）**: A-M0 已落库；A-M1～A-M4 为 `PARTIAL`，A-M5 为 `PARTIAL`，A-M6 达到 `PACKAGED/PARTIAL`。新增 v5→v7 Agent 迁移、root-ceo/HR/probation、模型 Profile/safeStorage、Job → Task → TaskRun → evidence、租约 owner 防旧 Worker 写回、权限快照变更阻塞、备用 Profile 环校验、结果审核、反馈指标、本地记忆、损坏正文恢复为 conflict 版本、重启后记忆检索、正文和加密快照原子 I/O 故障回滚、CEO 周期复盘摘要和设置页 Agent 团队。`pnpm.cmd test -- --run` 为 33 个文件/369 个测试；Agent Electron/CDP 54/54（含自治运营：非资金写操作免审批、资金 Job 必须确认；子 Agent 未绑定模型继承 default-main、设置页 AI 配置同步与继承、解绑恢复继承、CEO 无可用子 Agent 时拒绝执行、root-ceo 禁止作为执行者、CEO 派单经子 Agent 执行并落 TaskRunner 证据、HTTP 429 只重试一次、能力探测落库、503 后 fallback 路由与 fallbackUsed、401 不降级、日预算阻断、配置单价后的成本估算与未配置价格的“未估算”、进程中断 recovery_required 与安全重新排队、暂停 Agent 拒绝新 Job 并可恢复、FTS 索引重建 hash 保持、损坏正文 quarantine/恢复、同一 userData 重启恢复、备用 Profile 环和停用校验、无 Key 阻塞、safeStorage Key 下本地模型 Job 结果和 evidence、CEO 复盘摘要）；可见智能体真实 Electron/CDP 52/52（多店任务逐店派单；对话记忆：回合带最近对话 + 已审核记忆；思考可见 + 最多 3 轮；非资金自动派发/自动执行、资金与例外清单动作保留确认；模型 429 自动重试、不开店铺也能对话、自己打开店铺并续规划、团队/Job 感知问答、对话创建/激活子 Agent、打开面板、Job 完成自动复盘、计划经 job:delegate 派给 active 子 Agent）；记忆断电/磁盘满时序 4/4；安全套件 44/44；M4 完整安装生命周期 13/13（内含打包对话链路 19/19、安装 3/3、升级 4/4、卸载）；M1 inner CDP 108/108；打包目录 smoke 6/6（设置页 Agent 团队四个子页均可切换并渲染）；真实 Windows SendInput Agent 设置 smoke 7/7；隔离安装器降级/恢复 11/11；NSIS x64 构建通过；lint 0 errors。真实付费模型、真实店铺高风险写操作、完整人工桌面逐项验收、OS 级跨设备恢复未执行，详见 `docs/AGENT_PROGRESS.md` 与 `artifacts/agent/acceptance-manifest.json`。
+
+**Agent 扩展（2026-09-25，未提交）**: 新增 v8 迁移（`agent_skills`/`agent_plugins`）、工具目录 `packages/shared/src/agent-tools.ts`（提示词白名单由目录生成）、技能（AI 用现有工具制作声明式工作流：`createSkill` 自动执行、`runSkill` 逐步执行并回传真实结果、技能只能包含自动执行类工具且禁止嵌套技能管理）、插件（`createPlugin` 打包、`listPlugins`）与技能/插件 JSON 分享包导入导出（`shopilot-agent-pack` v1，设置 → Agent 团队 → 技能与插件，需用户确认、整体校验、同名更新、不含凭据）；技能进入软件上下文与 Agent 抽屉。**真机实测轮**：用真实数据副本（不动原库）按用户路径实测 11 项（对话/工具/技能/插件/记忆/审批/经营数据派单/面板导入导出/v8 迁移/崩溃恢复），发现并修复 5 个真实问题：复合指令被快捷路由劫持、只读指标（退款金额）误触发资金门禁、派单跳过原因被吞、采集 Job 因店铺未打开永久卡 running（TaskRunner 排队泵只启动已打开店铺 → 浏览器 Job 自动开店 + 租约巡检兜底）、采集幂等键跨版本冲突/复用终态 Job 计为已派发（分钟桶幂等键 + 如实标注 + 未实测平台提示）。验证：`pnpm.cmd exec vitest run` 34 个文件/381 个测试；`pnpm.cmd typecheck` 通过；`pnpm.cmd lint` 0 errors（810 warnings）；Agent 域 Electron/CDP 69/69；可见智能体真实 Electron/CDP 61/61；M3 任务引擎 113/113 随本轮改动复跑通过；`pnpm.cmd build` 与 `pnpm.cmd dist:dir` 通过、打包目录 smoke 6/6（Agent 团队五个子页均可切换渲染）。安全 44/44 等不涉及本次改动，未重跑。
+
+**Agent 审查轮（2026-09-25，未提交）**: 对智能体与 Agent 域做功能审查：静态契约比对（45 个软件动作 × 执行分支/标签/目录/提示词白名单一致；页面规划步骤闭合白名单且无写入类步骤）+ 关键链路走查。修复 8 项：①只读范围（`storeScope.readOnly`）从未参与 Job 门禁 → 带 browserTask 的写/提交 Job 拒绝只读 Agent、派单只选非只读执行者（共享选择器 + 单测）、执行助手按需恢复可写并审计、设置面板加「只读范围」开关；②聊天/回合不记模型用量（违反 §7.3）→ 每次调用写 `agent_usage`；③聊天无备用 Profile 降级 → 按白名单降级一次；④Job 轮询超时静默 → 明确提示；⑤采集类 Job 名提取回退到「· 店铺名」；⑥规格要求的 `AGENT_STATUS_CHANGED`/`AGENT_USAGE_UPDATED` 事件从未发出 → 现在发出且抽屉监听刷新；⑦12 个错误码补登记；⑧Workbench 事件监听改用 `EVENT_CHANNELS` 常量。验证：typecheck、单测 34 文件/382、lint 0 errors、Agent 域 CDP 70/70、可见智能体 CDP 61/61、M3 113/113、dist:dir + 打包 smoke 6/6。
+
+**Agent 能力扩展轮（2026-09-25，未提交）**: ①聊天/回合日预算硬阻断（与 Job 同口径，`AGENT_BUDGET_BLOCKED`）；②达人邀约发送接入智能体（`runInvite`，面板与 Main 共用 `@shared/invite-task` 构造器，缺项/未实测如实报错，发送类不进技能）；③逐条订单明细采集（`collectOrders` + `@shared/orders-steps`，实测档案红线 + 设置 `orders.profiles` 即时登记 + 整表逐行落库）；④连带修复：Job 载荷清洗嵌套上限 6→16 层且超限如实报错（旧实现把邀约 loop 载荷第 6 层静默替换成字符串 → `TASK_INVALID_STEP`）、凭据不可解密不再让应用启动失败、显式指定店铺全部无效时如实说明。验证：typecheck、单测 34 文件/391、lint 0 errors（831 warnings）、Agent 域 CDP 78/78、可见智能体 CDP 61/61、M3 113/113、dist:dir + 打包 smoke 6/6。
 
 ---
 
@@ -13,13 +21,14 @@
 | M0：Electron ABI + better-sqlite3 读写 | ✅ `SQLITE_OK abi=123` | `m0-sqlite-check.js`（Electron RUN_AS_NODE） |
 | M0：迁移 / 17 表 / WAL / foreign_keys | ✅ 全部落库 | `m0-db-verify.js` |
 | M1+：工作台全链路（108 项断言，含设置四页签、达人广场地址覆盖驱动邀约任务、右栏/左栏收起、店铺右键菜单、国内四平台目录与平台入口） | ✅ **108/108** | `tools/acceptance/m1-runner.js` + `m1-cdp-verify.js`（CDP 驱动真实应用） |
-| M2：代理/407/备份（29 项） | ✅ **29/29** | `tools/acceptance/m2-runner.js` 阶段1（本地带认证代理 + 备份演练） |
+| M2：代理/407/备份（30 项） | ✅ **30/30** | `tools/acceptance/m2-runner.js` 阶段1（本地带认证代理 + 备份演练） |
 | M2：环境指纹实测注入（8 字段） | ✅ **全部 verified** | `tools/acceptance/m2-runner.js` 阶段2（进程内自检，含时区 CDP） |
-| M3：任务引擎（111 项断言） | ✅ **111/111** | `tools/acceptance/m3-runner.js` + `m3-cdp-verify.js`（内置本地测试站点，UI 按钮级驱动） |
+| M3：任务引擎（113 项断言） | ✅ **113/113** | `tools/acceptance/m3-runner.js` + `m3-cdp-verify.js`（内置本地测试站点，UI 按钮级驱动） |
 | 安全能力：会话包 / Cookie / 应用锁 / 代理巡检 / 弹层遮挡（44 项） | ✅ **44/44** | `tools/acceptance/sec-runner.js` + `sec-cdp-verify.js` |
 | 单元测试：会话包格式与加解密（9 项） | ✅ **9/9** | `pnpm test`（vitest，`tests/unit/session-package.test.ts`） |
 | M4：发布工程（打包/安装/升级/卸载/诊断包/日志/单实例） | ✅ **13/13 阶段检查**（内含打包态对话链路 19/19、单实例互斥、安装版 3/3、升级 4/4） | `tools/acceptance/m4-runner.js` + `m4-cdp-verify.js`（win-unpacked 解包版 + NSIS 静默安装/升级/卸载） |
 | 自动更新：本地 feed 驱动真实安装包（16 项） | ✅ **16/16** | `tools/release/update-runner.js`（打包态 + `SHOPPILOT_UPDATE_FEED` 本地 feed：检查/SHA-512 下载校验/pending 落盘/审计/双通道/故障路径/重启自动检查） |
+| 本地功能回归：店铺拖动 / 抖店邀约 / 发票主体 | ✅ **10/10 + 36/36 + 26/26** | `store-drag-local-verify.js`、`douyin-invite-local-verify.js`、`invoice-license-local-verify.js` |
 | 审查修复轮（2026-09-22，v0.4.41→0.4.43） | ✅ **单测 322/322、本地 CDP 54/54、真机 SendInput 37/37** | 导航白名单/调度锚定/对账分工/BAD_STATE 友好化/拾取原因码全覆盖；注入脚本收敛；restoreTabs 旧 id 映射；共享 deadline；轮询销毁检查；原生视图遮挡对话框修复（task-layout 切换时显式上报视口）；低优先级收尾（reorder/closeTab 落库、节拍泄漏、转义、SVG、IPC 错误映射、fire 通道契约化、validate 警告、number 类型、PICK_NAVIGATED）；run-acceptance 接入 custom-local |
 
 ## 技术选型结论（M0 实测）
@@ -43,12 +52,12 @@
 - **修复：依赖链唯一一条「随安装包发布」的漏洞（builder-util-runtime 跨域重定向泄露凭据）**：`electron-updater` 6.6.2 把 `builder-util-runtime` 精确锁在 9.3.1，9.3.1 < 9.7.0 落在 CVE-2026-54673（跨域重定向会泄露 `PRIVATE-TOKEN` 与大小写变体 `Authorization`）范围内。先升 `electron-updater` 6.6.2 → 6.8.9（同为 6.x，它声明依赖 9.7.0），但**升级本身不够**：electron-builder 24 打包时是按 `node_modules` 文件系统扁平化收集生产依赖的，实测即使 `pnpm-lock.yaml` 已全树解析为 9.7.0，它仍从根目录那份来自 devDependencies 的实体目录抄走了 **9.2.4**，导致运行时加载到旧的漏洞版本。故在 `pnpm-workspace.yaml`（pnpm ≥10.6 起不再读 package.json 的 `pnpm` 字段）加 `overrides: builder-util-runtime: 9.7.0` + `publicHoistPattern: [builder-util-runtime]`，让 pnpm 自己把正确版本公开提升到根目录并保持同步。**验证以安装包为准**：解包 `release/win-unpacked/resources/app.asar` 实测 `electron-updater 6.8.9` + `builder-util-runtime 9.7.0`，且只有一份、无冲突；`update-runner` 16/16 通过（检查→下载 80MB→SHA-512 校验→双通道→feed 故障如实报错→重启自动检查），证明该版本组合没破坏更新链路。
 - **清理：仓库里那份过期的 `package-lock.json`**：npm 时期遗留，内容连 electron-updater 都没记，留着会让依赖审计（Dependabot / `npm audit`）读到一份与真实安装树不符的锁文件。已移除并加入 `.gitignore`。**收益别高估**：Dependabot 在失去 package-lock.json 后会转而直接扫根 `package.json`，所以 open 告警只从 127 降到 111，并非腰斩——真实收益是消除了一份会误导判断的锁文件。（127 条里确有 63 条 GHSA 在两份 lockfile 上重复计数，但那是 Dependabot 按清单逐一上报的固有行为。）修复后 open 告警的 scope 分布为 **111 条全部 development、runtime 为 0**（修复前 runtime 1 条，即 builder-util-runtime），其中 62 条挂在 electron 上。注意 Dependabot 的 scope 标签只反映 package.json 分区，**Electron 虽在 devDependencies 却是随包发布的运行时**，其告警不应按"不发布"看待。
 - **环境坑（重装依赖时必读）**：本仓库 `node_modules` 是 npm 时代遗留的混合树（实测 414 个实体目录 + 18 个 pnpm 链接），pnpm 会把冲突的旧目录挪到 `.ignored_<pkg>`。用 `pnpm install --ignore-scripts` 重装会跳过 postinstall，从而**清空 `node_modules/electron/dist` 与 `path.txt`、以及 better-sqlite3 的原生二进制**（打包不受影响，因为 electron-builder 自己会装原生预编译；但开发态与 m1/m2/m3/sec 起不来）。恢复方式：`electron/dist` + `path.txt` 从 `node_modules/.ignored_electron/` 拷回，better-sqlite3 的 `build/` 从 `node_modules/.ignored_better-sqlite3/` 拷回（或用 INSTALL.md 里的 `prebuild-install --runtime=electron --target=30.5.1`）。另：重装偶尔会报 `ERR_PNPM_PACKAGE_MANAGER_REMOVE_MODULES_DIR ... 拒绝访问 (os error 5)`，多为残留文件锁，重试即可。
-- **设置弹窗（四个独立页签：配置 / 达人广场 / AI 配置 / 关于软件）**：入口在左栏底栏 `⚙ 设置`，左栏收起后的窄轨也有 `⚙`（`rail-settings`）。每个页签**只保存自己那页的数据**（点「保存」写库并关闭弹窗；「关于软件」页只有「关闭」）。
+- **设置弹窗（五个独立页签：配置 / 达人广场 / AI 配置 / Agent 团队 / 关于软件）**：入口在左栏底栏 `⚙ 设置`，左栏收起后的窄轨也有 `⚙`（`rail-settings`）。每个页签**只保存自己那页的数据**（点「保存」写库并关闭弹窗；「关于软件」页只有「关闭」）。Agent 团队页通过 Main IPC 读取组织、模型 Profile、Job 和本地记忆摘要；API Key 仅显示 `hasKey`。
   - **配置**页为国内四家平台逐个指定「首页」地址，落到 `app_settings.platform.homeUrls`（`{"拼多多":"https://…"}`，留空即用平台默认）。**首页按钮取值优先级：配置值 → 店铺自己的后台地址 → 平台目录默认**（配置过就以配置为准，压过店铺自填地址；用户明确选择）；新建店铺的后台地址预填也改用同一来源。
   - **达人广场**页按平台覆盖达人邀约入口地址，落到 `app_settings.invite.squareUrls`。覆盖后任务里的 `waitForPage.urlIncludes` **从该地址末段派生**（不再写死 `daren-square`，否则自定义地址会一直等到超时）——M1 断言直接读新建任务的步骤拿这条证据。
   - **AI 配置**页见下方「M3 能力 → IPC 与 UI」。
   - **关于软件**页显示名称/版本/构建标签/仓库地址，并承载**软件更新**——原先左栏品牌行的「↻ 更新」按钮与窄轨 `rail-update` 已移除，更新整体搬入此页（内部 `data-test` 保持原样，故更新链路的验收只改了"怎么进来"）。
-  - 两个地址类页面都只做 `http(s)://` 格式校验、不联网探测可达性（与"不猜测地址"红线一致）。弹窗已登记进弹层遮挡逻辑（否则原生视图会盖住它）。顺带修掉一个老 bug：更新区"启动时自动检查"复选框被 `.modal input{width:100%}` 撑成整行宽（实测 474px + 文字 84px = 558px），把弹窗顶出横向滚动条——现按 `.store-pick input` 的既有做法改为 `width:auto`，并补了"四个页签都无横向溢出"的断言。
+  - 两个地址类页面都只做 `http(s)://` 格式校验、不联网探测可达性（与"不猜测地址"红线一致）。弹窗已登记进弹层遮挡逻辑（否则原生视图会盖住它）。顺带修掉一个老 bug：更新区"启动时自动检查"复选框被 `.modal input{width:100%}` 撑成整行宽（实测 474px + 文字 84px = 558px），把弹窗顶出横向滚动条——现按 `.store-pick input` 的既有做法改为 `width:auto`，并补了五个页签的横向溢出检查。
 - **后端**：店铺 CRUD/归档/回收站/purge、`profile:*`、`audit:query`、`overview:stats`、`settings:*`、危险操作全审计、snake→camel 行映射统一。
 
 ### 平台适配范围：国内四家（§16 平台适配层）
@@ -103,7 +112,7 @@
 
 ### IPC 与 UI
 - **面板二级页签：任务列表 / 达人邀约**（`data-test=task-tab-tasks / task-tab-invite`）。
-- **达人邀约（当前只做抖店）**：面板按「当前店铺的平台」匹配平台档案（`packages/shared/src/constants/invite.ts`）——**只注册了抖店一份档案**，其余平台明确显示"当前店铺的平台暂不支持"，不做猜测式实现。配置项：主推类目（22 项）、达人等级（LV0–LV6）、本批数量（≤40）、专属权益（4 项可勾）、**话术来源（手填 / AI 生成）**；「开始邀约」由配置生成受策展任务（navigate → waitForPage → clickByText 选类目/等级 → clickByText 搜索 → waitForSelector 行复选框 → clickAll 勾选 → clickByText 开抽屉 → **setInput 填话术 或 aiGenerate 生成话术 + readText 留档** → clickByText 勾权益 → **waitForUserConfirmation 门禁** → clickByText 确认发送）。手填模式空话术时按钮禁用（防误发空消息）；AI 模式话术框只读、由运行时写入，未配置 AI 时按钮同样禁用并明确提示。联系方式与推荐商品由平台抽屉要求，**本应用不保存手机号/微信号**。
+- **达人邀约（抖店 / 微信小店 / 快手小店）**：面板按当前店铺平台匹配独立档案，未实现平台明确拒绝。抖店当前为结构化抽屉流：主推类目/达人等级/数量/主营/手机号/微信号/核心优势/权益；平台已移除自由话术框，因此不展示旧的手填/AI 话术控件，也不插入二次确认。微信小店为逐位辅助填单流，快手为批量勾选流。
 - **AI 配置（设置 → AI 配置，独立页签）**：接口地址（OpenAI 兼容 `/chat/completions`）、模型名、API Key、超时（3–120s）；含「测试连接」（一次最小补全）与**「获取可用模型」**（只读 `GET /models`，地址由接口地址推导：`/chat/completions` 与 `/completions` 分两条正则匹配，合并写贪婪会把 `…/ai/chat/completions` 截成 `…/ai/chat/models`——实测踩过并已修）。推不出地址如实报 `AI_BAD_ENDPOINT`、未配 Key 报 `AI_NOT_CONFIGURED`，**不猜地址、不返回编造的模型名**；拉回的候选可在下拉里选，改接口地址立即作废旧候选。
   - **Key 边界**：`safeStorage`（DPAPI）加密存 `ai_cred.key`（`enc:` 前缀），IPC 只回 `hasKey`；验收断言界面输入框始终为空、DOM 内既无明文也无 `enc:` 密文、`ai_cred.*` 已进诊断包 `SETTING_DENY`。Key 只在主进程内存中使用、不进日志。
   - **网络边界（如实声明）**：主进程 `fetch` 直连出网、**不走店铺代理**；须 https://（仅 127.0.0.1/localhost 允许 http://）；失败按固定错误码如实返回，不静默重试。
@@ -201,23 +210,24 @@
 - **审计与事件**：`update.check` / `update.download` / `update.install` 全部落审计（含失败原因 JSON）；渲染层经 `update:statusChanged` / `update:progress` 白名单事件实时更新进度条。锁定态下更新通道同受 `APP_LOCKED` 门禁。
 - **验收（`tools/release/update-runner.js`，16 项全过）**：本地 HTTP feed 伪装 9.9.9 版本驱动 `release/win-unpacked` 真实安装包——初始状态/对话框与通道 UI/install 守卫/发现新版本/80MB 下载+SHA-512 校验/pending 缓存落盘/安装按钮出现/审计 check+download success/同版本 not-available/beta 通道生效/feed 500 如实报错+审计 failure/重启后 autoCheck 自动检查。不执行 `quitAndInstall`（会真装伪装版本），安装器行为由 `tools/acceptance/m4-runner.js` 的 NSIS 阶段覆盖。
 - **边界（如实）**：无代码签名证书 → 仅哈希校验、无签名校验（INTERNAL_BUILD）；开发态（非打包）不执行在线检查并如实提示。
-- **线上发布（2026-09-12）**：GitHub Release **v0.1.0 已发布**（`ShopPilot-Setup-0.1.0.exe` 85,660,479B + `.blockmap` + `latest.yml`，`node tools/release/publish-release.js` 幂等上传，凭据复用本机 Git Credential Manager，不落盘）；仓库经用户决定由 private 转为 **public**。打包态**无 feed 覆盖实测在线链路**：`feedSource=github` 回显正确，`update:check` 匿名解析 GitHub Releases 返回 `not-available`（同版本如实，`tools/acceptance/name-cdp-test-ghfeed.js` 探针）；转 public 前曾实测 private 仓库匿名访问 404 且错误如实展示、不静默。
+- **线上发布历史（2026-09-12）**：GitHub Release v0.1.0 与 beta 演练曾完成并已清理；这些记录不代表 v0.4.47 已发布。v0.4.47 本次只生成本地安装包与清单，线上发布需另行执行并复核资产。
 - **真实线上更新演练（2026-09-12，`update-online-drill.js` 12/12 通过）**：发布 `v0.1.1-beta.1` prerelease（exe + blockmap + `beta.yml`）后，用 0.1.0 打包版走**真实公网 GitHub 链路**：① stable 通道检查 → `not-available`（**prerelease 隔离**，GitHub `/releases/latest` 语义，实测确认）；② 切 beta 通道 → 发现 `0.1.1-beta.1`；③ **真实下载 85,660,524B（20s）→ SHA-512 校验通过 → pending 落盘（尺寸与 beta.yml 一致）→ 进度事件 → "重启并安装"按钮出现 → 审计落库**；④ 对下载产物 `/S` 静默安装 → 安装版 `currentVersion=0.1.1-beta.1`（**真实升级成功**）；⑤ 升级后 beta 复查 → `not-available`（版本闭环）；⑥ 静默卸载无残留。演练毕删除该 prerelease（release+tag 均 204）并恢复 0.1.0 现场（产物、版本号、`releases/latest` 均已验证复原）。注：产品内"重启并安装"走 `quitAndInstall(false,true)` 带交互向导，无人值守演练以同一 NSIS 安装包的 `/S` 静默安装等效替代。首轮演练曾暴露 2 处**脚本自身**缺陷（未先打开对话框即断言按钮；NSIS 卸载异步空壳目录），修脚本后复跑全绿——非产品缺陷，如实记录。
 
 ## 已知边界（如实声明）
 
 - **验收环境边界**：`screenshot` 步骤要求店铺视图真的处于可见/可渲染状态。若桌面上有另一个 Electron 实例或最大化窗口压在前面，`capturePage` 会如实失败（`CAPTURE_EMPTY`／CDP 报 `Current display surface not available for capture`），m3 会因此在"推进至确认门禁"这条上前置失败。**跑验收前请先关掉其它 Electron 实例**（今天实测：忘记关就会 10/82，关掉即 82/82）。这是环境敏感而非产品缺陷，但会误导排查，故记在此。
   - 2026-09-13 补充：开发机的**普通浏览器窗口**（Chrome/Edge 等，不能替用户关）也会造成同样后果。已给 m1/m3 运行器加两项**测试环境专用**的处置：启动参数 `--disable-features=CalculateNativeWinOcclusion` + `--disable-backgrounding-occluded-windows`，以及运行期间每 2.5s 把被测窗口保持在前台（`SHOPILOT_NO_KEEP_FOREGROUND=1` 可关，会短暂抢焦点）。**产品启动参数与行为均未改动**；实测未加处置时 m3 稳定卡在截图步骤、加上后 90/90。
-- **AI 边界**：① 主进程 `fetch` 直连出网、**不走店铺代理**（Chromium 的 session 代理管不到主进程）；② 接口地址须 https://（仅 127.0.0.1/localhost 允许 http://）；③ API Key 只在主进程使用（safeStorage 加密），界面与诊断包都不带出；④ 邀约抽屉的"推荐商品"区无稳定选择器 → AI 模式默认读"话术框所在固定定位浮层"的可见文本，读不到就如实失败（`AI_EMPTY_OUTPUT`），不拿整页文本充数；⑤ 生成的话术文本本身质量取决于所选模型，产品不做二次校验，靠**人工确认门禁**兜底。
+- **AI 边界**：① 主进程 `fetch` 直连出网、**不走店铺代理**（Chromium 的 session 代理管不到主进程）；② 接口地址须 https://（仅 127.0.0.1/localhost 允许 http://）；③ API Key 只在主进程使用（safeStorage 加密），界面与诊断包都不带出；④ 仅对仍存在自由话术框的平台启用 AI 话术，读不到稳定商品抽屉就如实失败（`AI_EMPTY_OUTPUT`），不拿整页文本充数；抖店当前结构化抽屉没有话术框，因此不展示 AI 话术控件。
 - **会话包内容边界**：包内只有 Cookie（明文清单，容器级口令加密）+ 环境指纹配置 + 店铺元信息；**localStorage/IndexedDB 不在包内**（异机导入后部分站点可能要求二次验证）。包头明文暴露来源店铺名/平台/有效期（供导入前确认来源），Cookie 与指纹在密文内。
 - **应用锁边界**：主密码用于应用锁与 KDF，**不重加密 Chromium profile**（§10.2/§633）；锁定隐藏视图 + 门禁业务 IPC，属"防顺手查看"级别，已解锁进程内存中的会话仍由操作系统用户隔离保护。
 - **代理**：规范红线——不可用时不自动切换、不静默降级，仅检测 + 如实展示（无自动故障转移能力）。
-- **发布**：无代码签名证书 → 构建标记 `INTERNAL_BUILD`；自动更新已实现并**上线验证**（GitHub Release v0.1.0 已发布、仓库已 public、打包态匿名在线检查实测 `not-available` 如实；stable/beta 双通道，SHA-512 哈希校验，无签名校验）；崩溃报告上传通道未实现（默认关闭，符合 §22 默认关闭要求，仅本地落盘）。
-- 拖拽排序未接 UI（店铺顺序调整目前走 `store:reorder` 接口）。
+- **发布**：无代码签名证书 → 构建标记 `INTERNAL_BUILD`；自动更新本地 feed 链路 16/16 通过，但 v0.4.47 线上 GitHub Release 尚未发布；更新包仅做 SHA-512 哈希校验、无签名校验。崩溃报告上传通道未实现（默认关闭，符合 §22 默认关闭要求，仅本地落盘）。
+- 拖拽排序已接 UI，并由店铺拖动本地端到端验收 10/10 覆盖状态、插入线、数据库顺序与刷新恢复。
 - 任务引擎边界：全局串行队列（并发=1）；确认门禁默认 60 分钟超时（期间队列停驻属预期语义）；截图需该店视口正在渲染；跨进程原地恢复不支持；步骤间无参数传递（后续步骤读前序结果需 M4 表达式能力）。
 - **渲染层重载后中栏回到欢迎页**：主进程侧店铺页面仍在（数据无损失），但工作台不会自动恢复"正在显示哪个店铺"，需在左栏重新点开；仅在开发态 HMR 或渲染进程崩溃恢复时可见。
 - 设计稿像素级人工核对待做（需用户比对 `../assets/design/shopilot-ui-concept-v1.png`）。
 - 备份跨机恢复语义、浏览器崩溃隔离与"两店铺不串用"已由 M2 阶段验收覆盖，但**跨机恢复需在第二台真机人工复核**（自动化用独立 userData 模拟）。
+- 真实桌面 SendInput 验收本次完成 12/13；最后一批输入时宿主窗口抢占前台，被 `win-input.ps1` 的 PID 保护拒绝，需在稳定前台的 Windows 会话补跑。
 
 ## 运行方式
 
@@ -227,7 +237,7 @@ cd D:\code\电商浏览器
 ```
 
 - 数据：`%APPDATA%\shopilot\shopilot.db`（WAL）；下载：`...\stores\<id>\downloads\`；备份：`...\backups\`；日志：`...\logs\app-YYYY-MM-DD.log`
-- 验收：`node tools/acceptance/m1-runner.js`（113 项）；`node tools/acceptance/m2-runner.js [stage1|stage2]`；`node tools/acceptance/m3-runner.js`（90 项）；`node tools/acceptance/sec-runner.js`（安全能力 44 项）；`node tools/acceptance/m4-runner.js [--skip-install]`（发布工程 13 项）；`node tools/release/update-runner.js`（更新链路 16 项，需先 `pnpm dist`）；`powershell -ExecutionPolicy Bypass -File tools/acceptance/run-acceptance.ps1`（一键串行：打包+全部套件+清单）；`node tools/ui/ui-panel.js`（右栏收起专项探针：打印面板/中栏/原生视图三项宽度实测）。各自使用独立临时 userData；跑前退出运行中实例释放 9223–9228、9232 端口；M3/M4/探针自带本地测试站点
+- 验收：`node tools/acceptance/m1-runner.js`（108 项）；`node tools/acceptance/m2-runner.js [stage1|stage2]`（阶段1 30 项，阶段2 指纹字段）；`node tools/acceptance/m3-runner.js`（113 项）；`node tools/acceptance/sec-runner.js`（安全能力 44 项）；`node tools/acceptance/m4-runner.js [--skip-install]`（发布工程 13 项）；`node tools/release/update-runner.js`（更新链路 16 项，需先 `pnpm dist`）；`powershell -ExecutionPolicy Bypass -File tools/acceptance/run-acceptance.ps1`（一键串行：打包+全部套件+清单）；`node tools/ui/ui-panel.js`（右栏收起专项探针：打印面板/中栏/原生视图三项宽度实测）。各自使用独立临时 userData；跑前退出运行中实例释放 9223–9228、9232 端口；M3/M4/探针自带本地测试站点
 - 单元测试：`pnpm test`（vitest）
 - 打包：`pnpm dist`（electron-vite build + electron-builder NSIS）→ `node tools/release/release-manifest.js` 生成 `release/release.json`
 - 开发模式：`pnpm dev`

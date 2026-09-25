@@ -1,6 +1,14 @@
 /// <reference types="vite/client" />
 
 import type { IPCResult } from '@shared/contracts/ipc'
+import type {
+  AgentPlan,
+  AgentPageObservation,
+  AgentSoftwareContext,
+  AgentSoftwarePlan,
+  AgentUiState
+} from '@shared/schemas/agent'
+import type { AgentJobCreate, AgentJobFeedback, AgentJobResultReview, AgentMemoryReview, AgentMemoryWrite, AgentTaskDelegate, ModelProfileInput } from '@shared/schemas/agent-domain'
 
 export interface TabInfo {
   id: string
@@ -49,7 +57,7 @@ declare global {
         pickElement: (storeId: string, mode: 'selector' | 'text') => Promise<IPCResult>
         openWindow: (storeId: string, tabId?: string) => Promise<IPCResult>
         /** 弹层打开/关闭：让主进程摘除/恢复原生视图挂载 */
-        setViewsObscured: (obscured: boolean) => Promise<IPCResult>
+        setViewsObscured: (obscured: boolean, reason?: 'modal' | 'agent') => Promise<IPCResult>
       }
       bookmark: {
         list: (storeId?: string) => Promise<IPCResult>
@@ -153,6 +161,57 @@ declare global {
         setKey: (key: string) => Promise<IPCResult>
         clearKey: () => Promise<IPCResult>
         test: () => Promise<IPCResult>
+        listModels: () => Promise<IPCResult>
+      }
+      agent: {
+        uiGet: () => Promise<IPCResult<AgentUiState>>
+        uiSet: (state: AgentUiState) => Promise<IPCResult<AgentUiState>>
+        observe: () => Promise<IPCResult<AgentPageObservation>>
+        generatePlan: (goal: string, history?: Array<{ role: 'user' | 'assistant'; text: string }>) => Promise<IPCResult<
+          | { kind: 'task'; plan: AgentPlan; observation: AgentPageObservation; model: string; elapsedMs: number; requiresApproval: boolean }
+          | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; pendingGoal?: string; thought?: string; requiresApproval: boolean }
+          | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; jobIds?: string[]; executed?: string[] }
+        >>
+        validatePlan: (plan: AgentPlan) => Promise<IPCResult>
+        softwareContext: () => Promise<IPCResult<AgentSoftwareContext>>
+        validateSoftwarePlan: (plan: AgentSoftwarePlan) => Promise<IPCResult>
+        executeSoftwarePlan: (plan: AgentSoftwarePlan, confirmed?: boolean) => Promise<IPCResult>
+      }
+      agentDomain: {
+        orgList: (query?: Record<string, unknown>) => Promise<IPCResult>
+        orgGet: (agentId: string) => Promise<IPCResult>
+        orgCreate: (input: Record<string, unknown>) => Promise<IPCResult>
+        orgUpdate: (input: Record<string, unknown>) => Promise<IPCResult>
+        orgActivate: (agentId: string, confirmed?: boolean) => Promise<IPCResult>
+        orgPause: (agentId: string, confirmed?: boolean) => Promise<IPCResult>
+        orgResume: (agentId: string, confirmed?: boolean) => Promise<IPCResult>
+        orgRetire: (agentId: string, confirmed?: boolean) => Promise<IPCResult>
+        hrPreview: (role: string) => Promise<IPCResult>
+        modelList: (query?: Record<string, unknown>) => Promise<IPCResult>
+        modelSet: (profile: ModelProfileInput) => Promise<IPCResult>
+        modelDelete: (profileId: string) => Promise<IPCResult>
+        modelTest: (profileId: string) => Promise<IPCResult>
+        modelBind: (agentId: string, modelProfileId: string | null) => Promise<IPCResult>
+        jobCreate: (input: AgentJobCreate) => Promise<IPCResult>
+        jobDelegate: (input: AgentTaskDelegate) => Promise<IPCResult>
+        jobList: (query?: Record<string, unknown>) => Promise<IPCResult>
+        jobGet: (jobId: string) => Promise<IPCResult>
+        jobRun: (jobId: string) => Promise<IPCResult>
+        jobCancel: (jobId: string) => Promise<IPCResult>
+        jobApprove: (jobId: string, approved: boolean, confirmationId?: string) => Promise<IPCResult>
+        jobResultReview: (input: AgentJobResultReview) => Promise<IPCResult>
+        jobFeedback: (input: AgentJobFeedback) => Promise<IPCResult>
+        jobResume: (jobId: string) => Promise<IPCResult>
+        memoryList: (query: Record<string, unknown>) => Promise<IPCResult>
+        memorySearch: (query: Record<string, unknown>) => Promise<IPCResult>
+        memoryWrite: (input: AgentMemoryWrite) => Promise<IPCResult>
+        memoryReview: (input: AgentMemoryReview) => Promise<IPCResult>
+        memoryRebuild: () => Promise<IPCResult>
+        memorySnapshot: () => Promise<IPCResult>
+        memorySnapshotInspect: (path: string) => Promise<IPCResult>
+        memorySnapshotRestore: (path: string, confirmed?: boolean) => Promise<IPCResult>
+        qualityMetrics: () => Promise<IPCResult>
+        qualityReview: () => Promise<IPCResult>
       }
       on: (channel: string, callback: (...args: any[]) => void) => void
       off: (channel: string, callback: (...args: any[]) => void) => void

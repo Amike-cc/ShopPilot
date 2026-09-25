@@ -6,6 +6,7 @@
 
 import { app, safeStorage } from 'electron'
 import { getDatabase } from '../db/database'
+import { logMain } from './logger'
 
 function keyFor(proxyId: string, field: 'u' | 'p'): string {
   return `proxy_cred.${proxyId}.${field}`
@@ -37,7 +38,14 @@ function decrypt(stored: string | null): string | null {
   if (!stored) return null
   if (stored.startsWith('enc:')) {
     if (!safeStorage.isEncryptionAvailable()) return null
-    return safeStorage.decryptString(Buffer.from(stored.slice(4), 'base64'))
+    try {
+      return safeStorage.decryptString(Buffer.from(stored.slice(4), 'base64'))
+    } catch (error: any) {
+      // 凭据不可解密（OSCrypt 密钥未落盘、系统密钥变化、强杀/断电后的半写状态）时
+      // **不能让应用启动失败**：如实当作"未配置"，由用户在设置里重新填写。
+      logMain('warn', `[credential] 已存凭据无法解密（将按未配置处理）：${String(error?.message || error).slice(0, 120)}`)
+      return null
+    }
   }
   if (stored.startsWith('plain:')) {
     return Buffer.from(stored.slice(6), 'base64').toString('utf8')

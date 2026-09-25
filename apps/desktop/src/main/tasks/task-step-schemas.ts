@@ -43,7 +43,11 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   waitForPage: z.object({ urlIncludes: z.string().max(300).optional() }).strict(),
   // deep = 穿透 ShadowRoot 查询（微信小店整页在 micro-app 的 ShadowRoot 里）
   waitForSelector: z.object({ selector, deep: z.boolean().optional() }).strict(),
-  readText: z.object({ selector, metric: z.string().min(1).max(60).optional(), deep: z.boolean().optional() }).strict(),
+  readText: z.object({
+    selector, metric: z.string().min(1).max(60).optional(), deep: z.boolean().optional(),
+    /** Agent 读取页面时必须开启：先脱敏再进入 task_step_results。 */
+    privacyRedact: z.boolean().optional()
+  }).strict(),
   // keepRows：把整表行数组落快照（发票中心要展示"待开票信息"的内容）；默认只落行数
   // pickByHeader：页面上有多张表时，挑表内含该文案的那一张（实测微信发票中心有 2 张日历表）
   // mergeHeaderTable：表头与数据分属两个 <table> 时（实测拼多多），把表头表的下一张也读进来
@@ -62,6 +66,8 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * 而本方向自己恰好没有表——不给判据就会把上一个方向的数据重复报成本方向的）。
      */
     rejectHeaders: z.array(z.string().min(1).max(60)).max(20).optional(),
+    /** 只返回表头和行数，不把订单/客户单元格内容送入 Main 或写入任务结果。 */
+    headersOnly: z.boolean().optional(),
     /**
      * 该表**本来就可能没有**（发票页某些开票方向就是空的：实测微信「给买家开票」
      * 整页没有账单表、抖店「给消费者开票」结构未验）。
@@ -69,7 +75,9 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * 界面显示"0 条"而不是"采集失败"。
      */
     emptyOk: z.boolean().optional()
-  }).strict(),
+  }).strict().refine(v => !(v.headersOnly && v.keepRows), {
+    message: 'headersOnly 与 keepRows 不能同时启用'
+  }),
   screenshot: z.object({}).strict(),
   fillDraft: z.object({ selector, text: z.string().max(20000) }).strict(),
   waitForUserConfirmation: z.object({ message: z.string().min(1).max(500) }).strict(),
@@ -349,7 +357,9 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * 注意它只豁免 NOT_FOUND（标签全文都不在页面上）；标签在、但旁白取不到值的
      * NO_VALUE_SIBLING / VALUE_TOO_LONG 仍然如实失败——那才是"页面结构变了"。
      */
-    absentOk: z.boolean().optional()
+    absentOk: z.boolean().optional(),
+    /** Agent 读取时脱敏结果后再保存。 */
+    privacyRedact: z.boolean().optional()
   }).strict(),
   // 显式等待（读型步骤，上限 2 分钟）：等 SPA 按新筛选条件刷新数据
   waitMs: z.object({ ms: z.number().int().min(100).max(120000) }).strict(),
@@ -359,11 +369,15 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   // 重载会重置分页与筛选（平台翻页是内部状态、URL 不变）。path 按 pathname 精确匹配，
   // urlIncludes 按子串匹配（path 更稳妥，避免 '/find' 前缀误命中 '/finder-detail'）。
   useTab: z.object({
+    /** 精确切换到同店铺中已打开的标签页；只供 Agent 固定当前上下文。 */
+    tabId: z.string().min(1).max(100).optional(),
     path: z.string().min(1).max(300).optional(),
     urlIncludes: z.string().min(1).max(300).optional(),
     // 默认关掉切换前的运行标签页（详情/表单页用完即关，否则轮次一多窗口堆满）
     closeCurrent: z.boolean().optional()
-  }).strict().refine((v) => !!v.path !== !!v.urlIncludes, { message: 'useTab 的 path 与 urlIncludes 必须二选一' }),
+  }).strict().refine((v) => [v.tabId, v.path, v.urlIncludes].filter(Boolean).length === 1, {
+    message: 'useTab 的 tabId、path 与 urlIncludes 必须且只能指定一个'
+  }),
   /**
    * 批次循环：把"一轮完整动作"（如 筛选→勾 40 位→批量邀约→确认发送）重复执行。
    *   - stopOn：命中这些错误码即**干净停止**（本轮记入 summary、不再继续、整个 run 仍成功）。

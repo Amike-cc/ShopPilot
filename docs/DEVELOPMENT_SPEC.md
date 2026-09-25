@@ -1,5 +1,7 @@
 # ShopPilot 开发设计文档
 
+> Agent 多 Agent 功能的专项实施基线见 [`AGENT_DEVELOPMENT_SPEC.md`](AGENT_DEVELOPMENT_SPEC.md)。涉及 CEO/HR/子 Agent、模型路由、Agent Job、本地记忆库和 Agent 验收时，以专项文档为准；通用 Electron 安全、店铺隔离、任务引擎和发布门槛仍以本文档为准。
+
 > 版本：v0.2（审查修订，审查报告见 [REVIEW.md](./REVIEW.md)）  
 > 状态：开发基线  
 > 关联设计图：[shopilot-ui-concept-v1.png](../assets/design/shopilot-ui-concept-v1.png)

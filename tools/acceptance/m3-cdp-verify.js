@@ -982,6 +982,10 @@ async function main() {
       scriptBox: !!document.querySelector('[data-test="invite-script"]'),
       scriptModeManual: !!document.querySelector('[data-test="invite-script-mode-manual"]'),
       scriptModeAi: !!document.querySelector('[data-test="invite-script-mode-ai"]'),
+      structuredPhone: !!document.querySelector('[data-test="invite-batch-phone"]'),
+      structuredWechat: !!document.querySelector('[data-test="invite-batch-wechat"]'),
+      structuredMainCategory: !!document.querySelector('[data-test="invite-main-category"]'),
+      structuredStrengths: document.querySelectorAll('[data-test^="invite-strength-"]').length,
       disabledNoScript: btn ? btn.disabled : null,
       overflowX: panel ? panel.scrollWidth > panel.clientWidth + 2 : null
     };
@@ -1022,26 +1026,58 @@ async function main() {
       document.querySelector('[data-test="invite-script-mode-manual"]').click();
       await new Promise(r => setTimeout(r, 250));
       await window.shopilot.ai.clearKey();
+    } else if (!out.scriptBox && btn) {
+      // 0.4.45+ 抖店改版抽屉没有话术框：手机号/微信号是面板侧必填，
+      // 运行前不需要 AI 或人工确认门禁。
+      const setSelect = async (sel, value) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        el.value = value;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 250));
+        return true;
+      };
+      const setInput = (sel, value) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        el.value = value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      };
+      await setSelect('[data-test="invite-category"]', '个护家清');
+      const lv = document.querySelector('[data-test^="invite-level-"]');
+      if (lv && !lv.checked) lv.click();
+      setInput('[data-test="invite-batch-phone"]', '15057937334');
+      setInput('[data-test="invite-batch-wechat"]', 'm3_verify_wx');
+      await new Promise(r => setTimeout(r, 700));
+      out.enabledAfterContacts = !document.querySelector('[data-test="invite-start"]').disabled;
     }
     return out;
   `)
   console.log('… 9b: 面板断言完成')
-  check('达人邀约（抖店）：类目 22 项 + 等级/权益/话术来源 chip 13 个 + 数量/话术齐备、无横向溢出',
+  check('达人邀约（抖店）：当前平台档案字段齐全、数量可配、无横向溢出',
     invitePanel.viewport === true && invitePanel.panel === true && invitePanel.categoryOptions === 23 &&
-    invitePanel.chips === 13 && invitePanel.countInput === true && invitePanel.scriptBox === true &&
-    invitePanel.scriptModeManual === true && invitePanel.scriptModeAi === true &&
-    invitePanel.overflowX === false,
+    invitePanel.countInput === true && invitePanel.overflowX === false &&
+    (invitePanel.scriptBox
+      ? invitePanel.chips === 13 && invitePanel.scriptModeManual === true && invitePanel.scriptModeAi === true
+      : invitePanel.structuredPhone === true && invitePanel.structuredWechat === true &&
+        invitePanel.structuredMainCategory === true && invitePanel.structuredStrengths === 13),
     JSON.stringify(invitePanel))
-  check('达人邀约：空话术时「开始邀约」禁用，填写话术后才可用（防误发空消息）',
-    invitePanel.disabledNoScript === true && invitePanel.enabledAfterScript === true,
-    JSON.stringify({ 空话术: invitePanel.disabledNoScript, 填后: invitePanel.enabledAfterScript }))
-  check('达人邀约：「AI 生成」模式下话术框只读；未配置 AI 时开始按钮禁用并明确提示',
-    invitePanel.aiMode?.readonly === true && invitePanel.aiMode?.disabled === true && invitePanel.aiMode?.hint === true,
-    JSON.stringify(invitePanel.aiMode))
-  check('达人邀约：配好 Key 后回到面板，AI 模式可用（按钮解禁、提示消失）',
-    invitePanel.aiModeReady?.disabled === false && invitePanel.aiModeReady?.readonly === true &&
-    invitePanel.aiModeReady?.hintGone === true,
-    JSON.stringify(invitePanel.aiModeReady))
+  check('达人邀约：当前平台必填项为空时禁用，补齐后可启动',
+    invitePanel.scriptBox
+      ? invitePanel.disabledNoScript === true && invitePanel.enabledAfterScript === true
+      : invitePanel.disabledNoScript === true && invitePanel.enabledAfterContacts === true,
+    JSON.stringify({ empty: invitePanel.disabledNoScript, after: invitePanel.enabledAfterScript ?? invitePanel.enabledAfterContacts }))
+  check('达人邀约：话术/结构化抽屉能力按平台档案呈现',
+    invitePanel.scriptBox
+      ? invitePanel.aiMode?.readonly === true && invitePanel.aiMode?.disabled === true && invitePanel.aiMode?.hint === true
+      : invitePanel.scriptBox === false && invitePanel.scriptModeManual === false && invitePanel.scriptModeAi === false,
+    JSON.stringify(invitePanel.scriptBox ? invitePanel.aiMode : { scriptBox: invitePanel.scriptBox, manual: invitePanel.scriptModeManual, ai: invitePanel.scriptModeAi }))
+  check('达人邀约：AI 门禁仅对存在话术框的平台生效',
+    invitePanel.scriptBox
+      ? invitePanel.aiModeReady?.disabled === false && invitePanel.aiModeReady?.readonly === true && invitePanel.aiModeReady?.hintGone === true
+      : invitePanel.scriptBox === false,
+    JSON.stringify(invitePanel.scriptBox ? invitePanel.aiModeReady : { applicable: false }))
 
   // ---------- 10. 清理 ----------
   const all = (await api.taskList()).data || []

@@ -447,11 +447,13 @@ export function registerBrowserHandlers(): void {
   })
 
   // browser:setViewsObscured - 渲染层弹层遮挡：摘除/恢复原生视图挂载
-  ipcMain.handle(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, async (_event: IpcMainInvokeEvent, input: { obscured: boolean }): Promise<IPCResult> => {
+  ipcMain.handle(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, async (_event: IpcMainInvokeEvent, input: { obscured: boolean, reason?: 'modal' | 'agent' }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
-      WindowManager.setBrowserViewsObscured(input?.obscured === true)
-      return success({ obscured: input?.obscured === true }, requestId)
+      const obscured = input?.obscured === true
+      const reason = input?.reason === 'agent' ? 'agent' : 'modal'
+      WindowManager.setBrowserViewsObscured(obscured, reason)
+      return success({ obscured, reason }, requestId)
     } catch (err: any) {
       return browserError(err, requestId)
     }

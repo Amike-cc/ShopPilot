@@ -72,7 +72,7 @@ function assertEndpointUsable(endpoint: string): void {
 export interface AiChatResult { text: string; model: string; elapsedMs: number }
 
 /** 单轮补全。system/user 都由本文件或调用方构造，不接受渲染层传入的任意角色/消息数组。 */
-export async function chatComplete(opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number }): Promise<AiChatResult> {
+export async function chatComplete(opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number; safeErrors?: boolean }): Promise<AiChatResult> {
   const cfg = getAiConfig()
   const key = getAiKey()
   if (!key || !key.trim()) throw new AiError('AI_NOT_CONFIGURED', '未配置大模型 API Key（设置 → AI 配置）')
@@ -99,7 +99,7 @@ export async function chatComplete(opts: { system: string; user: string; maxToke
       signal: ac.signal
     })
     const bodyText = await res.text()
-    if (!res.ok) throw new AiError('AI_REQUEST_FAILED', `HTTP ${res.status} ${bodyText.slice(0, 180)}`)
+    if (!res.ok) throw new AiError('AI_REQUEST_FAILED', opts.safeErrors ? `HTTP ${res.status}` : `HTTP ${res.status} ${bodyText.slice(0, 180)}`)
     let data: any = null
     try {
       data = JSON.parse(bodyText)

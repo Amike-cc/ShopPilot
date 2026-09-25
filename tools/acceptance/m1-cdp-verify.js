@@ -896,8 +896,8 @@ async function main() {
     out.keyCleared = clr.ok && clr.data.hasKey === false;
     return out;
   `)
-  check('设置弹窗有四个独立页签（配置 / 达人广场 / AI 配置 / 关于软件）',
-    settingsTabs.tabs.join(',') === '配置,达人广场,AI 配置,关于软件', JSON.stringify(settingsTabs.tabs))
+  check('设置弹窗有五个独立页签（配置 / 达人广场 / AI 配置 / Agent 团队 / 关于软件）',
+    settingsTabs.tabs.join(',') === '配置,达人广场,AI 配置,Agent 团队,关于软件', JSON.stringify(settingsTabs.tabs))
   check('「达人广场」是独立页签：只列已支持平台、占位符=内置实测地址、无横向溢出',
     settingsTabs.square?.pane === true && settingsTabs.square.configUnmounted === true &&
     settingsTabs.square.aboutUnmounted === true && settingsTabs.square.rows === 3 &&
@@ -979,6 +979,11 @@ async function main() {
       target, saved: ${JSON.stringify(squareSetup.saved)}, closed: ${JSON.stringify(squareSetup.closed)},
       displayed, cardFound,
       panel: !!panelEl, hasAiRadio: !!aiRadio,
+      scriptBox: !!scriptBox,
+      structuredPhone: !!document.querySelector('[data-test="invite-batch-phone"]'),
+      structuredWechat: !!document.querySelector('[data-test="invite-batch-wechat"]'),
+      structuredMainCategory: !!document.querySelector('[data-test="invite-main-category"]'),
+      structuredStrengths: document.querySelectorAll('[data-test^="invite-strength-"]').length,
       panelHead: panelEl ? panelEl.textContent.replace(/\\s+/g, ' ').trim().slice(0, 40) : null
     };
     if (aiRadio && scriptBox && startBtn) {
@@ -1032,6 +1037,54 @@ async function main() {
       out.hasSetInput = allSteps.some(s => s.type === 'setInput');
       out.gateType = gateStep?.type || null;
     }
+    // 0.4.45+ 抖店改版抽屉没有话术框，也不再插入人工确认门禁。
+    // 仍从面板填写当前流程的必填项，验证覆盖地址确实能驱动任务创建。
+    if (!scriptBox && startBtn) {
+      const setSelect = async (sel, value) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        el.value = value;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 250));
+        return true;
+      };
+      const setInput = (sel, value) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        el.value = value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      };
+      await setSelect('[data-test="invite-category"]', '个护家清');
+      const sub = document.querySelector('[data-test="invite-subcategory"] option:not([value=""])');
+      if (sub) await setSelect('[data-test="invite-subcategory"]', sub.value);
+      const third = document.querySelector('[data-test="invite-category3"] option:not([value=""])');
+      if (third) await setSelect('[data-test="invite-category3"]', third.value);
+      const level = document.querySelector('[data-test^="invite-level-"]');
+      if (level && !level.checked) level.click();
+      setInput('[data-test="invite-batch-phone"]', '15057937334');
+      setInput('[data-test="invite-batch-wechat"]', 'm1_verify_wx');
+      await new Promise(r => setTimeout(r, 700));
+      out.readyBeforeClick = !startBtn.disabled;
+      if (!startBtn.disabled) {
+        startBtn.click();
+        await new Promise(r => setTimeout(r, 1500));
+        const list2 = await window.shopilot.task.list();
+        const newest2 = list2.ok && list2.data.length ? list2.data[0] : null;
+        const all2 = [];
+        const flatten2 = list => (list || []).forEach(s => { all2.push(s); if (Array.isArray(s?.input?.steps)) flatten2(s.input.steps); });
+        flatten2(newest2?.steps || []);
+        const nav2 = all2.find(s => s.type === 'navigate');
+        const page2 = all2.find(s => s.type === 'waitForPage');
+        out.taskCount = list2.ok ? list2.data.length : -1;
+        out.navUrl = nav2?.input?.url || null;
+        out.urlIncludes = page2?.input?.urlIncludes || null;
+        out.hasSetInput = all2.some(s => s.type === 'setInput');
+        out.hasAiStep = all2.some(s => s.type === 'aiGenerate');
+        out.gateType = all2.find(s => s.type === 'waitForUserConfirmation')?.type || null;
+        if (newest2?.latestRun) await window.shopilot.task.cancel(newest2.latestRun.id);
+      }
+    }
     await window.shopilot.browser.close(sid);
     await window.shopilot.store.deletePermanent(sid);
     await window.shopilot.store.purge(sid);
@@ -1042,13 +1095,15 @@ async function main() {
     JSON.stringify({ saved: squareOverride.saved, closed: squareOverride.closed, error: squareOverride.error }))
   check('覆盖后的达人广场地址驱动邀约任务：navigate=覆盖地址、urlIncludes 同步派生为末段路径',
     squareOverride.panel === true && squareOverride.navUrl === squareOverride.target &&
-    squareOverride.urlIncludes === 'daren-square' &&
+    squareOverride.urlIncludes === 'daren-square' && squareOverride.readyBeforeClick === true &&
     squareOverride.hasSetInput === true && squareOverride.hasAiStep === false &&
-    squareOverride.gateType === 'waitForUserConfirmation',
+    (squareOverride.scriptBox ? squareOverride.gateType === 'waitForUserConfirmation' : squareOverride.gateType === null),
     JSON.stringify({ nav: squareOverride.navUrl, inc: squareOverride.urlIncludes, gate: squareOverride.gateType, panel: squareOverride.panel, displayed: squareOverride.displayed, cardFound: squareOverride.cardFound, ready: squareOverride.readyBeforeClick, scriptLen: squareOverride.scriptLen, manual: squareOverride.manualChecked, levels: squareOverride.levels, taskCount: squareOverride.taskCount, toasts: squareOverride.toasts, head: squareOverride.panelHead }))
-  check('邀约面板「话术来源」：手填/AI 二选一；未配置 AI 时选 AI → 话术框只读、开始按钮禁用并明确提示',
-    squareOverride.aiGate?.readonly === true && squareOverride.aiGate?.startDisabled === true &&
-    squareOverride.aiGate?.hint === true,
+  check('邀约面板配置与启动门禁符合当前平台档案',
+    squareOverride.scriptBox
+      ? squareOverride.aiGate?.readonly === true && squareOverride.aiGate?.startDisabled === true && squareOverride.aiGate?.hint === true
+      : squareOverride.hasAiRadio === false && squareOverride.structuredPhone && squareOverride.structuredWechat &&
+        squareOverride.structuredMainCategory && squareOverride.structuredStrengths === 13,
     JSON.stringify(squareOverride.aiGate))
 
   // 恢复达人广场默认地址（避免影响后续用例）

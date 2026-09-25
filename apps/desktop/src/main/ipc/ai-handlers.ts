@@ -16,6 +16,7 @@ import * as AiClient from '../services/ai-client'
 import { saveAiKey, deleteAiKey, hasAiKey } from '../services/credential-store'
 import { writeAudit } from '../services/audit-logger'
 import { logMain } from '../services/logger'
+import { syncMainAgentProfileFromAiConfig } from '../services/agent-runtime'
 
 const success = <T>(data: T): IPCResult<T> => ({ ok: true, data, requestId: randomUUID() })
 const failure = (code: string, message: string): IPCResult => ({ ok: false, error: { code, message }, requestId: randomUUID() })
@@ -45,6 +46,10 @@ export function registerAiHandlers(): void {
         if (!Number.isFinite(t)) return failure('AI_BAD_INPUT', '超时必须是数字（毫秒）')
         putSetting('ai.timeoutMs', Math.min(Math.max(Math.round(t), 3000), 120000))
       }
+      // The visible root-ceo Agent uses the dedicated Profile backed by this
+      // legacy AI configuration.  Child Agents without an explicit binding
+      // resolve to that Profile in Main at Job/chat snapshot time.
+      syncMainAgentProfileFromAiConfig()
       return success(AiClient.getAiConfig())
     } catch (e: any) {
       return failure('AI_CONFIG_FAILED', String(e?.message || e))

@@ -108,10 +108,10 @@ function createLegacyV3Database(): SqliteDb {
 }
 
 describe('数据库迁移', () => {
-  it('v4 迁移存在且是最新版本', () => {
+  it('v8 Agent 运行时迁移存在且是最新版本', () => {
     const latest = migrations[migrations.length - 1]
-    expect(latest.version).toBe(4)
-    expect(latest.name).toBe('task_query_indexes')
+    expect(latest.version).toBe(8)
+    expect(latest.name).toBe('agent_skills_and_plugins')
   })
 
   it('v4 全部语句都带 IF NOT EXISTS（可安全重复执行）', () => {
@@ -136,14 +136,14 @@ describe('数据库迁移', () => {
     db.close()
   })
 
-  realDbIt('生产 migrate() 能把 v3 旧库自动升到 v4 并补索引、写台账（真实 SQLite）', () => {
+  realDbIt('生产 migrate() 能把 v3 旧库自动升到 v8 并补索引、写 Agent 台账（真实 SQLite）', () => {
     const db = createLegacyV3Database()
     const shim = withTransactionShim(db)
     expect(getCurrentVersion(shim as MigrationDb)).toBe(3)
 
     expect(() => migrate(shim as MigrationDb)).not.toThrow()
 
-    expect(getCurrentVersion(shim as MigrationDb)).toBe(4)
+    expect(getCurrentVersion(shim as MigrationDb)).toBe(8)
     expect(indexNames(db, 'task_runs')).toContain('idx_task_runs_status')
     expect(indexNames(db, 'task_step_results')).toContain('idx_task_step_results_run_step')
 
@@ -152,9 +152,26 @@ describe('数据库迁移', () => {
       .all() as Array<{ version: number; name: string }>
     expect(applied).toEqual([{ version: 4, name: 'task_query_indexes' }])
 
+    const agentMigration = db
+      .prepare('SELECT version, name FROM schema_migrations WHERE version = 5')
+      .all() as Array<{ version: number; name: string }>
+    expect(agentMigration).toEqual([{ version: 5, name: 'agent_runtime_baseline' }])
+    const agentJobMigration = db
+      .prepare('SELECT version, name FROM schema_migrations WHERE version = 6')
+      .all() as Array<{ version: number; name: string }>
+    expect(agentJobMigration).toEqual([{ version: 6, name: 'agent_job_confirmation_and_leases' }])
+    const agentPricingMigration = db
+      .prepare('SELECT version, name FROM schema_migrations WHERE version = 7')
+      .all() as Array<{ version: number; name: string }>
+    expect(agentPricingMigration).toEqual([{ version: 7, name: 'agent_model_pricing' }])
+    const agentSkillMigration = db
+      .prepare('SELECT version, name FROM schema_migrations WHERE version = 8')
+      .all() as Array<{ version: number; name: string }>
+    expect(agentSkillMigration).toEqual([{ version: 8, name: 'agent_skills_and_plugins' }])
+
     // 幂等：再跑一次不会重复插入或报错
     expect(() => migrate(shim as MigrationDb)).not.toThrow()
-    const rows = db.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 4').get() as { n: number }
+    const rows = db.prepare('SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 8').get() as { n: number }
     expect(rows.n).toBe(1)
     db.close()
   })
@@ -178,6 +195,8 @@ describe('数据库迁移', () => {
 
     const runColumns = (db.prepare('PRAGMA table_info(task_runs)').all() as Array<{ name: string }>).map(c => c.name)
     expect(runColumns.filter(c => c === 'status_reason')).toHaveLength(1)
+    const profileColumns = (db.prepare('PRAGMA table_info(agent_model_profiles)').all() as Array<{ name: string }>).map(c => c.name)
+    expect(profileColumns.filter(c => c === 'pricing_json')).toHaveLength(1)
     db.close()
   })
 

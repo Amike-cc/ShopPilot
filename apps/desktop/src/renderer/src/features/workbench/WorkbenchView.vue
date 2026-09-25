@@ -170,7 +170,7 @@
               ref="urlInput"
               v-model="urlDraft"
               @keydown.enter="submitUrl"
-              :key="ws.activeTab?.id + ws.activeTab?.url"
+              :key="(ws.activeTab?.id || '') + (ws.activeTab?.url || '')"
               spellcheck="false"
             />
           </div>
@@ -394,7 +394,7 @@
       <!-- 任务面板 - §4.4 / §6.6（二级页签：达人邀约 / 待开发占位）
            二级页签刻意不用 .panel-tabs：那一行是标题栏拖拽区（还给 WCO 留了 140px），
            内容区里的页签不该抢拖拽、也不该留白 -->
-      <div class="panel-body env-body" v-else>
+      <div class="panel-body env-body" v-else-if="ws.rightPanel === 'tasks'">
         <div class="sub-tabs" data-test="task-subtabs">
           <button
             v-for="st in TASK_SUB_TABS" :key="st.key"
@@ -467,8 +467,8 @@
               </div>
               <div class="row-sub" v-if="liveMessage(t)" style="padding:2px 0" data-test="task-live-msg">{{ liveMessage(t) }}</div>
 
-              <div class="log-box" v-if="ws.taskLogs[detailRunId(t)]?.length">
-                <div class="log-line" v-for="(l, i) in ws.taskLogs[detailRunId(t)]" :key="i">
+              <div class="log-box" v-if="ws.taskLogs[detailRunId(t) || '']?.length">
+                <div class="log-line" v-for="(l, i) in ws.taskLogs[detailRunId(t) || '']" :key="i">
                   {{ new Date(l.at || Date.now()).toLocaleTimeString() }} [{{ l.phase }}]{{ l.stepType ? ' ' + l.stepType : '' }} {{ l.message || '' }}
                 </div>
               </div>
@@ -869,8 +869,8 @@
               </div>
               <div class="row-sub" v-if="liveMessage(inviteLatest)" style="padding:2px 0">{{ liveMessage(inviteLatest) }}</div>
               <div class="log-box invite-live-log" ref="inviteLiveLogEl" data-test="invite-live-log">
-                <div v-if="!ws.taskLogs[detailRunId(inviteLatest)]?.length" class="log-line">等待运行输出…开始邀约后，这里的日志会实时滚动，卡住时看停在最后几行。</div>
-                <div class="log-line" v-for="(l, i) in ws.taskLogs[detailRunId(inviteLatest)]" :key="i">
+                <div v-if="!ws.taskLogs[detailRunId(inviteLatest) || '']?.length" class="log-line">等待运行输出…开始邀约后，这里的日志会实时滚动，卡住时看停在最后几行。</div>
+                <div class="log-line" v-for="(l, i) in ws.taskLogs[detailRunId(inviteLatest) || '']" :key="i">
                   {{ new Date(l.at || Date.now()).toLocaleTimeString() }} [{{ l.phase }}]{{ l.stepType ? ' ' + l.stepType : '' }} {{ l.message || '' }}
                 </div>
               </div>
@@ -932,6 +932,17 @@
       </div>
       </template>
     </aside>
+
+    <AgentDock
+      :store-name="displayedStoreName"
+      :tab-title="ws.activeTab?.title || ''"
+      :current-url="ws.activeTab?.url || ''"
+      :needs-confirmation="confirmationCount > 0 || agent.needsConfirmation"
+      :locked="ws.appLocked"
+      @dragging-change="setAgentOrbDragging"
+      @view-tasks="viewAgentTasks"
+      @view-task="viewAgentTask"
+    />
 
     <!-- 发票中心：抓取并展示各平台后台的**待开票信息**（只读采集；开票操作仍在平台页面完成） -->
     <div v-if="invoiceCenterOpen" class="modal-mask" @click.self="invoiceCenterOpen = false">
@@ -1495,6 +1506,7 @@
           <button :class="['stab', { on: settingsTab === 'config' }]" data-test="settings-tab-config" @click="openSettingsTab('config')">配置</button>
           <button :class="['stab', { on: settingsTab === 'square' }]" data-test="settings-tab-square" @click="openSettingsTab('square')">达人广场</button>
           <button :class="['stab', { on: settingsTab === 'ai' }]" data-test="settings-tab-ai" @click="openSettingsTab('ai')">AI 配置</button>
+          <button :class="['stab', { on: settingsTab === 'agents' }]" data-test="settings-tab-agents" @click="openSettingsTab('agents')">Agent 团队</button>
           <button :class="['stab', { on: settingsTab === 'about' }]" data-test="settings-tab-about" @click="openSettingsTab('about')">关于软件</button>
         </div>
 
@@ -1583,6 +1595,11 @@
           </div>
         </div>
 
+        <!-- Agent 组织、模型、记忆和 Job：数据均来自 Main 白名单 IPC -->
+        <div v-else-if="settingsTab === 'agents'" class="sub-pane agent-admin-pane" data-test="settings-agents">
+          <AgentAdminPanel @toast="(message, kind) => ws.toast(message, kind || 'error')" />
+        </div>
+
         <!-- 关于软件：软件信息 + 更新 -->
         <div v-else class="sub-pane" data-test="settings-about">
           <div class="about-head">
@@ -1626,7 +1643,7 @@
         </div>
 
         <div class="modal-actions">
-          <template v-if="settingsTab !== 'about'">
+          <template v-if="!['about', 'agents'].includes(settingsTab)">
             <button class="btn-ghost" @click="settingsOpen = false">取消</button>
             <button class="btn-primary" data-test="settings-save" @click="saveSettingsConfig">保存</button>
           </template>
@@ -1645,17 +1662,22 @@
 <script setup lang="ts">
 import { reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
+import { useAgentStore } from '../../stores/agent'
 import { moveStoreId, type StoreDropPosition } from '../../stores/store-order'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import CustomTaskEditor from '../tasks/CustomTaskEditor.vue'
+import AgentDock from '../agent/AgentDock.vue'
+import AgentAdminPanel from '../agent/AgentAdminPanel.vue'
 import {
   hasBlockingIssues, toEngineSteps, validateCustomSteps,
   findCatalogEntry, type CustomStepDraft, type CustomStepIssue
 } from '@shared/custom-task'
 import { describePickResult, type ElementPickResult, type PickMode } from '@shared/element-pick'
+import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { inviteProfileFor, INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, isBatchProfile, isAssistProfile } from '@shared/constants/invite'
 import type { CategoryNode } from '@shared/constants/invite'
-import { buildInviteSteps, hasRequiredBatchContacts } from '@shared/invite-steps'
+import { hasRequiredBatchContacts } from '@shared/invite-steps'
+import { buildInviteTaskPayload as buildInviteTaskPayloadShared } from '@shared/invite-task'
 import { inviteConfigKey, legacyInviteConfigKey } from '@shared/invite-config'
 import { invoiceProfileFor } from '@shared/constants/invoice'
 import { buildInvoiceCollectSteps } from '@shared/invoice-steps'
@@ -1671,7 +1693,9 @@ import {
 } from '@shared/constants/ai'
 
 const ws = useWorkspaceStore()
+const agent = useAgentStore()
 const viewportEl = ref<HTMLElement | null>(null)
+const agentOrbDragging = ref(false)
 const urlInput = ref<HTMLElement | null>(null)
 const urlDraft = ref('')
 
@@ -1810,7 +1834,7 @@ const platformHomeUrls = ref<Record<string, string>>({})
 /** 设置弹窗内"配置"页的草稿（保存前的编辑态，避免直接改到生效值） */
 const homeUrlDraft = reactive<Record<string, string>>({})
 const settingsOpen = ref(false)
-const settingsTab = ref<'config' | 'square' | 'ai' | 'about'>('config')
+const settingsTab = ref<'config' | 'square' | 'ai' | 'agents' | 'about'>('config')
 
 /** 某平台的实际首页地址：配置值 → 平台目录默认 */
 function platformHome(platformName: string): string {
@@ -2000,7 +2024,7 @@ async function clearAiKey() {
   else { aiMsgOk.value = false; aiMsg.value = '清除失败: ' + res.error.message }
 }
 
-function openSettings(tab: 'config' | 'square' | 'ai' | 'about' = 'config') {
+function openSettings(tab: 'config' | 'square' | 'ai' | 'agents' | 'about' = 'config') {
   settingsOpen.value = true
   settingsTab.value = tab
   for (const p of quickPlatforms) homeUrlDraft[p.name] = platformHomeUrls.value[p.name] || ''
@@ -2059,6 +2083,9 @@ async function saveSettingsConfig() {
   } else if (tab === 'ai') {
     if (!(await saveAiConfig())) return
     ws.toast('AI 配置已保存', 'success')
+  } else if (tab === 'agents') {
+    settingsOpen.value = false
+    return
   } else {
     settingsOpen.value = false
     return
@@ -2096,7 +2123,7 @@ function applyUpdateStatus(payload: any) {
   if (!payload) return
   Object.assign(updateStatus, payload)
 }
-async function openSettingsTab(tab: 'config' | 'square' | 'ai' | 'about') {
+async function openSettingsTab(tab: 'config' | 'square' | 'ai' | 'agents' | 'about') {
   settingsTab.value = tab
   if (tab === 'about') await refreshUpdatePanel()
 }
@@ -2202,6 +2229,12 @@ function submitUrl() {
 
 watch(() => ws.activeTab?.url, (v) => { urlDraft.value = v || '' }, { immediate: true })
 watch(() => ws.displayedStoreId, () => { nextTick(reportViewport) })
+watch(() => `${ws.displayedStoreId || ''}|${ws.activeTab?.id || ''}|${ws.activeTab?.url || ''}`, (value, previous) => {
+  if (previous && previous !== value && agent.plan && ['draft', 'validated'].includes(agent.plan.status)) {
+    agent.clearPlan()
+    agent.observation = null
+  }
+})
 
 async function bookmarkCurrent() {
   const t = ws.activeTab
@@ -3203,53 +3236,42 @@ async function stopInvite() {
  *
  * 返回 null 表示当前不可建（平台不支持 / 配置没填齐），调用方负责提示原因。
  */
+/**
+ * 面板侧的任务载荷：把当前表单状态交给共享构造器（与智能体同一份构造逻辑，避免两处漂移）。
+ * `inviteReady` 仍在这里做面板口径的完整校验（含 AI 话术就绪），共享构造器再做一遍任务口径校验。
+ */
 function buildInviteTaskPayload(): { name: string; storeScope: string; steps: unknown[] } | null {
   const p = inviteProfile.value
   if (!p || !ws.displayedStoreId || !inviteReady.value) return null
-  const squareUrl = squareUrlFor(p.platform)
-  const steps = p.flow === 'batch-list'
-    ? buildInviteSteps(p, {
-        batch: {
-          category: invite.category, subcategory: invite.subcategory, category3: invite.category3,
-          levels: invite.levels, count: invite.count,
-          script: invite.script, scriptMode: invite.scriptMode, benefits: invite.benefits,
-          // 抖店改版抽屉：主营下拉 + 核心优势组（快手没有这些控件 → 传空即不生效）
-          strengths: JSON.parse(JSON.stringify(invite.strengths)),
-          mainCategory: invite.mainCategory,
-          // 快手：额外筛选行 / 抽屉必填联系方式 / 邀约商品数（抖店没有这些字段 → 传空即不生效）
-          extraFilters: JSON.parse(JSON.stringify(invite.extraFilters)),
-          contacts: p.contactSelectors
-            ? [
-                ...(p.contactSelectors.contact ? [{ selector: p.contactSelectors.contact, text: invite.batchContact.trim() }] : []),
-                ...(p.contactSelectors.phone ? [{ selector: p.contactSelectors.phone, text: invite.batchPhone.trim() }] : []),
-                ...(p.contactSelectors.wechat ? [{ selector: p.contactSelectors.wechat, text: invite.batchWechat.trim() }] : [])
-              ].filter(c => c.text)
-            : [],
-          productCount: invite.batchProductCount
-        }
-      }, squareUrl)
-    : buildInviteSteps(p, {
-        assist: {
-          contact: invite.contact, wechat: invite.wechat, phone: invite.phone,
-          script: invite.script, scriptMode: invite.scriptMode,
-          // 面板已去掉「添加商品数量」；留空 productIds 时引擎按 1 个自动添加（页面已有则不动）
-          productCount: 1,
-          productIds: inviteProducts.value,
-          finderType: invite.finderType,
-          finderCategories: invite.finderCategories,
-          finderOtherFilters: invite.finderOtherFilters
-        }
-      }, squareUrl)
-  const name = p.flow === 'batch-list'
-    ? `达人邀约 · ${p.platform} · ${
-        invite.category
-          ? invite.category +
-            (invite.subcategory ? '/' + invite.subcategory : '') +
-            (invite.subcategory && invite.category3 ? '/' + invite.category3 : '')
-          : '全部'
-      } · 最多 ${invite.count} 位`
-    : `达人邀约 · ${p.platform} · 辅助填单 · ${invite.contact.trim() || '未命名'}`
-  return { name, storeScope: ws.displayedStoreId, steps }
+  return buildInviteTaskPayloadShared({
+    profile: p,
+    storeId: ws.displayedStoreId,
+    squareUrl: squareUrlFor(p.platform),
+    config: {
+      category: invite.category,
+      subcategory: invite.subcategory,
+      category3: invite.category3,
+      levels: [...invite.levels],
+      count: invite.count,
+      script: invite.script,
+      scriptMode: invite.scriptMode,
+      benefits: [...invite.benefits],
+      strengths: JSON.parse(JSON.stringify(invite.strengths)),
+      mainCategory: invite.mainCategory,
+      extraFilters: JSON.parse(JSON.stringify(invite.extraFilters)),
+      batchContact: invite.batchContact,
+      batchPhone: invite.batchPhone,
+      batchWechat: invite.batchWechat,
+      batchProductCount: invite.batchProductCount,
+      contact: invite.contact,
+      wechat: invite.wechat,
+      phone: invite.phone,
+      productIds: inviteProducts.value,
+      finderType: invite.finderType,
+      finderCategories: JSON.parse(JSON.stringify(invite.finderCategories)),
+      finderOtherFilters: JSON.parse(JSON.stringify(invite.finderOtherFilters))
+    }
+  })
 }
 
 async function startInvite() {
@@ -3852,6 +3874,37 @@ const rightPanelCollapsed = ref(false)
 // 注意：ws.confirmations 是 Record<runId, item>（对象），不是数组 —— 用 .length 会恒为 undefined，
 // 导致"待确认时禁止收起"与"来新确认自动展开"两条守卫静默失效（M3 断言当场抓到）。
 const confirmationCount = computed(() => Object.keys(ws.confirmations || {}).length)
+const displayedStoreName = computed(() => ws.stores.find(store => store.id === ws.displayedStoreId)?.name || '')
+function setAgentOrbDragging(dragging: boolean) { agentOrbDragging.value = dragging }
+
+function viewAgentTasks() {
+  agent.setDrawerOpen(false)
+  rightPanelCollapsed.value = false
+  ws.rightPanel = 'tasks'
+  ws.refreshTasks()
+  window.shopilot.settings.set('ui.rightPanelCollapsed', false).catch(() => {})
+  syncViewportSoon()
+}
+
+function viewAgentTask(taskId?: string) {
+  viewAgentTasks()
+  if (taskId) {
+    detailTaskId.value = taskId
+    const task = ws.tasks.find(item => item.id === taskId)
+    if (task) void loadTaskDetail(task)
+  }
+}
+
+/** 主 Agent 的软件操作：打开应用面板（只做界面导航，不改数据）。 */
+function handleAgentPanelOpen(payload: any) {
+  const panel = String(payload?.panel || '')
+  if (panel === 'settings') openSettings('config')
+  else if (panel === 'agentTeam') openSettings('agents')
+  else if (panel === 'aiConfig') openSettings('ai')
+  else if (panel === 'tasks') viewAgentTasks()
+  else if (panel === 'invoiceCenter') { invoiceCenterOpen.value = true; void loadInvoiceCenter() }
+  else if (panel === 'dataCenter') { dataCenterOpen.value = true; void loadDataCenter() }
+}
 
 /** 中栏宽度变了 → 立刻上报原生视图 bounds（ResizeObserver 之外再兜一次，避免慢一帧） */
 function syncViewportSoon() {
@@ -3923,6 +3976,7 @@ function switchPanel(p: 'bookmarks' | 'downloads' | 'env' | 'tasks') {
   else if (p === 'env') { refreshEnv(); refreshCookies() }
   else if (p === 'tasks') ws.refreshTasks()
   else { ws.refreshBookmarks(); refreshEntryRoutes() }
+  syncViewportSoon()
 }
 
 /**
@@ -4722,6 +4776,7 @@ async function collectBusinessData() {
  */
 const ctxOverlapViewport = ref(false)
 let lastObscured = false
+let lastObscuredReasons = ''
 let overlaySyncChain: Promise<void> = Promise.resolve()
 let overlayRevision = 0
 
@@ -4732,7 +4787,7 @@ function refreshOverlayOcclusion(): Promise<void> {
     // A newer watch event has already scheduled a fresher DOM state.
     if (revision !== overlayRevision) return
 
-    const modalOpen = !!(ws.createDialogOpen || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value || dataCenterOpen.value || invoiceCenterOpen.value || taskDialogOpen.value)
+    const agentOverlayOpen = agent.ui.drawerOpen && !customPicking.value
     if (ctx.open && viewportEl.value) {
       const m = document.querySelector('[data-test="store-ctx"]')?.getBoundingClientRect()
       const v = viewportEl.value.getBoundingClientRect()
@@ -4744,16 +4799,23 @@ function refreshOverlayOcclusion(): Promise<void> {
     // 不应摘除原生视图，否则用户没有可点击的页面。
     const otherModalOpen = !!(ws.createDialogOpen || ws.trashOpen || rename.open || copycfg.open || confirmBox.open || settingsOpen.value || dataCenterOpen.value || invoiceCenterOpen.value)
     const customTaskOpen = taskDialogOpen.value && taskFlow.value === 'custom'
-    const shouldHide = otherModalOpen || (modalOpen && !customPicking.value && !customTaskOpen) || ctxOverlapViewport.value
-    if (shouldHide === lastObscured) return
+    const modalHidden = otherModalOpen || (taskDialogOpen.value && !customPicking.value && !customTaskOpen) || ctxOverlapViewport.value
+    const agentHidden = agentOrbDragging.value || agentOverlayOpen
+    const shouldHide = modalHidden || agentHidden
+    const reasons = `${modalHidden ? 'modal' : ''}|${agentHidden ? 'agent' : ''}`
+    if (shouldHide === lastObscured && reasons === lastObscuredReasons) return
     lastObscured = shouldHide
-    await window.shopilot.browser.setViewsObscured(shouldHide)
+    lastObscuredReasons = reasons
+    await Promise.all([
+      window.shopilot.browser.setViewsObscured(modalHidden, 'modal'),
+      window.shopilot.browser.setViewsObscured(agentHidden, 'agent')
+    ])
   }).catch(() => {})
   return overlaySyncChain
 }
 
 watch(
-  () => [ws.createDialogOpen, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value, invoiceCenterOpen.value, taskDialogOpen.value, taskFlow.value, customPicking.value],
+  () => [ws.createDialogOpen, ws.trashOpen, ctx.open, rename.open, copycfg.open, confirmBox.open, settingsOpen.value, dataCenterOpen.value, invoiceCenterOpen.value, taskDialogOpen.value, taskFlow.value, customPicking.value, agent.ui.drawerOpen, agentOrbDragging.value],
   () => {
     refreshOverlayOcclusion()
     // task-layout 切换（任务对话框开/关、自定义/邀约切换）会改变视口尺寸：
@@ -4818,12 +4880,13 @@ onMounted(async () => {
   window.shopilot.on('update:progress', updateEventHandler)
   // 采集任务可能在数据中心的等待窗口之后才跑完（例如运行排队等店铺浏览器打开）：
   // 任何运行结束都刷新一次已打开的面板，避免表格停在旧数字上
-  window.shopilot.on('task:progress', (ev: any) => {
+  window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, (ev: any) => {
     if (ev?.phase === 'finished' || ev?.phase === 'failed') {
       if (dataCenterOpen.value) void loadDataCenter()
       if (invoiceCenterOpen.value) void loadInvoiceCenter()
     }
   })
+  window.shopilot.on(EVENT_CHANNELS.AGENT_PANEL_OPEN, (ev: any) => handleAgentPanelOpen(ev))
   await ws.init()
   // Renderer reloads do not reset main-process WebContentsView state. Explicitly
   // clear a stale overlay flag before the first viewport report; app-lock state
@@ -4845,6 +4908,9 @@ onMounted(async () => {
   // 恢复上次的左栏收起状态
   const savedLeft = await window.shopilot.settings.get('ui.leftSidebarCollapsed')
   if (savedLeft?.ok && savedLeft.data?.value === true) { leftSidebarCollapsed.value = true }
+  await agent.initialize().catch(() => {})
+  // Older renderer state could leave the right panel on the former Agent tab.
+  if ((ws.rightPanel as string) === 'agent') ws.rightPanel = 'bookmarks'
   await nextTick()
   if (viewportEl.value) {
     resizeObserver = new ResizeObserver(() => reportViewport())
@@ -5054,12 +5120,13 @@ onBeforeUnmount(() => {
 .qp-dot { width: 10px; height: 10px; border-radius: 50%; }
 
 /* 右栏 */
-.right-panel { width: 320px; min-width: 320px; height: 100%; background: var(--color-bg-secondary); border-left: 1px solid var(--color-border); display: flex; flex-direction: column; }
+.right-panel { position: relative; flex: 0 0 auto; width: 320px; min-width: 320px; height: 100%; background: var(--color-bg-secondary); border-left: 1px solid var(--color-border); display: flex; flex-direction: column; }
 /* §17 顶部融合：面板顶行也是标题栏拖拽区；右侧 140px 留给原生窗口按钮（WCO） */
 .panel-tabs { display: flex; height: 40px; border-bottom: 1px solid var(--color-border); padding-right: 140px; -webkit-app-region: drag; }
 .ptab { flex: 1; font-size: 13px; color: var(--color-text-secondary); border-bottom: 2px solid transparent; -webkit-app-region: no-drag; }
 .ptab.on { color: #fff; border-bottom-color: var(--color-primary); }
 .panel-body { flex: 1; overflow-y: auto; padding: 8px; }
+.confirm-bar { position: relative;z-index: 150; }
 .row-item { position: relative; padding: 8px 30px 8px 10px; border-radius: var(--radius-sm); cursor: pointer; }
 .row-item:hover { background: var(--color-bg-tertiary); }
 .row-main { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -5482,7 +5549,7 @@ onBeforeUnmount(() => {
   margin-bottom: 0;
 }
 .inv-run-bar .cf-btns { align-items: center; }
-.inv-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.inv-grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
 .inv-grid3 .inv-col:last-child { grid-column: 1 / -1; }
 .inv-col { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
 .inv-col select { width: 100%; }
@@ -5494,6 +5561,14 @@ onBeforeUnmount(() => {
 .sub-tabs .stab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-warning, #d9a441); }
 /* 达人邀约面板：全部按 [data-test="invite-panel"] 作用域限定，
    避免历史上"通用 .env-sec input 撑爆布局"那类连带影响（右栏只有 320px 宽） */
+[data-test="invite-panel"] { min-width: 0; overflow-x: hidden; }
+[data-test="invite-panel"] .sub-pane,
+[data-test="invite-panel"] .inv-card,
+[data-test="invite-panel"] .inv-card-h,
+[data-test="invite-panel"] .inv-grid2,
+[data-test="invite-panel"] .inv-grid2 > *,
+[data-test="invite-panel"] .inv-row,
+[data-test="invite-panel"] .inv-chips { min-width: 0; max-width: 100%; box-sizing: border-box; }
 [data-test="invite-panel"] .inv-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; color: var(--color-text-secondary); }
 /* 行首标签不收缩、不折行：右栏仅 320px，「本批数量」这类 4 字标签会被挤成竖排（实测踩过）。
    裸文本节点在 flex 里是匿名项，所以模板里已把它们包成 .inv-label。 */
@@ -5513,6 +5588,7 @@ onBeforeUnmount(() => {
 [data-test="invite-panel"] .inv-row > input[type="text"]:focus { border-color: var(--color-primary); }
 [data-test="invite-panel"] select { flex: 1 1 auto; min-width: 0; }
 [data-test="invite-panel"] .inv-row > input[type="text"] { flex: 1 1 auto; min-width: 0; }
+[data-test="invite-panel"] .inv-col > input[type="text"] { width: 100%; }
 [data-test="invite-panel"] textarea { width: 100%; resize: vertical; font-family: inherit; }
 [data-test="invite-panel"] .inv-num { width: 64px; flex: 0 0 64px; }
 [data-test="invite-panel"] .inv-chips { display: flex; flex-wrap: wrap; gap: 4px; }

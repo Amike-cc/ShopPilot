@@ -14,6 +14,7 @@ import { createHash } from 'crypto'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import { redactAgentText } from '@shared/agent-privacy'
 import { TABLE_ROW_CLEAN_FN } from '@shared/constants/invoice'
 import type {
   TaskStepDef, TaskProgressEvent, TaskProgressPhase,
@@ -289,7 +290,20 @@ async function execute(run: RunHandle): Promise<void> {
     // 任务运行标签页：**按店铺复用**（此前每个 run 新建一个、从不回收——实测一天下来
     // 堆了 10 个渲染进程、约 1.5GB 内存）。复用不影响步骤正确性：抖店流程第 1 步就是
     // navigate、微信流程第 1 步是 mirrorTabUrl，都会把页面重新加载到目标地址。
-    if (!run.tabId || !getTabWebContents(run.storeId, run.tabId)) {
+    const firstStep = run.steps[run.startFrom]
+    const requestedTabId = firstStep?.type === 'useTab' && typeof firstStep.input?.tabId === 'string'
+      ? String(firstStep.input.tabId)
+      : null
+    if (requestedTabId && !getTabWebContents(run.storeId, requestedTabId)) {
+      const message = '计划绑定的标签页已关闭，请重新观察页面并创建任务'
+      TaskStore.updateRun(run.runId, { errorCode: 'TASK_TAB_NOT_FOUND', errorMessage: message })
+      transition(run, 'failed', message)
+      return
+    }
+    if (requestedTabId) {
+      // Agent 计划显式绑定生成计划时的标签页；不新建 about:blank 再切换，避免误读其他页面。
+      run.tabId = requestedTabId
+    } else if (!run.tabId || !getTabWebContents(run.storeId, run.tabId)) {
       const reusedId = runTabByStore.get(run.storeId)
       if (reusedId && getTabWebContents(run.storeId, reusedId)) {
         run.tabId = reusedId
@@ -1037,7 +1051,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const findEl = deep
         ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().find(el => { try { return el.matches(${JSON.stringify(String(input.selector))}) } catch { return false } }) || null })()`
         : `(document.querySelector(${JSON.stringify(String(input.selector))}))`
-      const text = await wc.executeJavaScript(`(() => {
+      const rawText = await wc.executeJavaScript(`(() => {
         const el = ${findEl};
         if (!el) return null;
         // 表单控件读 value：textarea 的 textContent 是"默认值"，用 setInput/aiGenerate 写入后并不会变，
@@ -1045,6 +1059,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') return String(el.value ?? '').trim().slice(0, 100000);
         return String(el.innerText || el.textContent || '').trim().slice(0, 100000);
       })()`)
+      const text = input.privacyRedact === true ? redactAgentText(rawText, 2000) : rawText
       if (text == null) throw new Error(`TASK_SELECTOR_CHANGED: 未找到元素 ${String(input.selector)}`)
       if (input.metric) {
         const num = parseFloat(String(text).replace(/[^\d.-]/g, ''))
@@ -1119,6 +1134,14 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
             if (own <= 1) body = tables[i + 1];
           }
         }
+        // Agent 摘要模式只读表头与行数，绝不读取任何订单/客户单元格文本。
+        if (${input.headersOnly === true}) {
+          const tableRows = Array.from(target.querySelectorAll('tr'));
+          const headerRow = target.querySelector('thead tr') || tableRows[0] || null;
+          const headers = headerRow ? Array.from(headerRow.querySelectorAll('th,td')).map(cell => String(cell.innerText || '').trim().slice(0, 100)) : [];
+          const bodyRows = body ? body.querySelectorAll('tr').length : tableRows.length - (headerRow ? 1 : 0);
+          return { __agentSummary: true, headers, rowCount: Math.max(0, bodyRows) };
+        }
         const grab = (t) => Array.from(t.querySelectorAll('tr')).map(tr =>
           Array.from(tr.children).map(c => String(c.innerText || '').trim().slice(0, 500)));
         const out = grab(target);
@@ -1157,6 +1180,12 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       if (!rows) {
         if (emptyOk) return emptyResult('页面上没有该选择器的表格')
         throw new Error(`TASK_SELECTOR_CHANGED: 未找到表格 ${String(input.selector)}`)
+      }
+      if (input.headersOnly === true && rows.__agentSummary === true) {
+        const rowCount = Number(rows.rowCount) || 0
+        const headers = Array.isArray(rows.headers) ? rows.headers.map((x: unknown) => redactAgentText(x, 100)) : []
+        if (input.metric) TaskStore.insertSnapshot(run.storeId, String(input.metric), rowCount, run.runId)
+        return { kind: 'table', payload: { headers, rowCount, metric: input.metric || null, summaryOnly: true } }
       }
       if (input.metric) {
         // keepRows：把整表行数组落快照（发票中心要展示"待开票信息"的内容，不只是一个行数）；
@@ -2408,6 +2437,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
     case 'useTab': {
       // 切到"已经打开的某个标签页"上继续（不导航、不重载）：微信邀约逐轮换人时必须回到
       // 那个一直活着的广场页——重载会重置分页与筛选（平台翻页是内部状态，URL 不变）。
+      const tabIdWant = input.tabId ? String(input.tabId) : null
       const pathWant = input.path ? String(input.path) : null
       const incWant = input.urlIncludes ? String(input.urlIncludes) : null
       guardSignals(run)
@@ -2417,6 +2447,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         return { id: t.id, url: live || String(t.url || '') }
       })
       const matchOf = (c: { id: string; url: string }) => {
+        if (tabIdWant) return c.id === tabIdWant
         let u: URL
         try { u = new URL(c.url) } catch { return false }
         if (pathWant) return u.pathname === pathWant || u.pathname.endsWith(pathWant)
@@ -2428,7 +2459,8 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       }
       const oldTabId = run.tabId
       run.tabId = target.id
-      runTabByStore.set(run.storeId, target.id)
+      // tabId 精确绑定属于 Agent 当前页上下文；不要把普通用户标签永久登记为任务运行标签。
+      if (!tabIdWant) runTabByStore.set(run.storeId, target.id)
       try { activateTab(run.storeId, target.id) } catch { /* 视图未挂载不阻塞流程 */ }
       if (input.closeCurrent !== false && oldTabId && oldTabId !== target.id) {
         // 详情/邀约表单页用完即关：否则每轮留一个标签页（实测一轮下来攒了 7 个 finder-detail）
@@ -2932,14 +2964,24 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       if (input.metric && !m) {
         throw new Error(`TASK_SELECTOR_CHANGED: 「${label}」旁取到的不是数值（${raw.slice(0, 40)}）——页面结构或文案已变，未落库`)
       }
-      const shown = (m ? m[0] : raw).replace(/\s+/g, '').slice(0, 40)
+      const shownRaw = (m ? m[0] : raw).replace(/\s+/g, '').slice(0, 40)
+      const shown = input.privacyRedact === true ? redactAgentText(shownRaw, 40) : shownRaw
       let num = parseFloat(shown.replace(/[^\d.]/g, ''))
       if (Number.isFinite(num) && shown.includes('亿')) num *= 1e8
       else if (Number.isFinite(num) && shown.includes('万')) num *= 1e4
       if (input.metric) {
         TaskStore.insertSnapshot(run.storeId, String(input.metric), Number.isFinite(num) ? num : shown, run.runId)
       }
-      return { kind: 'text', payload: { text: shown, rawText: raw.slice(0, 60), label, cardText: res.cardText, metric: input.metric || null } }
+      return {
+        kind: 'text',
+        payload: {
+          text: shown,
+          rawText: input.privacyRedact === true ? redactAgentText(raw, 60) : raw.slice(0, 60),
+          label: input.privacyRedact === true ? redactAgentText(label, 60) : label,
+          cardText: input.privacyRedact === true ? redactAgentText(res.cardText, 80) : res.cardText,
+          metric: input.metric || null
+        }
+      }
     }
     case 'waitMs': {
       // 显式等待：SPA 按新周期/筛选重新取数时，数值是原地刷新（元素早就在），

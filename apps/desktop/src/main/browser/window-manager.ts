@@ -222,9 +222,19 @@ export function setBrowserViewsVisible(visible: boolean): void {
  * 因此弹层打开期间摘除挂载，关闭后若未锁定则重新挂载。
  */
 let viewsHiddenForOverlay = false
-export function setBrowserViewsObscured(obscured: boolean): void {
-  viewsHiddenForOverlay = obscured
-  if (obscured) {
+let viewsHiddenForAgent = false
+export type BrowserViewObscuredReason = 'modal' | 'agent'
+
+/**
+ * Hide the native page view while HTML overlays are interactive. Agent overlays
+ * are tracked separately so Main can still inspect the current WebContents
+ * while the floating Agent drawer is open.
+ */
+export function setBrowserViewsObscured(obscured: boolean, reason: BrowserViewObscuredReason = 'modal'): void {
+  if (reason === 'agent') viewsHiddenForAgent = obscured
+  else viewsHiddenForOverlay = obscured
+  const hidden = viewsHiddenForOverlay || viewsHiddenForAgent
+  if (hidden) {
     detachMounted()
     logMain('info', '弹层打开：已摘除店铺视图挂载（避免原生层遮挡弹窗）')
     return
@@ -243,7 +253,7 @@ export function setBrowserViewsObscured(obscured: boolean): void {
 
 function mountTab(tab: Tab | null): void {
   if (!hostWindow || hostWindow.isDestroyed()) return
-  if (viewsHiddenForLock || viewsHiddenForOverlay) { detachMounted(); return }
+  if (viewsHiddenForLock || viewsHiddenForOverlay || viewsHiddenForAgent) { detachMounted(); return }
 
   if (!tab || !tab.webContentsView) {
     detachMounted()
@@ -545,7 +555,7 @@ export async function captureTab(storeId: string, tabId: string, format: string 
   // A resize or overlay transition can briefly leave the native view detached/zero-sized.
   // Reattach the displayed tab and retry until Chromium has a non-empty frame instead of
   // returning a successful but unusable zero-byte screenshot.
-  if (displayedStoreId === storeId && !viewsHiddenForLock && !viewsHiddenForOverlay) {
+  if (displayedStoreId === storeId && !viewsHiddenForLock && !viewsHiddenForOverlay && !viewsHiddenForAgent) {
     mountTab(tab)
   }
   const deadline = Date.now() + 5000
@@ -561,7 +571,7 @@ export async function captureTab(storeId: string, tabId: string, format: string 
   let png = image.toPNG()
   while ((image.isEmpty() || png.length < 100) && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 100))
-    if (displayedStoreId === storeId && !viewsHiddenForLock && !viewsHiddenForOverlay) mountTab(tab)
+    if (displayedStoreId === storeId && !viewsHiddenForLock && !viewsHiddenForOverlay && !viewsHiddenForAgent) mountTab(tab)
     image = await tab.webContentsView.webContents.capturePage(captureRect)
     png = image.toPNG()
   }
@@ -809,6 +819,29 @@ export function getTabWebContents(storeId: string, tabId: string): Electron.WebC
   const wc = browserStates.get(storeId)?.tabs.get(tabId)?.webContentsView?.webContents
   if (!wc || wc.isDestroyed()) return null
   return wc
+}
+
+/** Agent 观察只允许读取当前真正挂载的应用标签页；不接收任意 WebContents。 */
+export function isBrowserTabMounted(storeId: string, tabId: string): boolean {
+  const tab = browserStates.get(storeId)?.tabs.get(tabId)
+  return !!tab?.webContentsView &&
+    !tab.webContentsView.webContents.isDestroyed() &&
+    displayedStoreId === storeId &&
+    browserStates.get(storeId)?.activeTabId === tabId &&
+    mountedView === tab.webContentsView &&
+    !viewsHiddenForLock && !viewsHiddenForOverlay
+}
+
+/** Agent-only read access: the floating drawer may detach the view visually,
+ * but the current app-owned WebContents remains a valid observation target. */
+export function isBrowserTabReadableForAgent(storeId: string, tabId: string): boolean {
+  const tab = browserStates.get(storeId)?.tabs.get(tabId)
+  return !!tab?.webContentsView &&
+    !tab.webContentsView.webContents.isDestroyed() &&
+    displayedStoreId === storeId &&
+    browserStates.get(storeId)?.activeTabId === tabId &&
+    !viewsHiddenForLock &&
+    (mountedView === tab.webContentsView || viewsHiddenForAgent)
 }
 
 export function getActiveTabId(storeId: string): string | null {
