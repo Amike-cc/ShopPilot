@@ -1,0 +1,33 @@
+fix(workbench): 逐帧审查后的缺陷修复（交互/状态/校验/安全）
+
+用户可见缺陷（已真机复现并回归）：
+- 「保存为模板」静默失效：structuredClone 克隆 Vue 响应式对象必抛 DataCloneError，
+  改为 JSON 往返克隆（saveDraftTemplate/saveTaskTemplate/loadTaskTemplate 三处）。
+- 弹层不支持 Esc：全局键盘只处理了右键菜单，现按"最上层优先"逐层关闭
+  （Agent 抽屉认 defaultPrevented，避免一次 Esc 连抽屉一起关掉丢掉草稿）。
+- 截图提示早于保存结果：改为主进程落盘后回报真实路径（格式决定扩展名、文件名带随机后缀、
+  异步写盘），取消不再出现"已保存"的假成功。
+- 模板只有保存没有删除：补「删除模板」（带确认），存错能收拾。
+
+状态一致性：
+- 「其他」平台筛选恒为空：哨兵值改为按"是否内置平台"过滤（workspace 与视图共用常量）。
+- 切店铺竞态：收藏/下载/Cookie 的迟到应答不再覆盖当前店铺。
+- loadingTab 按店铺区分；closeStore 同步选中态；移入回收站摘除原生视图并清干净本地状态。
+- 渲染层重载后按主进程权威状态补齐已打开店铺/标签页/当前显示店铺（新增只读 browser:state）。
+- 采集等待超时不再当"已完成"（如实提示仍在进行），真失败仍报红。
+- 经营指标快照改按 storeId 归位（同名店铺不再串数据），主进程查询同步带上 store_id。
+
+平台校验：
+- 快手本批人数下限与步骤构造器同口径（minSelect）；邀约商品数按平台上限收敛并纳入就绪判据。
+- invite-task 构造器的商品数上限改取档案 maxProducts（原写死 20）。
+
+Agent：
+- Job 确认失败不再丢确认入口；UI 状态写入改为单飞+最新优先，避免旧快照覆盖新状态。
+- 待办点击用真实任务 id；Job 进度后刷新软件上下文；自动滚动签名纳入待办/Job 计数。
+
+主进程（安全与生命周期）：
+- settings 通用通道改白名单（只放行 ui./update./platform.homeUrls/orders.profiles/invite./security.idleMinutes）。
+- 会话/诊断/审计导出路径校验（绝对路径、home 或 tmp 之下、扩展名白名单）。
+- 店铺页面剪贴板读默认拒绝；will-navigate 走协议白名单；日志值级脱敏。
+- 删除/回收店铺时收敛运行环境（含独立窗口），失败即中止而不是留下半删状态。
+- safeStorage 不可用时凭据改为 fail-closed。

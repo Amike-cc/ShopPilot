@@ -277,32 +277,28 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     /**
-     * 与主进程对齐"哪些店铺已打开、有哪些标签页"。
-     * 用 tab.list 作为判据：主进程打开店铺时一定会建至少一个标签页；未打开的店铺拿不到标签页。
+     * 与主进程对齐"哪些店铺已打开、标签页与活动页、当前显示的是哪一家"。
+     *
+     * 渲染层重载/崩溃恢复后事件不会补发，只能主动问一次。用主进程的**权威状态**而不是
+     * 在渲染层猜：猜 display 会把用户刻意停留的欢迎页换成某家店铺的页面，猜活动标签页
+     * 会让截图/关闭落到另一个标签上。
      */
     async hydrateBrowserState() {
-      const results = await Promise.all(this.stores.map(async store => {
-        const res = await window.shopilot.browser.tab.list(store.id)
-        const tabs: TabInfo[] = res.ok ? ((res.data as any)?.tabs || []) : []
-        return { storeId: store.id, tabs }
-      }))
-      for (const { storeId, tabs } of results) {
-        if (!tabs.length) continue
-        this.tabsByStore[storeId] = tabs
-        this.activeTabIdByStore[storeId] = this.activeTabIdByStore[storeId] || tabs.find(t => t.isPinned)?.id || tabs[0].id
-        if (!this.openStoreIds.includes(storeId)) this.openStoreIds.push(storeId)
+      const res = await window.shopilot.browser.state()
+      if (!res.ok) return
+      const data = res.data as { displayedStoreId: string | null; stores: Array<{ storeId: string; activeTabId: string | null; tabs: TabInfo[] }> }
+      for (const item of data?.stores || []) {
+        if (!item?.storeId || !(item.tabs || []).length) continue
+        this.tabsByStore[item.storeId] = item.tabs
+        if (item.activeTabId) this.activeTabIdByStore[item.storeId] = item.activeTabId
+        if (!this.openStoreIds.includes(item.storeId)) this.openStoreIds.push(item.storeId)
       }
-      // 主进程当前显示的店铺没有查询接口：已打开的店铺里取最近活跃的那家作为显示店铺，
-      // 再显式 display 一次让两侧一致（这一步幂等，主进程已经显示它时就是空操作）。
-      if (!this.displayedStoreId && this.openStoreIds.length) {
-        const openRows = this.stores.filter(s => this.openStoreIds.includes(s.id))
-        const adopted = openRows.sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0))[0]
-        if (adopted) {
-          this.displayedStoreId = adopted.id
-          this.selectedStoreId = adopted.id
-          await window.shopilot.browser.display(adopted.id)
-          await Promise.all([this.refreshBookmarks(), this.refreshDownloads()])
-        }
+      const displayed = data?.displayedStoreId || null
+      // 主进程没在显示任何店铺（用户停在欢迎页）→ 保持欢迎页，不要替他打开
+      if (displayed && this.stores.some(s => s.id === displayed)) {
+        this.displayedStoreId = displayed
+        this.selectedStoreId = displayed
+        await Promise.all([this.refreshBookmarks(), this.refreshDownloads()])
       }
     },
 

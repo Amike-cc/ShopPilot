@@ -11,7 +11,8 @@ import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as WindowManager from '../browser/window-manager'
 import { clearStoreData } from '../browser/session-manager'
 import { randomUUID } from 'crypto'
-import { mkdirSync, writeFileSync } from 'fs'
+import { mkdirSync } from 'fs'
+import { writeFile } from 'fs/promises'
 import { join } from 'path'
 
 function generateRequestId(): string {
@@ -382,15 +383,18 @@ export function registerBrowserHandlers(): void {
     const requestId = generateRequestId()
     
     try {
-      const format = input.format || 'png'
+      const format = input.format === 'jpeg' ? 'jpeg' : 'png'
       const dataUrl = await WindowManager.captureTab(input.storeId, input.tabId, format)
       const base64 = String(dataUrl || '').replace(/^data:image\/\w+;base64,/, '')
       const buf = Buffer.from(base64, 'base64')
       if (!buf.length) return error(ERROR_CODES.INTERNAL_ERROR.code, 'CAPTURE_EMPTY: 视口未渲染，截图为空', requestId)
       const dir = join(app.getPath('userData'), 'stores', input.storeId, 'artifacts')
       mkdirSync(dir, { recursive: true })
-      const savedPath = join(dir, `capture_${Date.now()}.png`)
-      writeFileSync(savedPath, buf)
+      // 扩展名跟着真实格式走（jpeg 写进 .png 会打不开）；文件名带随机后缀，
+      // 否则同一毫秒连点两次会同名覆盖，而 savedPath 是"已保存"的唯一凭据
+      const ext = format === 'jpeg' ? 'jpg' : 'png'
+      const savedPath = join(dir, `capture_${Date.now()}_${randomUUID().slice(0, 8)}.${ext}`)
+      await writeFile(savedPath, buf)
       return success({ format, data: dataUrl, savedPath, bytes: buf.length }, requestId)
     } catch (err: any) {
       return browserError(err, requestId)
@@ -420,6 +424,24 @@ export function registerBrowserHandlers(): void {
         id: t.id, url: t.url, title: t.title, isPinned: t.isPinned, orderIndex: t.orderIndex
       }))
       return success({ tabs }, requestId)
+    } catch (err: any) {
+      return browserError(err, requestId)
+    }
+  })
+
+  // browser:state - 只读：渲染层重载/崩溃恢复后据它补齐"哪些店铺已打开、各自的标签页与活动页、
+  // 当前显示的是哪家"。此前没有这条通道，渲染层只能猜（猜错会把 welcome 页换掉、或让截图落到别的标签）
+  ipcMain.handle(IPC_CHANNELS.BROWSER_STATE, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const stores = WindowManager.getOpenStoreIds().map(storeId => ({
+        storeId,
+        activeTabId: WindowManager.getActiveTabId(storeId),
+        tabs: WindowManager.getStoreTabs(storeId).map(t => ({
+          id: t.id, url: t.url, title: t.title, isPinned: t.isPinned, orderIndex: t.orderIndex
+        }))
+      }))
+      return success({ displayedStoreId: WindowManager.getDisplayedStoreId(), stores }, requestId)
     } catch (err: any) {
       return browserError(err, requestId)
     }

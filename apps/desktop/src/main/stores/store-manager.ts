@@ -10,7 +10,7 @@ import { join } from 'path'
 import { getDatabase } from '../db/database'
 import { ensureProfileForStore } from './profile-manager'
 import { writeAudit } from '../services/audit-logger'
-import { closeStoreBrowser, getOpenStoreIds } from '../browser/window-manager'
+import { closeStoreBrowser, getOpenStoreIds, getStandaloneWindowCount } from '../browser/window-manager'
 import { closeStoreSession, getActiveSessions } from '../browser/session-manager'
 import type { Store, StoreCreateInput, StoreUpdateInput } from '@shared/schemas/store'
 import { normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
@@ -293,7 +293,7 @@ export function releaseStoreRuntime(storeId: string): void {
   } catch (error: any) {
     throw new Error(`PROFILE_IN_USE: 店铺运行环境未能关闭（${String(error?.message || error)}），已中止删除`)
   }
-  if (getOpenStoreIds().includes(storeId) || getActiveSessions().has(storeId)) {
+  if (getOpenStoreIds().includes(storeId) || getActiveSessions().has(storeId) || getStandaloneWindowCount(storeId) > 0) {
     throw new Error('PROFILE_IN_USE: 店铺浏览器仍在运行，已中止删除；请先关闭该店铺浏览器')
   }
 }

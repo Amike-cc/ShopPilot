@@ -57,6 +57,8 @@ export const IPC_CHANNELS = {
   BROWSER_PICK_ELEMENT: 'browser:pickElement',
   /** 渲染层弹层遮挡时摘除原生视图挂载（WebContentsView 永远画在 HTML 之上） */
   BROWSER_SET_VIEWS_OBSCURED: 'browser:setViewsObscured',
+  /** 只读浏览器状态：当前显示的店铺 + 各已打开店铺的标签页（渲染层重载后按它补齐，不靠猜） */
+  BROWSER_STATE: 'browser:state',
 
   // 书签 - §6.2
   BOOKMARK_LIST: 'bookmark:list',

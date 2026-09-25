@@ -1476,6 +1476,7 @@
               </label>
               <button class="mini-btn" type="button" :disabled="!selectedTemplateId" @click="loadTaskTemplate">套用模板</button>
               <button class="mini-btn" type="button" :disabled="!customSteps.length" @click="saveDraftTemplate">保存为模板</button>
+              <button class="mini-btn" type="button" :disabled="!selectedTemplateId" @click="deleteTaskTemplate">删除模板</button>
             </div>
 
             <CustomTaskEditor
@@ -2369,6 +2370,8 @@ async function refreshCookies() {
   const sid = ws.displayedStoreId
   if (!sid) { cookies.value = []; cookiesTotal.value = 0; return }
   const res = await window.shopilot.session.cookies(sid, ckSearch.value || undefined)
+  // 请求期间切了店铺：迟到的应答属于上一家店，写进来就是串店（Cookie 串店最危险）
+  if (ws.displayedStoreId !== sid) return
   if (res.ok) { cookies.value = res.data.items; cookiesTotal.value = res.data.total }
 }
 
@@ -3336,7 +3339,13 @@ async function startInvite() {
     const created = await window.shopilot.task.create(payload)
     if (!created.ok) { ws.toast('创建邀约任务失败: ' + created.error.message, 'error'); return }
     const started = await window.shopilot.task.run(created.data.id)
-    if (!started.ok) { ws.toast('启动邀约任务失败: ' + started.error.message, 'error'); return }
+    if (!started.ok) {
+      // 任务已经落库：如实说"已创建但没启动"，并刷新列表让用户能手动运行。
+      // 只说"启动失败"会让人以为没创建，再点一次就多出一个重复任务。
+      await ws.refreshTasks()
+      ws.toast(`邀约任务已创建但启动失败（${started.error.message}）——已加入任务列表，可在「任务列表」里手动运行`, 'error')
+      return
+    }
     ws.toast(p.flow === 'batch-list'
       ? '邀约任务已启动：正在真实发送（无二次确认），直到额度用完或可选达人不足'
       : '邀约任务已启动：将逐位提交平台确认流程，随时可停止', 'success')
@@ -3448,6 +3457,21 @@ function loadTaskTemplate() {
   tf.everyMin = tpl.everyMin
   customSelectedStep.value = 0
   ws.toast('已套用模板，请检查参数后创建', 'info')
+}
+/**
+ * 删除选中的模板。
+ * 模板存在 localStorage 里，此前只有"保存"没有"删除"——存错一个就永远留在下拉里没法收拾。
+ * 只删模板定义，已按它创建的任务不受影响（那是任务表里的独立记录）。
+ */
+function deleteTaskTemplate() {
+  const id = selectedTemplateId.value
+  const tpl = taskTemplates.value.find(x => x.id === id)
+  if (!tpl) return
+  if (!window.confirm(`删除模板「${tpl.name}」？已用它创建的任务不受影响。`)) return
+  taskTemplates.value = taskTemplates.value.filter(x => x.id !== id)
+  persistTaskTemplates()
+  selectedTemplateId.value = ''
+  ws.toast('模板已删除', 'success')
 }
 function persistCustomDraft() {
   try {
@@ -3969,13 +3993,15 @@ function viewAgentTasks() {
   syncViewportSoon()
 }
 
-function viewAgentTask(taskId?: string) {
+async function viewAgentTask(taskId?: string) {
   viewAgentTasks()
-  if (taskId) {
-    detailTaskId.value = taskId
-    const task = ws.tasks.find(item => item.id === taskId)
-    if (task) void loadTaskDetail(task)
-  }
+  if (!taskId) return
+  detailTaskId.value = taskId
+  // 任务列表可能是陈旧的（Job 刚派发完还没刷新）：先拉一次再找，
+  // 否则只会高亮卡片却不出详情，看起来像"点了没反应"
+  if (!ws.tasks.some(item => item.id === taskId)) await ws.refreshTasks()
+  const task = ws.tasks.find(item => item.id === taskId)
+  if (task) void loadTaskDetail(task)
 }
 
 /** 主 Agent 的软件操作：打开应用面板（只做界面导航，不改数据）。 */
@@ -4127,7 +4153,9 @@ function closeTopmostOverlay(): boolean {
   return false
 }
 function onDocKey(ev: KeyboardEvent) {
-  if (ev.key === 'Escape') closeTopmostOverlay()
+  // 关掉一层就 preventDefault：AgentDrawer 也挂了 window 级 Esc（它只认 defaultPrevented
+  // 才知道自己不是最上层），否则一次 Esc 会同时关掉弹层和抽屉，草稿跟着一起丢
+  if (ev.key === 'Escape' && closeTopmostOverlay()) ev.preventDefault()
   // Ctrl+Shift+B：收起/展开右侧栏（与 Ctrl+Shift+L 锁定同一套快捷键约定）
   if (ev.ctrlKey && ev.shiftKey && (ev.key === 'B' || ev.key === 'b')) { ev.preventDefault(); togglePanel() }
   // Ctrl+Shift+E：收起/展开左侧栏
@@ -4439,6 +4467,7 @@ async function collectStoreEntities() {
       if (run.ok && run.data?.runId) runIds.push(run.data.runId)
     }
     await ws.refreshTasks()
+    let timedOut = false
     if (runIds.length) {
       const deadline = Date.now() + 150000
       for (;;) {
@@ -4450,7 +4479,8 @@ async function collectStoreEntities() {
           const st = t?.latestRun?.status
           return st && ['succeeded', 'failed', 'cancelled'].includes(st)
         })
-        if (done || Date.now() > deadline) break
+        if (done) break
+        if (Date.now() > deadline) { timedOut = true; break }
       }
     }
     // 写回：空则填、不一致不覆盖（主进程按快照决定，界面只展示结果）
@@ -4458,8 +4488,10 @@ async function collectStoreEntities() {
     if (!applied.ok) { ws.toast('写回主体信息失败：' + applied.error.message, 'error'); return }
     entityReport.value = applied.data.rows || []
     const filled = applied.data.filled || 0
+    // 超时也要如实说：否则"采集完成"会把还在排队/跑着的店铺当成已采集
+    const lateNote = timedOut ? '（有店铺未在 2.5 分钟内跑完，结果可能不全；稍后可再点一次）' : ''
     ws.toast(
-      filled ? `已按平台读到的主体填入 ${filled} 家店铺的营业执照` : '采集完成：没有需要新填的主体（详见下方结果）',
+      (filled ? `已按平台读到的主体填入 ${filled} 家店铺的营业执照` : '采集完成：没有需要新填的主体（详见下方结果）') + lateNote,
       filled ? 'success' : 'info'
     )
     await Promise.all([ws.refreshStores(), loadInvoiceCenter()])
@@ -4606,6 +4638,7 @@ async function collectInvoiceData() {
     if (runIds.length) {
       const deadline = Date.now() + 180000
       let last: any[] = []
+      let timedOut = false
       for (;;) {
         await new Promise(r => setTimeout(r, 3000))
         const list = await window.shopilot.task.list()
@@ -4616,7 +4649,8 @@ async function collectInvoiceData() {
           const st = t?.latestRun?.status
           return st && ['succeeded', 'failed', 'cancelled'].includes(st)
         })
-        if (done || Date.now() > deadline) break
+        if (done) break
+        if (Date.now() > deadline) { timedOut = true; break }
       }
       const parts = last.map((t: any) => {
         const st = t.latestRun?.status
@@ -4625,7 +4659,10 @@ async function collectInvoiceData() {
         if (st === 'queued') return `${name}（排队等浏览器打开）`
         return `${name} ✗（${String(t.latestRun?.errorMessage || st).slice(0, 60)}）`
       })
-      if (parts.length) ws.toast('发票采集结果：' + parts.join('；'), parts.every((p: string) => p.includes('✓')) ? 'success' : 'info')
+      // 超时不再当成功：把"还没跑完"单独说出来，避免把运行中的店铺算进结果
+      const lateNote = timedOut ? '；有店铺 3 分钟内未跑完，稍后刷新查看' : ''
+      if (parts.length) ws.toast('发票采集结果：' + parts.join('；') + lateNote, !timedOut && parts.every((p: string) => p.includes('✓')) ? 'success' : 'info')
+      else if (timedOut) ws.toast('发票采集仍在进行中，稍后点「刷新」查看结果', 'info')
     }
     await loadInvoiceCenter()
   } finally {
@@ -4679,7 +4716,11 @@ const bizRows = computed(() => {
   }
   for (const snap of dc.snapshots as any[]) {
     if (!String(snap.metric || '').startsWith('biz.')) continue
-    const hit = [...byStore.values()].find(r => r.storeName === snap.storeName)
+    // 有 storeId 时必须按它定位：按名字兜底会落到同名店铺那一行（正是要修的串店），
+    // 找不到就跳过。只有老快照（没有 storeId）才退回按名字找。
+    const hit = snap.storeId
+      ? byStore.get(String(snap.storeId))
+      : [...byStore.values()].find(r => r.storeName === snap.storeName)
     if (!hit) continue
     hit.values[snap.metric] = snap.value
     if (snap.manual) hit.manual[snap.metric] = true
@@ -4854,6 +4895,7 @@ async function collectBusinessData() {
     if (runIds.length) {
       const deadline = Date.now() + 180000
       let last: any[] = []
+      let timedOut = false
       for (;;) {
         await new Promise(r => setTimeout(r, 3000))
         const list = await window.shopilot.task.list()
@@ -4864,7 +4906,8 @@ async function collectBusinessData() {
           const st = t?.latestRun?.status
           return st && ['succeeded', 'failed', 'cancelled'].includes(st)
         })
-        if (done || Date.now() > deadline) break
+        if (done) break
+        if (Date.now() > deadline) { timedOut = true; break }
       }
       const parts = last.map((t: any) => {
         const st = t.latestRun?.status
@@ -4874,7 +4917,12 @@ async function collectBusinessData() {
         if (st === 'failed') return `${name} ✗ ${t.latestRun?.errorCode || '失败'}${t.latestRun?.errorMessage ? '：' + String(t.latestRun.errorMessage).slice(0, 60) : ''}`
         return `${name}（${st || '未知'}）`
       })
-      if (parts.length) ws.toast('采集结果 —— ' + parts.join('｜'), last.every((t: any) => t.latestRun?.status === 'succeeded') ? 'success' : 'error')
+      // 超时不当成"采集完成"：运行中的店铺要单独说清，否则数字看起来像已经采过。
+      // 真失败仍用 error 级（超时才降到 info），别把失败混进"稍后再看"里
+      const lateNote = timedOut ? '｜有店铺 3 分钟内未跑完，稍后刷新查看' : ''
+      const allOk = last.every((t: any) => t.latestRun?.status === 'succeeded')
+      if (parts.length) ws.toast('采集结果 —— ' + parts.join('｜') + lateNote, timedOut ? 'info' : (allOk ? 'success' : 'error'))
+      else if (timedOut) ws.toast('经营数据采集仍在进行中，稍后刷新查看', 'info')
       await ws.refreshTasks()
     }
     await loadDataCenter()

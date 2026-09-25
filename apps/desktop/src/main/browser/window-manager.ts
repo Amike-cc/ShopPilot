@@ -54,6 +54,9 @@ export interface ViewportBounds {
 
 const browserStates = new Map<string, BrowserState>()
 
+/** 店铺的「独立窗口」逃生入口：不随 browserStates 走，删除店铺时要显式销毁 */
+const standaloneWindows = new Map<string, Set<BrowserWindow>>()
+
 let hostWindow: BrowserWindow | null = null
 let mountedView: WebContentsView | null = null
 let displayedStoreId: string | null = null
@@ -313,6 +316,13 @@ function mountTab(tab: Tab | null): void {
  * 关闭店铺浏览器：销毁其全部标签页 view（数据保留在 DB 供恢复）
  */
 export function closeStoreBrowser(storeId: string): void {
+  // 独立窗口不在 browserStates 里，必须显式销毁：否则会出现"店铺已删、独立窗口还放着那家店的页面"，
+  // 彻底删除时还会连带清掉这个窗口正在使用的 partition
+  for (const win of standaloneWindows.get(storeId) || []) {
+    try { if (!win.isDestroyed()) win.destroy() } catch { /* ignore */ }
+  }
+  standaloneWindows.delete(storeId)
+
   const state = browserStates.get(storeId)
   if (!state) return
 
@@ -846,6 +856,16 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
     openStandalone: () => { /* 已在独立窗口，无需再用 */ }
   }), { isStandalone: true })
   attachStoreReloadShortcuts(win.webContents)
+
+  // 登记独立窗口：删除/归档店铺时要能一起收敛（closeStoreBrowser 会销毁它们）
+  const list = standaloneWindows.get(storeId) || new Set<BrowserWindow>()
+  list.add(win)
+  standaloneWindows.set(storeId, list)
+  win.on('closed', () => {
+    const current = standaloneWindows.get(storeId)
+    current?.delete(win)
+    if (current && current.size === 0) standaloneWindows.delete(storeId)
+  })
 }
 
 /** 获取店铺标签页（排序后） */
@@ -853,6 +873,11 @@ export function getStoreTabs(storeId: string): Tab[] {
   const state = browserStates.get(storeId)
   if (!state) return []
   return Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)
+}
+
+/** 该店铺当前打开的独立窗口数量（删除店铺前的收敛自检用） */
+export function getStandaloneWindowCount(storeId: string): number {
+  return standaloneWindows.get(storeId)?.size || 0
 }
 
 /** 任务引擎专用（§4.4）：主进程内受控使用，句柄绝不出主进程 */

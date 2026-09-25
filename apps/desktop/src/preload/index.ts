@@ -63,7 +63,9 @@ const api = {
     /** 编排器「拾取元素」：picker-mode 下在店铺页面上点一下，取回锚点填进参数框 */
     pickElement: (storeId: string, mode: 'selector' | 'text'): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PICK_ELEMENT, { storeId, mode }),
-    openWindow: (storeId: string, tabId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_OPEN_WINDOW, { storeId, tabId })
+    openWindow: (storeId: string, tabId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_OPEN_WINDOW, { storeId, tabId }),
+    /** 只读：当前显示的店铺与各已打开店铺的标签页（渲染层重载后补齐状态用） */
+    state: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_STATE)
   },
   
   // 书签

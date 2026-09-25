@@ -227,20 +227,25 @@ const SETTING_KEY_MAX = 200
 const SETTING_VALUE_MAX_BYTES = 64 * 1024
 
 /**
- * 敏感键前缀黑名单：这些键都有各自的专用通道，或干脆只允许主进程内部维护，
- * 通用 settings 通道放行就等于绕开那些通道的校验（例如把已加密凭据改成明文）。
- * 'securi' 同时覆盖 'security.'（应用锁）与主密码键（该键名不以 security. 开头）。
+ * 允许经通用 settings 通道读写的键前缀（白名单）。
+ *
+ * 为什么是白名单而不是黑名单：通用通道能读写全部 app_settings，而这张表里同时住着
+ * 凭据记录（ai_cred.*、proxy_cred.*）、应用锁主密码与 Agent 运行配置——它们都有专用通道，
+ * 从通用口子放行就等于绕开那些通道的校验。黑名单只能挡住想得到的那几个前缀，
+ * 白名单能保证"没登记过的键进不来"。
+ *
+ * 这里列的就是渲染层实际用到的全部键族（含按店铺拼出来的 invite.config.store.<id>）：
+ * - ui.*               左/右侧栏收起状态、Agent UI 之外的界面偏好
+ * - update.*           更新通道与启动自动检查（§21 双通道）
+ * - platform.homeUrls  各平台首页地址覆盖
+ * - orders.profiles    订单页实测覆盖
+ * - invite.*           邀约配置（配置树 / 广场地址 / 按店铺配置）
+ * - security.idleMinutes 空闲自动锁定分钟数（应用锁的其它键仍被挡在门外）
  */
-const SETTING_DENY_PREFIXES = ['securi', 'ai_cred', 'ai.', 'proxy_cred', 'agent.']
+const SETTING_ALLOW_PREFIXES = ['ui.', 'update.', 'platform.homeUrls', 'orders.profiles', 'invite.', 'security.idleMinutes']
 
-/**
- * 黑名单例外（都有现行调用方，不能一刀切）：
- * - security.idleMinutes：设置页用它维护空闲锁定分钟数（renderer WorkbenchView.vue:2445）；
- * - invite.config.*：邀约面板的活动键，且渲染层按平台旧键做初始值迁移
- *   （renderer WorkbenchView.vue:3051；验收脚本 tools/acceptance/douyin-invite-local-verify.js:730
- *   也依赖旧键可写可读）。这些是店铺业务键，不是主进程独占凭据，故整族放行。
- */
-const SETTING_ALLOW_EXCEPTIONS = ['security.idleMinutes', 'invite.config.']
+/** 前三段属于"非敏感但需要说明"的越权尝试；其余不在白名单里的一律按参数错误返回 */
+const SETTING_SENSITIVE_PREFIXES = ['securi', 'ai_cred', 'ai.', 'proxy_cred', 'agent.']
 
 type SettingKeyCheck = { ok: true; value: string } | { ok: false; sensitive: boolean; reason: string }
 
@@ -251,9 +256,16 @@ function checkSettingKey(raw: unknown): SettingKeyCheck {
   if (raw.length > SETTING_KEY_MAX) {
     return { ok: false, sensitive: false, reason: `设置键过长（上限 ${SETTING_KEY_MAX} 字符）` }
   }
-  const allowed = SETTING_ALLOW_EXCEPTIONS.some(p => raw.startsWith(p))
-  if (!allowed && SETTING_DENY_PREFIXES.some(p => raw.startsWith(p))) {
-    return { ok: false, sensitive: true, reason: '该设置为敏感键，不允许通过通用设置通道读写' }
+  const allowed = SETTING_ALLOW_PREFIXES.some(p => raw.startsWith(p))
+  if (!allowed) {
+    const sensitive = SETTING_SENSITIVE_PREFIXES.some(p => raw.startsWith(p))
+    return {
+      ok: false,
+      sensitive,
+      reason: sensitive
+        ? '该设置为敏感键，不允许通过通用设置通道读写'
+        : `设置键不在白名单内（${SETTING_ALLOW_PREFIXES.join(' / ')}）`
+    }
   }
   return { ok: true, value: raw }
 }
@@ -559,10 +571,11 @@ export function registerProfileAndMiscHandlers(): void {
         tasks: (db.prepare('SELECT COUNT(*) c FROM tasks').get() as any).c
       }
 
-      // 每店每指标的最新一条 + **上一条**（用于数据中心显示"较上次采集的增减"）
+      // 每店每指标的最新一条 + **上一条**（用于数据中心显示"较上次采集的增减"）。
+      // 必须带 store_id：界面按 storeId 归位，两家同名店铺的指标才不会串到同一行。
       const snapRows = db.prepare(`
-        SELECT storeName, platform, metric, value_json, captured_at, source_run_id, rn FROM (
-          SELECT s.name AS storeName, s.platform AS platform, sn.metric AS metric,
+        SELECT storeId, storeName, platform, metric, value_json, captured_at, source_run_id, rn FROM (
+          SELECT s.id AS storeId, s.name AS storeName, s.platform AS platform, sn.metric AS metric,
                  sn.value_json AS value_json, sn.captured_at AS captured_at,
                  sn.source_run_id AS source_run_id,
                  ROW_NUMBER() OVER (PARTITION BY sn.store_id, sn.metric ORDER BY sn.rowid DESC) AS rn
@@ -576,10 +589,11 @@ export function registerProfileAndMiscHandlers(): void {
       const snapMap = new Map<string, any>()
       const snapshots: any[] = []
       for (const r of snapRows) {
-        const key = r.storeName + '\u0000' + r.metric
+        // 键带上店铺 id：按名字做键时同名店铺会互相覆盖（后一条把前一条的 prevValue 写错）
+        const key = String(r.storeId) + '\u0000' + r.metric
         if (r.rn === 1) {
           const item = {
-            storeName: r.storeName, platform: r.platform, metric: r.metric,
+            storeId: r.storeId, storeName: r.storeName, platform: r.platform, metric: r.metric,
             value: parseVal(r.value_json), capturedAt: r.captured_at,
             // 来源：无关联运行 = 手动录入（界面据此标记，绝不与自动采集的数字混淆）
             manual: !r.source_run_id,

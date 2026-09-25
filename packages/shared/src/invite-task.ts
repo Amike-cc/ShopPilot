@@ -145,7 +145,9 @@ export function buildInviteTaskPayload(input: { profile: InviteProfile; storeId:
             ...(profile.contactSelectors.wechat ? [{ selector: profile.contactSelectors.wechat, text: String(config.batchWechat || '').trim() }] : [])
           ].filter(item => item.text)
         : [],
-      productCount: Math.max(0, Math.min(20, Number(config.batchProductCount) || 0))
+      // 上限用平台档案自己的 maxProducts（快手 10）：这里再夹一次是兜住绕过面板的调用方，
+      // 口径必须与面板/档案一致，写死 20 会让超限配置照样进执行器。
+      productCount: Math.max(0, Math.min(profile.maxProducts, Number(config.batchProductCount) || 0))
     }
     const name = `达人邀约 · ${profile.platform} · ${
       config.category

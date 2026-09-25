@@ -164,7 +164,16 @@ function onTodoClick(item: TodoItem) {
   if (item.panel === 'agents') emit('view-agents')
   else scrollToLatest() // 待确认计划：卡片就在消息列表下方，滚到底即可看到
 }
-function onEscape(event: KeyboardEvent) { if (event.key === 'Escape') { event.preventDefault(); emit('close') } }
+/**
+ * Esc 只在自己是最上层时才关抽屉。
+ * 工作台有一条统一的浮层阶梯（设置/回收站/发票中心/任务对话框…），它关掉一层会 preventDefault；
+ * 抽屉若不认这个标记，一次 Esc 会把弹层和抽屉一起关掉，用户敲了一半的消息跟着丢失。
+ */
+function onEscape(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || event.defaultPrevented) return
+  event.preventDefault()
+  emit('close')
+}
 
 /**
  * 自动滚动到最新消息。

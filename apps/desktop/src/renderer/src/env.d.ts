@@ -58,6 +58,8 @@ declare global {
         openWindow: (storeId: string, tabId?: string) => Promise<IPCResult>
         /** 弹层打开/关闭：让主进程摘除/恢复原生视图挂载 */
         setViewsObscured: (obscured: boolean, reason?: 'modal' | 'agent') => Promise<IPCResult>
+        /** 只读：当前显示的店铺与各已打开店铺的标签页（渲染层重载后补齐状态用） */
+        state: () => Promise<IPCResult<{ displayedStoreId: string | null; stores: Array<{ storeId: string; activeTabId: string | null; tabs: TabInfo[] }> }>>
       }
       bookmark: {
         list: (storeId?: string) => Promise<IPCResult>
