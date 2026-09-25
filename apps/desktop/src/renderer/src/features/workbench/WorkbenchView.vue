@@ -1803,9 +1803,18 @@ async function onStoreDrop(targetStore: StoreRow, event: DragEvent) {
     return
   }
 
-  const currentIds = ws.stores.map(store => store.id)
-  const nextIds = moveStoreId(currentIds, dragged.id, targetStore.id, position)
-  if (nextIds === currentIds) return
+  // 只重排"用户看得见的那一段"（分组 + 平台筛选 + 搜索后的顺序），再把结果填回全局顺序的
+  // 同一批槽位：直接对 ws.stores 全量重排时，搜索/筛选状态下拖动会连带改变看不见的店铺顺序，
+  // 用户切回全部一看顺序变了，却找不到是哪一步动过。
+  const visibleIds = ws.groupedStores.flatMap(grp => grp.items.map(item => item.id))
+  const nextVisible = moveStoreId(visibleIds, dragged.id, targetStore.id, position)
+  if (nextVisible === visibleIds) return
+
+  const visibleSet = new Set(visibleIds)
+  const slots: number[] = []
+  ws.stores.forEach((store, index) => { if (visibleSet.has(store.id)) slots.push(index) })
+  const nextIds = ws.stores.map(store => store.id)
+  slots.forEach((globalIndex, k) => { nextIds[globalIndex] = nextVisible[k] })
   await ws.reorderStores(nextIds)
 }
 

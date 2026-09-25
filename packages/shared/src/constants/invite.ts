@@ -594,8 +594,10 @@ const KUAISHOU_BATCH: BatchInviteProfile = {
   // 面板/步骤据此不渲染也不点击等级区（见 invite-steps.ts 的 levelTrigger 判断）。
   levels: [],
   levelsWithQuotaHint: [],
-  // 抽屉里的合作标签（6 个复选框，实测；页面提示最多 5 个）
+  // 抽屉里的合作标签（6 个复选框，实测；页面提示最多 5 个）。
+  // 上限也写进档案：平台对第 6 个是静默忽略，面板不在勾选时拦住就会出现"界面选上了、消息里没有"。
   benefits: ['免费申样', '可聊高佣', '素材支持', '支持投流', '24h发货', '可破价'],
+  benefitsMax: 5,
   rowCheckboxSelector: 'tbody input[type=checkbox]',
   scriptSelector: 'textarea',
   // 四行的行容器类名**完全相同**（.kwaishop-cps-daren-match-pc-row），选择器区分不了，

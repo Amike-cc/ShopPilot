@@ -109,11 +109,23 @@ export function unpackSession(password: string, buf: Buffer, now: number = Date.
   if (typeof h.N !== 'number' || typeof h.r !== 'number' || typeof h.p !== 'number' || typeof h.keyLen !== 'number') {
     throw invalid('缺少 KDF 参数')
   }
+  // 包头里的 KDF 参数是**包自己带来的**：不设上限的话，一个 N=2^30 / p=64 的包能让 scrypt
+  // 在解密前就把 CPU 和内存吃满（拒绝服务）。这里按实际导出参数（N=16384,r=8,p=1,keyLen=32）
+  // 给一个宽松但有界、且贴合 scrypt 自身约束的范围（N 必须是 2 的幂且 > 1）。
+  if (!Number.isInteger(h.N) || h.N < 1024 || h.N > 1 << 20 || (h.N & (h.N - 1)) !== 0 ||
+      !Number.isInteger(h.r) || h.r < 1 || h.r > 32 ||
+      !Number.isInteger(h.p) || h.p < 1 || h.p > 16 ||
+      !Number.isInteger(h.keyLen) || h.keyLen < 16 || h.keyLen > 64) {
+    throw invalid('KDF 参数超出允许范围')
+  }
+  const salt = Buffer.from(String(h.salt || ''), 'base64')
+  const nonce = Buffer.from(String(h.nonce || ''), 'base64')
+  if (salt.length !== 32 || nonce.length !== 12) throw invalid('包头缺少盐或随机数')
 
   let plain: string
   try {
-    const key = deriveKey(password, Buffer.from(h.salt, 'base64'), { N: h.N, r: h.r, p: h.p, keyLen: h.keyLen })
-    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(h.nonce, 'base64'))
+    const key = deriveKey(password, salt, { N: h.N, r: h.r, p: h.p, keyLen: h.keyLen })
+    const decipher = createDecipheriv('aes-256-gcm', key, nonce)
     decipher.setAAD(header)
     decipher.setAuthTag(tag)
     plain = Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8')
