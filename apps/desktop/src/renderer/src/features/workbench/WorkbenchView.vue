@@ -942,6 +942,7 @@
       @dragging-change="setAgentOrbDragging"
       @view-tasks="viewAgentTasks"
       @view-task="viewAgentTask"
+      @view-agents="openSettings('agents')"
     />
 
     <!-- 发票中心：抓取并展示各平台后台的**待开票信息**（只读采集；开票操作仍在平台页面完成） -->

@@ -342,10 +342,11 @@ export function syncMainAgentProfileFromAiConfig(): void {
  * Recent Job summaries for the visible Agent's software context. Only bounded,
  * redacted fields leave Main; no prompts, memory bodies or credentials.
  */
-export function listRecentAgentJobSummaries(limit = 20): Array<{ id: string; goal: string; status: string; assignedAgentId: string; risk: string; resultCount: number; createdAt: number }> {
+export function listRecentAgentJobSummaries(limit = 20): Array<{ id: string; goal: string; status: string; assignedAgentId: string; risk: string; resultCount: number; unapprovedCount: number; createdAt: number }> {
   const bounded = Math.min(50, Math.max(1, Math.floor(limit)))
   const rows = getDatabase().prepare(`SELECT j.id, j.goal, j.status, j.assigned_agent_id, j.risk, j.created_at,
-      (SELECT COUNT(*) FROM agent_job_results r WHERE r.job_id = j.id) AS result_count
+      (SELECT COUNT(*) FROM agent_job_results r WHERE r.job_id = j.id) AS result_count,
+      (SELECT COUNT(*) FROM agent_job_results r WHERE r.job_id = j.id AND r.approved = 0) AS unapproved_count
     FROM agent_jobs j ORDER BY j.created_at DESC LIMIT ?`).all(bounded) as any[]
   return rows.map(row => ({
     id: String(row.id),
@@ -354,6 +355,7 @@ export function listRecentAgentJobSummaries(limit = 20): Array<{ id: string; goa
     assignedAgentId: String(row.assigned_agent_id),
     risk: String(row.risk || 'read'),
     resultCount: Number(row.result_count || 0),
+    unapprovedCount: Number(row.unapproved_count || 0),
     createdAt: Number(row.created_at)
   }))
 }

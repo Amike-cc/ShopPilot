@@ -108,27 +108,8 @@ function observationError(code: string, message: string): never {
   throw new AgentObservationError(code, message)
 }
 
-async function captureThumbnail(wc: Electron.WebContents): Promise<AgentPageObservation['screenshot']> {
-  const ref = randomUUID()
-  const capturedAt = Date.now()
-  try {
-    const image = await wc.capturePage()
-    if (image.isEmpty()) return { ref, capturedAt, available: false, dataUrl: null, errorCode: 'AGENT_CAPTURE_EMPTY' }
-    let thumb = image.getSize().width > 640 ? image.resize({ width: 640 }) : image
-    let png = thumb.toPNG()
-    if (png.length > 900000) {
-      thumb = thumb.resize({ width: 400 })
-      png = thumb.toPNG()
-    }
-    if (png.length > 900000) return { ref, capturedAt, available: false, dataUrl: null, errorCode: 'AGENT_CAPTURE_TOO_LARGE' }
-    return { ref, capturedAt, available: true, dataUrl: `data:image/png;base64,${png.toString('base64')}`, errorCode: null }
-  } catch {
-    // Screenshot failure is surfaced as a field. The text observation remains useful and no page bytes are logged.
-    return { ref, capturedAt, available: false, dataUrl: null, errorCode: 'AGENT_CAPTURE_FAILED' }
-  }
-}
 
-export async function observeCurrentPage(includeScreenshot = true): Promise<AgentPageObservation> {
+export async function observeCurrentPage(): Promise<AgentPageObservation> {
   if (isAppLocked()) observationError('APP_LOCKED', '应用已锁定，请先解锁')
   const storeId = getDisplayedStoreId()
   if (!storeId) observationError('AGENT_NO_STORE', '请先打开一个店铺浏览器')
@@ -176,12 +157,8 @@ export async function observeCurrentPage(includeScreenshot = true): Promise<Agen
     .map((x: string) => redactAgentText(x, 500)).filter(Boolean).slice(0, 60)
   const url = sanitizeAgentUrl(wc.getURL())
   const pageTitle = redactAgentText(wc.getTitle() || snapshot?.title || tab.title || '', 240)
-  // capturePage can block indefinitely for a detached WebContentsView. The
-  // Agent overlay still permits bounded DOM observation, but reports the
-  // screenshot as unavailable until the view is mounted again.
-  const screenshot = includeScreenshot && viewMounted
-    ? await captureThumbnail(wc)
-    : { ref: randomUUID(), capturedAt: Date.now(), available: false, dataUrl: null, errorCode: includeScreenshot ? 'AGENT_CAPTURE_DETACHED' : 'AGENT_CAPTURE_SKIPPED' }
+  // 截图功能已移除（用户要求）：观察只返回有界 DOM 摘要；字段保留为不可用，避免破坏旧契约。
+  const screenshot = { ref: randomUUID(), capturedAt: Date.now(), available: false, dataUrl: null, errorCode: 'AGENT_CAPTURE_REMOVED' }
 
   return {
     storeId, storeName: redactAgentText(store.name, 120), storePlatform: redactAgentText(store.platform, 80),

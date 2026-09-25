@@ -96,7 +96,7 @@ export function registerAgentHandlers(): void {
     try {
       assertTrustedRenderer(event)
       noArgumentsSchema.parse(args)
-      const observation = await observeCurrentPage(true)
+      const observation = await observeCurrentPage()
       storeId = observation.storeId
       writeAudit('agent.observe', 'success', { storeId, requestId: 'agent.observe' })
       return success(observation, requestId)

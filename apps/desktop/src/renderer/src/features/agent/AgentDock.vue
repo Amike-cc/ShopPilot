@@ -21,6 +21,7 @@
         @close="closeDrawer"
         @view-tasks="viewTasks"
         @view-task="viewTask"
+        @view-agents="$emit('view-agents')"
       />
     </div>
   </div>
@@ -42,6 +43,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'view-tasks': []
   'view-task': [taskId?: string]
+  'view-agents': []
   'dragging-change': [dragging: boolean]
 }>()
 const agent = useAgentStore()

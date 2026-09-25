@@ -12,7 +12,7 @@
 
 **Agent 能力扩展轮（2026-09-25，未提交）**: ①聊天/回合日预算硬阻断（与 Job 同口径，`AGENT_BUDGET_BLOCKED`）；②达人邀约发送接入智能体（`runInvite`，面板与 Main 共用 `@shared/invite-task` 构造器，缺项/未实测如实报错，发送类不进技能）；③逐条订单明细采集（`collectOrders` + `@shared/orders-steps`，实测档案红线 + 设置 `orders.profiles` 即时登记 + 整表逐行落库）；④连带修复：Job 载荷清洗嵌套上限 6→16 层且超限如实报错（旧实现把邀约 loop 载荷第 6 层静默替换成字符串 → `TASK_INVALID_STEP`）、凭据不可解密不再让应用启动失败、显式指定店铺全部无效时如实说明。验证：typecheck、单测 34 文件/391、lint 0 errors（831 warnings）、Agent 域 CDP 78/78、可见智能体 CDP 61/61、M3 113/113、dist:dir + 打包 smoke 6/6。
 
-**Agent 完善轮（2026-09-25，未提交）**: ①数据中心新增「订单明细」区块（`overview:orders`：表头文案匹配映射统一列、多余列进 extras、无表头退回列序；一键采集复用面板/智能体同一步骤构造器；可展开全部行）；②智能体新增只读工具 `getOrderDetails`（读最近一次快照、最多 20 条、买家列不进上下文），意图路由区分「采集/查看」；③技能生命周期 `updateSkill`（改名/描述/启用停用 + `agent:skill:update` + 设置面板按钮，停用后 runSkill 如实拒绝）；④对话自动滚动到最新消息（用户报告）：根因是消息 40 条上限后 push 触发 shift、长度恒定而旧实现只 watch length → 改签名式 watcher + 双帧贴底；⑤上翻阅读不打断：新内容只显示「有新消息 ↓」按钮（点击回到最新并恢复跟随），自己发消息仍跟到底，补滚的下一帧回调只在仍跟随时执行。验证：typecheck、单测 34 文件/392、lint 0 errors（844 warnings）、Agent 域 CDP 81/81、可见智能体 CDP 63/63、M1 108/108、M3 113/113、dist:dir + 打包 smoke 6/6。
+**Agent 完善轮（2026-09-25，未提交）**: ①数据中心新增「订单明细」区块（`overview:orders`：表头文案匹配映射统一列、多余列进 extras、无表头退回列序；一键采集复用面板/智能体同一步骤构造器；可展开全部行）；②智能体新增只读工具 `getOrderDetails`（读最近一次快照、最多 20 条、买家列不进上下文），意图路由区分「采集/查看」；③技能生命周期 `updateSkill`（改名/描述/启用停用 + `agent:skill:update` + 设置面板按钮，停用后 runSkill 如实拒绝）；④对话自动滚动到最新消息（用户报告）：根因是消息 40 条上限后 push 触发 shift、长度恒定而旧实现只 watch length → 改签名式 watcher + 双帧贴底；⑤上翻阅读不打断：新内容只显示「有新消息 ↓」按钮（点击回到最新并恢复跟随），自己发消息仍跟到底，补滚的下一帧回调只在仍跟随时执行；⑥删除截图功能并把原位置改为「待办事件（消息通知）」：待确认计划/等待确认的 Job/未完成 Job/结果待审核/记忆待审核，Job 条目点击直达 Job 看板、记忆条目打开 Agent 团队面板。验证：typecheck、单测 34 文件/392、lint 0 errors（845 warnings）、Agent 域 CDP 81/81、可见智能体 CDP 66/66、M1 108/108、M3 113/113、dist:dir + 打包 smoke 6/6。
 
 ---
 

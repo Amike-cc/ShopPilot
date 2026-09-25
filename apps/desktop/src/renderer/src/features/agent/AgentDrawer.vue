@@ -18,10 +18,13 @@
       <button type="button" @click="$emit('view-tasks')">☷ 查看任务</button>
     </nav>
     <div ref="scrollArea" class="agent-scroll-area" @scroll.passive="onScroll">
-      <details v-if="agent.observation?.screenshot.available && agent.observation.screenshot.dataUrl" class="agent-preview">
-        <summary>本次页面截图预览 · 临时保留</summary>
-        <img :src="agent.observation.screenshot.dataUrl" alt="当前页面截图预览" />
-      </details>
+      <section v-if="todoItems.length" class="agent-todos" data-test="agent-todos">
+        <div class="todos-head"><strong>待办事件</strong><span>{{ todoItems.length }} 条 · 点击处理</span></div>
+        <button v-for="item in todoItems" :key="item.key" type="button" class="todo-item" :class="item.kind" :data-test="`agent-todo-${item.kind}`" @click="onTodoClick(item)">
+          <span class="todo-icon">{{ item.icon }}</span>
+          <span class="todo-text">{{ item.text }}</span>
+        </button>
+      </section>
       <AgentMessageList :messages="agent.messages" :busy="agent.busy" :status-label="agent.stateLabel" />
       <div v-if="agent.error" class="agent-error" role="alert"><strong>{{ agent.error.code }}</strong><span>{{ agent.error.message }}</span></div>
       <section v-if="agent.softwareContext" class="agent-software-context">
@@ -97,7 +100,35 @@ const progressPercent = computed(() => {
   return Math.min(100, Math.round(((agent.task.currentStep + (agent.task.status === 'succeeded' ? 1 : 0)) / agent.task.totalSteps) * 100))
 })
 function focusComposer() { void nextTick(() => composer.value?.$el?.querySelector('textarea')?.focus()) }
-const emit = defineEmits<{ close: []; 'view-tasks': []; 'view-task': [taskId?: string] }>()
+const emit = defineEmits<{ close: []; 'view-tasks': []; 'view-task': [taskId?: string]; 'view-agents': [] }>()
+
+/**
+ * 待办事件（消息通知）：需要用户处理的事情集中在这里——待确认计划、等待人工确认的 Job、
+ * 未完成/被阻塞的 Job、待审核结果、待审核记忆。数据全部来自软件上下文与本地状态，不编造。
+ */
+type TodoItem = { key: string; kind: 'confirm' | 'waiting' | 'failed' | 'review' | 'memory'; icon: string; text: string; jobId?: string; panel?: 'agents' }
+const todoItems = computed<TodoItem[]>(() => {
+  const items: TodoItem[] = []
+  if (agent.softwarePlan) items.push({ key: 'plan-software', kind: 'confirm', icon: '⚠', text: `软件操作计划待确认：${agent.softwarePlan.name}` })
+  if (agent.plan) items.push({ key: 'plan-page', kind: 'confirm', icon: '⚠', text: `页面任务计划待派发：${agent.plan.name}` })
+  for (const job of agent.softwareContext?.jobs || []) {
+    if (job.status === 'waiting_confirmation') {
+      items.push({ key: `job-wait-${job.id}`, kind: 'waiting', icon: '⏳', text: `Job 等待人工确认：${job.goal}`, jobId: job.id })
+    } else if (['failed', 'recovery_required', 'blocked_budget', 'blocked_permission'].includes(job.status)) {
+      items.push({ key: `job-bad-${job.id}`, kind: 'failed', icon: '✕', text: `Job 未完成（${job.status}）：${job.goal}`, jobId: job.id })
+    } else if (Number(job.unapprovedCount || 0) > 0) {
+      items.push({ key: `job-review-${job.id}`, kind: 'review', icon: '🔎', text: `结果待审核：${job.goal}（${job.unapprovedCount} 条证据）`, jobId: job.id })
+    }
+  }
+  const memoryCount = Number(agent.softwareContext?.pendingMemoryReview || 0)
+  if (memoryCount > 0) items.push({ key: 'memory-review', kind: 'memory', icon: '🧠', text: `记忆待审核：${memoryCount} 条`, panel: 'agents' })
+  return items.slice(0, 8)
+})
+function onTodoClick(item: TodoItem) {
+  if (item.jobId) emit('view-task', item.jobId)
+  else if (item.panel === 'agents') emit('view-agents')
+  else scrollToLatest() // 待确认计划：卡片就在消息列表下方，滚到底即可看到
+}
 function onEscape(event: KeyboardEvent) { if (event.key === 'Escape') { event.preventDefault(); emit('close') } }
 
 /**
@@ -177,8 +208,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEscape))
 .agent-context-strip { flex:0 0 auto;padding:8px 12px;border-bottom:1px solid var(--color-border); }.agent-context-strip>div { display:flex;align-items:center;gap:7px;margin:3px 0;font-size:10px; }.context-icon { display:grid;place-items:center;flex:0 0 18px;height:18px;border-radius:5px;background:rgba(121,102,222,.15);color:#c8c0ff;font-size:9px; }.context-main { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-text-primary); }.drawer-url { margin:5px 0 0 25px;color:var(--color-text-muted);font-size:9px;overflow-wrap:anywhere;line-height:1.4; }
 .agent-shortcuts { flex:0 0 auto;display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--color-border); }.agent-shortcuts button,.task-card-head button { border:1px solid var(--color-border);border-radius:7px;padding:6px 7px;background:rgba(255,255,255,.035);color:var(--color-text-secondary);font-size:10px;white-space:nowrap;cursor:pointer; }.agent-shortcuts button:disabled { opacity:.45;cursor:default; }
 .agent-software-context { margin:6px 10px 8px;padding:8px;border:1px solid rgba(101,119,190,.3);border-radius:9px;background:rgba(80,96,171,.08); }.software-context-head { display:flex;justify-content:space-between;gap:8px;align-items:baseline; }.software-context-head strong { font-size:10px; }.software-context-head span { color:var(--color-text-muted);font-size:9px; }.software-context-stores { display:flex;flex-wrap:wrap;gap:5px;margin-top:7px; }.software-store-chip,.software-store-more { max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 6px;border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-muted);font-size:9px; }.software-store-chip.current { border-color:rgba(123,109,225,.8);color:var(--color-text-primary); }.software-store-chip i { margin-left:4px;color:#75c9a2;font-style:normal;font-size:8px; }.software-store-more { color:#b9b0f4; }
-.agent-preview { margin:8px 10px 2px;padding:7px;border:1px solid var(--color-border);border-radius:8px;color:var(--color-text-secondary);font-size:10px; }.agent-preview summary { cursor:pointer; }.agent-preview img { display:block;width:100%;height:auto;max-height:220px;object-fit:contain;margin-top:7px;border-radius:5px;background:#10121a; }
-.agent-scroll-area { flex:1 1 auto;min-height:80px;overflow:auto;padding-bottom:68px;scroll-behavior:smooth; }.agent-error,.task-error { display:flex;flex-direction:column;gap:4px;margin:4px 10px 8px;padding:9px;border:1px solid rgba(225,92,92,.34);border-radius:8px;background:rgba(150,43,43,.11);color:#ffb7b0;font-size:10px;overflow-wrap:anywhere; }.agent-error strong,.task-error strong { font-size:10px; }
+.agent-todos { margin:8px 10px 2px;padding:8px;border:1px solid rgba(226,178,74,.45);border-radius:9px;background:rgba(214,161,41,.08); }
+.agent-scroll-area { flex:1 1 auto;min-height:80px;overflow:auto;padding-bottom:68px;scroll-behavior:smooth; }
+.todos-head { display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:5px; }
+.todos-head strong { font-size:11px;color:#f4cf78; }.todos-head span { color:var(--color-text-muted);font-size:9px; }
+.todo-item { display:flex;align-items:flex-start;gap:6px;width:100%;margin:3px 0;padding:5px 6px;border:1px solid var(--color-border);border-radius:6px;background:rgba(255,255,255,.03);color:var(--color-text-primary);font-size:10px;line-height:1.45;text-align:left;cursor:pointer; }
+.todo-item:hover { background:rgba(255,255,255,.07); }
+.todo-icon { flex:0 0 14px;text-align:center; }.todo-text { min-width:0;overflow-wrap:anywhere; }
+.todo-item.confirm .todo-icon,.todo-item.waiting .todo-icon { color:#f4cf78; }.todo-item.failed .todo-icon { color:#ffaaa4; }.todo-item.review .todo-icon,.todo-item.memory .todo-icon { color:#9fd2ff; }.agent-error,.task-error { display:flex;flex-direction:column;gap:4px;margin:4px 10px 8px;padding:9px;border:1px solid rgba(225,92,92,.34);border-radius:8px;background:rgba(150,43,43,.11);color:#ffb7b0;font-size:10px;overflow-wrap:anywhere; }.agent-error strong,.task-error strong { font-size:10px; }
 .agent-task-card { margin:4px 10px 10px;padding:10px;border:1px solid var(--color-border);border-radius:10px;background:rgba(255,255,255,.025); }.task-card-head { display:flex;justify-content:space-between;align-items:center;gap:8px; }.task-card-head>div { min-width:0;display:flex;flex-direction:column;gap:3px; }.task-card-head strong { font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }.task-card-head span,.task-identifiers { color:var(--color-text-muted);font-size:9px; }.task-identifiers { margin-top:7px;line-height:1.5;overflow-wrap:anywhere; }.task-progress-track { height:5px;margin-top:8px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden; }.task-progress-track span { display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#3697ec,#9a65e7);transition:width .2s; }.task-progress-meta { display:flex;justify-content:space-between;margin-top:4px;color:var(--color-text-muted);font-size:9px; }.task-message { margin:6px 0;color:var(--color-text-secondary);font-size:10px;line-height:1.5; }
 .agent-confirm-card { margin-top:8px;padding:9px;border:1px solid rgba(239,189,78,.5);border-radius:8px;background:rgba(214,161,41,.1); }.agent-confirm-card strong { color:#f4cf78;font-size:11px; }.agent-confirm-card p { max-height:75px;overflow:auto;color:var(--color-text-primary);font-size:10px;line-height:1.5; }.agent-confirm-card>div { display:flex;gap:6px; }.agent-confirm-card button,.task-ops button { border:1px solid var(--color-border);border-radius:6px;padding:6px 8px;background:rgba(255,255,255,.06);color:var(--color-text-primary);font-size:10px;cursor:pointer; }.agent-confirm-card .approve { border:0;background:#39896e; }.task-ops { display:flex;gap:6px;flex-wrap:wrap;margin-top:7px; }.task-ops button:disabled,.agent-confirm-card button:disabled { opacity:.5; }
 .task-results { display:flex;flex-direction:column;gap:6px;margin-top:9px;padding-top:8px;border-top:1px solid var(--color-border); }.task-results>strong { font-size:10px; }.task-result-item { display:flex;align-items:flex-start;gap:6px;color:var(--color-text-secondary);font-size:9px;line-height:1.5;overflow-wrap:anywhere; }.result-kind { flex:0 0 48px;color:#aaa1f2; }

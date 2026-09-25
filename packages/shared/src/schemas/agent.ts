@@ -184,7 +184,7 @@ export const agentSoftwareAgentSchema = z.object({
   modelProfileId: z.string().max(80).nullable()
 }).strict()
 
-/** 软件级上下文里的 Job 摘要：目标已脱敏，证据只给数量。 */
+/** 软件级上下文里的 Job 摘要：目标已脱敏，证据只给数量（未审核数单独给，供「待办事件」用）。 */
 export const agentSoftwareJobSchema = z.object({
   id: z.string().min(1).max(80),
   goal: z.string().max(200),
@@ -192,6 +192,7 @@ export const agentSoftwareJobSchema = z.object({
   assignedAgentId: z.string().max(80),
   risk: z.string().max(20),
   resultCount: z.number().int().min(0).max(1000),
+  unapprovedCount: z.number().int().min(0).max(1000).default(0),
   createdAt: z.number().int().nonnegative()
 }).strict()
 
@@ -295,6 +296,8 @@ export const agentSoftwareContextSchema = z.object({
   agents: z.array(agentSoftwareAgentSchema).max(50).default([]),
   jobs: z.array(agentSoftwareJobSchema).max(20).default([]),
   skills: z.array(agentSoftwareSkillSchema).max(20).default([]),
+  /** 待人工审核的长期记忆条数（「待办事件」用；不携带正文）。 */
+  pendingMemoryReview: z.number().int().min(0).max(100000).default(0),
   trashStores: z.array(agentSoftwareTrashStoreSchema).max(50).default([]),
   backups: z.array(agentSoftwareBackupSchema).max(20).default([]),
   appLocked: z.boolean()

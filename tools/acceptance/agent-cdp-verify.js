@@ -264,6 +264,8 @@ async function main() {
 
     const observed = await call('window.shopilot.agent.observe()')
     check('Main 只观察当前授权店铺的真实页面', observed.ok && observed.data?.pageTitle === 'Agent CDP 页面标题', observed.ok ? observed.data?.pageTitle : observed.error?.code)
+    const screenshotRemoved = await cdp.evaluate(`return JSON.stringify({ preview: !!document.querySelector('.agent-preview'), png: (document.querySelector('.agent-drawer')?.innerHTML || '').includes('data:image/png') })`)
+    check('截图功能已移除：观察不截图，抽屉无截图预览', observed.ok && observed.data?.screenshot?.available === false && screenshotRemoved.includes('"preview":false') && screenshotRemoved.includes('"png":false'), `${observed.data?.screenshot?.errorCode || ''} ${screenshotRemoved}`)
     const observationClean = observed.ok &&
       !observed.data.visibleTextSummary.includes('北京市朝阳区') &&
       !observed.data.visibleTextSummary.includes('13800138000') &&
@@ -379,6 +381,8 @@ async function main() {
     check('智能体回合：对话移入回收站（确认后生效）', !!archiveSent && !!archivePlan && archivePlan.includes('移入回收站') && archivedStore === 'archived', `plan=${String(archivePlan || '').slice(0, 40)} reply=${String(archiveReply || '').slice(0, 80)} archived=${archivedStore}`)
     const purgeSent = await sendGoal('彻底删除验收临时店铺')
     const purgePlan = await poll(() => cdp.evaluate(`const card=document.querySelector('.agent-software-plan-card'); return card && card.innerText.includes('彻底删除') ? card.innerText : ''`), 20000)
+    const todoConfirm = await poll(() => cdp.evaluate(`const node=document.querySelector('[data-test="agent-todo-confirm"]'); return node ? node.innerText : ''`), 8000)
+    check('待办事件：待确认的计划以消息通知展示', !!purgePlan && !!todoConfirm && todoConfirm.includes('待确认'), String(todoConfirm || '').slice(0, 80))
     await new Promise(resolve => setTimeout(resolve, 1200))
     const purgeStillInTrash = await (async () => { const trash = await call('window.shopilot.store.trashList()'); return !!(trash.ok && (trash.data || []).some(item => item.name === '验收临时店铺')) })()
     await cdp.evaluate(`document.querySelector('.agent-software-plan-card .plan-actions .primary')?.click(); return true;`)
@@ -409,6 +413,16 @@ async function main() {
     const pluginListPlan = await poll(() => cdp.evaluate(`const card=document.querySelector('.agent-software-plan-card'); return card && card.innerText.includes('插件') ? card.innerText : ''`), 20000)
     const pluginListReply = await poll(() => cdp.evaluate(`const nodes=[...document.querySelectorAll('.agent-message.assistant .message-text')]; const last = nodes.length ? nodes[nodes.length-1].innerText : ''; return last.includes('验收巡检插件') ? last : ''`), 25000)
     check('插件：智能体把技能打包成插件并能列出', !!pluginSent && !!pluginReply && !!pluginListSent && !!pluginListPlan && !!pluginListReply, `pack=${String(pluginReply || '').slice(0, 60)} list=${String(pluginListReply || '').slice(0, 80)}`)
+
+    // 待办事件：等待人工确认的 Job 与待审核记忆都进入通知列表（执行一次软件计划会刷新软件上下文）。
+    const todoJob = executorId ? await call(`window.shopilot.agentDomain.jobCreate({createdByAgentId:'root-ceo',assignedAgentId:${JSON.stringify(executorId)},storeId:null,goal:'待办事件验收 Job',inputSummary:{source:'todo-fixture'},priority:40,requiresConfirmation:true,idempotencyKey:'todo-${Date.now()}',browserTask:null})`) : null
+    if (todoJob?.ok) await call(`window.shopilot.agentDomain.jobRun(${JSON.stringify(todoJob.data.id)})`)
+    const todoMemory = await call(`window.shopilot.agentDomain.memoryWrite({agentId:'root-ceo',storeId:${JSON.stringify(storeId)},scope:'store',type:'semantic',title:'待办事件验收记忆',content:'待审核记忆通知验收。',confidence:0.7,sensitivity:'low'})`)
+    await sendGoal('查看技能')
+    const todoWaiting = await poll(() => cdp.evaluate(`const node=document.querySelector('[data-test="agent-todo-waiting"]'); return node ? node.innerText : ''`), 12000)
+    const todoMemoryItem = await poll(() => cdp.evaluate(`const node=document.querySelector('[data-test="agent-todo-memory"]'); return node ? node.innerText : ''`), 12000)
+    check('待办事件：等待确认的 Job 与待审核记忆以通知展示', !!todoWaiting && todoWaiting.includes('待办事件验收 Job') && !!todoMemoryItem && todoMemoryItem.includes('记忆待审核'), `waiting=${String(todoWaiting || '').slice(0, 60)} memory=${String(todoMemoryItem || '').slice(0, 40)} job=${todoJob?.error?.code || 'ok'} mem=${todoMemory?.error?.code || 'ok'}`)
+    if (todoJob?.ok) await call(`window.shopilot.agentDomain.jobCancel(${JSON.stringify(todoJob.data.id)})`)
     await cdp.evaluate(`document.querySelector('[data-test="settings-open-btn"]')?.click(); return true;`)
     await poll(() => cdp.evaluate(`return !!document.querySelector('[data-test="settings-dialog"]')`), 10000)
     await cdp.evaluate(`document.querySelector('[data-test="settings-tab-agents"]')?.click(); return true;`)

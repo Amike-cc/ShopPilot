@@ -640,7 +640,7 @@ async function runMultiStorePageTasks(goal: string, history: Array<{ role: 'user
       if (!getActiveTabId(store.id)) createTab(store.id, store.adminUrl || undefined)
       await new Promise(resolve => setTimeout(resolve, 1500))
       if (!hasUsablePageContext()) throw new Error('店铺页面没有就绪（可能仍在加载或未登录）')
-      const observation = await observeCurrentPage(true)
+      const observation = await observeCurrentPage()
       const planned = await generatePagePlan(goal, observation, history)
       elapsedMs += planned.elapsedMs
       const validated = validateAgentPlan(planned.plan, observation)
@@ -850,7 +850,7 @@ export async function generateAgentPlan(raw: unknown): Promise<
   if (!looksLikePageTask(goal)) {
     return runAgentTurn(goal, softwareContext, history)
   }
-  const observation = await observeCurrentPage(true)
+  const observation = await observeCurrentPage()
   const planned = await generatePagePlan(goal, observation, history)
   return {
     kind: 'task',
@@ -877,7 +877,7 @@ async function generatePagePlan(goal: string, observation: AgentPageObservation,
 }
 
 export async function validateAgentPlanForCurrentPage(rawPlan: unknown) {
-  const observation = await observeCurrentPage(false)
+  const observation = await observeCurrentPage()
   return validateAgentPlan(rawPlan, observation)
 }
 
@@ -976,6 +976,7 @@ export function getAgentSoftwareContext(): AgentSoftwareContext {
     modelProfileId: agent.modelProfileId
   }))
   const jobs = listRecentAgentJobSummaries(20)
+  const pendingMemoryReview = Number((getDatabase().prepare("SELECT COUNT(*) AS c FROM agent_memory_records WHERE status='pending-review'").get() as any)?.c || 0)
   const skills = listAgentSkills().filter(skill => skill.status === 'enabled').slice(0, 20).map(skill => ({
     id: skill.id,
     name: skill.name,
@@ -1002,6 +1003,7 @@ export function getAgentSoftwareContext(): AgentSoftwareContext {
     agents,
     jobs,
     skills,
+    pendingMemoryReview,
     trashStores,
     backups,
     appLocked: false
