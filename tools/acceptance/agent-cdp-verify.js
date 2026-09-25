@@ -511,6 +511,27 @@ async function main() {
 
     const persistedUi = await call('window.shopilot.agent.uiGet()')
     check('orb/drawer/message 摘要由 app_settings 持久化，不含页面截图', persistedUi.ok && !!persistedUi.data?.drawerOpen && !JSON.stringify(persistedUi.data).includes('data:image/png'))
+
+    // 对话自动滚动到最新：先把消息灌到 40 条上限（此后 push 会触发 shift，长度恒定），
+    // 再发一条消息——签名式滚动必须仍然贴底（旧实现只 watch length，满 40 条后不再滚动）。
+    if (persistedUi.ok && persistedUi.data) {
+      const seeded = { ...persistedUi.data, messageSummaries: Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', summary: `历史消息 ${i}`, at: Date.now() - (40 - i) * 1000 })) }
+      await call(`window.shopilot.agent.uiSet(${JSON.stringify(seeded)})`)
+      await cdp.evaluate('location.reload(); return true;')
+      await sleep(1800)
+      // 重载后抽屉会按持久化状态自动打开；只有它没开时才点圆球（点两次会把抽屉关上）。
+      const drawerAfterReload = await poll(() => cdp.evaluate(`return !!document.querySelector('.agent-drawer')`), 5000)
+      if (!drawerAfterReload) await cdp.evaluate(`document.querySelector('.agent-orb')?.click(); return true;`)
+      await poll(() => cdp.evaluate(`return !!document.querySelector('.agent-drawer')`), 10000)
+      const cappedCount = await poll(() => cdp.evaluate(`const n=document.querySelectorAll('.agent-message').length; return n === 40 ? n : 0`), 10000)
+      const scrollBefore = await lastAssistant()
+      const scrollSent = await sendGoal('你好')
+      const scrollReply = await waitReply(scrollBefore, 30000)
+      const atBottom = await poll(() => cdp.evaluate(`const area=document.querySelector('.agent-scroll-area'); if(!area) return false; return area.scrollHeight - area.scrollTop - area.clientHeight < 14`), 8000)
+      const scrollDebug = atBottom ? '' : await cdp.evaluate(`const area=document.querySelector('.agent-scroll-area'); return JSON.stringify({ messages: document.querySelectorAll('.agent-message').length, top: area?.scrollTop, height: area?.scrollHeight, client: area?.clientHeight })`)
+      check('对话自动滚动到最新消息（消息满 40 条上限后仍生效）', cappedCount === 40 && !!scrollSent && !!scrollReply && atBottom === true, `messages=${cappedCount} atBottom=${atBottom} ${scrollDebug}`)
+    }
+
     const keyNotInDom = await cdp.evaluate(`return !document.documentElement.outerHTML.includes('temporary-agent-cdp-key-123456')`)
     check('AI Key 不进入 Renderer DOM', keyNotInDom)
     const password = 'agent-cdp-test-pass'

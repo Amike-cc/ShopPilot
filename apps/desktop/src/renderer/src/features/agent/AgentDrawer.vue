@@ -98,8 +98,42 @@ const progressPercent = computed(() => {
 function focusComposer() { void nextTick(() => composer.value?.$el?.querySelector('textarea')?.focus()) }
 const emit = defineEmits<{ close: []; 'view-tasks': []; 'view-task': [taskId?: string] }>()
 function onEscape(event: KeyboardEvent) { if (event.key === 'Escape') { event.preventDefault(); emit('close') } }
-watch(() => agent.messages.length, () => nextTick(() => { if (scrollArea.value) scrollArea.value.scrollTop = scrollArea.value.scrollHeight }), { flush: 'post' })
-onMounted(() => window.addEventListener('keydown', onEscape))
+
+/**
+ * 自动滚动到最新消息。
+ *
+ * 不能只看 `messages.length`：消息列表有 **40 条上限**（stores/agent.ts 的 slice(-40)），
+ * 满了之后是「shift + push」——长度恒定，watcher 不再触发，对话就不会跟着滚（用户实测报告）。
+ * 所以用「最后一条的 id/文本 + 思考中 + 计划卡/任务卡/软件上下文」拼出签名：
+ * 任何会在底部新增内容的变化都会改变签名，从而滚到底。
+ */
+const scrollSignature = computed(() => {
+  const last = agent.messages[agent.messages.length - 1]
+  return [
+    agent.messages.length,
+    last?.id || '',
+    last?.text?.length || 0,
+    agent.busy ? 1 : 0,
+    agent.error?.code || '',
+    agent.plan?.id || '',
+    agent.softwarePlan?.id || '',
+    agent.task?.id || '',
+    agent.task?.status || '',
+    agent.task?.currentStep ?? '',
+    agent.softwareContext?.displayedStoreId || ''
+  ].join('|')
+})
+/** 直接贴底 + 下一帧再补一次（smooth 动画/晚到的布局都可能在第一次滚动后才撑高内容）。 */
+function scrollToLatest() {
+  void nextTick(() => {
+    const area = scrollArea.value
+    if (!area) return
+    area.scrollTop = area.scrollHeight
+    requestAnimationFrame(() => { if (scrollArea.value) scrollArea.value.scrollTop = scrollArea.value.scrollHeight })
+  })
+}
+watch(scrollSignature, () => scrollToLatest(), { flush: 'post' })
+onMounted(() => { window.addEventListener('keydown', onEscape); scrollToLatest() })
 onBeforeUnmount(() => window.removeEventListener('keydown', onEscape))
 </script>
 
