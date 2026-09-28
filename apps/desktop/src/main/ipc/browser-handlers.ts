@@ -3,12 +3,14 @@
  * §6.2 浏览器和标签页接口
  */
 
-import { ipcMain, IpcMainInvokeEvent, app } from 'electron'
+import { familyHandle } from './family-handle'
+import { IpcMainInvokeEvent, app } from 'electron'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import { normalizeDouyinCategoryTree } from '@shared/douyin-category-tree'
 import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as WindowManager from '../browser/window-manager'
+import * as StoreManager from '../stores/store-manager'
 import { clearStoreData } from '../browser/session-manager'
 import { randomUUID } from 'crypto'
 import { mkdirSync } from 'fs'
@@ -40,6 +42,12 @@ function browserError(err: any, requestId: string): IPCResult {
   if (msg.includes('Navigation blocked')) {
     return error(ERROR_CODES.NAVIGATION_BLOCKED.code, ERROR_CODES.NAVIGATION_BLOCKED.message, requestId)
   }
+  if (msg.includes('BROWSER_NOT_READY')) {
+    return error('BROWSER_NOT_READY', msg.replace(/^BROWSER_NOT_READY:\s*/, '') || '店铺标签页尚未就绪', requestId)
+  }
+  if (msg.includes('IPC_FORBIDDEN')) {
+    return error(ERROR_CODES.IPC_FORBIDDEN.code, '不允许注册该店铺页面', requestId)
+  }
   if (msg.includes('Tab not found')) {
     return error(ERROR_CODES.TASK_INVALID_STEP.code, '标签页不存在（可能已被关闭）', requestId)
   }
@@ -52,21 +60,46 @@ function browserError(err: any, requestId: string): IPCResult {
 /**
  * 注册所有浏览器相关的 IPC 处理器
  */
+const handle = familyHandle('浏览器')
+
 export function registerBrowserHandlers(): void {
   // browser:open
-  ipcMain.handle(IPC_CHANNELS.BROWSER_OPEN, async (_event: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_OPEN, async (_event: IpcMainInvokeEvent, input: { storeId: string; display?: boolean }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
-      WindowManager.openStoreBrowser(input.storeId)
+      // display=false：批量采集/后台动作只要"店铺打开"（建 session、放行排队任务），
+      // 不要把原生视图盖到用户当前所在的页面上（默认 true = 用户点开店，当然要显示）
+      // source:'renderer'：这次显示是渲染层自己请求的，它不需要"跟随自己的动作再切页"
+      WindowManager.openStoreBrowser(input.storeId, { display: input?.display !== false, source: 'renderer' })
       return success({ success: true }, requestId)
     } catch (err: any) {
       return browserError(err, requestId)
     }
   })
   
+  // browser:registerWebview - 由主窗口 Renderer 的 DOM <webview> did-attach 发起。
+  // familyHandle 已校验 sender 是可信主窗口；这里再检查宿主 webContents，避免未来把该通道
+  // 挪到别的 IPC 家族后失去 sender 边界。
+  handle(IPC_CHANNELS.BROWSER_REGISTER_WEBVIEW, async (event: IpcMainInvokeEvent, input: { storeId: string; tabId: string; webContentsId: number }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const host = WindowManager.getBrowserHostWindow()
+      if (!host || host.isDestroyed() || event.sender !== host.webContents) {
+        return error(ERROR_CODES.IPC_FORBIDDEN.code, '只有主窗口渲染层可以注册店铺 webview', requestId)
+      }
+      if (!input || typeof input.storeId !== 'string' || typeof input.tabId !== 'string' || !Number.isInteger(input.webContentsId)) {
+        return error(ERROR_CODES.INVALID_ARGUMENT.code, 'storeId、tabId 和 webContentsId 无效', requestId)
+      }
+      const data = await WindowManager.registerWebview(input.storeId, input.tabId, input.webContentsId)
+      return success(data, requestId)
+    } catch (err: any) {
+      return browserError(err, requestId)
+    }
+  })
+
   // browser:close
-  ipcMain.handle(IPC_CHANNELS.BROWSER_CLOSE, async (_event: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_CLOSE, async (_event: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -78,7 +111,7 @@ export function registerBrowserHandlers(): void {
   })
   
   // browser:tab:create
-  ipcMain.handle(IPC_CHANNELS.BROWSER_TAB_CREATE, async (_event: IpcMainInvokeEvent, input: { storeId: string, url?: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_TAB_CREATE, async (_event: IpcMainInvokeEvent, input: { storeId: string, url?: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -90,7 +123,7 @@ export function registerBrowserHandlers(): void {
   })
   
   // browser:tab:activate
-  ipcMain.handle(IPC_CHANNELS.BROWSER_TAB_ACTIVATE, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_TAB_ACTIVATE, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -102,7 +135,7 @@ export function registerBrowserHandlers(): void {
   })
   
   // browser:tab:close
-  ipcMain.handle(IPC_CHANNELS.BROWSER_TAB_CLOSE, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_TAB_CLOSE, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -114,7 +147,7 @@ export function registerBrowserHandlers(): void {
   })
   
   // browser:tab:setPinned
-  ipcMain.handle(IPC_CHANNELS.BROWSER_TAB_SET_PINNED, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, pinned: boolean }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_TAB_SET_PINNED, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, pinned: boolean }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -126,7 +159,7 @@ export function registerBrowserHandlers(): void {
   })
   
   // browser:tab:reorder
-  ipcMain.handle(IPC_CHANNELS.BROWSER_TAB_REORDER, async (_event: IpcMainInvokeEvent, input: { storeId: string, orderedTabIds: string[] }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_TAB_REORDER, async (_event: IpcMainInvokeEvent, input: { storeId: string, orderedTabIds: string[] }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -138,7 +171,7 @@ export function registerBrowserHandlers(): void {
   })
   
   // browser:navigate
-  ipcMain.handle(IPC_CHANNELS.BROWSER_NAVIGATE, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, url: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_NAVIGATE, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, url: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -150,7 +183,7 @@ export function registerBrowserHandlers(): void {
   })
   
   // browser:prepareInviteSquare — 微信带货者广场筛选应用（用户仍需人工进入达人详情）
-  ipcMain.handle(IPC_CHANNELS.BROWSER_PREPARE_INVITE_SQUARE, async (_event: IpcMainInvokeEvent, input: {
+  handle(IPC_CHANNELS.BROWSER_PREPARE_INVITE_SQUARE, async (_event: IpcMainInvokeEvent, input: {
     storeId: string, url: string, finderType?: string, categories?: string[], otherFilters?: string[],
     loadCategoryTree?: boolean
   }): Promise<IPCResult> => {
@@ -158,8 +191,9 @@ export function registerBrowserHandlers(): void {
     try {
       const tabId = WindowManager.getActiveTabId(input.storeId)
       if (!tabId) return error(ERROR_CODES.INTERNAL_ERROR.code, '店铺没有当前标签页', requestId)
-      const wc = WindowManager.getTabWebContents(input.storeId, tabId)
-      if (!wc) return error(ERROR_CODES.BROWSER_CLOSED.code, '店铺标签页不可用', requestId)
+      // 页面句柄要等 guest 注册：店铺刚打开/渲染层刚重载时标签页存在但 webview 还没挂上，
+      // 这时既不能当成"已关闭"（BROWSER_CLOSED），也不能静默跳过——等待或如实报未就绪。
+      const wc = await WindowManager.waitForTabWebContents(input.storeId, tabId)
       WindowManager.activateTab(input.storeId, tabId)
       // input.url 来自渲染层，同样过协议白名单（与 navigateTab 一致）
       let safeUrl: string
@@ -365,10 +399,23 @@ export function registerBrowserHandlers(): void {
   })
 
   // browser:clearData
-  ipcMain.handle(IPC_CHANNELS.BROWSER_CLEAR_DATA, async (_event: IpcMainInvokeEvent, input: { storeId: string, types: string[], origin?: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_CLEAR_DATA, async (_event: IpcMainInvokeEvent, input: { storeId: string, types: string[], origin?: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
-    
+
     try {
+      if (!StoreManager.getStore(input?.storeId)) {
+        return error(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
+      }
+      if (input.origin) {
+        // 只接受合法的 http(s) origin：无效字符串原来直通 clearStorageData 静默无效
+        let parsed: URL
+        try { parsed = new URL(String(input.origin)) } catch {
+          return error(ERROR_CODES.INVALID_ARGUMENT.code, 'origin 必须是合法的 http(s) 地址', requestId)
+        }
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+          return error(ERROR_CODES.INVALID_ARGUMENT.code, 'origin 必须是 http(s) 地址', requestId)
+        }
+      }
       await clearStoreData(input.storeId, input.types, input.origin)
       return success({ success: true }, requestId)
     } catch (err: any) {
@@ -379,10 +426,15 @@ export function registerBrowserHandlers(): void {
   // browser:capture - 真实截图：落盘到该店铺的 artifacts 目录，并回报真实路径。
   // 为什么在主进程写：渲染层此前用 <a download> 触发保存对话框，无论用户是否保存都会立刻
   // 提示"已截图并保存"（取消保存框也报成功）。写文件必须由拿到像素的一侧完成才能如实回报。
-  ipcMain.handle(IPC_CHANNELS.BROWSER_CAPTURE, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, format: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_CAPTURE, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, format: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
-    
+
     try {
+      // storeId 参与拼盘符目录（userData/stores/<id>/artifacts）：先确认店铺存在，
+      // 否则任意字符串（含 ..\ 路径片段）都能在 userData 外递归建目录写文件
+      if (!StoreManager.getStore(input?.storeId)) {
+        return error(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
+      }
       const format = input.format === 'jpeg' ? 'jpeg' : 'png'
       const dataUrl = await WindowManager.captureTab(input.storeId, input.tabId, format)
       const base64 = String(dataUrl || '').replace(/^data:image\/\w+;base64,/, '')
@@ -402,7 +454,7 @@ export function registerBrowserHandlers(): void {
   })
 
   // browser:pickElement - 编排器「拾取元素」：在店铺页面上点一下取锚点（自定义任务用）
-  ipcMain.handle(IPC_CHANNELS.BROWSER_PICK_ELEMENT, async (_event: IpcMainInvokeEvent, input: { storeId: string, mode: 'selector' | 'text' }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_PICK_ELEMENT, async (_event: IpcMainInvokeEvent, input: { storeId: string, mode: 'selector' | 'text' }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
       if (!input?.storeId) return error(ERROR_CODES.INVALID_ARGUMENT.code, '缺少 storeId', requestId)
@@ -417,11 +469,12 @@ export function registerBrowserHandlers(): void {
   })
 
   // browser:tab:list - UI 读取当前店铺标签页
-  ipcMain.handle(IPC_CHANNELS.BROWSER_TAB_LIST, async (_event: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_TAB_LIST, async (_event: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
       const tabs = WindowManager.getStoreTabs(input.storeId).map(t => ({
-        id: t.id, url: t.url, title: t.title, isPinned: t.isPinned, orderIndex: t.orderIndex
+        id: t.id, url: t.url, title: t.title, isPinned: t.isPinned, orderIndex: t.orderIndex,
+        guestAttached: t.guestAttached === true && !!t.webContents && !t.webContents.isDestroyed()
       }))
       return success({ tabs }, requestId)
     } catch (err: any) {
@@ -431,14 +484,15 @@ export function registerBrowserHandlers(): void {
 
   // browser:state - 只读：渲染层重载/崩溃恢复后据它补齐"哪些店铺已打开、各自的标签页与活动页、
   // 当前显示的是哪家"。此前没有这条通道，渲染层只能猜（猜错会把 welcome 页换掉、或让截图落到别的标签）
-  ipcMain.handle(IPC_CHANNELS.BROWSER_STATE, async (): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_STATE, async (): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
       const stores = WindowManager.getOpenStoreIds().map(storeId => ({
         storeId,
         activeTabId: WindowManager.getActiveTabId(storeId),
         tabs: WindowManager.getStoreTabs(storeId).map(t => ({
-          id: t.id, url: t.url, title: t.title, isPinned: t.isPinned, orderIndex: t.orderIndex
+          id: t.id, url: t.url, title: t.title, isPinned: t.isPinned, orderIndex: t.orderIndex,
+          guestAttached: t.guestAttached === true && !!t.webContents && !t.webContents.isDestroyed()
         }))
       }))
       return success({ displayedStoreId: WindowManager.getDisplayedStoreId(), stores }, requestId)
@@ -448,7 +502,7 @@ export function registerBrowserHandlers(): void {
   })
 
   // browser:openWindow - §14 独立窗口逃生入口
-  ipcMain.handle(IPC_CHANNELS.BROWSER_OPEN_WINDOW, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId?: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_OPEN_WINDOW, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId?: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
       WindowManager.openStandaloneWindow(input.storeId, input.tabId)
@@ -459,10 +513,12 @@ export function registerBrowserHandlers(): void {
   })
 
   // browser:display - 切换显示的店铺（§8.2）
-  ipcMain.handle(IPC_CHANNELS.BROWSER_DISPLAY, async (_event: IpcMainInvokeEvent, input: { storeId: string | null }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_DISPLAY, async (_event: IpcMainInvokeEvent, input: { storeId: string | null }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
-      WindowManager.displayStore(input.storeId)
+      // source:'renderer'：渲染层自己请求的显示（ws.showStore/openStore 已经改过自己的状态），
+      // 事件里带上来源，界面据此决定"要不要跟随切页"——跟随只对主进程单方面显示有意义
+      WindowManager.displayStore(input.storeId, 'renderer')
       return success({ success: true, displayedStoreId: WindowManager.getDisplayedStoreId() }, requestId)
     } catch (err: any) {
       return browserError(err, requestId)
@@ -470,7 +526,7 @@ export function registerBrowserHandlers(): void {
   })
 
   // browser:setViewport - 渲染层上报 BrowserViewport 区域
-  ipcMain.handle(IPC_CHANNELS.BROWSER_SET_VIEWPORT, async (_event: IpcMainInvokeEvent, input: { x: number, y: number, width: number, height: number }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_SET_VIEWPORT, async (_event: IpcMainInvokeEvent, input: { x: number, y: number, width: number, height: number }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
       WindowManager.setViewportBounds({ x: input.x, y: input.y, width: input.width, height: input.height })
@@ -481,7 +537,7 @@ export function registerBrowserHandlers(): void {
   })
 
   // browser:setViewsObscured - 渲染层弹层遮挡：摘除/恢复原生视图挂载
-  ipcMain.handle(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, async (_event: IpcMainInvokeEvent, input: { obscured: boolean, reason?: 'modal' | 'agent' }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, async (_event: IpcMainInvokeEvent, input: { obscured: boolean, reason?: 'modal' | 'agent' }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
       const obscured = input?.obscured === true
@@ -494,7 +550,7 @@ export function registerBrowserHandlers(): void {
   })
 
   // browser:tab:control - 地址栏 前进/后退/重载
-  ipcMain.handle(IPC_CHANNELS.BROWSER_TAB_CONTROL, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, action: 'back' | 'forward' | 'reload' }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BROWSER_TAB_CONTROL, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, action: 'back' | 'forward' | 'reload' }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
       WindowManager.tabNavigationControl(input.storeId, input.tabId, input.action)

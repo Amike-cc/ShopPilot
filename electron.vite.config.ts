@@ -38,7 +38,11 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(desktopRoot, 'src/renderer'),
-    plugins: [vue()],
+    // 店铺页面是主窗口里的真实 Electron <webview>（webPreferences.webviewTag: true）。
+    // Vue 默认把未知小写标签当组件解析，会在开发态刷 "Failed to resolve component: webview"
+    // 并把 :partition / @did-attach 当组件 props/emit 处理；声明成自定义元素后
+    // 这些绑定按原生属性与 DOM 事件落到元素上，正是 webview 需要的语义。
+    plugins: [vue({ template: { compilerOptions: { isCustomElement: tag => tag === 'webview' } } })],
     resolve: {
       alias: {
         '@': resolve(desktopRoot, 'src/renderer/src'),

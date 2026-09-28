@@ -54,7 +54,7 @@ describe('Agent software scope', () => {
   it('accepts a bounded conversation history for agent memory', () => {
     expect(agentPlanGenerateInputSchema.parse({ goal: '你好' }).history).toEqual([])
     expect(agentPlanGenerateInputSchema.parse({ goal: '你好', history: [{ role: 'user', text: '暗号是蓝鲸七号' }] }).history).toHaveLength(1)
-    expect(() => agentPlanGenerateInputSchema.parse({ goal: '你好', history: Array.from({ length: 13 }, () => ({ role: 'user', text: 'x' })) })).toThrow()
+    expect(() => agentPlanGenerateInputSchema.parse({ goal: '你好', history: Array.from({ length: 65 }, () => ({ role: 'user', text: 'x' })) })).toThrow()
     expect(() => agentPlanGenerateInputSchema.parse({ goal: '你好', history: [{ role: 'system', text: 'x' }] })).toThrow()
   })
 

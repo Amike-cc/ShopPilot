@@ -3,7 +3,8 @@
  * §6.1 店铺 IPC 接口
  */
 
-import { ipcMain, IpcMainInvokeEvent } from 'electron'
+import { familyHandle } from './family-handle'
+import { IpcMainInvokeEvent } from 'electron'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import {
@@ -66,9 +67,11 @@ function runtimeCloseError(err: any, requestId: string): IPCResult {
 /**
  * 注册所有店铺相关的 IPC 处理器
  */
+const handle = familyHandle('店铺管理')
+
 export function registerStoreHandlers(): void {
   // store:list
-  ipcMain.handle(IPC_CHANNELS.STORE_LIST, async (_event: IpcMainInvokeEvent): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_LIST, async (_event: IpcMainInvokeEvent): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -80,7 +83,7 @@ export function registerStoreHandlers(): void {
   })
   
   // store:get
-  ipcMain.handle(IPC_CHANNELS.STORE_GET, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_GET, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -99,7 +102,7 @@ export function registerStoreHandlers(): void {
   })
   
   // store:create
-  ipcMain.handle(IPC_CHANNELS.STORE_CREATE, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_CREATE, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -117,7 +120,7 @@ export function registerStoreHandlers(): void {
   })
   
   // store:update
-  ipcMain.handle(IPC_CHANNELS.STORE_UPDATE, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_UPDATE, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -136,7 +139,7 @@ export function registerStoreHandlers(): void {
   })
   
   // store:archive
-  ipcMain.handle(IPC_CHANNELS.STORE_ARCHIVE, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_ARCHIVE, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -155,7 +158,7 @@ export function registerStoreHandlers(): void {
   })
   
   // store:restore
-  ipcMain.handle(IPC_CHANNELS.STORE_RESTORE, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_RESTORE, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -174,7 +177,7 @@ export function registerStoreHandlers(): void {
   })
   
   // store:deletePermanent
-  ipcMain.handle(IPC_CHANNELS.STORE_DELETE_PERMANENT, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_DELETE_PERMANENT, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -195,7 +198,7 @@ export function registerStoreHandlers(): void {
   })
   
   // store:trashList - 回收站列表（软删除店铺）
-  ipcMain.handle(IPC_CHANNELS.STORE_TRASH_LIST, async (_event: IpcMainInvokeEvent): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_TRASH_LIST, async (_event: IpcMainInvokeEvent): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
       return success(StoreManager.listTrashStores(), requestId)
@@ -205,7 +208,7 @@ export function registerStoreHandlers(): void {
   })
 
   // store:purge - 彻底删除（回收站内，二次确认后）
-  ipcMain.handle(IPC_CHANNELS.STORE_PURGE, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_PURGE, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
       const parsed = storeIdInputSchema.safeParse(input)
@@ -221,13 +224,14 @@ export function registerStoreHandlers(): void {
   })
 
   // store:reorder
-  ipcMain.handle(IPC_CHANNELS.STORE_REORDER, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_REORDER, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
       const parsed = storeReorderSchema.safeParse(input)
       if (!parsed.success) return invalidInput(requestId, parsed.error.issues)
-      StoreManager.reorderStores(parsed.data.orderedStoreIds)
+      const reordered = StoreManager.reorderStores(parsed.data.orderedStoreIds)
+      if (!reordered) return error(ERROR_CODES.INVALID_ARGUMENT.code, '排序列表与当前店铺列表不一致，请刷新后重试', requestId)
       return { ok: true, data: { success: true }, requestId }
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
@@ -235,7 +239,7 @@ export function registerStoreHandlers(): void {
   })
   
   // store:setGroup
-  ipcMain.handle(IPC_CHANNELS.STORE_SET_GROUP, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.STORE_SET_GROUP, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {

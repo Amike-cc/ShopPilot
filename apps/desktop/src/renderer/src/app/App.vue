@@ -1,6 +1,7 @@
 <template>
   <div class="app-shell">
-    <WorkbenchView />
+    <!-- 所有业务页面统一挂载到新的深色工作台。旧 WorkbenchView 保留在仓库中作为历史兼容代码，运行时不再作为入口。 -->
+    <DashboardView />
     <!-- 应用锁 overlay（§6.5/§189）：WebContentsView 已由主进程摘除，此层覆盖全屏 -->
     <div v-if="ws.appLocked" class="lock-overlay">
       <div class="lock-box">
@@ -26,7 +27,7 @@
 <script setup lang="ts">
 // App Shell - §17.1：单工作台屏幕（内嵌 WebContentsView 需固定视口区域）
 import { ref, watch } from 'vue'
-import WorkbenchView from '../features/workbench/WorkbenchView.vue'
+import DashboardView from '../features/workbench/DashboardView.vue'
 import { useWorkspaceStore } from '../stores/workspace'
 
 const ws = useWorkspaceStore()
@@ -34,12 +35,15 @@ const cred = ref('')
 const unlockErr = ref('')
 const unlocking = ref(false)
 
-// §17 顶部融合标题栏：右上角原生窗口按钮（WCO）overlay 底色跟随 UI 状态，
-// 避免窗口顶角与界面"不匹配"。欢迎页=#1a1a1a（browser-col 底色）、
-// 工作台=#242424（右栏底色）、应用锁=#101218（lock-overlay 底色）。
+// §17 顶部融合标题栏：右上角原生窗口按钮（WCO）overlay 是不透明覆盖层，
+// 底色必须与它覆盖的那块 UI **完全一致**，否则右上角会显示成一块多余的色块。
+// 统一工作台里 WCO（高 38px）落在白色的 .dashboard-toolbar 上（该行已为它右侧留出 148px），
+// 所以这里返回的就是工具栏底色 —— 必须与 DashboardView.vue 里 .dashboard-toolbar 的
+// background 保持同一个十六进制（改一处要改两处）。
+const TOOLBAR_BG = '#ffffff'
 function titlebarOverlayColor(): string {
   if (ws.appLocked) return '#101218'
-  return ws.displayedStoreId ? '#242424' : '#1a1a1a'
+  return TOOLBAR_BG
 }
 watch(
   () => [ws.appLocked, ws.displayedStoreId] as const,
@@ -73,7 +77,9 @@ window.addEventListener('keydown', (e) => {
 </script>
 
 <style>
-/* §17 UI 实现规范 - 深色主题 */
+/* §17 UI 实现规范 - 浅色主题（2026-09-28 按设计稿重制）
+   设计令牌集中在这里：页面/卡片/描边/文字四层 + 品牌色与语义色。
+   其它页面（工作台、数据中心、设置…）都引用这些变量，改一处全站一致。 */
 * {
   margin: 0;
   padding: 0;
@@ -81,20 +87,27 @@ window.addEventListener('keydown', (e) => {
 }
 
 :root {
-  --color-bg-primary: #1a1a1a;
-  --color-bg-secondary: #242424;
-  --color-bg-tertiary: #2d2d2d;
-  --color-bg-elevated: #333333;
-  --color-border: #404040;
-  --color-text-primary: #ffffff;
-  --color-text-secondary: #a0a0a0;
-  --color-text-muted: #6b6b6b;
-  --color-primary: #3b82f6;
-  --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-error: #ef4444;
-  --radius: 10px;
-  --radius-sm: 6px;
+  --color-bg-primary: #f5f7fb;
+  --color-bg-secondary: #ffffff;
+  --color-bg-tertiary: #f2f4f8;
+  --color-bg-elevated: #ffffff;
+  --color-border: #e9edf5;
+  --color-border-strong: #dbe2ee;
+  --color-text-primary: #0f1729;
+  --color-text-secondary: #4a5568;
+  --color-text-muted: #98a2b3;
+  --color-primary: #7c5cff;
+  --color-primary-strong: #5b3df5;
+  --color-success: #12b76a;
+  --color-warning: #f79009;
+  --color-error: #f04438;
+  --radius: 16px;
+  --radius-sm: 10px;
+  /* 品牌渐变（选中导航、主按钮）与卡片阴影 */
+  --brand-gradient: linear-gradient(135deg, #8b5cff 0%, #6a3cf0 100%);
+  --brand-soft: rgba(124, 92, 255, .1);
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, .04), 0 10px 28px rgba(16, 24, 40, .06);
+  --shadow-pop: 0 12px 32px rgba(16, 24, 40, .12);
 }
 
 body {
@@ -105,6 +118,15 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   user-select: none;
+}
+
+/* 应用内容由工作台及各页面自己的滚动容器承载，根文档不能再生成第二条滚动条。 */
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 button {
@@ -120,7 +142,7 @@ input {
 }
 
 .app-shell {
-  width: 100vw;
+  width: 100%;
   height: 100vh;
   overflow: hidden;
 }

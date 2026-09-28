@@ -80,6 +80,11 @@ export const useWorkspaceStore = defineStore('workspace', {
     selectedStoreId: null as string | null,
     /** 当前内嵌显示的店铺（null = 欢迎页） */
     displayedStoreId: null as string | null,
+    /**
+     * 最近一次显示切换的来源：'main' = 主进程单方面显示（Agent/开店自动显示）→ 界面应跟随切页；
+     * 'renderer' = 界面自己请求的（它已在正确页面上，跟随反而会打乱自己的导航）。
+     */
+    displaySource: 'renderer' as 'renderer' | 'main',
     /** 已打开浏览器的店铺集合 */
     openStoreIds: [] as string[],
     /** 各店铺标签页（事件驱动） */
@@ -184,6 +189,23 @@ export const useWorkspaceStore = defineStore('workspace', {
           this.openStoreIds = this.openStoreIds.filter(id => id !== payload.storeId)
         }
       })
+      // 主进程单方面切换了"当前显示哪家店"（采集任务批量开店铺、Agent 逐店动作都会走
+      // openStoreBrowser → displayStore）：渲染层必须跟上，否则原生店铺视图会盖在当前 UI 上，
+      // 而左栏高亮/标签栏/地址栏都停在旧状态。DashboardView 会据 displayedStoreId 切到浏览器页。
+      window.shopilot.on(EVENT_CHANNELS.BROWSER_DISPLAY_CHANGED, (payload: any) => {
+        const storeId = payload?.storeId ?? null
+        // 来源决定界面要不要"跟随切页"：只有主进程单方面显示（Agent 动作/开店后自动显示）
+        // 才需要切页；渲染层自己请求的显示，界面本来就在正确的页上（跟随会打乱它自己的导航时序）
+        this.displaySource = payload?.source === 'main' ? 'main' : 'renderer'
+        if (storeId) {
+          if (!this.openStoreIds.includes(storeId)) this.openStoreIds = [...this.openStoreIds, storeId]
+          this.selectedStoreId = storeId
+        } else if (this.selectedStoreId && !this.openStoreIds.includes(this.selectedStoreId)) {
+          this.selectedStoreId = null
+        }
+        this.displayedStoreId = storeId
+        void Promise.all([this.refreshBookmarks(), this.refreshDownloads()])
+      })
       window.shopilot.on(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, (payload: any) => {
         const key = `${payload?.storeId || ''}:${payload?.tabId || ''}`
         if (payload.isLoading) {
@@ -195,12 +217,23 @@ export const useWorkspaceStore = defineStore('workspace', {
       window.shopilot.on(EVENT_CHANNELS.BROWSER_CRASHED, (payload: any) => {
         this.toast(`页面异常已恢复（${payload.reason}）`, 'error')
       })
+      // 下载：创建与进度都由主进程推送（2026-09-28 前主进程从不发送，面板只能手动刷新）。
+      // 新下载 → 若正看着那家店的下载列表就刷新，并给一条轻提示；失败终态 → 明确告知。
+      window.shopilot.on(EVENT_CHANNELS.BROWSER_DOWNLOAD_CREATED, (payload: any) => {
+        if (!payload?.storeId) return
+        if (this.displayedStoreId === payload.storeId) void this.refreshDownloads()
+      })
       window.shopilot.on(EVENT_CHANNELS.BROWSER_DOWNLOAD_PROGRESS, (payload: any) => {
-        // 进度事件的 downloads 列表属于**哪个店铺**只由 refreshDownloads 自己知道：
-        // 切店后旧列表可能还在，这里先核对当前显示店铺与列表来源一致再刷
-        if (!this.downloads.some(d => d.id === payload.id)) return
-        if (this.downloadsStoreId !== this.displayedStoreId) return
-        this.refreshDownloads()
+        if (!payload?.id) return
+        const known = this.downloads.some(d => d.id === payload.id)
+        if (this.displayedStoreId === payload.storeId && (known || payload.state !== 'progressing')) {
+          void this.refreshDownloads()
+        }
+        // 终态且不是完成 → 失败必须让用户看见（此前 done 只写库，界面上什么都没有）
+        if (payload.state === 'interrupted' || payload.state === 'cancelled') {
+          const name = (this.downloads.find(d => d.id === payload.id) as any)?.fileName || '文件'
+          this.toast(`下载${payload.state === 'cancelled' ? '已取消' : '中断'}：${name}`, 'error')
+        }
       })
       // ---- 任务事件 - §6.6 ----
       window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, (ev: any) => {

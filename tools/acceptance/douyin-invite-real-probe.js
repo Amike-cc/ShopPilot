@@ -94,7 +94,7 @@ async function waitForCDP(timeoutMs = 40000) {
 
 async function connectByUrl(part) {
   const list = await targets()
-  const t = list.find(x => x.type === 'page' && x.url.includes(part))
+  const t = list.find(x => (x.type === 'page' || x.type === 'webview') && x.url.includes(part))
   if (!t) throw new Error('未找到页面目标: ' + part + '\n' + list.map(x => x.url.slice(0, 110)).join('\n'))
   const c = new CDP(t.webSocketDebuggerUrl)
   await c.ready
@@ -181,7 +181,7 @@ async function main() {
     let pageTarget = null
     for (let i = 0; i < 30; i++) {
       const list = await targets()
-      pageTarget = list.find(x => x.type === 'page' && /jinritemai\.com/.test(x.url))
+      pageTarget = list.find(x => (x.type === 'page' || x.type === 'webview') && /jinritemai\.com/.test(x.url))
       if (pageTarget) break
       await sleep(1000)
     }

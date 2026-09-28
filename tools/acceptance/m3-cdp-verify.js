@@ -202,6 +202,7 @@ async function main() {
     storeCreate: (input) => call(`window.shopilot.store.create(${JSON.stringify(input)})`),
     browserOpen: (sid) => call(`window.shopilot.browser.open(${JSON.stringify(sid)})`),
     sessionStatus: (sid) => call(`window.shopilot.session.status(${JSON.stringify(sid)})`),
+    browserState: () => call('window.shopilot.browser.state()'),
     auditQuery: (limit) => call(`window.shopilot.audit.query({ limit: ${limit || 300} })`),
     aiConfigGet: () => call('window.shopilot.ai.configGet()'),
     aiConfigSet: (input) => call(`window.shopilot.ai.configSet(${JSON.stringify(input)})`),
@@ -593,7 +594,11 @@ async function main() {
     ['clickByText 空文本', { type: 'clickByText', input: { text: '' } }, false],
     ['clickAll 正例（selector + max）', { type: 'clickAll', input: { selector: '.pick', max: 10 } }, true],
     ['clickAll 缺 selector/text', { type: 'clickAll', input: { max: 10 } }, false],
-    ['clickAll 超出平台单次上限 41', { type: 'clickAll', input: { selector: '.pick', max: 41 } }, false],
+    // schema 上限是"各平台档案里的最大单次批量数"（快手 100 / 抖店 40，由档案夹取）。
+    // 这里曾写 41 并断言"被拒"——那是照抖店常量抄的，结果快手邀约填 41–100 位时
+    // 面板放行、主进程拒绝，功能不可用（2026-09-28 审查确认）。现在按真实边界测：
+    ['clickAll 超出 schema 上限 101', { type: 'clickAll', input: { selector: '.pick', max: 101 } }, false],
+    ['clickAll 平台上限内 41 可用（快手 maxBatch=100）', { type: 'clickAll', input: { selector: '.pick', max: 41 } }, true],
     ['setInput 正例', { type: 'setInput', input: { selector: '#script-box', text: '厂家货源' } }, true],
     ['setInput 夹带 js 字段被拒（strict）', { type: 'setInput', input: { selector: '#script-box', text: 'x', js: 'alert(1)' } }, false]
   ]
@@ -924,8 +929,13 @@ async function main() {
   const rid6 = fired.data.runId
   await sleep(2500)
   check('排队中不静默拉起：run 仍 queued', (await runStatusOf(rid6)) === 'queued', await runStatusOf(rid6))
-  const st2 = await api.sessionStatus(sid2)
-  check('店铺二浏览器确实未被调度拉起', st2.ok && st2.data.open === false)
+  // 判据换成 browser:state（只读）：该店铺不出现在"已打开店铺"列表里 = 确实没被拉起。
+  // 原先读 session.status().open，而 ShopSessionStatusSummary 里**没有 open 字段**
+  // （字段叫 sessionPresent）→ `undefined === false` 恒假，这条断言无论实现对错都必然失败
+  // （2026-09-28 审查发现的"验收脚本依赖旧字段"实例；它会掩盖真实的静默拉起回归）。
+  const bs2 = await api.browserState()
+  const pulledUp = bs2.ok && (bs2.data.stores || []).some(x => x.storeId === sid2)
+  check('店铺二浏览器确实未被调度拉起', bs2.ok && !pulledUp, JSON.stringify((bs2.data?.stores || []).map(x => x.storeId)))
   const opened2 = await openStoreViaUI('M3店铺二')
   check('UI 打开店铺二（排队唤醒前提）', opened2)
   const fin6 = await pollRun(rid6, d => d.run.status === 'succeeded', 25000)

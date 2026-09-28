@@ -189,7 +189,10 @@ async function connectUi() {
 async function storeTarget(urlPart) {
   try {
     const targets = await fetchJson(`http://127.0.0.1:${CDP_PORT}/json`)
-    return targets.find(t => t.type === 'page' && t.url.includes(urlPart)) || null
+    // 店铺页面现在是主窗口里的 DOM <webview>：它在 CDP 目标列表里的 type 是 "webview"
+    // （原生 WebContentsView 时代是 "page"）。两种都认，否则"在店铺页面上做点什么"的断言
+    // 会全部以"拾取遮罩没出现"这种误导性的形式失败。
+    return targets.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes(urlPart)) || null
   } catch {
     return null
   }
@@ -713,15 +716,18 @@ async function main() {
     const geometry = await ui.eval(`${DOM}
       const panel = q('.task-create-modal'), p = panel.getBoundingClientRect();
       const v = q('.viewport').getBoundingClientRect();
+      // 页面可见宽度取 <webview> 元素的内容盒：容器 .viewport 有 1px 边框，
+      // 它的 border-box 比页面视口大 2px，用容器比会把"1px 边框"误判成"宽度不一致"。
+      const wv = q('[data-test="dashboard-browser-viewport"] webview');
       const f = q('[data-test="custom-f-0-selector"]').getBoundingClientRect();
-      return { pageWidth:v.width, panelLeft:p.left, pageRight:v.right,
+      return { pageWidth: wv ? wv.clientWidth : v.width, panelLeft:p.left, pageRight:v.right,
         separate:v.width > 200 && v.right <= p.left + 1,
         noOverflow:panel.scrollWidth <= panel.clientWidth + 1,
         fieldVisible:f.width > 0 && f.left >= p.left && f.right <= p.right && f.bottom <= p.bottom };
     `)
     check('⑨ 浏览器与编排器无重叠，字段可见且面板无横向溢出', geometry.separate && geometry.noOverflow && geometry.fieldVisible, JSON.stringify(geometry))
     const nativeWidth = await onStorePage(inspectUrl, 'return window.innerWidth;')
-    check('⑨ 原生浏览器宽度与预留区域一致', Math.abs(nativeWidth - geometry.pageWidth) <= 1, String(nativeWidth))
+    check('⑨ 店铺页面宽度与预留区域一致（DOM 内嵌，页面跟着元素走）', Math.abs(nativeWidth - geometry.pageWidth) <= 1, `页面=${nativeWidth} 元素=${geometry.pageWidth}`)
     await clickOnStorePage(inspectUrl, targetCenter, { hoverOnly: true })
     check('⑨ 悬停高亮目标', await onStorePage(inspectUrl, `return document.getElementById('__shopilot_pick_outline__')?.style.display === 'block';`))
     await clickOnStorePage(inspectUrl, targetCenter)

@@ -34,7 +34,9 @@ describe('A-M0 Agent contract', () => {
       id: 'model_12345678', name: 'x', provider: 'p', endpoint: 'https://example.com', model: 'm', hasKey: false,
       temperature: 0.7, maxTokens: 32, timeoutMs: 1000, fallbackProfileId: null,
       capabilities: { chat: true, json: false, vision: false, cancellation: true }, concurrencyLimit: 1,
-      dailyBudget: null, enabled: true, health: 'unknown', updatedAt: 0, credentialRef: 'secret'
+      dailyBudget: null, enabled: true, health: 'unknown', updatedAt: 0,
+      resolvedContextWindowTokens: 32768, resolvedContextSource: 'provider-default',
+      credentialRef: 'secret'
     } as any)).toThrow()
   })
 
@@ -53,8 +55,8 @@ describe('A-M0 Agent contract', () => {
     expect(parseAgentTurnOutput('{"thought":"只在思考"}')?.actions).toEqual([])
     expect(parseAgentTurnOutput('你好呀')).toBe(null)
     expect(parseAgentTurnOutput('{"reply":"","actions":[]}')).toBe(null)
-    const capped = parseAgentTurnOutput(JSON.stringify({ reply: 'x', actions: Array.from({ length: 5 }, () => ({ type: 'listAgents' })) }))
-    expect(capped?.actions).toHaveLength(3)
+    const capped = parseAgentTurnOutput(JSON.stringify({ reply: 'x', actions: Array.from({ length: 12 }, () => ({ type: 'listAgents' })) }))
+    expect(capped?.actions).toHaveLength(8)
   })
 
   it('flags only money actions for approval and keeps collection read-only', () => {

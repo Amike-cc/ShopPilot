@@ -100,10 +100,10 @@ export interface CustomStepDraft {
 }
 
 /**
- * 整单步骤数上限，必须与主进程 taskCreateSchema 的 `.max(30)` 对齐。
- * 不对齐的话第 31 步之前一切正常，点创建才会被 Zod 拒（用户看不到任何线索）。
+ * 整单步骤数上限，必须与主进程 taskCreateSchema 的 `.max(100)` 对齐。
+ * 不对齐的话第 101 步之前一切正常，点创建才会被 Zod 拒（用户看不到任何线索）。
  */
-export const CUSTOM_TASK_MAX_STEPS = 30
+export const CUSTOM_TASK_MAX_STEPS = 100
 
 /**
  * within 子字段的上限，与 Zod 的 within schema 对齐。
@@ -359,7 +359,11 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     fields: [
       { key: 'selector', label: '选择器', kind: 'text', maxLength: 500, placeholder: 'tbody input[type=checkbox]', pick: 'selector' },
       { key: 'text', label: '文案', kind: 'text', maxLength: 200, placeholder: '与选择器二选一', pick: 'text' },
-      { key: 'max', label: '最多勾选', kind: 'number', required: true, min: 1, max: 40, default: 1 },
+      // 上限 100 = 各平台档案里登记的最大单次批量数（快手 maxBatch=100，抖店 40）。
+      // 这里曾是 40（照抖店抄的常量），于是快手邀约填 41–100 位时面板校验通过、主进程
+      // schema 却拒绝，功能直接不可用（2026-09-28 审查确认的"平台常量写死漂移"）。
+      // 真正的平台上限由档案负责：`invite-task` 已按 profile.maxBatch 夹取。
+      { key: 'max', label: '最多勾选', kind: 'number', required: true, min: 1, max: 100, default: 1, placeholder: '平台单次上限不同：抖店 40 / 快手 100' },
       { key: 'scroll', label: '滚动续选（虚拟滚动列表）', kind: 'boolean' },
       { key: 'maxRounds', label: '滚动最多轮数', kind: 'number', min: 1, max: 60 },
       { key: 'counterIncludes', label: '计数文案必须包含', kind: 'text', maxLength: 40, placeholder: '用于区分页面上的多个"已选N"', pick: 'text' }
@@ -396,8 +400,11 @@ export const STEP_CATALOG: StepCatalogEntry[] = [
     label: '按键',
     group: '交互',
     desc: '只开放 Escape：用于收起页面上残留的下拉浮层。',
-    sideEffect: true,
-    idempotent: false,
+    // 只按 Escape 收起浮层：不改数据、可安全重放，因此**不算副作用**（与运行时集合
+    // `@shared/agent-step-effects` 的判定一致——这里曾经标成 true，与运行时判定打架，
+    // 会让编辑器对收浮层这一步多报一条"会改变页面状态"的警告）。
+    sideEffect: false,
+    idempotent: true,
     fields: [
       {
         key: 'key', label: '按键', kind: 'select', required: true, default: 'Escape',

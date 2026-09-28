@@ -291,6 +291,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:steps', v: CustomStepDraft[]): void
   (e: 'notify', text: string, kind: 'info' | 'success' | 'error'): void
+  (e: 'picking-change', picking: boolean): void
 }>()
 
 const groups = catalogGroups()
@@ -422,8 +423,19 @@ function withinOf(s: CustomStepDraft, sub: string): string {
  * 所以"回来按 id 重定位"没有依据。让下标在拾取期间保持不变，回填就必然落在用户点拾取时那一步上；
  * 这也是唯一不会写错步骤的做法（见 selectStep/add/move/removeAt 的 picking 守卫）。
  * 锁定之外的兜底：父组件可以在等待期间整份替换 steps（如"套用模板"），
- * 那种情况编辑器锁不住，所以回来时再核对"拾取开始时的那个步骤对象"是否仍在原下标上，不在就丢弃并提示。
+ * 那种情况编辑器锁不住，所以回来时再核对"拾取开始时的那个步骤内容"是否仍在原下标上，
+ * 不在就丢弃并提示。这里比较稳定的业务字段而不是对象引用，因为 Vue 的响应式传递可能
+ * 在内容未改变时产生新的代理对象。
  */
+function draftSignature(step: CustomStepDraft | undefined): string {
+  if (!step) return ''
+  try {
+    return JSON.stringify({ type: step.type, submit: !!step.submit, input: step.input || {} })
+  } catch {
+    return ''
+  }
+}
+
 async function pick(
   stepIndex: number,
   key: string,
@@ -432,11 +444,12 @@ async function pick(
 ) {
   if (picking.value) return
   picking.value = true
-  const stepAtStart = props.steps[stepIndex]
+  emit('picking-change', true)
+  const stepSignature = draftSignature(props.steps[stepIndex])
   try {
     const r = await props.pickElement(mode)
     if (!r || !r.ok) return  // 父组件已经提示过原因（取消/超时/注入失败）
-    if (props.steps[stepIndex] !== stepAtStart) {
+    if (draftSignature(props.steps[stepIndex]) !== stepSignature) {
       // 下标已指向别的步骤：宁可不填，也不能把锚点写到用户没在编辑的那一步上
       emit('notify', '步骤在拾取期间被替换或删除了，这次拾取结果已丢弃；请确认当前步骤后再拾取一次', 'error')
       return
@@ -480,6 +493,7 @@ async function pick(
     emit('notify', '拾取失败：' + String(e?.message || e), 'error')
   } finally {
     picking.value = false
+    emit('picking-change', false)
   }
 }
 
@@ -665,8 +679,8 @@ function move(i: number, delta: number) {
   font-size: 10px; line-height: 1.55; padding: 6px 7px;
   border-radius: 4px; border: 1px solid transparent;
 }
-.ct-issue.error { color: #fca5a5; background: rgba(239, 68, 68, .12); border-color: rgba(239, 68, 68, .35); }
-.ct-issue.warning { color: #fcd34d; background: rgba(245, 158, 11, .1); border-color: rgba(245, 158, 11, .3); }
+.ct-issue.error { color: #b54708; background: rgba(239, 68, 68, .12); border-color: rgba(239, 68, 68, .35); }
+.ct-issue.warning { color: #b54708; background: rgba(245, 158, 11, .1); border-color: rgba(245, 158, 11, .3); }
 .ct-ok {
   flex: 0 0 auto; font-size: 10px; color: var(--color-success);
   padding: 7px; border-top: 1px solid var(--color-border); background: var(--color-bg-secondary);

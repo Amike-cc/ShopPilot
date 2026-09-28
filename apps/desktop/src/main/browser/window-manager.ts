@@ -2,18 +2,16 @@
  * 浏览器视图管理器（主窗口内嵌模型）- §4.3 / §8.2
  *
  * 架构：
- * - 主窗口（工作台）是唯一宿主窗口；每个店铺标签页 = 一个 WebContentsView，
- *   挂在主窗口 contentView 上，bounds 对齐渲染层上报的 BrowserViewport 区域。
- * - 同一时刻仅显示 displayStoreId 的活动标签页；切换店铺/标签页 = 换挂载。
- * - 未显示的标签页 WebContents 继续存活（后台加载、状态保留）。
- * - 标签页元数据持久化 tabs 表，重启恢复（§4.3）。
- *
- * 兼容性（M0 实测）：Electron 30 的 View 无 children getter，自跟踪 mountedView；
- * WebContents 无 destroy()，销毁用 webContents.close()。
+ * - 主窗口（工作台）是唯一宿主窗口；每个店铺标签页由 Renderer DOM 中受控的
+ *   Electron `<webview>` 承载，主进程只保存并操作已注册的 guest WebContents。
+ * - 同一时刻仅允许 displayedStoreId 的活动标签页接收交互；切换店铺/标签页由 Renderer
+ *   控制 webview 的可见性，不再把原生 View 摘挂到 BrowserWindow.contentView。
+ * - 未显示的标签页 guest 继续存活（后台加载、状态保留），标签页元数据持久化 tabs 表。
+ * - WebContents 无 destroy()，销毁用 webContents.close()；Renderer reload 后必须重新注册 guest。
  */
 
-import { BrowserWindow, Menu, WebContentsView, clipboard } from 'electron'
-import { getStoreSession } from './session-manager'
+import { BrowserWindow, Menu, clipboard, webContents } from 'electron'
+import { getSession, waitForSessionReady } from './shop-session-manager'
 import { registerFingerprintTarget, unregisterFingerprintTarget } from './fingerprint-injector'
 import {
   buildStoreContextMenu, runStoreMenuAction, toStoreMenuInput, toElectronMenuTemplate,
@@ -37,7 +35,10 @@ export interface Tab {
   title: string
   isPinned: boolean
   orderIndex: number
-  webContentsView?: WebContentsView
+  /** Renderer DOM <webview> 注册后的 guest 句柄；不向 Renderer 暴露。 */
+  webContents?: Electron.WebContents
+  guestWebContentsId?: number
+  guestAttached?: boolean
 }
 
 interface BrowserState {
@@ -58,30 +59,25 @@ const browserStates = new Map<string, BrowserState>()
 const standaloneWindows = new Map<string, Set<BrowserWindow>>()
 
 let hostWindow: BrowserWindow | null = null
-let mountedView: WebContentsView | null = null
 let displayedStoreId: string | null = null
 let viewport: ViewportBounds = { x: 0, y: 0, width: 0, height: 0 }
 
-// WebContentsView.setVisible(false) controls compositor visibility, but
-// Chromium may keep document.visibilityState="visible" after a view is
-// detached. Keep the page lifecycle signal aligned with the native view so
-// store pages and acceptance probes observe the same state.
-function syncDocumentVisibility(view: WebContentsView, hidden: boolean): void {
-  const script = hidden
-    ? `(() => {
-        try {
-          Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-          Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
-        } catch (_) {}
-      })()`
-    : `(() => {
-        try { delete document.visibilityState; } catch (_) {}
-        try { delete document.hidden; } catch (_) {}
-      })()`
-  try {
-    if (view.webContents.isDestroyed()) return
-    void view.webContents.executeJavaScript(script, true).catch(() => undefined)
-  } catch { /* ignore a view destroyed during an overlay transition */ }
+/** guest id -> 已绑定的店铺标签页，防止一个 guest 被重复认领。 */
+const guestTabs = new Map<number, Tab>()
+/** 注册完成前等待页面句柄的任务/页面工具。 */
+const guestWaiters = new Map<string, Set<(wc: Electron.WebContents | null) => void>>()
+
+function tabKey(storeId: string, tabId: string): string {
+  return `${storeId}:${tabId}`
+}
+
+function notifyGuestWaiters(tab: Tab): void {
+  const key = tabKey(tab.storeId, tab.id)
+  const waiters = guestWaiters.get(key)
+  if (!waiters) return
+  guestWaiters.delete(key)
+  const wc = tab.webContents && !tab.webContents.isDestroyed() ? tab.webContents : null
+  waiters.forEach(resolve => { try { resolve(wc) } catch { /* ignore */ } })
 }
 
 function generateTabId(): string {
@@ -108,14 +104,18 @@ function isAllowedPageNavigation(targetUrl: string): boolean {
 /** 标签页崩溃自动重载的节流表（tabId → 上次自动重载时间），防崩溃-重载死循环 */
 const TAB_RELOAD_MIN_INTERVAL_MS = 5 * 60 * 1000
 const tabReloadGuard = new Map<string, number>()
+/** did-navigate-in-page 的落库节流（tabId → 上次落库时间）；与 tabReloadGuard 同生命周期清理 */
+const inPageSaveAt = new Map<string, number>()
 
 /** §8.2：注入宿主（主）窗口 */
 export function setBrowserHostWindow(win: BrowserWindow): void {
   hostWindow = win
   win.on('closed', () => {
     hostWindow = null
-    mountedView = null
     displayedStoreId = null
+    guestTabs.clear()
+    guestWaiters.forEach(waiters => waiters.forEach(resolve => resolve(null)))
+    guestWaiters.clear()
   })
 }
 
@@ -133,9 +133,8 @@ export function setViewportBounds(bounds: ViewportBounds): void {
     width: Math.min(Math.max(clean(bounds?.width), 0), 16384),
     height: Math.min(Math.max(clean(bounds?.height), 0), 16384)
   }
-  if (mountedView) {
-    mountedView.setBounds({ x: viewport.x, y: viewport.y, width: Math.max(viewport.width, 0), height: Math.max(viewport.height, 0) })
-  }
+  // DOM <webview> 自己由 Renderer 的 CSS 约束尺寸；该 IPC 只保留给旧页面与诊断日志。
+  logMain('info', `browser:setViewport（兼容记录）x=${viewport.x} y=${viewport.y} w=${viewport.width} h=${viewport.height} 近似可见区=${effectiveViewport().width}×${effectiveViewport().height}`)
 }
 
 /** 向渲染层推送事件（§7：带 entityId，前端按实体更新） */
@@ -147,14 +146,15 @@ function emit(channel: string, payload: any): void {
 
 function tabSnapshot(tab: Tab) {
   let loading = false
-  try { loading = !!tab.webContentsView && !tab.webContentsView.webContents.isDestroyed() && tab.webContentsView.webContents.isLoading() } catch { /* ignore */ }
+  try { loading = !!tab.webContents && !tab.webContents.isDestroyed() && tab.webContents.isLoading() } catch { /* ignore */ }
   return {
     id: tab.id,
     url: tab.url,
     title: tab.title,
     isPinned: tab.isPinned,
     orderIndex: tab.orderIndex,
-    loading
+    loading,
+    guestAttached: !!tab.webContents && !tab.webContents.isDestroyed() && tab.guestAttached === true
   }
 }
 
@@ -171,10 +171,14 @@ function emitTabs(storeId: string): void {
 /**
  * 打开（或显示）店铺浏览器：确保已打开并置为显示状态
  */
-export function openStoreBrowser(storeId: string): void {
+export function openStoreBrowser(storeId: string, opts: { display?: boolean; source?: 'renderer' | 'main' } = {}): void {
   if (!hostWindow || hostWindow.isDestroyed()) {
     throw new Error('Host window not available')
   }
+
+  // 由 ShopSessionManager 统一校验店铺并建立/复用底层 Session；
+  // 浏览器状态创建前先拒绝不存在或已删除的 storeId。
+  getSession(storeId)
 
   if (!browserStates.has(storeId)) {
     const state: BrowserState = { tabs: new Map(), activeTabId: null }
@@ -185,131 +189,71 @@ export function openStoreBrowser(storeId: string): void {
     queueMicrotask(() => storeOpenListeners.forEach(cb => { try { cb(storeId) } catch { /* ignore */ } }))
   }
   updateStoreLastActive(storeId)
-  displayStore(storeId)
+  // display:false = 只把店铺"打开"（建 session/标签、放行排队任务），**不把它显示出来**。
+  // ⚠ 只给"不需要用户看着"的调用方用：渲染层会把它的 webview 留着但隐藏（DOM overlay 只
+  // 影响可见性，不再摘除页面），需要真实点击的自动化（采集任务/邀约）应当显示店铺，
+  // 否则用户看不到点击落在哪，页面被平台因"不可见"而停摆时也无从判断。
+  if (opts.display === false) return
+  displayStore(storeId, opts.source === 'renderer' ? 'renderer' : 'main')
 }
 
 /**
- * 切换显示的店铺（§8.2 切换店铺）
+ * 切换当前显示店铺。DOM <webview> 的可见性由 Renderer 依据这些状态控制，
+ * 主进程不再把 guest 挂到 BrowserWindow.contentView。
  */
-export function displayStore(storeId: string | null): void {
+export function displayStore(storeId: string | null, source: 'renderer' | 'main' = 'main'): void {
   if (!hostWindow || hostWindow.isDestroyed()) return
-
   if (storeId === null) {
-    detachMounted()
     displayedStoreId = null
+    emit(EVENT_CHANNELS.BROWSER_DISPLAY_CHANGED, { storeId: null, source })
     return
   }
-
   if (!browserStates.has(storeId)) {
-    openStoreBrowser(storeId)
+    openStoreBrowser(storeId, { display: true, source })
     return
   }
-
   displayedStoreId = storeId
   const state = browserStates.get(storeId)!
-  const active = state.activeTabId ? state.tabs.get(state.activeTabId) : null
-  mountTab(active ?? Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)[0] ?? null)
+  if (!state.activeTabId) {
+    const first = Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)[0]
+    if (first) state.activeTabId = first.id
+  }
   updateStoreLastActive(storeId)
   emitTabs(storeId)
+  emit(EVENT_CHANNELS.BROWSER_DISPLAY_CHANGED, { storeId, source })
 }
 
-function detachMounted(): void {
-  if (mountedView && hostWindow && !hostWindow.isDestroyed()) {
-    // removeChildView alone does not make the WebContents invisible. Chromium
-    // may keep reporting visibilityState=visible and the native layer can
-    // still win the compositor race against HTML modals/context menus.
-    try { mountedView.setVisible(false) } catch { /* ignore */ }
-    syncDocumentVisibility(mountedView, true)
-    try { hostWindow.contentView.removeChildView(mountedView) } catch { /* ignore */ }
-  }
-  mountedView = null
-}
-
-/** 应用锁：渲染层 overlay 无法覆盖 WebContentsView，锁定期间必须摘除挂载 */
+/** 应用锁期间由 Renderer 隐藏 webview，主进程仍禁止任务/Agent 操作。 */
 let viewsHiddenForLock = false
 export function setBrowserViewsVisible(visible: boolean): void {
   viewsHiddenForLock = !visible
-  if (!visible) {
-    detachMounted()
-    return
-  }
-  if (displayedStoreId) displayStore(displayedStoreId)
+  logMain('info', `店铺 DOM webview ${visible ? '恢复可见性' : '进入锁定隐藏状态'}`)
 }
 
-/**
- * 渲染层弹层（回收站抽屉 / 新建店铺 / 任务对话框）遮挡：WebContentsView 是原生层，
- * 永远画在 HTML 之上，弹层若落在视口区域内会被整块盖住（实测遮挡比例 100%）。
- * 因此弹层打开期间摘除挂载，关闭后若未锁定则重新挂载。
- */
+/** DOM overlay 不再需要摘除原生 View；保留状态字段供兼容调用方与诊断。 */
 let viewsHiddenForOverlay = false
 let viewsHiddenForAgent = false
 export type BrowserViewObscuredReason = 'modal' | 'agent'
-
-/**
- * Hide the native page view while HTML overlays are interactive. Agent overlays
- * are tracked separately so Main can still inspect the current WebContents
- * while the floating Agent drawer is open.
- */
 export function setBrowserViewsObscured(obscured: boolean, reason: BrowserViewObscuredReason = 'modal'): void {
   if (reason === 'agent') viewsHiddenForAgent = obscured
   else viewsHiddenForOverlay = obscured
-  const hidden = viewsHiddenForOverlay || viewsHiddenForAgent
-  if (hidden) {
-    detachMounted()
-    logMain('info', '弹层打开：已摘除店铺视图挂载（避免原生层遮挡弹窗）')
-    return
-  }
-  if (viewsHiddenForLock) return
-  if (displayedStoreId) {
-    // Renderer reloads can leave the main-process overlay flag stale. Restore
-    // the current tab silently so the fresh renderer does not receive a
-    // synthetic tab-updated event and mistake the store for user-opened state.
-    const state = browserStates.get(displayedStoreId)
-    const active = state?.activeTabId ? state.tabs.get(state.activeTabId) : null
-    mountTab(active ?? (state ? Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)[0] : null) ?? null)
-  }
-  logMain('info', '弹层关闭：已恢复店铺视图挂载')
+  logMain('info', `DOM 店铺 webview overlay=${obscured ? 'open' : 'closed'} reason=${reason}`)
 }
 
-function mountTab(tab: Tab | null): void {
-  if (!hostWindow || hostWindow.isDestroyed()) return
-  if (viewsHiddenForLock || viewsHiddenForOverlay || viewsHiddenForAgent) { detachMounted(); return }
-
-  if (!tab || !tab.webContentsView) {
-    detachMounted()
-    return
-  }
-  // 渲染层从未上报过视口（直启恢复 / 窗口被遮挡时 ResizeObserver 暂停）时 viewport 可能还是 0，
-  // 0×0 视图会让页面布局塌缩、受信任点击全部落空（任务引擎实测踩过）。此时退化为整个内容区，
-  // 之后渲染层一旦上报真实 bounds（setViewportBounds）即自动纠正。
+/**
+ * 页面内可见区域的**近似**尺寸（DIP），只用于日志/诊断。
+ * DOM <webview> 后主进程看不到真实元素尺寸，需要精确尺寸的场景一律以页面自己的
+ * `window.innerWidth/innerHeight` 为准（任务引擎的落点判定就是这么做的）。
+ */
+function effectiveViewport(): ViewportBounds {
   let bounds = viewport
   if (bounds.width < 50 || bounds.height < 50) {
     try {
-      const cb = hostWindow.getContentBounds()
-      bounds = { x: 0, y: 0, width: cb.width, height: cb.height }
-    } catch { /* keep viewport */ }
+      const cb = hostWindow?.getContentBounds()
+      if (cb) bounds = { x: 0, y: 0, width: cb.width, height: cb.height }
+    } catch { /* keep the last renderer-reported bounds */ }
   }
-  if (mountedView !== tab.webContentsView) {
-    detachMounted()
-    hostWindow.contentView.addChildView(tab.webContentsView)
-  }
-  syncDocumentVisibility(tab.webContentsView, false)
-  try { tab.webContentsView.setVisible(true) } catch { /* ignore */ }
-  tab.webContentsView.setBounds({
-    x: bounds.x, y: bounds.y,
-    width: Math.max(bounds.width, 0), height: Math.max(bounds.height, 0)
-  })
-  mountedView = tab.webContentsView
-  // Chromium updates document.visibilityState and its layout one compositor
-  // tick after a View is reattached. Re-assert visibility/bounds on that tick.
-  setTimeout(() => {
-    if (mountedView !== tab.webContentsView || tab.webContentsView.webContents.isDestroyed()) return
-    try { tab.webContentsView.setVisible(true) } catch { /* ignore */ }
-    tab.webContentsView.setBounds({
-      x: bounds.x, y: bounds.y,
-      width: Math.max(bounds.width, 0), height: Math.max(bounds.height, 0)
-    })
-  }, 0)
+  return bounds
 }
 
 /**
@@ -328,13 +272,11 @@ export function closeStoreBrowser(storeId: string): void {
 
   saveTabs(storeId)
   state.tabs.forEach(tab => {
-    if (mountedView === tab.webContentsView) detachMounted()
-    try { unregisterFingerprintTarget(storeId, tab.id) } catch { /* ignore */ }
-    try {
-      if (tab.webContentsView && !tab.webContentsView.webContents.isDestroyed()) {
-        tab.webContentsView.webContents.close()
-      }
-    } catch { /* ignore */ }
+    detachGuestWebContents(tab)
+    // tabReloadGuard 只在 closeTab 里清过；关店铺这条路径漏了 → 长期开关店铺 + 偶发页面崩溃
+    // 会让这个 Map 只增不减（tabId 是随机串，等于慢性泄漏，2026-09-28 审查确认）
+    tabReloadGuard.delete(tab.id)
+    inPageSaveAt.delete(tab.id)
   })
   browserStates.delete(storeId)
 
@@ -354,134 +296,235 @@ export function closeStoreBrowser(storeId: string): void {
  */
 export function createTab(storeId: string, url?: string): string {
   const state = browserStates.get(storeId)
-  if (!state) {
-    throw new Error('Browser not open for this store')
-  }
+  if (!state) throw new Error('Browser not open for this store')
 
-  // 建页入口收敛：IPC 参数 / window.open / DB 恢复的老 URL 都经此兜底，
-  // 非法 scheme 退化为空白页而非抛错中断（恢复路径抛错会让整个店铺打不开；
-  // 需要报错的调用点自己先调 assertNavigableUrl）。
+  // 建页入口收敛：非法 scheme 退化为空白页；真正导航由已注册的 DOM guest 执行。
   let safeUrl = 'about:blank'
   if (url) {
     try { safeUrl = assertNavigableUrl(url) } catch { /* 非法地址退化为空白页 */ }
   }
-
-  const tabId = generateTabId()
-  const session = getStoreSession(storeId)
-
-  /**
-   * backgroundThrottling: false —— **必须关**。
-   *
-   * Chromium 默认在页面不可见/窗口被遮挡时把 requestAnimationFrame 与定时器降频
-   * （后台标签页 rAF 直接停摆）。这对"人在前台看着"的普通浏览没影响，但这家软件的核心
-   * 是**无人值守地跑页面自动化**：用户切到别的窗口时，被节流的页面会以各种古怪方式失灵——
-   * 实测（2026-09-15 快手达人邀约）：店铺窗口被终端窗口遮住后，页面 `visibilityState=hidden`、
-   * rAF 触发 0 次，而快手的「带货类目」级联弹层正是靠 rAF 计算定位，于是弹层永远停在初始的
-   * `-9999,-9999`，子类「纸品湿巾」整块在视口外 → 点击步骤如实报「被 unknown 遮挡」，
-   * 整轮在类目筛选就失败。把窗口切到前台（rAF 恢复）同一套步骤立刻跑通。
-   * 所以：**页面被遮挡是我们不能接受的运行前提**，这里显式关掉节流。
-   */
-  const view = new WebContentsView({ webPreferences: { session, backgroundThrottling: false } })
-
-  view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    try { createTab(storeId, targetUrl) } catch { /* ignore */ }
-    return { action: 'deny' }
-  })
-
-  // 页面主动导航（点链接 / location 赋值 / 服务端重定向）不走 IPC 与 window.open，
-  // 必须在 will-navigate 拦一道，否则页面能把自己导航到 file:/javascript:/data:。
-  // 注意 will-navigate 不会为 loadURL/goBack 这类主进程发起的导航触发，正常流程不受影响。
-  view.webContents.on('will-navigate', (event, targetUrl) => {
-    if (isAllowedPageNavigation(targetUrl)) return
-    event.preventDefault()
-    logMain('warn', `[nav] 页面主动跳转被拦截 store=${storeId} tab=${tabId} target=${String(targetUrl).slice(0, 200)}`)
-  })
+  getSession(storeId)
 
   const tab: Tab = {
-    id: tabId,
+    id: generateTabId(),
     storeId,
     url: safeUrl,
     title: '新标签页',
     isPinned: false,
     orderIndex: state.tabs.size,
-    webContentsView: view
+    guestAttached: false
   }
-
-  view.webContents.on('page-title-updated', (_e, title) => {
-    tab.title = title
-    saveTabToDatabase(tab)
-    emitTabs(storeId)
-  })
-
-  // 右键菜单：导航 / 重新加载 / 强制重新加载 / 编辑 / 链接 / 元素定位信息（原生菜单，见 store-context-menu.ts）
-  attachStoreContextMenu(view.webContents, () => ({
-    wc: view.webContents,
-    // 链接地址来自页面（可能是 javascript: 之类），过一遍协议白名单再开
-    openUrl: (u) => { try { createTab(storeId, assertNavigableUrl(u)) } catch { /* ignore */ } },
-    copyText: (t) => clipboard.writeText(t),
-    probeElement: (pt) => { void probeElementAt(view.webContents, pt) },
-    openStandalone: () => { try { openStandaloneWindow(storeId, tabId) } catch { /* ignore */ } }
-  }))
-  // 键盘兜底：页面即使封了右键，Ctrl+R / Ctrl+Shift+R 仍然可用
-  attachStoreReloadShortcuts(view.webContents)
-
-  view.webContents.on('did-navigate', (_e, newUrl) => {
-    tab.url = newUrl
-    saveTabToDatabase(tab)
-    emitTabs(storeId)
-  })
-
-  view.webContents.on('did-start-loading', () => {
-    if (displayedStoreId === storeId) emit(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, { storeId, tabId, isLoading: true })
-  })
-  view.webContents.on('did-stop-loading', () => {
-    if (displayedStoreId === storeId) emit(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, { storeId, tabId, isLoading: false })
-  })
-
-  // 渲染进程崩溃：留痕（此前只发了个 toast，日志里查不到，无法事后定位）+ 有界自动重载。
-  // 同一标签页 5 分钟内最多自动重载一次，避免"崩溃-重载"死循环把 CPU 打满。
-  view.webContents.on('render-process-gone', (_e, details) => {
-    logMain('error', `store tab renderer gone store=${storeId} tab=${tabId} reason=${details.reason} exitCode=${details.exitCode} url=${String(tab.url).slice(0, 120)}`)
-    emit(EVENT_CHANNELS.BROWSER_CRASHED, { storeId, tabId, reason: details.reason })
-    if (details.reason === 'clean-exit') return
-    const now = Date.now()
-    if (now - (tabReloadGuard.get(tabId) || 0) < TAB_RELOAD_MIN_INTERVAL_MS) {
-      logMain('warn', `store tab ${tabId} 短时间内再次崩溃，跳过自动重载（防重载死循环）`)
-      return
-    }
-    tabReloadGuard.set(tabId, now)
-    logMain('warn', `store tab ${tabId} 自动重载恢复`)
-    try { view.webContents.reload() } catch { /* ignore */ }
-  })
-
-  // 无响应（"卡死"）留痕：店铺页面卡住时用户只看到转圈，日志必须留下证据
-  view.webContents.on('unresponsive', () => {
-    logMain('error', `store tab unresponsive store=${storeId} tab=${tabId} url=${String(tab.url).slice(0, 120)}`)
-  })
-  view.webContents.on('responsive', () => {
-    logMain('info', `store tab responsive store=${storeId} tab=${tabId}`)
-  })
-
-  state.tabs.set(tabId, tab)
-
-  // 环境指纹注入（UA-CH/时区/navigator/screen/WebGL）——须在首次导航前注册
-  try { registerFingerprintTarget(storeId, tabId, view.webContents) } catch { /* ignore */ }
+  state.tabs.set(tab.id, tab)
 
   const shouldActivate = state.activeTabId === null || displayedStoreId === storeId
-  if (shouldActivate) {
-    activateTab(storeId, tabId)
-  }
-
-  // 始终显式加载（含 about:blank）：确保文档提交、dom-ready 触发、executeJavaScript 可解析
-  view.webContents.loadURL(safeUrl).catch(() => { /* 页面错误由视图内呈现 */ })
-
+  if (shouldActivate) activateTab(storeId, tab.id)
   saveTabToDatabase(tab)
   emitTabs(storeId)
-  return tabId
+  return tab.id
 }
 
 /**
- * 激活标签页（若该店铺正在显示则换挂载）
+ * 把 Renderer 创建的 DOM <webview> guest 绑定到一个已存在的标签页。
+ * 注册前的校验由 IPC handler 负责 sender；这里负责 store/tab/session/重复占用校验。
+ */
+export async function registerWebview(
+  storeId: string,
+  tabId: string,
+  webContentsId: number
+): Promise<{ storeId: string; tabId: string; webContentsId: number; guestAttached: true; pendingUrl: string; url: string }> {
+  const state = browserStates.get(storeId)
+  const tab = state?.tabs.get(tabId)
+  if (!state || !tab) throw new Error('Tab not found')
+  if (!Number.isInteger(webContentsId) || webContentsId <= 0) throw new Error('INVALID_ARGUMENT: webContentsId 无效')
+
+  const guest = webContents.fromId(webContentsId)
+  if (!guest || guest.isDestroyed()) throw new Error('BROWSER_NOT_READY: webview guest 不存在')
+  if (!hostWindow || hostWindow.isDestroyed()) throw new Error('Host window not available')
+  try {
+    if (guest.hostWebContents !== hostWindow.webContents) {
+      throw new Error('IPC_FORBIDDEN: guest 不属于主窗口')
+    }
+  } catch (err) {
+    if (String((err as any)?.message || err).startsWith('IPC_FORBIDDEN')) throw err
+    throw new Error('BROWSER_NOT_READY: guest 宿主关系不可验证')
+  }
+  const expectedSession = getSession(storeId)
+  // Electron 为同一个 persist partition 返回同一个 Session 单例；Session 类型本身不暴露
+  // partition 字段，因此用实例身份校验，避免把 Renderer 传入的 partition 当成信任边界。
+  if (guest.session !== expectedSession) {
+    throw new Error('IPC_FORBIDDEN: guest session 与店铺分区不匹配')
+  }
+  const existing = guestTabs.get(webContentsId)
+  if (existing && existing !== tab) throw new Error('IPC_FORBIDDEN: guest 已被其他标签页注册')
+  if (tab.webContents && tab.webContents !== guest) {
+    if (tab.webContents.isDestroyed()) {
+      detachGuestWebContents(tab, false)
+    } else {
+      // 渲染层重挂（切页回来、渲染层重载）时旧元素可能还没来得及销毁，旧 guest 就成了孤儿：
+      // 认新的一定要连带关掉旧的，否则一个标签页留下两个渲染进程，且事件监听会重复触发。
+      // 只记一条 warn：这是可恢复的时序，不是安全事件（安全边界由 sender + session 校验承担）。
+      logMain('warn', `[webview] 标签页 guest 被重新注册 store=${storeId} tab=${tabId} old=${tab.webContents.id} new=${guest.id}`)
+      detachGuestWebContents(tab, true)
+    }
+  }
+
+  await waitForSessionReady(storeId)
+  attachGuestWebContents(tab, guest)
+  const currentUrl = guest.getURL() || 'about:blank'
+  const pendingUrl = tab.url && tab.url !== 'about:blank' && currentUrl === 'about:blank' ? tab.url : currentUrl
+  return {
+    storeId,
+    tabId,
+    webContentsId,
+    guestAttached: true,
+    pendingUrl,
+    url: pendingUrl
+  }
+}
+
+/** 页面 guest 注册前，等待真实 Electron.WebContents；超时如实返回 BROWSER_NOT_READY。 */
+export async function waitForTabWebContents(storeId: string, tabId: string, timeoutMs = 15000): Promise<Electron.WebContents> {
+  const tab = browserStates.get(storeId)?.tabs.get(tabId)
+  if (!tab) throw new Error('BROWSER_CLOSED: 店铺浏览器或任务标签页已被关闭')
+  if (tab.webContents && !tab.webContents.isDestroyed() && tab.guestAttached) return tab.webContents
+  const timeout = Math.max(100, Math.min(Number(timeoutMs) || 15000, 120000))
+  return await new Promise<Electron.WebContents>((resolve, reject) => {
+    const key = tabKey(storeId, tabId)
+    const waiters = guestWaiters.get(key) || new Set<(wc: Electron.WebContents | null) => void>()
+    const timer = setTimeout(() => {
+      waiters.delete(done)
+      if (waiters.size === 0) guestWaiters.delete(key)
+      reject(new Error(`BROWSER_NOT_READY: 店铺标签页 guest 在 ${timeout}ms 内未注册`))
+    }, timeout)
+    const done = (wc: Electron.WebContents | null) => {
+      clearTimeout(timer)
+      waiters.delete(done)
+      if (waiters.size === 0) guestWaiters.delete(key)
+      if (wc && !wc.isDestroyed()) resolve(wc)
+      else reject(new Error('BROWSER_NOT_READY: 店铺标签页 guest 已断开'))
+    }
+    waiters.add(done)
+    guestWaiters.set(key, waiters)
+  })
+}
+
+/**
+ * 采集/登录检测这类"需要页面但没有页面也是一种可解释状态"的入口：
+ * 等该店铺活动标签页的 guest 注册完成，超时或店铺没开时如实返回 null。
+ *
+ * 为什么不直接返回错误：这些服务对外暴露的是 PAGE_NOT_READY 这个**业务状态**
+ * （界面显示"请先打开店铺页面"），不是异常；而店铺刚打开时 guest 还在注册路上，
+ * 直接判 null 会把"正在打开"误报成"没打开"。
+ */
+export async function waitForStoreWebContents(storeId: string, timeoutMs = 15000): Promise<Electron.WebContents | null> {
+  const immediate = getCurrentStoreWebContents(storeId)
+  if (immediate) return immediate
+  const state = browserStates.get(storeId)
+  const tabId = state?.activeTabId
+    || (state ? Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)[0]?.id : undefined)
+  if (!state || !tabId) return null
+  try {
+    return await waitForTabWebContents(storeId, tabId, timeoutMs)
+  } catch {
+    return null
+  }
+}
+
+function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
+  tab.webContents = wc
+  tab.guestWebContentsId = wc.id
+  tab.guestAttached = true
+  guestTabs.set(wc.id, tab)
+
+  wc.setWindowOpenHandler(({ url: targetUrl }) => {
+    try { createTab(tab.storeId, targetUrl) } catch { /* ignore */ }
+    return { action: 'deny' }
+  })
+  wc.on('will-navigate', (event, targetUrl) => {
+    if (isAllowedPageNavigation(targetUrl)) return
+    event.preventDefault()
+    logMain('warn', `[nav] 页面主动跳转被拦截 store=${tab.storeId} tab=${tab.id} target=${String(targetUrl).slice(0, 200)}`)
+  })
+  wc.on('page-title-updated', (_e, title) => {
+    tab.title = title
+    saveTabToDatabase(tab)
+    emitTabs(tab.storeId)
+  })
+  attachStoreContextMenu(wc, () => ({
+    wc,
+    openUrl: (u) => { try { createTab(tab.storeId, assertNavigableUrl(u)) } catch { /* ignore */ } },
+    copyText: (t) => clipboard.writeText(t),
+    probeElement: (pt) => { void probeElementAt(wc, pt) },
+    openStandalone: () => { try { openStandaloneWindow(tab.storeId, tab.id) } catch { /* ignore */ } }
+  }))
+  attachStoreReloadShortcuts(wc)
+  wc.on('did-navigate', (_e, newUrl) => {
+    tab.url = newUrl
+    saveTabToDatabase(tab)
+    emitTabs(tab.storeId)
+  })
+  wc.on('did-navigate-in-page', (_e, newUrl, isMainFrame) => {
+    if (!isMainFrame) return
+    tab.url = newUrl
+    emitTabs(tab.storeId)
+    const last = inPageSaveAt.get(tab.id) || 0
+    const now = Date.now()
+    if (now - last >= 2000) {
+      inPageSaveAt.set(tab.id, now)
+      saveTabToDatabase(tab)
+    }
+  })
+  wc.on('did-start-loading', () => {
+    if (displayedStoreId === tab.storeId) emit(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, { storeId: tab.storeId, tabId: tab.id, isLoading: true })
+  })
+  wc.on('did-stop-loading', () => {
+    if (displayedStoreId === tab.storeId) emit(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, { storeId: tab.storeId, tabId: tab.id, isLoading: false })
+  })
+  wc.on('render-process-gone', (_e, details) => {
+    logMain('error', `store tab renderer gone store=${tab.storeId} tab=${tab.id} reason=${details.reason} exitCode=${details.exitCode} url=${String(tab.url).slice(0, 120)}`)
+    emit(EVENT_CHANNELS.BROWSER_CRASHED, { storeId: tab.storeId, tabId: tab.id, reason: details.reason })
+    if (details.reason === 'clean-exit') return
+    const now = Date.now()
+    if (now - (tabReloadGuard.get(tab.id) || 0) < TAB_RELOAD_MIN_INTERVAL_MS) {
+      logMain('warn', `store tab ${tab.id} 短时间内再次崩溃，跳过自动重载（防重载死循环）`)
+      return
+    }
+    tabReloadGuard.set(tab.id, now)
+    try { if (!wc.isDestroyed()) wc.reload() } catch { /* ignore */ }
+  })
+  wc.on('unresponsive', () => logMain('error', `store tab unresponsive store=${tab.storeId} tab=${tab.id} url=${String(tab.url).slice(0, 120)}`))
+  wc.on('responsive', () => logMain('info', `store tab responsive store=${tab.storeId} tab=${tab.id}`))
+  wc.once('destroyed', () => {
+    if (tab.webContents === wc) detachGuestWebContents(tab, false)
+  })
+  try { registerFingerprintTarget(tab.storeId, tab.id, wc) } catch { /* ignore */ }
+  notifyGuestWaiters(tab)
+  saveTabToDatabase(tab)
+  emitTabs(tab.storeId)
+}
+
+function detachGuestWebContents(tab: Tab, close = true): void {
+  const wc = tab.webContents
+  if (wc) {
+    if (guestTabs.get(wc.id) === tab) guestTabs.delete(wc.id)
+    try { unregisterFingerprintTarget(tab.storeId, tab.id) } catch { /* ignore */ }
+    tab.webContents = undefined
+    tab.guestWebContentsId = undefined
+    tab.guestAttached = false
+    if (close) {
+      try { if (!wc.isDestroyed()) wc.close() } catch { /* ignore */ }
+    }
+  } else {
+    tab.guestAttached = false
+  }
+  notifyGuestWaiters(tab)
+  emitTabs(tab.storeId)
+}
+
+
+/**
+ * 激活标签页：只更新"当前活动页"的元数据并发事件。
+ * 页面可见性由 Renderer 依据这些状态切换 webview 的显示层级，主进程不再挂/摘原生 View。
  */
 export function activateTab(storeId: string, tabId: string): void {
   const state = browserStates.get(storeId)
@@ -490,10 +533,6 @@ export function activateTab(storeId: string, tabId: string): void {
   if (!tab) throw new Error('Tab not found')
 
   state.activeTabId = tabId
-
-  if (displayedStoreId === storeId) {
-    mountTab(tab)
-  }
 
   const db = getDatabase()
   db.prepare('UPDATE tabs SET last_active_at = ?, updated_at = ? WHERE id = ?')
@@ -510,14 +549,9 @@ export function closeTab(storeId: string, tabId: string): void {
   const tab = state.tabs.get(tabId)
   if (!tab) return
 
-  if (mountedView === tab.webContentsView) detachMounted()
-  try { unregisterFingerprintTarget(storeId, tabId) } catch { /* ignore */ }
+  detachGuestWebContents(tab)
   tabReloadGuard.delete(tabId)
-  try {
-    if (tab.webContentsView && !tab.webContentsView.webContents.isDestroyed()) {
-      tab.webContentsView.webContents.close()
-    }
-  } catch { /* ignore */ }
+  inPageSaveAt.delete(tabId)
 
   state.tabs.delete(tabId)
   getDatabase().prepare('DELETE FROM tabs WHERE id = ?').run(tabId)
@@ -536,7 +570,7 @@ export function closeTab(storeId: string, tabId: string): void {
     state.activeTabId = null
     const next = Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)[0]
     if (next) activateTab(storeId, next.id)
-    else if (displayedStoreId === storeId) mountTab(null)
+    else if (displayedStoreId === storeId) emitTabs(storeId)
   }
   emitTabs(storeId)
 }
@@ -584,34 +618,23 @@ export function reorderTabs(storeId: string, orderedTabIds: string[]): void {
  * 页面截图 - §6.2 browser:capture
  */
 export async function captureTab(storeId: string, tabId: string, format: string = 'png'): Promise<string> {
-  const state = browserStates.get(storeId)
-  const tab = state?.tabs.get(tabId)
-  if (!tab || !tab.webContentsView) throw new Error('Tab not found')
-
-  // A resize or overlay transition can briefly leave the native view detached/zero-sized.
-  // Reattach the displayed tab and retry until Chromium has a non-empty frame instead of
-  // returning a successful but unusable zero-byte screenshot.
-  if (displayedStoreId === storeId && !viewsHiddenForLock && !viewsHiddenForOverlay && !viewsHiddenForAgent) {
-    mountTab(tab)
-  }
+  const wc = await waitForTabWebContents(storeId, tabId)
   const deadline = Date.now() + 5000
-  while (tab.webContentsView.webContents.isLoadingMainFrame() && Date.now() < deadline) {
+  while (wc.isLoadingMainFrame() && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 100))
   }
-  const captureRect = {
-    x: 0, y: 0,
-    width: Math.max(1, Math.round(viewport.width)),
-    height: Math.max(1, Math.round(viewport.height))
-  }
-  let image = await tab.webContentsView.webContents.capturePage(captureRect)
+  // DOM <webview> 的可见区域大小由 Renderer 的 CSS 决定，主进程看不到；不带 rect 才是
+  // Electron 的"整块可见页面"语义。带上一份窗口级 bounds 会把页面坐标之外的大片空白也截进来。
+  let image = await wc.capturePage()
   let png = image.toPNG()
   while ((image.isEmpty() || png.length < 100) && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 100))
-    if (displayedStoreId === storeId && !viewsHiddenForLock && !viewsHiddenForOverlay && !viewsHiddenForAgent) mountTab(tab)
-    image = await tab.webContentsView.webContents.capturePage(captureRect)
+    image = await wc.capturePage()
     png = image.toPNG()
   }
-  if (image.isEmpty() || png.length < 100) throw new Error('页面当前不可见，无法截图')
+  if (image.isEmpty() || png.length < 100) {
+    throw new Error('页面当前不可见，无法截图（CAPTURE_EMPTY：该店铺页面被隐藏或未渲染，请先切到该店铺页面）')
+  }
   return format === 'jpeg' ? image.toJPEG(85).toString('base64') : png.toString('base64')
 }
 
@@ -622,14 +645,15 @@ export function navigateTab(storeId: string, tabId: string, url: string): void {
   const state = browserStates.get(storeId)
   if (!state) throw new Error('Browser not open for this store')
   const tab = state.tabs.get(tabId)
-  if (!tab || !tab.webContentsView) throw new Error('Tab not found')
+  if (!tab) throw new Error('Tab not found')
 
   const safeUrl = assertNavigableUrl(url)
-
   tab.url = safeUrl
-  tab.webContentsView.webContents.loadURL(safeUrl).catch(() => { /* 错误由页面呈现 */ })
   saveTabToDatabase(tab)
   emitTabs(storeId)
+  if (tab.webContents && !tab.webContents.isDestroyed()) {
+    void tab.webContents.loadURL(safeUrl).catch(() => { /* 错误由页面呈现 */ })
+  }
 }
 
 /**
@@ -684,8 +708,8 @@ export async function pickElementFromActiveTab(storeId: string, mode: PickMode):
   const state = browserStates.get(storeId)
   if (!state) return { ok: false, reason: 'NO_STORE_PAGE' }
   const tab = state.activeTabId ? state.tabs.get(state.activeTabId) : null
-  const wc = tab?.webContentsView?.webContents
-  if (!wc) return { ok: false, reason: 'NO_ACTIVE_TAB' }
+  const wc = tab?.webContents
+  if (!wc || wc.isDestroyed() || !tab?.guestAttached) return { ok: false, reason: 'BROWSER_NOT_READY' }
 
   try {
     // 先把键盘焦点交给页面：拾取层挂在页面里，Esc 取消也只监听页面内的 keydown。
@@ -801,8 +825,9 @@ function attachStoreReloadShortcuts(wc: Electron.WebContents): void {
 export function tabNavigationControl(storeId: string, tabId: string, action: 'back' | 'forward' | 'reload'): void {
   const state = browserStates.get(storeId)
   const tab = state?.tabs.get(tabId)
-  if (!tab || !tab.webContentsView) throw new Error('Tab not found')
-  const wc = tab.webContentsView.webContents
+  if (!tab) throw new Error('Tab not found')
+  const wc = tab.webContents
+  if (!wc || wc.isDestroyed() || !tab.guestAttached) throw new Error('BROWSER_NOT_READY: 标签页 guest 尚未注册')
   if (action === 'back' && wc.canGoBack()) wc.goBack()
   if (action === 'forward' && wc.canGoForward()) wc.goForward()
   if (action === 'reload') wc.reload()
@@ -810,6 +835,9 @@ export function tabNavigationControl(storeId: string, tabId: string, action: 'ba
 
 /** 在独立窗口打开当前页（F-BROWSER-004 / §14 逃生入口） */
 export function openStandaloneWindow(storeId: string, tabId?: string): void {
+  // 独立窗口继续使用原有 persist:store_<storeId> partition；
+  // 这里只通过 Facade 校验店铺并确保底层 Session 已登记，不改变窗口实现。
+  getSession(storeId)
   const state = browserStates.get(storeId)
   const tab = tabId ? state?.tabs.get(tabId) : null
   const url = tab?.url && tab.url !== 'about:blank' ? tab.url : undefined
@@ -882,32 +910,48 @@ export function getStandaloneWindowCount(storeId: string): number {
 
 /** 任务引擎专用（§4.4）：主进程内受控使用，句柄绝不出主进程 */
 export function getTabWebContents(storeId: string, tabId: string): Electron.WebContents | null {
-  const wc = browserStates.get(storeId)?.tabs.get(tabId)?.webContentsView?.webContents
-  if (!wc || wc.isDestroyed()) return null
+  const tab = browserStates.get(storeId)?.tabs.get(tabId)
+  const wc = tab?.webContents
+  if (!wc || wc.isDestroyed() || !tab?.guestAttached) return null
   return wc
 }
 
-/** Agent 观察只允许读取当前真正挂载的应用标签页；不接收任意 WebContents。 */
-export function isBrowserTabMounted(storeId: string, tabId: string): boolean {
-  const tab = browserStates.get(storeId)?.tabs.get(tabId)
-  return !!tab?.webContentsView &&
-    !tab.webContentsView.webContents.isDestroyed() &&
-    displayedStoreId === storeId &&
-    browserStates.get(storeId)?.activeTabId === tabId &&
-    mountedView === tab.webContentsView &&
-    !viewsHiddenForLock && !viewsHiddenForOverlay
+/**
+ * 主进程平台登录检测使用当前店铺已打开的页面，不创建 BrowserWindow 或 WebContents。
+ * 优先使用活动标签页；没有标签页时兼容该店铺现有的独立 BrowserWindow。
+ */
+export function getCurrentStoreWebContents(storeId: string): Electron.WebContents | null {
+  const state = browserStates.get(storeId)
+  const activeTab = state?.activeTabId ? state.tabs.get(state.activeTabId) : null
+  const activeContents = activeTab?.webContents
+  if (activeContents && !activeContents.isDestroyed() && activeTab?.guestAttached) return activeContents
+
+  for (const win of standaloneWindows.get(storeId) || []) {
+    try {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) return win.webContents
+    } catch { /* 忽略正在关闭的独立窗口 */ }
+  }
+  return null
 }
 
-/** Agent-only read access: the floating drawer may detach the view visually,
- * but the current app-owned WebContents remains a valid observation target. */
-export function isBrowserTabReadableForAgent(storeId: string, tabId: string): boolean {
+/** Agent 观察只允许读取当前店铺的活动 guest；不接收任意 WebContents。 */
+export function isBrowserTabMounted(storeId: string, tabId: string): boolean {
   const tab = browserStates.get(storeId)?.tabs.get(tabId)
-  return !!tab?.webContentsView &&
-    !tab.webContentsView.webContents.isDestroyed() &&
+  return !!tab?.webContents && tab.guestAttached === true &&
+    !tab.webContents.isDestroyed() &&
     displayedStoreId === storeId &&
     browserStates.get(storeId)?.activeTabId === tabId &&
-    !viewsHiddenForLock &&
-    (mountedView === tab.webContentsView || viewsHiddenForAgent)
+    !viewsHiddenForLock && !viewsHiddenForOverlay && !viewsHiddenForAgent
+}
+
+/** Agent drawer 是 DOM overlay，不影响主进程读取当前活动 guest。 */
+export function isBrowserTabReadableForAgent(storeId: string, tabId: string): boolean {
+  const tab = browserStates.get(storeId)?.tabs.get(tabId)
+  return !!tab?.webContents && tab.guestAttached === true &&
+    !tab.webContents.isDestroyed() &&
+    displayedStoreId === storeId &&
+    browserStates.get(storeId)?.activeTabId === tabId &&
+    !viewsHiddenForLock
 }
 
 export function getActiveTabId(storeId: string): string | null {
@@ -965,12 +1009,20 @@ function restoreTabs(storeId: string): void {
     }
   })
 
-  const lastActive = savedTabs.find((t: any) => t.last_active_at) || savedTabs[0]
+  // 恢复"上次所在的那个标签"：必须取 last_active_at **最大**的那条，而不是"第一条有值的"。
+  // 查询是按 order_index 升序返回的，`find(t => t.last_active_at)` 于是会命中 order 最小的
+  // 那个曾被点过的标签——用户点过 #2、#3 最后停在 #3，重启却恢复到 #2（2026-09-28 审查确认）。
+  const lastActive = savedTabs.reduce((best: any, cur: any) => {
+    const curAt = Number(cur?.last_active_at) || 0
+    if (!curAt) return best
+    const bestAt = Number(best?.last_active_at) || 0
+    return curAt > bestAt ? cur : best
+  }, null) || savedTabs[0]
   const first = (lastActive && state.tabs.get(idMap.get(String(lastActive.id)) || ''))
     || Array.from(state.tabs.values())[0]
   if (first) {
     state.activeTabId = first.id
-    mountTab(first)
+    emitTabs(storeId)
   }
 }
 
@@ -980,9 +1032,9 @@ function saveTabs(storeId: string): void {
   state.tabs.forEach(tab => {
     // 记录实时 URL/标题
     try {
-      if (tab.webContentsView && !tab.webContentsView.webContents.isDestroyed()) {
-        tab.url = tab.webContentsView.webContents.getURL() || tab.url
-        tab.title = tab.webContentsView.webContents.getTitle() || tab.title
+      if (tab.webContents && !tab.webContents.isDestroyed()) {
+        tab.url = tab.webContents.getURL() || tab.url
+        tab.title = tab.webContents.getTitle() || tab.title
       }
     } catch { /* ignore */ }
     saveTabToDatabase(tab)

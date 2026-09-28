@@ -2,7 +2,8 @@
  * 书签和下载相关的 IPC 处理器
  */
 
-import { ipcMain, IpcMainInvokeEvent } from 'electron'
+import { familyHandle } from './family-handle'
+import { IpcMainInvokeEvent } from 'electron'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import { ERROR_CODES } from '@shared/errors/error-codes'
@@ -30,9 +31,11 @@ function error(code: string, message: string, requestId: string): IPCResult {
 /**
  * 注册书签和下载相关的 IPC 处理器
  */
+const handle = familyHandle('书签与下载')
+
 export function registerBookmarkAndDownloadHandlers(): void {
   // bookmark:list
-  ipcMain.handle(IPC_CHANNELS.BOOKMARK_LIST, async (_event: IpcMainInvokeEvent, input: { storeId?: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BOOKMARK_LIST, async (_event: IpcMainInvokeEvent, input: { storeId?: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -44,7 +47,7 @@ export function registerBookmarkAndDownloadHandlers(): void {
   })
   
   // bookmark:entryRoutes —— 平台入口（§16，只读展示，不写库）
-  ipcMain.handle(IPC_CHANNELS.BOOKMARK_ENTRY_ROUTES, async (_event: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BOOKMARK_ENTRY_ROUTES, async (_event: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
 
     try {
@@ -57,7 +60,7 @@ export function registerBookmarkAndDownloadHandlers(): void {
   })
 
   // bookmark:create
-  ipcMain.handle(IPC_CHANNELS.BOOKMARK_CREATE, async (_event: IpcMainInvokeEvent, input: any): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BOOKMARK_CREATE, async (_event: IpcMainInvokeEvent, input: any): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -69,7 +72,7 @@ export function registerBookmarkAndDownloadHandlers(): void {
   })
   
   // bookmark:delete
-  ipcMain.handle(IPC_CHANNELS.BOOKMARK_DELETE, async (_event: IpcMainInvokeEvent, input: { bookmarkId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.BOOKMARK_DELETE, async (_event: IpcMainInvokeEvent, input: { bookmarkId: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -81,7 +84,7 @@ export function registerBookmarkAndDownloadHandlers(): void {
   })
   
   // download:list
-  ipcMain.handle(IPC_CHANNELS.DOWNLOAD_LIST, async (_event: IpcMainInvokeEvent, input: { storeId: string, limit?: number }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.DOWNLOAD_LIST, async (_event: IpcMainInvokeEvent, input: { storeId: string, limit?: number }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
@@ -93,12 +96,14 @@ export function registerBookmarkAndDownloadHandlers(): void {
   })
   
   // download:showInFolder
-  ipcMain.handle(IPC_CHANNELS.DOWNLOAD_SHOW_IN_FOLDER, async (_event: IpcMainInvokeEvent, input: { downloadId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.DOWNLOAD_SHOW_IN_FOLDER, async (_event: IpcMainInvokeEvent, input: { downloadId: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     
     try {
-      const shown = DownloadManager.showDownloadInFolder(input.downloadId)
-      return success({ success: shown }, requestId)
+      // 三种结果如实回报：missing = 文件已被移动/删除（以前一律返回 success:true，
+      // 用户点「打开所在文件夹」没反应也没有解释）
+      const result = DownloadManager.showDownloadInFolder(input.downloadId)
+      return success({ success: result === 'shown', result }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }

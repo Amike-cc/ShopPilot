@@ -1,7 +1,7 @@
 <template>
   <section class="agent-admin" data-test="agent-admin-panel">
-    <div class="agent-admin-tabs">
-      <button v-for="tab in tabs" :key="tab.key" :class="['admin-tab', { on: activeTab === tab.key }]" @click="activeTab = tab.key">{{ tab.label }}</button>
+    <div v-if="visibleTabs.length > 1" class="agent-admin-tabs">
+      <button v-for="tab in visibleTabs" :key="tab.key" :class="['admin-tab', { on: activeTab === tab.key }]" @click="activeTab = tab.key">{{ tab.label }}</button>
     </div>
 
     <div v-if="activeTab === 'team'" class="admin-scroll" data-test="agent-org-panel">
@@ -40,16 +40,17 @@
       <div v-for="profile in profiles" :key="profile.id" class="admin-card">
         <div class="admin-card-head"><strong>{{ profile.name }}</strong><span :class="['status-pill', profile.health]">{{ profile.health }}</span></div>
         <div class="admin-meta">{{ profile.id }} · {{ profile.provider }} · {{ profile.model }}</div>
-        <div class="admin-meta">endpoint={{ profile.endpoint }} · Key={{ profile.hasKey ? '已配置' : '未配置' }} · 并发={{ profile.concurrencyLimit }} · enabled={{ profile.enabled }} · 价格={{ profile.pricing ? `${profile.pricing.inputPerMTok}/${profile.pricing.outputPerMTok} ${profile.pricing.currency}/百万 token` : '未配置（未估算）' }}</div>
+        <div class="admin-meta">endpoint={{ profile.endpoint }} · Key={{ profile.hasKey ? '已配置' : '未配置' }} · 并发={{ profile.concurrencyLimit }} · 上下文={{ contextLabel(profile) }} · enabled={{ profile.enabled }} · 价格={{ profile.pricing ? `${profile.pricing.inputPerMTok}/${profile.pricing.outputPerMTok} ${profile.pricing.currency}/百万 token` : '未配置（未估算）' }}</div>
         <div class="admin-actions"><button class="mini-btn" @click="testModel(profile.id)">真实测试</button><button class="mini-btn" @click="editModel(profile)">编辑</button><button v-if="profile.hasKey" class="mini-btn" @click="clearModelKey(profile)">清除 Key</button><button v-if="profile.id !== 'model_default-main'" class="mini-btn danger-btn" @click="deleteModel(profile.id)">删除</button></div>
       </div>
       <div class="admin-create">
         <b>新增 / 更新 Profile</b>
+        <div class="admin-note">上下文窗口留空时由 Main 根据模型名自动推导；历史、记忆和输出会按有效窗口动态分配。只有供应商实际窗口与模型名不一致时才填写手动值。</div>
         <input v-model="modelDraft.name" placeholder="名称" maxlength="120" />
         <div class="admin-form-row"><input v-model="modelDraft.provider" placeholder="服务商" maxlength="80" /><input v-model="modelDraft.model" placeholder="模型名" maxlength="160" /></div>
         <input v-model="modelDraft.endpoint" placeholder="https://.../v1 或 /chat/completions" spellcheck="false" />
         <div class="admin-form-row"><input v-model.number="modelDraft.timeoutMs" type="number" min="1000" max="3600000" /><input v-model.number="modelDraft.concurrencyLimit" type="number" min="1" max="64" placeholder="并发上限" /></div>
-        <div class="admin-form-row"><input v-model.number="modelDraft.temperature" type="number" min="0" max="2" step="0.1" placeholder="temperature" /><input v-model.number="modelDraft.maxTokens" type="number" min="16" max="128000" placeholder="max tokens" /><label class="admin-check"><input v-model="modelDraft.enabled" type="checkbox" /> enabled</label></div>
+        <div class="admin-form-row"><input v-model.number="modelDraft.temperature" type="number" min="0" max="2" step="0.1" placeholder="temperature" /><input v-model.number="modelDraft.maxTokens" type="number" min="16" max="128000" placeholder="max tokens" /><input v-model.number="modelDraft.contextWindowTokens" type="number" min="4096" max="2000000" placeholder="上下文窗口（留空自动）" /><label class="admin-check"><input v-model="modelDraft.enabled" type="checkbox" /> enabled</label></div>
         <div class="admin-form-row"><select v-model="modelDraft.fallbackProfileId"><option value="">不配置备用 Profile</option><option v-for="profile in profiles" :key="profile.id" :value="profile.id">备用：{{ profile.name }}</option></select><input v-model="modelDraft.apiKey" type="password" autocomplete="new-password" placeholder="API Key（只发往 Main）" /></div>
         <div class="admin-form-row"><input v-model="modelDraft.budgetCurrency" maxlength="8" placeholder="预算单位，如 tokens" /><input v-model="modelDraft.budgetAmount" type="number" min="0" placeholder="日预算（可选）" /><input v-model="modelDraft.pricingCurrency" maxlength="8" placeholder="价格币种，如 USD" /></div>
         <div class="admin-form-row"><input v-model="modelDraft.inputPerMTok" type="number" min="0" step="0.01" placeholder="输入价 / 百万 token（可选）" /><input v-model="modelDraft.outputPerMTok" type="number" min="0" step="0.01" placeholder="输出价 / 百万 token（可选）" /><span class="admin-inherited-model">留空 = 未估算成本</span></div>
@@ -59,14 +60,16 @@
     </div>
 
     <div v-else-if="activeTab === 'memory'" class="admin-scroll" data-test="agent-memory-panel">
-      <div class="admin-head"><div><b>本地记忆库</b><span>正文不直接推到 Renderer；未审核记忆不能进入长期规则。</span></div><div class="admin-actions"><button class="mini-btn" @click="rebuildMemory">重建索引</button><button class="mini-btn" @click="snapshotMemory">加密快照</button></div></div>
+      <div class="admin-head"><div><b>本地记忆库</b><span>正文不直接推到 Renderer；未审核记忆不能进入长期规则。对话规则、成功 Job 和反馈会自动生成候选。</span></div><div class="admin-actions"><button class="mini-btn" @click="runQualityReview">自动整理</button><button class="mini-btn" @click="rebuildMemory">重建索引</button><button class="mini-btn" @click="snapshotMemory">加密快照</button></div></div>
+      <div class="admin-note"><label><input v-model="memoryAutoLearn" type="checkbox" /> 自动学习候选（仍需审核）</label><label class="memory-retention">保留天数 <input v-model.number="memoryRetentionDays" type="number" min="7" max="3650" /> <button class="mini-btn" @click="saveMemoryLearningSettings">保存策略</button></label></div>
       <div class="admin-form-row"><input v-model="snapshotPath" placeholder="已有加密快照路径（可选）" spellcheck="false" /><button class="mini-btn" :disabled="!snapshotPath" @click="inspectSnapshot">校验</button><button class="mini-btn danger-btn" :disabled="!snapshotPath" @click="restoreSnapshot">确认恢复</button></div>
       <div class="admin-form-row"><input v-model="memoryQuery" placeholder="中文关键词检索" @keyup.enter="searchMemory" /><select v-model="memoryStatus" @change="loadMemories"><option value="">长期可用 / 待审核</option><option value="pending-review">待审核</option><option value="approved">已批准</option><option value="stale">已过期</option><option value="conflict">冲突版本</option><option value="quarantined">隔离</option></select><button class="mini-btn primary" :disabled="!!memoryStatus" @click="searchMemory">搜索</button></div>
       <div v-if="memoryMessage" class="admin-note">{{ memoryMessage }}</div>
       <div v-for="memory in memories" :key="memory.id" class="admin-card">
         <div class="admin-card-head"><strong>{{ memory.title }}</strong><span :class="['status-pill', memory.status]">{{ memory.status }}</span></div>
         <div class="admin-meta">{{ memory.id }} · {{ memory.type }} · agent={{ memory.agentId }} · store={{ memory.storeId || 'shared' }}</div>
-        <div class="admin-meta">confidence={{ memory.confidence }} · hash={{ memory.contentHash.slice(0, 12) }} · sourceJob={{ memory.sourceJobId || '—' }}</div>
+        <div class="admin-meta">来源={{ memory.origin || 'manual' }} · confidence={{ Number(memory.confidence || 0).toFixed(2) }} · 命中 {{ memory.accessCount || 0 }} · 采纳 {{ memory.adoptCount || 0 }} · 拒绝 {{ memory.rejectCount || 0 }} · 重复观察 {{ memory.repeatCount || 0 }}</div>
+        <div class="admin-meta">hash={{ memory.contentHash.slice(0, 12) }} · sourceJob={{ memory.sourceJobId || '—' }}</div>
         <button v-if="memory.status === 'pending-review'" class="mini-btn primary" @click="reviewMemory(memory.id, 'approved')">批准进入长期记忆</button>
         <button v-if="memory.status !== 'stale'" class="mini-btn" @click="reviewMemory(memory.id, 'stale')">标记过期</button>
       </div>
@@ -74,29 +77,83 @@
     </div>
 
     <div v-else-if="activeTab === 'skills'" class="admin-scroll" data-test="agent-skill-panel">
-      <div class="admin-head"><div><b>技能与插件</b><span>技能是现有工具的声明式组合，不含脚本、Shell 或新权限；分享包只包含这些定义。</span></div><button class="mini-btn" @click="loadSkillLibrary">刷新</button></div>
+      <div class="admin-head"><div><b>技能</b><span>技能是现有工具的声明式组合，不含脚本、Shell 或新权限；分享包只包含这些定义。</span></div><button class="mini-btn" @click="loadSkillLibrary">刷新</button></div>
       <div v-if="skillMessage" class="admin-note" data-test="agent-skill-message">{{ skillMessage }}</div>
+      <!-- 直接创建：工具下拉来自 Main 的可用目录（与技能校验同一判定），因此选不到会被拒的步骤 -->
       <div class="admin-create">
-        <b>导出 JSON 分享包</b>
-        <div class="admin-form-row"><input v-model="exportSkillNames" maxlength="600" placeholder="技能名称，逗号分隔；留空=全部" /><button class="mini-btn primary" data-test="agent-skill-export-btn" @click="exportPack">生成分享包</button><button class="mini-btn" :disabled="!exportJson" @click="copyExport">复制</button></div>
-        <textarea v-model="exportJson" data-test="agent-skill-export" rows="4" readonly spellcheck="false" placeholder="点击“生成分享包”后出现 JSON" />
-      </div>
-      <div class="admin-create">
-        <b>导入 JSON 分享包</b>
-        <textarea v-model="importJson" data-test="agent-skill-import" rows="4" spellcheck="false" placeholder="把分享包 JSON 粘贴到这里；同名技能/插件会被更新" />
-        <button class="mini-btn primary" data-test="agent-skill-import-btn" :disabled="!importJson.trim()" @click="importPack">确认导入</button>
+        <b>新建技能</b>
+        <div class="admin-note">步骤只能用“自动执行类”工具；需要人工确认的工具（关店、增删店铺、任务运行、邀约发送等）不会出现在下拉里。</div>
+        <div class="admin-form-row"><input v-model="skillDraft.name" maxlength="80" data-test="agent-skill-new-name" placeholder="技能名称，例如：每日店铺巡检" /><input v-model="skillDraft.intent" maxlength="500" data-test="agent-skill-new-intent" placeholder="用途（可选），例如：只读巡检" /></div>
+        <textarea v-model="skillDraft.description" maxlength="500" rows="2" data-test="agent-skill-new-description" placeholder="说明（可选）：这个技能做什么" />
+        <div v-for="(step, index) in skillDraft.steps" :key="index" class="admin-form-row">
+          <select v-model="step.type" data-test="agent-skill-new-step-type" @change="applyStepTemplate(step)">
+            <option value="">选择工具…</option>
+            <option v-for="tool in skillTools" :key="tool.type" :value="tool.type">{{ tool.label }}（{{ tool.type }}）</option>
+          </select>
+          <textarea v-model="step.params" rows="2" spellcheck="false" data-test="agent-skill-new-step-params" :placeholder="stepTemplateHint(step.type)" />
+          <button class="mini-btn danger-btn" :disabled="skillDraft.steps.length <= 1" data-test="agent-skill-new-remove-step" @click="removeSkillDraftStep(index)">移除</button>
+        </div>
+        <div class="admin-actions">
+          <button class="mini-btn" :disabled="skillDraft.steps.length >= 8" data-test="agent-skill-new-add-step" @click="addSkillDraftStep">添加步骤</button>
+          <button class="mini-btn primary" data-test="agent-skill-new-submit" @click="createSkillFromDraft">创建技能</button>
+          <button class="mini-btn" data-test="agent-skill-new-reset" @click="resetSkillDraft">清空</button>
+        </div>
       </div>
       <div v-for="skill in skillLibrary.skills" :key="skill.id" class="admin-card" :data-test="`agent-skill-${skill.name}`">
         <div class="admin-card-head"><strong>{{ skill.name }}</strong><span :class="['status-pill', skill.status]">{{ skill.status }}</span></div>
-        <div class="admin-meta">{{ skill.id }} · {{ skill.source }} · {{ skill.steps.length }} 步 · {{ skill.pluginId ? `插件 ${skill.pluginId}` : '独立技能' }}</div>
+        <div class="admin-meta">{{ skill.id }} · {{ skill.source }} · {{ skill.steps.length }} 步 · {{ skill.pluginId ? `所属插件 ${pluginName(skill.pluginId)}` : '独立技能' }}</div>
         <div class="admin-meta">{{ skill.description || skill.intent || '无描述' }} · {{ skill.steps.map(step => step.type).join(' → ') }}</div>
         <div class="admin-actions"><button class="mini-btn" @click="exportSkillNames = skill.name; exportPack()">导出此技能</button><button class="mini-btn" @click="toggleSkill(skill)">{{ skill.status === 'enabled' ? '停用' : '启用' }}</button><button class="mini-btn danger-btn" @click="removeSkill(skill.id)">删除</button></div>
       </div>
-      <div v-for="plugin in skillLibrary.plugins" :key="plugin.id" class="admin-card">
+      <div v-if="!skillLibrary.skills.length" class="admin-empty">还没有技能；可以在上面直接创建，或在对话里说“帮我制作一个巡检技能”，或导入技能分享包。</div>
+      <div class="admin-create">
+        <b>导出技能分享包</b>
+        <div class="admin-form-row"><input v-model="exportSkillNames" maxlength="600" placeholder="技能名称，逗号分隔；留空=全部技能" /><button class="mini-btn primary" data-test="agent-skill-export-btn" @click="exportPack">生成分享包</button><button class="mini-btn" :disabled="!exportJson" @click="copyExport">复制</button></div>
+        <textarea v-model="exportJson" data-test="agent-skill-export" rows="4" readonly spellcheck="false" placeholder="点击“生成分享包”后出现 JSON" />
+      </div>
+      <div class="admin-create">
+        <b>导入技能分享包</b>
+        <textarea v-model="importJson" data-test="agent-skill-import" rows="4" spellcheck="false" placeholder="把分享包 JSON 粘贴到这里；同名技能会被更新" />
+        <button class="mini-btn primary" data-test="agent-skill-import-btn" :disabled="!importJson.trim()" @click="importPack">确认导入</button>
+      </div>
+    </div>
+
+    <div v-else-if="activeTab === 'plugins'" class="admin-scroll" data-test="agent-plugin-panel">
+      <div class="admin-head"><div><b>插件</b><span>插件把多个技能打包命名，用于成套交付；插件只是技能分组，不携带新权限。</span></div><button class="mini-btn" @click="loadSkillLibrary">刷新</button></div>
+      <div v-if="pluginMessage" class="admin-note" data-test="agent-plugin-message">{{ pluginMessage }}</div>
+      <div class="admin-create">
+        <b>导出插件分享包</b>
+        <div class="admin-note">插件不能脱离成员技能单独存在，所以导出插件会连同它引用的技能一起打包；不属于任何插件的技能不会带上。</div>
+        <div class="admin-form-row"><button class="mini-btn primary" data-test="agent-plugin-export-btn" :disabled="!skillLibrary.plugins.length" @click="exportAllPlugins">导出全部插件</button><button class="mini-btn" :disabled="!pluginExportJson" @click="copyPluginExport">复制</button></div>
+        <textarea v-model="pluginExportJson" data-test="agent-plugin-export" rows="4" readonly spellcheck="false" placeholder="点击“导出全部插件”或某个插件的“导出此插件”后出现 JSON" />
+      </div>
+      <div class="admin-create">
+        <b>导入插件分享包</b>
+        <textarea v-model="importPluginJson" data-test="agent-plugin-import" rows="4" spellcheck="false" placeholder="把分享包 JSON 粘贴到这里；同名插件会被更新" />
+        <button class="mini-btn primary" data-test="agent-plugin-import-btn" :disabled="!importPluginJson.trim()" @click="importPluginPack">确认导入</button>
+      </div>
+      <div v-for="plugin in skillLibrary.plugins" :key="plugin.id" class="admin-card" :data-test="`agent-plugin-card-${plugin.name}`">
         <div class="admin-card-head"><strong>{{ plugin.name }}</strong><span class="status-pill">{{ plugin.skillIds.length }} 技能</span></div>
         <div class="admin-meta">{{ plugin.id }} · {{ plugin.source }} · {{ plugin.description || '无描述' }}</div>
+        <div class="admin-meta">成员技能：{{ pluginSkillNames(plugin).join('、') || '（引用的技能已不存在）' }}</div>
+        <div class="admin-actions">
+          <button class="mini-btn" :disabled="!pluginSkillNames(plugin).length" @click="exportPlugin(plugin)">导出此插件</button>
+          <button class="mini-btn" data-test="agent-plugin-edit" @click="startPluginEdit(plugin)">编辑</button>
+          <button class="mini-btn danger-btn" data-test="agent-plugin-delete" @click="removePlugin(plugin)">删除</button>
+        </div>
+        <div v-if="pluginDraft?.id === plugin.id" class="admin-create">
+          <div class="admin-form-row">
+            <input v-model="pluginDraft.newName" maxlength="80" data-test="agent-plugin-edit-name" placeholder="插件名称" />
+            <input v-model="pluginDraft.skillNames" maxlength="600" data-test="agent-plugin-edit-skills" placeholder="成员技能名称，逗号分隔（留空=不改成员）" />
+          </div>
+          <textarea v-model="pluginDraft.description" rows="2" maxlength="500" data-test="agent-plugin-edit-description" placeholder="说明（可选）" />
+          <div class="admin-actions">
+            <button class="mini-btn primary" data-test="agent-plugin-edit-save" @click="savePluginEdit(plugin)">保存修改</button>
+            <button class="mini-btn" @click="pluginDraft = null">取消</button>
+          </div>
+        </div>
       </div>
-      <div v-if="!skillLibrary.skills.length && !skillLibrary.plugins.length" class="admin-empty">还没有技能或插件；可以在对话里说“帮我制作一个巡检技能”。</div>
+      <div v-if="!skillLibrary.plugins.length" class="admin-empty">还没有插件；可以在对话里说“把巡检技能打包成插件”，或导入插件分享包。</div>
     </div>
 
     <div v-else class="admin-scroll" data-test="agent-job-panel">
@@ -125,19 +182,35 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, reactive } from 'vue'
+import { computed, onMounted, ref, reactive } from 'vue'
+import { describeResolvedContextWindow } from '@shared/agent-context'
+
+/**
+ * 显示实际生效的窗口，而不是只写“自动推导”：模型行为异常时（例如你以为是 128k、
+ * 实际按 32k 在压缩历史），这里是唯一的自查入口。数值与来源都由 Main 推导后回传。
+ */
+function contextLabel(profile: any): string {
+  return describeResolvedContextWindow(profile?.resolvedContextWindowTokens, profile?.resolvedContextSource)
+}
 
 const tabs = [
   { key: 'team', label: '组织 / HR' },
   { key: 'models', label: '模型 Profile' },
   { key: 'memory', label: '本地记忆' },
-  { key: 'skills', label: '技能与插件' },
+  { key: 'skills', label: '技能' },
+  { key: 'plugins', label: '插件' },
   { key: 'jobs', label: 'Job 看板' }
 ] as const
 type AdminTab = typeof tabs[number]['key']
+/**
+ * 允许调用方只挂载其中一部分页签：设置页把「技能」和「插件」拆成两个一级页签之后，
+ * 「Agent 团队」不再渲染这两块内容——同一份代码、两种挂载方式，不复制实现也不复制样式。
+ */
+const props = defineProps<{ panels?: string[] }>()
+const visibleTabs = computed(() => (props.panels?.length ? tabs.filter(tab => props.panels!.includes(tab.key)) : [...tabs]))
 const TOOL_OPTIONS = ['observe_page', 'read_text', 'read_table', 'model_analyze', 'create_job', 'review_job', 'memory_search']
 type AgentDraft = { maxConcurrency: number; budgetCurrency: string; budgetAmount: string; storeIds: string; storeReadOnly: boolean; memoryWrite: boolean; memoryIncludeShared: boolean; tools: string[] }
-const activeTab = ref<AdminTab>('team')
+const activeTab = ref<AdminTab>(visibleTabs.value[0]?.key || 'team')
 const agents = ref<any[]>([])
 const profiles = ref<any[]>([])
 const memories = ref<any[]>([])
@@ -147,30 +220,118 @@ const hrPreview = ref<any>(null)
 const memoryQuery = ref('库存')
 const memoryStatus = ref('')
 const memoryMessage = ref('')
+const memoryAutoLearn = ref(true)
+const memoryRetentionDays = ref(180)
 const snapshotPath = ref('')
+// 面板展示给用户的快照摘要：恢复时回传，Main 会与文件实际摘要比对（审计 P2）
+const snapshotSha = ref('')
 const newAgent = reactive({ role: 'operator', name: '', description: '', modelProfileId: '', maxConcurrency: 1, budgetCurrency: 'tokens', budgetAmount: '', storeIds: '', storeReadOnly: true })
-const modelDraft = reactive({ id: '', name: '', provider: '', model: '', endpoint: '', timeoutMs: 30000, maxTokens: 1200, temperature: 0.7, concurrencyLimit: 1, fallbackProfileId: '', budgetCurrency: 'tokens', budgetAmount: '', pricingCurrency: 'USD', inputPerMTok: '', outputPerMTok: '', apiKey: '', enabled: true, capabilities: { chat: true, json: true, vision: false, cancellation: true } })
+const modelDraft = reactive({ id: '', name: '', provider: '', model: '', endpoint: '', timeoutMs: 30000, maxTokens: 1200, contextWindowTokens: null as number | null, temperature: 0.7, concurrencyLimit: 1, fallbackProfileId: '', budgetCurrency: 'tokens', budgetAmount: '', pricingCurrency: 'USD', inputPerMTok: '', outputPerMTok: '', apiKey: '', enabled: true, capabilities: { chat: true, json: true, vision: false, cancellation: true } })
 const agentDrafts = reactive<Record<string, AgentDraft>>({})
 const newJob = reactive({ assignedAgentId: '', storeId: '', goal: '', inputSummary: '{"source":"manual"}', browserTask: '', requiresConfirmation: false })
 const skillLibrary = ref<{ skills: any[]; plugins: any[] }>({ skills: [], plugins: [] })
+const skillTools = ref<any[]>([])
+const skillDraft = reactive<{ name: string; description: string; intent: string; steps: Array<{ type: string; params: string }> }>({ name: '', description: '', intent: '', steps: [{ type: '', params: '{}' }] })
 const exportSkillNames = ref('')
 const exportJson = ref('')
 const importJson = ref('')
 const skillMessage = ref('')
+const pluginExportJson = ref('')
+const importPluginJson = ref('')
+const pluginMessage = ref('')
 
 const emit = defineEmits<{ toast: [message: string, kind?: 'success' | 'error'] }>()
 async function loadAgents() { const res = await window.shopilot.agentDomain.orgList({ limit: 200 }); if (res.ok) agents.value = (res.data as any).items || []; else emit('toast', res.error.message, 'error') }
 async function loadModels() { const res = await window.shopilot.agentDomain.modelList({ limit: 200 }); if (res.ok) profiles.value = (res.data as any).items || []; else emit('toast', res.error.message, 'error') }
 async function loadJobs() { const res = await window.shopilot.agentDomain.jobList({ limit: 50 }); if (res.ok) jobs.value = res.data.items as any[]; else emit('toast', res.error.message, 'error') }
-async function runQualityReview() { const res = await window.shopilot.agentDomain.qualityReview(); if (!res.ok) return emit('toast', res.error.message, 'error'); qualitySummary.value = res.data; emit('toast', `CEO 复盘已生成：${res.data.governance?.pendingMemoryReview || 0} 项需人工复核`, 'success') }
+async function runQualityReview() { const res = await window.shopilot.agentDomain.qualityReview(); if (!res.ok) return emit('toast', res.error.message, 'error'); qualitySummary.value = res.data; emit('toast', `CEO 复盘已生成：合并重复记忆 ${res.data.governance?.consolidated || 0} 条，${res.data.governance?.pendingMemoryReview || 0} 项需人工复核`, 'success') }
 async function loadMemories() { const res = await window.shopilot.agentDomain.memoryList({ agentId: 'root-ceo', status: memoryStatus.value || null, limit: 50 }); if (res.ok) memories.value = res.data.items as any[]; else emit('toast', res.error.message, 'error') }
-async function loadAll() { await Promise.all([loadAgents(), loadModels(), loadJobs(), loadMemories(), loadSkillLibrary()]) }
-async function loadSkillLibrary() { const res = await window.shopilot.agentDomain.skillList(); if (res.ok) skillLibrary.value = res.data as any; else skillMessage.value = `读取失败（${res.error.code}）：${res.error.message}` }
+async function loadMemoryLearningSettings() { const res = await window.shopilot.agentDomain.memoryLearningSettings(); if (res.ok) { memoryAutoLearn.value = !!(res.data as any).autoLearn; memoryRetentionDays.value = Number((res.data as any).retentionDays || 180) } }
+async function saveMemoryLearningSettings() { const days = Number(memoryRetentionDays.value); if (!Number.isInteger(days) || days < 7 || days > 3650) return emit('toast', '保留天数必须为 7～3650 的整数', 'error'); const res = await window.shopilot.agentDomain.memoryLearningSettings({ autoLearn: memoryAutoLearn.value, retentionDays: days }); if (!res.ok) return emit('toast', res.error.message, 'error'); memoryRetentionDays.value = Number((res.data as any).retentionDays); memoryAutoLearn.value = !!(res.data as any).autoLearn; emit('toast', '自动学习策略已保存', 'success') }
+async function loadAll() { await Promise.all([loadAgents(), loadModels(), loadJobs(), loadMemories(), loadMemoryLearningSettings(), loadSkillLibrary()]) }
+async function loadSkillLibrary() { const res = await window.shopilot.agentDomain.skillList(); if (res.ok) skillLibrary.value = res.data as any; else skillMessage.value = `读取失败（${res.error.code}）：${res.error.message}`; await loadSkillTools() }
+/** 表单可选工具来自 Main（与技能校验同一判定），这里只做渲染。 */
+async function loadSkillTools() { if (skillTools.value.length) return; const res = await window.shopilot.agentDomain.skillTools(); if (res.ok) skillTools.value = (res.data as any).tools || []; else skillMessage.value = `工具目录读取失败（${res.error.code}）：${res.error.message}` }
+function resetSkillDraft() { skillDraft.name = ''; skillDraft.description = ''; skillDraft.intent = ''; skillDraft.steps = [{ type: '', params: '{}' }] }
+function addSkillDraftStep() { if (skillDraft.steps.length < 8) skillDraft.steps.push({ type: '', params: '{}' }) }
+function removeSkillDraftStep(index: number) { if (skillDraft.steps.length > 1) skillDraft.steps.splice(index, 1) }
+function applyStepTemplate(step: { type: string; params: string }) { const tool = skillTools.value.find(item => item.type === step.type); step.params = tool ? tool.params : '{}' }
+function stepTemplateHint(type: string) { const tool = skillTools.value.find(item => item.type === type); return tool ? `参数 JSON（示例：${tool.example}）` : '参数 JSON，例如 {}' }
+/** 面板创建技能：客户端只做形状检查，资格与安全判定全部交给 Main（与模型 createSkill 同一套）。 */
+async function createSkillFromDraft() {
+  const name = skillDraft.name.trim()
+  if (!name) { skillMessage.value = '请先填写技能名称。'; return }
+  const steps: Array<{ type: string; input: Record<string, unknown> }> = []
+  for (const [index, step] of skillDraft.steps.entries()) {
+    if (!step.type) { skillMessage.value = `第 ${index + 1} 步还没选工具。`; return }
+    let input: unknown
+    try { input = JSON.parse(step.params || '{}') } catch (error: any) { skillMessage.value = `第 ${index + 1} 步参数不是合法 JSON：${String(error?.message || error)}`; return }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) { skillMessage.value = `第 ${index + 1} 步参数必须是 JSON 对象。`; return }
+    steps.push({ type: step.type, input: input as Record<string, unknown> })
+  }
+  const res = await window.shopilot.agentDomain.skillCreate({ name, description: skillDraft.description.trim(), intent: skillDraft.intent.trim(), steps })
+  if (!res.ok) { skillMessage.value = `创建失败（${res.error.code}）：${res.error.message}`; return }
+  skillMessage.value = `已创建技能「${res.data.name}」（${res.data.steps.length} 个步骤，来源 ${res.data.source}）；说“运行技能 ${res.data.name}”即可执行。`
+  resetSkillDraft()
+  await loadSkillLibrary()
+}
 async function exportPack() { const names = exportSkillNames.value.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean); const res = await window.shopilot.agentDomain.packExport({ skillNames: names }); if (!res.ok) { skillMessage.value = `导出失败（${res.error.code}）：${res.error.message}`; return } exportJson.value = res.data.json; skillMessage.value = `已生成分享包：${res.data.skillCount} 个技能、${res.data.pluginCount} 个插件；可复制到其他电脑导入。` }
 async function copyExport() { try { await navigator.clipboard.writeText(exportJson.value); skillMessage.value = '分享包 JSON 已复制到剪贴板。' } catch { skillMessage.value = '剪贴板不可用，请手动全选复制文本框内容。' } }
 async function importPack() { const res = await window.shopilot.agentDomain.packImport(importJson.value, true); if (!res.ok) { skillMessage.value = `导入失败（${res.error.code}）：${res.error.message}`; return } skillMessage.value = `导入完成：新增 ${res.data.importedSkills}，更新 ${res.data.updatedSkills}，插件 ${res.data.importedPlugins}${res.data.errors?.length ? `；注意：${res.data.errors.join('；')}` : ''}`; importJson.value = ''; await loadSkillLibrary() }
 async function removeSkill(skillId: string) { if (!window.confirm('确认删除该技能？')) return; const res = await window.shopilot.agentDomain.skillDelete(skillId); if (!res.ok) { skillMessage.value = `删除失败（${res.error.code}）：${res.error.message}`; return } skillMessage.value = '技能已删除'; await loadSkillLibrary() }
 async function toggleSkill(skill: any) { const next = skill.status === 'enabled' ? 'disabled' : 'enabled'; const res = await window.shopilot.agentDomain.skillUpdate({ skillId: skill.id, status: next }); if (!res.ok) { skillMessage.value = `更新失败（${res.error.code}）：${res.error.message}`; return } skillMessage.value = `技能「${res.data.name}」已${next === 'enabled' ? '启用' : '停用'}`; await loadSkillLibrary() }
+/** 技能页显示所属插件名、插件页显示成员技能名——两个方向都从同一份列表解析，不额外请求 Main。 */
+function pluginName(pluginId: string): string {
+  return String(skillLibrary.value.plugins.find(plugin => plugin.id === pluginId)?.name || pluginId)
+}
+function pluginSkillNames(plugin: any): string[] {
+  const ids = Array.isArray(plugin?.skillIds) ? plugin.skillIds : []
+  return ids.map((id: string) => skillLibrary.value.skills.find(skill => skill.id === id)?.name).filter((name: string): name is string => !!name)
+}
+/**
+ * 插件导出必须带上它的成员技能：Main 只在“该插件的所有技能都在选中集合里”时才导出插件本身
+ * （见 `exportAgentPack`）。所以这里按成员技能名反查，而不是新加一个插件导出接口。
+ */
+async function exportPlugins(plugins: any[], label: string) {
+  const names = [...new Set(plugins.flatMap(plugin => pluginSkillNames(plugin)))]
+  if (!names.length) { pluginMessage.value = `${label}：没有可导出的成员技能，请先确认插件引用的技能还存在。`; return }
+  const res = await window.shopilot.agentDomain.packExport({ skillNames: names })
+  if (!res.ok) { pluginMessage.value = `导出失败（${res.error.code}）：${res.error.message}`; return }
+  pluginExportJson.value = res.data.json
+  pluginMessage.value = `${label}：已生成分享包，含 ${res.data.skillCount} 个成员技能、${res.data.pluginCount} 个插件。`
+}
+async function exportPlugin(plugin: any) { await exportPlugins([plugin], `插件「${plugin.name}」`) }
+/** 插件改/删与技能一样只改声明式定义；成员技能用名称给出（对话与分享包里也只有名称）。 */
+const pluginDraft = ref<{ id: string; newName: string; description: string; skillNames: string } | null>(null)
+function startPluginEdit(plugin: any) {
+  pluginDraft.value = { id: plugin.id, newName: plugin.name, description: plugin.description || '', skillNames: pluginSkillNames(plugin).join('，') }
+}
+async function savePluginEdit(plugin: any) {
+  const draft = pluginDraft.value
+  if (!draft) return
+  const skillNames = draft.skillNames.split(/[，,、\s]+/).map(item => item.trim()).filter(Boolean)
+  const input: Record<string, unknown> = { pluginId: plugin.id }
+  if (draft.newName.trim() && draft.newName.trim() !== plugin.name) input.newName = draft.newName.trim()
+  if (draft.description !== (plugin.description || '')) input.description = draft.description.trim()
+  if (skillNames.join('|') !== pluginSkillNames(plugin).join('|')) input.skillNames = skillNames
+  if (input.newName === undefined && !('description' in input) && !('skillNames' in input)) { pluginMessage.value = '没有需要保存的改动。'; return }
+  const res = await window.shopilot.agentDomain.pluginUpdate(input)
+  if (!res.ok) { pluginMessage.value = `保存失败（${res.error.code}）：${res.error.message}`; return }
+  pluginMessage.value = `已更新插件「${res.data.name}」（${res.data.skillIds.length} 个技能）。`
+  pluginDraft.value = null
+  await loadSkillLibrary()
+}
+async function removePlugin(plugin: any) {
+  if (!window.confirm(`删除插件「${plugin.name}」？成员技能会保留为独立技能。`)) return
+  const res = await window.shopilot.agentDomain.pluginDelete({ pluginId: plugin.id })
+  if (!res.ok) { pluginMessage.value = `删除失败（${res.error.code}）：${res.error.message}`; return }
+  pluginMessage.value = `已删除插件「${res.data.name}」，${res.data.releasedSkills} 个成员技能保留为独立技能。`
+  if (pluginDraft.value?.id === plugin.id) pluginDraft.value = null
+  await loadSkillLibrary()
+}
+async function exportAllPlugins() { await exportPlugins(skillLibrary.value.plugins, '全部插件') }
+async function copyPluginExport() { try { await navigator.clipboard.writeText(pluginExportJson.value); pluginMessage.value = '插件分享包 JSON 已复制到剪贴板。' } catch { pluginMessage.value = '剪贴板不可用，请手动全选复制文本框内容。' } }
+async function importPluginPack() { const res = await window.shopilot.agentDomain.packImport(importPluginJson.value, true); if (!res.ok) { pluginMessage.value = `导入失败（${res.error.code}）：${res.error.message}`; return } pluginMessage.value = `导入完成：新增 ${res.data.importedSkills}，更新 ${res.data.updatedSkills}，插件 ${res.data.importedPlugins}${res.data.errors?.length ? `；注意：${res.data.errors.join('；')}` : ''}`; importPluginJson.value = ''; await loadSkillLibrary() }
 function agentDraft(agent: any): AgentDraft {
   return agentDrafts[agent.id] || (agentDrafts[agent.id] = {
     maxConcurrency: Number(agent.maxConcurrency || 1),
@@ -191,24 +352,29 @@ async function saveAgentConfig(agent: any) { const draft = agentDraft(agent); co
 async function changeStatus(agent: any, action: 'activate' | 'pause' | 'resume' | 'retire') { if (!window.confirm(`确认${action === 'retire' ? '退休' : action === 'pause' ? '暂停' : action === 'resume' ? '恢复' : '激活'} ${agent.name}？`)) return; const fn = action === 'activate' ? window.shopilot.agentDomain.orgActivate : action === 'pause' ? window.shopilot.agentDomain.orgPause : action === 'resume' ? window.shopilot.agentDomain.orgResume : window.shopilot.agentDomain.orgRetire; const res = await fn(agent.id, true); if (!res.ok) return emit('toast', res.error.message, 'error'); await loadAgents() }
 function pricingDraft(value: any): { pricingCurrency: string; inputPerMTok: string; outputPerMTok: string } { return { pricingCurrency: value?.currency || 'USD', inputPerMTok: value?.inputPerMTok == null ? '' : String(value.inputPerMTok), outputPerMTok: value?.outputPerMTok == null ? '' : String(value.outputPerMTok) } }
 function draftPricing(): { currency: string; inputPerMTok: number; outputPerMTok: number } | null { const inputPerMTok = Number(modelDraft.inputPerMTok); const outputPerMTok = Number(modelDraft.outputPerMTok); const valid = (value: number) => Number.isFinite(value) && value >= 0; if (!valid(inputPerMTok) || !valid(outputPerMTok) || (inputPerMTok <= 0 && outputPerMTok <= 0)) return null; return { currency: modelDraft.pricingCurrency || 'USD', inputPerMTok, outputPerMTok } }
-function editModel(profile: any) { Object.assign(modelDraft, { id: profile.id, name: profile.name, provider: profile.provider, model: profile.model, endpoint: profile.endpoint, timeoutMs: profile.timeoutMs, maxTokens: profile.maxTokens, temperature: profile.temperature, concurrencyLimit: profile.concurrencyLimit, fallbackProfileId: profile.fallbackProfileId || '', budgetCurrency: profile.dailyBudget?.currency || 'tokens', budgetAmount: profile.dailyBudget?.amount == null ? '' : String(profile.dailyBudget.amount), ...pricingDraft(profile.pricing), enabled: profile.enabled, apiKey: '', capabilities: { ...profile.capabilities } }) }
-async function clearModelKey(profile: any) { if (!window.confirm(`确认清除 ${profile.name} 的 API Key？`)) return; const res = await window.shopilot.agentDomain.modelSet({ id: profile.id, name: profile.name, provider: profile.provider, model: profile.model, endpoint: profile.endpoint, timeoutMs: profile.timeoutMs, maxTokens: profile.maxTokens, temperature: profile.temperature, concurrencyLimit: profile.concurrencyLimit, fallbackProfileId: profile.fallbackProfileId, dailyBudget: profile.dailyBudget, pricing: profile.pricing, enabled: profile.enabled, capabilities: profile.capabilities, clearKey: true }); if (!res.ok) return emit('toast', res.error.message, 'error'); await loadModels(); emit('toast', '模型 API Key 已清除', 'success') }
-async function saveModel() { const dailyBudget = modelDraft.budgetAmount === '' ? null : { currency: modelDraft.budgetCurrency || 'tokens', amount: Number(modelDraft.budgetAmount) }; const pricing = draftPricing(); const res = await window.shopilot.agentDomain.modelSet({ id: modelDraft.id || undefined, name: modelDraft.name, provider: modelDraft.provider, model: modelDraft.model, endpoint: modelDraft.endpoint, timeoutMs: Number(modelDraft.timeoutMs), maxTokens: Number(modelDraft.maxTokens), temperature: Number(modelDraft.temperature), concurrencyLimit: Number(modelDraft.concurrencyLimit), fallbackProfileId: modelDraft.fallbackProfileId || null, dailyBudget, pricing, enabled: modelDraft.enabled, capabilities: modelDraft.capabilities, apiKey: modelDraft.apiKey || undefined }); if (!res.ok) return emit('toast', res.error.message, 'error'); Object.assign(modelDraft, { id: '', name: '', provider: '', model: '', endpoint: '', apiKey: '', fallbackProfileId: '', budgetAmount: '', inputPerMTok: '', outputPerMTok: '', maxTokens: 1200, temperature: 0.7, enabled: true }); await loadModels(); emit('toast', '模型 Profile 已保存', 'success') }
+function editModel(profile: any) { Object.assign(modelDraft, { id: profile.id, name: profile.name, provider: profile.provider, model: profile.model, endpoint: profile.endpoint, timeoutMs: profile.timeoutMs, maxTokens: profile.maxTokens, contextWindowTokens: profile.contextWindowTokens || null, temperature: profile.temperature, concurrencyLimit: profile.concurrencyLimit, fallbackProfileId: profile.fallbackProfileId || '', budgetCurrency: profile.dailyBudget?.currency || 'tokens', budgetAmount: profile.dailyBudget?.amount == null ? '' : String(profile.dailyBudget.amount), ...pricingDraft(profile.pricing), enabled: profile.enabled, apiKey: '', capabilities: { ...profile.capabilities } }) }
+async function clearModelKey(profile: any) { if (!window.confirm(`确认清除 ${profile.name} 的 API Key？`)) return; const res = await window.shopilot.agentDomain.modelSet({ id: profile.id, name: profile.name, provider: profile.provider, model: profile.model, endpoint: profile.endpoint, timeoutMs: profile.timeoutMs, maxTokens: profile.maxTokens, contextWindowTokens: profile.contextWindowTokens || null, temperature: profile.temperature, concurrencyLimit: profile.concurrencyLimit, fallbackProfileId: profile.fallbackProfileId, dailyBudget: profile.dailyBudget, pricing: profile.pricing, enabled: profile.enabled, capabilities: profile.capabilities, clearKey: true }); if (!res.ok) return emit('toast', res.error.message, 'error'); await loadModels(); emit('toast', '模型 API Key 已清除', 'success') }
+async function saveModel() { const dailyBudget = modelDraft.budgetAmount === '' ? null : { currency: modelDraft.budgetCurrency || 'tokens', amount: Number(modelDraft.budgetAmount) }; const pricing = draftPricing(); const res = await window.shopilot.agentDomain.modelSet({ id: modelDraft.id || undefined, name: modelDraft.name, provider: modelDraft.provider, model: modelDraft.model, endpoint: modelDraft.endpoint, timeoutMs: Number(modelDraft.timeoutMs), maxTokens: Number(modelDraft.maxTokens), contextWindowTokens: modelDraft.contextWindowTokens == null || Number(modelDraft.contextWindowTokens) < 4096 ? null : Number(modelDraft.contextWindowTokens), temperature: Number(modelDraft.temperature), concurrencyLimit: Number(modelDraft.concurrencyLimit), fallbackProfileId: modelDraft.fallbackProfileId || null, dailyBudget, pricing, enabled: modelDraft.enabled, capabilities: modelDraft.capabilities, apiKey: modelDraft.apiKey || undefined }); if (!res.ok) return emit('toast', res.error.message, 'error'); Object.assign(modelDraft, { id: '', name: '', provider: '', model: '', endpoint: '', apiKey: '', fallbackProfileId: '', budgetAmount: '', inputPerMTok: '', outputPerMTok: '', contextWindowTokens: null, maxTokens: 1200, temperature: 0.7, enabled: true }); await loadModels(); emit('toast', '模型 Profile 已保存', 'success') }
 async function testModel(id: string) { const res = await window.shopilot.agentDomain.modelTest(id); emit('toast', res.ok ? `测试成功：${res.data.model}，${res.data.elapsedMs}ms` : `测试失败（${res.error.code}）：${res.error.message}`, res.ok ? 'success' : 'error'); await loadModels() }
 async function deleteModel(id: string) { if (!window.confirm('确认删除该模型 Profile？')) return; const res = await window.shopilot.agentDomain.modelDelete(id); if (!res.ok) return emit('toast', res.error.message, 'error'); await loadModels() }
 async function searchMemory() { const res = await window.shopilot.agentDomain.memorySearch({ agentId: 'root-ceo', query: memoryQuery.value || '库存', limit: 50 }); if (res.ok) memories.value = res.data as any[]; else emit('toast', res.error.message, 'error') }
 async function reviewMemory(id: string, status: 'approved' | 'stale') { const res = await window.shopilot.agentDomain.memoryReview({ memoryId: id, status, reviewerAgentId: 'root-ceo' }); if (!res.ok) return emit('toast', res.error.message, 'error'); if (memoryStatus.value) await loadMemories(); else await searchMemory() }
 async function rebuildMemory() { const res = await window.shopilot.agentDomain.memoryRebuild(); memoryMessage.value = res.ok ? `索引重建完成：${res.data.indexed} 条，隔离 ${res.data.quarantined} 条` : res.error.message }
-async function snapshotMemory() { const res = await window.shopilot.agentDomain.memorySnapshot(); if (res.ok) snapshotPath.value = res.data.path; memoryMessage.value = res.ok ? `加密快照已生成（${res.data.bytes} bytes，SHA-256 ${res.data.sha256.slice(0, 12)}…）` : res.error.message }
-async function inspectSnapshot() { const res = await window.shopilot.agentDomain.memorySnapshotInspect(snapshotPath.value); memoryMessage.value = res.ok ? `快照校验通过：${res.data.records} 条记录，SHA-256 ${res.data.sha256.slice(0, 12)}…` : res.error.message }
-async function restoreSnapshot() { if (!window.confirm('确认从该加密快照恢复记忆？当前记忆会先生成备份，冲突版本保留为待审核。')) return; const res = await window.shopilot.agentDomain.memorySnapshotRestore(snapshotPath.value, true); memoryMessage.value = res.ok ? `恢复完成：${res.data.restored} 条，冲突 ${res.data.conflicts} 条；备份已生成。` : res.error.message; if (res.ok) await loadMemories() }
+async function snapshotMemory() { const res = await window.shopilot.agentDomain.memorySnapshot(); if (res.ok) { snapshotPath.value = res.data.path; snapshotSha.value = res.data.sha256 }; memoryMessage.value = res.ok ? `加密快照已生成（${res.data.bytes} bytes，SHA-256 ${res.data.sha256.slice(0, 12)}…）` : res.error.message }
+async function inspectSnapshot() { const res = await window.shopilot.agentDomain.memorySnapshotInspect(snapshotPath.value); if (res.ok) snapshotSha.value = res.data.sha256; memoryMessage.value = res.ok ? `快照校验通过：${res.data.records} 条记录，SHA-256 ${res.data.sha256.slice(0, 12)}…` : res.error.message }
+async function restoreSnapshot() { const res = await window.shopilot.agentDomain.memorySnapshotRestore(snapshotPath.value, snapshotSha.value || undefined); memoryMessage.value = res.ok ? `恢复完成：${res.data.restored} 条，冲突 ${res.data.conflicts} 条；备份已生成。` : res.error.message; if (res.ok) await loadMemories() }
 async function runJob(id: string) { const res = await window.shopilot.agentDomain.jobRun(id); if (!res.ok) return emit('toast', res.error.message, 'error'); await loadJobs() }
 async function resumeJob(id: string) { const res = await window.shopilot.agentDomain.jobResume(id); if (!res.ok) return emit('toast', res.error.message, 'error'); await loadJobs() }
 async function cancelJob(id: string) { const res = await window.shopilot.agentDomain.jobCancel(id); if (!res.ok) return emit('toast', res.error.message, 'error'); await loadJobs() }
 async function approveJob(job: any) { const res = await window.shopilot.agentDomain.jobApprove(job.id, true, job.confirmationId); if (!res.ok) return emit('toast', res.error.message, 'error'); await loadJobs() }
 async function createJob() { let inputSummary: Record<string, unknown>; let browserTask: any = null; try { const parsed = JSON.parse(newJob.inputSummary || '{}'); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('输入摘要必须是对象'); inputSummary = parsed; if (newJob.browserTask.trim()) { browserTask = JSON.parse(newJob.browserTask); } } catch (error: any) { return emit('toast', `Job JSON 无效：${String(error?.message || error)}`, 'error') } const res = await window.shopilot.agentDomain.jobCreate({ createdByAgentId: 'root-ceo', assignedAgentId: newJob.assignedAgentId, storeId: newJob.storeId.trim() || null, goal: newJob.goal.trim(), inputSummary, priority: 50, requiresConfirmation: newJob.requiresConfirmation, idempotencyKey: `ui-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`, browserTask, dependencies: [] }); if (!res.ok) return emit('toast', res.error.message, 'error'); Object.assign(newJob, { goal: '', inputSummary: '{"source":"manual"}', browserTask: '', requiresConfirmation: false }); await loadJobs(); emit('toast', 'Job 已创建并进入队列', 'success') }
 async function reviewResult(resultId: string, approved: boolean) { const res = await window.shopilot.agentDomain.jobResultReview({ resultId, reviewerAgentId: 'root-ceo', approved }); if (!res.ok) return emit('toast', res.error.message, 'error'); await loadJobs(); emit('toast', approved ? 'Job 结果已批准' : 'Job 结果已驳回', approved ? 'success' : 'error') }
-onMounted(loadAll)
+// 只挂技能或插件面板时不必顺带拉组织/模型/Job/记忆——少一次全量读取，也少一份界面噪声。
+onMounted(() => {
+  const only = visibleTabs.value.length === 1 ? visibleTabs.value[0].key : null
+  if (only === 'skills' || only === 'plugins') loadSkillLibrary()
+  else loadAll()
+})
 </script>
 
 <style scoped>

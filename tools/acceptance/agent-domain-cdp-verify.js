@@ -60,7 +60,7 @@ async function main() {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
     const pageUrl = `http://127.0.0.1:${server.address().port}/read-only`
     const fixtureAppData = path.join(userData, 'appdata')
-    appProcess = spawn(APP, [ROOT, '--no-sandbox', `--remote-debugging-port=${PORT}`, `--user-data-dir=${userData}`, '--disable-features=CalculateNativeWinOcclusion'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, APPDATA: fixtureAppData, LOCALAPPDATA: fixtureAppData, NODE_ENV: 'production', SHOPILOT_DISABLE_CDP_FP: '1' } })
+    appProcess = spawn(APP, [ROOT, '--no-sandbox', `--remote-debugging-port=${PORT}`, `--user-data-dir=${userData}`, '--disable-features=CalculateNativeWinOcclusion'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, APPDATA: fixtureAppData, LOCALAPPDATA: fixtureAppData, NODE_ENV: 'production', SHOPILOT_DISABLE_CDP_FP: '1', SHOPILOT_TEST_AUTOCONFIRM: '1' } })
     let logs = ''
     appProcess.stdout.on('data', chunk => { logs += chunk.toString() })
     appProcess.stderr.on('data', chunk => { logs += chunk.toString() })
@@ -495,12 +495,27 @@ async function main() {
     const hangRunning = hangJobId ? await cdp.eval(`window.shopilot.agentDomain.jobRun(${JSON.stringify(hangJobId)}); await new Promise(r=>setTimeout(r,150)); return await window.shopilot.agentDomain.jobGet(${JSON.stringify(hangJobId)})`) : null
     check('in-flight Main-only model Job is running before the process is killed', !!hangRunning?.ok && hangRunning.data.status === 'running' && hangRunning.data.results.length === 0, hangRunning?.error?.code || JSON.stringify(hangRunning?.data?.status || hangRunning || ''))
 
+    // —— 上下文：窗口推导、真实 token 用量、长历史压缩 ——
+    const hintedProfile = await cdp.eval(`return await window.shopilot.agentDomain.modelSet({name:'Local Hinted Window',provider:'local',endpoint:${JSON.stringify(pageUrl)},model:'fixture-model-128k',timeoutMs:5000})`)
+    check('未配置 override 时按模型名推导上下文窗口并回传来源', !!hintedProfile?.ok && hintedProfile.data.resolvedContextWindowTokens === 128000 && hintedProfile.data.resolvedContextSource === 'model-name', hintedProfile?.error?.code || JSON.stringify({ tokens: hintedProfile?.data?.resolvedContextWindowTokens, source: hintedProfile?.data?.resolvedContextSource }))
+    const overriddenWindow = await cdp.eval(`return await window.shopilot.agentDomain.modelSet({name:'Local Window Override',provider:'local',endpoint:${JSON.stringify(pageUrl)},model:'fixture-model',contextWindowTokens:8192,timeoutMs:5000})`)
+    check('手动 override 优先于模型名推导', !!overriddenWindow?.ok && overriddenWindow.data.resolvedContextWindowTokens === 8192 && overriddenWindow.data.resolvedContextSource === 'override', overriddenWindow?.error?.code || JSON.stringify({ tokens: overriddenWindow?.data?.resolvedContextWindowTokens, source: overriddenWindow?.data?.resolvedContextSource }))
+    const listedProfiles = await cdp.eval(`return await window.shopilot.agentDomain.modelList()`)
+    const mainProfileDto = listedProfiles?.ok ? (listedProfiles.data?.items || []).find(item => item.id === 'model_default-main') : null
+    check('未知模型家族保守兜底为 32k 且来源可追溯', mainProfileDto?.resolvedContextWindowTokens === 32768 && mainProfileDto?.resolvedContextSource === 'provider-default', listedProfiles?.error?.code || JSON.stringify({ tokens: mainProfileDto?.resolvedContextWindowTokens, source: mainProfileDto?.resolvedContextSource }))
+
+    // 40 轮长历史（每轮 1900 字）：预算侧必须压缩，而不是把整段历史塞进请求或直接超窗失败。
+    const longHistory = Array.from({ length: 40 }, (_, index) => ({ role: index % 2 === 0 ? 'user' : 'assistant', text: `第${index}轮：${'中'.repeat(1900)}` }))
+    const contextTurn = await cdp.eval(`const key=await window.shopilot.ai.setKey('temporary-agent-cdp-key'); const turn=await window.shopilot.agent.generatePlan('你好，简单介绍一下当前团队', ${JSON.stringify(longHistory)}); return {key,turn}`)
+    check('40 轮长历史压缩后仍能完成回合（不会超窗失败）', contextTurn?.turn?.ok === true && contextTurn.turn.data?.kind === 'chat' && String(contextTurn.turn.data.text || '').length > 0, contextTurn?.turn?.error?.code || JSON.stringify(contextTurn?.turn?.data?.kind || contextTurn?.turn))
+    check('回合结果携带真实 token 用量与生效窗口', contextTurn?.turn?.ok === true && Number(contextTurn.turn.data?.usage?.calls) >= 1 && Number(contextTurn.turn.data.usage.peakInputTokens) >= 5 && Number(contextTurn.turn.data.usage.contextWindowTokens) > 0 && contextTurn.turn.data.usage.usageReported === true, JSON.stringify(contextTurn?.turn?.data?.usage || contextTurn?.turn?.error?.code || ''))
+
     // Restart the real Main process with the same userData and verify that
     // memory metadata and the FTS index are usable after process recovery.
     cdp.close()
     if (appProcess?.pid) { try { execSync(`taskkill /PID ${appProcess.pid} /T /F`, { stdio: 'ignore' }) } catch {} }
     await waitFor(async () => !(await fetch(`http://127.0.0.1:${PORT}/json/version`).then(res => res.ok).catch(() => false)), 10000)
-    appProcess = spawn(APP, [ROOT, '--no-sandbox', `--remote-debugging-port=${PORT}`, `--user-data-dir=${userData}`, '--disable-features=CalculateNativeWinOcclusion'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, APPDATA: fixtureAppData, LOCALAPPDATA: fixtureAppData, NODE_ENV: 'production', SHOPILOT_DISABLE_CDP_FP: '1' } })
+    appProcess = spawn(APP, [ROOT, '--no-sandbox', `--remote-debugging-port=${PORT}`, `--user-data-dir=${userData}`, '--disable-features=CalculateNativeWinOcclusion'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, APPDATA: fixtureAppData, LOCALAPPDATA: fixtureAppData, NODE_ENV: 'production', SHOPILOT_DISABLE_CDP_FP: '1', SHOPILOT_TEST_AUTOCONFIRM: '1' } })
     appProcess.stdout.on('data', chunk => { logs += chunk.toString() })
     appProcess.stderr.on('data', chunk => { logs += chunk.toString() })
     await waitFor(async () => fetch(`http://127.0.0.1:${PORT}/json/version`).then(res => res.ok).catch(() => false), 30000)

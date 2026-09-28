@@ -101,11 +101,11 @@ async function attachApp(retries = 30) {
       // 等 UI 真正就绪（设置入口出现），而非仅 readyState
       const ok = await c.ev(`
         for (let i = 0; i < 60; i++) {
-          if (window.shopilot && document.querySelector('[data-test="settings-open-btn"]')) return true
+          if (window.shopilot && (document.querySelector('.dashboard-nav-item') || document.querySelector('[data-test="settings-open-btn"]'))) return true
           await new Promise(r => setTimeout(r, 500))
         }
         return false`, 40000)
-      if (!ok) { c.close(); throw new Error('settings-open-btn not ready') }
+      if (!ok) { c.close(); throw new Error('unified dashboard not ready') }
       return c
     } catch (e) { lastErr = e; await sleep(1000) }
   }
@@ -175,11 +175,13 @@ async function main() {
 
     // 2. 更新界面可打开（已搬进「设置 → 关于软件」）、通道默认 stable
     const ui = await c.ev(`
-      document.querySelector('[data-test="settings-open-btn"]').click()
-      await new Promise(r => setTimeout(r, 400))
-      document.querySelector('[data-test="settings-tab-about"]').click()
+      const settings = [...document.querySelectorAll('.dashboard-nav-item')].find(el => (el.textContent || '').includes('设置中心'))
+      if (settings) settings.click()
+      await new Promise(r => setTimeout(r, 500))
+      const about = [...document.querySelectorAll('.settings-nav button')].find(el => (el.textContent || '').includes('关于软件'))
+      if (about) about.click()
       await new Promise(r => setTimeout(r, 600))
-      const dlg = document.querySelector('[data-test="update-dialog"]')
+      const dlg = document.querySelector('[data-test="unified-settings-about"] [data-test="update-dialog"]')
       return { open: !!dlg, channel: document.querySelector('[data-test="update-channel"]')?.value, autocheck: document.querySelector('[data-test="update-autocheck"]')?.checked, message: document.querySelector('[data-test="update-message"]')?.textContent?.trim() }`)
     record('更新界面可打开且含通道选择', ui.open && ui.channel === 'stable' && ui.autocheck === false, ui)
 
@@ -215,9 +217,9 @@ async function main() {
     record('downloaded 后 UI 出现"重启并安装"按钮', uiBtn === true, { installBtn: uiBtn })
 
     // 8/9. 审计：update.check / update.download 各至少一条 success
-    const auditCheck = await c.ev(`const r = await window.shopilot.audit.query({ filter: { action: 'update.check' } }); return r.ok ? r.data : []`)
+    const auditCheck = await c.ev(`const r = await window.shopilot.audit.query({ action: 'update.check' }); return r.ok ? r.data : []`)
     record('审计含 update.check success', Array.isArray(auditCheck) && auditCheck.some(a => a.result === 'success'), { rows: Array.isArray(auditCheck) ? auditCheck.length : -1 })
-    const auditDl = await c.ev(`const r = await window.shopilot.audit.query({ filter: { action: 'update.download' } }); return r.ok ? r.data : []`)
+    const auditDl = await c.ev(`const r = await window.shopilot.audit.query({ action: 'update.download' }); return r.ok ? r.data : []`)
     record('审计含 update.download success', Array.isArray(auditDl) && auditDl.some(a => a.result === 'success'), { rows: Array.isArray(auditDl) ? auditDl.length : -1 })
 
     // 10. feed 改为当前版本 → not-available
@@ -237,7 +239,7 @@ async function main() {
     const s5 = await c.ev(`const r = await window.shopilot.update.check(); return r.ok ? r.data : { ipcError: r.error }`)
     record('feed 故障时如实报错（不静默）', s5 && s5.state === 'error' && String(s5.error || '').length > 0, s5 && { state: s5.state, error: String(s5.error || '').slice(0, 160) })
     failMode = false
-    const auditFail = await c.ev(`const r = await window.shopilot.audit.query({ filter: { action: 'update.check' } }); return r.ok ? r.data : []`)
+    const auditFail = await c.ev(`const r = await window.shopilot.audit.query({ action: 'update.check' }); return r.ok ? r.data : []`)
     record('审计含 update.check failure（故障留痕）', Array.isArray(auditFail) && auditFail.some(a => a.result === 'failure'), { rows: Array.isArray(auditFail) ? auditFail.length : -1 })
 
     // 13. autoCheck 开启 → 重启应用 → 启动后自动检查（8s 排程 + 网络，45s 上限）

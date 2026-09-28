@@ -4,14 +4,14 @@
  */
 
 import { randomBytes } from 'crypto'
-import { app, session } from 'electron'
+import { app } from 'electron'
 import { rmSync } from 'fs'
 import { join } from 'path'
 import { getDatabase } from '../db/database'
 import { ensureProfileForStore } from './profile-manager'
 import { writeAudit } from '../services/audit-logger'
 import { closeStoreBrowser, getOpenStoreIds, getStandaloneWindowCount } from '../browser/window-manager'
-import { closeStoreSession, getActiveSessions } from '../browser/session-manager'
+import * as ShopSessionManager from '../browser/shop-session-manager'
 import type { Store, StoreCreateInput, StoreUpdateInput } from '@shared/schemas/store'
 import { normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
 import { StoreStatus } from '@shared/enums/store-status'
@@ -286,14 +286,18 @@ export function archiveStore(storeId: string): boolean {
  * 关闭失败一律抛错而不是留下半删状态：调用方按错误返回，用户可以先关浏览器再重试。
  * 错误前缀用 PROFILE_IN_USE（"店铺浏览器正在运行"），IPC 层据此给出可行动提示。
  */
-export function releaseStoreRuntime(storeId: string): void {
+export function releaseStoreRuntime(storeId: string, options: { preserveSession?: boolean } = {}): void {
   try {
     closeStoreBrowser(storeId)
-    closeStoreSession(storeId)
+    ShopSessionManager.closeStoreSession(storeId, {
+      // 软删除需要保留登录环境；物理删除会在 destroyStoreSession 中清理。
+      preserveLogin: options.preserveSession !== false,
+      allowDeleted: true
+    })
   } catch (error: any) {
     throw new Error(`PROFILE_IN_USE: 店铺运行环境未能关闭（${String(error?.message || error)}），已中止删除`)
   }
-  if (getOpenStoreIds().includes(storeId) || getActiveSessions().has(storeId) || getStandaloneWindowCount(storeId) > 0) {
+  if (getOpenStoreIds().includes(storeId) || ShopSessionManager.hasActiveSession(storeId) || getStandaloneWindowCount(storeId) > 0) {
     throw new Error('PROFILE_IN_USE: 店铺浏览器仍在运行，已中止删除；请先关闭该店铺浏览器')
   }
 }
@@ -330,20 +334,18 @@ export async function purgeStore(storeId: string): Promise<boolean> {
   if (!row) return false
 
   // 删记录前先收敛运行时（视图/会话），否则 partition 被活动会话占着清不干净
-  releaseStoreRuntime(storeId)
+  releaseStoreRuntime(storeId, { preserveSession: false })
 
   // 先写审计（此时 stores 行仍在，满足 audit_logs.store_id 外键；
   // 删除 store 后该行 store_id 依 ON DELETE SET NULL 置空，审计记录本身保留）
   writeAudit('store.purge', 'success', { storeId })
 
+  // Session 的 partition 和会话级 Cookie 快照由统一 Facade 清理，
+  // 避免关闭流程异步快照把已经删除的登录环境重新写回来。
+  await ShopSessionManager.destroyStoreSession(storeId)
+
   // 级联删除依赖行（foreign_keys ON，ON DELETE CASCADE 覆盖 tabs/bookmarks/downloads/browser_profiles/store_proxies）
   db.prepare('DELETE FROM stores WHERE id = ?').run(storeId)
-
-  // 清理 session partition 存储
-  try {
-    const sess = session.fromPartition(`persist:store_${storeId}`)
-    await sess.clearStorageData()
-  } catch { /* partition 未创建过则忽略 */ }
 
   // 清理店铺下载目录
   try {
@@ -358,7 +360,12 @@ export async function purgeStore(storeId: string): Promise<boolean> {
  */
 export function reorderStores(orderedStoreIds: string[]): boolean {
   const db = getDatabase()
-  
+  const liveStoreIds = (db.prepare('SELECT id FROM stores WHERE deleted_at IS NULL').all() as Array<{ id: string }>).map(row => row.id)
+  const liveSet = new Set(liveStoreIds)
+  // Main 进程边界不接受子集、未知 ID 或包含已删除店铺的排序请求，
+  // 否则会留下重复/不连续的 sort_order，下一次列表查询的顺序就不稳定。
+  if (orderedStoreIds.length !== liveStoreIds.length || orderedStoreIds.some(id => !liveSet.has(id))) return false
+
   db.transaction(() => {
     const stmt = db.prepare('UPDATE stores SET sort_order = ?, updated_at = ? WHERE id = ?')
     

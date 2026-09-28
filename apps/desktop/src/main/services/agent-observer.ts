@@ -3,7 +3,7 @@ import type { AgentPageObservation } from '@shared/schemas/agent'
 import { redactAgentText, sanitizeAgentUrl } from '@shared/agent-privacy'
 import {
   getActiveTabId, getDisplayedStoreId, getOpenStoreIds, getStoreTabs,
-  getTabWebContents, isBrowserTabMounted, isBrowserTabReadableForAgent
+  getTabWebContents, isBrowserTabMounted, isBrowserTabReadableForAgent, waitForTabWebContents
 } from '../browser/window-manager'
 import { getStore } from '../stores/store-manager'
 import { isAppLocked } from './security-manager'
@@ -108,6 +108,23 @@ function observationError(code: string, message: string): never {
   throw new AgentObservationError(code, message)
 }
 
+/**
+ * 取当前活动标签页的页面句柄。
+ *
+ * 页面句柄来自主窗口渲染层 DOM `<webview>` 的注册：Agent 刚打开店铺就立刻观察时，
+ * 元素可能还没挂上（`guestAttached` 仍为 false）。这时直接判"已销毁"会误导用户，
+ * 所以先等一小段（最多 5s），仍拿不到再如实报"页面未就绪"。
+ */
+async function resolveTabWebContents(storeId: string, tabId: string): Promise<Electron.WebContents> {
+  const immediate = getTabWebContents(storeId, tabId)
+  if (immediate) return immediate
+  try {
+    return await waitForTabWebContents(storeId, tabId, 5000)
+  } catch {
+    observationError('AGENT_VIEW_NOT_MOUNTED', '店铺页面尚未就绪（webview 未注册或正在重载），请稍后重试')
+  }
+}
+
 
 export async function observeCurrentPage(): Promise<AgentPageObservation> {
   if (isAppLocked()) observationError('APP_LOCKED', '应用已锁定，请先解锁')
@@ -120,7 +137,7 @@ export async function observeCurrentPage(): Promise<AgentPageObservation> {
   if (!tabId) observationError('AGENT_NO_ACTIVE_TAB', '当前店铺没有活动标签页')
   const tab = getStoreTabs(storeId).find(x => x.id === tabId)
   if (!tab) observationError('AGENT_TAB_CLOSED', '当前标签页已关闭')
-  const wc = getTabWebContents(storeId, tabId)
+  const wc = await resolveTabWebContents(storeId, tabId)
   if (!wc || wc.isDestroyed()) observationError('AGENT_TAB_DESTROYED', '当前标签页已销毁，请重新打开后重试')
   const viewMounted = isBrowserTabMounted(storeId, tabId)
   if (!viewMounted && !isBrowserTabReadableForAgent(storeId, tabId)) {

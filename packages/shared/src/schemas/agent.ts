@@ -43,10 +43,16 @@ export const AGENT_SOFTWARE_ACTION_TYPES = [
   'listTrashStores',
   'listBackups',
   'getTaskDetail',
+  'createTask',
   'searchMemory',
   'openStore',
   'displayStore',
   'activateTab',
+  'createTab',
+  'navigateTab',
+  'controlTab',
+  'pinTab',
+  'closeTab',
   'closeStore',
   'createAgent',
   'activateAgent',
@@ -84,7 +90,31 @@ export const AGENT_SOFTWARE_ACTION_TYPES = [
   'deleteSkill',
   'createPlugin',
   'listPlugins',
-  'runInvite'
+  'runInvite',
+  // Job 闭环（详情/反馈/结果审阅/人工确认/安全恢复/取消）
+  'getJobDetail',
+  'jobFeedback',
+  'reviewJobResult',
+  'approveJob',
+  'resumeJob',
+  'cancelJob',
+  // 组织变更（岗位参数与模型绑定，走确认门禁）
+  'updateAgent',
+  'bindAgentModel',
+  // 插件改删与任务定义编辑
+  'updatePlugin',
+  'deletePlugin',
+  'updateTask',
+  // 数据中心只读汇总与主体回填
+  'overviewStats',
+  'overviewDatacenter',
+  'overviewInvoiceCenter',
+  'applyEntity',
+  // 质量复盘与记忆维护
+  'qualityMetrics',
+  'qualityReview',
+  'memoryRebuild',
+  'memorySnapshot'
 ] as const
 
 /** 主 Agent 可以打开的应用面板；不包含任何数据写入。 */
@@ -96,8 +126,8 @@ export const AGENT_CREATABLE_ROLES = ['operator', 'analyst', 'reviewer', 'conten
 export const AGENT_RISK_LEVELS = ['read', 'write', 'submit'] as const
 
 export const AGENT_MAX_GOAL_CHARS = 500
-export const AGENT_MAX_PROPOSAL_STEPS = 12
-export const AGENT_MAX_PLAN_STEPS = 25
+export const AGENT_MAX_PROPOSAL_STEPS = 48
+export const AGENT_MAX_PLAN_STEPS = 100
 export const AGENT_MAX_TEXT_CHARS = 2000
 export const AGENT_MAX_TIMEOUT_MS = 120000
 
@@ -218,6 +248,17 @@ export const agentSkillStepSchema = z.object({
   description: z.string().max(160).default('')
 }).strict()
 
+/**
+ * 用户在设置面板里创建技能：与模型 createSkill 动作同形（1～8 步、input 严格对象）。
+ * 步骤资格（只能自动执行类工具）由 @shared/agent-tools 的 skillStepEligible 判定，这里只管形状。
+ */
+export const agentSkillCreateInputSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().trim().max(500).default(''),
+  intent: z.string().trim().max(500).default(''),
+  steps: z.array(z.object({ type: z.string().min(1).max(60), input: z.record(z.unknown()).default({}) }).strict()).min(1).max(8)
+}).strict()
+
 export const agentSkillSchema = z.object({
   id: z.string().min(1).max(80),
   name: z.string().min(1).max(80),
@@ -230,6 +271,26 @@ export const agentSkillSchema = z.object({
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative()
 }).strict()
+
+/**
+ * 改插件（面板与智能体共用同一份）：用 pluginId 或现有 name 定位，
+ * newName 才是改名——两个字段分开，避免“name 既当定位又当新名”的歧义。
+ * skillNames 用名称给出（对话与分享包里只有名称），由 Main 反查成 id 并同步归属。
+ */
+export const agentPluginUpdateInputSchema = z.object({
+  pluginId: z.string().min(1).max(80).optional(),
+  name: z.string().trim().min(1).max(80).optional(),
+  newName: z.string().trim().min(1).max(80).optional(),
+  description: z.string().trim().max(500).optional(),
+  skillNames: z.array(z.string().trim().min(1).max(80)).min(1).max(8).optional()
+}).strict().refine(input => !!(input.pluginId || input.name), { message: '需要 pluginId 或 name 定位插件' })
+  .refine(input => input.newName !== undefined || input.description !== undefined || input.skillNames !== undefined, { message: '至少要修改名称、说明或成员技能之一' })
+
+/** 删插件（保留成员技能，只解除归属）。 */
+export const agentPluginDeleteInputSchema = z.object({
+  pluginId: z.string().min(1).max(80).optional(),
+  name: z.string().trim().min(1).max(80).optional()
+}).strict().refine(input => !!(input.pluginId || input.name), { message: '需要 pluginId 或 name 定位插件' })
 
 /** 插件：一组技能的打包（声明式，不含代码）。 */
 export const agentPluginSchema = z.object({
@@ -276,8 +337,8 @@ export const agentPackImportInputSchema = z.object({
 /** Job 结束后自动续办：把用户目标与 Job 结果交给智能体回合，让它判断并给出下一步。 */
 export const agentJobFollowUpInputSchema = z.object({
   goal: z.string().trim().min(1).max(500),
-  jobIds: z.array(z.string().min(1).max(80)).min(1).max(10),
-  history: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().max(2000) })).max(12).default([])
+  jobIds: z.array(z.string().min(1).max(80)).min(1).max(100),
+  history: z.array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().max(2000) })).max(64).default([])
 }).strict()
 
 /** 本地备份摘要：只给 id、时间、大小和恢复状态，不带文件路径。 */
@@ -322,6 +383,11 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('openStore'), storeId: agentStoreIdSchema }).strict(),
   z.object({ type: z.literal('displayStore'), storeId: agentStoreIdSchema }).strict(),
   z.object({ type: z.literal('activateTab'), storeId: agentStoreIdSchema, tabId: agentTabIdSchema }).strict(),
+  z.object({ type: z.literal('createTab'), storeId: agentStoreIdSchema, url: z.string().trim().max(2000).optional() }).strict(),
+  z.object({ type: z.literal('navigateTab'), storeId: agentStoreIdSchema, tabId: agentTabIdSchema, url: z.string().trim().min(1).max(2000) }).strict(),
+  z.object({ type: z.literal('controlTab'), storeId: agentStoreIdSchema, tabId: agentTabIdSchema, action: z.enum(['back', 'forward', 'reload']) }).strict(),
+  z.object({ type: z.literal('pinTab'), storeId: agentStoreIdSchema, tabId: agentTabIdSchema, pinned: z.boolean() }).strict(),
+  z.object({ type: z.literal('closeTab'), storeId: agentStoreIdSchema, tabId: agentTabIdSchema }).strict(),
   z.object({ type: z.literal('closeStore'), storeId: agentStoreIdSchema }).strict(),
   z.object({
     type: z.literal('createAgent'),
@@ -337,6 +403,13 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('listTrashStores') }).strict(),
   z.object({ type: z.literal('listBackups') }).strict(),
   z.object({ type: z.literal('getTaskDetail'), taskId: z.string().min(1).max(100) }).strict(),
+  z.object({
+    type: z.literal('createTask'),
+    name: z.string().trim().min(1).max(80),
+    storeScope: z.string().max(80).nullable().optional(),
+    steps: z.array(z.record(z.unknown())).min(1).max(100),
+    schedule: z.object({ everyMs: z.number().int().min(60000).max(30 * 86400000) }).nullable().optional()
+  }).strict(),
   z.object({ type: z.literal('searchMemory'), query: z.string().trim().min(1).max(200) }).strict(),
   z.object({ type: z.literal('createStore'), name: z.string().trim().min(1).max(120), platform: z.string().trim().min(1).max(80) }).strict(),
   z.object({
@@ -393,7 +466,82 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
   }).strict(),
   z.object({ type: z.literal('listPlugins') }).strict(),
   /** 达人邀约发送：按店铺已保存的邀约配置构造任务并派给子 Agent（提交类，按自治策略执行）。 */
-  z.object({ type: z.literal('runInvite'), storeId: z.string().max(80).optional(), count: z.number().int().min(1).max(50).optional() }).strict()
+  z.object({ type: z.literal('runInvite'), storeId: z.string().max(80).optional(), count: z.number().int().min(1).max(50).optional() }).strict(),
+
+  // ── Job 闭环（详情 / 反馈 / 结果审阅 / 人工确认 / 安全恢复 / 取消）──
+  z.object({ type: z.literal('getJobDetail'), jobId: z.string().min(1).max(100) }).strict(),
+  z.object({
+    type: z.literal('jobFeedback'),
+    jobId: z.string().min(1).max(100),
+    rating: z.number().int().min(1).max(5),
+    correction: z.string().trim().max(1000).optional()
+  }).strict(),
+  z.object({
+    type: z.literal('reviewJobResult'),
+    resultId: z.string().min(1).max(120),
+    approved: z.boolean(),
+    correction: z.string().trim().max(1000).optional()
+  }).strict(),
+  /** 批准/驳回等待人工确认的 Job。该工具本身在确认门禁内，用户的计划卡点击即人工确认。 */
+  z.object({ type: z.literal('approveJob'), jobId: z.string().min(1).max(100), approved: z.boolean() }).strict(),
+  /** 安全恢复：只有未产生页面副作用的 Job 能被恢复（副作用由 Main 判定并拒绝）。 */
+  z.object({ type: z.literal('resumeJob'), jobId: z.string().min(1).max(100) }).strict(),
+  z.object({ type: z.literal('cancelJob'), jobId: z.string().min(1).max(100) }).strict(),
+
+  // ── 组织变更（走人工确认门禁）──
+  z.object({
+    type: z.literal('updateAgent'),
+    agentId: z.string().min(1).max(80),
+    name: z.string().trim().min(1).max(120).optional(),
+    description: z.string().trim().max(1000).optional(),
+    storeScope: z.object({ storeIds: z.array(z.string().min(1).max(80)).max(200), readOnly: z.boolean().optional() }).strict().optional(),
+    dailyBudget: z.object({ currency: z.string().trim().min(1).max(8), amount: z.number().nonnegative() }).strict().nullable().optional(),
+    toolPolicy: z.object({
+      canCreateAgent: z.boolean().optional(),
+      canChangeModel: z.boolean().optional(),
+      canChangePolicy: z.boolean().optional(),
+      canReadOtherAgentPrivateMemory: z.boolean().optional(),
+      tools: z.array(z.enum(['observe_page', 'read_text', 'read_table', 'model_analyze', 'create_job', 'review_job', 'memory_search', 'memory_write'])).max(32).optional()
+    }).strict().optional(),
+    maxConcurrency: z.number().int().min(1).max(32).optional(),
+    timeoutMs: z.number().int().min(1000).max(3600000).optional()
+  }).strict(),
+  /** 绑定/解绑子 Agent 的模型 Profile（null = 解绑，回退继承）。 */
+  z.object({ type: z.literal('bindAgentModel'), agentId: z.string().min(1).max(80), modelProfileId: z.string().trim().max(80).nullable() }).strict(),
+
+  // ── 插件改删（插件是技能分组，不携带新权限）──
+  z.object({
+    type: z.literal('updatePlugin'),
+    pluginId: z.string().min(1).max(80).optional(),
+    name: z.string().trim().min(1).max(80).optional(),
+    newName: z.string().trim().min(1).max(80).optional(),
+    description: z.string().trim().max(500).optional(),
+    skillNames: z.array(z.string().min(1).max(80)).max(8).optional()
+  }).strict(),
+  z.object({ type: z.literal('deletePlugin'), pluginId: z.string().min(1).max(80).optional(), name: z.string().trim().min(1).max(80).optional() }).strict(),
+
+  // ── 任务定义编辑 ──
+  z.object({
+    type: z.literal('updateTask'),
+    taskId: z.string().min(1).max(100),
+    name: z.string().trim().min(1).max(80).optional(),
+    storeScope: z.string().max(80).nullable().optional(),
+    steps: z.array(z.record(z.unknown())).min(1).max(100).optional(),
+    schedule: z.object({ everyMs: z.number().int().min(60000).max(30 * 86400000) }).nullable().optional()
+  }).strict(),
+
+  // ── 数据中心只读汇总与主体回填 ──
+  z.object({ type: z.literal('overviewStats') }).strict(),
+  z.object({ type: z.literal('overviewDatacenter') }).strict(),
+  z.object({ type: z.literal('overviewInvoiceCenter') }).strict(),
+  /** 把已采到的店铺主体写进营业执照字段（空则填，不一致不覆盖，由 Main 判定）。 */
+  z.object({ type: z.literal('applyEntity') }).strict(),
+
+  // ── 质量复盘与记忆维护 ──
+  z.object({ type: z.literal('qualityMetrics') }).strict(),
+  z.object({ type: z.literal('qualityReview') }).strict(),
+  z.object({ type: z.literal('memoryRebuild') }).strict(),
+  z.object({ type: z.literal('memorySnapshot'), skipInvalidRecords: z.boolean().optional() }).strict()
 ])
 
 export const agentSoftwarePlanStepSchema = z.object({
@@ -457,9 +605,19 @@ export const agentPlanSchema = z.object({
   status: z.enum(AGENT_PLAN_STATUSES)
 }).strict()
 
+/**
+ * 单条 UI 消息持久化的正文上限。
+ *
+ * 这个值决定**重启后模型还能看到多少旧对话**：Renderer 内存里的单条消息上限是
+ * 2000 字，持久化时若再砍一刀，重载重建出的历史就会比会话内短得多（曾为 200，
+ * 等于重启即 10 倍上下文塌缩，长结论只剩开头一句）。因此这里与
+ * `agentConversationTurnSchema.text`（进模型的单轮上限）保持一致。
+ */
+export const AGENT_UI_MESSAGE_TEXT_MAX = 2000
+
 export const agentUiMessageSummarySchema = z.object({
   role: z.enum(['user', 'assistant']),
-  summary: z.string().max(200),
+  summary: z.string().max(AGENT_UI_MESSAGE_TEXT_MAX),
   at: z.number().int().nonnegative()
 }).strict()
 
@@ -475,12 +633,12 @@ export const agentUiStateSchema = z.object({
 /** 对话记忆：只带最近几轮的脱敏文本，供模型消除指代和延续上下文。 */
 export const agentConversationTurnSchema = z.object({
   role: z.enum(['user', 'assistant']),
-  text: z.string().trim().min(1).max(1000)
+  text: z.string().trim().min(1).max(2000)
 }).strict()
 
 export const agentPlanGenerateInputSchema = z.object({
   goal: z.string().trim().min(1).max(AGENT_MAX_GOAL_CHARS),
-  history: z.array(agentConversationTurnSchema).max(12).default([])
+  history: z.array(agentConversationTurnSchema).max(64).default([])
 }).strict()
 
 export type AgentPlanStatus = (typeof AGENT_PLAN_STATUSES)[number]

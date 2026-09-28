@@ -1,0 +1,36 @@
+name: CI
+
+# 轻量流水线（2026-09-26 审计 P2-G：仓库此前完全没有 CI，验收脚本全靠手跑）：
+# typecheck -> 单元测试 -> electron-vite build。重活（dist 打包、真机 CDP 验收套件）
+# 留在 tools/acceptance/run-acceptance.ps1，需要 Windows 桌面环境，不适合托管 runner。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    # Windows：主进程产物、better-sqlite3 预编译包与打包脚本都以 Windows x64 为目标
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # 锁文件是 lockfileVersion 9.0（pnpm 9/10 共用）；本机开发用的是更新的 pnpm
+          # （12.x），这里固定 10 以免托管 runner 上解析不到更新的主版本。
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify (typecheck + unit tests + build)
+        shell: pwsh
+        run: ./tools/ci/verify.ps1

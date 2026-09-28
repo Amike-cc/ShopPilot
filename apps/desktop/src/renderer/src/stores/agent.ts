@@ -7,7 +7,8 @@ import type {
   AgentSoftwarePlan,
   AgentUiState
 } from '@shared/schemas/agent'
-import { DEFAULT_AGENT_UI_STATE } from '@shared/schemas/agent'
+import { AGENT_UI_MESSAGE_TEXT_MAX, DEFAULT_AGENT_UI_STATE } from '@shared/schemas/agent'
+import { describeAgentContextUsage } from '@shared/agent-context'
 import type { TaskCreateInput } from '@shared/schemas/task'
 import { statusForJob, planStatusForJob, type AgentUiStatus } from '../features/agent/job-status'
 
@@ -29,7 +30,7 @@ const SOFTWARE_CONTEXT_THROTTLE_MS = 2000
 let softwareContextRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let softwareContextRefreshedAt = 0
 
-type AgentMessage = { id: string; role: 'user' | 'assistant'; text: string; at: number; thought?: boolean }
+type AgentMessage = { id: string; role: 'user' | 'assistant'; text: string; at: number; thought?: boolean; meta?: string }
 
 export const useAgentStore = defineStore('agent', {
   state: () => ({
@@ -56,6 +57,8 @@ export const useAgentStore = defineStore('agent', {
     lastGoal: '' as string,
     /** 续办已触发标记（同一批 Job 只续办一次）。 */
     followUpInFlight: false,
+    /** 已经完成或尝试过自动续办的批次，避免多个后台 watcher 重复派发。 */
+    followUpCompletedKey: '' as string,
   }),
 
   getters: {
@@ -112,8 +115,10 @@ export const useAgentStore = defineStore('agent', {
 
     persistUi() {
       if (!this.uiLoaded) return
+      // 存正文而不是 200 字摘要：重载时这里会被用来重建 messages（见 initialize），
+      // 存摘要等于每次重启都把旧轮次砍到 200 字，模型随即丢失指代对象。
       this.ui.messageSummaries = this.messages.slice(-40).map(message => ({
-        role: message.role, summary: message.text.slice(0, 200), at: message.at
+        role: message.role, summary: message.text.slice(0, AGENT_UI_MESSAGE_TEXT_MAX), at: message.at
       }))
       // Store state and preload return values are Vue/ContextBridge proxies. Clone in Renderer
       // before crossing contextBridge; cloning inside preload is too late for proxy arguments.
@@ -137,8 +142,8 @@ export const useAgentStore = defineStore('agent', {
       } finally { uiWriteInFlight = false }
     },
 
-    addMessage(role: AgentMessage['role'], text: string, options: { thought?: boolean } = {}) {
-      this.messages.push({ id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, role, text: String(text).slice(0, 2000), at: Date.now(), thought: options.thought === true })
+    addMessage(role: AgentMessage['role'], text: string, options: { thought?: boolean; meta?: string } = {}) {
+      this.messages.push({ id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, role, text: String(text).slice(0, 2000), at: Date.now(), thought: options.thought === true, meta: options.meta })
       this.messages = this.messages.slice(-40)
       this.persistUi()
     },
@@ -213,8 +218,9 @@ export const useAgentStore = defineStore('agent', {
       const trimmed = goal.trim()
       if (!trimmed || this.busy) return
       this.lastGoal = trimmed
-      // 只带最近几轮的脱敏文本，让模型能消除“它/刚才/继续”的指代；思考块不进上下文。
-      const history = this.messages.filter(message => !message.thought).slice(-8).map(message => ({ role: message.role, text: message.text.slice(0, 500) }))
+      // Main 会按当前模型的上下文窗口压缩旧轮次；Renderer 保留更长的
+      // 最近历史，让大窗口模型能够继续大型任务，低窗口模型仍能安全裁剪。
+      const history = this.messages.filter(message => !message.thought).slice(-40).map(message => ({ role: message.role, text: message.text.slice(0, 2000) }))
       if (options.echo !== false) this.addMessage('user', trimmed)
       this.error = null; this.status = 'thinking'; this.busy = true; this.plan = null; this.softwarePlan = null; this.pendingGoal = ''
       let autoRun: 'software' | 'dispatch' | null = null
@@ -226,7 +232,9 @@ export const useAgentStore = defineStore('agent', {
           this.plan = null
           this.softwarePlan = null
           for (const thought of result.data.thoughts || []) this.addMessage('assistant', thought, { thought: true })
-          this.addMessage('assistant', String(result.data.text || '当前没有打开的店铺页面。页面任务需要先打开店铺；打开后我可以生成计划并派给子 Agent。'))
+          this.addMessage('assistant', String(result.data.text || '当前没有打开的店铺页面。页面任务需要先打开店铺；打开后我可以生成计划并派给子 Agent。'), {
+            meta: result.data.usage ? describeAgentContextUsage(result.data.usage) : undefined
+          })
           if (Array.isArray(result.data.jobIds) && result.data.jobIds.length) void this.watchDelegatedJobs(result.data.jobIds.map(String), trimmed)
         } else if (result.data.kind === 'software') {
           if (result.data.thought) this.addMessage('assistant', result.data.thought, { thought: true })
@@ -349,8 +357,11 @@ export const useAgentStore = defineStore('agent', {
 
     /** 子 Agent 执行期间只读地跟踪 Job；主 Agent 不参与执行。 */
     async refreshJob() {
-      if (!this.task?.jobId) return
-      const result = await window.shopilot.agentDomain.jobGet(this.task.jobId)
+      const jobId = this.task?.jobId
+      if (!jobId) return
+      const result = await window.shopilot.agentDomain.jobGet(jobId)
+      // 读取期间用户可能已经创建了另一项任务，旧 Job 的响应不能写回新卡片。
+      if (this.task?.jobId !== jobId) return
       if (!result.ok) { this.task.errorCode = result.error.code; this.task.errorMessage = result.error.message; return }
       const job = JSON.parse(JSON.stringify(result.data)) as any
       const status = String(job.status || 'queued')
@@ -371,7 +382,7 @@ export const useAgentStore = defineStore('agent', {
         this.status = statusForJob(status)
         if (this.plan) this.plan.status = planStatusForJob(status)
         this.announceJobRecap(job, status, last)
-        if (this.task.runId) await this.loadTaskResults()
+        if (this.task.runId) await this.loadTaskResults(this.task.runId)
         // 终态才会产出「待审核证据」这类待办，计数必须以 Main 的最新数据为准（节流合并连发事件）。
         this.refreshSoftwareContextSoon()
         return
@@ -411,14 +422,15 @@ export const useAgentStore = defineStore('agent', {
     /** 多店任务/采集：派发后在后台轮询，逐个把执行结果汇总回对话；全部结束后让智能体自动续办（判断目标、给下一步）。 */
     async watchDelegatedJobs(jobIds: string[], goal = '') {
       const pending = new Set(jobIds)
-      const deadline = Date.now() + 10 * 60 * 1000
+      const unreadable = new Set<string>()
+      const deadline = Date.now() + 60 * 60 * 1000
       // 续办前检查：用户在这批 Job 结束后没有再发新消息（发了就以新消息为准，不打扰）。
       const lastUserAt = [...this.messages].reverse().find(message => message.role === 'user')?.at || 0
       while (pending.size && Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 3000))
         for (const jobId of [...pending]) {
           const result = await window.shopilot.agentDomain.jobGet(jobId)
-          if (!result.ok) { pending.delete(jobId); continue }
+           if (!result.ok) { pending.delete(jobId); unreadable.add(jobId); continue }
           const job = result.data
           if (!['succeeded', 'failed', 'cancelled', 'expired', 'blocked_budget', 'blocked_permission', 'recovery_required'].includes(job.status)) continue
           pending.delete(jobId)
@@ -434,16 +446,21 @@ export const useAgentStore = defineStore('agent', {
           }
         }
       }
-      if (!pending.size) this.addMessage('assistant', '多店任务已全部结束，详情和证据可在 Job 看板查看。')
-      else this.addMessage('assistant', `还有 ${pending.size} 个 Job 超过 10 分钟未结束，已停止轮询；可在 Job 看板查看进度或恢复。`)
+       if (!pending.size && !unreadable.size) this.addMessage('assistant', '多店任务已全部结束，详情和证据可在 Job 看板查看。')
+       else if (!pending.size && unreadable.size) this.addMessage('assistant', `已停止轮询；有 ${unreadable.size} 个 Job 无法读取最新状态，请到 Job 看板核对。`)
+       else this.addMessage('assistant', `还有 ${pending.size} 个 Job 超过 60 分钟未结束，已停止轮询；可在 Job 看板查看进度或恢复。`)
       // 自动续办：把结果交回智能体判断「目标是否达成 / 下一步怎么解决」（失败与成功都会续办一次）。
-      if (!goal || this.followUpInFlight) return
-      const currentLastUserAt = [...this.messages].reverse().find(message => message.role === 'user')?.at || 0
-      if (currentLastUserAt !== lastUserAt) return
-      this.followUpInFlight = true
+      // 仍有 Job 在运行时不能把未完成结果当成整批结果继续执行下一步。
+       if (pending.size || unreadable.size || !goal || this.followUpInFlight) return
+       const currentLastUserAt = [...this.messages].reverse().find(message => message.role === 'user')?.at || 0
+       if (currentLastUserAt !== lastUserAt) return
+       const followUpKey = `${goal}\u0000${[...jobIds].map(String).sort().join(',')}`
+       if (this.followUpCompletedKey === followUpKey) return
+       this.followUpCompletedKey = followUpKey
+       this.followUpInFlight = true
       try {
-        const history = this.messages.filter(message => !message.thought).slice(-8).map(message => ({ role: message.role, text: message.text.slice(0, 500) }))
-        const result = await window.shopilot.agent.jobFollowUp(goal, jobIds.slice(0, 10), history)
+        const history = this.messages.filter(message => !message.thought).slice(-40).map(message => ({ role: message.role, text: message.text.slice(0, 2000) }))
+        const result = await window.shopilot.agent.jobFollowUp(goal, jobIds.slice(0, 100), history)
         if (!result.ok) throw result.error
         if (result.data.kind === 'software') {
           if (result.data.thought) this.addMessage('assistant', result.data.thought, { thought: true })
@@ -456,7 +473,9 @@ export const useAgentStore = defineStore('agent', {
           if (result.data.requiresApproval !== true) await this.executeSoftwarePlan()
         } else {
           for (const thought of result.data.thoughts || []) this.addMessage('assistant', thought, { thought: true })
-          this.addMessage('assistant', String(result.data.text || '执行结果已看完。'))
+          this.addMessage('assistant', String(result.data.text || '执行结果已看完。'), {
+            meta: result.data.usage ? describeAgentContextUsage(result.data.usage) : undefined
+          })
         }
         await this.refreshSoftwareContextQuietly()
       } catch (error: any) {
@@ -502,7 +521,7 @@ export const useAgentStore = defineStore('agent', {
         if (this.plan) this.plan.status = this.task.status as AgentPlan['status']
         // 浏览器运行先到终态，Job 需要显式刷新一次才会落终态并触发复盘。
         if (this.task.jobId) await this.refreshJob()
-        await this.loadTaskResults()
+        await this.loadTaskResults(this.task.runId || undefined)
         // 任务终态同样会改变软件上下文里的任务/待办计数。
         this.refreshSoftwareContextSoon()
       } else {
@@ -520,28 +539,32 @@ export const useAgentStore = defineStore('agent', {
       this.status = 'waiting_confirmation'
     },
 
-    async loadTaskResults() {
-      if (!this.task?.runId) return
-      const result = await window.shopilot.task.results(this.task.runId)
+    async loadTaskResults(runId?: string) {
+      const targetRunId = runId || this.task?.runId
+      if (!targetRunId) return
+      const result = await window.shopilot.task.results(targetRunId)
+      // 结果读取期间可能已切换到另一项 TaskRun。
+      const task = this.task
+      if (!task || task.runId !== targetRunId) return
       if (!result.ok) {
-        this.task.errorCode = result.error.code
-        this.task.errorMessage = result.error.message
+        task.errorCode = result.error.code
+        task.errorMessage = result.error.message
         return
       }
-      this.task.results = result.data
+      task.results = result.data
       const failed = result.data?.run?.status === 'failed'
-      this.task.errorCode = failed ? result.data?.run?.errorCode || 'TASK_FAILED' : null
-      this.task.errorMessage = failed ? result.data?.run?.errorMessage || result.data?.run?.statusReason || null : null
-      this.task.currentStep = result.data?.run?.currentStep ?? this.task.currentStep
+      task.errorCode = failed ? result.data?.run?.errorCode || 'TASK_FAILED' : null
+      task.errorMessage = failed ? result.data?.run?.errorMessage || result.data?.run?.statusReason || null : null
+      task.currentStep = result.data?.run?.currentStep ?? task.currentStep
       const actualStatus = String(result.data?.run?.status || '')
       if (['succeeded', 'failed', 'cancelled'].includes(actualStatus)) {
-        this.task.status = actualStatus
+        task.status = actualStatus
         this.status = statusForJob(actualStatus)
         if (this.plan) this.plan.status = actualStatus as AgentPlan['status']
       }
-      if (this.completionAnnouncedRunId !== this.task.runId) {
-        this.completionAnnouncedRunId = this.task.runId
-        if (this.task.status === 'succeeded') {
+      if (this.completionAnnouncedRunId !== targetRunId) {
+        this.completionAnnouncedRunId = targetRunId
+        if (task.status === 'succeeded') {
           const summaries = (result.data?.results || []).map((row: any) => {
             if (row.kind === 'text') return String(row.payload?.text || row.summary || '').slice(0, 240)
             if (row.kind === 'table') return `表格 ${Number(row.payload?.rowCount ?? 0)} 行${row.payload?.summaryOnly ? '（仅表头与行数）' : ''}`
@@ -549,8 +572,8 @@ export const useAgentStore = defineStore('agent', {
             return String(row.summary || '').slice(0, 160)
           }).filter(Boolean)
           this.addMessage('assistant', `TaskRunner 报告成功。${summaries.join('；') || '任务步骤已完成。'}`)
-        } else if (this.task.status === 'failed') {
-          this.addMessage('assistant', `TaskRunner 报告失败（${this.task.errorCode || 'UNKNOWN'}）：${this.task.errorMessage || '无错误说明'}`)
+        } else if (task.status === 'failed') {
+          this.addMessage('assistant', `TaskRunner 报告失败（${task.errorCode || 'UNKNOWN'}）：${task.errorMessage || '无错误说明'}`)
         } else {
           this.addMessage('assistant', 'TaskRunner 报告任务已取消，后续步骤已停止。')
         }

@@ -5,14 +5,19 @@
 
 import { app, BrowserWindow, dialog, crashReporter } from 'electron'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { writeFileSync, existsSync } from 'fs'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
-import { initDatabase, closeDatabase } from './db/database'
+import { initDatabase, closeDatabase, getDatabasePath } from './db/database'
 import { registerStoreHandlers } from './ipc/store-handlers'
 import { registerBrowserHandlers } from './ipc/browser-handlers'
 import { registerBookmarkAndDownloadHandlers } from './ipc/bookmark-download-handlers'
 import { registerProfileAndMiscHandlers } from './ipc/profile-misc-handlers'
 import { registerProxyAndBackupHandlers } from './ipc/proxy-backup-handlers'
+import { registerPlatformHandlers } from './ipc/platform-handlers'
+import { registerOrderHandlers } from './ipc/order-handlers'
+import { registerSalesMetricsHandlers } from './ipc/sales-metrics-handlers'
+import { stopSalesMetricsScheduler } from './sales-metrics/sales-metrics-scheduler'
 import { registerTaskHandlers } from './ipc/task-handlers'
 import { registerSessionAndSecurityHandlers } from './ipc/session-security-handlers'
 import { registerUpdateHandlers } from './ipc/update-handlers'
@@ -23,12 +28,16 @@ import { scheduleStartupCheck } from './services/update-manager'
 import { installLockGate, startBackgroundServices } from './services/bg-services'
 import * as Security from './services/security-manager'
 import { setBrowserHostWindow, setBrowserViewsVisible, emitToRenderer } from './browser/window-manager'
-import { clearProxyAuthTracking } from './browser/session-manager'
+import { clearProxyAuthTracking, applyDefaultSessionPermissions } from './browser/session-manager'
 import { verifyStoreFingerprint } from './browser/fingerprint-injector'
-import { createStore, deleteStorePermanent, listStores } from './stores/store-manager'
+import { createStore, deleteStorePermanent, getStore, listStores } from './stores/store-manager'
 import { updateProfile } from './stores/profile-manager'
+import { assertNavigableUrl } from '@shared/navigation'
 import { openStoreBrowser, closeStoreBrowser, getStoreTabs } from './browser/window-manager'
 import { startSessionPersistence } from './services/session-persistence'
+import { latestBackupFileOnDisk, recoverDatabaseFromLatestBackup } from './services/backup-manager'
+import { migrateLegacyMemoryRoot } from './services/agent-memory'
+import * as TaskRunner from './tasks/task-runner'
 import { logMain } from './services/logger'
 
 /**
@@ -131,6 +140,41 @@ function resolveAppIcon(): string | undefined {
   return candidates.find(p => { try { return existsSync(p) } catch { return false } })
 }
 
+const STORE_PARTITION_PREFIX = 'persist:store_'
+
+/** 从 webview partition 中提取店铺 ID；未知格式一律拒绝。 */
+function getWebviewStoreId(partition: unknown): string | null {
+  if (typeof partition !== 'string' || !partition.startsWith(STORE_PARTITION_PREFIX)) return null
+  const storeId = partition.slice(STORE_PARTITION_PREFIX.length)
+  return storeId.length > 0 ? storeId : null
+}
+
+/** webview 只允许空白页，或由共享导航 helper 放行的 http(s) 地址。 */
+function isAllowedWebviewSource(source: unknown): boolean {
+  if (source === 'about:blank') return true
+  if (typeof source !== 'string') return false
+  try {
+    const safeUrl = assertNavigableUrl(source)
+    return ['http:', 'https:'].includes(new URL(safeUrl).protocol)
+  } catch {
+    return false
+  }
+}
+
+/** 只记录形状/协议，不把店铺 ID、主机名、路径或查询值写入日志。 */
+function describeWebviewValue(value: unknown, kind: 'partition' | 'src'): string {
+  if (typeof value !== 'string') return '<missing>'
+  if (kind === 'partition') {
+    return value.startsWith(STORE_PARTITION_PREFIX) ? 'persist:store_<redacted>' : '<invalid>'
+  }
+  if (value === 'about:blank') return 'about:blank'
+  try {
+    return `protocol=${new URL(value).protocol}`
+  } catch {
+    return '<invalid>'
+  }
+}
+
 /**
  * 创建主窗口
  */
@@ -153,10 +197,44 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      webviewTag: true
     },
     backgroundColor: '#1a1a1a',
     show: false
+  })
+
+  // webview 的初始参数来自 Renderer，必须在主窗口开始加载前收口，避免不受信任的
+  // preload、partition 或初始 URL 被 Electron 接受。仅允许真实店铺自己的持久分区。
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    // 无论校验是否通过，都移除 Renderer 提供的 preload，并固定 guest 的安全选项。
+    delete params.preload
+    delete webPreferences.preload
+    webPreferences.nodeIntegration = false
+    webPreferences.contextIsolation = true
+    webPreferences.sandbox = true
+    webPreferences.webviewTag = false
+    webPreferences.backgroundThrottling = false
+
+    const storeId = getWebviewStoreId(params.partition)
+    let validPartition = false
+    if (storeId && params.partition === `${STORE_PARTITION_PREFIX}${storeId}`) {
+      try {
+        validPartition = !!getStore(storeId)
+      } catch {
+        validPartition = false
+      }
+    }
+    const validSource = isAllowedWebviewSource(params.src)
+
+    if (!validPartition || !validSource) {
+      event.preventDefault()
+      const reason = !validPartition ? 'invalid-partition' : 'invalid-src'
+      logMain(
+        'warn',
+        `main window: blocked webview attach reason=${reason} partition=${describeWebviewValue(params.partition, 'partition')} src=${describeWebviewValue(params.src, 'src')}`
+      )
+    }
   })
 
   // 开发环境加载 Vite dev server
@@ -167,6 +245,37 @@ function createWindow(): void {
     // 生产环境加载打包后的文件
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  // Electron 安全清单：主窗口的页面导航与 window.open 收口。主窗口渲染层持有完整业务
+  // bridge（店铺/任务/AI Key），一旦被注入脚本，这两道护栏阻止它把宿主窗口导航到任意
+  // 远程页面——新开窗口默认继承 preload，等于把 bridge 送到远程内容手里。
+  const allowedUiFileHref = pathToFileURL(join(__dirname, '../renderer/index.html')).href
+  const allowedDevOrigin = process.env.VITE_DEV_SERVER_URL
+    ? (() => { try { return new URL(process.env.VITE_DEV_SERVER_URL as string).origin } catch { return null } })()
+    : null
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    let allowed = false
+    try {
+      const u = new URL(url)
+      if (u.protocol === 'file:') {
+        // 打包态只放行本地 UI 页本身（含 hash/查询变化；SPA 路由就是 hash）
+        allowed = u.href === allowedUiFileHref
+          || u.href.startsWith(allowedUiFileHref + '#')
+          || u.href.startsWith(allowedUiFileHref + '?')
+      } else if (allowedDevOrigin) {
+        // 开发态只放行 Vite dev server 同源
+        allowed = u.origin === allowedDevOrigin
+      }
+    } catch { allowed = false }
+    if (!allowed) {
+      event.preventDefault()
+      logMain('warn', `main window: blocked navigation to ${url}`)
+    }
+  })
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    logMain('warn', `main window: blocked window.open url=${details.url}`)
+    return { action: 'deny' }
+  })
 
   // 显示链路加固：titleBarStyle:'hidden' + titleBarOverlay 下 ready-to-show 在
   // Windows 上存在不触发的情况（进程活着但窗口永不出）——保留 ready-to-show
@@ -278,6 +387,10 @@ async function initialize(): Promise<void> {
     // 应用锁门禁必须在所有业务通道注册之前挂上（统一包装 ipcMain.handle）
     installLockGate()
 
+    // 权限收口要在**任何窗口创建之前**挂到默认 session 上（主窗口/密码对话框都用它）；
+    // 店铺 session 的收口在各自 configureSession 里，已由 session-manager 覆盖 request+check 两条路径。
+    applyDefaultSessionPermissions()
+
     // 注册 IPC 处理器
     console.log('Registering IPC handlers...')
     registerStoreHandlers()
@@ -285,6 +398,9 @@ async function initialize(): Promise<void> {
     registerBookmarkAndDownloadHandlers()
     registerProfileAndMiscHandlers()
     registerProxyAndBackupHandlers()
+    registerPlatformHandlers()
+    registerOrderHandlers()
+    registerSalesMetricsHandlers()
     registerTaskHandlers()
     registerSessionAndSecurityHandlers()
     registerUpdateHandlers()
@@ -301,6 +417,15 @@ async function initialize(): Promise<void> {
     })
     startBackgroundServices()
 
+    // 历史遗留的 Agent 记忆目录（%APPDATA%\ShopPilot\agent-memory）搬到 userData 之下：
+    // 否则它会落在备份/诊断包/卸载清理的边界之外（2026-09-28 审查实测两个目录同时存在）。
+    try {
+      const migrated = migrateLegacyMemoryRoot()
+      if (migrated.moved) logMain('info', `Agent 记忆目录已迁移：${migrated.from} → ${migrated.to}`)
+    } catch (e: any) {
+      logMain('warn', 'Agent 记忆目录迁移失败（不影响其他功能）: ' + String(e?.message || e))
+    }
+
     // 自动更新（§21）：update.autoCheck 开启时启动后延迟自动检查一次
     scheduleStartupCheck()
 
@@ -314,13 +439,64 @@ async function initialize(): Promise<void> {
       logMain('warn', '会话持久化启动失败（不影响其他功能）: ' + String(e?.message || e))
     }
   } catch (error: any) {
-    console.error('Failed to initialize application:', error)
-    try {
-      writeFileSync(join(app.getPath('userData'), 'startup-error.log'),
-        (error && error.stack) || String(error))
-    } catch { /* ignore */ }
-    app.quit()
+    await handleStartupFailure(error)
   }
+}
+
+/**
+ * 启动失败处理：留日志 → 尝试用最新备份自愈 → 起不来就**明确告诉用户**。
+ *
+ * 为什么要改：原先这里只写 `startup-error.log` 然后 `app.quit()`，用户看到的是
+ * "双击图标毫无反应"——没有窗口、没有弹窗、没有托盘。更糟的是"从备份恢复"这个功能
+ * 本身要求应用能起来（它走 IPC + 库），于是**唯一的自救路径依赖应用能启动**，
+ * 备份文件就在磁盘上却永远用不上（2026-09-28 审查确认的死锁）。
+ * 这里把"扫盘找最新备份 → 原子换回来 → 重启"做成不依赖库的能力。
+ */
+async function handleStartupFailure(error: any): Promise<void> {
+  const detail = (error && error.stack) || String(error)
+  console.error('Failed to initialize application:', error)
+  try {
+    writeFileSync(join(app.getPath('userData'), 'startup-error.log'), detail)
+  } catch { /* 日志写不了也要继续走下面的提示 */ }
+
+  const latest = latestBackupFileOnDisk()
+  if (latest) {
+    const choice = dialog.showMessageBoxSync({
+      type: 'error',
+      title: 'ShopPilot 启动失败',
+      message: '数据库无法打开，应用无法启动。',
+      detail:
+        `原因：${String(error?.message || error).slice(0, 300)}\n\n` +
+        `检测到一份备份：\n${latest}\n\n` +
+        `选择「用备份恢复并重启」会用这份备份替换当前数据库（当前库会留在原处，不会被删除），然后自动重启。`,
+      buttons: ['用备份恢复并重启', '退出'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true
+    })
+    if (choice === 0) {
+      try {
+        closeDatabase()
+        const { restoredFrom } = recoverDatabaseFromLatestBackup(getDatabasePath())
+        logMain('warn', `启动自愈：已用备份恢复数据库 ${restoredFrom}`)
+        app.relaunch()
+        app.exit(0)
+        return
+      } catch (recoverError: any) {
+        logMain('error', `启动自愈失败：${String(recoverError?.message || recoverError).slice(0, 200)}`)
+      }
+    }
+  }
+
+  dialog.showErrorBox(
+    'ShopPilot 启动失败',
+    `数据库无法打开，应用无法启动。\n\n` +
+      `原因：${String(error?.message || error).slice(0, 300)}\n\n` +
+      `${latest ? '用备份自动恢复也失败了。' : '本机还没有任何可用备份。'}\n` +
+      `错误详情已写入：\n${join(app.getPath('userData'), 'startup-error.log')}\n\n` +
+      `请把该文件发给技术支持。`
+  )
+  app.exit(1)
 }
 
 /**
@@ -374,13 +550,45 @@ app.on('window-all-closed', () => {
 
 // 退出路径留痕（2026-09-13 实测过一次"进程无声消失"：无错误日志、无事件日志、无转储，
 // 事后无法判断是窗口被关、主动退出还是被外部结束——这三条日志就是为这种场景加的）
+//
+// 退出次序（2026-09-28 审查修正）：
+//   · 这里**不再关库**。session-persistence 的 before-quit 监听器会 preventDefault 并异步
+//     把会话快照写完（最长 3 秒）才退出，而它的监听器注册得比这里晚——原实现等于"库先关了，
+//     进程还活着几秒"，期间 1s/1.5s/30s/60s 四个定时器仍在跑，写库全失败且多数被空 catch 吞掉。
+//   · 改为：先请所有在跑的 run 收尾（协作式取消），库留到最后一步（will-quit）再关。
 app.on('before-quit', () => {
   logMain('warn', 'app lifecycle: before-quit（准备退出）')
-  console.log('Closing database connection...')
-  closeDatabase()
+  // 经营采集是长驻定时器 + 可能的在跑采集：先停调度并把它标记为 INTERRUPTED，
+  // 否则库里会留下永不结束的 RUNNING，"是否还在采集"永远为真（§7.11）。
+  // 放在关库之前（will-quit 才关库），这样这次状态写入能成功。
+  try { stopSalesMetricsScheduler() } catch (e: any) {
+    try { logMain('warn', '退出前停止经营采集调度失败: ' + String(e?.message || e)) } catch { /* ignore */ }
+  }
+  try {
+    const active = TaskRunner.listLiveRuns()
+    if (active.length) {
+      logMain('warn', `退出前收尾：${active.length} 个未结束的运行将被取消 ${JSON.stringify(active.map(r => ({ runId: r.runId, status: r.status })))}`)
+      for (const run of active) {
+        try { TaskRunner.cancelRun(run.runId, '应用退出') } catch { /* 已结束/状态不允许都无妨 */ }
+      }
+    }
+  } catch (e: any) {
+    logMain('warn', '退出前取消运行失败: ' + String(e?.message || e))
+  }
 })
 app.on('will-quit', () => {
+  // 最后一刻才关库：此时会话快照（preventDefault 那段异步写）已经结束
+  try {
+    console.log('Closing database connection...')
+    closeDatabase()
+  } catch { /* 幂等，重复关不抛 */ }
   try { logMain('warn', 'app lifecycle: will-quit（即将退出）') } catch { /* 退出路径不抛错 */ }
+})
+// 子进程崩溃（GPU/utility/network）：白屏与卡死的常见根因，此前完全没有留痕
+app.on('child-process-gone', (_e, details) => {
+  try {
+    logMain('error', `child-process-gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${details.name || ''}`)
+  } catch { /* 不能因日志失败而抛 */ }
 })
 app.on('quit', (_e, exitCode) => {
   try { logMain('warn', `app lifecycle: quit exitCode=${exitCode}`) } catch { /* ignore */ }

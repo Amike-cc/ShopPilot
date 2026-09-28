@@ -46,14 +46,22 @@ async function readSessionCookies(storeId: string): Promise<SessionCookieEntry[]
  */
 export async function snapshotStoreSession(storeId: string): Promise<number> {
   try {
+    const file = snapshotPath(storeId)
     const cookies = await readSessionCookies(storeId)
-    if (!cookies.length) return 0
+    if (!cookies.length) {
+      // 一个会话级 Cookie 都没有 → 快照必须**消失**，不能留着一份旧文件。
+      // 此前这里直接 return 0，于是"用户点清空 Cookie → 快照文件还在 → 重启把它灌回"
+      // 表现为"清掉的登录态自己回来了"（用户会以为软件偷偷存了登录凭据）。
+      if (existsSync(file)) {
+        try { rmSync(file, { force: true }) } catch { /* 删不掉也不阻塞 */ }
+      }
+      return 0
+    }
     if (!safeStorage.isEncryptionAvailable()) {
       logMain('warn', `会话快照跳过 store=${storeId}：系统加密不可用，拒绝明文写 Cookie`)
       return -1
     }
     const blob = safeStorage.encryptString(JSON.stringify({ v: 1, at: Date.now(), cookies }))
-    const file = snapshotPath(storeId)
     mkdirSync(dirname(file), { recursive: true })
     // 先写临时文件再改名：中途断电/被杀不会留下半截文件（下次启动解不开=白丢登录态）
     const tmp = `${file}.tmp`

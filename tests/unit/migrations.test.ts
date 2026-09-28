@@ -99,6 +99,30 @@ function createLegacyV3Database(): SqliteDb {
     CREATE INDEX idx_task_runs_task_id ON task_runs(task_id);
     CREATE INDEX idx_task_runs_store_id ON task_runs(store_id);
     CREATE INDEX idx_task_step_results_run_id ON task_step_results(run_id);
+    CREATE TABLE store_snapshots (
+      id TEXT PRIMARY KEY,
+      store_id TEXT NOT NULL,
+      metric TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      source_run_id TEXT,
+      captured_at INTEGER NOT NULL
+    );
+    -- v15（hot_query_indexes）会给这两张表补索引，真实 v3 库里它们由 v1/v5 建好，
+    -- 夹具必须一并造出来（否则"旧库升级"用例会在一个现实中不存在的半成品库上跑）
+    CREATE TABLE audit_logs (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      result TEXT NOT NULL,
+      store_id TEXT,
+      request_id TEXT,
+      detail_json TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE agent_usage (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
     INSERT INTO schema_migrations (version, name, applied_at) VALUES
       (1, 'initial_schema', 0),
       (2, 'task_engine_columns', 0),
@@ -108,10 +132,15 @@ function createLegacyV3Database(): SqliteDb {
 }
 
 describe('数据库迁移', () => {
-  it('v8 Agent 运行时迁移存在且是最新版本', () => {
-    const latest = migrations[migrations.length - 1]
-    expect(latest.version).toBe(8)
-    expect(latest.name).toBe('agent_skills_and_plugins')
+  it('迁移链连续、命名稳定，且最新版本跟随代码（不再硬编码版本号）', () => {
+    const versions = migrations.map(migration => migration.version)
+    // 严格递增且不跳号：跳号通常意味着历史迁移被改动，老库会漏升级。
+    expect(versions).toEqual(versions.map((_, index) => index + 1))
+    expect(migrations[migrations.length - 1].version).toBe(versions.length)
+    // 记忆治理链必须都在：v9 上下文窗口 / v10 自动学习 / v11 近重复指纹
+    expect(migrations.find(m => m.version === 9)?.name).toBe('agent_model_context_window')
+    expect(migrations.find(m => m.version === 10)?.name).toBe('agent_memory_learning_governance')
+    expect(migrations.find(m => m.version === 11)?.name).toBe('agent_memory_dedupe')
   })
 
   it('v4 全部语句都带 IF NOT EXISTS（可安全重复执行）', () => {
@@ -136,14 +165,15 @@ describe('数据库迁移', () => {
     db.close()
   })
 
-  realDbIt('生产 migrate() 能把 v3 旧库自动升到 v8 并补索引、写 Agent 台账（真实 SQLite）', () => {
+  realDbIt('生产 migrate() 能把 v3 旧库自动升到最新版本并补索引、写 Agent 台账（真实 SQLite）', () => {
     const db = createLegacyV3Database()
     const shim = withTransactionShim(db)
     expect(getCurrentVersion(shim as MigrationDb)).toBe(3)
 
     expect(() => migrate(shim as MigrationDb)).not.toThrow()
 
-    expect(getCurrentVersion(shim as MigrationDb)).toBe(8)
+    const latestVersion = migrations[migrations.length - 1].version
+    expect(getCurrentVersion(shim as MigrationDb)).toBe(latestVersion)
     expect(indexNames(db, 'task_runs')).toContain('idx_task_runs_status')
     expect(indexNames(db, 'task_step_results')).toContain('idx_task_step_results_run_step')
 
@@ -168,6 +198,23 @@ describe('数据库迁移', () => {
       .prepare('SELECT version, name FROM schema_migrations WHERE version = 8')
       .all() as Array<{ version: number; name: string }>
     expect(agentSkillMigration).toEqual([{ version: 8, name: 'agent_skills_and_plugins' }])
+    const agentContextMigration = db
+      .prepare('SELECT version, name FROM schema_migrations WHERE version = 9')
+      .all() as Array<{ version: number; name: string }>
+    expect(agentContextMigration).toEqual([{ version: 9, name: 'agent_model_context_window' }])
+    const agentMemoryMigration = db
+      .prepare('SELECT version, name FROM schema_migrations WHERE version = 10')
+      .all() as Array<{ version: number; name: string }>
+    expect(agentMemoryMigration).toEqual([{ version: 10, name: 'agent_memory_learning_governance' }])
+    const agentMemoryDedupeMigration = db
+      .prepare('SELECT version, name FROM schema_migrations WHERE version = 11')
+      .all() as Array<{ version: number; name: string }>
+    expect(agentMemoryDedupeMigration).toEqual([{ version: 11, name: 'agent_memory_dedupe' }])
+    // v11 的真实列与索引必须落到旧库上（防迁移写错列名/漏建索引）
+    const memoryColumns = (db.prepare('PRAGMA table_info(agent_memory_records)').all() as Array<{ name: string }>).map(c => c.name)
+    expect(memoryColumns).toContain('dedupe_key')
+    expect(memoryColumns).toContain('repeat_count')
+    expect(indexNames(db, 'agent_memory_records')).toContain('idx_agent_memory_dedupe')
 
     // 幂等：再跑一次不会重复插入或报错
     expect(() => migrate(shim as MigrationDb)).not.toThrow()

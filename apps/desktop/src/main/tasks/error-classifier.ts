@@ -16,13 +16,19 @@
 
 /**
  * 错误消息首部形如 `CODE: 说明` 的固定错误码。
- * 顺序无关紧要（各自互不为前缀），但保持与 task-runner 里的抛出一致便于对照。
+ *
+ * ⚠ **顺序有意义**：匹配是"按数组顺序做 `includes`"，所以**互为前缀的码必须长在前**。
+ * （例：`TASK_TARGET_DISABLED_UNCERTAIN` 必须排在 `TASK_TARGET_DISABLED` 之前，
+ *   否则前者会被后者抢先命中，报出的错误码与真实原因不符。）
  */
 const PREFIX_CODES: readonly string[] = [
   'TASK_TIMEOUT',
   'TASK_SELECTOR_CHANGED',
   'NAVIGATION_BLOCKED',
   'TASK_CONFIRMATION_REQUIRED',
+  // 目标禁用但**无法归因**（额度用尽？必填未填？未登录？风控？）：不按预期收尾，如实失败。
+  // 必须排在 TASK_TARGET_DISABLED 之前（互为前缀，见上面的顺序说明）。
+  'TASK_TARGET_DISABLED_UNCERTAIN',
   'TASK_TARGET_DISABLED',
   // 目标被浮层遮住（实测快手级联弹层盖住按钮）：用户能自己解决（把窗口拉宽）
   'TASK_TARGET_COVERED',
@@ -33,6 +39,10 @@ const PREFIX_CODES: readonly string[] = [
   'TASK_TEXT_PRESENT',
   // 额度预检不过（微信今日剩余不足 / 抖店确认发送禁用等）
   'TASK_QUOTA_EXCEEDED',
+  // **额度读不到**（页面没渲染完/改版导致额度文案里始终没有数字）：这是"读失败"，不是
+  // "额度用尽"。必须与 TASK_QUOTA_EXCEEDED 分开——后者在邀约循环的 stopOn 里＝按预期
+  // 成功收尾，混用会让"读不到额度"变成"任务报成功、0 位邀约发出"（2026-09-28 审查）。
+  'TASK_QUOTA_UNREADABLE',
   // 广场可选达人不足（要 40 位但池子里只有更少）——发送前中止，别发错数量
   'TASK_SELECTION_SHORTFALL',
   // 当前分页里的候选都已处理过，由 loop 的 onCode 恢复步骤消化
@@ -58,6 +68,9 @@ const PREFIX_CODES: readonly string[] = [
   'TASK_INPUT_NOT_APPLIED',
   // 店铺浏览器/任务标签页被关闭（此前落进 INTERNAL_ERROR，看不出真实原因）
   'BROWSER_CLOSED',
+  // 标签页还在，但页面句柄（DOM <webview> 的 guest）尚未注册完成：等页面挂上就能继续。
+  // 必须与 BROWSER_CLOSED 分开，否则用户会去重建一个本来就还开着的任务。
+  'BROWSER_NOT_READY',
   // 截图时视口未渲染（页面不可见）：工件落不下来，得让用户知道是"窗口没显示"
   'CAPTURE_EMPTY',
   // 步骤参数非法：本不该在运行时出现，但一旦出现要能定位到具体步骤类型
@@ -69,6 +82,9 @@ const PREFIX_CODES: readonly string[] = [
   'AI_BAD_ENDPOINT',
   'AI_TIMEOUT',
   'AI_REQUEST_FAILED',
+  'AI_IMAGE_NOT_CONFIGURED',
+  'AI_IMAGE_FETCH_FAILED',
+  'AI_IMAGE_TEXT_NOT_CONFIGURED',
   // AI_EMPTY_SOURCE / AI_EMPTY_OUTPUT 统一归到 AI_EMPTY_OUTPUT（界面按"没取到内容"处理）
   'AI_EMPTY_SOURCE',
   'AI_EMPTY_OUTPUT'

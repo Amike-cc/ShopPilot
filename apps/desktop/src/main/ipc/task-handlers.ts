@@ -3,7 +3,8 @@
  * 所有状态迁移与执行都在 Main，渲染层只能触发白名单动作并订阅事件。
  */
 
-import { ipcMain, IpcMainInvokeEvent } from 'electron'
+import { familyHandle } from './family-handle'
+import { IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
@@ -37,20 +38,29 @@ function taskError(e: any, requestId: string): IPCResult {
   return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
 }
 
+const handle = familyHandle('任务')
+
 export function registerTaskHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.TASK_CREATE, async (_e: IpcMainInvokeEvent, input: any): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.TASK_CREATE, async (_e: IpcMainInvokeEvent, input: any): Promise<IPCResult> => {
     const requestId = rid()
     try {
       return ok(TaskStore.createTask(input), requestId)
     } catch (e: any) { return taskError(e, requestId) }
   })
 
-  ipcMain.handle(IPC_CHANNELS.TASK_LIST, async (): Promise<IPCResult> => {
+  // 编辑任务定义（部分更新：未传的字段保留原值）。运行中的任务不允许改步骤，
+  // task-store 抛 TASK_BAD_STATE（消息里带当前状态与原因），由 taskError 统一转文案。
+  handle(IPC_CHANNELS.TASK_UPDATE, async (_e: IpcMainInvokeEvent, input: TaskStore.TaskUpdateInput): Promise<IPCResult> => {
+    const requestId = rid()
+    try { return ok(TaskStore.updateTask(input), requestId) } catch (e: any) { return taskError(e, requestId) }
+  })
+
+  handle(IPC_CHANNELS.TASK_LIST, async (): Promise<IPCResult> => {
     const requestId = rid()
     try { return ok(TaskStore.listTasks(), requestId) } catch (e: any) { return taskError(e, requestId) }
   })
 
-  ipcMain.handle(IPC_CHANNELS.TASK_RUN, async (_e: IpcMainInvokeEvent, input: { taskId: string; storeId?: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.TASK_RUN, async (_e: IpcMainInvokeEvent, input: { taskId: string; storeId?: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       const res = Runner.enqueueRun(input.taskId, { reason: '手动触发', storeId: input.storeId })
@@ -58,13 +68,13 @@ export function registerTaskHandlers(): void {
     } catch (e: any) { return taskError(e, requestId) }
   })
 
-  ipcMain.handle(IPC_CHANNELS.TASK_PAUSE, async (_e: IpcMainInvokeEvent, input: { runId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.TASK_PAUSE, async (_e: IpcMainInvokeEvent, input: { runId: string }): Promise<IPCResult> => {
     const requestId = rid()
     try { Runner.pauseRun(input.runId); return ok({ success: true }, requestId) } catch (e: any) { return taskError(e, requestId) }
   })
 
   // resume 支持两种：continue（从暂停）/ retry（从失败步骤恢复，跳过已完成）
-  ipcMain.handle(IPC_CHANNELS.TASK_RESUME, async (_e: IpcMainInvokeEvent, input: { runId: string; mode?: 'continue' | 'retry' }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.TASK_RESUME, async (_e: IpcMainInvokeEvent, input: { runId: string; mode?: 'continue' | 'retry' }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       if (input.mode === 'retry') Runner.retryRunFromFailed(input.runId)
@@ -73,17 +83,17 @@ export function registerTaskHandlers(): void {
     } catch (e: any) { return taskError(e, requestId) }
   })
 
-  ipcMain.handle(IPC_CHANNELS.TASK_CANCEL, async (_e: IpcMainInvokeEvent, input: { runId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.TASK_CANCEL, async (_e: IpcMainInvokeEvent, input: { runId: string }): Promise<IPCResult> => {
     const requestId = rid()
     try { Runner.cancelRun(input.runId); return ok({ success: true }, requestId) } catch (e: any) { return taskError(e, requestId) }
   })
 
-  ipcMain.handle(IPC_CHANNELS.TASK_CONFIRM, async (_e: IpcMainInvokeEvent, input: { runId: string; approved: boolean }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.TASK_CONFIRM, async (_e: IpcMainInvokeEvent, input: { runId: string; approved: boolean }): Promise<IPCResult> => {
     const requestId = rid()
     try { Runner.confirmRun(input.runId, !!input.approved); return ok({ success: true }, requestId) } catch (e: any) { return taskError(e, requestId) }
   })
 
-  ipcMain.handle(IPC_CHANNELS.TASK_RESULTS, async (_e: IpcMainInvokeEvent, input: { runId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.TASK_RESULTS, async (_e: IpcMainInvokeEvent, input: { runId: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       const res = TaskStore.getResults(input.runId)
@@ -92,7 +102,7 @@ export function registerTaskHandlers(): void {
     } catch (e: any) { return taskError(e, requestId) }
   })
 
-  ipcMain.handle(IPC_CHANNELS.TASK_DELETE, async (_e: IpcMainInvokeEvent, input: { taskId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.TASK_DELETE, async (_e: IpcMainInvokeEvent, input: { taskId: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       const task = TaskStore.getTask(input.taskId)
@@ -107,13 +117,13 @@ export function registerTaskHandlers(): void {
   })
 
   // 诊断：立即触发定时任务（与到点触发同路径），便于验收与用户"立即运行一次"
-  ipcMain.handle(IPC_CHANNELS.TASK_CREATE_FIRE, async (_e: IpcMainInvokeEvent, input: { taskId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.TASK_CREATE_FIRE, async (_e: IpcMainInvokeEvent, input: { taskId: string }): Promise<IPCResult> => {
     const requestId = rid()
     try { return ok(Scheduler.fireNow(input.taskId), requestId) } catch (e: any) { return taskError(e, requestId) }
   })
 
   // 店铺指标快照 - §5.11（供环境面板/概览页展示巡检聚合指标）
-  ipcMain.handle(IPC_CHANNELS.SNAPSHOT_LIST, async (_e: IpcMainInvokeEvent, input: { storeId: string; limit?: number }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SNAPSHOT_LIST, async (_e: IpcMainInvokeEvent, input: { storeId: string; limit?: number }): Promise<IPCResult> => {
     const requestId = rid()
     try { return ok(TaskStore.listSnapshots(input.storeId, input.limit), requestId) } catch (e: any) { return taskError(e, requestId) }
   })

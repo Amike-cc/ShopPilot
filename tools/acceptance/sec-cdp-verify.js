@@ -160,22 +160,27 @@ async function main() {
     `type=${envUi.typeSelW} host=${envUi.hostW} port=${envUi.portW}`)
   check('环境面板含会话/Cookie、应用锁、备份诊断三段', envUi.hasNewSections === true)
 
-  // ---------- 0.6 弹层遮挡：店铺页是原生 WebContentsView，会盖住 HTML 弹窗（用户实报） ----------
+  // ---------- 0.6 弹层遮挡：店铺页现在是主窗口 DOM 里的 <webview> ----------
+  // 判据随之改变：不再要求"把页面摘掉"（那正是旧原生视图的避让手法），而是要求
+  //   ①弹窗层级确实压住 webview（用户当初的抱怨就是"弹窗盖不住店铺页"）；
+  //   ②弹窗期间与关闭后页面都没被销毁重建（DOM 嵌入才有这个性质，靠页面上的标记自证）。
   const storePageTarget = async () => {
     const t = await (await fetch(CDP_BASE + '/json')).json()
-    return t.find(x => x.type === 'page' && x.url.startsWith(BASE + '/setcookie'))
+    // DOM <webview> 的 guest 在 CDP 里的 type 是 "webview"，旧的原生视图是 "page"
+    return t.find(x => (x.type === 'page' || x.type === 'webview') && x.url.startsWith(BASE + '/setcookie'))
   }
-  const storePageVis = async () => {
+  const storePageState = async () => {
     const t = await storePageTarget()
     if (!t) return null
     const d = new CDPSession(t.webSocketDebuggerUrl)
-    const v = await d.evaluate(`return document.visibilityState`)
+    const v = await d.evaluate(`window.__M5_PAGE_MARK = window.__M5_PAGE_MARK || String(Date.now() + Math.random()); return { vis: document.visibilityState, w: window.innerWidth, mark: window.__M5_PAGE_MARK }`)
     d.close()
     return v
   }
-  const visBeforeModal = await storePageVis()
+  const stateBeforeModal = await storePageState()
   const modalOpen = await cdp.evaluate(`
-    const btn = [...document.querySelectorAll('.foot-btn')].find(b => (b.textContent || '').includes('回收站'));
+    // 底栏回收站按设计稿改成图标按钮（只有 🗑 + 角标），按 data-test 定位，不依赖按钮文字
+    const btn = document.querySelector('[data-test="trash-open"]');
     if (!btn) return { clicked: false };
     btn.click();
     await new Promise(r => setTimeout(r, 1500));
@@ -188,30 +193,53 @@ async function main() {
       const oh = Math.max(0, Math.min(m.y + m.h, v.y + v.h) - Math.max(m.y, v.y));
       ratio = +(ow * oh / (m.w * m.h)).toFixed(3);
     }
-    return { clicked: true, mask: !!document.querySelector('.modal-mask'), heading: document.querySelector('.modal h2')?.textContent || null, viewport: !!vp, overlapRatio: ratio };
+    const topZ = (node) => { let n = node, max = 0; while (n && n !== document.body) { max = Math.max(max, Number(getComputedStyle(n).zIndex) || 0); n = n.parentElement } return max };
+    const mask = document.querySelector('.modal-mask');
+    // 取**当前显示中**的那个 webview（多店/多标签时 DOM 里第一个元素未必是它），
+    // 弹窗要盖住的正是这一个。
+    const all = [...document.querySelectorAll('[data-test="dashboard-browser-viewport"] webview')];
+    const wv = all.find(el => el.classList.contains('active')) || all[0] || null;
+    return {
+      clicked: true, mask: !!mask, heading: document.querySelector('.modal h2')?.textContent || null,
+      viewport: !!vp, overlapRatio: ratio,
+      modalZ: mask ? topZ(mask) : 0,
+      webviewZ: wv ? topZ(wv) : null,
+      webviewOpacity: wv ? getComputedStyle(wv).opacity : null,
+      webviews: all.length
+    };
   `)
-  const visWithModal = await storePageVis()
+  const stateWithModal = await storePageState()
   check('回收站入口可点击并渲染抽屉', modalOpen.clicked && modalOpen.mask && modalOpen.heading === '回收站', JSON.stringify(modalOpen))
-  check('弹层期间店铺视图被摘除（原生层不再遮挡弹窗）',
-    visBeforeModal === 'visible' && visWithModal === 'hidden',
-    `弹窗前=${visBeforeModal} 弹窗时=${visWithModal} 重叠比例=${modalOpen.overlapRatio}`)
+  check('弹层期间弹窗层级高于 webview，且页面未被摘除（DOM 弹层不再靠摘视图避让）',
+    modalOpen.modalZ > (modalOpen.webviewZ ?? 0) && modalOpen.webviewOpacity === '1' &&
+    !!stateWithModal && stateWithModal.vis === 'visible',
+    `弹窗层级=${modalOpen.modalZ} 页面层级=${modalOpen.webviewZ} 页面不透明度=${modalOpen.webviewOpacity} webview数=${modalOpen.webviews} 页面可见性=${stateWithModal?.vis} 重叠比例=${modalOpen.overlapRatio}`)
   const modalClosed = await cdp.evaluate(`
     const b = document.querySelector('.modal-actions .btn-ghost');
     if (!b) return { closed: false };
     b.click();
     await new Promise(r => setTimeout(r, 1500));
-    return { closed: !document.querySelector('.modal-mask'), viewport: !!document.querySelector('.viewport'), tabs: document.querySelectorAll('.tab').length };
+    return { closed: !document.querySelector('.modal-mask'), viewport: !!document.querySelector('.viewport'), webviews: document.querySelectorAll('[data-test="dashboard-browser-viewport"] webview').length };
   `)
-  const visAfterModal = await storePageVis()
-  check('关闭弹层后店铺视图恢复（中栏不空白）',
-    modalClosed.closed && visAfterModal === 'visible' && modalClosed.viewport,
-    `关闭后=${JSON.stringify(modalClosed)} 可见性=${visAfterModal}`)
+  const stateAfterModal = await storePageState()
+  check('关闭弹层后页面仍是同一个（未销毁重建、中栏不空白）',
+    modalClosed.closed && modalClosed.viewport && modalClosed.webviews >= 1 &&
+    !!stateAfterModal && stateAfterModal.vis === 'visible' &&
+    !!stateBeforeModal && stateAfterModal.mark === stateBeforeModal.mark,
+    `关闭后=${JSON.stringify(modalClosed)} 页面标记 ${stateBeforeModal?.mark} → ${stateAfterModal?.mark}`)
 
   const ckA = await A.cookies(sa.id)
   const names = (ckA.data?.items || []).map(x => x.name)
   check('站点种下 2 条 Cookie 可查（含 HttpOnly）', names.includes('M5SESSION') && names.includes('M5HTTPONLY'), names.join(','))
   const longCk = (ckA.data?.items || []).find(x => x.name === 'M5SESSION')
-  check('查看器值截断展示（>24 字符→预览+省略号）', longCk?.valuePreview?.endsWith('…') && longCk.valuePreview.length <= 25, longCk?.valuePreview)
+  // 断言的是**安全性质**而不是某一种显示格式：预览里绝不能出现 Cookie 真实值的任何片段。
+  // 该 Cookie 的真值是 50 个 'S'（见上面 Set-Cookie），所以"出现连续 8 个 S"就是真值外泄。
+  // （此前断言写死"截断成 24 字符 + 省略号"，而主进程已改为整体掩码 '••••••' —— 比截断更安全；
+  //   旧断言因此恒失败，等于脚本卡住了更严的实现；2026-09-28 审查后收口。）
+  const preview = String(longCk?.valuePreview ?? '')
+  check('查看器不泄露 Cookie 值（掩码或无实值片段）',
+    preview.length > 0 && !preview.includes('SSSSSSSS'),
+    JSON.stringify(preview))
   check('HttpOnly 标记如实展示', (ckA.data?.items || []).find(x => x.name === 'M5HTTPONLY')?.httpOnly === true)
   const ckSearch = await A.cookies(sa.id, 'httponly')
   check('Cookie 搜索按名称/域过滤', (ckSearch.data?.items || []).length === 1 && ckSearch.data.items[0].name === 'M5HTTPONLY')
@@ -259,7 +287,7 @@ async function main() {
   let lsOnB = 'ATTACH_FAIL'
   try {
     const t2 = await (await fetch(CDP_BASE + '/json')).json()
-    const bTab = t2.find(t => t.type === 'page' && t.url.includes('/bcookie'))
+    const bTab = t2.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/bcookie'))
     if (bTab) {
       const cdpB = new CDPSession(bTab.webSocketDebuggerUrl)
       lsOnB = await cdpB.evaluate(`return localStorage.getItem('M5_LS_MARK')`)

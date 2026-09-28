@@ -49,7 +49,7 @@ class CDP {
 async function connect(part) {
   for (let i = 0; i < 40; i++) {
     const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()
-    const t = list.find(x => x.type === 'page' && x.url.includes(part))
+    const t = list.find(x => (x.type === 'page' || x.type === 'webview') && x.url.includes(part))
     if (t) { const c = new CDP(t.webSocketDebuggerUrl); await c.ready; return c }
     await sleep(700)
   }

@@ -2,17 +2,20 @@
  * 会话包 / Cookie 查看器 / 应用锁 IPC 处理器 - §6.3 / §6.5 / §10.2
  */
 
-import { ipcMain, IpcMainInvokeEvent, session } from 'electron'
+import { familyHandle } from './family-handle'
+import { IpcMainInvokeEvent } from 'electron'
 import { IPC_CHANNELS, EVENT_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import { ERROR_CODES } from '@shared/errors/error-codes'
 import { randomUUID } from 'crypto'
 import * as SessionExporter from '../services/session-exporter'
+import * as SessionPersistence from '../services/session-persistence'
 import * as Security from '../services/security-manager'
 import * as Diagnostics from '../services/diagnostics'
 import * as StoreManager from '../stores/store-manager'
+import * as ShopSessionManager from '../browser/shop-session-manager'
 import { emitToRenderer, setBrowserViewsVisible } from '../browser/window-manager'
-import { writeAudit } from '../services/audit-logger'
+import { writeAudit, auditRequestId } from '../services/audit-logger'
 
 function rid(): string { return randomUUID() }
 function ok<T>(data: T, requestId: string): IPCResult<T> { return { ok: true, data, requestId } }
@@ -41,12 +44,15 @@ function requireStoreId(raw: unknown): string | null {
 }
 
 function storeSession(storeId: string): Electron.Session {
-  return session.fromPartition(`persist:store_${storeId}`, { cache: true })
+  return ShopSessionManager.getSession(storeId)
 }
+
+// Session 数据操作遵守应用锁；只有安全状态/解锁等必要通道按通道放行。
+const handle = familyHandle('会话与安全')
 
 export function registerSessionAndSecurityHandlers(): void {
   // ---------- 会话导出/导入 §6.3 ----------
-  ipcMain.handle(IPC_CHANNELS.SESSION_EXPORT, async (_e: IpcMainInvokeEvent, input: { storeId: string; outputPath?: string; validDays?: number }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SESSION_EXPORT, async (_e: IpcMainInvokeEvent, input: { storeId: string; outputPath?: string; validDays?: number }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       const storeId = requireStoreId(input?.storeId)
@@ -55,7 +61,7 @@ export function registerSessionAndSecurityHandlers(): void {
     } catch (e: any) { return sessionError(e, requestId) }
   })
 
-  ipcMain.handle(IPC_CHANNELS.SESSION_IMPORT, async (_e: IpcMainInvokeEvent, input: { storeId: string; filePath?: string; pickFile?: boolean }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SESSION_IMPORT, async (_e: IpcMainInvokeEvent, input: { storeId: string; filePath?: string; pickFile?: boolean }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       const storeId = requireStoreId(input?.storeId)
@@ -65,7 +71,7 @@ export function registerSessionAndSecurityHandlers(): void {
   })
 
   // ---------- Cookie 查看器 ----------
-  ipcMain.handle(IPC_CHANNELS.SESSION_COOKIES, async (_e: IpcMainInvokeEvent, input: { storeId: string; search?: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SESSION_COOKIES, async (_e: IpcMainInvokeEvent, input: { storeId: string; search?: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       const storeId = requireStoreId(input?.storeId)
@@ -73,7 +79,8 @@ export function registerSessionAndSecurityHandlers(): void {
       const all = await storeSession(storeId).cookies.get({})
       let list = all.map((c: any) => ({
         name: c.name, domain: c.domain, path: c.path,
-        valuePreview: String(c.value || '').slice(0, 24) + (String(c.value || '').length > 24 ? '…' : ''),
+        // Renderer 只显示存在性掩码，不把 Cookie 原文或前缀带出 Main。
+        valuePreview: String(c.value || '').length > 0 ? '••••••' : '',
         secure: !!c.secure, httpOnly: !!c.httpOnly,
         session: !c.expirationDate,
         expires: c.expirationDate ? new Date(c.expirationDate * 1000).toLocaleString('zh-CN') : '会话结束'
@@ -87,7 +94,7 @@ export function registerSessionAndSecurityHandlers(): void {
     } catch (e: any) { return sessionError(e, requestId) }
   })
 
-  ipcMain.handle(IPC_CHANNELS.SESSION_DELETE_COOKIE, async (_e: IpcMainInvokeEvent, input: { storeId: string; name: string; domain: string; path: string; secure?: boolean }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SESSION_DELETE_COOKIE, async (_e: IpcMainInvokeEvent, input: { storeId: string; name: string; domain: string; path: string; secure?: boolean }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       const storeId = requireStoreId(input?.storeId)
@@ -98,19 +105,22 @@ export function registerSessionAndSecurityHandlers(): void {
     } catch (e: any) { return sessionError(e, requestId) }
   })
 
-  ipcMain.handle(IPC_CHANNELS.SESSION_CLEAR_COOKIES, async (_e: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SESSION_CLEAR_COOKIES, async (_e: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       const storeId = requireStoreId(input?.storeId)
       if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
       await storeSession(storeId).clearStorageData({ storages: ['cookies'] })
-      writeAudit('browser.clearData', 'success', { storeId, requestId: JSON.stringify({ what: 'cookies' }) })
+      // 快照必须同步失效：否则下次启动 restoreStoreSession 会把刚清掉的会话级 Cookie 灌回来，
+      // 用户会以为"清空 Cookie 没生效 / 软件偷偷保存了登录态"（2026-09-28 审查确认）。
+      try { SessionPersistence.clearStoreSessionSnapshot(storeId) } catch { /* 快照清理失败不阻塞 */ }
+      writeAudit('browser.clearData', 'success', { storeId, requestId: auditRequestId(requestId, 'cookies') })
       return ok({ cleared: true }, requestId)
     } catch (e: any) { return sessionError(e, requestId) }
   })
 
   // ---------- 诊断与审计导出 §6.7 ----------
-  ipcMain.handle(IPC_CHANNELS.DIAGNOSTICS_EXPORT, async (_e: IpcMainInvokeEvent, input: { outputPath?: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.DIAGNOSTICS_EXPORT, async (_e: IpcMainInvokeEvent, input: { outputPath?: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       return ok(Diagnostics.exportDiagnostics(input?.outputPath), requestId)
@@ -122,7 +132,7 @@ export function registerSessionAndSecurityHandlers(): void {
     }
   })
 
-  ipcMain.handle(IPC_CHANNELS.AUDIT_EXPORT, async (_e: IpcMainInvokeEvent, input: { filter?: any; outputPath?: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.AUDIT_EXPORT, async (_e: IpcMainInvokeEvent, input: { filter?: any; outputPath?: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
       return ok(Diagnostics.exportAuditLogs(input?.filter || {}, input?.outputPath), requestId)
@@ -135,38 +145,46 @@ export function registerSessionAndSecurityHandlers(): void {
   })
 
   // ---------- 应用锁 §6.5 ----------
-  ipcMain.handle(IPC_CHANNELS.SECURITY_STATUS, async (): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SECURITY_STATUS, async (): Promise<IPCResult> => {
     const requestId = rid()
     return ok(Security.getStatus(), requestId)
-  })
+  }, { allowWhenLocked: true })
 
-  ipcMain.handle(IPC_CHANNELS.SECURITY_SET_PASSWORD, async (_e: IpcMainInvokeEvent, input: { password?: string; oldPassword?: string } | void): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SECURITY_SET_PASSWORD, async (_e: IpcMainInvokeEvent, input: { password?: string; oldPassword?: string } | void): Promise<IPCResult> => {
     const requestId = rid()
     try {
       return ok(await Security.setMasterPassword(input || {}), requestId)
     } catch (e: any) { return sessionError(e, requestId) }
-  })
+  }, { allowWhenLocked: true })
 
-  ipcMain.handle(IPC_CHANNELS.SECURITY_REMOVE_PASSWORD, async (_e: IpcMainInvokeEvent, input: { credential?: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SECURITY_REMOVE_PASSWORD, async (_e: IpcMainInvokeEvent, input: { credential?: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
-      return ok(Security.removeMasterPassword(input?.credential ?? ''), requestId)
+      const wasLocked = Security.isAppLocked()
+      const result = Security.removeMasterPassword(input?.credential ?? '')
+      if (wasLocked) {
+        // 移除主密码会同时解除应用锁（见 security-manager）：与 SECURITY_UNLOCK 对齐，
+        // 必须恢复视图可见并广播状态，否则渲染层仍停在锁屏上
+        setBrowserViewsVisible(true)
+        emitToRenderer(EVENT_CHANNELS.SECURITY_LOCKED, { locked: false })
+      }
+      return ok(result, requestId)
     } catch (e: any) { return sessionError(e, requestId) }
-  })
+  }, { allowWhenLocked: true })
 
-  ipcMain.handle(IPC_CHANNELS.SECURITY_LOCK, async (): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SECURITY_LOCK, async (): Promise<IPCResult> => {
     const requestId = rid()
     if (!Security.hasMasterPassword()) return err(ERROR_CODES.APP_LOCKED.code, '未设置主密码，无法锁定', requestId)
     Security.lockApp() // 敏感引用销毁 / 隐藏视图 / 广播事件由 index 注入的 hook 统一处理
     return ok({ locked: true }, requestId)
-  })
+  }, { allowWhenLocked: true })
 
-  ipcMain.handle(IPC_CHANNELS.SECURITY_UNLOCK, async (_e: IpcMainInvokeEvent, input: { credential: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SECURITY_UNLOCK, async (_e: IpcMainInvokeEvent, input: { credential: string }): Promise<IPCResult> => {
     const requestId = rid()
     const success = Security.unlockApp(String(input?.credential ?? ''))
     if (!success) return err(ERROR_CODES.APP_LOCKED.code, '主密码不正确', requestId)
     setBrowserViewsVisible(true)
     emitToRenderer(EVENT_CHANNELS.SECURITY_LOCKED, { locked: false })
     return ok({ locked: false }, requestId)
-  })
+  }, { allowWhenLocked: true })
 }

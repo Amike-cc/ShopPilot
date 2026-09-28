@@ -34,6 +34,13 @@ export function initDatabase(): Database.Database {
   // §5 前言：连接级 PRAGMA，必须在事务外执行
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
+  // busy_timeout：默认是 0，意味着**一旦有第二个连接持锁就立刻抛 SQLITE_BUSY**
+  // （实测本机 busy_timeout=0）。本项目确实会出现第二个连接：备份/恢复/巡检用只读连接打开
+  // 同一个库文件（backup-manager），杀软与同步盘偶尔也会碰一下。表现为随机"保存失败"，
+  // 7×24 挂机下极难复现定位（2026-09-28 审查确认）。
+  db.pragma('busy_timeout = 5000')
+  // synchronous：显式写死 FULL。默认值在 WAL 下历史变过口径，业务库宁可慢一点也别赌默认。
+  db.pragma('synchronous = FULL')
 
   // 执行迁移
   migrate(db)

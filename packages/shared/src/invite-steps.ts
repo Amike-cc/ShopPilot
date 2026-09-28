@@ -245,7 +245,14 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   // 额度先行（按档案选择方式）：
   //  - requireEnabled：平台不展示剩余额度，额度用尽表现为抽屉确认按钮禁用（抖店）；
   //  - requireQuota  ：页面**明示**剩余额度（快手「今日剩余N条发送邀请机会」），取数字判断。
-  // 两者不足时都如实报 TASK_QUOTA_EXCEEDED → loop 里视为"额度用完"正常收尾。
+  // 确认为额度不足时都如实报 TASK_QUOTA_EXCEEDED → loop 里视为"额度用完"正常收尾。
+  //
+  // ⚠ 2026-09-28 起 requireEnabled 的语义收紧：**禁用态不再默认等于额度用尽**。禁用可能来自
+  // 必填未填/未登录/风控，而"额度用尽"在 loop 的 stopOn 里＝按预期成功收尾——一律当成额度用尽
+  // 会出现"任务报成功、0 位邀约发出"的静默假成功。现在必须由档案显式声明其一：
+  //   · `quotaDisabledMeansExhausted: true`（实测：本按钮禁用即额度用尽，如抖店）；或
+  //   · `quotaDisabledIncludes: [...]`（读到按钮旁的平台说明再比对文案）。
+  // 都没声明 → 禁用即如实失败（TASK_TARGET_DISABLED_UNCERTAIN），不再静默收工。
   if (p.quotaCheck === 'requireQuota' && p.quota) {
     round.push({
       type: 'requireQuota',
@@ -253,7 +260,18 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
       timeoutMs: 30000
     })
   } else if (p.texts.drawerConfirm) {
-    round.push({ type: 'requireEnabled', input: { text: p.texts.drawerConfirm, hint: p.quotaNote }, timeoutMs: 30000 })
+    round.push({
+      type: 'requireEnabled',
+      input: {
+        text: p.texts.drawerConfirm,
+        hint: p.quotaNote,
+        // 只有档案**显式声明过**"本按钮禁用即额度用尽"才把禁用当额度用尽（debug 期实测校准的
+        // 事实，见 invite.ts 的 quotaDisabledMeansExhausted）；没有声明的平台一律如实失败，
+        // 避免"按钮因别的原因禁用"被当成额度用尽 → 任务报成功但 0 位邀约发出。
+        disabledMeansQuota: p.quotaDisabledMeansExhausted === true
+      },
+      timeoutMs: 30000
+    })
   }
   /**
    * 抽屉里的「主营」级联（抖店改版抽屉）：**两步都要真实鼠标点击**。

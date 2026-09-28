@@ -494,7 +494,7 @@ async function connectUi() {
 
 async function connectPage(urlPart) {
   const targets = await getTargets()
-  const target = targets.find(t => t.type === 'page' && t.url.includes(urlPart))
+  const target = targets.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes(urlPart))
   if (!target) throw new Error(`page target not found: ${urlPart}`)
   const cdp = new CDP(target.webSocketDebuggerUrl)
   await cdp.ready

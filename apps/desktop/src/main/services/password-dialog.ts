@@ -91,9 +91,14 @@ function runWindow(query: Record<string, string>, timeoutMs = 180000): Promise<s
   })
 }
 
+/** 测试钩子只在开发态生效：打包版若机器残留这些环境变量，等于把导出/资金确认门永久打开 */
+function testHooksEnabled(): boolean {
+  return !app.isPackaged
+}
+
 /** 采集密码；取消返回 null */
 export async function askPassword(opts: AskOptions): Promise<string | null> {
-  if (process.env.SHOPILOT_TEST_PASSWORD) return process.env.SHOPILOT_TEST_PASSWORD
+  if (testHooksEnabled() && process.env.SHOPILOT_TEST_PASSWORD) return process.env.SHOPILOT_TEST_PASSWORD
   return runWindow({
     mode: 'password',
     title: opts.title,
@@ -113,7 +118,7 @@ export interface ConfirmOptions {
 
 /** 人工确认；取消返回 false - §6.3 / §13 */
 export async function askConfirm(opts: ConfirmOptions): Promise<boolean> {
-  if (process.env.SHOPILOT_TEST_AUTOCONFIRM === '1') return true
+  if (testHooksEnabled() && process.env.SHOPILOT_TEST_AUTOCONFIRM === '1') return true
   const r = await runWindow({
     mode: 'confirm',
     title: opts.title,

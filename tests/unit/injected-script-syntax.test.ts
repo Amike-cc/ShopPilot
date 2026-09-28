@@ -30,11 +30,15 @@ describe('注入脚本的语法自检', () => {
     expect(SRC).toContain('sawCoveredBy')
   })
 
-  it('店铺标签页必须关闭后台节流（否则遮挡时 rAF 停摆，平台弹层会停在屏幕外）', () => {
+  it('店铺页面必须关闭后台节流（否则遮挡时 rAF 停摆，平台弹层会停在屏幕外）', () => {
     expect(SRC.length).toBeGreaterThan(0)
     const wm = fs.readFileSync(path.join(__dirname, '../../apps/desktop/src/main/browser/window-manager.ts'), 'utf8')
-    // WebContentsView 与独立窗口两处都要关
-    const hits = wm.split('backgroundThrottling: false').length - 1
-    expect(hits).toBeGreaterThanOrEqual(2)
+    const main = fs.readFileSync(path.join(__dirname, '../../apps/desktop/src/main/index.ts'), 'utf8')
+    // 店铺页面由主窗口 DOM <webview> 承载后，guest 的节流开关统一在 will-attach-webview 里设置
+    // （这是所有店铺标签页唯一的创建入口）；独立窗口（逃生入口）另行设置。
+    // 两处都必须关：少一处就会在窗口被遮挡时让平台弹层停在屏幕外。
+    expect(main).toContain('will-attach-webview')
+    expect(main).toContain('webPreferences.backgroundThrottling = false')
+    expect(wm.split('backgroundThrottling: false').length - 1).toBeGreaterThanOrEqual(1)
   })
 })

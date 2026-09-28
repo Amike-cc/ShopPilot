@@ -35,5 +35,17 @@ module.exports = {
     '@typescript-eslint/no-explicit-any': 'warn', // 鼓励使用具体类型
     '@typescript-eslint/no-var-requires': 'off',
     '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }]
-  }
+  },
+  overrides: [
+    {
+      // 2026-09-26 审计 P2：`packages/shared` 是**两个进程共用的纯规则与契约**，
+      // 这里的 any 会同时污染主进程与渲染层的类型判断，所以在这一层把显式 any 直接当错误
+      // （其它层仍是 warn 的存量技术债）。例外只有 contracts/ipc.ts 的 IPC 信封默认泛型，
+      // 它在文件内用 eslint-disable + 说明标注。
+      files: ['packages/shared/src/**/*.ts'],
+      rules: {
+        '@typescript-eslint/no-explicit-any': 'error'
+      }
+    }
+  ]
 }

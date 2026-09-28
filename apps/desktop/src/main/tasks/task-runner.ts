@@ -15,6 +15,7 @@ import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { redactAgentText } from '@shared/agent-privacy'
+import { canRetryStepInPlace } from '@shared/agent-step-effects'
 import { TABLE_ROW_CLEAN_FN } from '@shared/constants/invoice'
 import type {
   TaskStepDef, TaskProgressEvent, TaskProgressPhase,
@@ -27,7 +28,8 @@ import { writeAudit } from '../services/audit-logger'
 import { logMain } from '../services/logger'
 import { generateInviteScript } from '../services/ai-client'
 import { isAppLocked } from '../services/security-manager'
-import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, closeTab } from '../browser/window-manager'
+import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, closeTab, waitForTabWebContents } from '../browser/window-manager'
+import { waitForStoreSessionReady } from '../browser/session-manager'
 import { getDatabase } from '../db/database'
 
 interface RunHandle {
@@ -91,12 +93,36 @@ const pauseSig = () => Object.assign(new Error('运行已暂停'), { name: 'Paus
 
 // ---------- 状态迁移 ----------
 
+/**
+ * 失败运行句柄保留策略：`retryRunFromFailed` 需要 live 里的句柄才能「从失败恢复」原地续跑
+ * （visitedRows 去重集只活在内存，重建会丢「已邀约」去重、可能对同一达人重复邀约），
+ * 所以 failed 不能像 succeeded/cancelled 那样立即释放。但无人值守场景失败是常态，
+ * 不设上限会慢性泄漏（每失败一次滞留一个持完整步骤数组的句柄）——用 FIFO 上限兜底：
+ * 超限淘汰最旧的失败句柄，该运行退化为"请重新运行任务"（与跨进程恢复边界一致）。
+ */
+const FAILED_HANDLE_KEEP = 20
+const failedHandles: string[] = []
+
+function forgetRun(runId: string): void {
+  const fi = failedHandles.indexOf(runId)
+  if (fi >= 0) failedHandles.splice(fi, 1)
+  live.delete(runId)
+}
+
 function transition(run: RunHandle, to: string, reason: string): void {
   const allowed = TRANSITIONS[run.status] || []
   if (!allowed.includes(to)) {
     throw new Error(`TASK_BAD_STATE: ${run.status} -> ${to} (${reason})`)
   }
+  const from = run.status
   run.status = to
+  // 状态机是所有 run 生命周期的唯一漏斗：起止/失败/取消都在这里落一行文件日志。
+  // 此前引擎 3000 行只有 1 处 logMain，7×24 无人值守时"凌晨 3 点第 25 轮为什么失败"
+  // 在日志里查不到（2026-09-28 审查确认的可观测性缺口）。
+  try {
+    logMain(to === 'failed' ? 'error' : 'info',
+      `[task] run=${run.runId} task=${run.taskId} store=${run.storeId} ${from}→${to}（${reason}）`)
+  } catch { /* 日志失败不能影响状态机 */ }
   const fields: Parameters<typeof TaskStore.updateRun>[1] = { status: to, statusReason: reason }
   if (to === 'running' && !run.startedOnce) { fields.startedAt = Date.now(); run.startedOnce = true }
   if (to === 'succeeded' || to === 'failed' || to === 'cancelled') fields.finishedAt = Date.now()
@@ -111,7 +137,15 @@ function transition(run: RunHandle, to: string, reason: string): void {
     to === 'queued' ? 'queued' : 'started'
   emitProgress(run, { phase, status: to, message: reason })
 
-  if (to === 'succeeded' || to === 'cancelled') live.delete(run.runId)
+  if (to === 'failed') {
+    // 重复失败（failed -> queued 重试后再 failed）会二次进入：先去重再入队
+    const fi = failedHandles.indexOf(run.runId)
+    if (fi >= 0) failedHandles.splice(fi, 1)
+    failedHandles.push(run.runId)
+    while (failedHandles.length > FAILED_HANDLE_KEEP) forgetRun(failedHandles[0])
+  } else if (to === 'succeeded' || to === 'cancelled') {
+    forgetRun(run.runId)
+  }
 }
 
 function emitProgress(run: RunHandle, extra: Partial<TaskProgressEvent>): void {
@@ -142,6 +176,12 @@ export function enqueueRun(taskId: string, opts: { reason: string; storeId?: str
     pendingConfirm: null, tabId: null, startedOnce: false, visitedRows: new Set()
   }
   live.set(run.id, handle)
+  // 同一任务重新入队后，旧的失败句柄已被新运行取代（一个任务只有一个现行运行）：
+  // 立即释放，防止"定时任务反复失败又反复重跑"把失败句柄积到上限。
+  for (const id of Array.from(failedHandles)) {
+    const old = live.get(id)
+    if (old && old.taskId === taskId) forgetRun(id)
+  }
   queue.push(handle)
   writeAudit('task.run', 'success', { storeId, requestId: JSON.stringify({ runId: run.id, taskId, trigger: opts.reason }) })
   schedulePump()
@@ -227,6 +267,14 @@ export function confirmRun(runId: string, approved: boolean): void {
   run.pendingConfirm?.(approved ? 'approve' : 'deny')
 }
 
+/** 当前内存里未结束的运行（退出流程用它主动取消，别把句柄丢在半路）。
+ *  说明：live 里的 failed 句柄没有意义——它们已经不跑了，所以这里只报"还会动"的状态。 */
+export function listLiveRuns(): Array<{ runId: string; taskId: string; storeId: string; status: string }> {
+  return [...live.values()]
+    .filter(r => r.status === 'queued' || r.status === 'running' || r.status === 'paused' || r.status === 'waiting_confirmation')
+    .map(r => ({ runId: r.runId, taskId: r.taskId, storeId: r.storeId, status: r.status }))
+}
+
 /** 引擎启动：归档遗留 run + 注册店铺打开监听唤醒队列（不静默拉起 - §4.4） */
 export function startEngine(): void {
   reconcileOnStartup()
@@ -294,7 +342,12 @@ async function execute(run: RunHandle): Promise<void> {
     const requestedTabId = firstStep?.type === 'useTab' && typeof firstStep.input?.tabId === 'string'
       ? String(firstStep.input.tabId)
       : null
-    if (requestedTabId && !getTabWebContents(run.storeId, requestedTabId)) {
+    // 标签页"还在不在"用主进程的标签表判断，不能用 getTabWebContents：
+    // 页面句柄要等 Renderer 的 <webview> 注册才有，拿它判存活会把"刚重载、还在注册路上"
+    // 误报成"标签页已关闭"（2026-09-28 迁移 DOM webview 时确认的差异）。
+    const tabExists = (tabId: string | null | undefined): boolean =>
+      !!tabId && getStoreTabs(run.storeId).some(t => t.id === tabId)
+    if (requestedTabId && !tabExists(requestedTabId)) {
       const message = '计划绑定的标签页已关闭，请重新观察页面并创建任务'
       TaskStore.updateRun(run.runId, { errorCode: 'TASK_TAB_NOT_FOUND', errorMessage: message })
       transition(run, 'failed', message)
@@ -303,9 +356,9 @@ async function execute(run: RunHandle): Promise<void> {
     if (requestedTabId) {
       // Agent 计划显式绑定生成计划时的标签页；不新建 about:blank 再切换，避免误读其他页面。
       run.tabId = requestedTabId
-    } else if (!run.tabId || !getTabWebContents(run.storeId, run.tabId)) {
+    } else if (!tabExists(run.tabId)) {
       const reusedId = runTabByStore.get(run.storeId)
-      if (reusedId && getTabWebContents(run.storeId, reusedId)) {
+      if (reusedId && tabExists(reusedId)) {
         run.tabId = reusedId
       } else {
         const firstNavigate = run.steps.find(s => s.type === 'navigate')
@@ -313,10 +366,24 @@ async function execute(run: RunHandle): Promise<void> {
         runTabByStore.set(run.storeId, run.tabId)
       }
     }
+    // 新建标签的首个导航在 createTab 内等待代理配置；TaskRunner 也要先等同一门禁，
+    // 避免第一步脚本在 session 尚未完成配置时读写页面。
+    await waitForStoreSessionReady(run.storeId)
+    // 页面句柄来自渲染层 DOM <webview> 的注册：开店 → 元素挂载 → did-attach → 主进程绑定。
+    // 这段空档期标签页已存在但还没有 guest，必须等（超时按 BROWSER_NOT_READY 如实失败），
+    // 不能拿 null 直接当"已关闭"，更不能跳过等待去执行步骤。
+    try {
+      await waitForTabWebContents(run.storeId, run.tabId!)
+    } catch (e: any) {
+      const message = String(e?.message || e).replace(/^BROWSER_NOT_READY:\s*/, '')
+      TaskStore.updateRun(run.runId, { errorCode: 'BROWSER_NOT_READY', errorMessage: message })
+      transition(run, 'failed', `页面未就绪：${message}`)
+      return
+    }
     // 运行标签页带到前台（activateTab 已在 mirrorTabUrl 里做过，navigate 流程此前漏了）：
-    // 复用的标签页若不是店铺窗口的当前页，视图视口是 0——getBoundingClientRect 全为 0，
-    // 可见性判定与点击都会失真（实测"点开始邀约"首轮就失败的帮凶之一）
-    try { activateTab(run.storeId, run.tabId) } catch { /* 视图未挂载等情况不阻塞流程 */ }
+    // 复用的标签页若不是店铺窗口的当前页，就还停在隐藏状态，落点判定与点击都会失真
+    // （实测"点开始邀约"首轮就失败的帮凶之一）
+    try { activateTab(run.storeId, run.tabId!) } catch { /* 标签页已消失等情况不阻塞流程 */ }
 
     const doneSet = run.skipDone ? TaskStore.succeededStepIndexes(run.runId) : new Set<number>()
 
@@ -364,12 +431,23 @@ async function execute(run: RunHandle): Promise<void> {
             }
             return
           }
-          if (attempt < step.retryLimit && !run.cancelRequested && run.status === 'running') {
+          // 重试闸（与落库侧 `normalizeStepRetryLimit` 同源判定，走 `@shared/agent-step-effects`）：
+          // 非幂等步骤（click*/loop/门禁/切标签）即使旧数据行里存着 retryLimit 也不许重试——
+          // 一次超时重试就会把"确认发送 / 批量邀约"真的再发一遍，而且 `withTimeout` 超时后
+          // 底层注入脚本仍在页面上跑，第二次点击会与第一次叠加。
+          const retryBudget = canRetryStepInPlace(step.type, step.retryLimit) ? (step.retryLimit as number) : 0
+          if (attempt < retryBudget && !run.cancelRequested && run.status === 'running') {
             attempt++
+            try {
+              logMain('warn', `[task] 步骤重试 run=${run.runId} step=${i + 1}/${run.steps.length} type=${step.type} 第${attempt}/${retryBudget}次：${String(e?.message).slice(0, 200)}`)
+            } catch { /* 日志失败不影响重试 */ }
             emitProgress(run, { phase: 'retry', stepIndex: i, stepType: step.type, message: `第 ${attempt} 次重试：${String(e?.message).slice(0, 160)}` })
             continue
           }
           const code = classifyError(e)
+          try {
+            logMain('error', `[task] 步骤失败 run=${run.runId} task=${run.taskId} store=${run.storeId} step=${i + 1}/${run.steps.length} type=${step.type} code=${code}：${String(e?.message || e).slice(0, 300)}`)
+          } catch { /* 日志失败不能影响失败落库 */ }
           TaskStore.updateRun(run.runId, { errorCode: code, errorMessage: String(e?.message || e).slice(0, 500) })
           run.startFrom = i
           transition(run, 'failed', `步骤 ${i + 1}/${run.steps.length}（${step.type}）失败`)
@@ -381,6 +459,9 @@ async function execute(run: RunHandle): Promise<void> {
     transition(run, 'succeeded', '全部步骤完成')
   } catch (e: any) {
     console.error('[task-runner] run 执行异常', run.runId, e)
+    try {
+      logMain('error', `[task] 引擎异常 run=${run.runId} task=${run.taskId} store=${run.storeId}：${String(e?.stack || e?.message || e).slice(0, 500)}`)
+    } catch { /* 日志失败不能影响落库 */ }
     try { TaskStore.updateRun(run.runId, { errorCode: 'INTERNAL_ERROR', errorMessage: String(e?.message || e).slice(0, 500) }) } catch { /* ignore */ }
     try { transition(run, 'failed', '引擎异常') } catch { /* 状态机不允许则保留现场 */ }
   }
@@ -404,8 +485,13 @@ interface StepContext { round?: number; path?: string }
 
 function wcOrThrow(run: RunHandle): Electron.WebContents {
   const wc = run.tabId ? getTabWebContents(run.storeId, run.tabId) : null
-  if (!wc) throw new Error('BROWSER_CLOSED: 店铺浏览器或任务标签页已被关闭')
-  return wc
+  if (wc) return wc
+  // 「标签页还在、只是页面句柄没注册」与「标签页真被关了」是两件事：
+  // 前者由渲染层重新挂载 <webview> 后会恢复（可重试），后者只能重建任务。
+  // 都报 BROWSER_CLOSED 会让用户看着一个还在的标签页去做无用功。
+  const tabStillOpen = !!run.tabId && getStoreTabs(run.storeId).some(t => t.id === run.tabId)
+  if (tabStillOpen) throw new Error('BROWSER_NOT_READY: 标签页页面尚未就绪（店铺 webview 未注册或正在重载）')
+  throw new Error('BROWSER_CLOSED: 店铺浏览器或任务标签页已被关闭')
 }
 
 function guardSignals(run: RunHandle): void {
@@ -756,14 +842,13 @@ async function findTextTarget(
       } catch { /* 读不到原因不影响主流程 */ }
       return { ok: false, reason: 'DISABLED', disabledReason: why };
     }
-    // 视口退化的兜底：WebContentsView 从窗口 contentView 上摘下来（渲染层打开弹层时
-    // setBrowserViewsObscured(true) 会摘）之后，页面文档视口变成 0×0——元素还在、也还有
-    // 尺寸，但坐标全在视口外，elementFromPoint 一律 null，受信任鼠标**物理上到不了**。
-    // 实测：发票中心的采集任务就是在自己的弹层打开期间跑的（采集按钮就在弹层里），
-    // 「给平台开票」「可开票」「给消费者开票」这些页签切换全部报 TASK_TARGET_COVERED/unknown，
-    // 一个方向都切不过去——不是页面点不到，是"视图没挂载"被误报成了"被遮挡"。
-    // 而页面脚本本身照常工作（实测 JS 多级点击 3s 内就把对方数据切出来了：表头多出
-    // 「处理状态/操作」、行数 5 → 2）。
+    // 视口退化的兜底：页面文档视口塌成近 0 时（DOM <webview> 尚未注册 guest、被从文档里
+    // 移除、或平台自己把内容区折叠），元素还在、也还有尺寸，但坐标全在视口外，
+    // elementFromPoint 一律 null，受信任鼠标**物理上到不了**。
+    // 实测（原生视图时代）：发票中心的采集任务在自己的弹层打开期间跑，页签切换全部报
+    // TASK_TARGET_COVERED/unknown，一个方向都切不过去——不是页面点不到，是"视图没挂载"
+    // 被误报成了"被遮挡"。DOM <webview> 之后弹层只靠 CSS 层级，不再摘除页面，
+    // 这条兜底留给真正的视口塌陷。
     // 是否降级由步骤显式声明（allowJsWhenDetached）：JS 点击对**框架托管的按钮**可能无效
     // （微信邀约实测合成 click 不生效），所以不能全局兜底——没声明的步骤如实报 VIEW_DETACHED，
     // 由调用方立刻抛出，而不是白等到超时再给一句含糊的"找不到元素"。
@@ -872,16 +957,16 @@ function performHitClick(
 }
 
 /**
- * 需要真实落点的步骤在开跑前先确认视图已挂载。
+ * 需要真实落点的步骤在开跑前先确认页面视口是真实的。
  *
- * 为什么必须显式查：WebContentsView 被摘除后页面视口变成 0×0，但 getBoundingClientRect
+ * 为什么必须显式查：视口塌成近 0 时（guest 未注册/被移出文档）getBoundingClientRect
  * 仍然返回（可能已经塌缩的）数值——于是坐标点击会"看起来发出去了、实际什么都没点到"，
  * 直到若干步之后才以别的错误码失败，根因完全看不出来。宁可这里立刻如实报出。
  */
 async function assertViewMounted(wc: Electron.WebContents, label: string): Promise<void> {
   const vp = await wc.executeJavaScript('({ w: innerWidth, h: innerHeight })').catch(() => null)
   if (vp && (vp.w < 50 || vp.h < 50)) {
-    throw new Error(`TASK_VIEW_DETACHED: ${label} 需要真实落点，但店铺视图当前未挂载（页面视口 ${vp.w}×${vp.h}）——请关闭遮挡它的弹层后重试`)
+    throw new Error(`TASK_VIEW_DETACHED: ${label} 需要真实落点，但页面视口塌陷（${vp.w}×${vp.h}）——店铺 webview 可能尚未注册或被移出文档，请重新打开店铺页面后重试`)
   }
 }
 
@@ -919,6 +1004,44 @@ async function followOpenedTab(
  * 所以 setInput 的 JS 写入路径对它无效，必须走这里。
  * 校验不过如实抛 TASK_INPUT_NOT_APPLIED——绝不假装写入成功。
  */
+/** 读回输入框当前值（contentEditable 读 textContent，其余读 value）；元素不在返回 null */
+async function readFieldValue(wc: Electron.WebContents, sel: string): Promise<string | null> {
+  try {
+    return await wc.executeJavaScript(`(() => {
+      const el = document.querySelector(${JSON.stringify(sel)});
+      if (!el) return null;
+      return el.isContentEditable ? String(el.textContent || '') : String(el.value == null ? '' : el.value);
+    })()`) as string | null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * "写入是否真的生效"的判据（setInput / fillDraft / aiGenerate 共用）。
+ *
+ * 存在意义：注入脚本 return true 只说明 setter 调用没抛异常，**不代表框架接收了值**——
+ * 平台把输入框换成只读态、被框架重置、元素在 ShadowRoot 里换了实例，都会让写入静默失效，
+ * 而失败要等跑到"发送"那一步才以平台拦截的形式暴露（此时前面几轮可能已真发出去）。
+ *
+ * 判据刻意宽松（避免把平台的正常归一化误判成失败）：
+ *   · 归一化（去空白/压缩空白）后全等 → 通过；
+ *   · 页面值非空且是期望的前缀（maxlength 截断）→ 通过；
+ *   · 页面值包含期望（平台包了一层标记/换行）→ 通过。
+ * 只有"页面里根本不是这段文本"才失败，并且报错只说长度不说内容（§4.5 不落表单原文）。
+ */
+function assertWriteApplied(applied: string | null, expected: string, label: string): void {
+  const norm = (s: string) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim()
+  const a = norm(applied ?? '')
+  const e = norm(expected)
+  if (!expected.length) return
+  if (applied == null) throw new Error(`TASK_INPUT_NOT_APPLIED: ${label} 写入后目标元素已不在页面上（${expected.length} 字未确认）`)
+  if (a === e) return
+  if (a && e.startsWith(a)) return
+  if (a && a.includes(e)) return
+  throw new Error(`TASK_INPUT_NOT_APPLIED: ${label} 写入未生效（期望 ${expected.length} 字，页面实际 ${a.length} 字）`)
+}
+
 async function trustedWrite(
   wc: Electron.WebContents, run: RunHandle, sel: string, deep: boolean, text: string, timeoutMs: number, label: string
 ): Promise<void> {
@@ -1240,6 +1363,10 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         return true;
       })()`), run, deadline, 'fillDraft')
       if (!okFilled) throw new Error(`TASK_SELECTOR_CHANGED: 未找到填充目标 ${String(input.selector)}`)
+      // 写后回读（同 setInput）：草稿填充静默失效时，必须在这一步就失败，
+      // 而不是等平台在发送时以"未填写"拦截（那时前面几轮可能已经真发出去了）
+      const appliedText = await readFieldValue(wc, String(input.selector))
+      assertWriteApplied(appliedText, String(input.text ?? ''), 'fillDraft')
       // §4.5：payload 只存摘要与长度，绝不存表单完整值
       return { kind: 'text', payload: { filled: true, selector: String(input.selector), length: String(input.text ?? '').length } }
     }
@@ -1523,8 +1650,15 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           break
         }
         if (hit && hit.reason === 'DISABLED') {
-          // 确认框在但按钮禁用：这不是"没有确认框"，如实失败（点不动就别假装发成功了）
+          // 确认框在但按钮禁用：这不算"没有确认框"，如实失败（点不动就别假装发成功了）
           throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态，确认框无法确认`)
+        }
+        if (hit && (hit.reason === 'VIEW_DETACHED' || hit.reason === 'COVERED' || hit.reason === 'OUT_OF_VIEWPORT')) {
+          // "找得到但点不了"（视图被摘除/被遮挡/在视口外）**不等于"没有确认框"**：
+          // 以前这些 reason 被忽略、轮询到超时后如实记成 clicked:false，于是快手那条
+          // 「继续发送邀约」确认框会被静默当成"没弹框"——接着 waitForGone 超时，
+          // 报出的原因与真实根因不符（2026-09-28 审查确认）。这里如实抛出。
+          throw new Error(`TASK_TARGET_DISABLED: 「${needle}」存在于页面上但当前不可点击（${hit.reason}），确认框无法确认`)
         }
         if (Date.now() >= until) break
         await new Promise(r => setTimeout(r, 300))
@@ -1588,10 +1722,10 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           if (hit.reason === 'ABSENT') {
             throw new Error(`${absentCode}: 页面上没有「${needle}」，而是写着「${hit.absentText}」——这一位不满足平台的合作条件，跳过换下一位`)
           }
-          // 视图未挂载且步骤没允许降级：立刻如实失败，别白等到超时
+          // 视口塌陷且步骤没允许降级：立刻如实失败，别白等到超时
           // （此时 elementFromPoint 恒为 null，再轮询一万次也还是 null）
           if (hit.reason === 'VIEW_DETACHED') {
-            throw new Error(`TASK_VIEW_DETACHED: 点「${needle}」需要真实落点，但店铺视图当前未挂载（视口 ${hit.coveredBy}）——请关闭遮挡它的弹层后重试`)
+            throw new Error(`TASK_VIEW_DETACHED: 点「${needle}」需要真实落点，但页面视口塌陷（${hit.coveredBy}）——店铺 webview 可能尚未注册或被移出文档，请重新打开店铺页面后重试`)
           }
           // ALL_VISITED：列表已渲染、候选都在，只是本页每一条都已处理过 → 立刻交给上层翻页，
           // 不必空等到超时（实测每个"本页取尽"都白等 30s，几十轮下来很可观）
@@ -1645,10 +1779,15 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         }
         // waitUrl：点击后应当发生**同标签页跳转**（SPA pushState）。按钮可能早早就在 DOM 里
         // 但事件尚未挂上，点早了会被丢弃——固定 sleep 不可靠（微信实测 3s 失败 / 4s 成功）。
-        // 这里轮询地址是否变化，没变就重新定位再点一次，最多 attempts 次。
+        // 这里轮询地址是否变化；没变则**重新定位再点一次**。
+        //
+        // ⚠ 默认 attempts = 1（不重发点击）：重发点击会**真的再点一次**，只对"点击不生效时再点
+        // 也不产生第二次提交"的导航触发类安全（如微信「邀请带货」跳表单页，它自己在档案里显式
+        // 声明 attempts:4）。若某步其实会提交（发送/确认/支付），默认重发就是静默重复提交——
+        // 所以改成"必须显式声明"才重试，未声明时宁可如实报 TASK_TIMEOUT 让人重跑。
         const waitUrl = input.waitUrl as { includes: string; attempts?: number } | undefined
         if (waitUrl) {
-          const attempts = Number(waitUrl.attempts) > 0 ? Number(waitUrl.attempts) : 3
+          const attempts = Number(waitUrl.attempts) > 0 ? Number(waitUrl.attempts) : 1
           let done = false
           for (let att = 1; att <= attempts && !done; att++) {
             const until = Date.now() + Math.max(4000, Math.floor(step.timeoutMs / attempts))
@@ -1881,7 +2020,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
                 // 拿不到它。于是子步骤的**瞬态失败**（典型：AI 生成话术超时）会直接把整批打掉——
                 // 真机实测：微信逐位邀约跑到第 25 轮时 aiGenerate 超时 30s，前 24 位已真实发出，
                 // 整单却报 failed。这里补上：子步骤声明了 retryLimit 就在 onCode 规则之前先重试它。
-                if (!hitRule && childRetries.get(childIdx)! < (child.retryLimit ?? 0)) {
+                if (!hitRule && childRetries.get(childIdx)! < (canRetryStepInPlace(child.type, child.retryLimit) ? (child.retryLimit as number) : 0)) {
                   childRetries.set(childIdx, childRetries.get(childIdx)! + 1)
                   const n = childRetries.get(childIdx)!
                   emitProgress(run, { phase: 'retry', stepIndex: parentIndex, stepType: child.type, message: `第 ${round} 轮子步骤重试（第 ${n}/${child.retryLimit} 次）：${String(ce?.message || ce).slice(0, 120)}` })
@@ -2296,6 +2435,11 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       })()`), run, deadline, 'setInput')
       if (!okFilled) throw new Error(`TASK_SELECTOR_CHANGED: 未找到输入目标 ${sel}`)
       guardSignals(run)
+      // **写后回读**：脚本返回 true 只代表"setter 没抛异常"，不代表框架接了值。
+      // 不回读时"写入静默失效"要等跑到发送那一步才以平台拦截的形式暴露（前面几轮可能已真发出去）。
+      const appliedText = await readFieldValue(wc, sel)
+      assertWriteApplied(appliedText, String(input.text ?? ''), 'setInput')
+      guardSignals(run)
       // §4.5：payload 只存摘要与长度，绝不存写入的完整文本
       return { kind: 'executed', payload: { action: 'setInput', selector: sel, length: String(input.text ?? '').length } }
     }
@@ -2389,6 +2533,10 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       })()`), run, step.timeoutMs, 'aiGenerate 写入')
       if (!okWrote) throw new Error(`TASK_SELECTOR_CHANGED: 未找到写入目标 ${sel}`)
       guardSignals(run)
+      // 写后回读：模型生成了话术但"没写进输入框"（只读态/框架重置）必须当场失败，
+      // 否则会带着空话术一路跑到发送（平台侧被拦截，或更糟——发出没有话术的邀约）
+      const appliedScript = await readFieldValue(wc, sel)
+      assertWriteApplied(appliedScript, generated.script, 'aiGenerate 写入')
       // §4.5：payload 只存摘要（模型名/长度/来源字符数/前 40 字预览）；
       // 完整话术由紧随其后的 readText 步骤落库，便于事后审计"到底发了什么"
       return {
@@ -2428,7 +2576,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       }, run, step.timeoutMs, 'mirrorTabUrl')
       await pollUntil(run, () => !wcOrThrow(run).isLoading(), Math.max(step.timeoutMs, 5000), 'mirrorTabUrl 加载完成')
       // 运行标签页带到前台：门禁阶段用户核对的就是这一页
-      try { activateTab(run.storeId, run.tabId!) } catch { /* 视图未挂载等情况不阻塞流程 */ }
+      try { activateTab(run.storeId, run.tabId!) } catch { /* 标签页已消失等情况不阻塞流程 */ }
       // §4.5：payload 只存 origin+path——query 里有 finderUsername 等 token，不落库
       let originPath = target
       try { const u = new URL(target); originPath = u.origin + u.pathname } catch { /* 保底原样 */ }
@@ -2461,7 +2609,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       run.tabId = target.id
       // tabId 精确绑定属于 Agent 当前页上下文；不要把普通用户标签永久登记为任务运行标签。
       if (!tabIdWant) runTabByStore.set(run.storeId, target.id)
-      try { activateTab(run.storeId, target.id) } catch { /* 视图未挂载不阻塞流程 */ }
+      try { activateTab(run.storeId, target.id) } catch { /* 标签页已消失不阻塞流程 */ }
       if (input.closeCurrent !== false && oldTabId && oldTabId !== target.id) {
         // 详情/邀约表单页用完即关：否则每轮留一个标签页（实测一轮下来攒了 7 个 finder-detail）
         try { closeTab(run.storeId, oldTabId) } catch { /* 已关闭/未挂载都无妨 */ }
@@ -2836,9 +2984,12 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       }
       guardSignals(run)
       if (found == null || !/\d/.test(found)) {
-        // 一直只看到"没有数字"的文案 → 如实说是"没读到额度数字"，别含糊成"找不到文案"
+        // 一直只看到"没有数字"的文案 → **读不到额度**，不是"额度不足"。
+        // 这里必须用不在 loop stopOn 里的码：此前借用 TASK_QUOTA_EXCEEDED，而它在邀约循环的
+        // stopOn 里＝按预期成功收尾，于是"页面没渲染完/改版导致读不到额度"会变成
+        // "任务报成功、一位都没发出去"（2026-09-28 审查确认的静默假成功）。
         if (sawWithoutNumber != null) {
-          throw new Error(`TASK_QUOTA_EXCEEDED: 额度文案「${sawWithoutNumber.slice(0, 60)}」里始终没有可识别的数字（等到超时）——无法确认可邀约额度`)
+          throw new Error(`TASK_QUOTA_UNREADABLE: 额度文案「${sawWithoutNumber.slice(0, 60)}」里始终没有可识别的数字（等到超时）——无法确认可邀约额度，按失败处理（不当作额度用尽）`)
         }
         if (optional) return { kind: 'executed', payload: { action: 'requireQuota', present: false, min } }
         throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到含「${marker}」的额度文案（平台可能已改版）`)
@@ -2846,7 +2997,7 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       const m = /\d+/.exec(found)
       const quota = m ? parseInt(m[0], 10) : NaN
       if (!Number.isFinite(quota)) {
-        throw new Error(`TASK_QUOTA_EXCEEDED: 额度文案「${found.slice(0, 60)}」里没有可识别的数字，无法确认可邀约额度`)
+        throw new Error(`TASK_QUOTA_UNREADABLE: 额度文案「${found.slice(0, 60)}」里没有可识别的数字，无法确认可邀约额度，按失败处理`)
       }
       if (input.metric) {
         TaskStore.insertSnapshot(run.storeId, String(input.metric), quota, run.runId)
@@ -2875,7 +3026,29 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
           return { kind: 'executed', payload: { action: 'requireEnabled', text: needle, clickedText: hit.clickedText, candidates: hit.candidates, enabled: true } }
         }
         if (hit.reason === 'DISABLED') {
-          throw new Error(`TASK_QUOTA_EXCEEDED: 「${needle}」当前为禁用态——可邀约额度已用尽或平台限制该操作${hint ? '（' + hint + '）' : ''}，本次邀约在发送前中止`)
+          // 禁用态本身**不说明原因**：可能额度用尽，也可能必填未填/未登录/风控。
+          // 此前一律当额度用尽，而该码在邀约循环的 stopOn 里＝按预期成功收尾
+          // → "按钮因别的原因被禁用"变成"任务报成功、0 位邀约发出"（2026-09-28 审查确认）。
+          // 现在只认档案里**声明过**的额度文案（引擎读得到按钮旁的 tooltip/popover 说明时比对），
+          // 否则如实失败——宁可让用户看到失败，也不能给一个假成功。
+          const why = String((hit as any).disabledReason || '')
+          const quotaWords = Array.isArray(input.quotaDisabledIncludes)
+            ? (input.quotaDisabledIncludes as unknown[]).map(x => String(x)).filter(Boolean)
+            : []
+          // 判定"禁用=额度用尽"的两条路，都必须由**步骤/档案显式给出**：
+          //  ① 读到了平台说明且与登记文案相符（更精确）；
+          //  ② 平台档案声明"本按钮禁用即额度用尽"（实测校准，如抖店「确认发送」）。
+          const meansQuota = (quotaWords.length > 0 && quotaWords.some(w => why.includes(w)))
+            || input.disabledMeansQuota === true
+          if (meansQuota) {
+            throw new Error(`TASK_QUOTA_EXCEEDED: 「${needle}」当前为禁用态${why ? `，平台说明「${why.slice(0, 80)}」` : '（平台档案声明此禁用即额度用尽）'}——本次邀约在发送前中止`)
+          }
+          throw new Error(
+            `TASK_TARGET_DISABLED_UNCERTAIN: 「${needle}」当前为禁用态，` +
+            `${why ? `平台说明「${why.slice(0, 80)}」` : '且读不到平台说明（按钮旁没有 tooltip/popover）'}——` +
+            `无法确认是额度用尽还是别的限制，未按"按预期收尾"处理，请人工确认后重跑。` +
+            `若这是本平台额度用尽时的表现，请在本步登记 quotaDisabledIncludes（平台文案）或 disabledMeansQuota（档案声明）${hint ? `（${hint}）` : ''}`
+          )
         }
         if (Date.now() >= deadline) {
           throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的按钮（${hint || '平台可能已改版'}）`)

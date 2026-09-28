@@ -117,7 +117,7 @@ async function connectByUrl(part, timeoutMs = 20000) {
   const t0 = Date.now()
   for (;;) {
     const list = await targets()
-    const t = list.find(x => x.type === 'page' && x.url.includes(part))
+    const t = list.find(x => (x.type === 'page' || x.type === 'webview') && x.url.includes(part))
     if (t) { const c = new CDP(t.webSocketDebuggerUrl); await c.ready; return c }
     if (Date.now() - t0 > timeoutMs) {
       throw new Error('未找到页面目标: ' + part + '\n' + list.map(x => x.url.slice(0, 100)).join('\n'))
@@ -347,7 +347,7 @@ async function main() {
       // 第 2 轮就开始了），事后只能看到空白页。
       if (!page) {
         const list = await targets()
-        const t = list.find(x => x.type === 'page' && /jinritemai\.com/.test(x.url))
+        const t = list.find(x => (x.type === 'page' || x.type === 'webview') && /jinritemai\.com/.test(x.url))
         if (t) { page = new CDP(t.webSocketDebuggerUrl); await page.ready }
       }
       if (page && Date.now() - lastProbe > 1800) {

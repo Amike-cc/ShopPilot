@@ -4,7 +4,34 @@
  */
 
 import { getDatabase } from '../db/database'
-import { shell } from 'electron'
+import { BrowserWindow, shell } from 'electron'
+import { existsSync } from 'fs'
+import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+
+/**
+ * 把下载状态推给渲染层。
+ *
+ * 为什么放在这里：`will-download` 挂在 session-manager 上，而 session-manager 是
+ * window-manager 的依赖方（反向 import 会成环）。download-manager 是叶子模块，
+ * 直接向所有窗口广播即可（本项目只有一个主窗口，但用 getAllWindows 更稳）。
+ *
+ * 2026-09-28 审查确认：此前进度与创建事件**主进程从不发送**，而渲染层早已在监听
+ * `BROWSER_DOWNLOAD_PROGRESS`（workspace.ts:198）→ 下载面板永不实时更新，
+ * 完成/中断对用户不可见，只能手动刷新。
+ */
+export function emitDownloadCreated(payload: { id: string; storeId: string; fileName: string; filePath: string }): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    try { win.webContents.send(EVENT_CHANNELS.BROWSER_DOWNLOAD_CREATED, payload) } catch { /* 窗口正在销毁 */ }
+  }
+}
+
+export function emitDownloadProgress(payload: { id: string; storeId: string; state: string; receivedBytes: number; totalBytes: number }): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    try { win.webContents.send(EVENT_CHANNELS.BROWSER_DOWNLOAD_PROGRESS, payload) } catch { /* 窗口正在销毁 */ }
+  }
+}
 
 export interface Download {
   id: string
@@ -46,19 +73,22 @@ export function listDownloads(storeId: string, limit?: number): Download[] {
 
 /**
  * 在文件夹中显示下载文件 - §6.2
+ * @returns 'shown' | 'missing' | 'not-found'：文件已被移动/删除时如实回报，
+ *   不能像以前那样"只要库里有记录就返回 true"——用户点「打开所在文件夹」会毫无反应且没有解释。
  */
-export function showDownloadInFolder(downloadId: string): boolean {
+export function showDownloadInFolder(downloadId: string): 'shown' | 'missing' | 'not-found' {
   const db = getDatabase()
   
   const download = db.prepare('SELECT file_path FROM downloads WHERE id = ?').get(downloadId) as { file_path: string } | undefined
   
   if (!download || !download.file_path) {
-    return false
+    return 'not-found'
   }
+  if (!existsSync(download.file_path)) return 'missing'
   
   // 使用 shell.showItemInFolder 在文件管理器中显示
   shell.showItemInFolder(download.file_path)
-  return true
+  return 'shown'
 }
 
 /**

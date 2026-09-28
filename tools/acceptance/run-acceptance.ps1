@@ -40,6 +40,12 @@ Run-Step 'sec' 'node tools/acceptance/sec-runner.js'
 Run-Step 'm4-full' 'node tools/acceptance/m4-runner.js'
 Run-Step 'custom-local' 'node tools/acceptance/custom-task-local-verify.js'
 Run-Step 'invite-live-log' 'node tools/acceptance/invite-live-log-verify.js'
+# Agent suites were previously manual-only (audit P2-G): they cover the Job state machine,
+# tool/skill/plugin gates, memory governance and the packaged app, so they belong here.
+Run-Step 'agent-cdp' 'node tools/acceptance/agent-cdp-runner.js'
+Run-Step 'agent-domain-cdp' 'node tools/acceptance/agent-domain-cdp-verify.js'
+Run-Step 'agent-memory-resilience' 'node tools/acceptance/agent-memory-resilience-verify.js'
+Run-Step 'packaged-agent-smoke' 'node tools/acceptance/packaged-agent-smoke.js'
 Run-Step 'manifest' 'node tools/release/release-manifest.js'
 Kill-ShopPilot
 

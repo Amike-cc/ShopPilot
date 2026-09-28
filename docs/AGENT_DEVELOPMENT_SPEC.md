@@ -193,11 +193,21 @@ HR 生成岗位卡，必须包含：
 - 下载与书签：listDownloads、listBookmarks、createBookmark、deleteBookmark（后两项需确认）。
 - 数据：createBackup、restoreBackup（需确认）。
 - 记忆：writeMemory（进入待人工审核）。
+- Job 闭环：getJobDetail、jobFeedback（评分/纠正意见，进入记忆学习但记忆仍需人工审核）、resumeJob（只恢复没有页面副作用的 Job，已产生副作用的会被 Main 拒绝）自动执行；approveJob、reviewJobResult、cancelJob 需确认。`approveJob` 只处理状态为 `waiting_confirmation` 的 Job，确认凭证取自该 Job 行本身，因此不构成“自我批准”通道：状态不对会被 Main 拒绝。
+- 组织与权限：updateAgent（名称/说明/店铺范围/日预算/工具权限/并发/超时）、bindAgentModel——需确认；店铺范围与工具权限在 Main 里还要求 `confirmed=true`，计划卡上用户的确认即该确认。
+- 插件与任务定义：updatePlugin、deletePlugin、updateTask——需确认（可逆的声明式定义变更，不是页面动作）。删插件只解除分组，成员技能保留为独立技能；运行中的任务只能改名称/计划，改步骤会被 Main 以 `TASK_BAD_STATE` 拒绝（步骤下标与已执行记录一一对应，中途替换会让副作用步骤重复或漏执行）。
+- 只读汇总与本地维护：overviewStats、overviewDatacenter、overviewInvoiceCenter（待开票清单，只读）、qualityMetrics、qualityReview（生成复盘并写本地记录）、memoryRebuild、memorySnapshot（系统加密快照）自动执行；结果在 Main 侧就压成有界摘要（条数 + 标量字段），避免把整份数据塞进上下文预算。快照的恢复/查看通道（memorySnapshotRestore/Inspect）**不**暴露给智能体：恢复是破坏性动作，查看要任意文件路径。
+- 主体回填：applyEntity——需确认（把平台采到的主体写进店铺营业执照字段），与平台不一致的不会被覆盖，掩码/形态不对的会被拒并如实回报。
+- 门禁与提示词同源：`toolApprovalRequired`（提示词里给工具打「需确认」标记、技能步骤资格判定）现在 = `AGENT_CONFIRM_REQUIRED_ACTIONS`（29 项）∪ 例外清单 ∪ 资金名匹配。此前它只看 3 项例外清单，导致提示词告诉模型“自治运营默认自动执行”，而实际有 20+ 个动作会弹确认卡。
+- **「风险等级」与「是否需要确认」是两件事，分别取两个集合**（2026-09-26 用户定调）：风险看 `AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS`（会改动持久状态的动作），确认看 `AGENT_CONFIRM_REQUIRED_ACTIONS`，后者是前者的子集。达人邀约 `runInvite`（用户在对话里发起、额度用尽自动停止）与技能启用/停用 `updateSkill`（可逆的本地定义变更）已撤出确认名单，但**仍在副作用集合里**（risk=write、只读执行者不能接、`side_effect_started` 照置位）；两者也仍在技能禁入清单里。`agent-service.planFromActions` 用前者推 risk、用后者推 requiresConfirmation——历史上这两者绑在一起，撤一个动作的确认就等于顺手把它降级成 read。
+- 新增工具时必须同步四个地方，缺一个就会出现“能规划不能执行”或“提示词与实际门禁不一致”：① `packages/shared/src/schemas/agent.ts` 的 action schema + `AGENT_SOFTWARE_ACTION_TYPES`；② `packages/shared/src/agent-tools.ts` 的 `AGENT_TOOL_CATALOG`（契约测试保证与 ① 一一对应）；③ `agent-service.ts` 的 `SOFTWARE_ACTION_LABELS` + `describeSoftwareAction` + `validateSoftwareAction` + `executeAgentSoftwarePlan` 的 case；④ `agent-domain-rules.ts` 的 `AGENT_CONFIRM_REQUIRED_ACTIONS`（会弹确认卡）与 `agent-tools.ts` 的 `AGENT_SKILL_FORBIDDEN_STEPS`（不可被技能嵌套）。
+- **动作名有两个消费方，且渲染层不能引 `agent-tools.ts`**：Main 用目录自带的 `label`，计划卡用纯数据表 `packages/shared/src/agent-tool-labels.ts`（引 `agent-tools.ts` 会连带 `agent-domain-rules.ts` → `node:crypto`，浏览器构建直接失败）。两份由 `tests/unit/agent-tools.test.ts` 的一致性测试锁死，改标签时一并改两处。
+- **面板与模型共用同一个写函数时，必须先摘掉动作判别键 `type`**：面板传纯输入（无 `type`），模型动作自带 `type`，直接喂严格 schema 会报 `unrecognized_keys: ["type"]`（`createSkill`、`updatePlugin`/`deletePlugin` 都踩过）。约定用 `stripActionType`，只摘 `type`，其余多余键仍严格拒绝。
 - 路由：含“任务/发票/备份/团队/书签”等软件功能词的指令优先走智能体回合，不会被当成页面任务去观察页面；只有真正的页面任务（标题/表格/库存/点击/截图等）才生成页面计划。
 
 全局设置永不由智能体操作：AI 配置与 Key、平台首页 / 达人广场地址、应用锁与密码、代理与凭据、会话导出/导入、软件更新；用户要求时只能引导到「设置」手动完成。
 
-主 Agent 对外称“智能体”，每回合由模型输出 `{"thought":"思考摘要","reply":"...","actions":[...]}`：`thought` 是可见的简短理由（≤100 字），`reply` 是给用户的结论，`actions` 逐条按上面的闭合白名单校验，非法动作直接丢弃。智能体最多 3 轮“思考 → 执行只读动作 → 看结果再决定”，结果不足时继续行动、充足时收尾；需要确认的动作整体作为软件操作计划交给用户确认；页面任务不出现在 actions 里，仍由子 Agent 执行。模型没按协议输出时只把原文当对话回复，不执行任何动作。
+主 Agent 对外称“智能体”，每回合由模型输出 `{"thought":"思考摘要","reply":"...","actions":[...]}`：`thought` 是可见的简短理由（≤100 字），`reply` 是给用户的结论，`actions` 逐条按上面的闭合白名单校验，非法动作直接丢弃。思考轮次按模型上下文窗口分配（小窗口 4 轮、32K 6 轮、64K 8 轮、128K 及以上 10 轮），结果不足时继续行动、充足时收尾；需要确认的动作整体作为软件操作计划交给用户确认；页面任务不出现在 actions 里，仍由子 Agent 执行。模型没按协议输出时只把原文当对话回复，不执行任何动作。
 
 ### 5.3 初始岗位模板
 
@@ -249,10 +259,13 @@ HR 生成岗位卡，必须包含：
 
 智能体的能力以**闭合工具目录**为唯一入口，技能与插件都是声明式数据，不引入脚本、Shell、文件或新权限：
 
-- **工具目录（Tool Catalog）**：`packages/shared/src/agent-tools.ts` 登记每个闭合软件动作（`AGENT_TOOL_CATALOG`：type、名称、说明、示例 JSON、审批标记）；智能体回合的提示词白名单由目录生成（`buildToolWhitelistText`），契约测试保证目录与 `AGENT_SOFTWARE_ACTION_TYPES` 一一对应、示例都能被 action schema 解析。用户说“查看工具/能力”时主 Agent 用 `listTools` 汇报。
-- **技能（Skill）**：用现有工具组合的可复用声明式工作流，落库 `agent_skills`（name/description/intent/steps/status/source/plugin_id）。步骤最多 8 条，只能包含“自动执行类”工具：资金/例外清单工具、需要人工确认的软件动作（关店、店铺增改删、任务运行控制、组织变更、书签增删、备份恢复）、未知动作、以及嵌套的技能/插件管理动作（createSkill/runSkill/deleteSkill/createPlugin/listPlugins/listSkills/listTools）都会被 Main 拒绝（`AGENT_CONFIRMATION_REQUIRED` / `AGENT_INVALID_SKILL_STEP`）。只读采集（发票/经营数据/主体）按 §5.4 自治策略允许进入技能，运行时仍按店铺派单。智能体能自己“制作工具”：`createSkill` 自动执行并落库，回复“已制作技能…”；`runSkill` 按 id/名称逐步执行并回传每步真实结果，派发的采集 Job 同样进入对话完成汇总；`deleteSkill` 删除；“查看技能”“运行技能 X”有确定性路由。
+- **工具目录（Tool Catalog）**：`packages/shared/src/agent-tools.ts` 登记每个闭合软件动作（`AGENT_TOOL_CATALOG`：type、名称、说明、示例 JSON、审批标记）；除店铺/任务/Agent 管理外，主 Agent 还可创建经过 TaskRunner 白名单校验的持久化任务，以及操作已打开浏览器的标签页（新建、http/https 导航、后退/前进/刷新、固定和关闭）。智能体回合的提示词白名单由目录生成（`buildToolWhitelistText`），契约测试保证目录与 `AGENT_SOFTWARE_ACTION_TYPES` 一一对应、示例都能被 action schema 解析。用户说“查看工具/能力”时主 Agent 用 `listTools` 汇报。
+- **技能（Skill）**：用现有工具组合的可复用声明式工作流，落库 `agent_skills`（name/description/intent/steps/status/source/plugin_id）。步骤最多 8 条，只能包含“自动执行类”工具：资金/例外清单工具、需要人工确认的软件动作（创建任务、关店/关标签页、店铺增改删、任务运行控制、组织变更、书签增删、备份恢复）、未知动作、以及嵌套的技能/插件管理动作（createSkill/runSkill/deleteSkill/createPlugin/listPlugins/listSkills/listTools）都会被 Main 拒绝（`AGENT_CONFIRMATION_REQUIRED` / `AGENT_INVALID_SKILL_STEP`）。只读采集（发票/经营数据/主体）按 §5.4 自治策略允许进入技能，运行时仍按店铺派单。智能体能自己“制作工具”：`createSkill` 自动执行并落库，回复“已制作技能…”；`runSkill` 按 id/名称逐步执行并回传每步真实结果，派发的采集 Job 同样进入对话完成汇总；`deleteSkill` 删除；“查看技能”“运行技能 X”有确定性路由。
 - **插件（Plugin）**：`agent_plugins` 把多个技能打包命名（`createPlugin`/`listPlugins`），用于成套交付；插件只是技能分组，不携带新权限。
-- **分享包（导入 / 导出）**：设置 → Agent 团队 → 技能与插件 可把技能/插件导出为 `shopilot-agent-pack` JSON（只含名称、说明、状态和步骤，不含 id、时间戳或任何凭据），也可以粘贴 JSON 导入：导入必须由用户点“确认导入”（`AGENT_PACK_INVALID` / `AGENT_CONFIRMATION_REQUIRED`），先整体校验（与 createSkill 同一套禁令）再落库，同名技能/插件更新，插件引用缺失技能会如实报错并继续导入其余技能；全程走面板与剪贴板，不引入文件系统权限。
+- **分享包（导入 / 导出）**：设置 → 技能（一级页签）导出/导入技能分享包，设置 → 插件（一级页签）导出/导入插件分享包，两者都是 `shopilot-agent-pack` JSON（只含名称、说明、状态和步骤，不含 id、时间戳或任何凭据）。插件不能脱离成员技能单独存在，所以插件页的导出会连同它引用的技能一起打包（插件页按成员技能名反查后复用同一个导出接口，不新增插件专属接口）。导入必须由用户点“确认导入”（`AGENT_PACK_INVALID` / `AGENT_CONFIRMATION_REQUIRED`），先整体校验（与 createSkill 同一套禁令）再落库，同名技能/插件更新，插件引用缺失技能会如实报错并继续导入其余技能；全程走面板与剪贴板，不引入文件系统权限。
+- **面板直接创建（用户手写技能）**：设置 → 技能（一级页签）→「新建技能」可填名称/说明/用途并逐条添加步骤（1～8 步），落库 `source='user'`，走 `AGENT_SKILL_CREATE` 与模型 `createSkill` 完全同一套校验（同名即更新）。工具下拉的数据来自 `AGENT_SKILL_TOOLS`（Main 返回 `listSkillStepTools()`），只列“自动执行类”工具（type/名称/说明/参数模板），因此界面上选不到会被拒的步骤；资格判定 `skillStepEligible`（`packages/shared/src/agent-tools.ts`）同时被 Main 的技能校验和该接口使用，二者不会漂移；绕过界面直接提交需确认工具仍会被 Main 以 `AGENT_CONFIRMATION_REQUIRED` 拒绝。参数模板由目录示例去掉 `type` 并把字符串占位清空（数组/数字/布尔保留），避免把示例里的 `"..."` 当真实参数提交。
+- **插件改/删（面板与智能体同一套校验）**：插件页每个插件卡片有「编辑」「删除」。编辑可改名称/说明/成员技能（按名称解析，走 `AGENT_PLUGIN_UPDATE` → `updateAgentPluginByUser`，输入 schema `agentPluginUpdateInputSchema`：必须有定位（pluginId 或 name）且至少一项变更，多余字段一律拒绝）；删除走 `AGENT_PLUGIN_DELETE` → `deleteAgentPluginByUser`，返回 `releasedSkills` 并**保留成员技能**（只解除 `agent_skills.plugin_id` 归属，同名插件不存在时 `AGENT_PLUGIN_NOT_FOUND`）。成员技能的归属由 `syncSkillMembership` 双向维护（把技能从一个插件移到另一个时，旧插件会同步移除该技能）。
+- **任务编辑（面板）**：任务列表卡片有「编辑」，复用自定义任务编辑器（与「复制」同一套步骤转换），保存走 `TASK_UPDATE` → `taskStore.updateTask`：未传字段不改、`storeScope/schedule` 传 `null` 清空、`steps` 整体替换并重排下标、每次写 `updated_at` 与审计 `task.update`；校验复用 `taskCreateSchema.shape.*` 与 `validateStepInput`（与创建同源），非法步骤在写库前就被拒。有未结束运行（queued/running/waiting_confirmation/paused）时只允许改名称/计划：面板在步骤未改动时干脆不发 `steps`，改了则由 Main 以 `TASK_BAD_STATE` 拒绝并说明原因。
 - **可见性**：启用的技能进入软件上下文 `skills`（id/name/description/stepCount）并显示在 Agent 抽屉的软件上下文里，模型据此选择 `runSkill`。
 
 ### 5.8 达人邀约发送与订单明细采集（智能体工具）
@@ -375,6 +388,7 @@ default-main 是主 Agent（root-ceo）的专用配置，只由“设置 → AI 
 | credentialRef | safeStorage 引用，禁止明文入库 |
 | temperature | 0～2，按岗位配置 |
 | maxTokens | 受全局上限限制 |
+| contextWindowTokens | 可选 4096～2000000；留空由 Main 根据 provider/model 自动推导 |
 | timeoutMs | 3 秒～120 秒 |
 | fallbackProfileId | 只能引用已启用配置 |
 | pricing | 可选：币种 + 每百万 token 输入/输出单价；未配置时成本显示“未估算”，禁止伪造 |
@@ -452,6 +466,8 @@ agent-memory/
 | feedback | 用户评分、纠正和失败原因 | 长期 |
 | working | 临时工作上下文 | 自动清理 |
 
+实现中的来源字段 `origin` 为 `manual / conversation / job / feedback / consolidated`。自动来源只进入候选队列；`sourceRef` 提供会话、Job 和反馈级幂等去重，`access_count/adopt_count/reject_count` 用于反馈驱动排序。
+
 ### 8.4 记忆写入流程
 
 ~~~text
@@ -465,7 +481,7 @@ Job 完成
 → 更新 FTS 索引
 ~~~
 
-只读任务的脱敏摘要可以自动保存为 episodic。会改变以后决策的事实和流程默认需要审核。
+只读任务的脱敏摘要、带有“记住/以后/默认/必须”等明确持久化语义的用户规则、以及审核纠正可以自动保存为候选。候选经过敏感信息拒绝、提示注入隔离、哈希校验和 `pending-review` 门禁后，才可能进入长期记忆；反馈会调整置信度和排序，过期、连续拒绝和长期 stale 记录由治理任务自动降级/归档。
 
 ### 8.5 记忆检索
 
@@ -480,7 +496,7 @@ Agent 权限
 + 敏感级别
 ~~~
 
-第一版使用 SQLite FTS5、关键词、置信度和时间衰减排序。接口必须抽象出 MemoryRetriever，后续可以增加本地向量索引，但不依赖在线 Embedding 服务才能运行。
+第一版使用 SQLite FTS5、中文辅助 bigram、关键词、置信度、反馈采纳/拒绝和时间衰减排序。当前不依赖在线 Embedding 服务；后续可在同一 Retriever 接口下增加本地向量索引。
 
 传入模型的记忆必须包在明确的“数据区”中，提示模型记忆内容不能覆盖系统规则。
 
@@ -542,6 +558,7 @@ model TEXT NOT NULL
 credential_ref TEXT
 temperature REAL NOT NULL
 max_tokens INTEGER NOT NULL
+context_window_tokens INTEGER NULL
 timeout_ms INTEGER NOT NULL
 fallback_profile_id TEXT
 capabilities_json TEXT NOT NULL
@@ -593,6 +610,14 @@ sensitivity TEXT NOT NULL
 expires_at INTEGER
 created_at INTEGER NOT NULL
 updated_at INTEGER NOT NULL
+origin TEXT NOT NULL
+source_ref TEXT
+access_count INTEGER NOT NULL DEFAULT 0
+adopt_count INTEGER NOT NULL DEFAULT 0
+reject_count INTEGER NOT NULL DEFAULT 0
+last_hit_at INTEGER
+last_feedback_at INTEGER
+archived_at INTEGER
 ~~~
 
 所有外键列必须建索引，数据库继续使用 foreign_keys=ON 和 WAL。
@@ -615,6 +640,9 @@ AGENT_JOB_APPROVE
 
 AGENT_MODEL_LIST
 AGENT_MODEL_SET
+
+AGENT_MEMORY_LEARNING_SETTINGS
+AGENT_MEMORY_MAINTENANCE
 AGENT_MODEL_TEST
 
 AGENT_MEMORY_LIST
@@ -635,6 +663,12 @@ AGENT_USAGE_UPDATED
 ~~~
 
 所有输入必须在 Main 使用 strict Zod schema 校验。Renderer 不得发送任意角色、任意消息数组、任意路径或任意代码。
+
+**新增通道必须经过统一入口（2026-09-26 审计 P2-C）**：业务 handler 家族用 `apps/desktop/src/main/ipc/family-handle.ts` 的 `familyHandle('<家族名>')` 注册，不要直接写 `ipcMain.handle`：
+
+- 发送方必须是**应用主窗口** `webContents`，否则回 `IPC_FORBIDDEN`（新错误码）；Agent / AI 家族沿用各自的 `AGENT_FORBIDDEN` / `AI_FORBIDDEN` 文案。
+- 应用锁定时一律拒绝；只有会话/安全家族显式 `allowWhenLocked: true`（解锁、锁状态、设置/移除主密码），否则用户永远解不开锁。
+- `tests/unit/ipc-trust-guard.test.ts` 是这条约定的契约：裸 `ipcMain.handle` 只允许出现在 `family-handle.ts`，或出现在"逐通道断言数 ≥ 通道数"的家族文件里（Agent 家族按家族给不同错误码，保留裸 handle + 每通道自查）。
 
 ## 11. UI 规范
 
@@ -728,6 +762,14 @@ agent.budget.block
 ~~~
 
 日志只写摘要、ID、状态、错误码和统计，不写 Key、Cookie、Token、密码和客户隐私。
+
+**审计关联键（2026-09-26 审计 P2）**：`audit_logs.request_id` 必须是**每次调用一个真实 id**
+（IPC 层 `randomUUID()`，经 `auditRequestId(id, detail)` 追加 `#说明`：失败时是错误码，
+成功时可以是最小上下文，如 `#endpoint,model`、`#3个技能`）。不允许再写 `'agent.observe'`
+这种常量串或错误码本身；`audit:query` 支持按 `requestId` 精确/前缀过滤（带 `#` 后缀的记录按前缀命中），
+filter 过 strict schema。技能/插件/分享包的增删改与 `ai:config:set` 必须留痕
+（`agent.skill.*` / `agent.plugin.*` / `agent.pack.*` / `ai.config`），模型自选动作建的技能
+`actor` 记为 root-ceo，用户手建的记为 `user`。
 
 ## 13. 错误码
 
@@ -846,6 +888,12 @@ CEO 汇总结果必须可以追溯到：
 - Job 摘要和审计引用。
 
 记忆备份必须使用现有备份加密能力或 AES-256-GCM；恢复前校验 SHA-256、manifest 版本和路径安全。
+
+**落地口径（2026-09-26 审计 P2）**：记忆快照恢复会比对**界面展示给用户的那个摘要**：
+
+- 面板先 `agent:memory:snapshot:inspect` 拿到 `sha256` 并显示；
+- 恢复时把同一个 `expectedSha256` 传回 Main（`restoreMemorySnapshot`），与实际文件摘要不一致（含被换文件、展示后被改写）一律拒绝（`AGENT_MEMORY_SNAPSHOT_INVALID`），规则在 `packages/shared/src/memory-snapshot.ts:verifySnapshotDigest`；
+- 输入过 strict schema（`agentMemorySnapshotRestoreSchema`），旧版 `confirmed` 字段仅作兼容；恢复 IPC 现在由 Main 侧 `askConfirm` 原生确认窗重新取得用户确认（测试验收可注入 `SHOPILOT_TEST_AUTOCONFIRM`），取消会在备份和写库前拒绝。审计 `agent.memory.restore` 记录**快照摘要 + 是否比对过摘要**。
 
 ### 16.3 回滚
 
@@ -1264,6 +1312,12 @@ agent_model_cred.<profileId>.key
 - 预算不足立即阻止新 Job，不中断已经等待人工确认的 Job。
 - 单一模型 profile 的并发通过信号量限制。
 - 应用退出时取消未开始的模型请求，已完成的结果正常落库。
+- **请求体只有一个构造点**（2026-09-26 审计 P2）：所有出站 `/chat/completions` 请求都经
+  `apps/desktop/src/main/services/model-request.ts` 的 `buildChatRequestBody`（字段名与取值口径）
+  + `buildChatRequestHeaders`（鉴权头）+ `clampMaxOutputTokens`（最大输出上限，默认上限 128000）。
+  目前有五处调用：`ai-client.chatComplete`（legacy 邀约/测试，温度 0.7、输出 64..1200）、
+  `agent-runtime` 的对话链路、Job 链路、profile 健康检查。换协议或加 provider 专属字段只改这一个文件；
+  `tests/unit/model-request.test.ts` 里有源码级守卫，禁止再出现手写的 `max_tokens:` 请求体。
 
 ### 27.3 健康状态
 
@@ -1347,6 +1401,11 @@ status: approved
 sensitivity: store
 confidence: 0.87
 sourceJobId: ajob_xxx
+origin: job
+sourceRef: job:xxx
+accessCount: 0
+adoptCount: 0
+rejectCount: 0
 createdAt: 0
 updatedAt: 0
 expiresAt: null
@@ -1358,8 +1417,8 @@ expiresAt: null
 ### 29.3 私有记忆加密
 
 - public 和 store 记忆只保存脱敏正文。
-- private 记忆使用 safeStorage 保护的数据密钥，通过 AES-256-GCM 加密，文件扩展名为 .mem.enc。
-- safeStorage 不可用时禁止新写入 private 记忆，只允许保存低敏感的 working 摘要并显示警告。
+- private 记忆使用 safeStorage 保护的数据密钥，通过 AES-256-GCM 加密，文件扩展名为 `.mem.enc`；旧版本 `.md` 记录仍可读取，显式重写/恢复后迁移到加密格式。
+- safeStorage 不可用时禁止新写入或读取 `.mem.enc` private 记忆，并返回受控错误；不把 private 正文降级写成明文。
 - 数据密钥轮换时保留版本号，旧版本只在迁移期间可解密。
 - 记忆导出默认重新加密，不导出 safeStorage 原始密钥。
 
@@ -1723,6 +1782,8 @@ blocked_permission
 - Job 被 Dispatcher 接受时写入 leaseOwner 和 leaseExpiresAt。
 - 心跳间隔默认 10 秒，租约默认 30 秒；连续 3 个心跳未更新才判为可恢复。
 - 只有持有当前租约的 worker 可以迁移 accepted/running。
+- **续租的唯一依据是"还有活着的执行者"**（模型请求的 controller 在飞，或 TaskRunner 运行仍在 queued/running/paused/waiting_confirmation），另给刚进入 running 的 Job 一个 2×leaseMs 的启动宽限窗口；判定在纯函数 `packages/shared/src/agent-lease.ts:evaluateLeaseSweep`。**没有活执行者时不再续租**，让租约照常过期进 `recovery_required`——否则"进程还活着"会顶替"worker 还在干活"，卡死的 Job 永不超时（2026-09-26 审计 P2-B）。
+- 超过 `agent.jobs.maxRunMs`（默认 30 分钟）一律转 `recovery_required` 交人工，**不自动重排**：可能已经产生副作用，重排等于重复动作。
 - 租约过期后不能直接继续点击页面，必须重新观察当前页面并重新验证上下文。
 - 进程重启把 accepted/running/waiting_input/waiting_confirmation 标记为 recovery_required；现有 TaskRunner 的 TaskRun 恢复规则仍按其自身状态机执行，不能由 Agent 层绕过。
 
@@ -1811,6 +1872,12 @@ SQLite FTS5 用于结构化索引和 BM25 排序；中文短语不能假定默�
 - 如果岗位要求视觉，再做最小图片输入测试。
 
 能力测试失败时 profile 可以保存但状态为 degraded，不允许被路由到要求该能力的 Job。
+
+**落地口径（2026-09-26 审计 P2-A，由真机验收校准）**：纯规则在 `packages/shared/src/agent-domain-rules.ts:modelCapabilityVerdict`，聊天链路与 Job 链路都在**选候选 Profile 时**读 `capabilities_json`：
+
+- `chat:false`（探测时完全没有文本，连通/对话真不可用）→ 该 Profile 不参与候选；主 Profile 被拦时自动看备用 Profile，全部不可用则聊天链路抛 `AGENT_MODEL_INCAPABLE`、Job 链路转 `blocked_permission` 并把 `profiles` 写进 Job 事件；
+- `json:false` → **只记 warn，不拦路由**。探测提示词只是一次弱信号（模型可能只是没按探针要求吐 JSON，带明确 schema 的请求照样能输出），拿它拦路由会把可用模型全挡在门外——离线 fixture 与部分真实配置的探测结果就是 `json:false`，实测能跑通 Job；
+- 从未探测（`{}`/缺字段）→ 视为未知，放行。
 
 ### 36.2 旧 AI 配置迁移
 
@@ -2028,6 +2095,7 @@ acceptance-manifest.json 必须包含版本、Git commit、运行命令、测试
 4. FTS5 + 中文辅助检索。
 5. pending-review、冲突和反馈。
 6. 加密快照、恢复和重建。
+7. 对话规则、Job 结果和反馈纠正自动生成候选；sourceRef 去重，反馈更新 confidence，周期治理执行 stale/归档。
 
 退出条件：重启、断电模拟、索引损坏、路径逃逸和跨店铺检索测试通过。
 
@@ -2038,6 +2106,7 @@ acceptance-manifest.json 必须包含版本、Git commit、运行命令、测试
 - 成功率、首次成功率、人工修正率、记忆命中和采纳统计。
 - profile 健康、降级和预算面板。
 - stale、冲突和过期自动治理。
+- 对话/Job/反馈自动学习候选、审核门禁、置信度自适应排序和保留策略。
 - CEO 周期性复盘摘要，但不自动改变安全规则。
 
 退出条件：每条质量指标能追溯到 Job、模型、证据或反馈来源。
@@ -2064,15 +2133,20 @@ acceptance-manifest.json 必须包含版本、Git commit、运行命令、测试
 |---|---:|---|
 | agent.org.enabled | false | A-M2 前关闭；开启前要求迁移成功 |
 | agent.jobs.enabled | false | A-M3 前关闭 |
-| agent.memory.enabled | false | A-M4 前关闭 |
+| agent.memory.enabled | true | A-M4 基础能力已启用；候选仍受审核门禁 |
 | agent.memory.root | %APPDATA%\\ShopPilot\\agent-memory | 只保存经过路径校验的绝对路径 |
 | agent.jobs.maxDepth | 12 | Job DAG 最大深度 |
 | agent.jobs.maxNodes | 50 | 单个父 Job 最大节点 |
 | agent.jobs.confirmationTtlMs | 600000 | 人工确认有效期 10 分钟 |
 | agent.jobs.leaseMs | 30000 | Dispatcher 租约 |
+| agent.jobs.maxRunMs | 1800000 | 单个 running Job 的最长运行时限；到点转 `recovery_required` 交人工（不自动重排，可能有副作用） |
 | agent.jobs.heartbeatMs | 10000 | Dispatcher 心跳 |
-| agent.memory.maxContextChars | 6000 | 注入单次模型上下文上限 |
+| agent.memory.maxContextChars | 0（自动） | 旧设置仍可作为手动上限；运行时默认按模型上下文窗口自动计算记忆预算 |
 | agent.memory.maxResults | 50 | 单次搜索结果上限 |
+| agent.memory.autoLearn | true | 从明确持久化语义、成功 Job 证据和反馈纠正生成候选 |
+| agent.memory.autoLearn.requireReview | true | 自动候选默认必须人工审核；关闭属于高级治理选项 |
+| agent.memory.retentionDays | 180 | stale 记忆保留期，超过后归档但不删除正文 |
+| agent.memory.maxAutoCandidatesPerDay | 100 | 自动候选每日上限，防止对话/Job 噪声无限膨胀 |
 | agent.model.maxRetries | 1 | 只针对允许错误 |
 | agent.audit.retentionDays | 3650 | 审计默认十年，遵循产品策略 |
 
@@ -2146,8 +2220,8 @@ acceptance-manifest.json 必须包含版本、Git commit、运行命令、测试
 - A-M1：PARTIAL。Profile CRUD、safeStorage、hasKey DTO、绑定和真实模型测试入口已实现；本地 safeStorage Key 夹具已完成实际模型请求和 evidence 验证，真实付费模型、能力探测和生产 fallback 端到端验收仍未完成。
 - A-M2：PARTIAL。root-ceo + mode=hr、岗位预览、probation、用户确认激活、暂停/恢复/退休和范围校验已实现；打包版设置页 Agent SendInput smoke 已通过，完整人工桌面验收仍未完成。
 - A-M3：PARTIAL。Job → Task → TaskRun → evidence、幂等、租约心跳/过期、旧 Worker lease owner 拒写、恢复、取消、人工确认一次性消费和结果审核已由本地 Electron/CDP 夹具验证；模型 Job 的真实请求路由和真实店铺写操作仍停在确认前。
-- A-M4：PARTIAL。脱敏、隔离、FTS5/LIKE 检索、审核、quarantine、重建和加密快照入口已实现；断电/磁盘满时序和加密快照原子回滚已由验收故障夹具 4/4 验证，OS 级破坏性事件和跨设备恢复仍未完成。
-- A-M5：PARTIAL。指标接口已提供成功率/首次成功率/人工修正率/fallback/预算阻塞/记忆命中采纳拒绝/stale conflict/Profile 健康度和结果反馈，成本结算、周期复盘和完整治理闭环未完成。
+- A-M4：PARTIAL。脱敏、隔离、FTS5/LIKE 与中文 bigram 检索、审核、quarantine、重建、加密快照和自动候选写入已实现；断电/磁盘满时序和加密快照原子回滚已有验收故障夹具证据，OS 级破坏性事件和跨设备恢复仍未完成。
+- A-M5：PARTIAL。已接通对话规则、成功 Job 证据、反馈纠正的自动学习候选、sourceRef 去重、反馈驱动 confidence/排序、过期/拒绝/retention 治理，以及命中/采纳/拒绝指标；成本结算、后台周期调度和完整真实桌面/真实模型闭环仍未完成。
 - A-M6：PACKAGED/PARTIAL。类型检查、单测、构建、打包目录、NSIS 安装/升级/卸载、隔离降级回滚、Electron/CDP 和打包版 Agent 设置 SendInput smoke 已运行；真实店铺、真实模型和完整人工桌面逐项验收仍未完成。
 
 旧版“本文件只完善设计、下一次从 A-M0 开始”的表述是历史基线，不能覆盖本节的当前实现状态。实现与既有通用文档发生冲突时，按本文件的 root-ceo 唯一性、Main 权限边界、全局 TaskRunner 和人工确认要求解释，并在 `docs/AGENT_PROGRESS.md` 记录冲突。

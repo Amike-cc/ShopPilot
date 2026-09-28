@@ -32,6 +32,8 @@ describe('任务错误码分类', () => {
       ['TASK_SELECTION_SHORTFALL: 只勾中 3 位，少于要求的 40 位', 'TASK_SELECTION_SHORTFALL'],
       ['TASK_QUOTA_EXCEEDED: 数值不足——页面显示「今日剩余 0」', 'TASK_QUOTA_EXCEEDED'],
       ['BROWSER_CLOSED: 店铺浏览器已关闭', 'BROWSER_CLOSED'],
+      // 标签页还在、只是 <webview> 的 guest 还没注册：必须与 BROWSER_CLOSED 区分开
+      ['BROWSER_NOT_READY: 标签页页面尚未就绪（店铺 webview 未注册或正在重载）', 'BROWSER_NOT_READY'],
       ['AI_TIMEOUT: 模型响应超时', 'AI_TIMEOUT'],
       ['TASK_SELECTOR_CHANGED: 未找到元素 #x', 'TASK_SELECTOR_CHANGED'],
       ['NAVIGATION_BLOCKED: 仅允许 http/https', 'NAVIGATION_BLOCKED'],

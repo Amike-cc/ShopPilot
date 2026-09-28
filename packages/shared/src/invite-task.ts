@@ -44,6 +44,12 @@ const text = (value: unknown, max: number): string => (typeof value === 'string'
 const list = (value: unknown, max: number): string[] => Array.isArray(value)
   ? value.filter(item => typeof item === 'string' && item.trim().length > 0).map(item => String(item).slice(0, max)).slice(0, max)
   : []
+const boundedPicks = (value: unknown, max?: number): string[] => {
+  const values = Array.isArray(value)
+    ? value.filter(item => typeof item === 'string' && item.trim().length > 0).map(item => String(item).trim())
+    : []
+  return values.slice(0, max == null ? values.length : Math.max(0, max))
+}
 const mapList = (value: unknown): Record<string, string[]> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   const out: Record<string, string[]> = {}
@@ -113,10 +119,19 @@ export function inviteTaskIssues(input: { profile: InviteProfile; config: Invite
     return issues
   }
   if (profile.levels.length > 0 && !(config.levels || []).length) issues.push('达人等级未选择')
+  const benefitCount = boundedPicks(config.benefits).length
+  if (profile.benefitsMax != null && benefitCount > profile.benefitsMax) {
+    issues.push(`${profile.benefitsLabelText || '权益'}最多选择 ${profile.benefitsMax} 项`)
+  }
+  const strengthMax = profile.strengths?.maxSelect
+  if (strengthMax != null && boundedPicks(config.strengths).length > strengthMax) {
+    issues.push('核心优势最多选择 ' + strengthMax + ' 项')
+  }
   const contactsOk = hasRequiredBatchContacts(profile, { contact: config.batchContact, phone: config.batchPhone, wechat: config.batchWechat })
   if (!contactsOk) issues.push('抽屉必填的联系方式未填写（联系人/手机号/微信号）')
   const count = Number(config.count)
-  if (!Number.isInteger(count) || count < 1 || count > profile.maxBatch) issues.push(`邀约数量需为 1～${profile.maxBatch} 的整数`)
+  const minCount = Math.max(1, Math.min(profile.maxBatch, profile.minSelect || 1))
+  if (!Number.isInteger(count) || count < minCount || count > profile.maxBatch) issues.push(`邀约数量需为 ${minCount}～${profile.maxBatch} 的整数`)
   return issues
 }
 
@@ -134,8 +149,9 @@ export function buildInviteTaskPayload(input: { profile: InviteProfile; storeId:
       count: Math.max(1, Math.min(Number(config.count), profile.maxBatch)),
       script: config.script || '',
       scriptMode: config.scriptMode || 'manual',
-      benefits: config.benefits || [],
-      strengths: config.strengths || [],
+      // Shared/Main 也要执行平台上限，不能只依赖 Renderer 的 watch。
+      benefits: boundedPicks(config.benefits, profile.benefitsMax),
+      strengths: boundedPicks(config.strengths, profile.strengths?.maxSelect),
       mainCategory: config.mainCategory || '',
       extraFilters: config.extraFilters || {},
       contacts: profile.contactSelectors

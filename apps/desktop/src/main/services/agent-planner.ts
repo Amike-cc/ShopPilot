@@ -13,6 +13,7 @@ import {
 } from '@shared/schemas/agent'
 import type { TaskCreateInput } from '@shared/schemas/task'
 import { isMoneyActionText } from '@shared/agent-domain-rules'
+import { AGENT_SIDE_EFFECT_STEP_TYPES } from '@shared/agent-step-effects'
 import { redactAgentText, sanitizeAgentUrl } from '@shared/agent-privacy'
 import { DEFAULT_STEP_TIMEOUT, stepInputSchemas } from '../tasks/task-step-schemas'
 
@@ -23,7 +24,7 @@ export class AgentPlanningError extends Error {
   }
 }
 
-const SIDE_EFFECT_TYPES = new Set<AgentStepType>(['click', 'clickByText'])
+const SIDE_EFFECT_TYPES: ReadonlySet<string> = AGENT_SIDE_EFFECT_STEP_TYPES
 const SUBMIT_WORDS = /提交|发送|发布|删除|付款|支付|下单|退款|开票|确认|保存|修改|解绑|publish|submit|send|delete|pay|purchase/i
 
 /** Fixed model instruction. Page text is evidence only and can never override this policy. */
@@ -37,7 +38,7 @@ export const AGENT_SYSTEM_PROMPT = [
   '只需要计划当前页面标题时，使用 readText，input.selector="title"。读取页面指标优先使用 readLabelValue。',
   '副作用步骤只允许单次 click 或 clickByText；不要写入输入框，不要批量点击，不要循环。提交、发送、发布、删除、付款、确认等动作会由主进程插入人工确认步骤。',
   '输出格式：{"name":"不超过80字的任务名","steps":[{"type":"readText","input":{"selector":"title"},"description":"读取当前页面标题","timeoutMs":15000,"retryLimit":0}],"schedule":null}',
-  '每个步骤必须包含 type、input、description。steps 数量 1 到 12。schedule 仅支持 null 或 {"everyMs":毫秒}，最短 60000，最长 2592000000。'
+  '每个步骤必须包含 type、input、description。steps 数量 1 到 48；大型任务按同一店铺的顺序步骤连续输出。schedule 仅支持 null 或 {"everyMs":毫秒}，最短 60000，最长 2592000000。'
 ].join('\n')
 
 function fail(code: string, message: string): never {

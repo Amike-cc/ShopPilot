@@ -17,7 +17,10 @@ async function getPageWs(predicate) {
   for (let i = 0; i < 40; i++) {
     try {
       const targets = await listTargets()
-      const page = targets.find(t => t.type === 'page' && t.webSocketDebuggerUrl && predicate(t.url))
+      // 店铺页面现在是主窗口里的 DOM <webview>，它在 CDP 目标列表里的 type 是 "webview"
+      // （原生 WebContentsView 时代是 "page"）——两种都要认，否则验收会把"页面明明在"
+      // 报成"找不到 target"。
+      const page = targets.find(t => (t.type === 'page' || t.type === 'webview') && t.webSocketDebuggerUrl && predicate(t.url))
       if (page) return page.webSocketDebuggerUrl
     } catch {}
     await sleep(500)
@@ -89,19 +92,25 @@ async function main() {
   check('preload API 注入 window.shopilot（含 profile/audit）', true)
 
   const uiSmoke = await cdp.evaluate(`
+    // 工作台外壳的判据用当前 UI 的根类名 .dashboard-shell（DashboardView 的 <section>），
+    // 不再查旧页面 WorkbenchView 的 .workbench：那是保留在仓库里的历史兼容代码、运行时不是入口，
+    // 它一旦不在页面上，这条"工作台已渲染"的冒烟断言就恒失败——卡住的是更旧的实现
+    // （2026-09-28 审查发现的"验收脚本依赖旧 class"实例）。sidebar/welcome 仍是当前 UI 真有的类。
     const deadline = Date.now() + 5000;
-    while (!document.querySelector('.workbench') && Date.now() < deadline) {
+    while (!document.querySelector('.dashboard-shell') && Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 50));
     }
     return {
-      workbench: !!document.querySelector('.workbench'),
+      shell: !!document.querySelector('.dashboard-shell'),
       sidebar: !!document.querySelector('.sidebar'),
       welcome: !!document.querySelector('.welcome'),
       bg: getComputedStyle(document.body).backgroundColor
     };
   `)
-  check('深色三栏工作台已渲染（workbench+sidebar+welcome）', uiSmoke.workbench && uiSmoke.sidebar && uiSmoke.welcome, JSON.stringify(uiSmoke))
-  check('深色主题背景 #1a1a1a', uiSmoke.bg === 'rgb(26, 26, 26)', uiSmoke.bg)
+  check('统一工作台外壳已渲染（dashboard-shell+sidebar+welcome）', uiSmoke.shell && uiSmoke.sidebar && uiSmoke.welcome, JSON.stringify(uiSmoke))
+  // 2026-09-28 按设计稿改版：主题从深色换成浅色（#f5f7fb）。断言要跟着实现走——
+  // 写死旧主题色会让"改了主题"变成一条恒失败的验收项（历史上踩过同类：断言卡住更严的实现）。
+  check('浅色主题背景 #f5f7fb', uiSmoke.bg === 'rgb(245, 247, 251)', uiSmoke.bg)
 
   const csp = await cdp.evaluate(`
     const m = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
@@ -121,9 +130,9 @@ async function main() {
     return true;
   `)
 
-  // 设定视口（内嵌 WebContentsView 的真实渲染区域）
+  // 设定视口（兼容 IPC：DOM <webview> 自己由 CSS 约束尺寸，这里只验证旧入口仍被接受）
   const sv = await cdp.evaluate(`return await window.shopilot.browser.setViewport({ x: 336, y: 84, width: 900, height: 620 });`)
-  check('browser:setViewport 接受视口上报', sv.ok === true)
+  check('browser:setViewport 仍接受上报（兼容入口，不再驱动原生视图）', sv.ok === true)
 
   // ---------- 店铺 CRUD ----------
   const created = await cdp.evaluate(`
@@ -192,6 +201,62 @@ async function main() {
   check('http 导航被接受', nav.ok === true)
   await sleep(2500)
 
+  // ---------- 真实 DOM 嵌入（主窗口里的 Electron <webview>）----------
+  // 判据是"主窗口 DOM 里真有 WEBVIEW 元素 + 主进程确认 guest 已注册 + 页面视口 = 元素尺寸"，
+  // 而不是旧实现的原生 WebContentsView bounds（那时 DOM 里只有一块空白 div，
+  // HTML 弹层永远盖不住店铺页面，只能靠摘挂原生视图来"避让"）。
+  const embed = await cdp.evaluate(`
+    const deadline = Date.now() + 20000;
+    let el = null;
+    while (Date.now() < deadline) {
+      el = document.querySelector('[data-test="dashboard-browser-viewport"] webview');
+      if (el) {
+        let ok = false;
+        try { ok = el.getWebContentsId() > 0 } catch { ok = false }
+        if (ok) break;
+      }
+      await new Promise(r => setTimeout(r, 200));
+    }
+    if (!el) return { found: false };
+    let guestId = 0;
+    try { guestId = el.getWebContentsId() } catch { guestId = 0 }
+    const state = await window.shopilot.browser.state();
+    const row = (state.data?.stores || []).find(s => s.storeId === ${JSON.stringify(storeA)});
+    const tab = (row?.tabs || []).find(t => t.id === ${JSON.stringify(tabId)});
+    const r = el.getBoundingClientRect();
+    return {
+      found: true,
+      tag: el.tagName,
+      partition: el.getAttribute('partition'),
+      src: el.getAttribute('src'),
+      guestId,
+      guestAttached: tab?.guestAttached === true,
+      rect: { w: Math.round(r.width), h: Math.round(r.height) },
+      opacity: getComputedStyle(el).opacity
+    };
+  `)
+  check('主窗口 DOM 中存在真实 <webview> 元素（不是空白占位 div）',
+    embed.found === true && embed.tag === 'WEBVIEW', JSON.stringify(embed))
+  check('webview partition = persist:store_<storeId>（每店独立会话）',
+    embed.partition === 'persist:store_' + storeA, String(embed.partition))
+  check('webview 已把页面加载进元素本身（src 反映真实地址，不再另起原生视图）',
+    String(embed.src).startsWith('http://127.0.0.1:') || String(embed.src).startsWith('https://'), String(embed.src))
+  check('getWebContentsId() 为有效 guest id 且主进程 guestAttached=true',
+    Number.isInteger(embed.guestId) && embed.guestId > 0 && embed.guestAttached === true,
+    JSON.stringify({ guestId: embed.guestId, attached: embed.guestAttached }))
+
+  const embedPage = await (async () => {
+    const ws = await getPageWs(u => u.includes('/json/version'))
+    const s = new CDPSession(ws)
+    await s.ready
+    const v = await s.evaluate(`return { w: window.innerWidth, h: window.innerHeight, vis: document.visibilityState, href: location.href.slice(-24) };`)
+    s.close()
+    return v
+  })()
+  check('guest 页面视口尺寸 = webview 元素尺寸（页面真被 DOM 约束，不是原生覆盖层）',
+    embed.rect.w > 0 && embedPage.w === embed.rect.w && embedPage.h === embed.rect.h,
+    JSON.stringify({ rect: embed.rect, page: embedPage }))
+
   const ctrl = await cdp.evaluate(`return await window.shopilot.browser.tab.control(${JSON.stringify(storeA)}, ${JSON.stringify(tabId)}, 'reload');`)
   check('browser:tab:control(reload)', ctrl.ok === true)
 
@@ -199,7 +264,7 @@ async function main() {
   const evts = await cdp.evaluate(`return window.__evts.filter(e => e.storeId === ${JSON.stringify(storeA)}).length;`)
   check('browser:tabUpdated 事件已推送到渲染层', evts >= 1, '推送次数=' + evts)
 
-  // 截图（视口已设，页面已加载）
+  // 截图（页面已注册为 guest 且正在显示）
   const cap = await cdp.evaluate(`return await window.shopilot.browser.capture(${JSON.stringify(storeA)}, ${JSON.stringify(tabId)}, 'png');`)
   check('browser:capture 返回 PNG base64', cap.ok === true && typeof cap.data.data === 'string' && cap.data.data.length > 2000, 'len=' + (cap.data?.data || '').length)
 
@@ -221,8 +286,8 @@ async function main() {
   check('browser:display 切回店铺A', disp.ok && disp.data.displayedStoreId === storeA)
 
   const targets = await listTargets()
-  const tA = targets.find(t => t.type === 'page' && t.url.includes('/json/version') && t.webSocketDebuggerUrl)
-  const tB = targets.find(t => t.type === 'page' && t.url.includes('/json/list') && t.webSocketDebuggerUrl)
+  const tA = targets.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/json/version') && t.webSocketDebuggerUrl)
+  const tB = targets.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/json/list') && t.webSocketDebuggerUrl)
   check('两个店铺的页面 target 均存活', !!tA && !!tB)
 
   // ---------- 店铺右键菜单（§4.3 / §6.6 复制配置）：原为 window.confirm 占位，用户实报"显示不正常" ----------
@@ -234,17 +299,40 @@ async function main() {
     if (!card) return { cards: document.querySelectorAll('.store-card').length };
     card.querySelector('.store-action')?.click();
     await new Promise(r => setTimeout(r, 3200));
-    return { cards: document.querySelectorAll('.store-card').length, viewport: !!document.querySelector('.viewport') };
+    const webviews = [...document.querySelectorAll('[data-test="dashboard-browser-viewport"] webview')];
+    const pairs = webviews.map(el => el.getAttribute('data-store-id') + ':' + el.getAttribute('data-tab-id'));
+    const state = await window.shopilot.browser.state();
+    const stores = state.data?.stores || [];
+    const expected = stores.reduce((n, s) => n + (s.tabs || []).length, 0);
+    const row = stores.find(s => s.storeId === ${JSON.stringify(storeA)});
+    return {
+      cards: document.querySelectorAll('.store-card').length,
+      viewport: !!document.querySelector('.viewport'),
+      webviews: webviews.length,
+      uniquePairs: new Set(pairs).size,
+      expected,
+      ownWebviews: webviews.filter(el => el.getAttribute('data-store-id') === ${JSON.stringify(storeA)}).length,
+      tabs: (row?.tabs || []).length,
+      attached: (row?.tabs || []).every(t => t.guestAttached === true)
+    };
   `)
   check('界面刷新后可看到店铺卡并打开店铺（右键菜单前置条件）',
     openedForCtx.cards >= 2 && openedForCtx.viewport === true, JSON.stringify(openedForCtx))
+  check('渲染层重载后 webview 重新注册且不重复（每个标签页恰好一个元素）',
+    openedForCtx.webviews === openedForCtx.expected &&
+    openedForCtx.uniquePairs === openedForCtx.webviews &&
+    openedForCtx.ownWebviews === openedForCtx.tabs && openedForCtx.tabs >= 1 &&
+    openedForCtx.attached === true,
+    JSON.stringify({ webviews: openedForCtx.webviews, expected: openedForCtx.expected, unique: openedForCtx.uniquePairs, own: openedForCtx.ownWebviews, tabs: openedForCtx.tabs, attached: openedForCtx.attached }))
 
-  const pageVis = async () => {
+  // 店铺页面现在是 DOM <webview>：它的"可见性/尺寸"由元素本身决定，而不再是原生视图的摘挂。
+  // 这里读 guest 页面自己的状态，用来证明弹层期间页面**没有**被拆掉，且页面尺寸仍与元素一致。
+  const pageState = async () => {
     const list = await listTargets()
-    const t = list.find(x => x.type === 'page' && x.url.includes('/json/version') && x.webSocketDebuggerUrl)
+    const t = list.find(x => (x.type === 'page' || x.type === 'webview') && x.url.includes('/json/version') && x.webSocketDebuggerUrl)
     if (!t) return null
     const s = new CDPSession(t.webSocketDebuggerUrl)
-    const v = await s.evaluate(`return document.visibilityState`)
+    const v = await s.evaluate(`return { vis: document.visibilityState, w: window.innerWidth };`)
     s.close()
     return v
   }
@@ -271,8 +359,9 @@ async function main() {
       .every(t => (ctxMenu.items || []).includes(t)) &&
       (ctxMenu.items || []).some(t => t === '打开浏览器' || t === '关闭浏览器'),
     JSON.stringify(ctxMenu.items))
-  const visSidebarMenu = await pageVis()
-  check('菜单落在左栏时不摘除视图（中栏不白闪）', visSidebarMenu === 'visible', '可见性=' + visSidebarMenu)
+  const sidebarMenuPage = await pageState()
+  check('左栏菜单打开时店铺页面仍挂载且可见（DOM 嵌入不再摘除页面）',
+    !!sidebarMenuPage && sidebarMenuPage.vis === 'visible', JSON.stringify(sidebarMenuPage))
   const escClosed = await cdp.evaluate(`
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await new Promise(r => setTimeout(r, 500));
@@ -280,7 +369,7 @@ async function main() {
   `)
   check('Esc 关闭右键菜单', escClosed.closed === true)
 
-  // 菜单若与视口相交，店铺页必须被摘除（否则用户看到的还是店铺页面）
+  // 菜单与视口相交时：应用内菜单必须**压在 webview 之上**（DOM 层级即可，不需要摘除页面）
   const overlappingMenu = await cdp.evaluate(`
     const card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('测试店铺A'));
     const vp = document.querySelector('.viewport');
@@ -288,21 +377,39 @@ async function main() {
     card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: Math.round(vr.left + 200), clientY: Math.round(vr.top + 150) }));
     await new Promise(r => setTimeout(r, 800));
     const m = document.querySelector('[data-test="store-ctx"]');
+    const el = document.querySelector('[data-test="dashboard-browser-viewport"] webview');
     const mr = m ? m.getBoundingClientRect() : null;
     const overlaps = mr ? !(mr.right <= vr.left || mr.left >= vr.right || mr.bottom <= vr.top || mr.top >= vr.bottom) : false;
-    return { shown: !!m, overlaps };
+    const topZ = (node) => { let n = node, max = 0; while (n && n !== document.body) { max = Math.max(max, Number(getComputedStyle(n).zIndex) || 0); n = n.parentElement } return max };
+    return {
+      shown: !!m, overlaps,
+      menuZ: m ? topZ(m) : 0,
+      webviewZ: el ? topZ(el) : null,
+      webviewOpacity: el ? getComputedStyle(el).opacity : null,
+      webviews: document.querySelectorAll('[data-test="dashboard-browser-viewport"] webview').length
+    };
   `)
-  const visOverlapMenu = await pageVis()
-  check('菜单与视口相交时店铺视图被摘除（原生层不遮挡菜单）',
-    overlappingMenu.shown && overlappingMenu.overlaps && visOverlapMenu === 'hidden',
-    JSON.stringify({ ...overlappingMenu, vis: visOverlapMenu }))
+  const overlapPage = await pageState()
+  check('菜单与视口相交时菜单层级高于 webview，且页面未被摘除（DOM 弹层不再靠摘视图避让）',
+    overlappingMenu.shown && overlappingMenu.overlaps &&
+    overlappingMenu.menuZ > (overlappingMenu.webviewZ ?? 0) &&
+    overlappingMenu.webviews >= 1 &&
+    !!overlapPage && overlapPage.vis === 'visible',
+    JSON.stringify({ ...overlappingMenu, page: overlapPage }))
   await cdp.evaluate(`
     document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     await new Promise(r => setTimeout(r, 600));
     return true;
   `)
-  const visAfterMenu = await pageVis()
-  check('关闭菜单后店铺视图恢复', visAfterMenu === 'visible', '可见性=' + visAfterMenu)
+  const afterMenuPage = await pageState()
+  const afterMenuDom = await cdp.evaluate(`
+    const el = document.querySelector('[data-test="dashboard-browser-viewport"] webview');
+    return { present: !!el, opacity: el ? getComputedStyle(el).opacity : null };
+  `)
+  check('关闭菜单后 webview 仍在、页面未重建且尺寸不变（DOM 嵌入的页面状态保持）',
+    afterMenuDom.present === true && afterMenuDom.opacity === '1' &&
+    !!afterMenuPage && afterMenuPage.vis === 'visible' && afterMenuPage.w === overlapPage.w,
+    JSON.stringify({ dom: afterMenuDom, page: afterMenuPage }))
 
   const renameUi = await cdp.evaluate(`
     const card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('测试店铺A'));
@@ -358,39 +465,51 @@ async function main() {
 
 
   if (tA && tB) {
-    const cdpA = new CDPSession(tA.webSocketDebuggerUrl)
-    const cdpB = new CDPSession(tB.webSocketDebuggerUrl)
-    await cdpA.ready; await cdpB.ready
+    // ⚠ 前面的界面重载会重建 webview 元素，DOM <webview> 的 guest 随元素一起重建，
+    // 之前抓到的 target 句柄随即失效（旧的原生视图时代重载不影响它，所以老脚本没有这一步）。
+    // 用之前必须重新解析，否则连上的是一个已消失的调试端点（报错信息还会是空的）。
+    const targetsNow = await listTargets()
+    const tA2 = targetsNow.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/json/version') && t.webSocketDebuggerUrl)
+    const tB2 = targetsNow.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/json/list') && t.webSocketDebuggerUrl)
+    const targetsBack = !!tA2 && !!tB2
+    check('渲染层重载后两个店铺页面 target 重新出现（DOM guest 随元素重建）', targetsBack,
+      JSON.stringify({ a: !!tA2, b: !!tB2 }))
+    // 目标缺失时只跳过本段（隔离/下载用例），后面的用例继续跑
+    if (targetsBack) {
+      const cdpA = new CDPSession(tA2.webSocketDebuggerUrl)
+      const cdpB = new CDPSession(tB2.webSocketDebuggerUrl)
+      await cdpA.ready; await cdpB.ready
 
-    await cdpA.evaluate(`localStorage.setItem('shopilot-iso', 'from-A'); return true;`)
-    await sleep(300)
-    const bRead = await cdpB.evaluate(`return localStorage.getItem('shopilot-iso');`)
-    const aRead = await cdpA.evaluate(`return localStorage.getItem('shopilot-iso');`)
-    check('店铺 A 能读回自身 localStorage', aRead === 'from-A')
-    check('店铺 B 读不到店铺 A 的 localStorage（partition 隔离）', bRead === null)
+      await cdpA.evaluate(`localStorage.setItem('shopilot-iso', 'from-A'); return true;`)
+      await sleep(300)
+      const bRead = await cdpB.evaluate(`return localStorage.getItem('shopilot-iso');`)
+      const aRead = await cdpA.evaluate(`return localStorage.getItem('shopilot-iso');`)
+      check('店铺 A 能读回自身 localStorage', aRead === 'from-A')
+      check('店铺 B 读不到店铺 A 的 localStorage（partition 隔离）', bRead === null)
 
-    await cdpA.evaluate(`
-      const blob = new Blob(['shopilot-download-test'], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = 'test.bin';
-      document.body.appendChild(a); a.click();
-      return true;
-    `)
-    let dlRow = null
-    for (let i = 0; i < 20; i++) {
-      await sleep(500)
-      const dl = await cdp.evaluate(`return await window.shopilot.download.list(${JSON.stringify(storeA)}, 10);`)
-      dlRow = dl.ok && dl.data.length > 0 ? dl.data[0] : null
-      if (dlRow && dlRow.state === 'completed') break
+      await cdpA.evaluate(`
+        const blob = new Blob(['shopilot-download-test'], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'test.bin';
+        document.body.appendChild(a); a.click();
+        return true;
+      `)
+      let dlRow = null
+      for (let i = 0; i < 20; i++) {
+        await sleep(500)
+        const dl = await cdp.evaluate(`return await window.shopilot.download.list(${JSON.stringify(storeA)}, 10);`)
+        dlRow = dl.ok && dl.data.length > 0 ? dl.data[0] : null
+        if (dlRow && dlRow.state === 'completed') break
+      }
+      check('下载已按店铺归档并落库', !!dlRow, dlRow ? JSON.stringify({ f: dlRow.fileName, s: dlRow.state }) : '无记录')
+      check('下载文件名带店铺前缀（camelCase fileName）', !!dlRow && dlRow.fileName.startsWith('测试店铺A_'), dlRow?.fileName)
+      check('下载状态 completed（文件写盘）', !!dlRow && dlRow.state === 'completed')
+      const dlB = await cdp.evaluate(`return await window.shopilot.download.list(${JSON.stringify(storeB)}, 10);`)
+      check('店铺 B 的下载列表不含店铺 A 的下载', dlB.ok && dlB.data.every(d => !String(d.fileName).startsWith('测试店铺A_')))
+
+      cdpA.close(); cdpB.close()
     }
-    check('下载已按店铺归档并落库', !!dlRow, dlRow ? JSON.stringify({ f: dlRow.fileName, s: dlRow.state }) : '无记录')
-    check('下载文件名带店铺前缀（camelCase fileName）', !!dlRow && dlRow.fileName.startsWith('测试店铺A_'), dlRow?.fileName)
-    check('下载状态 completed（文件写盘）', !!dlRow && dlRow.state === 'completed')
-    const dlB = await cdp.evaluate(`return await window.shopilot.download.list(${JSON.stringify(storeB)}, 10);`)
-    check('店铺 B 的下载列表不含店铺 A 的下载', dlB.ok && dlB.data.every(d => !String(d.fileName).startsWith('测试店铺A_')))
-
-    cdpA.close(); cdpB.close()
   }
 
   // ---------- 关闭重开 → 标签恢复 ----------
@@ -450,18 +569,33 @@ async function main() {
   await new Promise(r => panelSite.listen(PANEL_SITE_PORT, '127.0.0.1', r))
   const panelSiteUrl = `http://127.0.0.1:${PANEL_SITE_PORT}/`
 
-  const panelPrep = await cdp.evaluate(`
+  const panelCreated = await cdp.evaluate(`
     const created = await window.shopilot.store.create({ name: '面板测试店', platform: '拼多多', adminUrl: ${JSON.stringify(panelSiteUrl)} });
     const sid = created.data.id;
     await window.shopilot.browser.open(sid);
     await new Promise(r => setTimeout(r, 1800));
     const tab = await window.shopilot.browser.tab.create(sid, ${JSON.stringify(panelSiteUrl)});
-    await new Promise(r => setTimeout(r, 2600));
-    const card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('面板测试店'));
-    if (card) { card.querySelector('.store-action').click(); await new Promise(r => setTimeout(r, 2600)); }
-    return { storeId: sid, tabId: tab.data?.tabId, displayed: !!document.querySelector('.store-card.displayed') };
+    return { storeId: sid, tabId: tab.data?.tabId };
   `)
-  check('面板测试店铺已打开并显示（本地站点）', !!panelPrep.storeId && panelPrep.displayed === true, JSON.stringify(panelPrep))
+  // 上一步是直接调 IPC 建的店，渲染层的店铺列表还是旧的 → 刷新一次让它重新拉
+  // （否则左栏根本没有这张卡片，断言会以"卡片不存在"的形式误报）
+  await cdp.evaluate(`location.reload(); return true;`)
+  await sleep(3000)
+  const panelPrep = await cdp.evaluate(`
+    const our = () => [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('面板测试店'));
+    const cardFound = !!our();
+    if (our()) { our().querySelector('.store-action').click(); await new Promise(r => setTimeout(r, 2600)); }
+    const card = our();
+    return {
+      storeId: ${JSON.stringify(panelCreated.storeId)},
+      cardFound,
+      cardCount: document.querySelectorAll('.store-card').length,
+      // 断言**本店**的卡片带 displayed：以前写的是"任意卡片带 displayed"，
+      // 于是别的店碰巧处于显示态就能让这条通过——它当时并没有验证目标店铺（2026-09-28 审出）。
+      displayed: !!card && card.classList.contains('displayed')
+    };
+  `)
+  check('面板测试店铺已打开并显示（本地站点）', !!panelPrep.storeId && panelPrep.displayed === true, JSON.stringify({ ...panelCreated, ...panelPrep }))
 
   const storeView = async () => {
     const ws = await getPageWs(u => u.includes(`127.0.0.1:${PANEL_SITE_PORT}`))
@@ -473,10 +607,12 @@ async function main() {
   }
   const panelRect = () => cdp.evaluate(`
     const rp = document.querySelector('[data-test="right-panel"]');
-    const vp = document.querySelector('.viewport');
+    // 店铺页的可见宽度 = <webview> 元素的内容盒（clientWidth）。容器 .viewport 有 1px 边框，
+    // 它的 border-box 会比页面视口大 2px —— 用容器去比会把"1px 边框"误判成"页面没跟着变宽"。
+    const wv = document.querySelector('[data-test="dashboard-browser-viewport"] webview');
     const r = el => el ? Math.round(el.getBoundingClientRect().width) : null;
     return {
-      panel: r(rp), viewport: r(vp), rail: !!document.querySelector('.panel-rail'),
+      panel: r(rp), viewport: wv ? wv.clientWidth : r(document.querySelector('.viewport')), rail: !!document.querySelector('.panel-rail'),
       active: (() => { const b = [...document.querySelectorAll('.ptab')].find(x => x.className.includes('on')); return b ? b.textContent.trim() : null })(),
       setting: (await window.shopilot.settings.get('ui.rightPanelCollapsed')).data.value
     };
@@ -487,7 +623,6 @@ async function main() {
   check('展开态：右栏 320px、店铺页宽度=中栏宽度',
     pExpanded.panel === 320 && pExpanded.viewport === viewExpanded.innerWidth,
     JSON.stringify({ panel: pExpanded.panel, viewport: pExpanded.viewport, innerWidth: viewExpanded.innerWidth }))
-
   await cdp.evaluate(`document.querySelector('[data-test="panel-collapse"]').click(); return true;`)
   await sleep(1200)
   const pCollapsed = await panelRect()
@@ -495,7 +630,7 @@ async function main() {
   check('点收起 → 右栏 44px 窄轨，中栏变宽 ≥250px',
     pCollapsed.panel === 44 && pCollapsed.rail === true && (pCollapsed.viewport - pExpanded.viewport) >= 250,
     JSON.stringify({ panel: pCollapsed.panel, rail: pCollapsed.rail, viewport: pExpanded.viewport + '→' + pCollapsed.viewport }))
-  check('原生视图（店铺页）真的跟着变宽（不是只有 HTML 在变）',
+  check('DOM webview（店铺页）真的跟着变宽（页面 innerWidth = 元素宽度）',
     viewCollapsed.innerWidth === pCollapsed.viewport && (viewCollapsed.innerWidth - viewExpanded.innerWidth) >= 250,
     JSON.stringify({ before: viewExpanded.innerWidth, after: viewCollapsed.innerWidth }))
   check('收起状态写入设置 ui.rightPanelCollapsed=true', pCollapsed.setting === true, String(pCollapsed.setting))
@@ -523,13 +658,14 @@ async function main() {
     JSON.stringify({ panel: pBack.panel, setting: pBack.setting, innerWidth: viewBack.innerWidth, viewport: pBack.viewport }))
 
   // ---------- 左侧栏收起/展开（用户要求"左侧边栏可以收起和展开"） ----------
-  // 与右栏同样以店铺页自身 innerWidth 为证：收起左栏后中栏原生视图必须真的变宽，不能只有 HTML 布局在动。
+  // 与右栏同样以店铺页自身 innerWidth 为证：收起左栏后中栏 webview 必须真的变宽，不能只有 HTML 布局在动。
   const sidebarRect = () => cdp.evaluate(`
     const sb = document.querySelector('[data-test="sidebar"]');
-    const vp = document.querySelector('.viewport');
+    // 同上：以 <webview> 的内容盒为店铺页宽度（容器有 1px 边框）
+    const wv = document.querySelector('[data-test="dashboard-browser-viewport"] webview');
     const r = el => el ? Math.round(el.getBoundingClientRect().width) : null;
     return {
-      sidebar: r(sb), viewport: r(vp), rail: !!document.querySelector('.sidebar-rail'),
+      sidebar: r(sb), viewport: wv ? wv.clientWidth : r(document.querySelector('.viewport')), rail: !!document.querySelector('.sidebar-rail'),
       collapseBtn: !!document.querySelector('[data-test="sidebar-collapse"]'),
       setting: (await window.shopilot.settings.get('ui.leftSidebarCollapsed')).data.value
     };
@@ -537,19 +673,21 @@ async function main() {
 
   const sExpanded = await sidebarRect()
   const viewLExpanded = await storeView()
-  check('左栏展开态基线：304px、有收起按钮、店铺页宽度=中栏宽度',
-    sExpanded.sidebar === 304 && sExpanded.collapseBtn === true && sExpanded.viewport === viewLExpanded.innerWidth,
+  // 2026-09-28 按设计稿改版：左栏 304 → 248px、窄轨 44 → 60px。数字断言跟着实现走
+  // （写死旧宽度会让"改了导航宽度"变成恒失败项；行为断言——收起/展开、页面跟着变宽——保持不变）。
+  check('左栏展开态基线：248px、有收起按钮、店铺页宽度=中栏宽度',
+    sExpanded.sidebar === 248 && sExpanded.collapseBtn === true && sExpanded.viewport === viewLExpanded.innerWidth,
     JSON.stringify({ sidebar: sExpanded.sidebar, collapseBtn: sExpanded.collapseBtn, viewport: sExpanded.viewport, innerWidth: viewLExpanded.innerWidth }))
 
   await cdp.evaluate(`document.querySelector('[data-test="sidebar-collapse"]').click(); return true;`)
   await sleep(1200)
   const sCollapsed = await sidebarRect()
   const viewLCollapsed = await storeView()
-  check('点收起 → 左栏 44px 窄轨，中栏变宽 ≥250px',
-    sCollapsed.sidebar === 44 && sCollapsed.rail === true && (sCollapsed.viewport - sExpanded.viewport) >= 250,
+  check('点收起 → 左栏 60px 窄轨，中栏变宽 ≥180px',
+    sCollapsed.sidebar === 60 && sCollapsed.rail === true && (sCollapsed.viewport - sExpanded.viewport) >= 180,
     JSON.stringify({ sidebar: sCollapsed.sidebar, rail: sCollapsed.rail, viewport: sExpanded.viewport + '→' + sCollapsed.viewport }))
-  check('收起左栏后原生视图（店铺页）真的跟着变宽',
-    viewLCollapsed.innerWidth === sCollapsed.viewport && (viewLCollapsed.innerWidth - viewLExpanded.innerWidth) >= 250,
+  check('收起左栏后 DOM webview（店铺页）真的跟着变宽',
+    viewLCollapsed.innerWidth === sCollapsed.viewport && (viewLCollapsed.innerWidth - viewLExpanded.innerWidth) >= 180,
     JSON.stringify({ before: viewLExpanded.innerWidth, after: viewLCollapsed.innerWidth }))
   check('左栏收起状态写入设置 ui.leftSidebarCollapsed=true', sCollapsed.setting === true, String(sCollapsed.setting))
 
@@ -557,8 +695,8 @@ async function main() {
   await sleep(1200)
   const sExpandedBack = await sidebarRect()
   const viewLBack = await storeView()
-  check('窄轨展开按钮恢复 304px 且店铺页宽度回到中栏宽度、设置写回 false',
-    sExpandedBack.sidebar === 304 && sExpandedBack.rail === false && sExpandedBack.setting === false && viewLBack.innerWidth === sExpandedBack.viewport,
+  check('窄轨展开按钮恢复 248px 且店铺页宽度回到中栏宽度、设置写回 false',
+    sExpandedBack.sidebar === 248 && sExpandedBack.rail === false && sExpandedBack.setting === false && viewLBack.innerWidth === sExpandedBack.viewport,
     JSON.stringify({ sidebar: sExpandedBack.sidebar, rail: sExpandedBack.rail, setting: sExpandedBack.setting, innerWidth: viewLBack.innerWidth, viewport: sExpandedBack.viewport }))
 
   await cdp.evaluate(`
@@ -567,7 +705,7 @@ async function main() {
   `)
   await sleep(900)
   const sHotkey = await sidebarRect()
-  check('快捷键 Ctrl+Shift+E 收起左栏', sHotkey.sidebar === 44 && sHotkey.rail === true, JSON.stringify(sHotkey))
+  check('快捷键 Ctrl+Shift+E 收起左栏', sHotkey.sidebar === 60 && sHotkey.rail === true, JSON.stringify(sHotkey))
 
   // 收起态下"新建/回收站/设置"仍可达（窄轨不要变成死胡同），随后恢复展开态收尾
   const railBtns = await cdp.evaluate(`
@@ -603,8 +741,10 @@ async function main() {
     while (Date.now() < d && ![...document.querySelectorAll('.store-card')].some(c => c.textContent.includes('徽标测试店'))) {
       await new Promise(r => setTimeout(r, 200));
     }
+    // 底栏回收站按设计稿改成图标按钮（只有 🗑 + 角标，没有「回收站」文字），所以按 data-test 定位，
+    // 不再靠 textContent 找按钮——断言意图（角标计数来自 ws.trashStores、无需先打开回收站）不变。
     const footBadge = () => {
-      const b = [...document.querySelectorAll('.foot-btn')].find(x => x.textContent.includes('回收站'));
+      const b = document.querySelector('[data-test="trash-open"]');
       const n = b ? b.querySelector('.badge') : null;
       return n ? n.textContent.trim() : '';
     };
@@ -614,7 +754,7 @@ async function main() {
 
   const badgeAfter = await cdp.evaluate(`
     const footBadge = () => {
-      const b = [...document.querySelectorAll('.foot-btn')].find(x => x.textContent.includes('回收站'));
+      const b = document.querySelector('[data-test="trash-open"]');
       const n = b ? b.querySelector('.badge') : null;
       return n ? n.textContent.trim() : '';
     };

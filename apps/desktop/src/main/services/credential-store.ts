@@ -113,6 +113,10 @@ export function credentialRefs(proxyId: string): { usernameRef: string; password
 
 /** 单一 AI Key 的存储键；已在 diagnostics 的 SETTING_DENY 中排除，不会进诊断包 */
 export const AI_KEY_SETTING = 'ai_cred.key'
+/** 生图 API 独立凭据；不能复用文本 AI Key，避免误发到不同供应商。 */
+export const AI_IMAGE_KEY_SETTING = 'ai_cred.imageKey'
+/** AI 生成商品图片页面的文本分析专用凭据；不复用 Agent 文本 Key。 */
+export const AI_IMAGE_TEXT_KEY_SETTING = 'ai_cred.imageTextKey'
 
 export function saveAiKey(key: string): void {
   putSetting(AI_KEY_SETTING, key ? encrypt(key) : '')
@@ -140,8 +144,54 @@ export function hasAiKey(): boolean {
   }
 }
 
+export function saveAiImageKey(key: string): void {
+  putSetting(AI_IMAGE_KEY_SETTING, key ? encrypt(key) : '')
+}
+
+export function getAiImageKey(): string | null {
+  return decrypt(getSetting(AI_IMAGE_KEY_SETTING))
+}
+
+/** 启动期安全探针：只回传是否配置，不把生图 Key 暴露给渲染层。 */
+export function hasAiImageKey(): boolean {
+  try {
+    const k = getAiImageKey()
+    return !!(k && k.trim())
+  } catch (error: any) {
+    logMain('error', `[credential] 无法确认生图 API Key 是否已配置：${String(error?.message || error)}`)
+    return false
+  }
+}
+
+export function saveAiImageTextKey(key: string): void {
+  putSetting(AI_IMAGE_TEXT_KEY_SETTING, key ? encrypt(key) : '')
+}
+
+export function getAiImageTextKey(): string | null {
+  return decrypt(getSetting(AI_IMAGE_TEXT_KEY_SETTING))
+}
+
+/** 启动期安全探针：只回传是否配置商品图片文本分析 Key。 */
+export function hasAiImageTextKey(): boolean {
+  try {
+    const k = getAiImageTextKey()
+    return !!(k && k.trim())
+  } catch (error: any) {
+    logMain('error', `[credential] 无法确认生图文本 API Key 是否已配置：${String(error?.message || error).slice(0, 120)}`)
+    return false
+  }
+}
+
 export function deleteAiKey(): void {
   getDatabase().prepare('DELETE FROM app_settings WHERE key = ?').run(AI_KEY_SETTING)
+}
+
+export function deleteAiImageKey(): void {
+  getDatabase().prepare('DELETE FROM app_settings WHERE key = ?').run(AI_IMAGE_KEY_SETTING)
+}
+
+export function deleteAiImageTextKey(): void {
+  getDatabase().prepare('DELETE FROM app_settings WHERE key = ?').run(AI_IMAGE_TEXT_KEY_SETTING)
 }
 
 // 保持 app 导入有效（文档性引用：safeStorage 需在 app.whenReady 后调用）

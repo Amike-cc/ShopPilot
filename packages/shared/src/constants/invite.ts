@@ -250,6 +250,16 @@ export interface BatchInviteProfile extends InviteProfileBase {
   /** quotaCheck='requireQuota' 时的锚点：文案片段与最低通过值 */
   quota?: { textIncludes: string; min: number; optional?: boolean }
   /**
+   * quotaCheck='requireEnabled' 时的**实测声明**：本平台这个按钮的"禁用态"就是额度用尽。
+   *
+   * 为什么必须显式声明：禁用态本身不带原因（必填未填/未登录/风控也是禁用），而"额度用尽"在
+   * loop 的 stopOn 里＝按预期成功收尾——引擎若默认"禁用=额度用尽"，遇到别的禁用原因就会
+   * **任务报成功、0 位邀约发出**（2026-09-28 审查确认的静默假成功）。
+   * 抖店实测：页面不展示剩余额度，额度用尽表现为「确认发送」禁用且**读不到浮层说明**，
+   * 所以只能用这条档案级声明表达；若将来发现它还会因别的原因禁用，改这里即可。
+   */
+  quotaDisabledMeansExhausted?: boolean
+  /**
    * 抽屉里的「选择商品」是**弹窗**（实测快手：点「选择商品」开 modal，
    * 里面左侧有商品列表、底部「取 消 / 确 认」）——勾选在 modal 内完成，确认后才回到抽屉。
    */
@@ -454,7 +464,10 @@ const DOUDIAN: BatchInviteProfile = {
     categoryAnyLeaf: '不限',
     filteredMarker: '已筛选'
   },
-  quotaNote: '抖店不在页面展示剩余邀约额度；流程会在打开邀约抽屉后先校验「确认发送」是否可用，额度用尽/平台限制时如实失败'
+  quotaNote: '抖店不在页面展示剩余邀约额度；流程会在打开邀约抽屉后先校验「确认发送」是否可用，额度用尽/平台限制时如实失败',
+  // quotaCheck 默认 'requireEnabled'：抖店的额度用尽就是「确认发送」禁用（实测），
+  // 且按钮旁读不到浮层说明 → 只能由档案声明"这个禁用=额度用尽"，才能按预期收尾而不是报失败。
+  quotaDisabledMeansExhausted: true
 }
 
 /**

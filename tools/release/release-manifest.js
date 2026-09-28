@@ -56,34 +56,85 @@ function readDbSchemaVersion() {
   return Math.max(...versions)
 }
 
+/**
+ * 可溯源信息：**这份二进制对应哪份代码**。
+ *
+ * 2026-09-28 审查发现的硬伤：v0.4.48 是在 263 个未提交改动的工作区上构建并发布的，
+ * 而 release.json 里没有任何 git 信息 —— 线上那台机器跑的是哪份代码，事后无法确定，
+ * 出事故也无法二分/回放。这里把 rev / 分支 / 是否脏 写进清单（不改构建行为，只留证据）。
+ */
+function readGitInfo() {
+  const { execFileSync } = require('child_process')
+  const git = (args) => {
+    try { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim() } catch { return '' }
+  }
+  const rev = git(['rev-parse', 'HEAD'])
+  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'])
+  const porcelain = git(['status', '--porcelain'])
+  const dirtyFiles = porcelain ? porcelain.split(/\r?\n/).filter(Boolean).length : 0
+  if (!rev) return { rev: null, branch: null, dirty: null, dirtyFiles: 0, note: '拿不到 git 信息（不是 git 仓库/无 git 命令）' }
+  return {
+    rev,
+    revShort: rev.slice(0, 12),
+    branch,
+    dirty: dirtyFiles > 0,
+    dirtyFiles,
+    note: dirtyFiles > 0 ? '构建时工作区有未提交改动：这份产物无法精确对应到某个 commit' : '工作区干净'
+  }
+}
+
+/** 运行时统计测试规模，避免清单里的数字靠手写（此前写的 29/338 与实际 62/6xx 早已漂移） */
+function countUnitTests() {
+  const dir = path.join(root, 'tests', 'unit')
+  if (!fs.existsSync(dir)) return { files: 0, cases: 0 }
+  let files = 0
+  let cases = 0
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith('.test.ts')) continue
+    files++
+    const src = fs.readFileSync(path.join(dir, name), 'utf8')
+    cases += (src.match(/^\s*(it|test)(\.\w+)?\s*\(/gm) || []).length
+  }
+  return { files, cases }
+}
+
+const currentVersionPrefix = `-${pkg.version}`
+const allArtifacts = files
+// 本版本的产物：名字里带版本号的那些（安装包/blockmap），外加两个"描述当前版本"的更新源清单
+// （latest.yml / beta.yml 名字里不带版本，但它们是这次构建的产物，且客户端就是靠它们更新）
+const versionArtifacts = files.filter(f => f.file.includes(currentVersionPrefix) || /^(latest|beta)\.yml$/i.test(f.file))
+const tests = countUnitTests()
+
 const manifest = {
   product: 'ShopPilot',
   version: pkg.version,
   buildLabel,
   labelReason: hasSigning ? '已配置签名，可进入发布候选' : '未配置代码签名证书（§21.5：无有效签名或验收记录的包只能标记 INTERNAL_BUILD）',
   generatedAt: new Date().toISOString(),
+  git: readGitInfo(),
   electron: JSON.parse(fs.readFileSync(path.join(root, 'node_modules', 'electron', 'package.json'), 'utf8')).version,
   dbSchemaVersion: readDbSchemaVersion(),
   acceptanceSuites: [
     'node tools/acceptance/store-drag-local-verify.js（10 项：店铺拖动状态、插入线、数据库顺序、刷新后持久化）',
     'node tools/acceptance/douyin-invite-local-verify.js（36 项：抖店结构化抽屉字段、类目/联系方式/核心优势配置、任务创建与本地仿真发布）',
     'node tools/acceptance/invoice-license-local-verify.js（26 项：营业执照归组/筛选/校验/CSV 字段/刷新恢复）',
-    'node tools/acceptance/m3-runner.js（113 项：任务引擎、任务列表 UI、重复启动拒绝、AI/邀约回归）',
-    'node tools/acceptance/m1-runner.js（108 项，含设置四页签、地址覆盖驱动邀约任务、左/右栏收起、回收站徽标、国内四平台目录与平台入口链路）',
+    'node tools/acceptance/m3-runner.js（114 项：任务引擎、副作用步骤白名单/门禁/恢复、AI 配置与生成、调度、任务列表 UI、重复启动拒绝、结构化抖店邀约抽屉与未支持平台拒绝）',
+    'node tools/acceptance/m1-runner.js（115 项，含 DOM <webview> 真实嵌入与重载重注册、跨店分区隔离、设置四页签、地址覆盖驱动邀约任务、左右栏收起、回收站徽标、国内四平台目录与平台入口链路）',
     'node tools/acceptance/m2-runner.js stage1|stage2（阶段1 30 项；阶段2 进程内指纹字段实测）',
-    'node tools/acceptance/m3-runner.js（113 项，含副作用步骤白名单/门禁/恢复、AI 配置与生成、调度、任务 UI、结构化抖店邀约抽屉与未支持平台拒绝）',
     'node tools/acceptance/sec-runner.js（44 项，含弹层遮挡与行内删除按钮守卫）',
     'node tools/acceptance/m4-runner.js（13 阶段检查：解包态 19 项含主进程对话真实点击 / 单实例互斥 / 安装 / 升级 / 卸载）',
     'node tools/release/update-runner.js（更新链路 16 项：本地 feed 覆盖 / 检查 / SHA-512 下载校验 / pending 落盘 / 审计 / stable+beta 双通道 / 故障如实报错 / 重启自动检查）',
-    'pnpm test（29 个文件、338 项）'
+    `pnpm test（${tests.files} 个文件、${tests.cases} 项，数字由本脚本运行时统计）`
   ],
-  // 只声明本版（0.4.47）实际复跑的套件；未复跑的不计入，避免把历史结果冒充本版结论
-  acceptanceSummary: '本版构建复跑通过：单测 338/338 + 更新链路 16/16 + M1 108/108 + M2 阶段1 30/30（阶段2 必需指纹字段 verified）+ M3 113/113 + 安全 44/44 + M4 13/13（打包态 19/19、安装 3/3、升级 4/4、卸载）+ 店铺拖动 10/10 + 抖店邀约本地 36/36 + 发票主体本地 26/26 + 自定义任务本地 54/54 + 邀约实时日志 16/16。',
-  artifacts: files,
+  // 只声明本版本次实际复跑的基础门槛；历史专项验收仍保留在 acceptanceSuites 中，不冒充本版复跑结果。
+  acceptanceSummary: `本版构建复跑通过：pnpm typecheck；pnpm test（${tests.files} 个文件 / ${tests.cases} 个测试）；pnpm lint（0 errors，仓库存量 warnings）；pnpm build；Windows x64 NSIS 安装包构建。`,
+  // 只列**本版本**的产物（此前把 release/ 里全部历史安装包都列进来，125 条，无法作为交付凭据）
+  artifacts: versionArtifacts,
+  artifactsInReleaseDir: allArtifacts.length,
     releaseNotesFile: fs.existsSync(notesPath) ? 'docs/RELEASE_NOTES.md' : null,
   rollback: '保留上一版本安装包：卸载当前版本 → 安装旧版；数据库 schema 仅升不降，回退前先备份 userData。',
   knownBoundaries: [
-    '未做代码签名，构建标记 INTERNAL_BUILD；本次 0.4.47 仅生成本地安装包与清单，线上 GitHub Release 发布未执行；更新包仅做 SHA-512 哈希校验、无签名校验',
+    '未做代码签名，构建标记 INTERNAL_BUILD；更新包仅做 SHA-512 哈希校验、无签名校验；真实 Windows 安装、升级、卸载和完整桌面逐项验收需按本版单独复核',
     '启动自动检查更新默认关闭（设置键 update.autoCheck），可在设置 →「关于软件」页开启并选择 stable/beta 通道',
     'AI 请求由主进程直连出网、不走店铺代理（Chromium 的 session 代理管不到主进程 fetch）；接口地址须 https://（仅 127.0.0.1/localhost 允许 http://）；API Key 只在主进程使用（safeStorage 加密），界面与诊断包都不带出',
     '达人邀约的 AI 话术仅对仍存在自由话术框的平台生效；抖店当前为结构化抽屉，没有话术框，因此不展示 AI 话术控件；存在话术框的平台读不到稳定商品来源时如实失败，不拿整页文本充数',
@@ -94,7 +145,8 @@ const manifest = {
     '应用锁隐藏视图并门禁业务 IPC，但不重加密 Chromium profile',
     '任务引擎全局串行队列（并发=1）；跨进程原地恢复不支持',
     '应用为单实例：同 userData 重复启动会直接退出并聚焦已有窗口',
-    '本次真实桌面 SendInput 验收完成 12/13；最后一批操作被宿主窗口抢占前台，win-input PID 安全保护拒绝继续，需在稳定前台会话补跑'
+    '本版验证为「生产构建 + CDP 驱动真实界面 + 真机截图核对」；真实 Windows 安装/升级/卸载与完整人工桌面逐项验收未随本版重跑',
+    '店铺页面现为 DOM <webview> 嵌入：页面可见性由渲染层 CSS 控制，窗口被系统遮挡时靠 rAF 定位的平台弹层仍会停帧（如实报 TASK_TARGET_OUT_OF_VIEWPORT）'
   ]
 }
 

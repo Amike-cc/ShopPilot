@@ -159,6 +159,16 @@ export const ERROR_CODES = {
     message: '当前调用方不能访问 Agent IPC',
     retryable: false
   },
+  AI_FORBIDDEN: {
+    code: 'AI_FORBIDDEN',
+    message: '当前调用方不能访问 AI 配置 IPC（仅应用主窗口可调用）',
+    retryable: false
+  },
+  IPC_FORBIDDEN: {
+    code: 'IPC_FORBIDDEN',
+    message: '当前调用方不能访问该 IPC 通道（仅应用主窗口可调用）',
+    retryable: false
+  },
   AGENT_INTERNAL_ERROR: {
     code: 'AGENT_INTERNAL_ERROR',
     message: 'Agent 操作失败',
@@ -242,6 +252,11 @@ export const ERROR_CODES = {
   AGENT_MODEL_KEY_REQUIRED: {
     code: 'AGENT_MODEL_KEY_REQUIRED',
     message: '该模型 Profile 尚未配置 API Key',
+    retryable: false
+  },
+  AGENT_MODEL_INCAPABLE: {
+    code: 'AGENT_MODEL_INCAPABLE',
+    message: '该模型 Profile 未通过能力探测（智能体需要对话与 JSON 输出），请重新测试或换一个 Profile',
     retryable: false
   },
   AGENT_INVALID_INPUT: {
@@ -362,6 +377,11 @@ export const ERROR_CODES = {
   AGENT_MEMORY_NOT_FOUND: {
     code: 'AGENT_MEMORY_NOT_FOUND',
     message: '记忆记录不存在',
+    retryable: false
+  },
+  AGENT_MEMORY_INTEGRITY_FAILED: {
+    code: 'AGENT_MEMORY_INTEGRITY_FAILED',
+    message: '记忆正文完整性校验失败，已隔离',
     retryable: false
   },
   AGENT_MEMORY_TOO_LARGE: {

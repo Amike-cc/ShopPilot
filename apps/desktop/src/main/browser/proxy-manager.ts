@@ -100,10 +100,10 @@ export function listProxies(): ProxyRecord[] {
   return (getDatabase().prepare('SELECT * FROM proxies ORDER BY created_at DESC').all() as any[]).map(mapProxyRow)
 }
 
-export function updateProxy(
+export async function updateProxy(
   proxyId: string,
   patch: Partial<ProxyDraft> & { username?: string; password?: string }
-): ProxyRecord {
+): Promise<ProxyRecord> {
   const db = getDatabase()
   const existing = getProxy(proxyId)
   if (!existing) throw new Error('PROXY_NOT_FOUND')
@@ -130,17 +130,33 @@ export function updateProxy(
 
   vals.push(proxyId)
   db.prepare(`UPDATE proxies SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+  // 活动店铺必须立即使用新地址/端口/凭据，不能等下一次打开浏览器。
+  const boundStoreIds = (db.prepare('SELECT store_id FROM store_proxies WHERE proxy_id = ? AND mode = ?').all(proxyId, 'bound') as Array<{ store_id: string }>).map(row => row.store_id)
+  await Promise.all(boundStoreIds.map(storeId => reconfigureProxy(storeId)))
   return getProxy(proxyId)!
 }
 
-export function deleteProxy(proxyId: string): boolean {
+export async function deleteProxy(proxyId: string): Promise<{ deleted: boolean; unboundStores: number }> {
   const db = getDatabase()
+  // 外键会把绑定记录的 proxy_id 置空；保存受影响的店铺，删除后让活动 session 回落直连。
+  const boundStoreIds = (db.prepare('SELECT store_id FROM store_proxies WHERE proxy_id = ?').all(proxyId) as Array<{ store_id: string }>).map(row => row.store_id)
   const info = db.prepare('DELETE FROM proxies WHERE id = ?').run(proxyId)
   if (info.changes > 0) {
+    // **必须同步把绑定记录回落成 direct**：外键只把 proxy_id 置 NULL，`mode` 会留在 'bound'，
+    // 于是 getStoreProxy 仍返回 {mode:'bound', proxyId:null} → 界面继续显示"当前：绑定代理"
+    // （用户以为还有代理保护），而 session 实际已回落直连＝真实 IP 暴露，
+    // 且 boundProxyRecords 要求 proxy_id IS NOT NULL → 该店从此不再被巡检。
+    // 用户删代理的动机常常正是"这个代理有问题"，所以这条路径最容易踩（2026-09-28 审查确认）。
+    const unbind = db.prepare("UPDATE store_proxies SET mode = 'direct', updated_at = ? WHERE store_id = ? AND mode = 'bound' AND proxy_id IS NULL")
+    const now = Date.now()
+    for (const storeId of boundStoreIds) {
+      try { unbind.run(now, storeId) } catch { /* 单店失败不影响删除结果 */ }
+    }
     deleteProxyCredentials(proxyId)
-    writeAudit('proxy.delete', 'success')
+    await Promise.all(boundStoreIds.map(storeId => reconfigureProxy(storeId)))
+    writeAudit('proxy.delete', 'success', { requestId: JSON.stringify({ proxyId, unboundStores: boundStoreIds.length }) })
   }
-  return info.changes > 0
+  return { deleted: info.changes > 0, unboundStores: info.changes > 0 ? boundStoreIds.length : 0 }
 }
 
 /**
@@ -198,7 +214,7 @@ function recordCheck(proxyId: string, result: { ok: boolean; latencyMs: number |
  * 绑定/解绑代理到店铺，并即时对活动 session 生效 - §5.4 / §6.3
  * mode：proxyId 非空 = 'bound'，否则 'direct'
  */
-export function bindProxy(storeId: string, proxyId: string | null): void {
+export async function bindProxy(storeId: string, proxyId: string | null): Promise<void> {
   const db = getDatabase()
   const mode = proxyId ? 'bound' : 'direct'
   db.prepare(`
@@ -209,7 +225,7 @@ export function bindProxy(storeId: string, proxyId: string | null): void {
   `).run(storeId, proxyId, mode, Date.now())
 
   // 若该店铺浏览器已打开，重新应用代理配置（首次导航前设置）
-  reconfigureProxy(storeId)
+  await reconfigureProxy(storeId)
   writeAudit('proxy.bind', 'success', { storeId })
 }
 

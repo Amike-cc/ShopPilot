@@ -7,6 +7,7 @@
 
 import { z } from 'zod'
 import { TASK_STEP_TYPES } from '@shared/schemas/task'
+import { AGENT_NON_RESUMABLE_STEP_TYPES, isIdempotentStepType } from '@shared/agent-step-effects'
 
 const selector = z.string().min(1).max(500)
 const httpUrl = z.string().url().refine(
@@ -140,7 +141,10 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     }).strict().optional(),
     /**
      * 点击后应当发生的**同标签页跳转**：`{ includes, attempts? }`。
-     * 给了它就：点击 → 轮询当前地址是否含 includes；未出现则重新定位再点一次（最多 attempts 次，默认 3）。
+     * 给了它就：点击 → 轮询当前地址是否含 includes；未出现则重新定位再点一次（最多 attempts 次）。
+     * **默认 1 = 不重发点击**：重发会真的再点一次，只对"点不生效时再点也不产生第二次提交"的
+     * 导航触发类安全——必须是任务作者显式声明的意图（如微信「邀请带货」写 attempts:4，
+     * 它只跳表单页、真正发送在后面一步）。会提交的步骤别写 attempts，宁可超时让人重跑。
      * 用途：微信详情页「邀请带货」是 SPA 内部 pushState，按钮早早就在 DOM 里但事件尚未挂上，
      * 点早了会被丢弃——固定 sleep 不可靠（实测 3s 失败、4s 成功），轮询+重试才是稳的。
      */
@@ -157,7 +161,7 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      */
     nth: z.enum(['round', 'unvisited']).optional(),
     /**
-     * 窗口视图未挂载（渲染层弹层遮挡 → 原生视图被摘除 → 页面视口 0×0）时，
+     * 页面视口塌陷（DOM <webview> 的 guest 尚未注册 / 页面被移出文档 / 平台折叠内容区）时，
      * 是否允许降级为 JS 点击。
      *
      * 只给**纯页内状态切换**的点击开（切页签、切筛选）：那种点击点了之后页面自己重渲染，
@@ -224,8 +228,10 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   clickAll: z.object({
     selector: selector.optional(),
     text: z.string().min(1).max(200).optional(),
-    // 平台对单次批量操作有上限（达人选人上限 40），这里做硬约束
-    max: z.number().int().min(1).max(40),
+    // 上限 100 = 各平台档案登记的最大单次批量数（快手 maxBatch=100）；抖店的 40 由档案负责夹取
+    // （invite-task 按 profile.maxBatch 收口）。此前写死 40 是照抖店抄的平台常量 → 快手邀约
+    // 填 41–100 位时面板放行、这里拒绝，功能不可用（2026-09-28 审查确认）。
+    max: z.number().int().min(1).max(100),
     // scroll=true：点完当前可点的行后向下滚动列表继续选（虚拟滚动/滚动加载的列表，如抖店广场）
     scroll: z.boolean().optional(),
     // 滚动续选的最大轮数（防止无进展时空转）
@@ -316,7 +322,26 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   requireEnabled: z.object({
     text: z.string().min(1).max(200),
     deep: z.boolean().optional(),
-    hint: z.string().max(200).optional()
+    hint: z.string().max(200).optional(),
+    /**
+     * **平台表达"额度用尽"的禁用文案**（登记后本步才把禁用当成额度用尽＝按预期收尾）。
+     *
+     * 为什么需要它：禁用态本身不带原因——平台可能因为"额度用尽"禁用，也可能因为
+     * "必填未填/未登录/风控"禁用。此前一律当额度用尽，而 `TASK_QUOTA_EXCEEDED` 在邀约
+     * 循环的 `stopOn` 里＝**按预期成功收尾**，于是"按钮因别的原因被禁用"会变成
+     * "任务报成功、一位都没发出去"（2026-09-28 审查确认的静默假成功）。
+     * 现在只认声明过的文案（引擎会去读按钮旁的 tooltip/popover 说明），
+     * 读不到或不匹配 → 如实失败（`TASK_TARGET_DISABLED_UNCERTAIN`），不再默认当额度用尽。
+     */
+    quotaDisabledIncludes: z.array(z.string().min(1).max(120)).max(8).optional(),
+    /**
+     * **平台档案显式声明**：这个按钮的禁用态就等于"额度用尽"（实测校准的事实）。
+     *
+     * 与 `quotaDisabledIncludes` 的区别：后者靠"读到按钮旁的文案再比对"（更精确，优先），
+     * 本字段是"读不到文案时的平台声明"。两者都**必须显式给出**——引擎不再默认
+     * "禁用=额度用尽"（那是静默假成功的来源）。抖店的「确认发送」就是靠本字段按额度用尽收尾。
+     */
+    disabledMeansQuota: z.boolean().optional()
   }).strict(),
   /**
    * 文案缺席断言（读型步骤）：页面上**不该出现**这段文案；出现即按 code 如实失败。
@@ -422,18 +447,35 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   }).strict()
 }
 
-/** 副作用步骤不可进入"从失败恢复"的重试范围 - §9.2（重试会重复点击/重复写入） */
-export const NON_RESUMABLE_TYPES: ReadonlySet<string> = new Set([
-  'fillDraft', 'waitForUserConfirmation',
-  'click', 'clickByText', 'clickAll', 'setInput', 'aiGenerate',
-  // 条件点击也是副作用（点了就是真发出去了），不可重放
-  'clickIfPresent',  // 微信小店流程的副作用步骤同样不可重复执行（重复点击=重复发送风险）
-  'typeText', 'ensureRows', 'ensureRowsById',
-  // 切标签页是运行态操作（tabId 会被改写），重放没有意义
-  'useTab',
-  // 循环体里通常含点击/写入（一循环就是一轮真实发送），整步不可重放
-  'loop'
-])
+/**
+ * 副作用步骤不可进入"从失败恢复"的重试范围 - §9.2（重试会重复点击/重复写入）
+ *
+ * 名单来自 `@shared/agent-step-effects` 的单一事实来源：这里以前自己维护一份 13 项的列表，
+ * 而 `agent-domain-rules.deriveJobRisk` 用文案正则、`agent-planner.SIDE_EFFECT_TYPES` 只有 2 项，
+ * 三份口径打架（审计 P0-1）。现在三处同源，`tests/unit/agent-step-effects.test.ts` 用集合同一性锁死。
+ */
+export const NON_RESUMABLE_TYPES: ReadonlySet<string> = AGENT_NON_RESUMABLE_STEP_TYPES
+
+/**
+ * 归一化 `retryLimit`：**非幂等步骤强制为 0**（`click*` 重试=重复提交，`loop` 重试=整多跑一轮）。
+ *
+ * 为什么要在**主进程**再挡一次：编辑器侧（`@shared/custom-task`）本来会报错拦人，但那只覆盖
+ * "用户走编辑器"这一条路；`task:create` / `task:update` 是直落库的通道（粘贴 JSON、导入、
+ * 将来的第三方调用方），主进程是唯一的信任边界——同一条规则写在两处必然漂移（2026-09-28 审查
+ * 证实：主进程侧此前完全没有这道闸）。
+ *
+ * 判定用 `@shared/agent-step-effects` 的 `isIdempotentStepType`（单一事实来源），
+ * 与 `custom-task.STEP_CATALOG.idempotent` 一致（有单测锁死两者等价）。
+ *
+ * 口径是"归一化"而不是"抛错"：用户已存的旧任务行里可能就带着非幂等步骤的 retryLimit，
+ * 抛错会让这些任务直接无法加载/无法编辑；归零既安全又不破坏兼容。
+ */
+export function normalizeStepRetryLimit(type: string, retryLimit?: number | null): number {
+  if (!isIdempotentStepType(type)) return 0
+  const n = Number(retryLimit)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.min(5, Math.trunc(n))
+}
 
 /** 非"确认门禁"类步骤的默认超时；批量点击要等框架重渲染、AI 生成要等模型返回，给更长默认值 */
 export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
@@ -462,6 +504,9 @@ export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
 export const taskCreateSchema = z.object({
   name: z.string().min(1).max(80),
   storeScope: z.string().max(80).nullish(),
-  steps: z.array(taskStepSchema).min(1).max(30),
+  // Long Agent jobs are still bounded and each step remains whitelist-validated;
+  // the old 30-step ceiling made a large but legitimate workflow fail before
+  // it could reach TaskRunner.
+  steps: z.array(taskStepSchema).min(1).max(100),
   schedule: z.object({ everyMs: z.number().int().min(60000).max(30 * 86400000) }).nullish()
 })

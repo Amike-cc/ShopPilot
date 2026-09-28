@@ -37,6 +37,41 @@ function getToken() {
   return { token: m[1].trim(), user: u ? u[1].trim() : '?' }
 }
 
+/**
+ * 发布前的**可溯源门禁**：工作区不干净就拒绝发布。
+ *
+ * 为什么要有这道闸：2026-09-28 审查实测——v0.4.48 是在 263 个未提交改动的工作区上构建并
+ * 发布出去的，而清单里没有任何 git 信息，于是"线上这台机器跑的是哪份代码"事后无法确定，
+ * 出事故无法二分/回放。发布物必须能对应到一个 commit。
+ *
+ * 逃生口：确实需要从脏工作区发版时显式设 `SHOPILOT_ALLOW_DIRTY_RELEASE=1`——
+ * 让"我知道我在发一份无法溯源的包"变成一个要动手输入的判断，而不是默认发生的事。
+ */
+function assertCleanWorktree() {
+  const git = (args) => {
+    const r = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' })
+    return r.status === 0 ? String(r.stdout || '').trim() : ''
+  }
+  const rev = git(['rev-parse', 'HEAD'])
+  if (!rev) {
+    console.error('发布中止：拿不到 git HEAD（不是 git 仓库？）——发布物必须可溯源到一个 commit。')
+    process.exit(1)
+  }
+  const dirty = git(['status', '--porcelain'])
+  const dirtyFiles = dirty ? dirty.split(/\r?\n/).filter(Boolean).length : 0
+  if (dirtyFiles === 0) {
+    console.log(`可溯源检查：工作区干净，发布物对应 ${rev.slice(0, 12)}`)
+    return
+  }
+  if (process.env.SHOPILOT_ALLOW_DIRTY_RELEASE === '1') {
+    console.warn(`警告：工作区有 ${dirtyFiles} 个未提交改动，已按 SHOPILOT_ALLOW_DIRTY_RELEASE=1 继续——本次发布物无法对应到单个 commit。`)
+    return
+  }
+  console.error(`发布中止：工作区有 ${dirtyFiles} 个未提交改动，发布物将无法对应到某个 commit。`)
+  console.error('先提交（或 git stash），或确认要发不可溯源的包时设 SHOPILOT_ALLOW_DIRTY_RELEASE=1 重跑。')
+  process.exit(1)
+}
+
 async function api(url, token, opts = {}) {
   const res = await fetch(url, {
     ...opts,
@@ -59,6 +94,7 @@ async function api(url, token, opts = {}) {
   for (const a of ASSETS) {
     if (!fs.existsSync(path.join(REL_DIR, a.name))) throw new Error(`缺少产物 ${a.name}，请先 pnpm dist`)
   }
+  assertCleanWorktree()
   const { token, user } = getToken()
   console.log(`token ok (user=${user}, len=${token.length})`)
 
@@ -67,7 +103,15 @@ async function api(url, token, opts = {}) {
   console.log(`repo ${repo.full_name} private=${repo.private}`)
 
   const notes = fs.readFileSync(path.join(ROOT, 'docs', 'RELEASE_NOTES.md'), 'utf8')
-  const name = `ShopPilot ${VERSION} (INTERNAL_BUILD)`
+  // 构建标签以 release.json 为准（release-manifest.js 按 CSC_LINK/签名配置算出来的），
+  // 这里不再写死 INTERNAL_BUILD —— 一旦真的配上签名，Release 标题还会继续显示 INTERNAL_BUILD，
+  // 误导用户与运维（2026-09-28 审查确认的三处硬编码之一）。
+  let buildLabel = 'INTERNAL_BUILD'
+  try {
+    const manifestPath = path.join(REL_DIR, 'release.json')
+    if (fs.existsSync(manifestPath)) buildLabel = JSON.parse(fs.readFileSync(manifestPath, 'utf8')).buildLabel || buildLabel
+  } catch { /* 清单缺失/损坏 → 保守标记为内部构建 */ }
+  const name = `ShopPilot ${VERSION} (${buildLabel})`
   let rel
   try {
     rel = await api(`${base}/releases`, token, {

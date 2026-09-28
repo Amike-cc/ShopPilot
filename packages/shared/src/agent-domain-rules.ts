@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import { AGENT_JOB_STATUSES, ROOT_AGENT_ID, type AgentJobCreate } from './schemas/agent-domain'
+import { hasSideEffectSteps } from './agent-step-effects'
 import { agentSoftwareActionSchema, type AgentSoftwareAction } from './schemas/agent'
 
 export const JOB_TRANSITIONS: Record<string, readonly string[]> = {
@@ -27,6 +28,11 @@ export function payloadHash(value: unknown): string {
 export function deriveJobRisk(input: Pick<AgentJobCreate, 'goal' | 'inputSummary' | 'browserTask'>): 'read' | 'write' | 'submit' {
   const raw = stableJson({ goal: input.goal, inputSummary: input.inputSummary, browserTask: input.browserTask }).toLowerCase()
   if (/(publish|send|submit|payment|pay|delete|remove|order|checkout|账号|收款|付款|下单|发布|发送|删除)/i.test(raw)) return 'submit'
+  // 步骤类型是权威信号：文案正则匹配不到 `"type":"clickByText"` / setInput / typeText / aiGenerate /
+  // ensureRows* / useTab / loop / clickAll / clickIfPresent（`\bclick\b` 要求词边界），
+  // 只靠文案会把这类浏览器 Job 判成 read —— 既可能派给只读执行者，又会被"安全恢复"重放。
+  // 名单来自 shared/agent-step-effects.ts（单一事实来源）。
+  if (hasSideEffectSteps(input.browserTask)) return 'write'
   // Navigation is a read-only context change; click/fill/select and explicit
   // mutation verbs are the side-effect boundary.
   if (/\b(click|write|fill|select|invite|update|create)\b/i.test(raw)) return 'write'
@@ -104,14 +110,71 @@ export function isMoneyActionText(value: unknown): boolean {
 }
 
 /**
- * 除资金外仍需用户审批的例外动作（不可逆/数据销毁类）。
+ * 除资金外仍需用户审批的例外动作（持久化任务、关闭标签页和不可逆/数据销毁类）。
  * 自治运营默认自动执行，列入这里的动作会先展示计划等用户确认。
  */
-export const APPROVAL_REQUIRED_SOFTWARE_ACTIONS: readonly string[] = ['deleteStorePermanent']
+export const APPROVAL_REQUIRED_SOFTWARE_ACTIONS: readonly string[] = ['deleteStorePermanent', 'createTask', 'closeTab']
 
 export function softwareActionNeedsApproval(type: string): boolean {
   return APPROVAL_REQUIRED_SOFTWARE_ACTIONS.includes(type)
 }
+
+/**
+ * 会真实改动持久状态的软件动作（店铺/任务/技能/插件/组织/备份/邀约…）。
+ *
+ * **与"是否需要人工确认"是两件事**，这里必须分开：
+ *   · 风险等级（risk=write）与 `side_effect_started`、只读执行者过滤、可恢复重放判定都看**副作用**；
+ *   · 是否先弹确认只影响"谁点头"，不该反过来决定"能不能重放""能不能给只读 Agent"。
+ * 以前 `planFromActions` 用确认集合同时推 risk，两者一绑，任何一次"少要一次确认"的调整
+ * 都会顺手把风险降级成 read（审计 P0-1 的同一类问题）。
+ */
+export const AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS: ReadonlySet<string> = new Set([
+  'closeStore', 'closeTab', 'createAgent', 'activateAgent', 'pauseAgent', 'resumeAgent', 'retireAgent',
+  'createTask', 'deleteTask', 'runTask', 'cancelTaskRun', 'updateTask',
+  'createStore', 'updateStore', 'archiveStore', 'restoreStore', 'deleteStorePermanent',
+  'restoreBackup',
+  'createBookmark', 'deleteBookmark',
+  // 达人邀约会把私信真的发出去（提交类），风险等级必须是 write
+  'runInvite',
+  'createSkill', 'updateSkill', 'deleteSkill', 'createPlugin', 'updatePlugin', 'deletePlugin',
+  'approveJob', 'reviewJobResult', 'cancelJob',
+  'updateAgent', 'bindAgentModel',
+  'applyEntity'
+])
+
+export function softwareActionHasSideEffect(type: string): boolean {
+  return AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS.has(type)
+}
+
+/**
+ * 需要用户先确认的软件动作。
+ *
+ * 口径（2026-09-26 用户定调）：**"由用户自己在对话里发起"的动作不再要求二次确认**——
+ * 达人邀约（`runInvite`，额度用尽自动停止，明细进实时日志）与技能启用/停用（`updateSkill`，
+ * 可逆的本地定义变更）已撤出本名单；它们仍在 `AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS` 里，
+ * 因此风险等级、只读执行者过滤与不可重放判定都不受影响。
+ *
+ * 其余仍需确认的是：创建/关闭/删除店铺与标签页、任务创建/删除/运行、备份恢复、
+ * 组织与模型绑定、插件与任务定义变更，以及 Job 闭环里的批准/驳回/取消。
+ *
+ * 放在 shared 而不是 Main：技能步骤校验（Main）与「技能可用工具」接口（面板表单的数据源）
+ * 必须用同一份判定，否则表单会给出一个提交时才被拒的步骤。
+ */
+export const AGENT_CONFIRM_REQUIRED_ACTIONS: ReadonlySet<string> = new Set([
+  'closeStore', 'closeTab', 'createAgent', 'activateAgent', 'pauseAgent', 'resumeAgent', 'retireAgent',
+  'createTask',
+  'createStore', 'updateStore', 'archiveStore', 'restoreStore', 'deleteStorePermanent',
+  'deleteTask', 'runTask', 'cancelTaskRun', 'restoreBackup',
+  'createBookmark', 'deleteBookmark', 'deleteSkill',
+  // Job 闭环里的判定类动作：批准/驳回等待人工确认的 Job、审阅结果、取消 Job。
+  'approveJob', 'reviewJobResult', 'cancelJob',
+  // 组织与权限：改岗位边界（店铺范围/工具权限/预算）与模型绑定。
+  'updateAgent', 'bindAgentModel',
+  // 插件与任务定义的可逆变更。
+  'updatePlugin', 'deletePlugin', 'updateTask',
+  // 把平台主体写进店铺营业执照（写库，且可能产生冲突需要人判断）。
+  'applyEntity'
+])
 
 /**
  * §27.2：普通模型请求最多一次网络重试，且只对连接断开、超时前连接失败
@@ -124,11 +187,40 @@ export function canRetryModelRequest(kind: 'network' | 'http', status: number | 
 }
 
 /**
+ * 路由用：能力探测结论是否够跑"必须输出 JSON"的智能体调用（2026-09-26 审计 P2-A）。
+ *
+ * 探测结果以前只落库、只显示，**不参与路由**：一个探测时完全没吐出文本（连通/对话失败）
+ * 的 Profile 仍会被选中，然后在请求失败后才被发现，用户看到的是"智能体坏了"而不是"这个模型不可用"。
+ *
+ * 判定口径（为不误伤而刻意保守，实战验收校准过）：
+ *   · **只有 `chat:false`（探测完全没有文本）才拦**——这是可靠的"这个 Profile 跑不了"信号；
+ *   · `json:false` **不拦**，只回一条 warning：探测提示词只是一次弱信号（模型可能只是没按
+ *     探针要求吐 JSON，实际带明确 schema 的请求照样能输出），拿它拦路由会把可用模型全部挡在门外
+ *     （离线 fixture 与部分真实配置的探测结果就是 `json:false`，实测确实能跑通 Job）；
+ *   · 从未探测（`{}`/缺字段）视为未知 → 放行。
+ */
+export function modelCapabilityVerdict(capabilities: unknown): { usable: boolean; code?: 'AGENT_MODEL_INCAPABLE'; reason?: string; warning?: string } {
+  if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) return { usable: true }
+  const record = capabilities as Record<string, unknown>
+  if (record.chat === false) {
+    return {
+      usable: false,
+      code: 'AGENT_MODEL_INCAPABLE',
+      reason: '该模型 Profile 未通过对话能力探测（探测时完全没有返回文本），请到「设置 → 模型」重新测试或换一个 Profile'
+    }
+  }
+  if (record.json === false) {
+    return { usable: true, warning: '该模型 Profile 未通过 JSON 输出能力探测，若动作解析反复失败请重新测试或换一个 Profile' }
+  }
+  return { usable: true }
+}
+
+/**
  * 智能体回合输出：模型只允许返回 {"thought": "...", "reply": "...", "actions": [...]}。
  * thought 是一句简短的思考/理由摘要（可以展示给用户）；actions 逐条按闭合白名单校验，
  * 非法动作直接丢弃；返回 null 表示模型没按协议输出，调用方可以把原文当普通对话回复。
  */
-export function parseAgentTurnOutput(raw: string, maxActions = 3): { thought: string; reply: string; actions: AgentSoftwareAction[] } | null {
+export function parseAgentTurnOutput(raw: string, maxActions = 8): { thought: string; reply: string; actions: AgentSoftwareAction[] } | null {
   const text = String(raw || '').trim()
   if (!text) return null
   const start = text.indexOf('{')
@@ -140,7 +232,7 @@ export function parseAgentTurnOutput(raw: string, maxActions = 3): { thought: st
   if (!record) return null
   const thought = typeof record.thought === 'string' ? record.thought.trim().slice(0, 500) : ''
   const reply = typeof record.reply === 'string' ? record.reply : ''
-  const limit = Math.max(0, Math.min(maxActions, 3))
+  const limit = Math.max(0, Math.min(maxActions, 8))
   const actions: AgentSoftwareAction[] = []
   if (Array.isArray(record.actions)) {
     for (const item of record.actions.slice(0, limit)) {

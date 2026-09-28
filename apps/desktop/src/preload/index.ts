@@ -15,6 +15,7 @@ import type {
   AgentUiState
 } from '@shared/schemas/agent'
 import type { AgentJobCreate, AgentJobFeedback, AgentJobResultReview, AgentMemoryReview, AgentMemoryWrite, AgentTaskDelegate, ModelProfileInput } from '@shared/schemas/agent-domain'
+import type { AgentContextUsage } from '@shared/agent-context'
 
 /**
  * 暴露给渲染进程的安全 API
@@ -39,11 +40,15 @@ const api = {
   
   // 浏览器
   browser: {
-    open: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_OPEN, { storeId }),
+    open: (storeId: string, opts?: { display?: boolean }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_OPEN, { storeId, ...(opts || {}) }),
     close: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLOSE, { storeId }),
     display: (storeId: string | null): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_DISPLAY, { storeId }),
+    /** 注册标签页对应的 webview 内容，供主进程维护其挂载关系 */
+    registerWebview: (storeId: string, tabId: string, webContentsId: number): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BROWSER_REGISTER_WEBVIEW, { storeId, tabId, webContentsId }),
+    /** 上报浏览器内容区域边界，供已注册 webview 同步布局 */
     setViewport: (bounds: { x: number, y: number, width: number, height: number }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SET_VIEWPORT, bounds),
-    /** 弹层打开/关闭：让主进程摘除/恢复原生视图挂载（否则弹窗被店铺页面盖住） */
+    /** 弹层打开/关闭：暂时隐藏/恢复已注册 webview */
     setViewsObscured: (obscured: boolean, reason: 'modal' | 'agent' = 'modal'): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, { obscured, reason }),
     
     tab: {
@@ -144,6 +149,8 @@ const api = {
   // 会话 - §6.3（导出/导入经主进程托管对话框；Cookie 查看器）
   session: {
     status: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SESSION_STATUS, { storeId }),
+    checkLoginStatus: (storeId: string): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SESSION_CHECK_LOGIN_STATUS, { storeId }),
     export: (storeId: string, outputPath?: string, validDays?: number): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.SESSION_EXPORT, { storeId, outputPath, validDays }),
     import: (storeId: string, filePath?: string, pickFile?: boolean): Promise<IPCResult> =>
@@ -153,6 +160,54 @@ const api = {
     deleteCookie: (storeId: string, name: string, domain: string, path: string, secure?: boolean): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.SESSION_DELETE_COOKIE, { storeId, name, domain, path, secure }),
     clearCookies: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SESSION_CLEAR_COOKIES, { storeId })
+  },
+
+  // 统一订单域：只暴露安全采集结果与分页查询，不暴露页面/Session/网络凭据。
+  orders: {
+    collect: (input: { storeId: string; maxPages?: number; maxOrders?: number; timeoutMs?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ORDER_COLLECT, input),
+    list: (query: { storeId: string; status?: string; startDate?: number; endDate?: number; page?: number; pageSize?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ORDER_LIST, query),
+    get: (storeId: string, orderId: string): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ORDER_GET, { storeId, orderId }),
+    observation: {
+      start: (input: { storeId: string; timeoutMs?: number; maxResponses?: number }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.ORDER_OBSERVATION_START, input),
+      stop: (storeId: string): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.ORDER_OBSERVATION_STOP, { storeId })
+    }
+  },
+
+  // 经营数据：只暴露安全的聚合结果和有限查询参数，不暴露 Session/请求凭据。
+  // 计划管理只接受 storeId / 周期 / 分页 / 状态过滤——主进程用 Zod strict 再把一道关，
+  // 多传一个字段直接判非法（不接受 SQL、URL、Session、WebContents 或任意脚本）。
+  salesMetrics: {
+    collect: (input: { storeId: string; periodType?: string; periodStart?: number; periodEnd?: number; timeoutMs?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_COLLECT, input),
+    latest: (input: { storeId: string; periodType?: string }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_LATEST, input),
+    list: (input: { storeId: string; periodType?: string; periodStart?: number; periodEnd?: number; page?: number; pageSize?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_LIST, input),
+    products: (input: { storeId: string; periodType?: string; periodStart?: number; periodEnd?: number; page?: number; pageSize?: number; sort?: string; limit?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PRODUCTS, input),
+    topProducts: (input: { storeId: string; periodType?: string; page?: number; pageSize?: number; sort?: string; limit?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_TOP_PRODUCTS, input),
+    plans: (input: { storeId?: string; platform?: string } = {}): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_LIST, input),
+    planGet: (storeId: string): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_GET, { storeId }),
+    planUpdate: (input: { storeId: string; enabled?: boolean; intervalMs?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_UPDATE, input),
+    planPause: (storeId: string): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_PAUSE, { storeId }),
+    planResume: (storeId: string): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_RESUME, { storeId }),
+    /** 立即采集：只入队，结果通过 salesMetrics:runFinished 事件回报（依次能看到 RUNNING→终态）。 */
+    planRunNow: (storeId: string, periodType?: string): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_RUN_NOW, { storeId, periodType }),
+    runs: (input: { storeId?: string; platform?: string; status?: string; page?: number; pageSize?: number } = {}): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_RUNS_LIST, input),
+    health: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_HEALTH)
   },
 
   // 应用锁 - §6.5
@@ -183,6 +238,7 @@ const api = {
     confirm: (runId: string, approved: boolean): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_CONFIRM, { runId, approved }),
     results: (runId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_RESULTS, { runId }),
     delete: (taskId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_DELETE, { taskId }),
+    update: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_UPDATE, JSON.parse(JSON.stringify(input))),
     fireScheduled: (taskId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_CREATE_FIRE, { taskId })
   },
 
@@ -196,13 +252,13 @@ const api = {
     generatePlan: (goal: string, history?: Array<{ role: 'user' | 'assistant'; text: string }>): Promise<IPCResult<
       | { kind: 'task'; plan: AgentPlan; observation: any; model: string; elapsedMs: number; requiresApproval: boolean }
       | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; pendingGoal?: string; thought?: string; requiresApproval: boolean }
-      | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; executed?: string[]; jobIds?: string[] }
+      | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; executed?: string[]; jobIds?: string[]; usage?: AgentContextUsage }
     >> =>
       ipcRenderer.invoke(IPC_CHANNELS.AGENT_PLAN_GENERATE, { goal, history: history ? JSON.parse(JSON.stringify(history)) : [] }),
     /** Job 结束后自动续办：把用户目标与 Job 结果交给智能体回合判断下一步。 */
     jobFollowUp: (goal: string, jobIds: string[], history?: Array<{ role: 'user' | 'assistant'; text: string }>): Promise<IPCResult<
       | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; thought?: string; requiresApproval: boolean }
-      | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; executed?: string[]; jobIds?: string[] }
+      | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; executed?: string[]; jobIds?: string[]; usage?: AgentContextUsage }
     >> =>
       ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_FOLLOW_UP, JSON.parse(JSON.stringify({ goal, jobIds, history: history || [] }))),
     validatePlan: (plan: AgentPlan): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PLAN_VALIDATE, JSON.parse(JSON.stringify(plan))),
@@ -224,8 +280,12 @@ const api = {
     orgResume: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_RESUME, { agentId, actorAgentId: 'root-ceo', confirmed }),
     orgRetire: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_RETIRE, { agentId, actorAgentId: 'root-ceo', confirmed }),
     skillList: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_LIST),
+    skillCreate: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_CREATE, JSON.parse(JSON.stringify(input))),
+    skillTools: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_TOOLS),
     skillDelete: (skillId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_DELETE, { skillId }),
     skillUpdate: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_UPDATE, JSON.parse(JSON.stringify(input))),
+    pluginUpdate: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PLUGIN_UPDATE, JSON.parse(JSON.stringify(input))),
+    pluginDelete: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PLUGIN_DELETE, JSON.parse(JSON.stringify(input))),
     packExport: (input: Record<string, unknown> = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PACK_EXPORT, JSON.parse(JSON.stringify(input))),
     packImport: (json: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PACK_IMPORT, JSON.parse(JSON.stringify({ json, confirmed }))),
     hrPreview: (role: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_HR_PREVIEW, { mode: 'hr', role, actorAgentId: 'root-ceo' }),
@@ -251,7 +311,15 @@ const api = {
     memoryRebuild: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_REBUILD),
     memorySnapshot: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_SNAPSHOT),
     memorySnapshotInspect: (path: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_SNAPSHOT_INSPECT, { path }),
-    memorySnapshotRestore: (path: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_SNAPSHOT_RESTORE, { path, confirmed, actorAgentId: 'root-ceo' }),
+    // Restore confirmation is Main-owned. Keep the old `(path, confirmed,
+    // expectedSha256)` call shape readable so older renderers/acceptance
+    // fixtures still run, but never forward the boolean as authorization.
+    memorySnapshotRestore: (path: string, confirmedOrExpectedSha256?: boolean | string, expectedSha256?: string): Promise<IPCResult> => {
+      const digest = typeof confirmedOrExpectedSha256 === 'string' ? confirmedOrExpectedSha256 : expectedSha256
+      return ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_SNAPSHOT_RESTORE, { path, actorAgentId: 'root-ceo', ...(digest ? { expectedSha256: digest } : {}) })
+    },
+    memoryLearningSettings: (input?: { autoLearn: boolean; retentionDays: number }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_LEARNING_SETTINGS, input == null ? undefined : JSON.parse(JSON.stringify(input))),
+    memoryMaintenance: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_MAINTENANCE),
     qualityMetrics: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_QUALITY_METRICS),
     qualityReview: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_QUALITY_REVIEW)
   },
@@ -283,7 +351,25 @@ const api = {
     setKey: (key: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_KEY_SET, { key }),
     clearKey: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_KEY_CLEAR),
     test: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_TEST),
-    listModels: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_MODELS_LIST)
+    listModels: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_MODELS_LIST),
+    imageConfigGet: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_CONFIG_GET),
+    imageConfigSet: (input: { endpoint?: string, model?: string, timeoutMs?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_CONFIG_SET, input),
+    setImageKey: (key: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_KEY_SET, { key }),
+    clearImageKey: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_KEY_CLEAR),
+    testImage: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEST),
+    listImageModels: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_MODELS_LIST),
+    imageTextConfigGet: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_CONFIG_GET),
+    imageTextConfigSet: (input: { endpoint?: string, model?: string, timeoutMs?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_CONFIG_SET, input),
+    setImageTextKey: (key: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_KEY_SET, { key }),
+    clearImageTextKey: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_KEY_CLEAR),
+    testImageText: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_TEST),
+    listImageTextModels: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_MODELS_LIST),
+    analyzeImageProduct: (input: { name?: string; tags?: string; price?: string; originalPrice?: string }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_ANALYZE, JSON.parse(JSON.stringify(input))),
+    generateImage: (input: { prompt: string; model?: string; size?: string; n?: number; confirmed?: boolean; sourceImages?: Array<{ name: string; mimeType: string; b64Json: string }> }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_GENERATE, JSON.parse(JSON.stringify(input)))
   },
 
   // 事件监听

@@ -28,10 +28,18 @@ playwright-report
 test-results
 
 # Build
+# 注意：这里必须用根锚定路径。/release/ 若写成 release/ 会连
+# tools/release/（发布脚本源码）一起忽略，新增文件将被静默漏提交。
 *.tsbuildinfo
-release/
-release-share/
-release-icon/
+/release/
+/release-share/
+/release-icon/
+
+# 仓库级日志：logs/README.md 写明「日志文件默认被 Git 忽略，不进入源码提交」，
+# 但此前只忽略了 *.log，于是 60 多个 build-*.txt / m1-*.txt 一直以未跟踪状态堆在工作区，
+# 提交时极易被顺手带进版本库（历史真机留档在 wx-invite-test/evidence/，不受此规则影响）。
+/logs/*
+!/logs/README.md
 
 # Local diagnostics and generated screenshots
 .dsh_probe.txt

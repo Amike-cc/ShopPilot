@@ -10,7 +10,7 @@ import {
   agentUiStateSchema
 } from '@shared/schemas/agent'
 import { redactAgentText } from '@shared/agent-privacy'
-import { writeAudit } from '../services/audit-logger'
+import { writeAudit, auditRequestId } from '../services/audit-logger'
 import { AgentObservationError, observeCurrentPage } from '../services/agent-observer'
 import { AgentPlanningError } from '../services/agent-planner'
 import {
@@ -24,8 +24,7 @@ import {
   validateAgentPlanForCurrentPage,
   validateAgentSoftwarePlan
 } from '../services/agent-service'
-import { getBrowserHostWindow } from '../browser/window-manager'
-import { isAppLocked } from '../services/security-manager'
+import { assertTrustedRenderer as assertTrustedIpc } from '../services/renderer-trust'
 
 const noArgumentsSchema = z.tuple([])
 
@@ -38,17 +37,8 @@ function failure(code: string, message: string, requestId: string): IPCResult {
 }
 
 function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
-  const host = getBrowserHostWindow()
-  if (!host || host.isDestroyed() || host.webContents !== event.sender) {
-    const error = new Error('Agent IPC 仅允许应用主窗口调用')
-    ;(error as any).code = 'AGENT_FORBIDDEN'
-    throw error
-  }
-  if (isAppLocked()) {
-    const error = new Error('应用已锁定，请先解锁')
-    ;(error as any).code = 'APP_LOCKED'
-    throw error
-  }
+  // 实现收敛到 services/renderer-trust.ts（原本与 agent-domain-handlers 各写一份，措辞/错误码不一致）。
+  assertTrustedIpc(event, { forbiddenCode: 'AGENT_FORBIDDEN', feature: 'Agent' })
 }
 
 function errorResponse(error: unknown, requestId: string, auditAction?: 'agent.observe' | 'agent.plan' | 'agent.plan.validate' | 'agent.ui.update' | 'agent.software.context' | 'agent.software.validate' | 'agent.software.execute', storeId?: string): IPCResult {
@@ -66,7 +56,7 @@ function errorResponse(error: unknown, requestId: string, auditAction?: 'agent.o
   } else if (error instanceof Error) {
     message = error.message || message
   }
-  if (auditAction) writeAudit(auditAction, 'failure', { storeId, requestId: code })
+  if (auditAction) writeAudit(auditAction, 'failure', { storeId, requestId: auditRequestId(requestId, code) })
   return failure(code, message, requestId)
 }
 
@@ -86,7 +76,7 @@ export function registerAgentHandlers(): void {
       assertTrustedRenderer(event)
       const input = agentUiStateSchema.parse(raw)
       const state = setAgentUiState(input)
-      writeAudit('agent.ui.update', 'success', { requestId: 'agent.ui.update' })
+      writeAudit('agent.ui.update', 'success', { requestId })
       return success(state, requestId)
     } catch (error) { return errorResponse(error, requestId, 'agent.ui.update') }
   })
@@ -99,7 +89,7 @@ export function registerAgentHandlers(): void {
       noArgumentsSchema.parse(args)
       const observation = await observeCurrentPage()
       storeId = observation.storeId
-      writeAudit('agent.observe', 'success', { storeId, requestId: 'agent.observe' })
+      writeAudit('agent.observe', 'success', { storeId, requestId })
       return success(observation, requestId)
     } catch (error) { return errorResponse(error, requestId, 'agent.observe', storeId) }
   })
@@ -114,7 +104,7 @@ export function registerAgentHandlers(): void {
       storeId = result.kind === 'task' ? result.plan.storeId
         : result.kind === 'software' ? (result.context.displayedStoreId || undefined)
         : undefined
-      writeAudit('agent.plan', 'success', { storeId, requestId: 'agent.plan' })
+      writeAudit('agent.plan', 'success', { storeId, requestId })
       return success(result, requestId)
     } catch (error) { return errorResponse(error, requestId, 'agent.plan', storeId) }
   })
@@ -126,7 +116,7 @@ export function registerAgentHandlers(): void {
       assertTrustedRenderer(event)
       const result = await followUpAgentJob(raw)
       storeId = result.kind === 'software' ? (result.context.displayedStoreId || undefined) : undefined
-      writeAudit('agent.plan', 'success', { storeId, requestId: 'agent.job.followUp' })
+      writeAudit('agent.plan', 'success', { storeId, requestId })
       return success(result, requestId)
     } catch (error) { return errorResponse(error, requestId, 'agent.plan', storeId) }
   })
@@ -144,7 +134,7 @@ export function registerAgentHandlers(): void {
         ;(error as any).code = 'AGENT_CONTEXT_CHANGED'
         throw error
       }
-      writeAudit('agent.plan.validate', 'success', { storeId, requestId: 'agent.plan.validate' })
+      writeAudit('agent.plan.validate', 'success', { storeId, requestId })
       return success(result, requestId)
     } catch (error) { return errorResponse(error, requestId, 'agent.plan.validate', storeId) }
   })
@@ -155,7 +145,7 @@ export function registerAgentHandlers(): void {
       assertTrustedRenderer(event)
       noArgumentsSchema.parse(args)
       const context = getAgentSoftwareContext()
-      writeAudit('agent.software.context', 'success', { requestId: 'agent.software.context' })
+      writeAudit('agent.software.context', 'success', { requestId })
       return success(context, requestId)
     } catch (error) { return errorResponse(error, requestId, 'agent.software.context') }
   })
@@ -169,7 +159,7 @@ export function registerAgentHandlers(): void {
       const firstAction = plan.steps[0]?.action as any
       storeId = firstAction?.storeId
       const result = validateAgentSoftwarePlan(plan)
-      writeAudit('agent.software.validate', 'success', { storeId, requestId: 'agent.software.validate' })
+      writeAudit('agent.software.validate', 'success', { storeId, requestId })
       return success(result, requestId)
     } catch (error) { return errorResponse(error, requestId, 'agent.software.validate', storeId) }
   })
@@ -185,10 +175,7 @@ export function registerAgentHandlers(): void {
       const result = await executeAgentSoftwarePlan(input)
       writeAudit('agent.software.execute', 'success', {
         storeId,
-        requestId: JSON.stringify({
-          actions: input.plan.steps.map(step => step.action.type),
-          confirmed: input.confirmed === true
-        })
+        requestId: auditRequestId(requestId, input.plan.steps.map(step => step.action.type).join('+'))
       })
       return success(result, requestId)
     } catch (error) { return errorResponse(error, requestId, 'agent.software.execute', storeId) }

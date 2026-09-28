@@ -24,6 +24,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { AGENT_TOOL_LABELS } from '@shared/agent-tool-labels'
 import type { AgentSoftwareActionType, AgentSoftwarePlan } from '@shared/schemas/agent'
 
 const props = defineProps<{ plan: AgentSoftwarePlan; busy?: boolean }>()
@@ -33,13 +34,13 @@ const locked = ref(false)
 watch(() => props.plan, value => { draft.value = copy(value) }, { deep: true })
 watch(() => draft.value.status, value => { locked.value = !['draft', 'validated'].includes(value) }, { immediate: true })
 function copy(plan: AgentSoftwarePlan): AgentSoftwarePlan { return JSON.parse(JSON.stringify(plan)) }
+/**
+ * 动作名来自共享的纯数据表（74 项全覆盖）：之前是 14 项的局部映射 + 强转，
+ * 新增工具在计划卡上会显示成 "undefined · 需确认"。
+ * 用 @shared/agent-tool-labels 而不是 @shared/agent-tools：后者会连带 node:crypto，浏览器构建过不去。
+ */
 function actionLabel(type: AgentSoftwareActionType): string {
-  return ({
-    listStores: '店铺列表', listTasks: '任务列表', listAgents: '子 Agent 列表', listJobs: 'Job 列表',
-    openStore: '打开店铺', displayStore: '切换店铺', activateTab: '切换标签页', closeStore: '关闭店铺',
-    createAgent: '创建子 Agent（需确认）', activateAgent: '激活子 Agent（需确认）', pauseAgent: '暂停子 Agent（需确认）',
-    resumeAgent: '恢复子 Agent（需确认）', retireAgent: '退休子 Agent（需确认）', openPanel: '打开面板'
-  } as Record<AgentSoftwareActionType, string>)[type]
+  return AGENT_TOOL_LABELS[type] || type
 }
 </script>
 

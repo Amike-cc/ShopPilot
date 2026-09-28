@@ -113,6 +113,8 @@ export const TEXT_LIMITS = {
 export const ERROR_MESSAGES = {
   DATABASE_NOT_INITIALIZED: 'Database not initialized. Call initDatabase() first.',
   BROWSER_CLOSED: 'BROWSER_CLOSED: 店铺浏览器或任务标签页已被关闭',
+  // 标签页还在，但页面句柄（DOM <webview> 的 guest）尚未注册完成 —— 与"已关闭"分开表明可重试
+  BROWSER_NOT_READY: 'BROWSER_NOT_READY: 标签页页面尚未就绪（店铺 webview 未注册或正在重载）',
   TASK_NOT_FOUND: 'TASK_NOT_FOUND',
   TASK_BAD_STATE_ACTIVE: 'TASK_BAD_STATE: 该任务已有未结束的运行，请先等待、恢复或取消当前运行后再启动',
   TASK_BAD_STATE_NO_STORE: 'TASK_BAD_STATE: 任务未绑定店铺，请先在任务中指定店铺或运行时选择',

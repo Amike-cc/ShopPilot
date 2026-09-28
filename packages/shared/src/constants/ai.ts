@@ -10,6 +10,12 @@
 export const DEFAULT_AI_ENDPOINT = 'https://api.deepseek.com/v1/chat/completions'
 export const DEFAULT_AI_MODEL = 'deepseek-chat'
 export const DEFAULT_AI_TIMEOUT_MS = 30000
+/** 生图接口必须显式配置，避免把文本 API 或文本 Key 当成图片服务使用。 */
+export const DEFAULT_AI_IMAGE_ENDPOINT = ''
+export const DEFAULT_AI_IMAGE_MODEL = ''
+/** 商品图片工作台的文本分析 API 也必须显式配置，不继承 Agent 文本配置。 */
+export const DEFAULT_AI_IMAGE_TEXT_ENDPOINT = ''
+export const DEFAULT_AI_IMAGE_TEXT_MODEL = ''
 
 /** 超时可配范围（毫秒） */
 export const AI_TIMEOUT_MIN_MS = 3000
@@ -20,6 +26,20 @@ export const AI_SETTING_KEYS = {
   endpoint: 'ai.endpoint',
   model: 'ai.model',
   timeoutMs: 'ai.timeoutMs'
+} as const
+
+/** 图片生成配置与文本配置完全分离；地址可以填基础地址或 /images/generations。 */
+export const AI_IMAGE_SETTING_KEYS = {
+  endpoint: 'ai.image.endpoint',
+  model: 'ai.image.model',
+  timeoutMs: 'ai.image.timeoutMs'
+} as const
+
+/** AI 生成商品图片页面的卖点分析/提示词整理专用文本 API 配置。 */
+export const AI_IMAGE_TEXT_SETTING_KEYS = {
+  endpoint: 'ai.imageText.endpoint',
+  model: 'ai.imageText.model',
+  timeoutMs: 'ai.imageText.timeoutMs'
 } as const
 
 /** 达人广场地址覆盖表（按平台名），留空表示用平台档案里的内置默认 */
@@ -88,4 +108,50 @@ export function modelsUrlFromChat(chatUrl: string): string | null {
   const m = /^(.*)\/chat\/completions$/i.exec(ep) || /^(.*)\/completions$/i.exec(ep)
   if (!m) return null
   return `${m[1]}/models`
+}
+
+/**
+ * 由 OpenAI 兼容的 chat/completions 地址推导图片生成地址。
+ * 这里只做明确的路径替换，不猜测供应商私有路径；无法推导时返回 null。
+ */
+export function imageUrlFromChat(chatUrl: string): string | null {
+  const raw = String(chatUrl ?? '').trim().replace(/\/+$/, '')
+  if (/(^|\/)images\/generations$/i.test(raw)) return raw
+  if (/completions/i.test(raw) && !/\/(chat\/)?completions$/i.test(raw)) return null
+  const ep = normalizeAiEndpoint(chatUrl)
+  if (!ep) return null
+  const m = /^(.*)\/chat\/completions$/i.exec(ep) || /^(.*)\/completions$/i.exec(ep)
+  if (!m) return null
+  return `${m[1]}/images/generations`
+}
+
+/**
+ * 规范化图片生成地址。图片服务可以单独填写完整的 `/images/generations`，
+ * 也可以填写 OpenAI 兼容基础地址或 `/chat/completions` 地址；空值保持空值，
+ * 不会回退到文本端点。
+ */
+export function normalizeImageEndpoint(raw: string): string {
+  const s = String(raw ?? '').trim().replace(/\s+/g, '').replace(/\/+$/, '')
+  if (!s) return ''
+  // 不把供应商的编辑端点或其它私有图片路径猜成生成地址。
+  if (/(^|\/)images\//i.test(s) && !/(^|\/)images\/generations$/i.test(s)) return ''
+  return imageUrlFromChat(s) || ''
+}
+
+/** 从独立图片端点推导只读 `/models` 地址。 */
+export function modelsUrlFromImageEndpoint(raw: string): string | null {
+  const endpoint = normalizeImageEndpoint(raw)
+  if (!endpoint) return null
+  return endpoint.replace(/\/images\/generations$/i, '/models')
+}
+
+/**
+ * 由 OpenAI 兼容的图片生成地址推导图片编辑地址。
+ * 只有明确的 `/images/generations` 路径才允许替换，避免把供应商私有路径
+ * 猜成一个看似可用但实际错误的上传端点。
+ */
+export function imageEditUrlFromGeneration(generationUrl: string): string | null {
+  const raw = String(generationUrl ?? '').trim().replace(/\/+$/, '')
+  if (!/(^|\/)images\/generations$/i.test(raw)) return null
+  return raw.replace(/\/images\/generations$/i, '/images/edits')
 }

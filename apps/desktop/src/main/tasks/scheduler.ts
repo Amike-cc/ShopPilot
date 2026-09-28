@@ -35,9 +35,10 @@ export function anchorNextFire(lastFiredAt: unknown, everyMs: number, now: numbe
 }
 
 function tick(): void {
-  let tasks
+  let tasks: TaskStore.ScheduleCandidate[]
   try {
-    tasks = TaskStore.listTasks()
+    // 轻量查询：每秒一拍，不能用 listTasks()（那是 1+3N 次查询，见 task-store 注释）
+    tasks = TaskStore.listScheduleCandidates()
   } catch {
     return // 数据库正在恢复等瞬态
   }
@@ -52,7 +53,7 @@ function tick(): void {
   for (const t of tasks) {
     if (t.status !== 'active' || !t.schedule?.everyMs) continue
     if (!t.storeScope) continue // 未绑定店铺的任务不自动触发
-    if (t.latestRun && ['queued', 'running', 'waiting_confirmation', 'paused'].includes(t.latestRun.status)) {
+    if (t.latestRunStatus && ['queued', 'running', 'waiting_confirmation', 'paused'].includes(t.latestRunStatus)) {
       nextFireAt.set(t.id, now + t.schedule.everyMs)
       continue
     }

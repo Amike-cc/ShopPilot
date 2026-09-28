@@ -52,8 +52,8 @@ async function main() {
   const info = await wx.ev(`(function(){var qr=document.querySelector("img[src*=qrcode],img[src*=qr],canvas");return JSON.stringify({url:location.href.slice(0,60),hasQR:!!qr,text:String(document.body?document.body.innerText:"").replace(/\\s+/g," ").slice(0,80)})})()`)
   console.log('login page:', info)
   const shot = await wx.send('Page.captureScreenshot', { format: 'png' })
-  fs.writeFileSync('wx-invite-test/wx-login-qr.png', Buffer.from(shot.data, 'base64'))
-  console.log('saved wx-invite-test/wx-login-qr.png')
+  fs.writeFileSync('wx-invite-test/evidence/wx-login-qr.png', Buffer.from(shot.data, 'base64'))
+  console.log('saved wx-invite-test/evidence/wx-login-qr.png')
   wx.close()
   process.exit(0)
 }

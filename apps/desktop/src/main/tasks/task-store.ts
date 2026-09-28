@@ -13,8 +13,10 @@ import type {
   TaskStepResultView, TaskResults, StepResultKind
 } from '@shared/schemas/task'
 // 步骤白名单 schema 独立成 task-step-schemas.ts（不含 DB/Electron 依赖，单测可直接导入）
-export { stepInputSchemas, NON_RESUMABLE_TYPES, DEFAULT_STEP_TIMEOUT, taskCreateSchema } from './task-step-schemas'
-import { stepInputSchemas, taskCreateSchema, DEFAULT_STEP_TIMEOUT } from './task-step-schemas'
+export { stepInputSchemas, NON_RESUMABLE_TYPES, normalizeStepRetryLimit, DEFAULT_STEP_TIMEOUT, taskCreateSchema } from './task-step-schemas'
+import { stepInputSchemas, taskCreateSchema, DEFAULT_STEP_TIMEOUT, normalizeStepRetryLimit } from './task-step-schemas'
+// 更新定义时"运行中能否改步骤""这次 UPDATE 写哪几列"的纯规则（同上，为可单测而独立）
+import { ACTIVE_RUN_STATUSES, assertStepsEditable, buildTaskUpdateSet } from './task-update-rules'
 
 function newId(prefix: string): string { return `${prefix}_${randomBytes(12).toString('hex')}` }
 
@@ -83,6 +85,9 @@ function validateStepInput(s: { type: string; input?: unknown; timeoutMs?: numbe
   }
   const input = out.data as any
   const timeoutMs = s.timeoutMs ?? (DEFAULT_STEP_TIMEOUT[s.type] ?? 15000)
+  // 重试闸：非幂等步骤（click*/loop/门禁/切标签）一律 0——重试等于重复提交。
+  // 归一化在落库侧完成，引擎运行侧还有一道同源判定（挡修复前已落库的旧行）。
+  const retryLimit = normalizeStepRetryLimit(s.type, s.retryLimit)
   if (s.type === 'loop' && Array.isArray(input?.steps)) {
     input.steps = input.steps.map((child: any, k: number) => validateStepInput(child, `${label}.${k + 1}`))
     // onCode 的恢复步骤同样是"会被执行的步骤"，必须一起过白名单（否则循环恢复里塞未登记类型就绕过了校验）
@@ -95,7 +100,7 @@ function validateStepInput(s: { type: string; input?: unknown; timeoutMs?: numbe
       }))
     }
   }
-  return { type: s.type, input, timeoutMs, ...(s.retryLimit != null ? { retryLimit: s.retryLimit } : {}) }
+  return { type: s.type, input, timeoutMs, ...(retryLimit > 0 ? { retryLimit } : {}) }
 }
 
 export function createTask(input: TaskCreateInput): TaskView {
@@ -124,6 +129,87 @@ export function createTask(input: TaskCreateInput): TaskView {
   return getTask(taskId)!
 }
 
+/**
+ * 任务定义**部分更新**（task:update）。
+ *
+ * 校验与 createTask **同源**，没有第二份规则：
+ *   · steps 的结构先走 taskCreateSchema.shape.steps（与 createTask 用的同一个 schema）；
+ *   · 每个步骤再走同一个 validateStepInput（白名单 + loop/onCode 递归 + 默认超时）；
+ *   · name / storeScope / schedule 也复用 taskCreateSchema 的同名字段 schema。
+ * 未传的字段保留原值；显式传 null 表示清空 storeScope / schedule。
+ *
+ * 运行中可否改字段的策略：**只有 steps 被拒**。名称 / 店铺范围 / 计划都不参与当前这一轮执行——
+ * 本次运行在入队时就已快照了 taskName 与 storeId，计划只影响下一次到点触发；
+ * 而 steps 被 step_index 引用（current_step、task_step_results、恢复时跳过已成功的下标），
+ * 中途替换会让"哪一步已执行"对不上，副作用步骤可能被跳过或重复执行。
+ */
+export interface TaskUpdateInput {
+  taskId: string
+  name?: string
+  storeScope?: string | null
+  /** 与 createTask 相同的步骤形状（比需求里给的字段多一个可选 retryLimit 原样透传，语义不变） */
+  steps?: TaskCreateInput['steps']
+  schedule?: unknown
+}
+
+/** 该任务是否存在未结束的运行（queued/running/waiting_confirmation/paused），有则返回该运行记录。 */
+function findActiveRun(db: any, taskId: string): any | null {
+  const marks = ACTIVE_RUN_STATUSES.map(() => '?').join(',')
+  const row = db.prepare(
+    `SELECT * FROM task_runs WHERE task_id = ? AND status IN (${marks}) ORDER BY rowid DESC LIMIT 1`
+  ).get(taskId, ...ACTIVE_RUN_STATUSES) as any
+  return row ?? null
+}
+
+export function updateTask(input: TaskUpdateInput): TaskView {
+  const db = getDatabase()
+  const exists = db.prepare('SELECT id FROM tasks WHERE id = ?').get(input.taskId) as any
+  if (!exists) throw new Error('TASK_NOT_FOUND')
+
+  // 只有"改步骤"受运行态限制；其余字段在运行中照旧可改（见上面接口注释）
+  if (input.steps !== undefined) assertStepsEditable(findActiveRun(db, input.taskId)?.status ?? null)
+
+  // 全部校验都在写库之前做完：非法输入不会留下半更新状态
+  const changed: string[] = []
+  let name: string | undefined
+  let storeScope: string | null | undefined
+  let scheduleJson: string | null | undefined
+  if (input.name !== undefined) { name = taskCreateSchema.shape.name.parse(input.name); changed.push('name') }
+  if (input.storeScope !== undefined) {
+    storeScope = taskCreateSchema.shape.storeScope.parse(input.storeScope); changed.push('storeScope')
+  }
+  if (input.schedule !== undefined) {
+    const schedule = taskCreateSchema.shape.schedule.parse(input.schedule)
+    scheduleJson = schedule ? JSON.stringify(schedule) : null
+    changed.push('schedule')
+  }
+  // 与 createTask 完全同一条路径：结构 schema → 逐个 validateStepInput（白名单不放宽）
+  const steps = input.steps === undefined
+    ? undefined
+    : taskCreateSchema.shape.steps.parse(input.steps).map((s, i) => validateStepInput(s, String(i + 1)))
+  if (steps) changed.push('steps')
+
+  const now = Date.now()
+  db.transaction(() => {
+    const { sets, values } = buildTaskUpdateSet({ name, storeScope, scheduleJson, updatedAt: now })
+    db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values, input.taskId)
+    if (steps) {
+      // 整体替换（序号从 0 重排）；此处任务没有未结束的运行，不存在下标错位
+      db.prepare('DELETE FROM task_steps WHERE task_id = ?').run(input.taskId)
+      const insStep = db.prepare(
+        'INSERT INTO task_steps (id, task_id, step_index, type, input_json, timeout_ms, retry_limit) VALUES (?,?,?,?,?,?,?)'
+      )
+      steps.forEach((s, i) => {
+        insStep.run(newId('tstep'), input.taskId, i, s.type, JSON.stringify(s.input),
+          s.timeoutMs, s.retryLimit ?? 0)
+      })
+    }
+  })()
+
+  writeAudit('task.update', 'success', { requestId: JSON.stringify({ taskId: input.taskId, fields: changed }) })
+  return getTask(input.taskId)!
+}
+
 export function getTask(taskId: string): TaskView | null {
   const db = getDatabase()
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as any
@@ -142,6 +228,40 @@ export function getTask(taskId: string): TaskView | null {
 export function listTasks(): TaskView[] {
   const db = getDatabase()
   return (db.prepare('SELECT id FROM tasks ORDER BY created_at DESC').all() as any[]).map(r => getTask(r.id)!).filter(Boolean)
+}
+
+/** 调度器专用的轻量列表（**一条 SQL**，只取决定"该不该触发"的字段）。 */
+export interface ScheduleCandidate {
+  id: string
+  status: string
+  storeScope: string | null
+  schedule: { everyMs?: number } | null
+  lastFiredAt: number | null
+  latestRunStatus: string | null
+}
+
+/**
+ * 为什么不能直接用 `listTasks()`：后者是 1 + 3N 次查询（每个任务再查 steps 与最近一次 run），
+ * 而调度器**每秒**都要判一次——20 个任务就是 61 次同步 SQLite 查询/秒、7×24 不停，
+ * 纯属白烧 CPU/IO（2026-09-28 审查实测）。这里一次查询拿齐全部判据：
+ * 相关子查询按 (task_id, rowid DESC) 取最后一行，走 idx_task_runs_task_id。
+ */
+export function listScheduleCandidates(): ScheduleCandidate[] {
+  const rows = getDatabase().prepare(`
+    SELECT t.id AS id, t.status AS status, t.store_scope AS store_scope, t.schedule_json AS schedule_json,
+           t.last_fired_at AS last_fired_at,
+           (SELECT r.status FROM task_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS latest_status
+    FROM tasks t
+    ORDER BY t.created_at DESC
+  `).all() as any[]
+  return rows.map(r => ({
+    id: r.id,
+    status: r.status,
+    storeScope: r.store_scope ?? null,
+    schedule: r.schedule_json ? (() => { try { return JSON.parse(r.schedule_json) } catch { return null } })() : null,
+    lastFiredAt: r.last_fired_at ?? null,
+    latestRunStatus: r.latest_status ?? null
+  }))
 }
 
 export function getSteps(taskId: string): TaskStepDef[] {

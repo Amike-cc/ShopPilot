@@ -49,7 +49,7 @@ flowchart LR
     MAIN --> SEC[SecurityManager]
     MAIN --> DB[(SQLite)]
     MAIN --> FS[Profile/Download/Backup Files]
-    BROWSER --> CHROMIUM[Chromium WebContentsView]
+    BROWSER --> CHROMIUM[Chromium guest<br/>主窗口 DOM webview]
     TASK --> BROWSER
     TASK --> ADAPTER[Platform Adapter]
     NET --> BROWSER
@@ -125,7 +125,7 @@ shopilot/
 负责所有高权限和可持久化操作：
 
 - 创建和销毁店铺浏览器会话。
-- 管理 BrowserWindow、WebContentsView 和标签页。
+- 管理 BrowserWindow、店铺 guest（DOM `<webview>` 注册进来的 WebContents）和标签页。
 - 读取/写入 SQLite。
 - 配置代理、下载、备份、恢复和日志。
 - 校验 IPC 请求，执行权限检查和人工确认门禁。
@@ -144,6 +144,13 @@ shopilot/
 - 代理必须在首次导航前设置。
 - 店铺关闭时保存标签页 URL、标题、固定状态和排序。
 - Browser 崩溃后只恢复当前店铺，不影响其他店铺。
+
+**页面承载方式（2026-09-28 修订）**：店铺页面由**主窗口 Renderer DOM 里的 Electron `<webview>`** 承载，每个 store/tab 一个元素，`partition="persist:store_<storeId>"`。主进程只保存**已注册的** guest WebContents（注册入口 `browser:registerWebview`：校验 sender 是主窗口、guest 宿主是主窗口、session 与店铺分区同实例、无重复占用），不再把原生视图挂到 `BrowserWindow.contentView`。由此：
+
+- HTML 弹层/抽屉/菜单/拾取遮罩靠 CSS 层级就能盖住店铺页面，不再需要"摘挂原生视图"来避让；
+- 页面尺寸、圆角、`overflow` 由 DOM 约束，切换标签/店铺只切元素可见性（用 opacity 隐藏而不是 `display:none`/`visibility:hidden`——后者会让 guest 自认不可见，平台页面（微应用等）会停止渲染）；
+- guest 的 `will-attach-webview` 强制 `nodeIntegration:false`/`contextIsolation:true`/`sandbox:true`/`webviewTag:false` 并剥掉 Renderer 传来的 preload，远程店铺页面拿不到主窗口业务 bridge；
+- 标签页存在但 guest 尚未注册时，页面工具按 `BROWSER_NOT_READY` 等待或如实失败，与 `BROWSER_CLOSED`（确实关闭）分开。
 
 环境配置采用“稳定、可追踪、一店铺一配置”的策略。MVP 只开放在目标 Chromium 版本上经过验证的字段：User-Agent、语言、时区、屏幕尺寸、颜色深度、硬件并发数和 WebGL 展示信息。配置保存时生成版本号和摘要，启动时校验实际值；无法验证的字段显示为“未验证”，不在界面上伪造健康度。
 
@@ -558,7 +565,7 @@ backup:completed
 
 1. Renderer 发送 storeId。
 2. Main 检查应用未锁定，获取店铺 session。
-3. 激活对应 BrowserWindow/WebContentsView。
+3. 激活对应店铺的标签页（显示与否由渲染层切换该 webview 的可见性）。
 4. 加载该店铺保存的标签页。
 5. 右侧面板刷新代理、Cookie 和配置状态。
 6. 更新 last_active_at。
@@ -709,7 +716,7 @@ failed -> running       # 从失败步骤恢复，跳过已完成步骤
 ### M0：技术验证
 
 - Electron 多 session partition。
-- 多 WebContentsView 标签页。
+- 多标签页：每店每标签一个 DOM `<webview>`（各自独立 persist 分区）。
 - per-session proxy 设置，含 407 认证注入（`login` 事件 + safeStorage）与 HTTPS 型代理协议支持验证。
 - CDP/注入方式覆盖时区、WebGL、navigator 字段，并校验 UA 与 UA-CH 成对一致；失败字段退回“未验证”。
 - better-sqlite3 针对目标 Electron ABI 的重建与冒烟。
@@ -819,7 +826,7 @@ interface PlatformAdapter {
 - `WorkspaceHeader`：模块导航、当前店铺、窗口操作。
 - `BrowserToolbar`：前进、后退、刷新、地址栏、收藏和下载。
 - `BrowserTabs`：标签创建、关闭、固定、排序和加载状态。
-- `BrowserViewport`：WebContentsView 容器和页面错误卡片。
+- `BrowserViewport`：DOM `<webview>` 宿主容器、页面错误卡片与未注册诊断。
 - `EnvironmentPanel`：环境、代理、Cookie、健康度和操作按钮。
 - `StoreOverview`：概览指标卡、异常汇总与最近活动时间线。
 - `TaskConfirmationBar`：高风险步骤的人工作确认。

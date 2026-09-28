@@ -27,8 +27,8 @@ async function main() {
   })
   console.log(info.result?.value)
   const shot = await send('Page.captureScreenshot', { format: 'png' })
-  fs.writeFileSync('wx-invite-test/wx-login-qr.png', Buffer.from(shot.data, 'base64'))
-  console.log('saved wx-invite-test/wx-login-qr.png')
+  fs.writeFileSync('wx-invite-test/evidence/wx-login-qr.png', Buffer.from(shot.data, 'base64'))
+  console.log('saved wx-invite-test/evidence/wx-login-qr.png')
   ws.close()
   process.exit(0)
 }

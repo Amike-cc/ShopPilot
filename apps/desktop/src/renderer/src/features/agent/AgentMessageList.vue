@@ -10,6 +10,7 @@
       <div class="message-bubble">
         <div class="message-role">{{ message.role === 'user' ? '你' : message.thought ? '思考' : '智能体' }}</div>
         <div class="message-text">{{ message.text }}</div>
+        <div v-if="message.meta" class="message-meta">{{ message.meta }}</div>
       </div>
     </div>
     <div v-if="busy" class="agent-thinking"><span></span><span></span><span></span> {{ statusLabel }}</div>
@@ -17,7 +18,7 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{ messages: Array<{ id: string; role: 'user' | 'assistant'; text: string; at: number; thought?: boolean }>; busy: boolean; statusLabel: string }>()
+defineProps<{ messages: Array<{ id: string; role: 'user' | 'assistant'; text: string; at: number; thought?: boolean; meta?: string }>; busy: boolean; statusLabel: string }>()
 </script>
 
 <style scoped>
@@ -34,6 +35,7 @@ defineProps<{ messages: Array<{ id: string; role: 'user' | 'assistant'; text: st
 .user .message-bubble { border-radius:12px 4px 12px 12px;background:rgba(82,99,205,.16); }
 .message-role { margin-bottom:4px;color:var(--color-text-secondary);font-size:10px;font-weight:700; }
 .message-text { white-space:pre-wrap;color:var(--color-text-primary);font-size:12px;line-height:1.6; }
+.message-meta { margin-top:5px;color:var(--color-text-muted);font-size:9px;letter-spacing:.02em; }
 .agent-thinking { display:flex;align-items:center;gap:4px;color:var(--color-text-secondary);font-size:11px;padding:6px 36px; }
 .agent-thinking span { width:4px;height:4px;border-radius:50%;background:#9688ff;animation:dot 1s infinite alternate; }
 .agent-thinking span:nth-child(2) { animation-delay:.2s }.agent-thinking span:nth-child(3) { animation-delay:.4s }

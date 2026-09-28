@@ -29,8 +29,8 @@ if (login) {
   const v = await snd('Runtime.evaluate', { expression: 'JSON.stringify({w:innerWidth,h:innerHeight,qr:!!document.querySelector("img[src*=qrcode],canvas")})', returnByValue: true })
   console.log('登录页:', v.result?.value)
   const shot = await snd('Page.captureScreenshot', { format: 'png' })
-  fs.writeFileSync('wx-invite-test/wx-login-front.png', Buffer.from(shot.data, 'base64'))
-  console.log('截图已存 wx-invite-test/wx-login-front.png')
+  fs.writeFileSync('wx-invite-test/evidence/wx-login-front.png', Buffer.from(shot.data, 'base64'))
+  console.log('截图已存 wx-invite-test/evidence/wx-login-front.png')
   w2.close()
 }
 setTimeout(() => process.exit(0), 300)

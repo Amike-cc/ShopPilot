@@ -40,7 +40,7 @@ for (const p of list.filter(x => x.type === 'page' && x.url.startsWith('https://
   })
   const v = await snd('Runtime.evaluate', { expression: 'JSON.stringify({w:innerWidth,h:innerHeight,txt:String(document.body?document.body.innerText:"").replace(/\\s+/g," ").slice(0,40)})', returnByValue: true })
   const shot = await snd('Page.captureScreenshot', { format: 'png' })
-  fs.writeFileSync('wx-invite-test/wx-login-front.png', Buffer.from(shot.data, 'base64'))
+  fs.writeFileSync('wx-invite-test/evidence/wx-login-front.png', Buffer.from(shot.data, 'base64'))
   console.log('当前前台页:', p.url.slice(0, 60), v.result?.value)
   w2.close()
   break

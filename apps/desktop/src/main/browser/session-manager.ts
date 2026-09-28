@@ -7,11 +7,11 @@ import { app, session, Session } from 'electron'
 import { getDatabase } from '../db/database'
 import { join, parse } from 'path'
 import { mkdirSync, existsSync } from 'fs'
-import { recordDownload, updateDownloadState } from './download-manager'
+import { recordDownload, updateDownloadState, emitDownloadCreated, emitDownloadProgress } from './download-manager'
 import { getProxyCredentials } from '../services/credential-store'
 import { writeAudit } from '../services/audit-logger'
 import { logMain } from '../services/logger'
-import { clearStoreSessionSnapshot, trackStoreSession, untrackStoreSession, snapshotStoreSession } from '../services/session-persistence'
+import { trackStoreSession, untrackStoreSession, snapshotStoreSession } from '../services/session-persistence'
 import { parseUaClientHints } from './fingerprint-injector'
 
 /**
@@ -44,11 +44,96 @@ function sanitizeForFilename(name: string): string {
   return name.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40)
 }
 
+/** 唯一放行的权限：剪贴板**写入**（页面的"复制"按钮要用）。读取一律拒绝——
+ *  剪贴板里可能是用户刚复制的密码/验证码/订单信息，页面没有理由能读到它。
+ *  注意 Electron 30 的枚举里写入叫 clipboard-sanitized-write（没有 clipboard-write），
+ *  两个名字都列上，避免再踩"写死的名字永远匹配不上"。 */
+const ALLOWED_PERMISSIONS = ['clipboard-sanitized-write', 'clipboard-write']
+
+/**
+ * 权限收口（§27 默认拒绝）。**request 与 check 两条路径都要实现**。
+ *
+ * 为什么必须成对：Electron 文档明确写着"must also implement setPermissionCheckHandler to get
+ * complete permission handling. Most web APIs do a permission check and then make a permission
+ * request if the check is denied"——只实现 request 时，走 check 路径的 API（权限查询、
+ * 部分媒体/全屏/存储访问判定）不受"默认拒绝"约束。2026-09-28 审查确认：全仓只有
+ * request handler，主窗口与密码窗所在的默认 session 更是一个都没有。
+ *
+ * 设备权限（HID/串口/USB）与屏幕共享本项目没有使用场景，直接拒绝。
+ * 屏幕共享**故意不设 handler**：Electron 未设置 handler 时不授予（安全默认），
+ * 而设一个写错的 handler 反而可能放开——宁可留空。
+ *
+ * 整体 try/catch：这些 API 若在某个 Electron 版本上缺失/改名，绝不能让店铺 session 建立失败。
+ */
+function applyPermissionHandlers(sess: Session, label: string): void {
+  try {
+    sess.setPermissionRequestHandler((webContents, permission, callback) => {
+      const allowed = ALLOWED_PERMISSIONS.includes(String(permission))
+      let origin = 'unknown'
+      try { origin = new URL(webContents.getURL()).origin } catch { /* about:blank 时按 unknown 记 */ }
+      logMain('info', `[permission] ${allowed ? 'allow' : 'deny'} permission=${permission} origin=${origin} ${label}`)
+      callback(allowed)
+    })
+  } catch (e: any) {
+    logMain('warn', `[permission] 安装 request handler 失败 ${label}: ${String(e?.message || e)}`)
+  }
+  try {
+    sess.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.includes(String(permission)))
+  } catch (e: any) {
+    logMain('warn', `[permission] 安装 check handler 失败 ${label}: ${String(e?.message || e)}`)
+  }
+  try {
+    sess.setDevicePermissionHandler(() => false)
+  } catch (e: any) {
+    logMain('warn', `[permission] 安装 device handler 失败 ${label}: ${String(e?.message || e)}`)
+  }
+}
+
+/**
+ * 给**默认 session**（主窗口 + 密码/确认对话框）补上同一套权限收口。
+ * 在 app ready、创建任何窗口之前调用（index.ts 的 initialize）。
+ */
+export function applyDefaultSessionPermissions(): void {
+  try {
+    applyPermissionHandlers(session.defaultSession, 'default-session')
+  } catch (e: any) {
+    logMain('warn', `[permission] 默认 session 权限收口失败：${String(e?.message || e)}`)
+  }
+}
+
+/**
+ * 下载文件名净化：平台给的名字（Content-Disposition）不可信。
+ *   · 只取 basename（挡 `..\..\x` 这类目录穿越）；
+ *   · 去掉路径分隔符与 Windows 非法字符 `\ / : * ? " < > |`、控制字符；
+ *   · 挡 Windows 保留设备名（CON/NUL/COM1…，含带扩展名的形式）；
+ *   · 去掉结尾的点与空格（Windows 上会被静默截断，导致库里记的路径与真实文件不一致）。
+ */
+export function safeDownloadName(raw: unknown): string {
+  const base = String(raw || '').split(/[\\/]/).pop() || ''
+  // 按码点过滤：控制字符（<0x20、0x7f）与 Windows 非法字符 `<>:"|?*`。
+  // 用码点判断而不是控制字符正则，避免 `no-control-regex`
+  const stripped = Array.from(base)
+    .filter(ch => {
+      const code = ch.charCodeAt(0)
+      if (code < 0x20 || code === 0x7f) return false
+      return !'<>:"|?*'.includes(ch)
+    })
+    .join('')
+  let name = stripped.replace(/\s+/g, ' ').trim().replace(/[. ]+$/g, '')
+  const stem = name.replace(/\.[^.]*$/, '').toUpperCase()
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(stem)) name = `_${name}`
+  if (!name) name = 'download'
+  return name.slice(0, 120)
+}
+
 /**
  * 活动的 session 实例缓存
  * Key: storeId, Value: Session
  */
 const activeSessions = new Map<string, Session>()
+
+/** 每个店铺 session 的初始配置完成状态；首次导航必须等代理配置完成。 */
+const sessionReady = new Map<string, Promise<void>>()
 
 /** 每店铺最近一次代理凭据注入事实（407 login → safeStorage 取出 → callback） */
 const lastProxyAuth = new Map<string, { at: number; username: string; proxyId: string }>()
@@ -81,30 +166,55 @@ export function getStoreSession(storeId: string): Session {
   const partition = getStorePartition(storeId)
   const storeSession = session.fromPartition(partition, { cache: true })
   
-  // 配置 session
-  configureSession(storeSession, storeId)
+  // 配置 session。代理配置是异步的，保存 Promise 供首次导航/重配置等待。
+  const ready = configureSession(storeSession, storeId)
+  sessionReady.set(storeId, ready)
+  // 没有需要等待的调用方时也要标记 rejection 已被消费，避免 Node 未处理拒绝。
+  void ready.catch(() => {})
   
   // 缓存
   activeSessions.set(storeId, storeSession)
   // 纳入定期会话快照（会话级 Cookie 不落盘，靠这份快照跨重启保住登录态）
   trackStoreSession(storeId)
   // Cookie 一变就快照（防抖 3s）：进程被强杀时也能留住最近的登录态，
-  // 否则只能靠 60s 定时，最多丢一分钟内的登录动作
+  // 否则只能靠 60s 定时，最多丢一分钟内的登录动作。
+  //
+  // **每个 session 只装一次**：`session.fromPartition` 是 Electron 的单例，但
+  // `closeStoreSession` 只删 Map 条目、销毁不了这个 Session 对象——于是"删店→恢复→再开店"
+  // 每绕一圈都会在**同一个** Session 上再 `on('changed')` 一次。N 份监听 = 一次 Cookie
+  // 变更触发 N 次同步加密+写盘（2026-09-28 审查确认的写放大/监听器泄漏）。
   try {
-    let snapTimer: NodeJS.Timeout | null = null
-    storeSession.cookies.on('changed', () => {
-      if (snapTimer) clearTimeout(snapTimer)
-      snapTimer = setTimeout(() => { void snapshotStoreSession(storeId).catch(() => {}) }, 3000)
-    })
+    if (!(storeSession as any).__cookieSnapHooked) {
+      ;(storeSession as any).__cookieSnapHooked = true
+      let snapTimer: NodeJS.Timeout | null = null
+      storeSession.cookies.on('changed', () => {
+        if (snapTimer) clearTimeout(snapTimer)
+        snapTimer = setTimeout(() => {
+          // 防抖期间店铺可能已被彻底删除/会话已关闭：绝不能再快照，否则 getStoreSession
+          // 会为已删店铺重建分区（重新登记进 activeSessions/trackedStores），已清掉的
+          // 登录凭据文件可能被写回磁盘。比较 session 实例身份同时挡住"已关闭"与"已重建"。
+          if (activeSessions.get(storeId) !== storeSession) return
+          void snapshotStoreSession(storeId).catch(() => {})
+        }, 3000)
+      })
+    }
   } catch { /* 监听装不上不影响主流程（还有定时与退出前快照兜底） */ }
   
   return storeSession
 }
 
+/** 等待店铺 session 的初始配置（尤其是代理）完成。 */
+export async function waitForStoreSessionReady(storeId: string): Promise<void> {
+  // ShopSessionManager 可能已经先取得了同一店铺的 Session；复用现有配置 Promise，
+  // 避免 WebContentsView 创建时重复注册 webRequest / download 监听器。
+  if (!activeSessions.has(storeId) || !sessionReady.has(storeId)) getStoreSession(storeId)
+  await sessionReady.get(storeId)
+}
+
 /**
  * 配置 session 的基本设置
  */
-function configureSession(sess: Session, storeId: string): void {
+function configureSession(sess: Session, storeId: string): Promise<void> {
   // 设置 User-Agent - 从 browser_profiles 读取
   const db = getDatabase()
   const profile = db.prepare(`
@@ -130,27 +240,21 @@ function configureSession(sess: Session, storeId: string): void {
   }
   
   // 设置代理（如果有绑定）- §4.3 代理必须在首次导航前设置
-  configureProxy(sess, storeId)
+  const proxyReady = configureProxy(sess, storeId)
 
   // 代理 407 认证注入 - §4.3：proxyRules 不内嵌凭据，login 事件运行时注入
   // Electron 30 login details = { url, isMainFrame, firstAuthAttempt, responseHeaders }，无 isProxy；
   // 统一在 app 级单通道处理（session 级双注册会与 app 竞争，打断 Chromium 认证重放）
   ensureGlobalLoginHandler()
   
-  // 配置权限处理 - §27 默认拒绝
-  sess.setPermissionRequestHandler((webContents, permission, callback) => {
-    // 只放行剪贴板**写入**（页面"复制"按钮需要）；剪贴板读取一律拒绝——
-    // 剪贴板里可能是用户刚复制的密码/验证码/订单信息，页面没有理由能读到它。
-    // 注意：Electron 30 的权限枚举里写入叫 clipboard-sanitized-write（无 clipboard-write 这个名字），
-    // 原先写死的 'clipboard-write' 永远匹配不上 —— 等于写入也被拒，名字两个都列上避免再踩。
-    const allowed = ['clipboard-sanitized-write', 'clipboard-write'].includes(String(permission))
-    let origin = 'unknown'
-    try { origin = new URL(webContents.getURL()).origin } catch { /* 页面还没 URL（about:blank）时按 unknown 记 */ }
-    logMain('info', `[permission] ${allowed ? 'allow' : 'deny'} permission=${permission} origin=${origin} store=${storeId}`)
-    callback(allowed)
-  })
+  // 配置权限处理 - §27 默认拒绝（request + check 两条路径都要覆盖，见函数内注释）
+  applyPermissionHandlers(sess, `store=${storeId}`)
   // 配置下载处理 - §5.9 下载按店铺归档
-  sess.on('will-download', (_event, item, webContents) => {
+  // 同 Cookie 监听：Session 是单例，重复进入这里会在同一个对象上叠加监听 →
+  // 一次下载写 N 条 downloads 记录 + N 次 mkdirSync（2026-09-28 审查确认）。
+  if (!(sess as any).__downloadHooked) {
+    ;(sess as any).__downloadHooked = true
+    sess.on('will-download', (_event, item, webContents) => {
     try {
       const db = getDatabase()
       const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(storeId) as { name: string } | undefined
@@ -160,7 +264,11 @@ function configureSession(sess: Session, storeId: string): void {
       mkdirSync(downloadDir, { recursive: true })
 
       // 文件名加店铺前缀，重名追加序号 - §5.9
-      const original = item.getFilename() || 'download'
+      //
+      // 先做 basename + 字符清洗：`getFilename()` 是平台（Content-Disposition）给的名字，
+      // 上游没有"已清洗"的承诺，带 `..\` 或非法字符就会写出下载目录之外或落盘失败。
+      // 同时挡掉 Windows 保留名（CON/NUL/COM1…）与尾随点/空格。
+      const original = safeDownloadName(item.getFilename())
       let prefixed = original.startsWith(storeName + '_') ? original : `${storeName}_${original}`
       let target = join(downloadDir, prefixed)
       let seq = 1
@@ -175,24 +283,44 @@ function configureSession(sess: Session, storeId: string): void {
 
       const pageUrl = (() => { try { return webContents.getURL() } catch { return undefined } })()
       const downloadId = recordDownload(storeId, prefixed, target, pageUrl)
+      // 新下载要让界面立刻看到（此前 BROWSER_DOWNLOAD_CREATED 两侧皆空＝死事件）
+      emitDownloadCreated({ id: downloadId, storeId, fileName: prefixed, filePath: target })
 
       item.on('updated', (_e2, state) => {
-        if (state === 'interrupted') updateDownloadState(downloadId, 'interrupted')
+        if (state !== 'progressing') updateDownloadState(downloadId, 'interrupted')
+        emitDownloadProgress({
+          id: downloadId, storeId,
+          state: state === 'progressing' ? 'progressing' : 'interrupted',
+          receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes()
+        })
       })
 
       item.on('done', (_e2, state) => {
-        if (state === 'completed') {
+        const finalState = state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted'
+        if (finalState === 'completed') {
           updateDownloadState(downloadId, 'completed', item.getReceivedBytes())
-        } else if (state === 'cancelled') {
-          updateDownloadState(downloadId, 'cancelled')
         } else {
-          updateDownloadState(downloadId, 'interrupted')
+          updateDownloadState(downloadId, finalState)
+        }
+        // 完成/中断/取消都要推：面板据此更新，失败也才有用户可见的终点
+        emitDownloadProgress({
+          id: downloadId, storeId, state: finalState,
+          receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes()
+        })
+        if (finalState !== 'completed') {
+          logMain('warn', `[download] ${finalState} store=${storeId} file=${prefixed}`)
         }
       })
     } catch (err) {
+      // 目录创建/落盘准备失败：**不要**让下载悄悄落到 Chromium 默认目录而应用无记录。
+      // 取消它并留日志，用户至少能在下载面板看到一条 cancelled。
       logMain('error', `[download] will-download 处理失败 store=${storeId}: ${String(err)}`)
+      try { item.cancel() } catch { /* 已结束 */ }
     }
-  })
+    })
+  }
+
+  return proxyReady
 }
 
 /**
@@ -206,14 +334,21 @@ interface LoginDetails {
   responseHeaders?: Record<string, string[]>
 }
 
-/** 最近已处理的挑战 URL → 时间戳（session 级 + app 级双通道去重） */
+/**
+ * 最近已处理的挑战 → 时间戳（session 级 + app 级双通道去重）。
+ *
+ * 键必须带 storeId：仅按 URL 去重时，**两家店绑同一代理、同时导航同一 URL**
+ * （多店并发自动化正是主场景）会让后到的那家被判定"重复"而取消认证 → 该请求 407 失败。
+ * 症状是"某店页面偶发打不开、重试就好"，极难排查（2026-09-28 审查确认）。
+ */
 const recentChallenges = new Map<string, number>()
-function isDuplicateChallenge(url: string | undefined): boolean {
+function isDuplicateChallenge(storeId: string, url: string | undefined): boolean {
   if (!url) return false
+  const key = `${storeId}\u0000${url}`
   const now = Date.now()
-  const last = recentChallenges.get(url)
+  const last = recentChallenges.get(key)
   if (last && now - last < 1000) return true
-  recentChallenges.set(url, now)
+  recentChallenges.set(key, now)
   if (recentChallenges.size > 200) {
     for (const [k, v] of recentChallenges) if (now - v > 5000) recentChallenges.delete(k)
   }
@@ -292,7 +427,7 @@ function ensureGlobalLoginHandler(): void {
     const loginDetails: LoginDetails = { ...details, isProxy: authInfo?.isProxy === true || details?.isProxy === true }
     logMain('info', `[login] app-level challenge resolved store=${String(storeId || '')} proxy=${looksLikeProxyChallenge(loginDetails)} url=${details.url}`)
     if (!storeId) { callback(); return }
-    if (isDuplicateChallenge(details.url)) {
+    if (isDuplicateChallenge(storeId, details.url)) {
       logMain('info', `[login] 1s 内重复挑战，直接取消 store=${storeId}`)
       callback()
       return
@@ -301,7 +436,7 @@ function ensureGlobalLoginHandler(): void {
   })
 }
 
-function configureProxy(sess: Session, storeId: string): void {
+async function configureProxy(sess: Session, storeId: string): Promise<void> {
   const db = getDatabase()
   
   // 查询店铺绑定的代理
@@ -312,35 +447,33 @@ function configureProxy(sess: Session, storeId: string): void {
     WHERE sp.store_id = ?
   `).get(storeId) as { mode: string; type?: string; host?: string; port?: number; username_ref?: string; password_ref?: string } | undefined
   
-  if (!binding || binding.mode === 'direct') {
-    // 直连模式
-    sess.setProxy({ mode: 'direct' })
-    return
-  }
-  
-  if (!binding.host || !binding.port) {
-    // 绑定的代理已被删除（FK 置空）→ 回落直连，避免沿用过期的 setProxy 配置
-    sess.setProxy({ mode: 'direct' })
-    return
-  }
-  
-  // 构建代理规则 - §4.3 不内嵌凭据（407 由 login 事件注入）
-  const proxyRules = `${binding.type}://${binding.host}:${binding.port}`
+  try {
+    if (!binding || binding.mode === 'direct' || !binding.host || !binding.port) {
+      // 直连模式；代理被删除后也必须显式回落直连。
+      await sess.setProxy({ mode: 'direct' })
+      return
+    }
 
-  sess.setProxy({
-    mode: 'fixed_servers',
-    proxyRules
-  }).catch(err => {
-    logMain('error', `[proxy] setProxy 失败 store=${storeId} rules=${proxyRules}: ${String(err)}`)
-  })
+    // 构建代理规则 - §4.3 不内嵌凭据（407 由 login 事件注入）
+    const proxyRules = `${binding.type}://${binding.host}:${binding.port}`
+    await sess.setProxy({ mode: 'fixed_servers', proxyRules })
+  } catch (err) {
+    logMain('error', `[proxy] setProxy 失败 store=${storeId}: ${String(err)}`)
+    throw err
+  }
 }
 
 /**
  * 重新应用代理配置（proxy:bind / proxy:update 后调用；session 已创建时）
  */
-export function reconfigureProxy(storeId: string): void {
+export async function reconfigureProxy(storeId: string): Promise<void> {
   const sess = activeSessions.get(storeId)
-  if (sess) configureProxy(sess, storeId)
+  if (!sess) return
+  // 串行化首次配置与后续绑定/修改，避免旧代理配置覆盖新配置。
+  const previous = sessionReady.get(storeId) || Promise.resolve()
+  const next = previous.catch(() => {}).then(() => configureProxy(sess, storeId))
+  sessionReady.set(storeId, next)
+  await next
 }
 
 /**
@@ -377,9 +510,14 @@ export async function clearStoreData(
     await sess.clearStorageData(options)
   }
   // 清了 Cookie 就必须同时丢掉会话快照，否则下次启动会把刚清掉的登录态又灌回来
-  // （用户会以为"清数据没生效"）
-  if (types.includes('cookies') && !origin) {
-    try { clearStoreSessionSnapshot(storeId) } catch { /* 清理失败不阻塞 */ }
+  // （用户会以为"清数据没生效"）。
+  //
+  // 按域清（带 origin）时**不能**一概丢弃：同一个店铺可能有多个域的登录态，按域清只该影响那一个域。
+  // 这里改成"立刻按当前状态重拍快照"——快照要么反映清完后的真实 Cookie（还有别的域），
+  // 要么在会话级 Cookie 全空时被 snapshotStoreSession 自动删除（全量清空的场景）。
+  // 此前 `&& !origin` 的写法让按域清完全不动快照，重启后同名 Cookie 被旧快照覆盖回来。
+  if (types.includes('cookies')) {
+    void snapshotStoreSession(storeId).catch(() => { /* 快照失败不阻塞清理 */ })
   }
   
   // 下载记录清理 - §5.9
@@ -398,10 +536,18 @@ export async function clearStoreData(
  * 关闭前**先快照会话级 Cookie**（异步、不阻塞）：微信小店的登录 Cookie 全是会话级，
  * Chromium 默认不落盘——不在这里存一份，关掉店铺窗口/退出应用后就得重新扫码。
  */
-export function closeStoreSession(storeId: string): void {
+export interface CloseStoreSessionOptions {
+  /** 删除店铺时关闭流程不应再异步写回旧 Cookie 快照。 */
+  persist?: boolean
+}
+
+export function closeStoreSession(storeId: string, options: CloseStoreSessionOptions = {}): void {
   if (activeSessions.has(storeId)) {
-    void snapshotStoreSession(storeId).catch(() => { /* 快照失败不阻塞关闭 */ })
+    if (options.persist !== false) {
+      void snapshotStoreSession(storeId).catch(() => { /* 快照失败不阻塞关闭 */ })
+    }
     activeSessions.delete(storeId)
+    sessionReady.delete(storeId)
   }
   untrackStoreSession(storeId)
 }

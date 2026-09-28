@@ -1,5 +1,15 @@
 <template>
   <div class="workbench" :class="{ 'task-layout': taskDialogOpen && taskFlow === 'custom', 'picker-mode': customPicking }">
+    <DashboardView
+      v-if="homeMode"
+      @open-store="openDashboardStore"
+      @create-store="openDashboardCreate"
+      @open-settings="openDashboardSettings"
+      @open-data-center="openDashboardDataCenter"
+      @open-tasks="openDashboardTasks"
+      @back-dashboard="showDashboard"
+    />
+    <template v-else>
     <!-- 左栏：店铺侧边栏 - §8.2 StoreSidebar（可收起为窄轨：新建/回收站/设置仍可达） -->
     <aside class="sidebar" :class="{ collapsed: leftSidebarCollapsed }" data-test="sidebar">
       <div class="sidebar-rail" v-if="leftSidebarCollapsed">
@@ -19,6 +29,11 @@
         <div class="brand-name">ShopPilot</div>
         <button class="sidebar-collapse" data-test="sidebar-collapse" title="收起左侧栏（Ctrl+Shift+E）" @click="collapseSidebar()">‹</button>
       </div>
+
+      <button class="home-return" type="button" title="返回首页 Dashboard" @click="showDashboard">
+        <span class="home-return-icon">⌂</span>
+        <span>首页 Dashboard</span>
+      </button>
 
       <div class="sidebar-tools">
         <div class="search-box">
@@ -445,6 +460,7 @@
                 title="复制为新的自定义任务"
                 @click.stop="copyTask(t)"
               >复制</button>
+              <button class="mini-btn" data-test="task-edit" title="编辑任务定义（名称/步骤/计划）" @click.stop="editTask(t)">编辑</button>
               <button class="mini-btn" title="保存为自定义任务模板" @click.stop="saveTaskTemplate(t)">模板</button>
               <button class="row-del" title="删除任务" @click.stop="delTask(t.id)">×</button>
             </div>
@@ -1420,9 +1436,12 @@
          finally 不强制重开，尊重用户的关闭意图。 -->
     <div v-if="taskDialogOpen || customPicking" v-show="taskDialogOpen" class="modal-mask" data-test="task-dialog" @click.self="!taskSubmitting && (taskDialogOpen = false)">
       <div class="modal modal-wide task-create-modal" :class="{ 'task-create-tall': taskFlow === 'custom' }">
-        <h2>新建任务</h2>
+        <h2>{{ editingTaskId ? '编辑任务' : '新建任务' }}</h2>
         <fieldset :disabled="taskSubmitting" style="border:0;padding:0;margin:0;min-width:0">
         <div v-if="customPicking" class="env-note" data-test="picker-status">在左侧页面点击目标元素，结果会自动填回。按 Esc 取消拾取。</div>
+        <div v-if="editingTaskId" class="env-note" data-test="task-edit-hint">
+          正在编辑已有任务：保存后对<b>下一次运行</b>生效。运行中的任务只能改名称与计划——步骤要等这次运行结束（已执行到哪一步是按步骤下标记录的，中途替换会重复或漏执行）。
+        </div>
         <div class="row-sub" style="margin-bottom:8px">
           选择内置流程，或用<b>自定义任务</b>编排步骤。创建后可手动运行；设置定时后会自动触发。
           实际执行结果取决于店铺登录状态、页面和参数配置。
@@ -1495,18 +1514,18 @@
         </template>
 
         <div v-if="scheduleIssue" class="env-note" role="alert" data-test="task-schedule-error">{{ scheduleIssue }}</div>
-        <label class="ct-check" style="margin:8px 0" data-test="task-run-after-create">
+        <label class="ct-check" style="margin:8px 0" data-test="task-run-after-create" v-if="!editingTaskId">
           <input v-model="runAfterCreate" type="checkbox" /> 创建后立即试运行一次
         </label>
         <div class="modal-actions">
-          <button class="btn-ghost" data-test="task-cancel" @click="taskDialogOpen = false">取消</button>
+          <button class="btn-ghost" data-test="task-cancel" @click="editingTaskId = null; taskDialogOpen = false">取消</button>
           <button
             class="btn-primary"
             data-test="task-submit"
             :disabled="submitDisabled"
             :title="submitDisabledReason"
             @click="submitTask"
-          >{{ taskSubmitting ? '正在创建…' : '创建任务' }}</button>
+          >{{ taskSubmitting ? (editingTaskId ? '正在保存…' : '正在创建…') : (editingTaskId ? '保存修改' : '创建任务') }}</button>
         </div>
         </fieldset>
       </div>
@@ -1533,6 +1552,8 @@
           <button :class="['stab', { on: settingsTab === 'square' }]" data-test="settings-tab-square" @click="openSettingsTab('square')">达人广场</button>
           <button :class="['stab', { on: settingsTab === 'ai' }]" data-test="settings-tab-ai" @click="openSettingsTab('ai')">AI 配置</button>
           <button :class="['stab', { on: settingsTab === 'agents' }]" data-test="settings-tab-agents" @click="openSettingsTab('agents')">Agent 团队</button>
+          <button :class="['stab', { on: settingsTab === 'skills' }]" data-test="settings-tab-skills" @click="openSettingsTab('skills')">技能</button>
+          <button :class="['stab', { on: settingsTab === 'plugins' }]" data-test="settings-tab-plugins" @click="openSettingsTab('plugins')">插件</button>
           <button :class="['stab', { on: settingsTab === 'about' }]" data-test="settings-tab-about" @click="openSettingsTab('about')">关于软件</button>
         </div>
 
@@ -1619,11 +1640,71 @@
             「获取可用模型」是只读请求 <b>/models</b>（由接口地址推导，见上方"模型列表"），拉不到就如实报错、不编造候选。
             预设只是便捷预填，各家的模型名与可用性以你的账号为准。
           </div>
+          <div class="ai-split-card" data-test="settings-image-ai">
+            <div class="env-h">生图 API（独立配置）</div>
+            <div class="env-note">商品图生成和图片编辑只读取这里的地址、模型与 Key，不会复用上面的文本 API。</div>
+            <label class="plat-row">生图接口地址
+              <input v-model="imageAiDraft.endpoint" data-test="image-ai-endpoint" spellcheck="false" placeholder="https://api.example.com/v1 或 /images/generations" />
+            </label>
+            <div class="env-note" v-if="imageAiResolvedEndpoint">实际生图请求：<code>{{ imageAiResolvedEndpoint }}</code><template v-if="imageAiModelsUrl"><br>模型列表：<code>{{ imageAiModelsUrl }}</code></template></div>
+            <label class="plat-row">生图模型名
+              <input v-model="imageAiDraft.model" data-test="image-ai-model" spellcheck="false" placeholder="例如 gpt-image-1、flux-1" />
+            </label>
+            <label class="plat-row">生图超时(ms)
+              <input v-model.number="imageAiDraft.timeoutMs" type="number" :min="AI_TIMEOUT_MIN_MS" :max="AI_TIMEOUT_MAX_MS" data-test="image-ai-timeout" class="inv-num" />
+            </label>
+            <label class="plat-row">生图 API Key
+              <input v-model="imageAiKeyDraft" type="password" data-test="image-ai-key" autocomplete="new-password" :placeholder="imageAiConfig.hasImageKey ? '已配置（留空则不改动）' : '粘贴生图 API Key'" />
+            </label>
+            <div class="cf-btns" style="margin-top:8px">
+              <button class="mini-btn" data-test="image-ai-models-btn" :disabled="imageAiModelsLoading" @click="fetchImageAiModels">{{ imageAiModelsLoading ? '获取中…' : '获取生图模型' }}</button>
+              <button class="mini-btn primary" data-test="image-ai-test" :disabled="imageAiTesting" @click="testImageAi">{{ imageAiTesting ? '测试中…' : '测试生图接口' }}</button>
+              <button class="mini-btn danger-btn" v-if="imageAiConfig.hasImageKey" data-test="image-ai-key-clear" @click="clearImageAiKey">清除生图 Key</button>
+            </div>
+            <div class="plat-row" v-if="imageAiModels.length"><span class="plat-name" style="width:auto;flex:0 0 auto">可选生图模型</span><select data-test="image-ai-model-pick" :value="imageAiDraft.model" @change="pickImageAiModel(($event.target as HTMLSelectElement).value)"><option value="">— 选择后填入上方模型名 —</option><option v-for="m in imageAiModels" :key="m" :value="m">{{ m }}</option></select><span class="row-sub">{{ imageAiModels.length }} 个</span></div>
+            <div class="env-note" :class="{ ok: imageAiMsgOk }" v-if="imageAiMsg" data-test="image-ai-msg">{{ imageAiMsg }}</div>
+            <div class="env-note">测试生图接口只读 GET /models，不会发起付费生成；没有真实返回时工作台保持空状态。</div>
+          </div>
+          <div class="ai-split-card" data-test="settings-image-text-ai">
+            <div class="env-h">生图文本 API（商品分析独立配置）</div>
+            <div class="env-note">只用于 AI 生成商品图片页面的商品分析和提示词整理，不会读取 Agent 文本配置，也不负责实际图片生成。</div>
+            <label class="plat-row">分析文本接口地址
+              <input v-model="imageTextAiDraft.endpoint" data-test="image-text-ai-endpoint" spellcheck="false" placeholder="https://api.example.com/v1" />
+            </label>
+            <div class="env-note" v-if="imageTextAiResolvedEndpoint">实际请求：<code>{{ imageTextAiResolvedEndpoint }}</code><template v-if="imageTextAiModelsUrl"><br>模型列表：<code>{{ imageTextAiModelsUrl }}</code></template></div>
+            <label class="plat-row">分析文本模型名
+              <input v-model="imageTextAiDraft.model" data-test="image-text-ai-model" spellcheck="false" placeholder="例如 deepseek-chat、qwen-plus" />
+            </label>
+            <label class="plat-row">分析文本超时(ms)
+              <input v-model.number="imageTextAiDraft.timeoutMs" type="number" :min="AI_TIMEOUT_MIN_MS" :max="AI_TIMEOUT_MAX_MS" data-test="image-text-ai-timeout" class="inv-num" />
+            </label>
+            <label class="plat-row">分析文本 API Key
+              <input v-model="imageTextAiKeyDraft" type="password" data-test="image-text-ai-key" autocomplete="new-password" :placeholder="imageTextAiConfig.hasImageTextKey ? '已配置（留空则不改动）' : '粘贴商品分析文本 API Key'" />
+            </label>
+            <div class="cf-btns" style="margin-top:8px">
+              <button class="mini-btn" data-test="image-text-ai-models-btn" :disabled="imageTextAiModelsLoading" @click="fetchImageTextAiModels">{{ imageTextAiModelsLoading ? '获取中…' : '获取分析模型' }}</button>
+              <button class="mini-btn primary" data-test="image-text-ai-test" :disabled="imageTextAiTesting" @click="testImageTextAi">{{ imageTextAiTesting ? '测试中…' : '测试分析接口' }}</button>
+              <button class="mini-btn danger-btn" v-if="imageTextAiConfig.hasImageTextKey" data-test="image-text-ai-key-clear" @click="clearImageTextAiKey">清除分析 Key</button>
+            </div>
+            <div class="plat-row" v-if="imageTextAiModels.length"><span class="plat-name" style="width:auto;flex:0 0 auto">可选分析模型</span><select data-test="image-text-ai-model-pick" :value="imageTextAiDraft.model" @change="pickImageTextAiModel(($event.target as HTMLSelectElement).value)"><option value="">— 选择后填入上方模型名 —</option><option v-for="m in imageTextAiModels" :key="m" :value="m">{{ m }}</option></select><span class="row-sub">{{ imageTextAiModels.length }} 个</span></div>
+            <div class="env-note" :class="{ ok: imageTextAiMsgOk }" v-if="imageTextAiMsg" data-test="image-text-ai-msg">{{ imageTextAiMsg }}</div>
+            <div class="env-note">商品分析文本与 Agent 文本 API、图片生成 API 分开保存；不配置时 AI 生成商品图页面会明确显示不可用状态。</div>
+          </div>
         </div>
 
-        <!-- Agent 组织、模型、记忆和 Job：数据均来自 Main 白名单 IPC -->
+        <!-- Agent 组织、模型、记忆和 Job：数据均来自 Main 白名单 IPC；技能与插件已拆成两个独立页签 -->
         <div v-else-if="settingsTab === 'agents'" class="sub-pane agent-admin-pane" data-test="settings-agents">
-          <AgentAdminPanel @toast="(message, kind) => ws.toast(message, kind || 'error')" />
+          <AgentAdminPanel :panels="['team', 'models', 'memory', 'jobs']" @toast="(message, kind) => ws.toast(message, kind || 'error')" />
+        </div>
+
+        <!-- 技能（独立页签）：技能是现有工具的声明式组合，不含脚本或新权限 -->
+        <div v-else-if="settingsTab === 'skills'" class="sub-pane agent-admin-pane" data-test="settings-skills">
+          <AgentAdminPanel :panels="['skills']" @toast="(message, kind) => ws.toast(message, kind || 'error')" />
+        </div>
+
+        <!-- 插件（独立页签）：插件把多个技能打包命名，只是分组、不携带新权限 -->
+        <div v-else-if="settingsTab === 'plugins'" class="sub-pane agent-admin-pane" data-test="settings-plugins">
+          <AgentAdminPanel :panels="['plugins']" @toast="(message, kind) => ws.toast(message, kind || 'error')" />
         </div>
 
         <!-- 关于软件：软件信息 + 更新 -->
@@ -1679,9 +1760,10 @@
     </div>
 
     <!-- Toast -->
-    <div class="toast-host">
+      <div class="toast-host">
       <div v-for="t in ws.toasts" :key="t.id" :class="['toast', t.kind]">{{ t.text }}</div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -1691,6 +1773,7 @@ import { useWorkspaceStore, OTHER_PLATFORM_FILTER, type StoreRow } from '../../s
 import { useAgentStore } from '../../stores/agent'
 import { moveStoreId, type StoreDropPosition } from '../../stores/store-order'
 import PlatformIcon from '../../components/PlatformIcon.vue'
+import DashboardView from './DashboardView.vue'
 import CustomTaskEditor from '../tasks/CustomTaskEditor.vue'
 import AgentDock from '../agent/AgentDock.vue'
 import AgentAdminPanel from '../agent/AgentAdminPanel.vue'
@@ -1715,17 +1798,61 @@ import { ordersProfileFor } from '@shared/constants/orders'
 import { buildOrdersCollectSteps } from '@shared/orders-steps'
 import { buildBusinessCollectSteps } from '@shared/business-steps'
 import {
-  DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
+  DEFAULT_AI_ENDPOINT, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
   AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, INVITE_SQUARE_URLS_SETTING,
-  AI_PROVIDER_PRESETS, normalizeAiEndpoint, modelsUrlFromChat
+  AI_PROVIDER_PRESETS, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint
 } from '@shared/constants/ai'
 
 const ws = useWorkspaceStore()
 const agent = useAgentStore()
+/** 首页是独立的 Dashboard；打开店铺后回到原有浏览器工作台，保留全部浏览器能力。 */
+const homeMode = ref(true)
 const viewportEl = ref<HTMLElement | null>(null)
 const agentOrbDragging = ref(false)
 const urlInput = ref<HTMLElement | null>(null)
 const urlDraft = ref('')
+
+async function openDashboardStore(storeId: string) {
+  // 店铺浏览器直接嵌在 Dashboard 的主窗口工作区，不切换到另一套页面。
+  homeMode.value = true
+  await ws.openStore(storeId)
+}
+
+function openDashboardCreate() {
+  // 复用现有的新建店铺对话框与校验；对话框属于原工作台层，所以先切回工作台再打开。
+  homeMode.value = false
+  openCreateDialog()
+}
+
+function openDashboardSettings() {
+  homeMode.value = false
+  openSettings('config')
+}
+
+async function openDashboardDataCenter() {
+  homeMode.value = false
+  dataCenterOpen.value = true
+  await nextTick()
+  await loadDataCenter()
+}
+
+async function openDashboardTasks() {
+  const store = ws.stores[0]
+  if (!store) return
+  homeMode.value = false
+  rightPanelCollapsed.value = false
+  await ws.openStore(store.id)
+  ws.rightPanel = 'tasks'
+  await ws.refreshTasks()
+}
+
+async function showDashboard() {
+  homeMode.value = true
+  if (ws.displayedStoreId) {
+    ws.displayedStoreId = null
+    await window.shopilot.browser.display(null)
+  }
+}
 
 const storeDrag = reactive({
   draggingId: '',
@@ -1803,10 +1930,11 @@ async function onStoreDrop(targetStore: StoreRow, event: DragEvent) {
     return
   }
 
-  // 只重排"用户看得见的那一段"（分组 + 平台筛选 + 搜索后的顺序），再把结果填回全局顺序的
-  // 同一批槽位：直接对 ws.stores 全量重排时，搜索/筛选状态下拖动会连带改变看不见的店铺顺序，
-  // 用户切回全部一看顺序变了，却找不到是哪一步动过。
-  const visibleIds = ws.groupedStores.flatMap(grp => grp.items.map(item => item.id))
+  // 只重排当前分组里用户看得见的店铺，再把结果填回这些店铺原本占据的全局槽位。
+  // groupedStores 为了展示会按分组名称排序，不能把多个分组 flatten 后再写回全局顺序，
+  // 否则拖动一个分组会连带改变其它分组的位置。
+  const group = ws.groupedStores.find(grp => grp.group === storeGroupKey(dragged))
+  const visibleIds = group?.items.map(item => item.id) || []
   const nextVisible = moveStoreId(visibleIds, dragged.id, targetStore.id, position)
   if (nextVisible === visibleIds) return
 
@@ -1872,7 +2000,7 @@ const platformHomeUrls = ref<Record<string, string>>({})
 /** 设置弹窗内"配置"页的草稿（保存前的编辑态，避免直接改到生效值） */
 const homeUrlDraft = reactive<Record<string, string>>({})
 const settingsOpen = ref(false)
-const settingsTab = ref<'config' | 'square' | 'ai' | 'agents' | 'about'>('config')
+const settingsTab = ref<'config' | 'square' | 'ai' | 'agents' | 'skills' | 'plugins' | 'about'>('config')
 
 /** 某平台的实际首页地址：配置值 → 平台目录默认 */
 function platformHome(platformName: string): string {
@@ -1954,14 +2082,34 @@ function resetSquareUrl(platformName: string) { squareUrlDraft[platformName] = '
 const aiConfig = ref<{ endpoint: string; resolvedEndpoint?: string; model: string; timeoutMs: number; hasKey: boolean }>({
   endpoint: DEFAULT_AI_ENDPOINT, model: DEFAULT_AI_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS, hasKey: false
 })
+const imageAiConfig = ref<{ imageEndpoint: string; resolvedImageEndpoint?: string; imageModel: string; imageTimeoutMs: number; hasImageKey: boolean }>({
+  imageEndpoint: DEFAULT_AI_IMAGE_ENDPOINT, imageModel: DEFAULT_AI_IMAGE_MODEL, imageTimeoutMs: DEFAULT_AI_TIMEOUT_MS, hasImageKey: false
+})
+const imageTextAiConfig = ref<{ imageTextEndpoint: string; resolvedImageTextEndpoint?: string; imageTextModel: string; imageTextTimeoutMs: number; hasImageTextKey: boolean }>({
+  imageTextEndpoint: DEFAULT_AI_IMAGE_TEXT_ENDPOINT, imageTextModel: DEFAULT_AI_IMAGE_TEXT_MODEL, imageTextTimeoutMs: DEFAULT_AI_TIMEOUT_MS, hasImageTextKey: false
+})
 const aiDraft = reactive({ endpoint: '', model: '', timeoutMs: DEFAULT_AI_TIMEOUT_MS })
+const imageAiDraft = reactive({ endpoint: DEFAULT_AI_IMAGE_ENDPOINT, model: DEFAULT_AI_IMAGE_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS })
+const imageTextAiDraft = reactive({ endpoint: DEFAULT_AI_IMAGE_TEXT_ENDPOINT, model: DEFAULT_AI_IMAGE_TEXT_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS })
 const aiKeyDraft = ref('')
+const imageAiKeyDraft = ref('')
+const imageTextAiKeyDraft = ref('')
 const aiMsg = ref('')
 const aiMsgOk = ref(false)
 const aiTesting = ref(false)
+const imageAiMsg = ref('')
+const imageAiMsgOk = ref(false)
+const imageAiTesting = ref(false)
+const imageTextAiMsg = ref('')
+const imageTextAiMsgOk = ref(false)
+const imageTextAiTesting = ref(false)
 /** 「获取可用模型」拉回来的模型名（只读接口；失败时保持为空并如实报错，不编造候选） */
 const aiModels = ref<string[]>([])
 const aiModelsLoading = ref(false)
+const imageAiModels = ref<string[]>([])
+const imageAiModelsLoading = ref(false)
+const imageTextAiModels = ref<string[]>([])
+const imageTextAiModelsLoading = ref(false)
 /** 服务商预设（含中转站/自定义）：只是便捷预填，选完仍可任意改地址与模型名 */
 const aiProviderKey = ref('__custom__')
 
@@ -1969,6 +2117,10 @@ const aiProviderKey = ref('__custom__')
 const aiResolvedEndpoint = computed(() => normalizeAiEndpoint(aiDraft.endpoint))
 /** 由实际请求地址推导的模型列表地址（推不出来就不显示，不猜） */
 const aiModelsUrl = computed(() => modelsUrlFromChat(aiDraft.endpoint) || '')
+const imageAiResolvedEndpoint = computed(() => normalizeImageEndpoint(imageAiDraft.endpoint))
+const imageAiModelsUrl = computed(() => modelsUrlFromImageEndpoint(imageAiDraft.endpoint) || '')
+const imageTextAiResolvedEndpoint = computed(() => normalizeAiEndpoint(imageTextAiDraft.endpoint))
+const imageTextAiModelsUrl = computed(() => modelsUrlFromChat(imageTextAiDraft.endpoint) || '')
 
 /** 选中预设：填基础地址 + 常见模型名；「自定义」只切标记，不动用户已填内容 */
 function applyAiPreset(key: string) {
@@ -1991,9 +2143,17 @@ async function loadAiConfig() {
   const res = await window.shopilot.ai.configGet()
   if (!res.ok) return
   aiConfig.value = res.data
+  imageAiConfig.value = res.data
   aiDraft.endpoint = res.data.endpoint
   aiDraft.model = res.data.model
   aiDraft.timeoutMs = res.data.timeoutMs
+  imageAiDraft.endpoint = res.data.imageEndpoint || DEFAULT_AI_IMAGE_ENDPOINT
+  imageAiDraft.model = res.data.imageModel || DEFAULT_AI_IMAGE_MODEL
+  imageAiDraft.timeoutMs = res.data.imageTimeoutMs || DEFAULT_AI_TIMEOUT_MS
+  imageTextAiConfig.value = res.data
+  imageTextAiDraft.endpoint = res.data.imageTextEndpoint || DEFAULT_AI_IMAGE_TEXT_ENDPOINT
+  imageTextAiDraft.model = res.data.imageTextModel || DEFAULT_AI_IMAGE_TEXT_MODEL
+  imageTextAiDraft.timeoutMs = res.data.imageTextTimeoutMs || DEFAULT_AI_TIMEOUT_MS
   aiProviderKey.value = matchPresetFor(res.data.endpoint)
 }
 
@@ -2012,6 +2172,44 @@ async function saveAiConfig(): Promise<boolean> {
     if (!kr.ok) { ws.toast('保存 API Key 失败: ' + kr.error.message, 'error'); return false }
     aiKeyDraft.value = ''
     aiConfig.value = { ...aiConfig.value, hasKey: kr.data.hasKey }
+  }
+  return true
+}
+
+/** 旧店铺工作台弹窗也使用独立的生图配置通道，避免与文本 API 串用。 */
+async function saveImageAiConfig(): Promise<boolean> {
+  const res = await window.shopilot.ai.imageConfigSet({
+    endpoint: imageAiDraft.endpoint.trim(),
+    model: imageAiDraft.model.trim(),
+    timeoutMs: Number(imageAiDraft.timeoutMs) || DEFAULT_AI_TIMEOUT_MS
+  })
+  if (!res.ok) { ws.toast('保存生图 API 配置失败: ' + res.error.message, 'error'); return false }
+  imageAiConfig.value = res.data
+  const key = imageAiKeyDraft.value.trim()
+  if (key) {
+    const kr = await window.shopilot.ai.setImageKey(key)
+    if (!kr.ok) { ws.toast('保存生图 API Key 失败: ' + kr.error.message, 'error'); return false }
+    imageAiKeyDraft.value = ''
+    imageAiConfig.value = { ...imageAiConfig.value, hasImageKey: kr.data.hasImageKey }
+  }
+  return true
+}
+
+/** 旧店铺工作台弹窗也提供独立的商品图片文本分析配置。 */
+async function saveImageTextAiConfig(): Promise<boolean> {
+  const res = await window.shopilot.ai.imageTextConfigSet({
+    endpoint: imageTextAiDraft.endpoint.trim(),
+    model: imageTextAiDraft.model.trim(),
+    timeoutMs: Number(imageTextAiDraft.timeoutMs) || DEFAULT_AI_TIMEOUT_MS
+  })
+  if (!res.ok) { ws.toast('保存生图文本 API 配置失败: ' + res.error.message, 'error'); return false }
+  imageTextAiConfig.value = res.data
+  const key = imageTextAiKeyDraft.value.trim()
+  if (key) {
+    const kr = await window.shopilot.ai.setImageTextKey(key)
+    if (!kr.ok) { ws.toast('保存生图文本 API Key 失败: ' + kr.error.message, 'error'); return false }
+    imageTextAiKeyDraft.value = ''
+    imageTextAiConfig.value = { ...imageTextAiConfig.value, hasImageTextKey: kr.data.hasImageTextKey }
   }
   return true
 }
@@ -2060,6 +2258,62 @@ async function clearAiKey() {
   const res = await window.shopilot.ai.clearKey()
   if (res.ok) { aiConfig.value = { ...aiConfig.value, hasKey: false }; aiMsgOk.value = true; aiMsg.value = 'API Key 已清除' }
   else { aiMsgOk.value = false; aiMsg.value = '清除失败: ' + res.error.message }
+}
+
+async function testImageAi() {
+  imageAiTesting.value = true
+  imageAiMsg.value = ''
+  if (!(await saveImageAiConfig())) { imageAiTesting.value = false; return }
+  const res = await window.shopilot.ai.testImage()
+  imageAiTesting.value = false
+  if (res.ok) { imageAiMsgOk.value = true; imageAiMsg.value = `生图接口可用：模型 ${res.data.model}，${res.data.elapsedMs}ms` }
+  else { imageAiMsgOk.value = false; imageAiMsg.value = `生图接口失败（${res.error.code}）：${res.error.message}` }
+}
+
+async function fetchImageAiModels() {
+  imageAiModelsLoading.value = true
+  imageAiMsg.value = ''
+  if (!(await saveImageAiConfig())) { imageAiModelsLoading.value = false; return }
+  const res = await window.shopilot.ai.listImageModels()
+  imageAiModelsLoading.value = false
+  if (res.ok) { imageAiModels.value = res.data.models; imageAiMsgOk.value = true; imageAiMsg.value = `已获取 ${res.data.models.length} 个生图模型` }
+  else { imageAiModels.value = []; imageAiMsgOk.value = false; imageAiMsg.value = `获取生图模型失败（${res.error.code}）：${res.error.message}` }
+}
+
+function pickImageAiModel(name: string) { if (name) imageAiDraft.model = name }
+
+async function testImageTextAi() {
+  imageTextAiTesting.value = true
+  imageTextAiMsg.value = ''
+  if (!(await saveImageTextAiConfig())) { imageTextAiTesting.value = false; return }
+  const res = await window.shopilot.ai.testImageText()
+  imageTextAiTesting.value = false
+  if (res.ok) { imageTextAiMsgOk.value = true; imageTextAiMsg.value = `分析接口可用：模型 ${res.data.model}，${res.data.elapsedMs}ms` }
+  else { imageTextAiMsgOk.value = false; imageTextAiMsg.value = `分析接口失败（${res.error.code}）：${res.error.message}` }
+}
+
+async function fetchImageTextAiModels() {
+  imageTextAiModelsLoading.value = true
+  imageTextAiMsg.value = ''
+  if (!(await saveImageTextAiConfig())) { imageTextAiModelsLoading.value = false; return }
+  const res = await window.shopilot.ai.listImageTextModels()
+  imageTextAiModelsLoading.value = false
+  if (res.ok) { imageTextAiModels.value = res.data.models; imageTextAiMsgOk.value = true; imageTextAiMsg.value = `已获取 ${res.data.models.length} 个分析模型` }
+  else { imageTextAiModels.value = []; imageTextAiMsgOk.value = false; imageTextAiMsg.value = `获取分析模型失败（${res.error.code}）：${res.error.message}` }
+}
+
+function pickImageTextAiModel(name: string) { if (name) imageTextAiDraft.model = name }
+
+async function clearImageTextAiKey() {
+  const res = await window.shopilot.ai.clearImageTextKey()
+  if (res.ok) { imageTextAiConfig.value = { ...imageTextAiConfig.value, hasImageTextKey: false }; imageTextAiMsgOk.value = true; imageTextAiMsg.value = '生图文本 API Key 已清除' }
+  else { imageTextAiMsgOk.value = false; imageTextAiMsg.value = '清除生图文本 Key 失败: ' + res.error.message }
+}
+
+async function clearImageAiKey() {
+  const res = await window.shopilot.ai.clearImageKey()
+  if (res.ok) { imageAiConfig.value = { ...imageAiConfig.value, hasImageKey: false }; imageAiMsgOk.value = true; imageAiMsg.value = '生图 API Key 已清除' }
+  else { imageAiMsgOk.value = false; imageAiMsg.value = '清除生图 Key 失败: ' + res.error.message }
 }
 
 function openSettings(tab: 'config' | 'square' | 'ai' | 'agents' | 'about' = 'config') {
@@ -2120,7 +2374,8 @@ async function saveSettingsConfig() {
     ws.toast('达人广场地址已保存', 'success')
   } else if (tab === 'ai') {
     if (!(await saveAiConfig())) return
-    ws.toast('AI 配置已保存', 'success')
+    if (!(await saveImageAiConfig())) return
+    ws.toast('文本 API 与生图 API 配置已分别保存', 'success')
   } else if (tab === 'agents') {
     settingsOpen.value = false
     return
@@ -2161,7 +2416,7 @@ function applyUpdateStatus(payload: any) {
   if (!payload) return
   Object.assign(updateStatus, payload)
 }
-async function openSettingsTab(tab: 'config' | 'square' | 'ai' | 'agents' | 'about') {
+async function openSettingsTab(tab: 'config' | 'square' | 'ai' | 'agents' | 'skills' | 'plugins' | 'about') {
   settingsTab.value = tab
   if (tab === 'about') await refreshUpdatePanel()
 }
@@ -2307,6 +2562,8 @@ async function refreshEnv() {
   const sid = ws.displayedStoreId
   if (!sid) return
   const st = await window.shopilot.session.status(sid)
+  // 请求期间可能已切到另一家店铺：迟到的会话状态不能覆盖当前环境面板。
+  if (ws.displayedStoreId !== sid) return
   if (st.ok) {
     const b = st.data.binding
     proxyBindId.value = b && b.mode === 'bound' ? (b.proxyId || '') : ''
@@ -2357,6 +2614,8 @@ async function verifyEnv() {
   verifying.value = true
   const res = await window.shopilot.profile.verify(sid)
   verifying.value = false
+  // 指纹验证耗时较长，切店后丢弃上一家店铺的结果。
+  if (ws.displayedStoreId !== sid) return
   if (res.ok) {
     verifyItems.value = res.data.items
     const bad = res.data.items.filter((i: any) => i.state !== 'verified').length
@@ -3399,6 +3658,14 @@ const scheduleIssue = computed(() => {
 /** 编排中的步骤草稿（submit/retryLimit 是编排器元数据，不进引擎，见 toEngineSteps） */
 const customSteps = ref<CustomStepDraft[]>([])
 const customTaskName = ref('')
+/** 非空 = 对话框处于「编辑已有任务」模式：提交走 task.update，不新建任务。 */
+const editingTaskId = ref<string | null>(null)
+/** 进入编辑时的步骤快照（同一套转换，保证可比）：只改了名称/计划时就不把 steps 发出去，
+ *  否则编辑一个正在运行的任务会被 Main 以“运行中不能改步骤”拒绝——那本来不是用户的意图。 */
+const editingTaskStepsJson = ref('')
+function stepsSnapshot(steps: CustomStepDraft[]): string {
+  return JSON.stringify(steps.map(s => ({ type: s.type, input: s.input, timeoutMs: s.timeoutMs, retryLimit: s.retryLimit })))
+}
 const runAfterCreate = ref(false)
 const selectedTemplateId = ref('')
 type TaskTemplate = { id: string; name: string; steps: CustomStepDraft[]; everyMin: number | null }
@@ -3700,14 +3967,46 @@ function onEditorNotify(text: string, kind: 'info' | 'success' | 'error') {
 }
 
 function openTaskDialog() {
+  // 新建入口必须清掉编辑态，否则会把上一个任务改掉而不是建新任务
+  editingTaskId.value = null
   taskFlow.value = 'invite'
   tf.everyMin = null
   taskDialogOpen.value = true
 }
 
+/**
+ * 编辑已有任务定义：复用自定义任务编辑器（步骤草稿与「复制」同一套转换），
+ * 提交时走 task.update。运行中的任务由 Main 决定：名称/计划可改，步骤要等运行结束
+ * （步骤与 step_index 一一对应，中途替换会让副作用步骤重复或漏执行）。
+ */
+function editTask(t: any) {
+  if (!ws.displayedStoreId) return ws.toast('请先打开一个店铺', 'error')
+  const unsupported = (t.steps || []).find((s: any) => !findCatalogEntry(s.type))
+  if (unsupported) {
+    ws.toast(`该任务包含暂不在面板编辑器里的步骤：${unsupported.type}；可用智能体或按模板重建`, 'error')
+    return
+  }
+  editingTaskId.value = t.id
+  taskFlow.value = 'custom'
+  tf.everyMin = t.schedule ? Math.round(t.schedule.everyMs / 60000) : null
+  customTaskName.value = String(t.name)
+  customSteps.value = (t.steps || []).map((s: any) => ({
+    type: s.type,
+    input: { ...(s.input || {}) },
+    timeoutMs: s.timeoutMs,
+    retryLimit: s.retryLimit
+  }))
+  customSelectedStep.value = 0
+  editingTaskStepsJson.value = stepsSnapshot(customSteps.value)
+  taskDialogOpen.value = true
+  ws.toast(isTaskActive(t) ? '该任务正在运行：名称/计划可保存，步骤要等这次运行结束' : '正在编辑任务，保存后对下一次运行生效', 'info')
+}
+
 /** 将已有任务复制为可编辑的自定义任务草稿，避免重复搭建相同步骤。 */
 function copyTask(t: any) {
   if (!ws.displayedStoreId) return ws.toast('请先打开一个店铺', 'error')
+  // 复制必须回到“新建”语义，否则会覆盖被编辑的任务
+  editingTaskId.value = null
   const unsupported = (t.steps || []).find((s: any) => !findCatalogEntry(s.type))
   if (unsupported) {
     ws.toast(`该任务包含暂不支持复制编辑的步骤：${unsupported.type}`, 'error')
@@ -3783,12 +4082,19 @@ async function submitCustomTask() {
   }
 
   const name = customTaskName.value.trim() || `自定义任务 · ${new Date().toLocaleString()}`
-  const res = await window.shopilot.task.create({
+  const payload = {
     name,
     storeScope: ws.displayedStoreId,
     steps: toEngineSteps(customSteps.value),
     schedule: tf.everyMin === null || tf.everyMin === '' ? null : { everyMs: Number(tf.everyMin) * 60000 }
-  })
+  }
+  const editingId = editingTaskId.value
+  const stepsChanged = !editingId || stepsSnapshot(customSteps.value) !== editingTaskStepsJson.value
+  const updatePayload: Record<string, unknown> = { taskId: editingId, ...payload }
+  if (editingId && !stepsChanged) delete updatePayload.steps
+  const res = editingId
+    ? await window.shopilot.task.update(updatePayload)
+    : await window.shopilot.task.create(payload)
   if (res.ok) {
     // 创建成功后清掉草稿：任务已经进列表了，把同一份步骤继续留在对话框里
     // 只会让下一次「新建任务」看起来像填好的、一点就建出个同名重复任务
@@ -3796,15 +4102,18 @@ async function submitCustomTask() {
     // 取消不走这里——那是"还没建"，草稿留着是有用的。
     customSteps.value = []
     customTaskName.value = ''
+    editingTaskId.value = null
+    editingTaskStepsJson.value = ''
     taskDialogOpen.value = false
-    ws.toast('任务已创建，可在列表里点 ▶ 运行', 'success')
+    ws.toast(editingId ? '任务已更新，下一次运行按新定义执行' : '任务已创建，可在列表里点 ▶ 运行', 'success')
     await ws.refreshTasks()
     try { localStorage.removeItem(draftStorageKey()) } catch { /* ignore */ }
-    await runCreatedTaskIfRequested(res.data?.id)
+    // 编辑不触发试运行：用户是在改定义，不是在启动
+    if (!editingId) await runCreatedTaskIfRequested(res.data?.id)
   } else {
     // 走到这里说明主进程的 Zod 拒了（本模块的校验已放行）——如实报出来，
     // 那意味着目录与引擎 schema 出现了漂移，是需要修的 bug，不该被含糊成"创建失败"
-    ws.toast('创建失败: ' + res.error.message, 'error')
+    ws.toast((editingId ? '保存失败: ' : '创建失败: ') + res.error.message, 'error')
   }
 }
 
@@ -4108,6 +4417,7 @@ async function refreshEntryRoutes() {
   const sid = ws.displayedStoreId
   if (!sid) { entryRoutes.value = []; return }
   const res = await window.shopilot.bookmark.entryRoutes(sid)
+  if (ws.displayedStoreId !== sid) return
   entryRoutes.value = res && res.ok ? (res.data.routes || []) : []
 }
 
@@ -5100,6 +5410,9 @@ onMounted(async () => {
   })
   window.shopilot.on(EVENT_CHANNELS.AGENT_PANEL_OPEN, (ev: any) => handleAgentPanelOpen(ev))
   await ws.init()
+  // 如果主进程恢复了上次正在显示的店铺，继续显示浏览器工作台；只有没有活动店铺时才进入首页。
+  // 已有店铺视图也回到 Dashboard 壳内的内嵌浏览器，避免重载后跳到旧工作台。
+  if (ws.displayedStoreId) homeMode.value = true
   // Renderer reloads do not reset main-process WebContentsView state. Explicitly
   // clear a stale overlay flag before the first viewport report; app-lock state
   // remains authoritative in the main process and still prevents mounting.
@@ -5147,7 +5460,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.workbench { display: flex; width: 100vw; height: 100vh; overflow: hidden; }
+.workbench { display: flex; width: 100%; height: 100vh; overflow: hidden; }
 .workbench.task-layout .sidebar,
 .workbench.task-layout .right-panel { display: none; }
 .workbench.task-layout .browser-col {
@@ -5170,6 +5483,14 @@ onBeforeUnmount(() => {
   font-weight: 700; font-size: 16px;
 }
 .brand-name { font-weight: 600; font-size: 15px; }
+.home-return {
+  display: flex; align-items: center; gap: 9px; width: calc(100% - 20px); height: 34px;
+  margin: 0 10px 10px; padding: 0 10px; border: 1px solid rgba(118, 129, 158, .2);
+  border-radius: 8px; background: rgba(59, 130, 246, .12); color: var(--color-text-secondary);
+  font-size: 12px; text-align: left;
+}
+.home-return:hover, .home-return:focus-visible { border-color: var(--color-primary); background: rgba(59, 130, 246, .2); color: #fff; outline: none; }
+.home-return-icon { width: 18px; color: var(--color-primary); font-size: 17px; text-align: center; }
 /* 更新入口已搬进「设置 → 关于软件」，品牌行只留 logo/名称/收起按钮；
    margin-left:auto 从原 .brand-update 挪到这里，收起按钮才会留在右端 */
 .sidebar-collapse {
