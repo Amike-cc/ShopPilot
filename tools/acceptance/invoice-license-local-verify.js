@@ -131,6 +131,28 @@ async function until(ui, expression, timeoutMs = 8000) {
   return last
 }
 
+/**
+ * 走界面打开发票中心：左栏「数据分析」→ 页内「发票中心」页签。
+ *
+ * 2026-09-29 界面重制后，发票中心不再是"左栏底部按钮 + 弹窗"，而是数据分析页的一个模式页签；
+ * 原来的 `[data-test="invoice-center-open"]` / `[data-test="invoice-center-modal"]` 已随旧入口移除。
+ * 这里按当前真实路径走（点导航、点页签都是用户会做的动作），不改内部状态。
+ */
+async function openInvoiceCenter(ui) {
+  await ui.eval(`
+    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(item => (item.textContent || '').includes('数据分析'))
+    if (nav) nav.click()
+    return true
+  `)
+  await until(ui, `return !!document.querySelector('.unified-route-tabs')`)
+  await ui.eval(`
+    const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(item => (item.textContent || '').includes('发票中心'))
+    if (tab) tab.click()
+    return true
+  `)
+  await until(ui, `return !!document.querySelector('[data-test="invoice-license-bar"]')`)
+}
+
 const LIC_A = { name: '上海验达贸易有限公司', no: '91310000MA1FL1234X' }
 const LIC_B = { name: '杭州验己科技有限公司', no: '91330100MA2AB5678Y' }
 
@@ -241,9 +263,11 @@ async function main() {
     await until(ui, `return document.querySelectorAll('[data-test="store-card"]').length === 5`)
 
     // ---- 4. 打开发票中心（走界面入口，不调内部函数） ----
-    await ui.eval(`document.querySelector('[data-test="invoice-center-open"]').click(); return true`)
-    const opened = await until(ui, `return !!document.querySelector('[data-test="invoice-center-modal"]')`)
-    check('点左栏「发票中心」能打开面板', !!opened)
+    // 入口在 2026-09-29 的界面重制后从"左栏底部按钮 + 弹窗"变成了「数据分析」页的「发票中心」页签，
+    // 这里跟着走当前真实路径（页面不再有 invoice-center-open / invoice-center-modal 两个钩子）。
+    await openInvoiceCenter(ui)
+    const opened = await until(ui, `return !!document.querySelector('[data-test="invoice-license-bar"]')`)
+    check('从「数据分析 → 发票中心」能打开发票中心', !!opened)
 
     await until(ui, `return document.querySelectorAll('[data-test="invoice-row"]').length === 5`)
     const chips = await ui.eval(`
@@ -369,7 +393,7 @@ async function main() {
     // ---- 10. 刷新页面：营业执照与筛选条都还在（真落库了） ----
     await ui.eval('location.reload(); return true;')
     await sleep(2800)
-    await ui.eval(`document.querySelector('[data-test="invoice-center-open"]').click(); return true`)
+    await openInvoiceCenter(ui)
     await until(ui, `return document.querySelectorAll('[data-test="invoice-row"]').length === 5`)
     const chipsReload = await ui.eval(`
       return [...document.querySelectorAll('[data-test="invoice-license-bar"] .inv-lic-chip')].map(el => el.textContent.replace(/\\s+/g, ' ').trim())
