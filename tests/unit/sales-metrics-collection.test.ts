@@ -130,12 +130,17 @@ describe('sales metrics · 迁移与库结构', () => {
     expect(columns('sales_collection_plans')).toContain('last_safe_message')
   })
 
-  realIt('迁移链连续到 v17，重复执行不报错', () => {
+  realIt('迁移链连续到 v18，重复执行不报错', () => {
     const versions = migrations.map(migration => migration.version)
     expect(versions).toEqual(versions.map((_, index) => index + 1))
-    expect(migrations[migrations.length - 1].version).toBe(17)
+    expect(migrations[migrations.length - 1].version).toBe(18)
     const { db } = setup()
     expect(() => migrate(db)).not.toThrow()
+    // v18 只加了一列投放花费；必须是可空列，否则老库里已有的行会被强制写默认值
+    const columns = (db.prepare('PRAGMA table_info(sales_metrics)').all() as Array<{ name: string; notnull: number }>)
+    const adSpend = columns.find(column => column.name === 'ad_spend_minor')
+    expect(adSpend).toBeTruthy()
+    expect(adSpend!.notnull).toBe(0)
   })
 
   realIt('删除店铺时计划、运行与证据随外键级联消失（不留孤儿计划）', () => {
@@ -509,12 +514,15 @@ describe('sales metrics · 真实 0 与 null', () => {
   })
 
   it('行级数据状态区分全 0 / 部分 / 有值 / 无值', () => {
-    const zero = { orderCount: 0, paidOrderCount: 0, salesQuantity: 0, grossSalesAmountMinor: 0, paidSalesAmountMinor: 0, refundAmountMinor: 0, refundOrderCount: 0, refundQuantity: 0, netSalesAmountMinor: 0 }
+    const zero = { orderCount: 0, paidOrderCount: 0, salesQuantity: 0, grossSalesAmountMinor: 0, paidSalesAmountMinor: 0, refundAmountMinor: 0, refundOrderCount: 0, refundQuantity: 0, netSalesAmountMinor: 0, adSpendMinor: 0 }
     expect(deriveRowDataStatus(null)).toBe('NOT_COLLECTED')
     expect(deriveRowDataStatus({ ...zero, orderCount: null })).toBe('PARTIAL')
     expect(deriveRowDataStatus(zero)).toBe('REAL_ZERO')
     expect(deriveRowDataStatus({ ...zero, paidSalesAmountMinor: 100 })).toBe('REAL_VALUE')
-    expect(deriveRowDataStatus({ ...zero, orderCount: null, paidOrderCount: null, salesQuantity: null, grossSalesAmountMinor: null, paidSalesAmountMinor: null, refundAmountMinor: null, refundOrderCount: null, refundQuantity: null, netSalesAmountMinor: null })).toBe('NOT_COLLECTED')
+    // v18 起"投放花费"也算行内字段：快手/微信没有可读的投放来源 → adSpend 为 null → 整行 PARTIAL。
+    // 这是有意的：整行状态要回答"这套指标齐不齐"，不能在缺一项时仍宣称 REAL_ZERO。
+    expect(deriveRowDataStatus({ ...zero, adSpendMinor: null })).toBe('PARTIAL')
+    expect(deriveRowDataStatus({ ...zero, orderCount: null, paidOrderCount: null, salesQuantity: null, grossSalesAmountMinor: null, paidSalesAmountMinor: null, refundAmountMinor: null, refundOrderCount: null, refundQuantity: null, netSalesAmountMinor: null, adSpendMinor: null })).toBe('NOT_COLLECTED')
   })
 
   it('跨平台合计只在口径版本一致时成立，否则为 null（前端显示"—"）', () => {
@@ -673,7 +681,7 @@ describe('sales metrics · 脱敏证据', () => {
     expect(rows.find(row => row.fieldName === 'orderCount')?.valueType).toBe('ORDER_COUNT')
   })
 
-  realIt('运行记录的 metrics_json 只存九个聚合指标（不含商品明细/买家信息）', () => {
+  realIt('运行记录的 metrics_json 只存聚合指标（不含商品明细/买家信息）', () => {
     const { db, ledger } = setup()
     seedStore(db, 'store_a', 'A 店', '拼多多')
     db.prepare(`INSERT INTO sales_collection_runs (run_id, store_id, platform, planned_at, status, created_at) VALUES ('run_1','store_a','拼多多',?, 'SUCCEEDED', ?)`).run(NOW, NOW)
@@ -682,14 +690,14 @@ describe('sales metrics · 脱敏证据', () => {
       id: 'm', platform: '拼多多', storeId: 'store_a', periodType: 'TODAY', periodStart: 1, periodEnd: 2,
       orderCount: 1, paidOrderCount: 1, salesQuantity: 1, grossSalesAmountMinor: 100,
       paidSalesAmountMinor: 100, refundAmountMinor: 0, refundOrderCount: 0, refundQuantity: 0,
-      netSalesAmountMinor: 100, collectedAt: NOW, sourceUpdatedAt: null, sourceType: 'DOM',
+      netSalesAmountMinor: 100, adSpendMinor: 30, collectedAt: NOW, sourceUpdatedAt: null, sourceType: 'DOM',
       adapterVersion: 'v1', metricDefinitionVersion: 'sales-metrics-1', dataStatus: 'REAL_VALUE', runId: 'run_1'
     })
     expect(ledger.attachRunMetricsSnapshot('run_1', 'store_a')).toBe(1)
     const row = db.prepare('SELECT metrics_json FROM sales_collection_runs WHERE run_id = ?').get('run_1') as { metrics_json: string }
     const snapshot = JSON.parse(row.metrics_json) as Record<string, unknown>
     expect(Object.keys(snapshot).sort()).toEqual([
-      'grossSalesAmountMinor', 'netSalesAmountMinor', 'orderCount', 'paidOrderCount', 'paidSalesAmountMinor',
+      'adSpendMinor', 'grossSalesAmountMinor', 'netSalesAmountMinor', 'orderCount', 'paidOrderCount', 'paidSalesAmountMinor',
       'periodEnd', 'periodStart', 'refundAmountMinor', 'refundOrderCount', 'refundQuantity', 'salesQuantity'
     ])
     expect(metricsSnapshotJson(null)).toBeNull()
@@ -924,6 +932,12 @@ function fakePage(options: {
   bodyTextLength?: number
   /** 「周期已生效」文案是否出现在页面上（默认出现 = 点击真的生效了） */
   periodAppliedTextSeen?: boolean
+  /**
+   * 周期控件是否**本来就停在目标周期**（默认 false）。
+   * true 表示"点了也没用"的那种页面：SPA 记住了上次选择，再点同一个页签是空操作——
+   * 真机实测（2026-09-29）快手就是这样连续 9 次判 PERIOD_NOT_APPLIED 的。
+   */
+  periodAlreadySelected?: boolean
 } = {}): { wc: WebContents; navigated: string[] } {
   const navigated: string[] = []
   let currentUrl = options.url || 'https://store.weixin.qq.com/shop/home'
@@ -942,6 +956,18 @@ function fakePage(options: {
       // 否则会连带命中"找周期控件坐标"的脚本，把点击路径也吞掉）
       if (code.includes('shadowRoot.textContent')) return options.periodAppliedTextSeen !== false
       if (code.includes('new RegExp')) return options.bodyMatches === true
+      // 周期控件选中态探针（脚本独有特征 TAB_TEXTS）。**必须排在 __clickableScore 那条之前**：
+      // 这条脚本也带 __clickableScore（复用候选排序），否则会被当成"找点击坐标"吞掉。
+      if (code.includes('TAB_TEXTS')) {
+        const selected = options.periodAlreadySelected === true
+        return {
+          found: true,
+          selected,
+          reason: selected ? 'SELECTED_BY_STYLE' : 'SAME_AS_SIBLINGS',
+          ownStyle: selected ? 'rgb(50,107,251)|rgb(232,243,255)' : 'rgb(44,46,48)|rgb(245,246,249)',
+          siblingStyle: 'rgb(44,46,48)|rgb(245,246,249)'
+        }
+      }
       if (code.includes('__clickableScore')) return options.clickable === false ? null : { x: 10, y: 10 }
       const label = /const label = ("(?:[^"\\]|\\.)*")/.exec(code)
       if (!label) return { ok: false, reason: 'ERR' }
@@ -1107,6 +1133,37 @@ describe('sales metrics · 页面读取 Adapter', () => {
     expect(metric.refundOrderCount).toBe(1)
     expect(metric.orderCount).toBeNull()               // 页面只给一个订单数 → 下单数保持 null
     expect(metric.netSalesAmountMinor).toBe(8770)
+  })
+
+  it('页面本来就停在目标周期时不再误报 PERIOD_NOT_APPLIED（判据③：控件自身已选中）', async () => {
+    // 2026-09-29 实测：快手计划连续 9 次停采，快照写"点了「近7日」但读数仍是 9.8"——
+    // 页面已经停在近7日（SPA 记住上次选择），点同一个页签不会改变任何值，判据①②必然都不成立。
+    const adapter = new KuaishouAdapter(kuaishou)
+    const same = { 成交金额: '9.8', 成交订单数: '2', 成交件数: '2', '退款金额(退款日)': '0', 成交退款订单数: '0' }
+    const { wc } = fakePage({
+      values: same,
+      valuesBeforeClick: same,          // 点击前后一模一样：模拟"空操作"
+      periodAppliedTextSeen: false,     // 快手没有可区分的文案标记
+      periodAlreadySelected: true       // 但控件自身显示近7日已选中
+    })
+    const result = await adapter.collectSalesMetrics(contextFor(wc, '快手小店'), { periodType: 'LAST_7_DAYS', timeoutMs: 1200 })
+    expect(result.status).toBe('SUCCEEDED')
+    expect(result.storeMetrics![0].grossSalesAmountMinor).toBe(980)
+  })
+
+  it('控件没显示选中、值也没变时仍然判 PERIOD_NOT_APPLIED（不放松 2026-09-28 的护栏）', async () => {
+    const adapter = new KuaishouAdapter(kuaishou)
+    const same = { 成交金额: '0', 成交订单数: '0', 成交件数: '0', '退款金额(退款日)': '0', 成交退款订单数: '0' }
+    const { wc } = fakePage({
+      values: same,
+      valuesBeforeClick: same,          // 点击没生效：页面停在默认周期，值不变
+      periodAppliedTextSeen: false,
+      periodAlreadySelected: false      // 目标页签也没呈现选中态
+    })
+    const result = await adapter.collectSalesMetrics(contextFor(wc, '快手小店'), { periodType: 'LAST_7_DAYS', timeoutMs: 1200 })
+    expect(result.status).toBe('ERROR')
+    expect(result.reasonCode).toBe('PERIOD_NOT_APPLIED')
+    expect(result.storeMetrics?.length ?? 0).toBe(0)
   })
 
   it('不在已登记页面时会先导航过去（而不是拿当前页硬读）', async () => {

@@ -183,6 +183,7 @@ export function metricsSnapshotJson(metrics: SalesMetrics | null | undefined): s
     refundOrderCount: metrics.refundOrderCount,
     refundQuantity: metrics.refundQuantity,
     netSalesAmountMinor: metrics.netSalesAmountMinor,
+    adSpendMinor: metrics.adSpendMinor,
     periodStart: metrics.periodStart,
     periodEnd: metrics.periodEnd
   })

@@ -637,14 +637,31 @@ const legacyGmv = computed(() => metricAggregate('biz.gmv'))
 /**
  * 销售概览 KPI 行（设计稿的六项）。
  *
- * 数据规则与页面其余部分一致：**优先自动采集**，采集缺该字段时回落到任务快照并标注来源；
- * 「投放花费」四家平台的经营数据页都没有稳定来源、「净成交 ROI」要拿净成交额÷投放花费才算得出来
- * —— 这两项如实显示「—」，不估算、不用其它字段凑数（宁可空着也不编数字）。
+ * 数据规则与页面其余部分一致：**优先自动采集**，采集缺该字段时回落到任务快照并标注来源。
+ * 「投放花费」只有抖店（「投放消耗」）与拼多多（「推广花费」）有可读来源，其余平台留空并如实标注；
+ * 「投产比 ROI」只拿**同一批既报了成交额又报了投放花费的店铺**相除——不把没有花费来源的店铺的
+ * 成交额算进分子，否则 ROI 会凭空变好（分母缺项而分子齐全，是这类指标最常见的造假方式）。
  */
 interface KpiRowItem { key: string; label: string; tone: string; value: string; delta: number | null; note: string; hint: string; inverse?: boolean }
 const formatMoneyCompact = (value: number | null) => value === null ? '—' : `¥ ${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value)}`
 const collectedRefundAmount = computed(() => collectedSum(m => m.refundAmountMinor, 0.01))
 const collectedRefundOrders = computed(() => collectedSum(m => m.refundOrderCount))
+const collectedAdSpend = computed(() => collectedSum(m => m.adSpendMinor, 0.01))
+/** 投产比只用"有花费也有成交额"的店铺，分子分母同源 */
+const collectedRoi = computed(() => {
+  let gross = 0
+  let spend = 0
+  let covered = 0
+  for (const item of collectedLatest.value) {
+    const gmv = item.metric.grossSalesAmountMinor
+    const adSpend = item.metric.adSpendMinor
+    if (gmv == null || adSpend == null) continue
+    gross += gmv
+    spend += adSpend
+    covered++
+  }
+  return { value: covered && spend > 0 ? gross / spend : null, covered, total: collectedRows.value.length }
+})
 const legacyRefundAmount = computed(() => metricAggregate('biz.refundAmount'))
 const legacyRefundOrders = computed(() => metricAggregate('biz.refundOrders'))
 
@@ -674,10 +691,28 @@ const kpiRow = computed<KpiRowItem[]>(() => {
       collectedDelta(m => m.refundAmountMinor, 0.01), '退款金额（退款日口径）', true),
     build('refundOrders', '退款订单', 'amber', collectedRefundOrders.value, legacyRefundOrders.value, formatNumber,
       collectedDelta(m => m.refundOrderCount), '成交退款订单数', true),
-    { key: 'adSpend', label: '投放花费', tone: 'yellow', value: '—', delta: null, note: '未采集', hint: '投放花费｜平台经营数据页没有该字段的稳定来源，如实留空（不做估算）' },
-    { key: 'roi', label: '净成交ROI', tone: 'green', value: '—', delta: null, note: '缺投放花费', hint: '净成交 ROI = 净成交额 ÷ 投放花费；投放花费未采集，因此无法计算' }
+    // 投放花费与 ROI 都不做跨日涨跌配色：花费涨不等于好、跌也不等于坏，给数字配上红绿
+    // 等于替用户下判断。这里只报数值与覆盖度。
+    build('adSpend', '投放花费', 'yellow', collectedAdSpend.value, null, formatMoneyCompact,
+      null, '投放花费（平台口径：抖店「投放消耗」、拼多多「推广花费」；快手/微信没有可读来源）'),
+    buildRoi()
   ]
 })
+function buildRoi(): KpiRowItem {
+  const roi = collectedRoi.value
+  const value = roi.covered > 0 ? roi.value : null
+  return {
+    key: 'roi',
+    label: '投产比 ROI',
+    tone: 'green',
+    value: value === null ? '—' : value.toFixed(2),
+    delta: null,
+    note: value === null
+      ? (roi.total ? `${PERIOD_CAPTION[period.value]}缺投放花费` : '尚无采集计划')
+      : `${roi.covered}/${roi.total} 家（有花费也有成交额）`,
+    hint: '投产比 ROI = 成交金额 ÷ 投放花费，只用**同时**报了这两个字段的店铺计算（分子分母同源，不拿没有花费来源的店铺的成交额充分子）'
+  }
+}
 function deltaClass(kpi: KpiRowItem): string {
   if (kpi.delta === null) return 'muted'
   const good = kpi.inverse ? kpi.delta < 0 : kpi.delta >= 0

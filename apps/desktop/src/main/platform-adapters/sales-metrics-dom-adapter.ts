@@ -22,7 +22,7 @@ import { SALES_METRICS_METRIC_DEFINITION_VERSION, salesMetricsPeriodBounds } fro
 import type { PlatformLoginResult } from '@shared/contracts/platform-adapter'
 import type { PlatformAdapterContext, SalesMetricsCapableAdapter } from './platform-adapter'
 import { createLoginResult, LOGIN_DETECTION_ONLY_CAPABILITIES } from './platform-adapter'
-import { clickText, navigateTo, parseSalesValue, readLabelValue, waitForUrlMarker, type PageHandle } from './sales-metrics-page-reader'
+import { clickText, navigateTo, parseSalesValue, readLabelValue, readPeriodControlState, waitForUrlMarker, type PageHandle } from './sales-metrics-page-reader'
 export interface PlatformLoginProbe {
   /** 允许的 host（精确匹配，不做后缀模糊） */
   host: string
@@ -264,7 +264,11 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
           finishedAt: Date.now()
         }
       }
-      const ready = await waitForUrlMarker(wc, profile.urlMarker, Math.min(remaining(), 30_000))
+      // 冷启动的 SPA 后台页需要更久才把地址落到位：实测拼多多在"刚启动、页面是自动打开"的那条
+      // 路径上 30 秒没等到 /home（人工导航同一地址 4 秒就到），于是被判 PAGE_NOT_READY 白跑一轮。
+      // 页面上真有值却因为加载慢被当成"未就绪"，属于把"慢"误报成"坏"——放宽到 45 秒，
+      // 总预算仍是 90 秒，真的起不来仍会如实报 PAGE_NOT_READY。
+      const ready = await waitForUrlMarker(wc, profile.urlMarker, Math.min(remaining(), 45_000))
       if (!ready) {
         return { ...base, status: 'NETWORK_ERROR', reasonCode: 'PAGE_NOT_READY', safeMessage: `经营数据页未就绪（等不到「${profile.urlMarker}」）`, dataStatus: 'COLLECTION_FAILED', finishedAt: Date.now() }
       }
@@ -275,6 +279,9 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
     // 但"点不到"有两种原因，必须分开对待：页面真的改版了，或者 SPA 还没渲染出来。
     // 真机实测（2026-09-28）微信小店的经营数据区要 30 秒以上才渲染，冷启时控件还不存在。
     // 所以第一次点不到就**重载一次再给一轮机会**，两轮都点不到才判 PAGE_CHANGED。
+    // 这条判据的结果（VALUE_CHANGED/MARKER/CONTROL_SELECTED/BASE_SELECTED）会写进运行记录的
+    // safeMessage，供事后核对"这条数据是凭什么认定为目标周期的"。
+    let periodEvidence = ''
     if (profile.periodText) {
       const probeAnchor = profile.metrics[0]
       /** 读首个指标的当前原文（用于判断"周期真的切过去了"） */
@@ -285,6 +292,13 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
         timeoutMs: Math.min(remaining(), 8_000)
       })
       const beforeClick = await readProbeAnchor()
+      // 页面可能**本来就停在目标周期**（SPA 记住上次选择）：这时点同一个页签不会改变任何东西，
+      // 只靠"值变了/文案变了"会把这种情况判成失败。先读一次控件自身的选中态作为基线。
+      const periodStateBefore = await readPeriodControlState(wc, {
+        text: profile.periodText,
+        deep: !!profile.periodDeep,
+        timeoutMs: Math.min(remaining(), 4_000)
+      })
       let clicked = false
       for (let round = 0; round < 2 && !clicked; round++) {
         clicked = await clickText(wc, { text: profile.periodText, deep: !!profile.periodDeep, timeoutMs: Math.min(remaining(), 30_000) })
@@ -307,15 +321,26 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
        * 判据（任一成立即可）：
        *   ① 首个指标的值与点击前不同（默认周期与目标周期的数据几乎不会完全相同）；
        *   ② 档案声明的 `periodAppliedText` 出现（微信实测：近7天视图显示「较上周期 X%」，
-       *      而默认的「今天」视图显示的是「昨日 X」）。
+       *      而默认的「今天」视图显示的是「昨日 X」）；
+       *   ③ 控件自身显示目标周期已被选中（文字色/背景色与同组页签不同）。这条是**点击前也认**的：
+       *      页面本来就停在目标周期时，点击是空操作、值也不会变，①②必然都不成立——
+       *      快手因此连续 9 次被判 PERIOD_NOT_APPLIED 而停采（实测 2026-09-29）。
+       *      它不会放松 2026-09-28 那次的判据：那次点击失败后页面仍停在「今天」，
+       *      目标页签并未呈现选中态，③ 不成立，仍会如实报错。
        */
       const appliedDeadline = Date.now() + Math.min(remaining(), 20_000)
       let applied = false
+      if (periodStateBefore.selected) { applied = true; periodEvidence = 'BASE_SELECTED' }
       for (;;) {
+        if (applied) break
         const afterClick = await readProbeAnchor()
         const valueChanged = afterClick.ok && (!beforeClick.ok || String(afterClick.raw) !== String(beforeClick.raw))
         const markerSeen = !!profile.periodAppliedText && await this.pageHasTextDeep(wc, profile.periodAppliedText)
-        if (valueChanged || markerSeen) { applied = true; break }
+        const periodState = await readPeriodControlState(wc, { text: profile.periodText, deep: !!profile.periodDeep, timeoutMs: Math.min(remaining(), 4_000) })
+        if (valueChanged) { applied = true; periodEvidence = 'VALUE_CHANGED' }
+        else if (markerSeen) { applied = true; periodEvidence = 'MARKER' }
+        else if (periodState.selected) { applied = true; periodEvidence = 'CONTROL_SELECTED' }
+        if (applied) break
         if (Date.now() >= appliedDeadline) break
         await delay(700)
       }
@@ -324,7 +349,7 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
           ...base,
           status: 'ERROR',
           reasonCode: 'PERIOD_NOT_APPLIED',
-          safeMessage: `点了周期控件「${profile.periodText}」但页面数值没跟着变（读数仍是「${beforeClick.ok ? String(beforeClick.raw) : '原值'}」）——周期可能没生效，按错误口径落库比没有数字更糟，本次不采集`,
+          safeMessage: `点了周期控件「${profile.periodText}」但页面数值没跟着变（读数仍是「${beforeClick.ok ? String(beforeClick.raw) : '原值'}」），控件自身也没显示该周期已被选中——周期可能没生效，按错误口径落库比没有数字更糟，本次不采集`,
           dataStatus: 'COLLECTION_FAILED',
           finishedAt: Date.now()
         }
@@ -378,7 +403,9 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
       status: complete ? 'SUCCEEDED' : 'PARTIAL',
       reasonCode: complete ? 'SALES_METRICS_READ_FROM_PAGE' : 'SALES_METRICS_PARTIAL',
       safeMessage: complete
-        ? `已从${this.platform}经营数据页读取指标`
+        // 把"周期凭什么算生效"写进运行记录：事后排查"这条 7 天数据是不是今天的"时，
+        // 光有 SUCCEEDED 不够，得知道当时满足的是哪条判据。
+        ? `已从${this.platform}经营数据页读取指标${periodEvidence ? `（周期判据：${periodEvidence}）` : ''}`
         : `只读到部分指标：${readings.filter(item => item.value == null).map(item => `${item.anchor.anchorText}(${item.reason})`).join('、')}`,
       sourceType,
       storeMetricsCount: 1,
@@ -422,7 +449,7 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
     const fields: Record<string, number | null> = {
       orderCount: null, paidOrderCount: null, salesQuantity: null,
       grossSalesAmountMinor: null, paidSalesAmountMinor: null, refundAmountMinor: null,
-      refundOrderCount: null, refundQuantity: null, netSalesAmountMinor: null
+      refundOrderCount: null, refundQuantity: null, netSalesAmountMinor: null, adSpendMinor: null
     }
     for (const reading of readings) {
       const field = reading.anchor.salesField
@@ -452,6 +479,7 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
       refundOrderCount: fields.refundOrderCount,
       refundQuantity: fields.refundQuantity,
       netSalesAmountMinor: fields.netSalesAmountMinor,
+      adSpendMinor: fields.adSpendMinor,
       collectedAt,
       // 页面没有对外暴露"数据更新时间"时保持 null——不拿采集时刻冒充平台更新时间
       sourceUpdatedAt: null,

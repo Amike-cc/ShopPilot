@@ -188,13 +188,13 @@ export function deriveDataStatus(input: {
  */
 export function deriveRowDataStatus(metrics: Pick<SalesMetrics,
   'orderCount' | 'paidOrderCount' | 'salesQuantity' | 'grossSalesAmountMinor' |
-  'paidSalesAmountMinor' | 'refundAmountMinor' | 'refundOrderCount' | 'refundQuantity' | 'netSalesAmountMinor'
+  'paidSalesAmountMinor' | 'refundAmountMinor' | 'refundOrderCount' | 'refundQuantity' | 'netSalesAmountMinor' | 'adSpendMinor'
 > | null): SalesMetricsDataStatus {
   if (!metrics) return 'NOT_COLLECTED'
   const values = [
     metrics.orderCount, metrics.paidOrderCount, metrics.salesQuantity,
     metrics.grossSalesAmountMinor, metrics.paidSalesAmountMinor, metrics.refundAmountMinor,
-    metrics.refundOrderCount, metrics.refundQuantity, metrics.netSalesAmountMinor
+    metrics.refundOrderCount, metrics.refundQuantity, metrics.netSalesAmountMinor, metrics.adSpendMinor
   ]
   const present = values.filter(value => value != null).length
   if (present === 0) return 'NOT_COLLECTED'

@@ -158,6 +158,24 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 50; i++) { await new Promise(resolve => setTimeout(resolve, 0)) }
 }
 
+/**
+ * 放行所有挂起的采集并**按挂钟等到库里没有 RUNNING**。
+ *
+ * 为什么不能只 `release()` + `settle()` 就断言：一轮 settle() 是 50 次宏任务让行，
+ * 而一次采集要走过"采集 → 写指标 → 台账收尾 → 计划推进"整条异步链；满负载跑全量套件时
+ * 这条链可能还没落地，于是同一份代码单跑通过、全量跑失败（2026-09-29 实测）。
+ * 这里用挂钟截止 + 每轮放行所有已捕获的 release，超时返回剩余 RUNNING 条数供断言报错。
+ */
+async function drain(timeoutMs: number, releases: Array<() => void>, countRunning: () => number): Promise<number> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (countRunning() === 0) return 0
+    if (Date.now() >= deadline) return countRunning()
+    for (const release of releases.splice(0)) release()
+    await settle()
+  }
+}
+
 describe('经营采集调度器 · 节拍', () => {
   realIt('每次触发写入运行记录，完成后更新计划状态与下一次运行时间', async () => {
     const h = use(harness([{ id: 'store_a', platform: '拼多多' }]))
@@ -239,9 +257,11 @@ describe('经营采集调度器 · 节拍', () => {
     expect(h.collectCalls).toHaveLength(2)
     expect(new Set(h.collectCalls.map(call => call.storeId))).toEqual(new Set(['store_a', 'store_b']))
 
-    for (const release of releases.splice(0)) release()
-    await settle()
-    expect(h.db.prepare("SELECT COUNT(*) AS n FROM sales_collection_runs WHERE status='RUNNING'").get()).toMatchObject({ n: 0 })
+    // 放行前两家并等到它们真的落库：一轮 settle() 只是 50 次宏任务让行，
+    // 满负载跑全量套件时"采集 → 写库 → 台账收尾 → 计划推进"可能还没走完，
+    // 用挂钟截止等待，避免把"慢"判成"错"（单跑通过、全量跑挂在这里过）。
+    const drainedEarly = await drain(8_000, releases, () => (h.db.prepare("SELECT COUNT(*) AS n FROM sales_collection_runs WHERE status='RUNNING'").get() as { n: number }).n)
+    expect(drainedEarly).toBe(0)
 
     // 关键性质：刚跑完的两家下一次计划点已被推到 10 分钟后（假时钟不前进），
     // 于是这一拍唯一还到期的就是没跑过的 store_c → 它必须被拉起，不能饿死。
@@ -257,14 +277,9 @@ describe('经营采集调度器 · 节拍', () => {
     expect(new Set(h.collectCalls.map(call => call.storeId))).toEqual(new Set(['store_a', 'store_b', 'store_c']))
 
     // 把仍在挂起的采集逐个放行，直到库里不留 RUNNING。
-    // 不能只放一次：本拍与上一拍挂起的 promise 数量不同，写死次数会让断言变成"碰巧通过"。
-    for (let round = 0; round < 8; round++) {
-      const pending = (h.db.prepare("SELECT COUNT(*) AS n FROM sales_collection_runs WHERE status='RUNNING'").get() as { n: number }).n
-      if (pending === 0) break
-      for (const release of releases.splice(0)) release()
-      await settle()
-    }
-    expect(h.db.prepare("SELECT COUNT(*) AS n FROM sales_collection_runs WHERE status='RUNNING'").get()).toMatchObject({ n: 0 })
+    const leftovers = await drain(10_000, releases, () => (h.db.prepare("SELECT COUNT(*) AS n FROM sales_collection_runs WHERE status='RUNNING'").get() as { n: number }).n)
+    if (leftovers !== 0) console.log('[diag] running=', leftovers, 'calls=', JSON.stringify(h.collectCalls))
+    expect(leftovers).toBe(0)
   })
 
   realIt('登录失效后停机：下一拍不会重新拉起，且不再累计失败次数', async () => {

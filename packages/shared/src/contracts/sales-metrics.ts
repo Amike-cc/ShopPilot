@@ -134,6 +134,11 @@ export interface SalesMetrics {
   refundOrderCount: number | null
   refundQuantity: number | null
   netSalesAmountMinor: number | null
+  /**
+   * 投放花费（广告消耗）。**必须**是平台自己的投放口径，不估算、不按比例分摊：
+   * 抖店经营数据卡的「投放消耗」、拼多多的「推广花费」。没有该来源的平台保持 null。
+   */
+  adSpendMinor: number | null
   collectedAt: number
   sourceUpdatedAt: number | null
   /** 这次数据从哪来：NETWORK/DOM/EXPORT/ORDER_AGGREGATION/OCR/MANUAL，NONE = 无可靠来源。 */
@@ -255,7 +260,11 @@ export const SALES_METRICS_METRIC_DEFINITIONS: Readonly<Record<string, SalesMetr
   refundAmountMinor: { field: 'refundAmountMinor', label: '退款金额', unit: 'MINOR_CNY', definition: '退款成功的金额合计，按退款完成时间归属（不是申请时间）', nullable: true },
   refundOrderCount: { field: 'refundOrderCount', label: '退款订单数', unit: 'COUNT', definition: '发生退款成功的订单数，按退款完成时间归属', nullable: true },
   refundQuantity: { field: 'refundQuantity', label: '退款件数', unit: 'COUNT', definition: '退款成功的商品件数', nullable: true },
-  netSalesAmountMinor: { field: 'netSalesAmountMinor', label: '净销售额', unit: 'MINOR_CNY', definition: 'grossSalesAmountMinor - refundAmountMinor；只要有一个算子为 null，本字段必须为 null', nullable: true }
+  netSalesAmountMinor: { field: 'netSalesAmountMinor', label: '净销售额', unit: 'MINOR_CNY', definition: 'grossSalesAmountMinor - refundAmountMinor；只要有一个算子为 null，本字段必须为 null', nullable: true },
+  // 投放花费是六项概览指标里唯一"平台不一定给"的一项：抖店经营数据卡有「投放消耗」、拼多多首页有
+  // 「推广花费」，快手/微信没有可读来源 → 保持 null。**绝不用成交额乘系数估算**：那种数字看起来
+  // 齐全，却无法回答"这是谁的口径"，会让 ROI 变成假精确。
+  adSpendMinor: { field: 'adSpendMinor', label: '投放花费', unit: 'MINOR_CNY', definition: '统计周期内的广告投放消耗，取平台自身口径（抖店「投放消耗」、拼多多「推广花费」）；没有该来源时为 null', nullable: true }
 })
 
 export const SALES_METRICS_PERIOD_SEMANTICS =

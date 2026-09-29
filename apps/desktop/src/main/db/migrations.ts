@@ -1017,6 +1017,19 @@ export const migrations: Migration[] = [
     down: (db) => {
       db.exec('DROP INDEX IF EXISTS idx_sales_collection_runs_created; DROP INDEX IF EXISTS idx_sales_metrics_raw_captured;')
     }
+  },
+  {
+    version: 18,
+    name: 'sales_metrics_ad_spend',
+    up: (db) => {
+      // 投放花费（§12 六项概览指标之一）。加列而不是塞进别的字段：它是**平台自己的口径**
+      // （抖店「投放消耗」、拼多多「推广花费」），没有来源的平台必须留 null；
+      // 和成交额混在一起，事后就答不出"这笔钱是谁花的、按谁的规则统计的"。
+      const metricColumns = new Set((db.prepare('PRAGMA table_info(sales_metrics)').all() as Array<{ name: string }>).map(column => column.name))
+      if (!metricColumns.has('ad_spend_minor')) db.exec('ALTER TABLE sales_metrics ADD COLUMN ad_spend_minor INTEGER')
+    },
+    // SQLite 不能删列；旧版本会忽略多出来的可空列，降级是安全的。
+    down: () => { /* 无可回滚动作 */ }
   }
 ]
 

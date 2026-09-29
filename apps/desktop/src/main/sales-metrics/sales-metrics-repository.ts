@@ -50,6 +50,7 @@ export function mapStoreMetricRow(row: Record<string, unknown>): SalesMetrics {
     refundOrderCount: nullableNumber(row.refund_order_count),
     refundQuantity: nullableNumber(row.refund_quantity),
     netSalesAmountMinor: nullableNumber(row.net_sales_amount_minor),
+    adSpendMinor: nullableNumber(row.ad_spend_minor),
     collectedAt: Number(row.collected_at),
     sourceUpdatedAt: nullableNumber(row.source_updated_at),
     // 旧行（v17 之前写下的）没有来源列，按默认值回填：NONE 表示"没有可追溯来源"，
@@ -118,9 +119,9 @@ export class SalesMetricsRepository {
         id, platform, store_id, period_type, period_start, period_end,
         order_count, paid_order_count, sales_quantity, gross_sales_amount_minor,
         paid_sales_amount_minor, refund_amount_minor, refund_order_count,
-        refund_quantity, net_sales_amount_minor, collected_at, source_updated_at,
+        refund_quantity, net_sales_amount_minor, ad_spend_minor, collected_at, source_updated_at,
         source_type, adapter_version, metric_definition_version, data_status, run_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(platform, store_id, period_start, period_end) DO UPDATE SET
         period_type = excluded.period_type,
         order_count = excluded.order_count,
@@ -132,6 +133,7 @@ export class SalesMetricsRepository {
         refund_order_count = excluded.refund_order_count,
         refund_quantity = excluded.refund_quantity,
         net_sales_amount_minor = excluded.net_sales_amount_minor,
+        ad_spend_minor = excluded.ad_spend_minor,
         collected_at = excluded.collected_at,
         source_updated_at = excluded.source_updated_at,
         source_type = excluded.source_type,
@@ -143,7 +145,9 @@ export class SalesMetricsRepository {
       id, metric.platform, metric.storeId, metric.periodType, metric.periodStart, metric.periodEnd,
       metric.orderCount, metric.paidOrderCount, metric.salesQuantity, metric.grossSalesAmountMinor,
       metric.paidSalesAmountMinor, metric.refundAmountMinor, metric.refundOrderCount,
-      metric.refundQuantity, metric.netSalesAmountMinor, metric.collectedAt, metric.sourceUpdatedAt,
+      // v18 新增列：老调用方或手写的指标字面量可能没有这个属性，用 ?? null 兜底——
+      // SQLite 绑定 undefined 会直接抛 "Provided value cannot be bound to SQLite parameter"。
+      metric.refundQuantity, metric.netSalesAmountMinor, metric.adSpendMinor ?? null, metric.collectedAt, metric.sourceUpdatedAt,
       metric.sourceType || 'NONE', metric.adapterVersion, metric.metricDefinitionVersion || SALES_METRICS_METRIC_DEFINITION_VERSION,
       metric.dataStatus || 'UNKNOWN', metric.runId
     )

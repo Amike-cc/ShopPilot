@@ -31,18 +31,21 @@ describe('拼多多经营数据档案', () => {
     expect(profile.urlMarker).toBe('mms.pinduoduo.com/home')
     // 卡片是"今日实时"，不是近 7 天滚动：口径写错的话，把今日累计标成 7 天比没有数字更糟
     expect(profile.salesPeriodType).toBe('TODAY')
-    expect(profile.measuredAt).toBe('2026-09-28')
+    expect(profile.measuredAt).toBe('2026-09-29')
     // 卡片数值不随周期页签变化 → 档案里不该有"点周期控件"这一步
     expect(profile.periodText).toBeUndefined()
   })
 
-  it('两个锚点都显式声明落到哪个统一指标（不靠中文文案推断口径）', () => {
+  it('三个锚点都显式声明落到哪个统一指标（不靠中文文案推断口径）', () => {
     const metrics = businessProfileFor(PDD)!.metrics
     const byKey = new Map(metrics.map(m => [m.key, m]))
     expect(byKey.get('biz.gmv')).toMatchObject({ anchorText: '成交金额', salesField: 'grossSalesAmountMinor', salesUnit: 'MINOR_CNY' })
     expect(byKey.get('biz.orders')).toMatchObject({ anchorText: '成交订单数', salesField: 'paidOrderCount', salesUnit: 'COUNT' })
-    // 数据中心的字体反爬页没有登记任何锚点（登记了就等于承认能读）
-    expect(metrics).toHaveLength(2)
+    // 「推广花费」是六项概览指标里"投放花费"的拼多多口径（2026-09-29 首页实测可读：今日 10.03 / 昨日 48.48）
+    expect(byKey.get('biz.adSpend')).toMatchObject({ anchorText: '推广花费', salesField: 'adSpendMinor', salesUnit: 'MINOR_CNY' })
+    // 数据中心的字体反爬页没有登记任何锚点（登记了就等于承认能读）；
+    // 退款金额/退款订单数也没有登记——首页只有"退款/售后"待处理单数，售后工作台页会跳到设置页
+    expect(metrics).toHaveLength(3)
   })
 
   it('卡片文本里的三个数字只认主值：主值可解析、昨日对照与空值都不能被当成数值', () => {
@@ -60,6 +63,20 @@ describe('拼多多经营数据档案', () => {
     expect(businessProfileFor('微信小店')!.salesPeriodType).toBe('LAST_7_DAYS')
     expect(businessProfileFor('抖店')!.salesPeriodType).toBe('TODAY')
     expect(Object.keys(BUSINESS_PROFILES)).toHaveLength(4)
+  })
+
+  it('抖店：首页卡片实测可读的三项都登记了（成交金额/成交订单数/投放消耗）', () => {
+    // 2026-09-29 真机复测推翻了"抖店只有成交金额一项"的旧结论：卡片头一行
+    // 「成交金额 0 / 成交订单数 0 / 支出金额 0 / 投放消耗 0」都能按标签锚点读到。
+    const metrics = businessProfileFor('抖店')!.metrics
+    const byKey = new Map(metrics.map(m => [m.key, m]))
+    expect(byKey.get('biz.gmv')).toMatchObject({ anchorText: '成交金额', salesField: 'grossSalesAmountMinor' })
+    expect(byKey.get('biz.orders')).toMatchObject({ anchorText: '成交订单数', salesField: 'paidOrderCount' })
+    expect(byKey.get('biz.adSpend')).toMatchObject({ anchorText: '投放消耗', salesField: 'adSpendMinor', salesUnit: 'MINOR_CNY' })
+    // 退款两项故意不登记：那两列的默认归属基准是「支付时间」，而 refundAmountMinor 的定义是
+    // "按退款完成时间"，点击列内下拉无法可靠切基准（实测 2026-09-29）→ 宁可不采
+    expect(metrics.some(m => m.salesField === 'refundAmountMinor')).toBe(false)
+    expect(metrics.some(m => m.salesField === 'refundOrderCount')).toBe(false)
   })
 
   it('拼多多 Adapter 走的是 DOM 档案路径（不能退回"注册表为空的网络抽取"那条沉默路径）', () => {

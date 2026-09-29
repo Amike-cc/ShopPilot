@@ -81,6 +81,7 @@ v17 追加的列：
 | `refundOrderCount` | 发生退款成功的订单数，按退款完成时间归属 |
 | `refundQuantity` | 退款成功的商品件数 |
 | `netSalesAmountMinor` | `grossSalesAmountMinor - refundAmountMinor`；**任一算子为 null 则本字段为 null**（禁止用 0 补齐再相减） |
+| `adSpendMinor` | 统计周期内的**广告投放消耗**，取平台自身口径（抖店「投放消耗」、拼多多「推广花费」）；快手/微信没有可读来源 → `null`。**不允许按成交额乘系数估算**（估算值看起来齐全，却答不出"这是谁的口径"，会让 ROI 变成假精确） |
 
 其他约定：
 
@@ -88,6 +89,8 @@ v17 追加的列：
 - 时区统一 `Asia/Shanghai`。
 - **跨平台合计只在 `metricDefinitionVersion` 一致时才允许**；不一致时返回 `null`，前端显示"—"（`sumAcrossPlatforms`）。
 - 口径未知时必须为 `null`，不允许自动推断。
+- 「投产比 ROI」= Σ成交金额 ÷ Σ投放花费，**只用同时报了这两个字段的店铺**（分子分母同源）；
+  没有花费来源的店铺不计入，也不拿它们的成交额充分子。
 
 ### 4.1 数据状态（前端必须区分）
 
@@ -190,19 +193,27 @@ v17 追加的列：
 
 **「点到控件」不等于「周期已生效」**（2026-09-28 实测事故）：微信小店那次点击没生效，采集把默认「今天」视图的
 `¥0 / 0 单` 当成 `LAST_7_DAYS` 写进了库，而近 7 天真实值是 `¥108.90 / 11 单`——把默认周期的数字标成目标周期，
-比没有数字更糟。因此点完之后必须验证，判据任一成立即可：① 首个指标的值与点击前不同；② 档案声明的
-`periodAppliedText` 出现（微信实测：近7天视图显示「较上周期 X%」，默认「今天」视图显示的是「昨日 X」）。
-两条都不成立 → `PERIOD_NOT_APPLIED`，**一个字段都不写**（下次周期到点再试）。
+比没有数字更糟。因此点完之后必须验证，判据任一成立即可：
+
+1. 首个指标的值与点击前不同；
+2. 档案声明的 `periodAppliedText` 出现（微信实测：近7天视图显示「较上周期 X%」，默认「今天」视图显示的是「昨日 X」）；
+3. **控件自身显示目标周期已被选中**（`readPeriodControlState`：该页签的文字色/背景色与同组页签不同）。
+   这条**点击前也认**——页面本来就停在目标周期时（SPA 记住上次选择），点击是空操作、值也不会变，
+   判据 ①② 必然都不成立：快手因此连续 9 次被判 `PERIOD_NOT_APPLIED` 而停采（2026-09-29 实测）。
+   它不放松 2026-09-28 那次的判据：那次点击失败后页面仍停在「今天」，目标页签并未呈现选中态，③ 不成立。
+
+三条都不成立 → `PERIOD_NOT_APPLIED`，**一个字段都不写**（下次周期到点再试）。判定成功的依据会写进运行记录的
+`safeMessage`（`周期判据：VALUE_CHANGED / MARKER / CONTROL_SELECTED / BASE_SELECTED`），事后可核对"这条数据凭什么是这个口径"。
 
 **统一字段映射由档案显式声明**（`BizMetricAnchor.salesField` / `salesUnit`），不按中文文案推断。档案同时声明 `salesPeriodType`，
 采集按它落 `period_type`（否则会把 7 天的数字标成今天）。
 
 | 平台 | 档案周期 | 已登记字段 | 状态 |
 |---|---|---|---|
-| 微信小店 | `LAST_7_DAYS`（点「近7天」） | 成交金额→`grossSalesAmountMinor`、成交订单数→`paidOrderCount`、成交退款金额→`refundAmountMinor`；销量与退款订单数无可靠来源 → `null` | `IMPLEMENTED` + 字段来源已真实验证 |
-| 快手小店 | `LAST_7_DAYS`（点「近7日」） | 成交金额、成交订单数、成交件数→`salesQuantity`、退款金额(退款日)→`refundAmountMinor`、成交退款订单数→`refundOrderCount` | `IMPLEMENTED` + 字段来源已真实验证 |
-| 抖店 | `TODAY`（首页卡片，无周期控件） | 成交金额→`grossSalesAmountMinor`；其余无可靠页面 → `null` | `IMPLEMENTED` + 字段来源已真实验证 |
-| 拼多多 | `TODAY`（首页卡片，无周期控件；「7日/30日」页签只切趋势图） | 成交金额→`grossSalesAmountMinor`、成交订单数→`paidOrderCount`；销量/退款金额/退款订单数无可靠来源 → `null` | `IMPLEMENTED` + 字段来源已真实验证（2026-09-28） |
+| 微信小店 | `LAST_7_DAYS`（点「近7天」） | 成交金额→`grossSalesAmountMinor`、成交订单数→`paidOrderCount`、成交退款金额→`refundAmountMinor`；销量/退款订单数/投放花费无可靠来源 → `null` | `IMPLEMENTED` + 字段来源已真实验证 |
+| 快手小店 | `LAST_7_DAYS`（点「近7日」） | 成交金额、成交订单数、成交件数→`salesQuantity`、退款金额(退款日)→`refundAmountMinor`、成交退款订单数→`refundOrderCount`；无投放消耗来源 → `null` | `IMPLEMENTED` + 字段来源已真实验证 |
+| 抖店 | `TODAY`（首页卡片「实时」） | 成交金额→`grossSalesAmountMinor`、**成交订单数→`paidOrderCount`（2026-09-29 新识别）**、**投放消耗→`adSpendMinor`（同上）**；退款两项**故意不登记**（列默认按「支付时间」归属，与本仓 `refundAmountMinor` 的"按退款完成时间"定义不符，列内下拉切基准实测不可靠） | `IMPLEMENTED` + 字段来源已真实验证（2026-09-29） |
+| 拼多多 | `TODAY`（首页卡片，无周期控件；「7日/30日」页签只切趋势图） | 成交金额→`grossSalesAmountMinor`、成交订单数→`paidOrderCount`、**推广花费→`adSpendMinor`（2026-09-29 新识别）**；销量/退款金额/退款订单数无可靠来源 → `null`（首页「退款/售后」是待处理工单数，不是退款金额） | `IMPLEMENTED` + 字段来源已真实验证（2026-09-29） |
 
 > 拼多多的接入方式与前三家一致：走 `BUSINESS_PROFILES` 的 DOM 锚点档案（`PddAdapter extends SalesMetricsDomAdapter`）。
 > 它的数据中心页（`sycm/stores_data`、`sycm/evaluation`）数字是**反抓取字体**（私有区码位，取文本为乱码），

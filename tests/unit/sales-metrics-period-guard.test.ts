@@ -34,6 +34,28 @@ describe('经营数据采集的周期生效判据', () => {
     expect(kuaishou.periodAppliedText).toBeUndefined()
   })
 
+  it('判据③：页面本来就停在目标周期时（点击是空操作）也要认，不能被判成 PERIOD_NOT_APPLIED', () => {
+    // 实测（2026-09-29）：快手计划连续 9 次 PERIOD_NOT_APPLIED，快照里写着"点了「近7日」但
+    // 读数仍是 9.8"——页面已经停在近7日（SPA 记住上次选择），再点同一个页签当然不会变值，
+    // 于是判据①②必然都不成立。判据③读控件自身的选中态（选中色与同组页签不同），
+    // 点击前也认：那时读到的值**就是**目标周期的值。
+    expect(ADAPTER_SRC).toContain('readPeriodControlState')
+    expect(ADAPTER_SRC).toContain('periodStateBefore')
+    expect(ADAPTER_SRC).toContain('CONTROL_SELECTED')
+    expect(ADAPTER_SRC).toContain('BASE_SELECTED')
+    // 判据③不能把 2026-09-28 的护栏拆掉：点击失败后页面仍停在默认周期 → 目标页签不呈现选中态 → 仍报错
+    expect(ADAPTER_SRC).toContain("reasonCode: 'PERIOD_NOT_APPLIED'")
+  })
+
+  it('判据③是"与同组页签比较配色"，不是在页面里找固定的颜色值', () => {
+    const reader = readFileSync(resolve('apps/desktop/src/main/platform-adapters/sales-metrics-page-reader.ts'), 'utf8')
+    expect(reader).toContain('readPeriodControlState')
+    // 与同组页签逐个比较（写死某个 rgb 会在平台换肤/夜间模式时静默失效）
+    expect(reader).toContain('SELECTED_BY_STYLE')
+    expect(reader).toContain('SAME_AS_SIBLINGS')
+    expect(reader).not.toMatch(/selected\s*=\s*.*rgb\(/)
+  })
+
   it('所有声明了周期控件的档案都必须注明"默认口径与目标口径不同"（否则判据①不成立）', () => {
     for (const profile of Object.values(BUSINESS_PROFILES)) {
       if (!profile.periodText) continue

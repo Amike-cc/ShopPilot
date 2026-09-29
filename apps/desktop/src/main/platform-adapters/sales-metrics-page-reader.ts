@@ -247,6 +247,110 @@ export async function clickText(wc: PageHandle, options: { text: string; deep?: 
   }
 }
 
+/**
+ * 读"周期控件当前是否处于选中态"。
+ *
+ * 为什么需要它：验证"周期真的切过去了"原来只有两条判据——值变了、或档案声明的
+ * `periodAppliedText` 出现。这两条都建立在"点击会改变页面"的前提上，于是**页面本来就停在
+ * 目标周期**时必然失败：点了「近7日」而页面早就是近7日，值不会变、文案也不会变 → 判
+ * `PERIOD_NOT_APPLIED` 并且一个字段都不写。快手计划连续 9 次停采就是这个假阴性
+ * （实测 2026-09-29：`settle` 之后页面保留上次选择，第二次点同一个页签是空操作）。
+ *
+ * 判据是"控件自己的外观与同组页签不同"：真机实测快手未选中 `color rgb(44,46,48) /
+ * bg rgb(245,246,249)`、选中 `color rgb(50,107,251) / bg rgb(232,243,255)`；同一组的
+ * 其他页签保持未选中配色。所以"目标页签的 文字色+背景色 与所有同组页签都不同"即视为选中。
+ * 判不出来（找不到、没有同组页签）时如实返回 false——不能因为"看起来像"就放行。
+ */
+export interface PeriodControlState {
+  found: boolean
+  selected: boolean
+  reason: 'SELECTED_BY_STYLE' | 'SAME_AS_SIBLINGS' | 'NO_SIBLING_TABS' | 'NOT_FOUND' | 'ERR'
+  ownStyle: string | null
+  siblingStyle: string | null
+}
+
+export async function readPeriodControlState(wc: PageHandle, options: { text: string; deep?: boolean; timeoutMs?: number }): Promise<PeriodControlState> {
+  const deadline = Date.now() + Math.max(500, options.timeoutMs ?? 4000)
+  let last: PeriodControlState = { found: false, selected: false, reason: 'NOT_FOUND', ownStyle: null, siblingStyle: null }
+  for (;;) {
+    if (wc.isDestroyed()) return { ...last, reason: 'ERR' }
+    last = await attemptPeriodControlState(wc, options.text, !!options.deep)
+    if (last.reason !== 'NOT_FOUND') return last
+    if (Date.now() >= deadline) return last
+    await delay(300)
+  }
+}
+
+async function attemptPeriodControlState(wc: PageHandle, text: string, deep: boolean): Promise<PeriodControlState> {
+  const script = `(() => {
+    ${deep ? ENUM_DEEP_FN : ''}
+    ${VISIBLE_JS}
+    ${PICK_SORT_JS}
+    const want = __narrow(${JSON.stringify(text)});
+    // 同组页签的文案集合：只有认出"这一组是周期切换控件"才谈得上比较选中态
+    const TAB_TEXTS = ['昨日', '昨天', '今天', '今日', '实时', '近7日', '近7天', '近30日', '近30天', '本周', '本月', '近90天'];
+    const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+    const findTab = (target) => {
+      const cands = [];
+      for (const el of scope) {
+        const raw = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('');
+        // 只认"自身文本几乎就是页签文案"的元素：容器元素也含同样文字，但它们的文本会长得多
+        const own2 = __narrow(raw);
+        if (!own2) continue;
+        let rank = -1;
+        if (own2 === target) rank = 0;
+        else if (own2.includes(target) && own2.length <= target.length + 6) rank = 1;
+        if (rank < 0) continue;
+        if (!__visible(el)) continue;
+        cands.push({ el, rank, len: own2.length });
+      }
+      if (!cands.length) return null;
+      cands.sort((a, b) => (a.rank - b.rank) || (a.len - b.len));
+      return cands[0].el;
+    };
+    const styleOf = (el) => { const cs = getComputedStyle(el); return cs.color + '|' + cs.backgroundColor };
+    const target = findTab(want);
+    if (!target) return { found: false, selected: false, reason: 'NOT_FOUND', ownStyle: null, siblingStyle: null };
+    // 同组页签：从目标向上最多两层，在该子树里找其它"周期类"短文案元素
+    let group = target.parentElement;
+    let siblings = [];
+    for (let level = 0; level < 2 && group; level++) {
+      siblings = [];
+      for (const el of group.querySelectorAll('*')) {
+        if (el === target || el.contains(target) || target.contains(el)) continue;
+        const raw = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('');
+        const own = __narrow(raw);
+        if (!own || !TAB_TEXTS.includes(own)) continue;
+        if (!__visible(el)) continue;
+        siblings.push(el);
+      }
+      if (siblings.length) break;
+      group = group.parentElement;
+    }
+    if (!siblings.length) return { found: true, selected: false, reason: 'NO_SIBLING_TABS', ownStyle: styleOf(target), siblingStyle: null };
+    const mine = styleOf(target);
+    const others = siblings.map(styleOf);
+    const same = others.some(style => style === mine);
+    return {
+      found: true,
+      selected: !same,
+      reason: same ? 'SAME_AS_SIBLINGS' : 'SELECTED_BY_STYLE',
+      ownStyle: mine,
+      siblingStyle: others[0] || null
+    };
+  })()`
+  const raw = await wc.executeJavaScript(script, true).catch(() => null)
+  if (!raw || typeof raw !== 'object') return { found: false, selected: false, reason: 'ERR', ownStyle: null, siblingStyle: null }
+  const state = raw as Partial<PeriodControlState>
+  return {
+    found: !!state.found,
+    selected: !!state.selected,
+    reason: (state.reason as PeriodControlState['reason']) || 'ERR',
+    ownStyle: state.ownStyle ?? null,
+    siblingStyle: state.siblingStyle ?? null
+  }
+}
+
 /** 等 URL 包含指定片段（就绪判据）。 */
 export async function waitForUrlMarker(wc: PageHandle, marker: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + Math.max(1000, timeoutMs)

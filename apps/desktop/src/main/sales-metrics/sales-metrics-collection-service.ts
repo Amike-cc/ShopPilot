@@ -106,7 +106,7 @@ function valueTypeFor(field: string): SalesCollectionEvidenceInput['valueType'] 
 
 const METRIC_FIELDS: ReadonlyArray<keyof SalesMetrics> = [
   'orderCount', 'paidOrderCount', 'salesQuantity', 'grossSalesAmountMinor',
-  'paidSalesAmountMinor', 'refundAmountMinor', 'refundOrderCount', 'refundQuantity', 'netSalesAmountMinor'
+  'paidSalesAmountMinor', 'refundAmountMinor', 'refundOrderCount', 'refundQuantity', 'netSalesAmountMinor', 'adSpendMinor'
 ]
 
 /**
@@ -138,6 +138,7 @@ export function normalizeStoreMetric(input: {
   const refundAmountMinor = toMinorAmount(raw.refundAmountMinor)
   const refundOrderCount = toCount(raw.refundOrderCount)
   const refundQuantity = toCount(raw.refundQuantity)
+  const adSpendMinor = toMinorAmount(raw.adSpendMinor)
   const declaredNet = toMinorAmount(raw.netSalesAmountMinor)
   const netSalesAmountMinor = declaredNet != null
     ? declaredNet
@@ -161,6 +162,7 @@ export function normalizeStoreMetric(input: {
     refundOrderCount,
     refundQuantity,
     netSalesAmountMinor,
+    adSpendMinor,
     collectedAt: input.collectedAt,
     sourceUpdatedAt: raw.sourceUpdatedAt == null ? null : toCount(raw.sourceUpdatedAt),
     sourceType: input.sourceType,
@@ -168,7 +170,7 @@ export function normalizeStoreMetric(input: {
     metricDefinitionVersion: SALES_METRICS_METRIC_DEFINITION_VERSION,
     dataStatus: deriveRowDataStatus({
       orderCount, paidOrderCount, salesQuantity, grossSalesAmountMinor,
-      paidSalesAmountMinor, refundAmountMinor, refundOrderCount, refundQuantity, netSalesAmountMinor
+      paidSalesAmountMinor, refundAmountMinor, refundOrderCount, refundQuantity, netSalesAmountMinor, adSpendMinor
     }),
     runId: input.runId
   }

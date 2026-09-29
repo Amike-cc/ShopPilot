@@ -20,7 +20,8 @@ export const BIZ_METRICS = [
   { key: 'biz.orders', label: '订单' },
   { key: 'biz.gmv', label: '销售额' },
   { key: 'biz.refundAmount', label: '退款金额' },
-  { key: 'biz.refundOrders', label: '退款订单数' }
+  { key: 'biz.refundOrders', label: '退款订单数' },
+  { key: 'biz.adSpend', label: '投放花费' }
 ] as const
 
 export type BizMetricKey = (typeof BIZ_METRICS)[number]['key']
@@ -41,6 +42,7 @@ export type BizSalesField =
   | 'refundAmountMinor'
   | 'refundOrderCount'
   | 'refundQuantity'
+  | 'adSpendMinor'
 
 export interface BizMetricAnchor {
   /** 与 BIZ_METRICS.key 对应 */
@@ -151,15 +153,20 @@ const WEIXIN: BusinessProfile = {
 
 const DOUDIAN: BusinessProfile = {
   platform: '抖店',
-  // 抖店后台首页：卡片上的「成交金额」（今日，带"较昨日"对比）
+  // 抖店后台首页：卡片上的「成交金额」「成交订单数」「投放消耗」（今日，带"较昨日"对比）
   pageUrl: 'https://fxg.jinritemai.com/ffa/mshop/homepage/index',
   urlMarker: 'mshop/homepage',
   salesPeriodType: 'TODAY',
-  measuredAt: '2026-09-13',
+  // 2026-09-29 真机复测（店铺 1111）：首页卡片结构与 09-13 结论不同——「成交订单数」「投放消耗」
+  // 都能按标签锚点读到（卡片头 成交金额 0 / 成交订单数 0 / 支出金额 0 / 投放消耗 0，值均为今日实时）。
+  measuredAt: '2026-09-29',
   metrics: [
-    { key: 'biz.gmv', anchorText: '成交金额', salesField: 'grossSalesAmountMinor', salesUnit: 'MINOR_CNY' }
+    { key: 'biz.gmv', anchorText: '成交金额', salesField: 'grossSalesAmountMinor', salesUnit: 'MINOR_CNY' },
+    { key: 'biz.orders', anchorText: '成交订单数', salesField: 'paidOrderCount', salesUnit: 'COUNT' },
+    // 「投放消耗」= 该店广告消耗（投放分析卡），是六项概览指标里"投放花费"的抖店口径
+    { key: 'biz.adSpend', anchorText: '投放消耗', salesField: 'adSpendMinor', salesUnit: 'MINOR_CNY' }
   ],
-  note: '口径：今日成交金额（后台首页卡片）。该账号罗盘未开通，其余指标无数据页可读——销量/订单/退款金额在首页与广告文案同名（实测「销量」读到的是"销量高"这类文案），故只登记能可靠读到的这一项，不猜。'
+  note: '口径：今日实时（首页卡片）。**退款金额/退款订单数故意不登记**：这两列自带的归属基准默认是「支付时间」（实测列内下拉可选项为 支付时间/退款时间），而我们 refundAmountMinor 的定义是"按退款完成时间归属"——实测 2026-09-29 点击列内下拉无法可靠切到「退款时间」（aurora 弹层的选项与关闭态标签同坐标，点了不生效），宁可留 null 也不按另一个基准填数。'
 }
 
 const PINDUODUO: BusinessProfile = {
@@ -169,12 +176,14 @@ const PINDUODUO: BusinessProfile = {
   urlMarker: 'mms.pinduoduo.com/home',
   // 卡片主值是**实时（今日累计）**，「昨日 X」是卡片里的对照行（实测点「7日」页签只换趋势图，卡片数值不变）
   salesPeriodType: 'TODAY',
-  measuredAt: '2026-09-28',
+  measuredAt: '2026-09-29',
   metrics: [
     { key: 'biz.gmv', anchorText: '成交金额', salesField: 'grossSalesAmountMinor', salesUnit: 'MINOR_CNY' },
-    { key: 'biz.orders', anchorText: '成交订单数', salesField: 'paidOrderCount', salesUnit: 'COUNT' }
+    { key: 'biz.orders', anchorText: '成交订单数', salesField: 'paidOrderCount', salesUnit: 'COUNT' },
+    // 「推广花费」= 多多搜索/场景推广消耗，是六项概览指标里"投放花费"的拼多多口径（实测 2026-09-29：今日 10.03 / 昨日 48.48）
+    { key: 'biz.adSpend', anchorText: '推广花费', salesField: 'adSpendMinor', salesUnit: 'MINOR_CNY' }
   ],
-  note: '口径：今日实时（首页卡片主值，昨日值仅作卡片内对照，不采集）。数据中心（sycm/stores_data、sycm/evaluation）的成交金额/订单数**字体反爬**——数字用私有区码位渲染，取文本得到乱码（实测 2026-09-28），因此不登记那两页；首页卡片的数字是纯文本可读。销量/退款金额在首页与优惠券文案同名（实测「成交订单数」在优惠券面板也出现且值为 --），故只登记能可靠读到的两项。'
+  note: '口径：今日实时（首页卡片主值，昨日值仅作卡片内对照，不采集）。数据中心（sycm/stores_data、sycm/evaluation）的成交金额/订单数**字体反爬**——数字用私有区码位渲染，取文本得到乱码（实测 2026-09-28），因此不登记那两页；首页卡片的数字是纯文本可读。**退款金额/退款订单数不登记**：首页只有「退款/售后」待处理单数（那是待办工单数，不是退款金额/退款订单数），售后工作台页会跳转到设置页且没有聚合退款指标（实测 2026-09-29），sycm 页字体反爬——没有可信来源就留 null。'
 }
 
 export const BUSINESS_PROFILES: Readonly<Record<string, BusinessProfile>> = {
