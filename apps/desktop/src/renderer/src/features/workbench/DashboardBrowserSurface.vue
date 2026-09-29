@@ -58,6 +58,7 @@
             :data-store-id="item.storeId"
             :data-tab-id="item.tabId"
             :aria-label="`${item.storeName} · ${item.tabTitle || '新标签页'}`"
+            allowpopups
             @did-attach="handleWebviewAttach(item)"
             @did-fail-load="handleWebviewFailure(item, $event)"
             @did-finish-load="clearWebviewError(item)"

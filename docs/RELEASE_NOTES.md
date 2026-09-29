@@ -1,3 +1,34 @@
+# ShopPilot 0.4.53 变更说明（当前工作区）
+
+> **构建标签：INTERNAL_BUILD** —— 本包未做代码签名，按 DEVELOPMENT_SPEC §21.5 不能标记为正式 RELEASE；本次发布用于内部试用和验收。
+
+## 本次更新（修复「浏览器不能打开新标签页」）
+
+用户实报：在店铺页面里点开新标签页的链接没反应。真机逐段复现后定位到两个问题：
+
+1. **`<webview>` 少了 `allowpopups`**（根因）。Electron 的 `<webview>` **默认禁止弹窗**：没有这个属性时，页面里 `target=_blank` 的链接与 `window.open` 在 webview 层就被丢弃，主进程的 `setWindowOpenHandler` **根本不会被调用**——实测真鼠标点一个 `target=_blank` 链接，页签数不变，应用日志里一条 `window-open` 都没有。加上 `allowpopups` 后同一次点击立刻开出新标签页并加载目标地址（实测新增页签标题 "Example Domain"）。
+   - 这不是放开安全边界：`allowpopups` 只是"允许把新窗口请求交给主进程判断"，主进程仍然 `action: 'deny'` 掉原生弹窗，改成**应用内标签页**（同一店铺的 `persist:store_<id>` 分区），不会新建 `BrowserWindow`、不会获得额外权限；`will-attach-webview` 的 preload 剥离与权限锁死照旧。
+2. **失败被静默吞掉**。原来的 handler 是 `try { createTab(...) } catch { /* ignore */ }`——真出错时表现为"点了没反应"，现场只剩一个空白页，既没有日志也没有提示。现在成功写 `info`（店铺、页签、disposition、目标地址），失败写 `warn`（含错误原因），排障时第一现场就有证据。
+
+顺带核对了用户路径的其它环节，都是好的（本次未改）：左栏点店铺卡会切到「店铺工作台」；工具栏「+」连点多次都能新建页签且每个标签页各挂一个 `<webview>`。
+
+## 本版验证
+
+- `pnpm typecheck` 通过；`pnpm lint` 0 errors（warnings 为仓库存量）。
+- `pnpm test`（`vitest run`）：**70 个文件 / 759 个用例通过**（新增 2 条源码级护栏：`<webview>` 必须带 `allowpopups`；window-open 失败分支必须留日志而不是吞异常）。
+- **M1 全链路验收 115/115**。
+- 真机验证（生产构建 + CDP + 真鼠标点击）：
+  - 店铺页面里 `target=_blank` 链接 → 新标签页出现且加载目标地址（日志 `[window-open] 已开新标签页 … disposition=foreground-tab`）；
+  - 工具栏「+」连点 3 次 → 页签 3 → 4 → 5 → 6，`<webview>` 同步增加；
+  - 左栏店铺卡 → 切到「店铺工作台」并渲染标签栏。
+
+## 已知边界
+
+- 未做代码签名，更新包仅 SHA-512 校验；真实店铺逐项人工验收、安装态「检查更新 → 下载 → 安装」未随本版重跑。
+- 页面弹出的新窗口统一变成**应用内标签页**（这是设计选择：所有店铺页面都留在 ShopPilot 里，便于任务/Agent 复用同一会话）；需要真正独立窗口时用店铺右键菜单的「在独立窗口打开当前标签页」。
+
+---
+
 # ShopPilot 0.4.52 变更说明（当前工作区）
 
 > **构建标签：INTERNAL_BUILD** —— 本包未做代码签名，按 DEVELOPMENT_SPEC §21.5 不能标记为正式 RELEASE；本次发布用于内部试用和验收。

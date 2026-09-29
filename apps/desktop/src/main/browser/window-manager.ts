@@ -436,8 +436,16 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
   tab.guestAttached = true
   guestTabs.set(wc.id, tab)
 
-  wc.setWindowOpenHandler(({ url: targetUrl }) => {
-    try { createTab(tab.storeId, targetUrl) } catch { /* ignore */ }
+  wc.setWindowOpenHandler(({ url: targetUrl, disposition }) => {
+    // 页面里 target=_blank 的链接、window.open、以及外站"在新标签页打开"都走这里。
+    // 关键：**不能把 createTab 的异常吞掉**——吞了以后表现为"点了没反应"，
+    // 现场只剩一个空白页，既没有日志也没有提示（2026-09-29 用户实报"浏览器不能打开新标签页"）。
+    try {
+      const tabId = createTab(tab.storeId, targetUrl)
+      logMain('info', `[window-open] 已开新标签页 store=${tab.storeId} tab=${tabId} disposition=${String(disposition)} target=${String(targetUrl).slice(0, 160)}`)
+    } catch (error) {
+      logMain('warn', `[window-open] 开新标签页失败 store=${tab.storeId} target=${String(targetUrl).slice(0, 160)}: ${String((error as Error)?.message || error).slice(0, 200)}`)
+    }
     return { action: 'deny' }
   })
   wc.on('will-navigate', (event, targetUrl) => {

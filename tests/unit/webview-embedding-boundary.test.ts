@@ -93,6 +93,22 @@ describe('主窗口 DOM <webview> 嵌入边界', () => {
     expect(SURFACE).toContain('loadURL')
   })
 
+  it('<webview> 必须带 allowpopups，否则页面里 target=_blank/window.open 打不开新标签页', () => {
+    // 2026-09-29 用户实报"浏览器不能打开新标签页"：Electron 的 <webview> 默认**禁止弹窗**，
+    // 没有 allowpopups 时新窗口请求在 webview 层就被丢弃，主进程的 setWindowOpenHandler
+    // 根本不会被调用（实测：真鼠标点 target=_blank 链接，页签数不变、日志里一条 window-open 都没有）。
+    // allowpopups 只是"允许把请求交给主进程判断"，我们仍然在 handler 里 deny 掉原生弹窗、改成应用内标签页。
+    expect(SURFACE).toMatch(/<webview[\s\S]*?allowpopups[\s\S]*?<\/webview>/)
+  })
+
+  it('window-open 失败必须留日志（不能把 createTab 的异常吞掉，否则表现为"点了没反应"）', () => {
+    expect(WINDOW_MANAGER).toContain('setWindowOpenHandler')
+    expect(WINDOW_MANAGER).toContain('createTab(tab.storeId, targetUrl)')
+    // 失败分支要写 warn（旧实现是空 catch，现场只剩一个空白页，既没日志也没提示）
+    expect(WINDOW_MANAGER).toMatch(/catch\s*\(error\)\s*\{[\s\S]{0,400}window-open\] 开新标签页失败/)
+    expect(WINDOW_MANAGER).toContain('action: \'deny\'')
+  })
+
   it('被隐藏的店铺/标签页用 opacity 隐藏而不是 display/visibility（否则平台页面停止渲染）', () => {
     const styleBlock = SURFACE.slice(SURFACE.lastIndexOf('<style'))
     expect(styleBlock).toMatch(/\.dashboard-browser-webview\s*\{[^}]*opacity:\s*0/)
