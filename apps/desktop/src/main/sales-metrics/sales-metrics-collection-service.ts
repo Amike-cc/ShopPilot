@@ -75,6 +75,9 @@ function assertStoreId(storeId: string): string {
  * 具体边界由 `@shared/sales-metrics-rules` 唯一实现（按天对齐、同日重复采集更新同一行）；
  * 这里只是给旧调用点保留的同名包装，避免三处各写一份周期算法。
  */
+/** 未指定预算时的默认值（含附加口径的余量）：手动"立即采集"走这条路径 */
+const MULTI_PERIOD_DEFAULT_BUDGET_MS = 60_000
+
 export function periodBounds(input: { periodType?: SalesMetricsPeriodType; periodStart?: number; periodEnd?: number }): { start: number; end: number } {
   return salesMetricsPeriodBounds(input.periodType || 'TODAY', Date.now(), { start: input.periodStart, end: input.periodEnd })
 }
@@ -339,10 +342,10 @@ export class SalesMetricsCollectionService {
       const context = {
         storeId: input.storeId, platform: store.platform, session, webContents,
         currentUrl: (() => { try { return String(webContents.getURL() || '') } catch { return '' } })(),
-        timeoutMs: input.timeoutMs || 30000
+        timeoutMs: input.timeoutMs || MULTI_PERIOD_DEFAULT_BUDGET_MS
       }
       const adapterResult = await adapter.collectSalesMetrics(context,
-        { periodType, periodStart: period.start, periodEnd: period.end, timeoutMs: input.timeoutMs || 30000 })
+        { periodType, periodStart: period.start, periodEnd: period.end, timeoutMs: input.timeoutMs || MULTI_PERIOD_DEFAULT_BUDGET_MS })
 
       result.status = adapterResult.status
       result.sourceType = adapterResult.sourceType
@@ -359,9 +362,13 @@ export class SalesMetricsCollectionService {
         const collectedAt = Date.now()
         const storeMetrics = (adapterResult.storeMetrics || [])
           .filter(metric => metric.storeId === input.storeId && metric.platform === store.platform)
+          // 一次采集可能带回**多个口径**的行（主口径 + 附加口径）：每行按它自己的 periodType/
+          // periodStart/periodEnd 归一化，不能统一按主口径写——那会把 30 天的数字标成 7 天的。
           .map(metric => normalizeStoreMetric({
             metric, storeId: input.storeId, platform: store.platform,
-            periodType, periodStart: period.start, periodEnd: period.end,
+            periodType: (metric.periodType as SalesMetricsPeriodType) || periodType,
+            periodStart: Number.isFinite(metric.periodStart) ? metric.periodStart : period.start,
+            periodEnd: Number.isFinite(metric.periodEnd) ? metric.periodEnd : period.end,
             collectedAt, sourceType: adapterResult.sourceType, adapterVersion: adapter.adapterVersion,
             runId: runContext?.runId || null
           }))

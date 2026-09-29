@@ -45,8 +45,15 @@ const PLAN_SYNC_INTERVAL_MS = 30 * 1000
  *  取 180 秒是因为真机上微信小店的经营数据区要 30 秒以上才渲染完（实测），
  *  90 秒的 Adapter 预算留一倍余量。 */
 const RUN_HARD_TIMEOUT_MS = 180 * 1000
-/** 交给 Adapter 的预算：导航 + 固定周期 + 逐指标读值都在这个预算内完成。 */
-const RUN_ADAPTER_BUDGET_MS = 90 * 1000
+/**
+ * 交给 Adapter 的预算：导航 + 固定周期 + 逐指标读值都在这个预算内完成。
+ *
+ * 120 秒（原 90 秒）是因为一次采集现在可能要采**多个口径**（主口径 + 档案声明的附加口径，
+ * 如快手/微信还要补采近 30 天）：每个口径都要"点页签 → 验证切换生效 → 等页面重取数 → 读锚点"，
+ * 微信小店单个口径就要 10 秒上下。预算不够时附加口径会被跳过（如实记为部分成功），
+ * 所以这里给足；硬上限仍是 180 秒，卡死也不会占住唯一的并发位。
+ */
+const RUN_ADAPTER_BUDGET_MS = 120 * 1000
 
 export interface SalesMetricsSchedulerRuntime {
   now: () => number
@@ -245,8 +252,12 @@ async function runPlan(plan: { storeId: string; platform: string; nextRunAt: num
       refreshLastSuccess
     })
     // 成功分支要把"这一拍写进去的聚合值"补进运行记录，供 24 小时趋势使用。
+    // 带上主口径的区间：一次采集可能写多个口径，快照要取**主口径**那一行。
     if (refreshLastSuccess) {
-      try { ledger.attachRunMetricsSnapshot(runId, plan.storeId) } catch { /* 趋势缺一次点不影响采集 */ }
+      const period = Number.isFinite(result.periodStart) && Number.isFinite(result.periodEnd)
+        ? { start: Number(result.periodStart), end: Number(result.periodEnd) }
+        : undefined
+      try { ledger.attachRunMetricsSnapshot(runId, plan.storeId, period) } catch { /* 趋势缺一次点不影响采集 */ }
     }
     const freshness = computeFreshness({
       lastSuccessAt: refreshLastSuccess ? finishedAt : (runtime().ledger.getPlan(plan.storeId)?.lastSuccessAt ?? null),

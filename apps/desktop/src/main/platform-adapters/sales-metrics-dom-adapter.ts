@@ -22,7 +22,7 @@ import { SALES_METRICS_METRIC_DEFINITION_VERSION, salesMetricsPeriodBounds } fro
 import type { PlatformLoginResult } from '@shared/contracts/platform-adapter'
 import type { PlatformAdapterContext, SalesMetricsCapableAdapter } from './platform-adapter'
 import { createLoginResult, LOGIN_DETECTION_ONLY_CAPABILITIES } from './platform-adapter'
-import { clickText, navigateTo, parseSalesValue, readLabelValue, readPeriodControlState, waitForUrlMarker, type PageHandle } from './sales-metrics-page-reader'
+import { clickText, navigateTo, parseSalesValue, readLabelValue, readPeriodControlState, waitForUrlMarker, type LabelReadAttempt, type PageHandle } from './sales-metrics-page-reader'
 export interface PlatformLoginProbe {
   /** 允许的 host（精确匹配，不做后缀模糊） */
   host: string
@@ -47,6 +47,19 @@ interface AnchorReading {
   raw: string | null
   value: number | null
   reason: string | null
+}
+
+/** 一次采集里"某一个统计口径"的一轮：主口径 + 档案声明的附加口径。 */
+interface PeriodPassPlan {
+  /** 只允许档案能声明的那四种口径（CUSTOM 走外部区间，不走这条路） */
+  periodType: BusinessProfile['salesPeriodType']
+  /** 该口径要点的周期控件文案；没有（如首页卡片只有今日）就整轮跳过点击 */
+  controlText?: string
+  appliedText?: string
+  deep?: boolean
+  settleMs?: number
+  /** 主口径失败 = 整次采集失败；附加口径失败 = 部分成功 */
+  primary: boolean
 }
 
 function periodBounds(periodType: SalesMetricsPeriodType): { start: number; end: number } {
@@ -197,10 +210,13 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
     if (!profile) {
       return { ...base, status: 'DATA_SOURCE_NOT_VERIFIED', reasonCode: 'PAGE_PROFILE_NOT_MEASURED', safeMessage: `${this.platform}经营数据页档案尚未实测，未做任何猜测`, dataStatus: 'SOURCE_UNVERIFIED', finishedAt: Date.now() }
     }
-    if (profile.salesPeriodType !== options.periodType) {
+    // 请求的口径必须是档案声明过的（主口径或附加口径）：没声明就拒绝，防止"随便点个页签
+    // 就把它的数字当目标口径"。附加口径只由本次采集自己按顺序补采，不接受外部指定。
+    const declaredPeriods: Array<BusinessProfile['salesPeriodType']> = [profile.salesPeriodType, ...(profile.extraPeriods || []).map(extra => extra.periodType)]
+    if (!declaredPeriods.includes(options.periodType as BusinessProfile['salesPeriodType'])) {
       return {
         ...base, status: 'ERROR', reasonCode: 'PERIOD_SEMANTICS_MISMATCH',
-        safeMessage: `该页面档案固定的是${profile.salesPeriodType}口径，请求的是${options.periodType}，拒绝按错误口径落库`,
+        safeMessage: `该页面档案登记的口径是 ${declaredPeriods.join('/')}，请求的是${options.periodType}，拒绝按错误口径落库`,
         dataStatus: 'COLLECTION_FAILED', finishedAt: Date.now()
       }
     }
@@ -221,25 +237,15 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
     const budgetMs = Math.max(5_000, Number(options.timeoutMs) || 30_000)
     const deadline = startedAt + budgetMs
     const remaining = (): number => Math.max(1_000, deadline - Date.now())
-
     /**
-     * 页面"渲染出来了但结构对不上" vs "内容区根本没画出来"。
+     * 是否补采附加口径：**进门时按预算一次性决定**，而不是看"还剩多少"。
      *
-     * 前者是页面改版（停机、等重新实测），后者是当时的渲染条件不满足（窗口最小化/被遮挡，
-     * 或者页面还在冷启）——那要按可重试的失败处理，而不是把一个健康平台永久停掉。
-     * 真机实测：窗口不在前台时微信/抖店的内容区都不渲染，外壳正文只有 106～109 字。
+     * 为什么这么定：附加口径是"顺带采"的（每个都要点页签 + 验证 + 等重取数 + 读锚点，
+     * 微信小店单个口径约 10 秒）。预算本来就小的调用方（例如只想快速读一次主口径）不该被
+     * 拖进多口径；而真实路径的预算都够（调度器 120 秒、手动"立即采集"60 秒）。
+     * 用"剩余时间"判断会让同一个调用方在不同机器负载下时采时不采，反而更难解释。
      */
-    const structureFailure = async (reasonCode: string, message: string): Promise<SalesMetricsCollectionResult & { storeMetrics?: SalesMetrics[] }> => {
-      const length = await this.bodyTextLength(wc)
-      if (length < SHELL_BODY_TEXT_MAX) {
-        return {
-          ...base, status: 'NETWORK_ERROR', reasonCode: 'PAGE_NOT_RENDERED',
-          safeMessage: `经营数据页内容区未渲染（正文仅 ${length} 字）——窗口可能被最小化/遮挡，或页面仍在冷启；按可重试失败处理，不判为页面改版`,
-          dataStatus: 'COLLECTION_FAILED', finishedAt: Date.now()
-        }
-      }
-      return { ...base, status: 'PAGE_CHANGED', reasonCode, safeMessage: message, dataStatus: 'PAGE_CHANGED', finishedAt: Date.now() }
-    }
+    const collectExtras = budgetMs >= 45_000 && (profile.extraPeriods || []).length > 0
 
     // 1. 就位：不在已登记页面才导航（避免每 10 分钟把用户的标签页刷一遍）
     const currentUrl = (() => { try { return String(wc.getURL() || '') } catch { return '' } })()
@@ -274,18 +280,109 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
       }
     }
 
-    // 2. 固定统计口径：点不到周期控件就**不采**——周期没切成功却按目标周期落库是口径错误。
+    // 2 + 3. 逐口径采集：主口径先采，档案声明的附加口径（同页其它周期控件）依次补采。
     //
-    // 但"点不到"有两种原因，必须分开对待：页面真的改版了，或者 SPA 还没渲染出来。
-    // 真机实测（2026-09-28）微信小店的经营数据区要 30 秒以上才渲染，冷启时控件还不存在。
-    // 所以第一次点不到就**重载一次再给一轮机会**，两轮都点不到才判 PAGE_CHANGED。
-    // 这条判据的结果（VALUE_CHANGED/MARKER/CONTROL_SELECTED/BASE_SELECTED）会写进运行记录的
-    // safeMessage，供事后核对"这条数据是凭什么认定为目标周期的"。
-    let periodEvidence = ''
-    if (profile.periodText) {
+    // 为什么要有附加口径：各平台只暴露一种固定窗口（抖店/拼多多「今日实时」、快手/微信「近 7 天」），
+    // 总览每个页签就总有一半平台空白。把同页**实测点得动、切过去数值确实变**的其它周期也采下来
+    // （每个口径独立验证、独立落一行），页签之间才有得比。
+    const plans: PeriodPassPlan[] = [
+      {
+        periodType: profile.salesPeriodType,
+        controlText: profile.periodText,
+        appliedText: profile.periodAppliedText,
+        deep: profile.periodDeep,
+        settleMs: profile.periodSettleMs,
+        primary: true
+      },
+      ...(collectExtras ? (profile.extraPeriods || []).map(extra => ({
+        periodType: extra.periodType,
+        controlText: extra.controlText,
+        appliedText: extra.appliedText,
+        deep: extra.deep ?? profile.periodDeep,
+        settleMs: extra.settleMs ?? profile.periodSettleMs,
+        primary: false
+      })) : [])
+    ]
+
+    const storeMetrics: SalesMetrics[] = []
+    const passNotes: string[] = []
+    if (!collectExtras && (profile.extraPeriods || []).length) {
+      // 预算不够就只采主口径：这是调用方的选择，不算失败，但要在记录里写清楚没采哪些口径。
+      passNotes.push(`附加口径未采（预算 ${Math.round(budgetMs / 1000)}s < 45s）：${(profile.extraPeriods || []).map(item => item.periodType).join('/')}`)
+    }
+    let periodEvidence = ''   // 主口径凭什么算生效（写进运行记录供事后核对）
+    let primaryFailure: { status: SalesMetricsCollectionResult['status']; reasonCode: string; safeMessage: string; dataStatus: string } | null = null
+    let allComplete = true
+    let extrasAttempted = false
+
+    for (const plan of plans) {
+      if (!plan.primary) extrasAttempted = true
+      const pass = await this.collectPeriodPass({ wc, context, profile, plan, remaining })
+      if (!pass.ok) {
+        if (plan.primary) {
+          primaryFailure = { status: pass.status, reasonCode: pass.reasonCode, safeMessage: pass.safeMessage, dataStatus: pass.dataStatus }
+        } else {
+          passNotes.push(`${plan.periodType}(${pass.reasonCode})`)
+          allComplete = false
+        }
+        continue
+      }
+      storeMetrics.push(pass.metric)
+      if (plan.primary) periodEvidence = pass.evidence
+      if (!pass.complete) {
+        allComplete = false
+        passNotes.push(`${plan.periodType}部分字段：${pass.missing.join('、')}`)
+      }
+      if (plan.primary) continue
+      passNotes.push(`${plan.periodType}判据：${pass.evidence}`)
+    }
+
+    if (primaryFailure) {
+      return { ...base, ...primaryFailure, status: primaryFailure.status as SalesMetricsCollectionResult['status'], dataStatus: primaryFailure.dataStatus as SalesMetricsCollectionResult['dataStatus'], finishedAt: Date.now() }
+    }
+    const complete = allComplete && storeMetrics.length === plans.length
+    // "预算不够所以没采附加口径"写在成功消息里（不算失败，但记录里必须看得见没采哪些口径）
+    const skippedNote = !extrasAttempted && passNotes.length ? `（${passNotes.join('；')}）` : ''
+    return {
+      ...base,
+      status: complete ? 'SUCCEEDED' : 'PARTIAL',
+      reasonCode: complete ? 'SALES_METRICS_READ_FROM_PAGE' : 'SALES_METRICS_PARTIAL',
+      safeMessage: complete
+        // 把"周期凭什么算生效"写进运行记录：事后排查"这条 7 天数据是不是今天的"时，
+        // 光有 SUCCEEDED 不够，得知道当时满足的是哪条判据。
+        ? `已从${this.platform}经营数据页读取 ${storeMetrics.length} 个口径的指标${periodEvidence ? `（主口径判据：${periodEvidence}）` : ''}${skippedNote}`
+        : `部分口径/字段未取到：${passNotes.join('；')}`,
+      sourceType: 'DOM',
+      storeMetricsCount: storeMetrics.length,
+      storeMetrics,
+      dataStatus: complete ? 'REAL_VALUE' : 'PARTIAL',
+      finishedAt: Date.now()
+    }
+  }
+
+  /**
+   * 单个口径的一轮：可选地点周期控件（并验证真的生效）→ 按锚点读值 → 生成该口径的指标行。
+   *
+   * 失败**不抛异常**，把可诊断的原因码交回调用方：主口径失败 = 整次采集失败，
+   * 附加口径失败 = 部分成功（其它口径的数据照旧落库，并在 safeMessage 里如实列出谁没成）。
+   */
+  private async collectPeriodPass(input: {
+    wc: PageHandle
+    context: PlatformAdapterContext
+    profile: BusinessProfile
+    plan: PeriodPassPlan
+    remaining: () => number
+  }): Promise<
+    | { ok: true; metric: SalesMetrics; evidence: string; complete: boolean; missing: string[] }
+    | { ok: false; status: SalesMetricsCollectionResult['status']; reasonCode: string; safeMessage: string; dataStatus: string }
+  > {
+    const { wc, context, profile, plan, remaining } = input
+    const bounds = periodBounds(plan.periodType)
+    let evidence = ''
+
+    if (plan.controlText) {
       const probeAnchor = profile.metrics[0]
-      /** 读首个指标的当前原文（用于判断"周期真的切过去了"） */
-      const readProbeAnchor = () => readLabelValue(wc, {
+      const readProbeAnchor = (): Promise<LabelReadAttempt> => readLabelValue(wc, {
         label: probeAnchor.anchorText,
         deep: !!probeAnchor.deep,
         valueMaxLen: probeAnchor.valueMaxLen,
@@ -295,72 +392,59 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
       // 页面可能**本来就停在目标周期**（SPA 记住上次选择）：这时点同一个页签不会改变任何东西，
       // 只靠"值变了/文案变了"会把这种情况判成失败。先读一次控件自身的选中态作为基线。
       const periodStateBefore = await readPeriodControlState(wc, {
-        text: profile.periodText,
-        deep: !!profile.periodDeep,
+        text: plan.controlText,
+        deep: !!plan.deep,
         timeoutMs: Math.min(remaining(), 4_000)
       })
       let clicked = false
       for (let round = 0; round < 2 && !clicked; round++) {
-        clicked = await clickText(wc, { text: profile.periodText, deep: !!profile.periodDeep, timeoutMs: Math.min(remaining(), 30_000) })
+        // 附加口径是"顺带采"的：点不到就快点放弃，别把 30 秒预算烧在一个可选页签上
+        // （单测里这一点很直观：一个点不到的附加控件会让整轮多等 30 秒）。
+        clicked = await clickText(wc, { text: plan.controlText, deep: !!plan.deep, timeoutMs: Math.min(remaining(), plan.primary ? 30_000 : 8_000) })
         if (clicked) break
-        const canRetry = round === 0 && remaining() > 20_000
+        // 只有主口径值得"重载一次再来"：附加口径点不到就直接放弃，别把预算烧在重载上
+        const canRetry = round === 0 && plan.primary && remaining() > 20_000
         if (!canRetry) break
         await navigateTo(wc, profile.pageUrl, Math.min(remaining(), 30_000))
         await waitForUrlMarker(wc, profile.urlMarker, Math.min(remaining(), 20_000))
       }
       if (!clicked) {
-        return structureFailure('PERIOD_CONTROL_NOT_FOUND', `页面上点不到周期控件「${profile.periodText}」（重载一次仍未出现）——页面可能已改版，已停采等待重新实测`)
+        const length = await this.bodyTextLength(wc)
+        if (plan.primary && length < SHELL_BODY_TEXT_MAX) {
+          return { ok: false, status: 'NETWORK_ERROR', reasonCode: 'PAGE_NOT_RENDERED', safeMessage: `经营数据页内容区未渲染（正文仅 ${length} 字）——窗口可能被最小化/遮挡，或页面仍在冷启；按可重试失败处理，不判为页面改版`, dataStatus: 'COLLECTION_FAILED' }
+        }
+        return { ok: false, status: plan.primary ? 'PAGE_CHANGED' : 'ERROR', reasonCode: 'PERIOD_CONTROL_NOT_FOUND', safeMessage: `页面上点不到周期控件「${plan.controlText}」（重载一次仍未出现）——页面可能已改版，已停采等待重新实测`, dataStatus: plan.primary ? 'PAGE_CHANGED' : 'COLLECTION_FAILED' }
       }
-      /**
-       * 「点到控件」不等于「周期已生效」。
-       *
-       * 2026-09-28 实测事故：微信小店那次点击没生效，采集把「今天」视图的 `¥0 / 0 单`
-       * 当成「近7天」写进了库（近7天真实值是 `¥108.90 / 11 单`）。把默认周期的数字
-       * 标成目标周期，比没有数字更糟，所以点完之后必须**验证**，验不了就不采。
-       *
-       * 判据（任一成立即可）：
-       *   ① 首个指标的值与点击前不同（默认周期与目标周期的数据几乎不会完全相同）；
-       *   ② 档案声明的 `periodAppliedText` 出现（微信实测：近7天视图显示「较上周期 X%」，
-       *      而默认的「今天」视图显示的是「昨日 X」）；
-       *   ③ 控件自身显示目标周期已被选中（文字色/背景色与同组页签不同）。这条是**点击前也认**的：
-       *      页面本来就停在目标周期时，点击是空操作、值也不会变，①②必然都不成立——
-       *      快手因此连续 9 次被判 PERIOD_NOT_APPLIED 而停采（实测 2026-09-29）。
-       *      它不会放松 2026-09-28 那次的判据：那次点击失败后页面仍停在「今天」，
-       *      目标页签并未呈现选中态，③ 不成立，仍会如实报错。
-       */
       const appliedDeadline = Date.now() + Math.min(remaining(), 20_000)
       let applied = false
-      if (periodStateBefore.selected) { applied = true; periodEvidence = 'BASE_SELECTED' }
+      if (periodStateBefore.selected) { applied = true; evidence = 'BASE_SELECTED' }
       for (;;) {
         if (applied) break
         const afterClick = await readProbeAnchor()
         const valueChanged = afterClick.ok && (!beforeClick.ok || String(afterClick.raw) !== String(beforeClick.raw))
-        const markerSeen = !!profile.periodAppliedText && await this.pageHasTextDeep(wc, profile.periodAppliedText)
-        const periodState = await readPeriodControlState(wc, { text: profile.periodText, deep: !!profile.periodDeep, timeoutMs: Math.min(remaining(), 4_000) })
-        if (valueChanged) { applied = true; periodEvidence = 'VALUE_CHANGED' }
-        else if (markerSeen) { applied = true; periodEvidence = 'MARKER' }
-        else if (periodState.selected) { applied = true; periodEvidence = 'CONTROL_SELECTED' }
+        const markerSeen = !!plan.appliedText && await this.pageHasTextDeep(wc, plan.appliedText)
+        const periodState = await readPeriodControlState(wc, { text: plan.controlText, deep: !!plan.deep, timeoutMs: Math.min(remaining(), 4_000) })
+        if (valueChanged) { applied = true; evidence = 'VALUE_CHANGED' }
+        else if (markerSeen) { applied = true; evidence = 'MARKER' }
+        else if (periodState.selected) { applied = true; evidence = 'CONTROL_SELECTED' }
         if (applied) break
         if (Date.now() >= appliedDeadline) break
         await delay(700)
       }
       if (!applied) {
         return {
-          ...base,
-          status: 'ERROR',
+          ok: false,
+          status: plan.primary ? 'ERROR' : 'PARTIAL',
           reasonCode: 'PERIOD_NOT_APPLIED',
-          safeMessage: `点了周期控件「${profile.periodText}」但页面数值没跟着变（读数仍是「${beforeClick.ok ? String(beforeClick.raw) : '原值'}」），控件自身也没显示该周期已被选中——周期可能没生效，按错误口径落库比没有数字更糟，本次不采集`,
-          dataStatus: 'COLLECTION_FAILED',
-          finishedAt: Date.now()
+          safeMessage: `点了周期控件「${plan.controlText}」但页面数值没跟着变（读数仍是「${beforeClick.ok ? String(beforeClick.raw) : '原值'}」），控件自身也没显示该周期已被选中——周期可能没生效，按错误口径落库比没有数字更糟，本次不采集`,
+          dataStatus: plan.primary ? 'COLLECTION_FAILED' : 'PARTIAL'
         }
       }
       // 等页面按新周期把**其余**卡片也刷完（首个指标已经确认变了）；等待时间不得超过剩余预算，
-      // 否则一次采集会超出调度器给的时限（被测/被限速时尤其明显）。
-      const settleMs = Math.min(profile.periodSettleMs || 6000, remaining())
-      await delay(settleMs)
+      // 否则一次采集会超出调度器给到的时限（被测/被限速时尤其明显）。
+      await delay(Math.min(plan.settleMs || 6000, remaining()))
     }
 
-    // 3. 逐锚点读值
     const readings: AnchorReading[] = []
     for (const anchor of profile.metrics) {
       const read = await readLabelValue(wc, {
@@ -384,35 +468,20 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
     // 标签全找不到 → 页面结构变了（旧解析器作废），而不是"没数据"；
     // 但如果内容区压根没渲染（窗口被遮挡/最小化），那不算改版。
     if (foundCount === 0) {
-      return structureFailure('EVIDENCE_SHAPE_MISMATCH', `档案里的锚点一个都没命中（${profile.measuredAt} 实测），页面可能已改版，已停采等待重新实测`)
+      const length = await this.bodyTextLength(wc)
+      if (length < SHELL_BODY_TEXT_MAX) {
+        return { ok: false, status: 'NETWORK_ERROR', reasonCode: 'PAGE_NOT_RENDERED', safeMessage: `经营数据页内容区未渲染（正文仅 ${length} 字）——窗口可能被最小化/遮挡，或页面仍在冷启；按可重试失败处理，不判为页面改版`, dataStatus: 'COLLECTION_FAILED' }
+      }
+      return { ok: false, status: plan.primary ? 'PAGE_CHANGED' : 'PARTIAL', reasonCode: 'EVIDENCE_SHAPE_MISMATCH', safeMessage: `档案里的锚点一个都没命中（${profile.measuredAt} 实测），页面可能已改版，已停采等待重新实测`, dataStatus: plan.primary ? 'PAGE_CHANGED' : 'PARTIAL' }
     }
     // 标签在但当前都没数值：平台此刻没有数据 → 不写 0，也不写空行
     if (valuesPresent === 0) {
-      return {
-        ...base, status: 'NO_METRICS_FOUND', reasonCode: 'PAGE_SHOWS_NO_VALUE',
-        safeMessage: '页面上指标当前没有数值（平台未返回数据）——按"未采集"记录，不写 0',
-        dataStatus: 'NOT_COLLECTED', sourceType: 'DOM', finishedAt: Date.now()
-      }
+      return { ok: false, status: 'NO_METRICS_FOUND', reasonCode: 'PAGE_SHOWS_NO_VALUE', safeMessage: `「${plan.periodType}」口径下页面上指标当前没有数值（平台未返回数据）——按"未采集"记录，不写 0`, dataStatus: 'NOT_COLLECTED' }
     }
 
-    const metric = this.buildMetric(context, profile, bounds, readings)
-    const complete = foundCount === profile.metrics.length && readings.every(item => item.reason == null)
-    const sourceType: SalesMetricsSourceType = 'DOM'
-    return {
-      ...base,
-      status: complete ? 'SUCCEEDED' : 'PARTIAL',
-      reasonCode: complete ? 'SALES_METRICS_READ_FROM_PAGE' : 'SALES_METRICS_PARTIAL',
-      safeMessage: complete
-        // 把"周期凭什么算生效"写进运行记录：事后排查"这条 7 天数据是不是今天的"时，
-        // 光有 SUCCEEDED 不够，得知道当时满足的是哪条判据。
-        ? `已从${this.platform}经营数据页读取指标${periodEvidence ? `（周期判据：${periodEvidence}）` : ''}`
-        : `只读到部分指标：${readings.filter(item => item.value == null).map(item => `${item.anchor.anchorText}(${item.reason})`).join('、')}`,
-      sourceType,
-      storeMetricsCount: 1,
-      storeMetrics: [metric],
-      dataStatus: complete ? 'REAL_VALUE' : 'PARTIAL',
-      finishedAt: Date.now()
-    }
+    const metric = this.buildMetric(context, profile, bounds, readings, plan.periodType)
+    const missing = readings.filter(item => item.value == null).map(item => `${item.anchor.anchorText}(${item.reason})`)
+    return { ok: true, metric, evidence, complete: foundCount === profile.metrics.length && readings.every(item => item.reason == null), missing }
   }
 
   /**
@@ -443,7 +512,8 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
     context: PlatformAdapterContext,
     profile: BusinessProfile,
     bounds: { start: number; end: number },
-    readings: readonly AnchorReading[]
+    readings: readonly AnchorReading[],
+    periodType: SalesMetricsPeriodType
   ): SalesMetrics {
     const collectedAt = Date.now()
     const fields: Record<string, number | null> = {
@@ -467,7 +537,7 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
       id: `page-${context.storeId}-${bounds.start}-${bounds.end}`,
       platform: this.platform,
       storeId: context.storeId,
-      periodType: profile.salesPeriodType,
+      periodType,
       periodStart: bounds.start,
       periodEnd: bounds.end,
       orderCount: fields.orderCount,

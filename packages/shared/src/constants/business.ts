@@ -103,8 +103,30 @@ export interface BusinessProfile {
    * 就是把 7 天的数字当成今天的——比没有数字更糟。所以这里声明一次，采集侧按它落 period_type。
    */
   salesPeriodType: 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS'
+  /**
+   * 同一次采集里**顺带**再采的其它口径（可选）。
+   *
+   * 为什么需要：各平台只暴露一种固定窗口（抖店/拼多多是「今日实时」，快手/微信是「近 7 天」），
+   * 于是总览切换页签时总有一半平台没数据——「近 7 天」看不到投放花费、「今日」看不到退款。
+   * 这里把**同一页面上的其它周期控件**登记下来，采集时依次点过去各读一轮（每个口径独立验证、
+   * 独立落一行），页签才有得比。声明前必须在真机确认该控件点得动、且切换后数值确实变了。
+   */
+  extraPeriods?: BizPeriodPlan[]
   /** 额外说明（如"销量在该平台叫成交件数"） */
   note?: string
+}
+
+/** 附加口径的采集计划：点哪个控件、对应哪个统一周期类型、用什么文案确认切换成功 */
+export interface BizPeriodPlan {
+  periodType: 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS'
+  /** 页面上该周期的控件文案（实测） */
+  controlText: string
+  /** 该口径下可用的「切换已生效」文案（没量到就不写，靠值变化/控件选中态判断） */
+  appliedText?: string
+  /** 控件在 ShadowRoot 内 */
+  deep?: boolean
+  /** 切完等页面重新取数的毫秒数 */
+  settleMs?: number
 }
 
 /**
@@ -127,7 +149,13 @@ const KUAISHOU: BusinessProfile = {
     { key: 'biz.refundAmount', anchorText: '退款金额(退款日)', salesField: 'refundAmountMinor', salesUnit: 'MINOR_CNY' },
     { key: 'biz.refundOrders', anchorText: '成交退款订单数', salesField: 'refundOrderCount', salesUnit: 'COUNT' }
   ],
-  note: '口径：近7日；销量取「成交件数」；退款金额取「退款金额(退款日)」、退款订单数取「成交退款订单数」。页面只给一个订单数（成交订单数），因此只写 paidOrderCount，orderCount 保持 null。'
+  note: '口径：近7日；销量取「成交件数」；退款金额取「退款金额(退款日)」、退款订单数取「成交退款订单数」。页面只给一个订单数（成交订单数），因此只写 paidOrderCount，orderCount 保持 null。',
+  // 2026-09-29 真机实测：该页周期控件只有「近7日 / 近30日」两个（页面默认视图是"昨日"，但"昨日"
+  // 在控件里找不到可点元素——所以不登记 YESTERDAY，宁可那一列空着，也不点错元素后把默认周期当昨天）。
+  // 点「近30日」后数值确实变化（成交金额 0 → 142.71、订单 0 → 13、退款 35.12/3），页签本身也变成选中色。
+  extraPeriods: [
+    { periodType: 'LAST_30_DAYS', controlText: '近30日' }
+  ]
 }
 
 const WEIXIN: BusinessProfile = {
@@ -148,7 +176,14 @@ const WEIXIN: BusinessProfile = {
     { key: 'biz.orders', anchorText: '成交订单数', deep: true, salesField: 'paidOrderCount', salesUnit: 'COUNT' },
     { key: 'biz.refundAmount', anchorText: '成交退款金额', deep: true, salesField: 'refundAmountMinor', salesUnit: 'MINOR_CNY' }
   ],
-  note: '口径：近7天；退款金额取「成交退款金额」。销量与退款订单数：本店「店铺数据 → 交易统计」页渲染为空（无数据/权限），未采集——不猜别的口径，这两个字段保持 null。'
+  note: '口径：近7天；退款金额取「成交退款金额」。销量与退款订单数：本店「店铺数据 → 交易统计」页渲染为空（无数据/权限），未采集——不猜别的口径，这两个字段保持 null。',
+  // 2026-09-29 真机实测：顶部有「今天 / 近7天 / 近30天」三个页签，都能点动且点完数值确实变化
+  // （近30天：成交金额 ¥237.6、订单 24、退款 ¥19.8；今天：全 0）。选中态靠文字色深浅区分
+  // （选中 rgba(0,0,0,.9) / 未选中 rgba(0,0,0,.3)），所以「今天」在默认视图下也能被确认已选中。
+  extraPeriods: [
+    { periodType: 'TODAY', controlText: '今天', deep: true, settleMs: 6000 },
+    { periodType: 'LAST_30_DAYS', controlText: '近30天', deep: true, settleMs: 6000 }
+  ]
 }
 
 const DOUDIAN: BusinessProfile = {

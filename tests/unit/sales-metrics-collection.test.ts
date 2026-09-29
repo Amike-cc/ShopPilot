@@ -938,17 +938,33 @@ function fakePage(options: {
    * 真机实测（2026-09-29）快手就是这样连续 9 次判 PERIOD_NOT_APPLIED 的。
    */
   periodAlreadySelected?: boolean
+  /**
+   * 多口径页面的值表：按"点了哪个周期控件"区分，键是控件文案（如「近7日」/「近30日」）。
+   * 给了它就按当前选中的控件取值，用来验证"一次采集写多个口径、各落一行"。
+   */
+  periodValues?: Record<string, Record<string, string>>
+  /** 点不动的周期控件文案（模拟"这个页签找了但点不到"） */
+  unclickableControls?: string[]
+  /**
+   * 点完之后该页签是否变成"选中"外观（默认 true = 正常页面：点谁谁选中）。
+   * 设成 false 用来模拟"点击是空操作、页签也没高亮"——那时三条判据都不成立，必须报 PERIOD_NOT_APPLIED。
+   */
+  clickSelectsControl?: boolean
 } = {}): { wc: WebContents; navigated: string[] } {
   const navigated: string[] = []
   let currentUrl = options.url || 'https://store.weixin.qq.com/shop/home'
   const bodyTextLength = options.bodyTextLength ?? 3000
   let clicked = false
+  // 当前停在哪个周期控件上（多口径用例用它选值表；单口径用例仍走 clicked 布尔）
+  let activeControl = ''
+  let pendingControl = ''
+  const clickedControls = new Set<string>()
   const wc = {
     isDestroyed: () => false,
     isLoading: () => false,
     getURL: () => currentUrl,
     loadURL: async (url: string) => { navigated.push(url); currentUrl = url },
-    sendInputEvent: () => { clicked = true },
+    sendInputEvent: () => { clicked = true; if (pendingControl) { activeControl = pendingControl; clickedControls.add(pendingControl) } },
     executeJavaScript: async (code: string) => {
       // 正文长度探针（不把正文带回 Main，只回长度）
       if (code.includes('.innerText || "").length : 0')) return bodyTextLength
@@ -959,7 +975,12 @@ function fakePage(options: {
       // 周期控件选中态探针（脚本独有特征 TAB_TEXTS）。**必须排在 __clickableScore 那条之前**：
       // 这条脚本也带 __clickableScore（复用候选排序），否则会被当成"找点击坐标"吞掉。
       if (code.includes('TAB_TEXTS')) {
-        const selected = options.periodAlreadySelected === true
+        const want = /const want = __narrow\(("(?:[^"\\]|\\.)*")\)/.exec(code)
+        const control = want ? JSON.parse(want[1]) as string : ''
+        // 默认按"正常页面"建模：点过的页签就显示为选中（realworld 里点页签当然会高亮它）。
+        // 需要"点了没反应"这个失败态时用 clickSelectsControl: false 显式声明。
+        const clickedSelected = !!control && clickedControls.has(control) && options.clickSelectsControl !== false
+        const selected = options.periodAlreadySelected === true || clickedSelected
         return {
           found: true,
           selected,
@@ -968,12 +989,22 @@ function fakePage(options: {
           siblingStyle: 'rgb(44,46,48)|rgb(245,246,249)'
         }
       }
-      if (code.includes('__clickableScore')) return options.clickable === false ? null : { x: 10, y: 10 }
+      if (code.includes('__clickableScore')) {
+        // findTextPoint 的脚本里带着要点的文案（`const want = __narrow("近7日")`），记下来：
+        // 下一步 sendInputEvent 就表示"点了它"。
+        const want = /const want = __narrow\(("(?:[^"\\]|\\.)*")\)/.exec(code)
+        if (want) pendingControl = JSON.parse(want[1]) as string
+        if (options.clickable === false) return null
+        if (pendingControl && (options.unclickableControls || []).includes(pendingControl)) return null
+        return { x: 10, y: 10 }
+      }
       const label = /const label = ("(?:[^"\\]|\\.)*")/.exec(code)
       if (!label) return { ok: false, reason: 'ERR' }
       const parsed = JSON.parse(label[1]) as string
       if ((options.missingLabels || []).includes(parsed)) { return { ok: false, reason: 'NOT_FOUND' } }
-      const table = clicked ? (options.values || {}) : (options.valuesBeforeClick ?? options.values ?? {})
+      const table = options.periodValues
+        ? (options.periodValues[activeControl] || options.periodValues[''] || {})
+        : (clicked ? (options.values || {}) : (options.valuesBeforeClick ?? options.values ?? {}))
       const value = table[parsed]
       if (value == null) return { ok: false, reason: 'NOT_FOUND' }
       return { ok: true, value, cardText: `${parsed} ${value}` }
@@ -1015,8 +1046,10 @@ describe('sales metrics · 页面读取 Adapter', () => {
     expect(metric.netSalesAmountMinor).toBe(123456)   // gross - refund
     expect(metric.periodType).toBe('LAST_7_DAYS')
 
-    // 周期与档案固定口径不一致 → 拒绝按错误口径落库
-    const mismatch = await adapter.collectSalesMetrics(contextFor(wc, '微信小店'), { periodType: 'TODAY', timeoutMs: 1200 })
+    // 周期与档案登记口径不一致 → 拒绝按错误口径落库。
+    // 注意：微信档案现在**登记了** TODAY（附加口径「今天」），所以这里用真正没登记的口径
+    // （YESTERDAY）——登记过的口径允许被请求，这正是多口径采集的前提。
+    const mismatch = await adapter.collectSalesMetrics(contextFor(wc, '微信小店'), { periodType: 'YESTERDAY', timeoutMs: 1200 })
     expect(mismatch.status).toBe('ERROR')
     expect(mismatch.reasonCode).toBe('PERIOD_SEMANTICS_MISMATCH')
     expect(mismatch.storeMetrics).toEqual([])
@@ -1030,7 +1063,8 @@ describe('sales metrics · 页面读取 Adapter', () => {
     const { wc } = fakePage({
       values: { 成交金额: '¥0', 成交订单数: '0', 成交退款金额: '0.00' },
       valuesBeforeClick: { 成交金额: '¥0', 成交订单数: '0', 成交退款金额: '0.00' },
-      periodAppliedTextSeen: false
+      periodAppliedTextSeen: false,
+      clickSelectsControl: false      // 点击是空操作：页签也没高亮
     })
     const result = await adapter.collectSalesMetrics(contextFor(wc, '微信小店'), { periodType: 'LAST_7_DAYS', timeoutMs: 1200 })
     expect(result.status).toBe('ERROR')
@@ -1158,12 +1192,86 @@ describe('sales metrics · 页面读取 Adapter', () => {
       values: same,
       valuesBeforeClick: same,          // 点击没生效：页面停在默认周期，值不变
       periodAppliedTextSeen: false,
-      periodAlreadySelected: false      // 目标页签也没呈现选中态
+      periodAlreadySelected: false,     // 目标页签也没呈现选中态
+      clickSelectsControl: false        // 点了也不高亮（死点击）
     })
     const result = await adapter.collectSalesMetrics(contextFor(wc, '快手小店'), { periodType: 'LAST_7_DAYS', timeoutMs: 1200 })
     expect(result.status).toBe('ERROR')
     expect(result.reasonCode).toBe('PERIOD_NOT_APPLIED')
     expect(result.storeMetrics?.length ?? 0).toBe(0)
+  })
+
+  it('多口径档案：主口径（近7日）与附加口径（近30日）各落一行，互不覆盖', async () => {
+    // 为什么要有这条：总览按口径分页签，而各平台只暴露一种固定窗口（快手/微信是近 7 天、
+    // 抖店/拼多多是今日），于是每个页签总有一半平台空白。档案里登记了同页其它周期控件后，
+    // 一次采集要按"点哪个控件 → 读一组值 → 落一行"，不能把最后一个口径的数字当成全部。
+    const adapter = new KuaishouAdapter(kuaishou)
+    const profile = businessProfileFor('快手小店')!
+    expect(profile.extraPeriods?.map(p => p.periodType)).toEqual(['LAST_30_DAYS'])
+    const { wc } = fakePage({
+      url: 'https://syt.kwaixiaodian.com/zones/goodsManagement/goods_overview',
+      periodValues: {
+        '': { 成交金额: '0', 成交订单数: '0', 成交件数: '0', '退款金额(退款日)': '0', 成交退款订单数: '0' },      // 默认视图（昨日）
+        '近7日': { 成交金额: '88.8', 成交订单数: '4', 成交件数: '6', '退款金额(退款日)': '1.1', 成交退款订单数: '1' },
+        '近30日': { 成交金额: '142.71', 成交订单数: '13', 成交件数: '13', '退款金额(退款日)': '35.12', 成交退款订单数: '3' }
+      }
+    })
+    const result = await adapter.collectSalesMetrics(contextFor(wc, '快手小店'), { periodType: 'LAST_7_DAYS', timeoutMs: 60_000 })
+    expect(result.status).toBe('SUCCEEDED')
+    const rows = result.storeMetrics || []
+    expect(rows.map(row => row.periodType).sort()).toEqual(['LAST_30_DAYS', 'LAST_7_DAYS'])
+    const week = rows.find(row => row.periodType === 'LAST_7_DAYS')!
+    const month = rows.find(row => row.periodType === 'LAST_30_DAYS')!
+    expect(week.grossSalesAmountMinor).toBe(8880)
+    expect(month.grossSalesAmountMinor).toBe(14271)
+    expect(month.refundAmountMinor).toBe(3512)
+    // 两个口径的区间必须不同（否则库里按 (platform,store,period_start,period_end) 唯一会互相覆盖）
+    expect(month.periodStart).toBeLessThan(week.periodStart)
+  })
+
+  it('附加口径点不到时：主口径照样落库，整次记为部分成功并写明谁没成', async () => {
+    const adapter = new KuaishouAdapter(kuaishou)
+    const { wc } = fakePage({
+      url: 'https://syt.kwaixiaodian.com/zones/goodsManagement/goods_overview',
+      periodValues: {
+        '': { 成交金额: '0', 成交订单数: '0', 成交件数: '0', '退款金额(退款日)': '0', 成交退款订单数: '0' },
+        '近7日': { 成交金额: '88.8', 成交订单数: '4', 成交件数: '6', '退款金额(退款日)': '1.1', 成交退款订单数: '1' }
+      },
+      unclickableControls: ['近30日']
+    })
+    const result = await adapter.collectSalesMetrics(contextFor(wc, '快手小店'), { periodType: 'LAST_7_DAYS', timeoutMs: 60_000 })
+    // 主口径成功 → 不是失败态；但附加口径确实没成 → PARTIAL 且要说清
+    expect(result.status).toBe('PARTIAL')
+    expect(result.storeMetrics?.map(row => row.periodType)).toEqual(['LAST_7_DAYS'])
+    expect(result.safeMessage).toContain('LAST_30_DAYS')
+    expect(result.safeMessage).toContain('PERIOD_CONTROL_NOT_FOUND')
+  })
+
+  it('主口径失败就是整次失败（附加口径成功也不能把它救回来）', async () => {
+    const adapter = new KuaishouAdapter(kuaishou)
+    const same = { 成交金额: '9.8', 成交订单数: '2', 成交件数: '2', '退款金额(退款日)': '0', 成交退款订单数: '0' }
+    const { wc } = fakePage({
+      url: 'https://syt.kwaixiaodian.com/zones/goodsManagement/goods_overview',
+      // 点「近7日」前后值一样（点击没生效），控件也没显示选中 → 主口径判 PERIOD_NOT_APPLIED
+      values: same,
+      valuesBeforeClick: same,
+      periodAppliedTextSeen: false,
+      periodAlreadySelected: false,
+      clickSelectsControl: false
+    })
+    const result = await adapter.collectSalesMetrics(contextFor(wc, '快手小店'), { periodType: 'LAST_7_DAYS', timeoutMs: 1200 })
+    expect(result.status).toBe('ERROR')
+    expect(result.reasonCode).toBe('PERIOD_NOT_APPLIED')
+    expect(result.storeMetrics?.length ?? 0).toBe(0)
+  })
+
+  it('请求未登记的口径时拒绝落库（不能随便点个页签就当目标口径）', async () => {
+    const adapter = new KuaishouAdapter(kuaishou)
+    const { wc } = fakePage({ url: 'https://syt.kwaixiaodian.com/zones/goodsManagement/goods_overview', values: { 成交金额: '1' } })
+    // 快手档案登记的是 LAST_7_DAYS + LAST_30_DAYS；YESTERDAY 没登记 → 拒绝
+    const result = await adapter.collectSalesMetrics(contextFor(wc, '快手小店'), { periodType: 'YESTERDAY', timeoutMs: 5_000 })
+    expect(result.status).toBe('ERROR')
+    expect(result.reasonCode).toBe('PERIOD_SEMANTICS_MISMATCH')
   })
 
   it('不在已登记页面时会先导航过去（而不是拿当前页硬读）', async () => {

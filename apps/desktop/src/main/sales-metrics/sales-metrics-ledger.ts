@@ -478,9 +478,15 @@ export class SalesMetricsLedger {
    * 为什么需要：24 小时趋势要的是"每次采集那一刻的值"，而 sales_metrics 每个周期只有一行
    * （同一周期反复采集是原地更新）。没有这一步，趋势图只能画出最后一次的值。
    * 只存九个聚合指标，不含商品明细或订单正文。
+   *
+   * 一次采集可能写入**多个口径**的行（主口径 + 附加口径），所以传 period 时优先取那一行：
+   * 不指定就会按 period_end 最大取到"近 30 天"，把运行记录的快照变成另一个口径的数字。
    */
-  attachRunMetricsSnapshot(runId: string, storeId: string): number {
-    const row = this.db.prepare('SELECT * FROM sales_metrics WHERE store_id = ? ORDER BY collected_at DESC, period_end DESC LIMIT 1').get(storeId) as Record<string, unknown> | undefined
+  attachRunMetricsSnapshot(runId: string, storeId: string, period?: { start: number; end: number }): number {
+    const exact = period && Number.isFinite(period.start) && Number.isFinite(period.end)
+      ? this.db.prepare('SELECT * FROM sales_metrics WHERE store_id = ? AND period_start = ? AND period_end = ? ORDER BY collected_at DESC LIMIT 1').get(storeId, period.start, period.end) as Record<string, unknown> | undefined
+      : undefined
+    const row = exact ?? this.db.prepare('SELECT * FROM sales_metrics WHERE store_id = ? ORDER BY collected_at DESC, period_end DESC LIMIT 1').get(storeId) as Record<string, unknown> | undefined
     if (!row) return 0
     return this.db.prepare('UPDATE sales_collection_runs SET metrics_json = ? WHERE run_id = ?').run(metricsSnapshotJson(mapStoreMetricRow(row)), runId).changes
   }

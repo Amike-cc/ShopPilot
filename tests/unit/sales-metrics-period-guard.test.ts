@@ -65,20 +65,42 @@ describe('经营数据采集的周期生效判据', () => {
     }
   })
 
+  it('附加口径的声明必须完整：有控件文案、不与主口径重复、四种口径之一', () => {
+    const allowed = ['TODAY', 'YESTERDAY', 'LAST_7_DAYS', 'LAST_30_DAYS']
+    for (const profile of Object.values(BUSINESS_PROFILES)) {
+      for (const extra of profile.extraPeriods || []) {
+        expect(extra.controlText.trim().length, `${profile.platform} 的附加口径要点得到控件`).toBeGreaterThan(0)
+        expect(extra.periodType, `${profile.platform} 附加口径不能与主口径同名`).not.toBe(profile.salesPeriodType)
+        expect(allowed, `${profile.platform} 附加口径必须是可落库的四种之一`).toContain(extra.periodType)
+      }
+    }
+    // 真机实测点得动、切过去数值确实变的才登记（2026-09-29）：
+    // 快手「近30日」、微信「今天/近30天」；抖店首页的「近7日」是卡片内的对比标签、
+    // 点了不改数值，拼多多首页的页签只切趋势图 → 都不登记。
+    expect(businessProfileFor('快手小店')!.extraPeriods?.map(p => p.controlText)).toEqual(['近30日'])
+    expect(businessProfileFor('微信小店')!.extraPeriods?.map(p => p.controlText)).toEqual(['今天', '近30天'])
+    expect(businessProfileFor('抖店')!.extraPeriods).toBeUndefined()
+    expect(businessProfileFor('拼多多')!.extraPeriods).toBeUndefined()
+  })
+
   it('采集侧确实执行了验证，且失败时不写数据（源码级护栏）', () => {
     // 失败路径：周期没生效 → ERROR + PERIOD_NOT_APPLIED（不是静默按目标周期落库）
     expect(ADAPTER_SRC).toContain('PERIOD_NOT_APPLIED')
-    // 两个判据都要在：点击前先记值 → 点击后比对
+    // 三个判据都要在：点击前先记值 → 点击后比对
     expect(ADAPTER_SRC).toContain('beforeClick')
     expect(ADAPTER_SRC).toContain('afterClick')
     expect(ADAPTER_SRC).toContain('valueChanged')
     expect(ADAPTER_SRC).toContain('periodAppliedText')
     // 文案判据要穿透 ShadowRoot（微信小店的经营数据区整页在 micro-app 的 ShadowRoot 内）
     expect(ADAPTER_SRC).toContain('shadowRoot')
-    // 周期验证失败必须发生在"逐锚点读值"之前：上面的判据失败要 return，不能继续读
+    // 周期验证失败必须发生在"逐锚点读值"之前：判据不成立就 return，不能继续读。
+    // 多口径改造后读值循环移进了 collectPeriodPass，判据与循环仍同一个方法、判据在前。
     const appliedIndex = ADAPTER_SRC.indexOf('PERIOD_NOT_APPLIED')
-    const readLoopIndex = ADAPTER_SRC.indexOf('// 3. 逐锚点读值')
+    const readLoopIndex = ADAPTER_SRC.indexOf('for (const anchor of profile.metrics)')
     expect(appliedIndex).toBeGreaterThan(0)
     expect(readLoopIndex).toBeGreaterThan(appliedIndex)
+    // 每个口径各自验证：验证代码必须在"逐口径循环"里被调用的那个方法内，而不是只跑一次
+    expect(ADAPTER_SRC).toContain('collectPeriodPass')
+    expect(ADAPTER_SRC.indexOf('collectPeriodPass({ wc, context, profile, plan, remaining })')).toBeGreaterThan(0)
   })
 })
