@@ -132,7 +132,15 @@ export const AGENT_MAX_TEXT_CHARS = 2000
 export const AGENT_MAX_TIMEOUT_MS = 120000
 
 export const agentScheduleSchema = z.object({
-  everyMs: z.number().int().min(60000).max(30 * 86400000)
+  everyMs: z.number().int().min(60000).max(30 * 86400000),
+  /**
+   * 到点时店铺浏览器没开：要不要**后台静默打开**再跑（不抢当前视图）。
+   *
+   * 默认 false = 保持排队等用户打开（§4.4 的"不静默拉起"：有副作用的任务不该自己开页面）。
+   * 只读的采集类定时任务（如发票中心每 N 小时刷新）显式置 true：不这么做的话，
+   * 无人值守时每一次触发都只是把 run 排进队列，看起来"定时任务跑了"其实一次都没采到。
+   */
+  backgroundOpen: z.boolean().optional()
 }).strict()
 
 export const agentPageButtonSchema = z.object({
@@ -408,7 +416,7 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
     name: z.string().trim().min(1).max(80),
     storeScope: z.string().max(80).nullable().optional(),
     steps: z.array(z.record(z.unknown())).min(1).max(100),
-    schedule: z.object({ everyMs: z.number().int().min(60000).max(30 * 86400000) }).nullable().optional()
+    schedule: agentScheduleSchema.nullable().optional()
   }).strict(),
   z.object({ type: z.literal('searchMemory'), query: z.string().trim().min(1).max(200) }).strict(),
   z.object({ type: z.literal('createStore'), name: z.string().trim().min(1).max(120), platform: z.string().trim().min(1).max(80) }).strict(),
@@ -527,7 +535,7 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
     name: z.string().trim().min(1).max(80).optional(),
     storeScope: z.string().max(80).nullable().optional(),
     steps: z.array(z.record(z.unknown())).min(1).max(100).optional(),
-    schedule: z.object({ everyMs: z.number().int().min(60000).max(30 * 86400000) }).nullable().optional()
+    schedule: agentScheduleSchema.nullable().optional()
   }).strict(),
 
   // ── 数据中心只读汇总与主体回填 ──

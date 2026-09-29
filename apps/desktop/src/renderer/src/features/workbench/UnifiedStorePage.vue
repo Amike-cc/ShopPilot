@@ -85,7 +85,7 @@ const filteredStores = computed(() => ws.stores.filter(store => {
 }))
 
 function shortUrl(value: string) { try { return new URL(value).host } catch { return value || '未配置后台地址' } }
-function statusLabel(value: string) { return ({ online: '在线', launching: '启动中', needs_login: '登录失效', proxy_error: '代理异常', offline: '离线', archived: '已归档' } as Record<string, string>)[value] || '未知状态' }
+function statusLabel(value: string) { return ({ online: '在线', launching: '启动中', needs_login: '登录失效', proxy_error: '代理异常', offline: '离线', incomplete: '离线', archived: '已归档' } as Record<string, string>)[value] || '未知状态' }
 function statusClass(value: string) { return value === 'online' ? 'online' : ['needs_login', 'proxy_error'].includes(value) ? 'warning' : 'offline' }
 function openCreate() { createError.value = ''; createOpen.value = true }
 function refresh() { state.value = 'loading'; void ws.refreshStores().then(() => { state.value = 'ready' }).catch(error => { state.value = 'error'; errorMessage.value = error instanceof Error ? error.message : String(error) }) }

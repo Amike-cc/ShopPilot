@@ -14,6 +14,7 @@ import {
   getTabWebContents
 } from '../browser/window-manager'
 import { logMain } from '../services/logger'
+import { StoreStatus } from '@shared/enums/store-status'
 import {
   platformAdapterRegistry,
   type PlatformAdapterRegistry
@@ -275,7 +276,14 @@ export function detectStoreLoginStatus(
     const current = inFlight.get(storeId)
     if (current) return current
   }
-  const promise = runDetection(storeId, runtime, registry, timeoutMs)
+  const promise = runDetection(storeId, runtime, registry, timeoutMs).then(result => {
+    // 在线只表示平台登录态已被真实页面证据确认；打开 Session、页面加载完成或
+    // 检测失败都不能把未登录店铺标成 online。仅默认运行时落库，测试运行时不触碰 DB。
+    if (useDedupe) {
+      StoreManager.updateStoreStatus(storeId, result.status === 'LOGGED_IN' ? StoreStatus.ONLINE : StoreStatus.OFFLINE)
+    }
+    return result
+  })
   if (!useDedupe) return promise
   inFlight.set(storeId, promise)
   return promise.finally(() => {

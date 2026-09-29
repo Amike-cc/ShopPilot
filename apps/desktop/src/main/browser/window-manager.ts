@@ -20,7 +20,7 @@ import {
 import { buildElementProbeScript, formatElementProbe, type ElementProbeResult } from './element-probe'
 import { buildElementPickerScript, describePickResult, type ElementPickResult, type PickMode } from './element-picker'
 import { getDatabase } from '../db/database'
-import { updateStoreStatus, updateStoreLastActive } from '../stores/store-manager'
+import { updateStoreStatus, updateStoreLastActive, onStoreStatusChanged } from '../stores/store-manager'
 import { StoreStatus } from '@shared/enums/store-status'
 import { assertNavigableUrl } from '@shared/navigation'
 export { assertNavigableUrl } from '@shared/navigation'
@@ -66,6 +66,14 @@ let viewport: ViewportBounds = { x: 0, y: 0, width: 0, height: 0 }
 const guestTabs = new Map<number, Tab>()
 /** 注册完成前等待页面句柄的任务/页面工具。 */
 const guestWaiters = new Map<string, Set<(wc: Electron.WebContents | null) => void>>()
+
+// 店铺状态由 Main 统一计算，Renderer 只接收安全的 storeId/status 摘要。
+// 部分纯适配器单测会替换 store-manager 模块，只提供 CRUD 方法；兼容该最小 mock。
+if (typeof onStoreStatusChanged === 'function') {
+  onStoreStatusChanged((storeId, status) => {
+    emit(EVENT_CHANNELS.STORE_STATUS_CHANGED, { storeId, status })
+  })
+}
 
 function tabKey(storeId: string, tabId: string): string {
   return `${storeId}:${tabId}`
@@ -184,7 +192,9 @@ export function openStoreBrowser(storeId: string, opts: { display?: boolean; sou
     const state: BrowserState = { tabs: new Map(), activeTabId: null }
     browserStates.set(storeId, state)
     restoreTabs(storeId)
-    updateStoreStatus(storeId, StoreStatus.ONLINE)
+    // 打开浏览器只代表 Session 已建立，不能据此推断平台已登录。
+    // 只有平台适配器确认 LOGGED_IN 后才会切换为 online。
+    updateStoreStatus(storeId, StoreStatus.OFFLINE)
     // 唤醒等待该店铺的排队任务 run（§4.4：不静默拉起，但已拉起后要放行队列）
     queueMicrotask(() => storeOpenListeners.forEach(cb => { try { cb(storeId) } catch { /* ignore */ } }))
   }
@@ -286,6 +296,11 @@ export function closeStoreBrowser(storeId: string): void {
     if (next) displayStore(next)
   }
 
+  const loginTimer = loginDetectionTimers.get(storeId)
+  if (loginTimer) {
+    clearTimeout(loginTimer)
+    loginDetectionTimers.delete(storeId)
+  }
   // 注意：不删除 tabs 行 —— 店铺下次打开/应用重启时按 §4.3 恢复
   updateStoreStatus(storeId, StoreStatus.OFFLINE)
   emitTabs(storeId)
@@ -470,6 +485,7 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
     tab.url = newUrl
     saveTabToDatabase(tab)
     emitTabs(tab.storeId)
+    scheduleLoginDetection(tab.storeId)
   })
   wc.on('did-navigate-in-page', (_e, newUrl, isMainFrame) => {
     if (!isMainFrame) return
@@ -481,12 +497,14 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
       inPageSaveAt.set(tab.id, now)
       saveTabToDatabase(tab)
     }
+    scheduleLoginDetection(tab.storeId)
   })
   wc.on('did-start-loading', () => {
     if (displayedStoreId === tab.storeId) emit(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, { storeId: tab.storeId, tabId: tab.id, isLoading: true })
   })
   wc.on('did-stop-loading', () => {
     if (displayedStoreId === tab.storeId) emit(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, { storeId: tab.storeId, tabId: tab.id, isLoading: false })
+    scheduleLoginDetection(tab.storeId)
   })
   wc.on('render-process-gone', (_e, details) => {
     logMain('error', `store tab renderer gone store=${tab.storeId} tab=${tab.id} reason=${details.reason} exitCode=${details.exitCode} url=${String(tab.url).slice(0, 120)}`)
@@ -509,6 +527,28 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
   notifyGuestWaiters(tab)
   saveTabToDatabase(tab)
   emitTabs(tab.storeId)
+  scheduleLoginDetection(tab.storeId)
+}
+
+const loginDetectionTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/** 页面完成导航后自动复核登录态；未确认登录的店铺保持 offline。 */
+function scheduleLoginDetection(storeId: string, delayMs = 300): void {
+  const previous = loginDetectionTimers.get(storeId)
+  if (previous) clearTimeout(previous)
+  const timer = setTimeout(() => {
+    loginDetectionTimers.delete(storeId)
+    // 动态导入避免 window-manager ↔ platform-login-service 的模块初始化环。
+    void import('../platform-adapters/platform-login-service')
+      .then(({ detectStoreLoginStatus }) => detectStoreLoginStatus(storeId))
+      .then(result => {
+        // 扫码/验证码登录可能只更新当前页面状态而不触发导航；未确认登录时继续
+        // 低频复核，直到店铺关闭或检测到 LOGGED_IN。
+        if (browserStates.has(storeId) && result.status !== 'LOGGED_IN') scheduleLoginDetection(storeId, 3000)
+      })
+      .catch(() => { /* 页面未就绪/平台未支持时保持 offline */ })
+  }, delayMs)
+  loginDetectionTimers.set(storeId, timer)
 }
 
 function detachGuestWebContents(tab: Tab, close = true): void {

@@ -73,7 +73,7 @@ const appLinks: Array<{ key: string; label: string; description: string; icon: s
   { key: 'tasks', label: 'AI 任务中心', description: '管理 TaskRunner 任务、运行、确认和进度。', icon: '◎', tone: 'teal', page: 'tasks' },
   { key: 'settings', label: '设置中心', description: '平台地址、AI、Agent、技能、插件和软件更新。', icon: '⚙', tone: 'violet', page: 'settings' }
 ]
-function statusLabel(status: string) { return ({ online: '在线', launching: '启动中', needs_login: '登录失效', proxy_error: '代理异常', offline: '离线', archived: '已归档' } as Record<string, string>)[status] || '未知状态' }
+function statusLabel(status: string) { return ({ online: '在线', launching: '启动中', needs_login: '登录失效', proxy_error: '代理异常', offline: '离线', incomplete: '离线', archived: '已归档' } as Record<string, string>)[status] || '未知状态' }
 function statusClass(status: string) { return status === 'online' ? 'online' : ['needs_login', 'proxy_error'].includes(status) ? 'warning' : 'offline' }
 </script>
 

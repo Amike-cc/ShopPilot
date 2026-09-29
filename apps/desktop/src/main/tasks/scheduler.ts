@@ -10,6 +10,8 @@ import { fireScheduled } from './task-runner'
 let timer: NodeJS.Timeout | null = null
 /** 内存中的下次触发时间；首次见到任务 = now + everyMs（不做停机补偿突发触发） */
 const nextFireAt = new Map<string, number>()
+/** 每个任务"上次排期用的周期"：用于发现周期被改过并重新排期（见 tick 里的注释） */
+const fireEveryMs = new Map<string, number>()
 
 export function startScheduler(): void {
   if (timer) return
@@ -47,7 +49,7 @@ function tick(): void {
   if (nextFireAt.size > tasks.length) {
     const alive = new Set(tasks.map(t => t.id))
     for (const id of nextFireAt.keys()) {
-      if (!alive.has(id)) nextFireAt.delete(id)
+      if (!alive.has(id)) { nextFireAt.delete(id); fireEveryMs.delete(id) }
     }
   }
   for (const t of tasks) {
@@ -55,7 +57,24 @@ function tick(): void {
     if (!t.storeScope) continue // 未绑定店铺的任务不自动触发
     if (t.latestRunStatus && ['queued', 'running', 'waiting_confirmation', 'paused'].includes(t.latestRunStatus)) {
       nextFireAt.set(t.id, now + t.schedule.everyMs)
+      fireEveryMs.set(t.id, t.schedule.everyMs)
       continue
+    }
+    /**
+     * 周期被改过 → 重新排期。
+     *
+     * 2026-09-29 实测踩到：nextFireAt 是**内存里**的值，改任务上的 everyMs 并不会动它。
+     * 把发票采集的周期从 3 小时改成 1 分钟做验证时，调度器仍按老锚点等满 3 小时——
+     * 界面上周期已经显示"每 1 分钟"，实际一次也不会触发（"改了没生效"这类错觉）。
+     * 这里记住每个任务上次排期用的 everyMs，不等就重新锚一次：
+     * 取"新锚点"与"已排的点"里较早的那个——改短立即生效，改长则下一次仍按旧点跑一次。
+     */
+    const everyMs = t.schedule.everyMs
+    if (!fireEveryMs.has(t.id) || fireEveryMs.get(t.id) !== everyMs) {
+      const anchored = anchorNextFire(t.lastFiredAt, everyMs, now)
+      const planned = nextFireAt.get(t.id)
+      nextFireAt.set(t.id, planned == null ? anchored : Math.min(planned, anchored))
+      fireEveryMs.set(t.id, everyMs)
     }
     if (!nextFireAt.has(t.id)) {
       nextFireAt.set(t.id, anchorNextFire(t.lastFiredAt, t.schedule.everyMs, now))

@@ -217,6 +217,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       window.shopilot.on(EVENT_CHANNELS.BROWSER_CRASHED, (payload: any) => {
         this.toast(`页面异常已恢复（${payload.reason}）`, 'error')
       })
+      window.shopilot.on(EVENT_CHANNELS.STORE_STATUS_CHANGED, (payload: any) => {
+        const storeId = String(payload?.storeId || '')
+        const status = String(payload?.status || '')
+        if (!storeId || !status) return
+        const index = this.stores.findIndex(store => store.id === storeId)
+        if (index < 0) return
+        this.stores[index] = { ...this.stores[index], status }
+      })
       // 下载：创建与进度都由主进程推送（2026-09-28 前主进程从不发送，面板只能手动刷新）。
       // 新下载 → 若正看着那家店的下载列表就刷新，并给一条轻提示；失败终态 → 明确告知。
       window.shopilot.on(EVENT_CHANNELS.BROWSER_DOWNLOAD_CREATED, (payload: any) => {

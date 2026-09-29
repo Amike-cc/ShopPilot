@@ -27,6 +27,23 @@
           <div class="dc-card"><div class="dc-num">{{ invoiceTotal.amountText }}</div><div class="dc-label">可开金额合计</div></div>
           <div class="dc-card"><div class="dc-num">{{ invoiceTotal.stores }}</div><div class="dc-label">有待办的店铺</div></div>
         </div>
+        <!-- 自动更新：每 3 小时一次。状态如实显示"哪几家挂着周期、上次什么时候触发"，
+             开关直接改任务上的 schedule；挂不上/没有任务时如实说明，不给假状态。 -->
+        <div class="inv-schedule" data-test="invoice-schedule">
+          <span class="inv-schedule-dot" :class="{ on: invoiceSchedule.enabled > 0 }" aria-hidden="true"></span>
+          <span>
+            自动更新：<b>每 3 小时一次</b>
+            <template v-if="invoiceSchedule.enabled > 0">
+              · 已启用 {{ invoiceSchedule.enabled }}/{{ invoiceSchedule.total }} 家<template v-if="invoiceSchedule.lastFiredAt"> · 上次触发 {{ formatTime(invoiceSchedule.lastFiredAt) }}</template>
+            </template>
+            <template v-else> · 尚未启用（点「采集发票数据」会自动挂上）</template>
+          </span>
+          <button
+            type="button" class="unified-button" data-test="invoice-schedule-toggle"
+            :disabled="collecting"
+            @click="toggleInvoiceSchedule(invoiceSchedule.enabled === 0)"
+          >{{ invoiceSchedule.enabled > 0 ? '关闭自动更新' : '开启每 3 小时自动更新' }}</button>
+        </div>
         <!-- 只说清"哪些条数没计入合计"：各平台把「处理中/处理记录」这类已提交流水也放在同一页，
              它们商家这边没有待办，计入合计会让数字虚高。 -->
         <p v-if="invoiceTotal.historical" class="inv-note" data-test="invoice-pending-note">
@@ -259,14 +276,91 @@ function displayValue(value: unknown) { return value == null || value === '' ? '
 function formatTime(value: number) { return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
 function formatValue(value: unknown, key: string) { const number = typeof value === 'number' ? value : Number(value); if (!Number.isFinite(number)) return '—'; return key.includes('gmv') || key.includes('Amount') ? `¥ ${number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}` : number.toLocaleString('zh-CN') }
 async function load() { loading.value = true; errorMessage.value = ''; try { const responses = await Promise.all([window.shopilot.overview.datacenter(), window.shopilot.overview.orders(), window.shopilot.overview.invoiceCenter()]); if (!responses[0].ok) throw new Error(responses[0].error.message); dataCenter.value = responses[0].data; orderData.value = responses[1].ok ? responses[1].data : { stores: [] }; invoiceData.value = responses[2].ok ? responses[2].data : { rows: [] } } catch (error) { errorMessage.value = error instanceof Error ? error.message : String(error) } finally { loading.value = false } }
+/** 发票自动采集周期：3 小时（用户要求「发票中心三个小时更新一次」） */
+const INVOICE_SCHEDULE_MS = 3 * 60 * 60 * 1000
+const INVOICE_TASK_PREFIX = '发票采集 ·'
+
+/** 采集任务名（发票的带前缀，便于复用时按前缀认领同一个任务） */
+function collectTaskName(kind: 'business' | 'orders' | 'invoice', storeName: string) {
+  return kind === 'business' ? `经营指标采集 · ${storeName}` : kind === 'orders' ? `订单明细采集 · ${storeName}` : `${INVOICE_TASK_PREFIX}${storeName}`
+}
+
+/**
+ * 复用已有任务，而不是每点一次就新建一个。
+ *
+ * 原实现每次点「采集」都 task.create 一个新任务——实测点两轮就留下
+ * 「发票采集 · 抖店」「发票采集 · 抖店 · 2026/9/15」一串同名任务：任务中心越堆越多，
+ * 而定时更新只能挂在其中一个上（挂错就等于没挂）。这里按"店铺 + 名称前缀"认领一个，
+ * 把步骤与周期一起更新到它身上。
+ */
+async function ensureCollectTask(kind: 'business' | 'orders' | 'invoice', store: any, steps: any[], schedule: unknown): Promise<string> {
+  const name = collectTaskName(kind, store.name)
+  const listed = await window.shopilot.task.list()
+  const existing = (listed.ok ? (listed.data as any[]) : [])
+    .filter(task => task.storeScope === store.id && String(task.name || '').startsWith(collectTaskName(kind, '')))
+    .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))[0]
+  if (existing) {
+    // 步骤不可改（该任务正有未结束的运行）时不新建重复任务，仍用它跑一次
+    await window.shopilot.task.update({ taskId: existing.id, name, steps, schedule })
+    return String(existing.id)
+  }
+  const created = await window.shopilot.task.create({ name, storeScope: store.id, steps, schedule })
+  return created.ok ? String((created.data as any).id) : ''
+}
+
 async function createCollectionTasks(kind: 'business' | 'orders' | 'invoice') {
   const supported = ws.stores.filter(store => kind === 'business' ? !!businessProfileFor(store.platform) : kind === 'orders' ? !!ordersProfileFor(store.platform) : !!invoiceProfileFor(store.platform))
   if (!supported.length) { ws.toast('当前没有已实测的可采集平台，系统不会猜测页面选择器', 'info'); return }
-  collecting.value = true; let created = 0
-  try { for (const store of supported) { const profile = kind === 'business' ? businessProfileFor(store.platform) : kind === 'orders' ? ordersProfileFor(store.platform) : invoiceProfileFor(store.platform); if (!profile) continue; if (!ws.openStoreIds.includes(store.id)) await window.shopilot.browser.open(store.id); const steps = kind === 'business' ? buildBusinessCollectSteps(profile) : kind === 'orders' ? buildOrdersCollectSteps(profile) : buildInvoiceCollectSteps(profile); const result = await window.shopilot.task.create({ name: `${kind === 'business' ? '经营指标' : kind === 'orders' ? '订单明细' : '发票'}采集 · ${store.name}`, storeScope: store.id, steps }); if (result.ok) { const run = await window.shopilot.task.run(result.data.id); if (run.ok) created++ } } await ws.refreshTasks(); ws.toast(created ? `已启动 ${created} 个采集任务` : '采集任务未能启动，请查看任务中心', created ? 'success' : 'error'); } finally { collecting.value = false } }
+  collecting.value = true
+  let created = 0
+  try {
+    for (const store of supported) {
+      const profile = kind === 'business' ? businessProfileFor(store.platform) : kind === 'orders' ? ordersProfileFor(store.platform) : invoiceProfileFor(store.platform)
+      if (!profile) continue
+      if (!ws.openStoreIds.includes(store.id)) await window.shopilot.browser.open(store.id)
+      const steps = kind === 'business' ? buildBusinessCollectSteps(profile) : kind === 'orders' ? buildOrdersCollectSteps(profile) : buildInvoiceCollectSteps(profile)
+      // 只有发票采集挂周期（每 3 小时）：经营指标已有自己的 10 分钟调度器，给任务再挂一次会变成两套调度各跑一遍
+      const schedule = kind === 'invoice' ? { everyMs: INVOICE_SCHEDULE_MS, backgroundOpen: true } : undefined
+      const taskId = await ensureCollectTask(kind, store, steps as any[], schedule)
+      if (!taskId) continue
+      const run = await window.shopilot.task.run(taskId)
+      if (run.ok) created++
+    }
+    await ws.refreshTasks()
+    const suffix = kind === 'invoice' ? '；发票每 3 小时自动更新一次' : ''
+    ws.toast(created ? `已启动 ${created} 个采集任务${suffix}` : '采集任务未能启动，请查看任务中心', created ? 'success' : 'error')
+  } finally { collecting.value = false }
+}
 function collectBusiness() { return createCollectionTasks('business') }
 function collectOrders() { return createCollectionTasks('orders') }
 function collectInvoices() { return createCollectionTasks('invoice') }
+
+/** 发票自动更新现状（逐店一条：哪几家挂着周期、上次什么时候触发） */
+const invoiceSchedule = computed(() => {
+  const supported = ws.stores.filter(store => !!invoiceProfileFor(store.platform))
+  const tasks = supported.map(store => ws.tasks.find(task => task.storeScope === store.id && String(task.name || '').startsWith(INVOICE_TASK_PREFIX)))
+  const scheduled = tasks.filter(task => Number((task?.schedule as any)?.everyMs || 0) === INVOICE_SCHEDULE_MS)
+  const fired = scheduled.map(task => Number((task as any)?.lastFiredAt || 0)).filter(value => value > 0)
+  return { total: supported.length, enabled: scheduled.length, lastFiredAt: fired.length ? Math.max(...fired) : 0 }
+})
+
+/** 一键开关自动更新：给每家的发票任务挂上/摘掉 3 小时周期 */
+async function toggleInvoiceSchedule(enabled: boolean) {
+  collecting.value = true
+  try {
+    let changed = 0
+    for (const store of ws.stores.filter(item => !!invoiceProfileFor(item.platform))) {
+      const task = ws.tasks.find(item => item.storeScope === store.id && String(item.name || '').startsWith(INVOICE_TASK_PREFIX))
+      if (!task) continue
+      const result = await window.shopilot.task.update({ taskId: task.id, schedule: enabled ? { everyMs: INVOICE_SCHEDULE_MS, backgroundOpen: true } : null })
+      if (result.ok) changed++
+    }
+    await ws.refreshTasks()
+    ws.toast(changed
+      ? (enabled ? `已开启每 3 小时自动更新（${changed} 家）` : `已关闭自动更新（${changed} 家）`)
+      : '还没有发票采集任务——先点一次「采集发票数据」', changed ? 'success' : 'info')
+  } finally { collecting.value = false }
+}
 async function saveManual() { if (!manualReady.value) return; const result = await window.shopilot.overview.manualMetric(manual.storeId, manual.metric, Number(manual.value)); if (!result.ok) { ws.toast('录入失败：' + result.error.message, 'error'); return } ws.toast('已录入手动指标', 'success'); manual.value = null; await load() }
 async function exportInvoices() { const result = await window.shopilot.overview.invoiceExport(); if (!result.ok) ws.toast('导出失败：' + result.error.message, 'error'); else if (!result.data?.canceled) ws.toast(`已导出 ${result.data.rows} 条记录`, 'success') }
 function onTaskProgress(event: any) { if (event?.phase === 'finished' || event?.phase === 'failed') void load() }
@@ -276,6 +370,6 @@ onBeforeUnmount(() => { window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTask
 </script>
 
 <style scoped>
-.unified-page{min-width:0;min-height:0;height:100%;overflow:auto;padding:22px 24px 32px;color:var(--dash-text)}.unified-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:16px}.unified-page-head h1{margin:5px 0 7px;font-size:25px}.unified-page-head p{margin:0;color:var(--dash-text-muted);font-size:12px}.unified-page-actions{display:flex;gap:8px}.unified-button{min-height:32px;padding:0 13px;border:1px solid var(--dash-border);border-radius:9px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer}.unified-button:hover,.unified-button:focus-visible{border-color:rgba(151,120,255,.7);color:#fff;outline:none}.unified-button.primary{border-color:rgba(130,92,255,.75);background:linear-gradient(135deg,#f3f0fc,#8c5cff);color:#fff}.unified-button:disabled{opacity:.55;cursor:not-allowed}.unified-route-tabs{display:flex;gap:5px;margin-bottom:15px;padding:4px;border:1px solid var(--dash-border);border-radius:10px;background:#ecedee}.unified-route-tabs button{height:30px;padding:0 14px;border:0;border-radius:7px;background:transparent;color:var(--dash-text-muted);cursor:pointer}.unified-route-tabs button.active{background:rgba(113,78,231,.36);color:#fff}.unified-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.unified-stat-card{display:flex;flex-direction:column;gap:6px;padding:14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.unified-stat-card span,.unified-stat-card small{color:var(--dash-text-muted);font-size:11px}.unified-stat-card strong{font-size:25px}.unified-data-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr);gap:12px}.unified-card{min-width:0;padding:16px;border:1px solid var(--dash-border);border-radius:13px;background:#ffffff}.unified-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.unified-card-head h2{margin:0 0 5px;font-size:16px}.unified-card-head span{color:var(--dash-text-muted);font-size:11px}.unified-table-wrap{overflow:auto}.unified-table{width:100%;border-collapse:collapse;font-size:11px}.unified-table th,.unified-table td{padding:10px 9px;border-bottom:1px solid rgba(111,137,177,.12);text-align:left;white-space:nowrap}.unified-table th{color:var(--dash-text-muted);font-weight:500}.unified-table td{color:var(--dash-text-soft)}.unified-table em{display:inline-block;margin-left:4px;padding:2px 4px;border-radius:4px;background:rgba(242,165,87,.15);color:#b54708;font-size:9px;font-style:normal}.unified-empty,.unified-state{display:flex;min-height:180px;align-items:center;justify-content:center;gap:10px;flex-direction:column;color:var(--dash-text-muted);border:1px dashed var(--dash-border);border-radius:11px}.unified-empty.compact{min-height:90px}.unified-alert{padding:10px 12px;margin-bottom:12px;border-radius:9px;font-size:12px}.unified-alert.error{border:1px solid rgba(239,99,119,.35);background:rgba(117,37,58,.2);color:#b42318}.unified-alert button{margin-left:8px;border:0;background:transparent;color:#fff;text-decoration:underline;cursor:pointer}.snapshot-list{display:flex;flex-direction:column;gap:8px}.snapshot-row{display:flex;justify-content:space-between;gap:10px;padding:10px;border-radius:8px;background:#f7f9fd}.snapshot-row strong,.snapshot-row small{display:block}.snapshot-row small{margin-top:4px;color:var(--dash-text-muted);font-size:10px}.snapshot-row>span{color:#5b3df5;font-size:12px}.dc-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.dc-card{padding:13px 14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.dc-num{color:var(--dash-text);font-size:24px;font-weight:700;letter-spacing:-.02em}.dc-label{margin-top:4px;color:var(--dash-text-muted);font-size:11px}.inv-note{margin:0 0 12px;padding:9px 11px;border:1px solid var(--dash-border);border-radius:10px;background:#f7f9fd;color:var(--dash-text-soft);font-size:11.5px;line-height:1.6}.inv-lic-bar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:12px}.inv-lic-title{color:var(--dash-text-muted);font-size:11.5px}.inv-lic-chip{display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:0 11px;border:1px solid var(--dash-border);border-radius:999px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer;font-size:11.5px}.inv-lic-chip i{color:var(--dash-text-muted);font-style:normal}.inv-lic-chip.on{border-color:rgba(124,92,255,.6);background:rgba(124,92,255,.12);color:#5b3df5}.inv-lic-chip.on i{color:#5b3df5}.inv-lic-chip.none{border-style:dashed}.inv-row-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.inv-row-head b{color:var(--dash-text);font-size:13px}.inv-row-sub{color:var(--dash-text-muted);font-size:10.5px}.inv-count{margin-left:auto;color:var(--dash-text-soft);font-size:11.5px}.inv-lic-tag{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 9px;border:1px solid rgba(124,92,255,.35);border-radius:999px;background:rgba(124,92,255,.1);color:#5b3df5;cursor:pointer;font-size:10.5px}.inv-lic-tag em{color:var(--dash-text-muted);font-style:normal}.inv-lic-tag.none{border-style:dashed;border-color:var(--dash-border);background:transparent;color:var(--dash-text-muted)}.inv-lic-edit{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px;padding:9px;border:1px dashed var(--dash-border);border-radius:10px}.inv-lic-edit input{height:32px;min-width:200px;flex:1 1 220px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.inv-lic-err{color:#b42318;font-size:11px}.invoice-section em{margin-left:4px;padding:1px 5px;border-radius:6px;background:#fff4e5;color:#b54708;font-size:9.5px;font-style:normal}.order-store-list,.invoice-list{display:flex;flex-direction:column;gap:12px}.order-store-block,.invoice-row{padding:13px;border:1px solid var(--dash-border);border-radius:10px;background:rgba(8,16,31,.45)}.order-store-head,.invoice-row-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.order-store-head strong,.invoice-row-head strong{display:block}.order-store-head span,.invoice-row-head span{display:block;margin-top:4px;color:var(--dash-text-muted);font-size:10px}.invoice-sections{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}.invoice-section{display:flex;flex-direction:column;gap:5px;padding:10px;border-radius:8px;background:#ededef}.invoice-section span,.invoice-section small{color:var(--dash-text-muted);font-size:10px}.manual-card{margin-top:12px}.manual-form{display:flex;flex-wrap:wrap;gap:8px}.manual-form select,.manual-form input{height:34px;min-width:160px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.loader{width:18px;height:18px;border:2px solid rgba(163,143,255,.2);border-top-color:#7c5cff;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.unified-page{min-width:0;min-height:0;height:100%;overflow:auto;padding:22px 24px 32px;color:var(--dash-text)}.unified-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:16px}.unified-page-head h1{margin:5px 0 7px;font-size:25px}.unified-page-head p{margin:0;color:var(--dash-text-muted);font-size:12px}.unified-page-actions{display:flex;gap:8px}.unified-button{min-height:32px;padding:0 13px;border:1px solid var(--dash-border);border-radius:9px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer}.unified-button:hover,.unified-button:focus-visible{border-color:rgba(151,120,255,.7);color:#fff;outline:none}.unified-button.primary{border-color:rgba(130,92,255,.75);background:linear-gradient(135deg,#f3f0fc,#8c5cff);color:#fff}.unified-button:disabled{opacity:.55;cursor:not-allowed}.unified-route-tabs{display:flex;gap:5px;margin-bottom:15px;padding:4px;border:1px solid var(--dash-border);border-radius:10px;background:#ecedee}.unified-route-tabs button{height:30px;padding:0 14px;border:0;border-radius:7px;background:transparent;color:var(--dash-text-muted);cursor:pointer}.unified-route-tabs button.active{background:rgba(113,78,231,.36);color:#fff}.unified-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.unified-stat-card{display:flex;flex-direction:column;gap:6px;padding:14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.unified-stat-card span,.unified-stat-card small{color:var(--dash-text-muted);font-size:11px}.unified-stat-card strong{font-size:25px}.unified-data-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr);gap:12px}.unified-card{min-width:0;padding:16px;border:1px solid var(--dash-border);border-radius:13px;background:#ffffff}.unified-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.unified-card-head h2{margin:0 0 5px;font-size:16px}.unified-card-head span{color:var(--dash-text-muted);font-size:11px}.unified-table-wrap{overflow:auto}.unified-table{width:100%;border-collapse:collapse;font-size:11px}.unified-table th,.unified-table td{padding:10px 9px;border-bottom:1px solid rgba(111,137,177,.12);text-align:left;white-space:nowrap}.unified-table th{color:var(--dash-text-muted);font-weight:500}.unified-table td{color:var(--dash-text-soft)}.unified-table em{display:inline-block;margin-left:4px;padding:2px 4px;border-radius:4px;background:rgba(242,165,87,.15);color:#b54708;font-size:9px;font-style:normal}.unified-empty,.unified-state{display:flex;min-height:180px;align-items:center;justify-content:center;gap:10px;flex-direction:column;color:var(--dash-text-muted);border:1px dashed var(--dash-border);border-radius:11px}.unified-empty.compact{min-height:90px}.unified-alert{padding:10px 12px;margin-bottom:12px;border-radius:9px;font-size:12px}.unified-alert.error{border:1px solid rgba(239,99,119,.35);background:rgba(117,37,58,.2);color:#b42318}.unified-alert button{margin-left:8px;border:0;background:transparent;color:#fff;text-decoration:underline;cursor:pointer}.snapshot-list{display:flex;flex-direction:column;gap:8px}.snapshot-row{display:flex;justify-content:space-between;gap:10px;padding:10px;border-radius:8px;background:#f7f9fd}.snapshot-row strong,.snapshot-row small{display:block}.snapshot-row small{margin-top:4px;color:var(--dash-text-muted);font-size:10px}.snapshot-row>span{color:#5b3df5;font-size:12px}.dc-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.dc-card{padding:13px 14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.dc-num{color:var(--dash-text);font-size:24px;font-weight:700;letter-spacing:-.02em}.dc-label{margin-top:4px;color:var(--dash-text-muted);font-size:11px}.inv-note{margin:0 0 12px;padding:9px 11px;border:1px solid var(--dash-border);border-radius:10px;background:#f7f9fd;color:var(--dash-text-soft);font-size:11.5px;line-height:1.6}.inv-lic-bar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:12px}.inv-lic-title{color:var(--dash-text-muted);font-size:11.5px}.inv-lic-chip{display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:0 11px;border:1px solid var(--dash-border);border-radius:999px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer;font-size:11.5px}.inv-lic-chip i{color:var(--dash-text-muted);font-style:normal}.inv-lic-chip.on{border-color:rgba(124,92,255,.6);background:rgba(124,92,255,.12);color:#5b3df5}.inv-lic-chip.on i{color:#5b3df5}.inv-lic-chip.none{border-style:dashed}.inv-row-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.inv-row-head b{color:var(--dash-text);font-size:13px}.inv-row-sub{color:var(--dash-text-muted);font-size:10.5px}.inv-count{margin-left:auto;color:var(--dash-text-soft);font-size:11.5px}.inv-lic-tag{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 9px;border:1px solid rgba(124,92,255,.35);border-radius:999px;background:rgba(124,92,255,.1);color:#5b3df5;cursor:pointer;font-size:10.5px}.inv-lic-tag em{color:var(--dash-text-muted);font-style:normal}.inv-lic-tag.none{border-style:dashed;border-color:var(--dash-border);background:transparent;color:var(--dash-text-muted)}.inv-lic-edit{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px;padding:9px;border:1px dashed var(--dash-border);border-radius:10px}.inv-lic-edit input{height:32px;min-width:200px;flex:1 1 220px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.inv-lic-err{color:#b42318;font-size:11px}.inv-schedule{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin:0 0 12px;padding:9px 11px;border:1px solid var(--dash-border);border-radius:10px;background:#f7f9fd;color:var(--dash-text-soft);font-size:11.5px}.inv-schedule b{color:var(--dash-text)}.inv-schedule-dot{width:7px;height:7px;border-radius:50%;background:#98a2b3}.inv-schedule-dot.on{background:#12b76a}.inv-schedule .unified-button{margin-left:auto}.invoice-section em{margin-left:4px;padding:1px 5px;border-radius:6px;background:#fff4e5;color:#b54708;font-size:9.5px;font-style:normal}.order-store-list,.invoice-list{display:flex;flex-direction:column;gap:12px}.order-store-block,.invoice-row{padding:13px;border:1px solid var(--dash-border);border-radius:10px;background:rgba(8,16,31,.45)}.order-store-head,.invoice-row-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.order-store-head strong,.invoice-row-head strong{display:block}.order-store-head span,.invoice-row-head span{display:block;margin-top:4px;color:var(--dash-text-muted);font-size:10px}.invoice-sections{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}.invoice-section{display:flex;flex-direction:column;gap:5px;padding:10px;border-radius:8px;background:#ededef}.invoice-section span,.invoice-section small{color:var(--dash-text-muted);font-size:10px}.manual-card{margin-top:12px}.manual-form{display:flex;flex-wrap:wrap;gap:8px}.manual-form select,.manual-form input{height:34px;min-width:160px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.loader{width:18px;height:18px;border:2px solid rgba(163,143,255,.2);border-top-color:#7c5cff;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:980px){.unified-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.unified-data-grid{grid-template-columns:1fr}}
 </style>

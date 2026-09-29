@@ -8,6 +8,7 @@
 import { z } from 'zod'
 import { TASK_STEP_TYPES } from '@shared/schemas/task'
 import { AGENT_NON_RESUMABLE_STEP_TYPES, isIdempotentStepType } from '@shared/agent-step-effects'
+import { agentScheduleSchema } from '@shared/schemas/agent'
 
 const selector = z.string().min(1).max(500)
 const httpUrl = z.string().url().refine(
@@ -508,5 +509,7 @@ export const taskCreateSchema = z.object({
   // the old 30-step ceiling made a large but legitimate workflow fail before
   // it could reach TaskRunner.
   steps: z.array(taskStepSchema).min(1).max(100),
-  schedule: z.object({ everyMs: z.number().int().min(60000).max(30 * 86400000) }).nullish()
+  // 复用 agent 那份 schedule schema：定义两处必然漂移——2026-09-29 实测，主进程这份没有 backgroundOpen，
+  // parse 时把调用方传的 backgroundOpen 静默strip 掉，于是定时任务后台开页面的开关永远为假。
+  schedule: agentScheduleSchema.nullish()
 })

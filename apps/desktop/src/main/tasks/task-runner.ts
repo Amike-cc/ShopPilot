@@ -28,7 +28,7 @@ import { writeAudit } from '../services/audit-logger'
 import { logMain } from '../services/logger'
 import { generateInviteScript } from '../services/ai-client'
 import { isAppLocked } from '../services/security-manager'
-import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, closeTab, waitForTabWebContents } from '../browser/window-manager'
+import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, closeTab, waitForTabWebContents, openStoreBrowser } from '../browser/window-manager'
 import { waitForStoreSessionReady } from '../browser/session-manager'
 import { getDatabase } from '../db/database'
 
@@ -372,8 +372,13 @@ async function execute(run: RunHandle): Promise<void> {
     // 页面句柄来自渲染层 DOM <webview> 的注册：开店 → 元素挂载 → did-attach → 主进程绑定。
     // 这段空档期标签页已存在但还没有 guest，必须等（超时按 BROWSER_NOT_READY 如实失败），
     // 不能拿 null 直接当"已关闭"，更不能跳过等待去执行步骤。
+    //
+    // 45 秒（原 15 秒）：**定时任务后台开店**这条路径上，渲染层要先挂起 guest 宿主、新元素
+    // attach 后才有 did-attach，窗口不在前台时这一串更慢。实测（2026-09-29）发票采集定时触发时
+    // 15 秒不够，任务报 BROWSER_NOT_READY 白跑一轮——它不是"页面没了"，只是"还没挂上"。
+    // 无人值守的定时任务宁可在第一次触发多等一会，也不要一上来就失败。
     try {
-      await waitForTabWebContents(run.storeId, run.tabId!)
+      await waitForTabWebContents(run.storeId, run.tabId!, 45_000)
     } catch (e: any) {
       const message = String(e?.message || e).replace(/^BROWSER_NOT_READY:\s*/, '')
       TaskStore.updateRun(run.runId, { errorCode: 'BROWSER_NOT_READY', errorMessage: message })
@@ -3204,12 +3209,34 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
 export function fireScheduled(taskId: string): TaskScheduledFiredEvent {
   const task = TaskStore.getTask(taskId)
   const { runId, storeId } = enqueueRun(taskId, { reason: '调度触发' })
-  const queuedWaiting = !getOpenStoreIds().includes(storeId)
+  let queuedWaiting = !getOpenStoreIds().includes(storeId)
+  /**
+   * 任务自己声明了 `schedule.backgroundOpen` 时，没开店铺浏览器就**后台把它开起来**
+   * （display:false，不抢当前视图）再跑。
+   *
+   * 为什么需要这个开关：默认的"不静默拉起"（§4.4）是给有副作用的任务的护栏；但只读的采集类
+   * 定时任务（如发票中心每 3 小时刷新）如果不这么做，无人值守时每次触发都只是把 run 排进队列，
+   * 界面上看着"定时任务已触发"，实际一次都没采到——比不排更糟（有动作没结果）。
+   * 开页面失败也不抛：如实把 queuedWaiting 留在 true（排队等人开），消息里说明。
+   */
+  let autoOpened = false
+  if (queuedWaiting && (task?.schedule as { backgroundOpen?: boolean } | null | undefined)?.backgroundOpen === true) {
+    try {
+      openStoreBrowser(storeId, { display: false, source: 'main' })
+      autoOpened = true
+      queuedWaiting = false
+      logMain('info', `[scheduler] 定时任务后台打开店铺页面 store=${storeId} task=${taskId}`)
+    } catch (error) {
+      logMain('warn', `[scheduler] 后台打开店铺页面失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
+    }
+  }
   const ev: TaskScheduledFiredEvent = {
     runId, taskId, storeId, queuedWaiting,
     message: queuedWaiting
       ? `定时任务「${task?.name}」已触发：店铺浏览器未打开，保持排队等待，不静默拉起`
-      : `定时任务「${task?.name}」已触发并入队`
+      : autoOpened
+        ? `定时任务「${task?.name}」已触发：店铺页面已在后台打开，采完即止（不影响你当前页面）`
+        : `定时任务「${task?.name}」已触发并入队`
   }
   emitToRenderer(EVENT_CHANNELS.TASK_SCHEDULED_FIRED, ev)
   return ev
