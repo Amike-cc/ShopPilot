@@ -285,9 +285,9 @@
                 <button type="button" class="ov-link inline" @click="navigateTo('tasks')">查看全部 <span aria-hidden="true">→</span></button>
               </div>
               <div v-if="taskState === 'loading'" class="ov-empty"><span class="loader"></span> 正在读取任务…</div>
-              <div v-else-if="!pendingTasks.length" class="ov-empty">暂无待办：没有等待确认、失败或进行中的任务</div>
+              <div v-else-if="!pendingTasks.length" class="ov-empty">暂无待办：没有需要人工处理的任务或待开发票店铺</div>
               <ul v-else class="todo-list">
-                <li v-for="item in pendingTasks" :key="item.id" class="todo-item">
+                <li v-for="item in pendingTasks" :key="item.id" class="todo-item" :class="{ clickable: item.kind === 'invoice' }" :role="item.kind === 'invoice' ? 'button' : undefined" :tabindex="item.kind === 'invoice' ? 0 : undefined" @click="item.kind === 'invoice' && navigateTo('invoices')" @keydown.enter="item.kind === 'invoice' && navigateTo('invoices')">
                   <span class="todo-check" aria-hidden="true"></span>
                   <span class="todo-title" :title="item.name">{{ item.name }}</span>
                   <span :class="['todo-chip', item.tone]">{{ item.badge }}</span>
@@ -486,6 +486,7 @@ const selectedPlatform = ref('all')
 const dataState = ref<LoadState>('loading')
 const dataError = ref('')
 const taskState = ref<LoadState>('loading')
+const invoiceTodoRows = ref<Array<{ storeId: string; storeName: string; count: number }>>([])
 const snapshotState = ref<LoadState>('loading')
 const snapshotPartial = ref(false)
 const snapshots = ref<SnapshotRow[]>([])
@@ -847,23 +848,31 @@ const platformOnlineSummary = computed(() => {
   return `${rows.filter(row => row.state === 'online').length} / ${rows.length} 在线`
 })
 /**
- * 待办任务（设计稿右栏第三张卡）：只列**需要人管**的任务，标签用真实状态而不是编出来的时间。
- * 等待确认/执行失败 = 较紧急；进行中/已暂停 = 进行中。
+ * 待办任务（设计稿右栏第三张卡）：只列**需要人工处理**的任务，以及发票中心已采到
+ * 待开票记录的店铺。排队中/进行中的自动任务不会占用待办名额。
  */
 const pendingTasks = computed(() => ws.tasks
   .map((task: any) => {
     const run = task.latestRun
     const status = run?.id ? (ws.runLive[run.id]?.status || run.status) : run?.status
-    return { id: task.id as string, name: String(task.name || '未命名任务'), status: String(status || '') }
+    return { id: task.id as string, name: String(task.name || '未命名任务'), status: String(status || ''), kind: 'task' as const }
   })
-  .filter(item => ['waiting_confirmation', 'failed', 'running', 'queued', 'paused'].includes(item.status))
-  .slice(0, 3)
+  .filter(item => ['waiting_confirmation', 'failed', 'paused'].includes(item.status))
   .map(item => ({
     id: item.id,
     name: item.name,
     badge: item.status === 'waiting_confirmation' ? '待确认' : item.status === 'failed' ? '较紧急' : item.status === 'paused' ? '已暂停' : '进行中',
-    tone: ['waiting_confirmation', 'failed'].includes(item.status) ? 'urgent' : 'info'
+    tone: ['waiting_confirmation', 'failed'].includes(item.status) ? 'urgent' : 'info',
+    kind: item.kind
   }))
+  .concat(invoiceTodoRows.value.map(row => ({
+    id: `invoice:${row.storeId}`,
+    name: `${row.storeName} · 待开发票`,
+    badge: `${row.count} 条`,
+    tone: 'urgent' as const,
+    kind: 'invoice' as const
+  })))
+  .slice(0, 3)
 )
 
 const platformSyncRows = computed(() => {
@@ -911,7 +920,7 @@ async function waitForWorkspace() {
 }
 async function loadDashboardData() {
   dataState.value = 'loading'; dataError.value = ''
-  await loadTasks()
+  await Promise.all([loadTasks(), loadInvoiceTodo()])
   try {
     await waitForWorkspace()
     await Promise.all([loadSnapshots(), loadCollectedMetrics()])
@@ -1002,6 +1011,17 @@ async function refreshData() {
 async function loadTasks() {
   taskState.value = 'loading'
   try { await waitForWorkspace(); await ws.refreshTasks(); taskState.value = ws.tasks.length ? 'ready' : 'empty' } catch { taskState.value = 'error' }
+}
+async function loadInvoiceTodo() {
+  try {
+    const response = await window.shopilot.overview.invoiceCenter()
+    if (!response.ok) { invoiceTodoRows.value = []; return }
+    invoiceTodoRows.value = ((response.data as any)?.rows || [])
+      .map((row: any) => ({ storeId: String(row.storeId || ''), storeName: String(row.storeName || '未命名店铺'), count: Number(row.count) || 0 }))
+      .filter((row: { storeId: string; count: number }) => row.storeId && row.count > 0)
+  } catch {
+    invoiceTodoRows.value = []
+  }
 }
 async function loadSnapshots() {
   if (loadingSnapshots) return
@@ -1290,6 +1310,11 @@ function scheduleCollectedRefresh() {
 function onCollectedRunFinished() {
   if (isOnOverview.value) void loadCollectedMetrics()
 }
+function onTaskProgress(event: any) {
+  if (isOnOverview.value && (event?.phase === 'finished' || event?.phase === 'failed')) {
+    void Promise.all([loadTasks(), loadInvoiceTodo()])
+  }
+}
 // 主进程**单方面**显示店铺时（Agent 动作 / 开店后自动显示 → BROWSER_DISPLAY_CHANGED，
 // workspace 已更新 displayedStoreId 与 displaySource）才把页面切过去：不切的话原生店铺视图
 // 会盖住当前页（数据分析/设置…），而用户没有任何界面入口能纠正。
@@ -1309,6 +1334,7 @@ onMounted(async () => {
   document.addEventListener('mousedown', onDocumentMouseDown)
   window.shopilot.on(EVENT_CHANNELS.AGENT_PANEL_OPEN, handleAgentPanelOpen)
   window.shopilot.on(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished)
+  window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress)
   tickClock()
   clockTimer = window.setInterval(tickClock, 1000)
   // DashboardView 现在是应用的真实入口，必须自行完成工作区初始化，不能依赖旧 WorkbenchView 的生命周期。
@@ -1321,7 +1347,7 @@ onMounted(async () => {
   scheduleCollectedRefresh()
   stopStoreWatch = watch(() => ws.stores.map(store => `${store.id}:${store.status}`).join('|'), () => { void loadSnapshots(); void loadCollectedMetrics() })
 })
-onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); document.removeEventListener('mousedown', onDocumentMouseDown); window.shopilot.off(EVENT_CHANNELS.AGENT_PANEL_OPEN, handleAgentPanelOpen); window.shopilot.off(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished); stopStoreWatch?.(); if (noticeTimer) window.clearTimeout(noticeTimer); if (collectedTimer) window.clearInterval(collectedTimer); if (clockTimer) window.clearInterval(clockTimer); void window.shopilot.browser.setViewsObscured(false) })
+onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); document.removeEventListener('mousedown', onDocumentMouseDown); window.shopilot.off(EVENT_CHANNELS.AGENT_PANEL_OPEN, handleAgentPanelOpen); window.shopilot.off(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished); window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress); stopStoreWatch?.(); if (noticeTimer) window.clearTimeout(noticeTimer); if (collectedTimer) window.clearInterval(collectedTimer); if (clockTimer) window.clearInterval(clockTimer); void window.shopilot.browser.setViewsObscured(false) })
 </script>
 
 <style scoped>
@@ -1646,6 +1672,8 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .ov-ai-button:hover, .ov-ai-button:focus-visible { background: #f3efff; outline: none; }
 .todo-list { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 0; padding: 0; list-style: none; }
 .todo-item { display: flex; align-items: center; gap: 10px; padding: 9px 2px; }
+.todo-item.clickable { cursor: pointer; border-radius: 7px; }
+.todo-item.clickable:hover, .todo-item.clickable:focus-visible { background: var(--dash-card-hover); outline: none; }
 .todo-check { width: 18px; height: 18px; flex: 0 0 18px; border: 1.5px solid #cfd8e6; border-radius: 50%; }
 .todo-title { min-width: 0; flex: 1; overflow: hidden; color: var(--dash-text); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
 .todo-chip { flex: 0 0 auto; padding: 3px 9px; border-radius: 8px; font-size: 11px; font-weight: 600; }
