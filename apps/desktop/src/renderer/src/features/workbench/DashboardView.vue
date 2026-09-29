@@ -293,7 +293,6 @@
                   <span :class="['todo-chip', item.tone]">{{ item.badge }}</span>
                 </li>
               </ul>
-              <button type="button" class="todo-add" @click="openTasks(true)">＋ 新建任务</button>
             </section>
           </aside>
         </div>
@@ -1652,8 +1651,8 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .todo-chip { flex: 0 0 auto; padding: 3px 9px; border-radius: 8px; font-size: 11px; font-weight: 600; }
 .todo-chip.urgent { background: #fff4e5; color: #b54708; }
 .todo-chip.info { background: #eef4ff; color: #1d4ed8; }
-.todo-add { display: flex; width: 100%; align-items: center; justify-content: center; gap: 6px; margin-top: 10px; height: 38px; border: 1px dashed #d8dfea; border-radius: 12px; background: transparent; color: var(--dash-text-soft); cursor: pointer; font-size: 12.5px; }
-.todo-add:hover, .todo-add:focus-visible { border-color: rgba(124, 92, 255, .55); color: var(--dash-purple); outline: none; }
+/* 待办任务卡不再放「新建任务」入口（用户要求）：新建任务的入口留在右侧任务面板里，
+   概览这张卡只做"看"，不放操作按钮，避免误点。 */
 
 /* ---------------- 弹窗 / 菜单 / 提示 ---------------- */
 .dashboard-context-menu { position: fixed; z-index: 220; width: 252px; padding: 6px; border: 1px solid var(--dash-border-strong); border-radius: 14px; background: #fff; box-shadow: var(--shadow-pop); }
