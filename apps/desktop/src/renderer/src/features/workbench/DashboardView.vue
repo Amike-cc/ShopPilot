@@ -174,8 +174,8 @@
                 <div class="ov-card-title">
                   <div class="ov-title-row">
                     <h2>销售概览</h2>
-                    <button type="button" class="ov-refresh" data-test="overview-refresh" :disabled="dataState === 'loading'" @click="loadDashboardData">
-                      <span aria-hidden="true">⟳</span>{{ dataState === 'loading' ? '读取中…' : '刷新数据' }}
+                    <button type="button" class="ov-refresh" data-test="overview-refresh" :disabled="collectState.running || dataState === 'loading'" @click="refreshData">
+                      <span aria-hidden="true">⟳</span>{{ refreshLabel }}
                     </button>
                   </div>
                   <span>核心经营指标</span>
@@ -920,6 +920,85 @@ async function loadDashboardData() {
   } catch (error: any) {
     dataState.value = 'error'; dataError.value = error?.message || '概览数据读取失败'
   }
+}
+
+/**
+ * 「刷新数据」= **真的去采一轮**，不是重读本地库。
+ *
+ * 为什么必须去采：卡片上的数字来自每 10 分钟一次的自动采集，重读本地库只会把同一份旧数据
+ * 再画一遍——用户按了按钮看到数字没变，会以为"采集坏了"。所以这里对**当前筛选范围内**的店铺
+ * 逐个入队「立即采集」（走调度器：有运行记录、有并发上限、失败退避都在），等它们跑完再读库。
+ *
+ * 等待期间按钮显示进度（采集中 2/4），完成后弹一条汇总：成功的多少家、失败的分别是什么原因
+ * （原因码直接来自运行记录，不编中文猜测）。
+ */
+const collectState = reactive({ running: false, done: 0, total: 0 })
+const refreshLabel = computed(() => {
+  if (collectState.running) return `采集中 ${collectState.done}/${collectState.total}`
+  return dataState.value === 'loading' ? '读取中…' : '刷新数据'
+})
+const COLLECT_REASON_TEXT: Record<string, string> = {
+  QUEUED: '已入队',
+  ALREADY_RUNNING: '已在采集中',
+  PLAN_NOT_FOUND: '没有采集计划',
+  PLATFORM_PROFILE_NOT_MEASURED: '该平台未实测采集档案',
+  STORE_NOT_FOUND: '店铺不存在',
+  PAGE_NOT_READY: '店铺页面打不开',
+  PAGE_NOT_RENDERED: '页面没渲染出来',
+  PERIOD_NOT_APPLIED: '统计周期没切换成功',
+  PERIOD_CONTROL_NOT_FOUND: '找不到周期控件',
+  LOGIN_REQUIRED: '登录态已失效',
+  NETWORK_ERROR: '网络/加载失败',
+  SALES_METRICS_PARTIAL: '只采到部分指标',
+  NO_METRICS_FOUND: '页面当前没有数值',
+  COLLECTION_TIMEOUT: '超时',
+  CIRCUIT_OPEN: '连续失败已停机'
+}
+async function refreshData() {
+  if (collectState.running) return
+  await waitForWorkspace()
+  const targets = ws.stores.filter(store => selectedPlatform.value === 'all' || store.platform === selectedPlatform.value)
+  if (!targets.length) { await loadDashboardData(); return }
+
+  collectState.running = true
+  collectState.total = targets.length
+  collectState.done = 0
+  const pending = new Map(targets.map(store => [store.id, store.name]))
+  const failed: string[] = []
+  const finished = (payload: any) => {
+    const storeId = payload?.storeId
+    if (!pending.has(storeId)) return
+    pending.delete(storeId)
+    collectState.done = collectState.total - pending.size
+    if (payload.status !== 'SUCCEEDED' && payload.status !== 'PARTIAL') {
+      failed.push(`${pending.get(storeId) || storeId}：${COLLECT_REASON_TEXT[payload.reasonCode] || payload.reasonCode || payload.status}`)
+    }
+  }
+  window.shopilot.on(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, finished)
+  try {
+    for (const store of targets) {
+      const response = await window.shopilot.salesMetrics.planRunNow(store.id)
+      if (!response.ok || !(response.data as any)?.accepted) {
+        pending.delete(store.id)
+        collectState.done = collectState.total - pending.size
+        const reason = response.ok ? (response.data as any)?.reasonCode : response.error?.message
+        failed.push(`${store.name}：${COLLECT_REASON_TEXT[String(reason)] || reason || '未能入队'}`)
+      }
+    }
+    // 等入队的跑完：并发上限内四家店约一分钟；给 6 分钟上限以免页面卡住时按钮永远转圈。
+    const deadline = Date.now() + 6 * 60 * 1000
+    while (pending.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 700))
+    if (pending.size) for (const name of pending.values()) failed.push(`${name}：等待超时`)
+  } finally {
+    window.shopilot.off(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, finished)
+    collectState.running = false
+  }
+
+  await loadDashboardData()
+  const okCount = targets.length - failed.length
+  showNotice(failed.length
+    ? `已采集 ${okCount}/${targets.length} 家；${failed.join('；')}`
+    : `已按当前口径采集 ${okCount} 家店铺的最新数据`)
 }
 async function loadTasks() {
   taskState.value = 'loading'

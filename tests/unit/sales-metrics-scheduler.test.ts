@@ -356,7 +356,7 @@ describe('经营采集调度器 · 节拍', () => {
 
   realIt('启动时收敛上次残留的 RUNNING，并把过去的计划点重锚（不补发积压）', () => {
     const h = use(harness([{ id: 'store_a', platform: '拼多多' }]))
-    h.ledger.syncPlans({ stores: [{ id: 'store_a', platform: '拼多多' }], now: NOW - 3_600_000, intervalMs: 600_000, anchor: (previous, interval, now, jitter) => now + interval + jitter, jitterFor: jitterMsForStore })
+    h.ledger.syncPlans({ stores: [{ id: 'store_a', platform: '拼多多' }], now: NOW - 3_600_000, intervalMs: 600_000, anchor: (previous, interval, now, jitter) => now + interval + jitter, jitterFor: jitterMsForStore, supported: () => true })
     h.db.prepare(`INSERT INTO sales_collection_runs (run_id, store_id, platform, planned_at, started_at, status, created_at) VALUES ('old','store_a','拼多多',?,?, 'RUNNING', ?)`).run(NOW - 1000, NOW - 1000, NOW - 1000)
 
     startSalesMetricsScheduler()
@@ -393,6 +393,51 @@ describe('经营采集调度器 · 节拍', () => {
     startSalesMetricsScheduler()
     expect(requestImmediateRun('store_ghost')).toMatchObject({ queued: false, reasonCode: 'STORE_NOT_FOUND' })
     expect(h.collectCalls).toHaveLength(0)
+  })
+
+  realIt('手动采集会为「还没建计划」的店铺按需补建计划（否则用户看到的就是这家店点不动）', () => {
+    // 真机背景（2026-09-29）：本机有一家店（微信仿真店）没有计划行，手动点它直接 PLAN_NOT_FOUND。
+    // 用户按下按钮时不该因为"计划同步还没扫到"而失败——补建计划后走同一条调度路径（有运行记录）。
+    const h = use(harness([{ id: 'store_a', platform: '拼多多' }]))
+    startSalesMetricsScheduler()
+    expect(h.ledger.getPlan('store_a')).toBeTruthy()
+    // 模拟"还没建计划"：把计划删掉（等价于刚建店、计划同步还没扫到）
+    h.db.prepare('DELETE FROM sales_collection_plans WHERE store_id = ?').run('store_a')
+    expect(h.ledger.getPlan('store_a')).toBeNull()
+
+    const queued = requestImmediateRun('store_a')
+    expect(queued.queued).toBe(true)
+    expect(h.ledger.getPlan('store_a')).toBeTruthy()      // 已按需补建
+    tickSalesMetricsScheduler()
+    expect(h.collectCalls).toHaveLength(1)
+  })
+
+  realIt('平台没有实测采集档案时，手动采集如实拒绝（不建一个每轮都失败的计划）', () => {
+    const h = use(harness([{ id: 'store_x', platform: '某个没接的平台' }]))
+    startSalesMetricsScheduler()
+    // 计划同步本身也不该为"没有实测档案的平台"建计划（建了只会每 10 分钟制造一条失败记录）
+    expect(h.ledger.getPlan('store_x')).toBeNull()
+    expect(requestImmediateRun('store_x')).toMatchObject({ queued: false, reasonCode: 'PLATFORM_PROFILE_NOT_MEASURED' })
+    expect(h.ledger.getPlan('store_x')).toBeNull()
+    expect(h.collectCalls).toHaveLength(0)
+  })
+
+  realIt('手动刷新放宽并发到 4：四家店同一拍全部开跑（用户在看，不两两排队）', () => {
+    // 周期采集仍是保守的 2 家；但"刷新数据"是用户按下的，四家串行要等一分多钟。
+    const h = use(harness([
+      { id: 'store_a', platform: '拼多多' },
+      { id: 'store_b', platform: '拼多多' },
+      { id: 'store_c', platform: '拼多多' },
+      { id: 'store_d', platform: '拼多多' }
+    ]))
+    const releases: Array<() => void> = []
+    h.behavior = storeId => new Promise(resolve => { releases.push(() => resolve(result(storeId, 'SUCCEEDED'))) })
+    startSalesMetricsScheduler()
+    for (const store of ['store_a', 'store_b', 'store_c', 'store_d']) expect(requestImmediateRun(store).queued).toBe(true)
+    tickSalesMetricsScheduler()
+    expect(h.collectCalls).toHaveLength(4)
+    for (const release of releases.splice(0)) release()
+    void drain(6_000, releases, () => (h.db.prepare("SELECT COUNT(*) AS n FROM sales_collection_runs WHERE status='RUNNING'").get() as { n: number }).n)
   })
 
   realIt('暂停/恢复/改周期都会推送计划变更事件并反映在视图里', () => {

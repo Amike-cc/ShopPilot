@@ -216,6 +216,12 @@ export class SalesMetricsLedger {
     intervalMs: number
     anchor: (previousNextRunAt: number | null, intervalMs: number, now: number, jitterMs: number) => number
     jitterFor: (storeId: string) => number
+    /**
+     * 该平台有没有实测过的采集档案。没有就不建计划，并且停掉已存在的计划：
+     * 平台档案缺失时采集必然每次都失败（PAGE_PROFILE_NOT_MEASURED），建了计划只会每 10 分钟
+     * 制造一条失败记录，把"健康度/最近失败"这类面板刷成噪声。
+     */
+    supported: (platform: string) => boolean
   }): { created: number; disabled: number; reanchored: number } {
     const active = new Map(input.stores.map(store => [store.id, store]))
     let created = 0
@@ -236,6 +242,15 @@ export class SalesMetricsLedger {
           }
           continue
         }
+        // 平台没有实测档案 → 停计划（自定义平台/新平台接入前都属于这种）
+        if (!input.supported(store.platform)) {
+          if (Number(row.enabled) === 1) {
+            this.db.prepare('UPDATE sales_collection_plans SET enabled = 0, next_run_at = NULL, last_status = ?, last_reason_code = ?, last_safe_message = ?, backoff_until = NULL, updated_at = ? WHERE store_id = ?')
+              .run('DISABLED', 'PLATFORM_PROFILE_NOT_MEASURED', `${store.platform}还没有实测过的采集档案，采集计划已停止`, input.now, row.store_id)
+            disabled++
+          }
+          continue
+        }
         // 平台改名/换平台：以 stores 为准
         const reanchoredAt = input.anchor(row.next_run_at, input.intervalMs, input.now, input.jitterFor(row.store_id))
         if (Number(row.enabled) === 1 && reanchoredAt !== Number(row.next_run_at)) {
@@ -250,11 +265,30 @@ export class SalesMetricsLedger {
       `)
       for (const store of input.stores) {
         if (known.has(store.id)) continue
+        if (!input.supported(store.platform)) continue
         insert.run(store.id, store.platform, input.intervalMs, input.now + input.intervalMs + input.jitterFor(store.id), input.now)
         created++
       }
       return { created, disabled, reanchored }
     })
+  }
+
+  /**
+   * 按需建计划：用户手动点"刷新数据"时，某店铺可能还没有计划（还没被计划同步扫到，
+   * 或者刚建店不久）——那种情况下"手动采集"不该直接失败，否则用户看到的就是"这家店点不动"。
+   *
+   * 只补建计划、不改变已有计划（幂等）；是否允许为这个平台建计划由调用方判断
+   * （平台没有实测档案时建了也只会每次失败，那种情况调用方应当如实拒绝）。
+   */
+  ensurePlan(input: { storeId: string; platform: string; now: number; intervalMs: number; jitterMs: number }): boolean {
+    const existing = this.getPlan(input.storeId)
+    if (existing) return false
+    this.db.prepare(`
+      INSERT INTO sales_collection_plans (store_id, platform, enabled, interval_ms, timezone, next_run_at, last_status, updated_at)
+      VALUES (?, ?, 1, ?, 'Asia/Shanghai', ?, 'READY', ?)
+      ON CONFLICT(store_id) DO UPDATE SET platform = excluded.platform
+    `).run(input.storeId, input.platform, input.intervalMs, input.now + input.intervalMs + input.jitterMs, input.now)
+    return true
   }
 
   listPlans(): SalesCollectionPlanRow[] {

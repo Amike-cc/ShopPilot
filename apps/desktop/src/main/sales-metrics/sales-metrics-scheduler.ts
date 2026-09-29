@@ -31,6 +31,7 @@ import {
   planTransition
 } from '@shared/sales-metrics-rules'
 import * as StoreManager from '../stores/store-manager'
+import { businessProfileFor } from '@shared/constants/business'
 import { emitToRenderer } from '../browser/window-manager'
 import { logMain } from '../services/logger'
 import { salesMetricsCollectionService } from './sales-metrics-collection-service'
@@ -54,6 +55,14 @@ const RUN_HARD_TIMEOUT_MS = 180 * 1000
  * 所以这里给足；硬上限仍是 180 秒，卡死也不会占住唯一的并发位。
  */
 const RUN_ADAPTER_BUDGET_MS = 120 * 1000
+/**
+ * 手动"立即采集"时的并发上限（用户正盯着看，值得多开两个位）。
+ *
+ * 周期采集按 2 家保守跑：没人等，撞上平台限速也只是下一轮再采。
+ * 但"刷新数据"是用户按下的，四家店串行两两排队要等一分多钟——所以手动队列非空时放宽到 4
+ * （每家是各自独立的 store 分区与页面，资源上就是一个浏览器开四个后台标签页）。
+ */
+const MANUAL_MAX_PARALLEL = 4
 
 export interface SalesMetricsSchedulerRuntime {
   now: () => number
@@ -151,7 +160,8 @@ function syncPlans(now: number, reanchor: boolean): { created: number; disabled:
     anchor: reanchor
       ? anchorNextRun
       : (previous, interval, current, jitter) => (previous != null && Number.isFinite(previous) ? previous : current + interval + jitter),
-    jitterFor: jitterMsForStore
+    jitterFor: jitterMsForStore,
+    supported: platform => !!businessProfileFor(platform)
   })
 }
 
@@ -320,7 +330,9 @@ export function tickSalesMetricsScheduler(): void {
 
   try {
     const now = runtime().now()
-    let capacity = SALES_METRICS_MAX_PARALLEL - inFlight.size
+    // 手动队列非空 → 放宽并发（用户在看）；纯周期采集按保守的 2 家跑。
+    const cap = manualQueue.size > 0 ? Math.max(SALES_METRICS_MAX_PARALLEL, MANUAL_MAX_PARALLEL) : SALES_METRICS_MAX_PARALLEL
+    let capacity = cap - inFlight.size
     // 手动请求优先于周期请求：用户刚点了"立即采集"，不该排在 10 分钟周期后面。
     for (const storeId of [...manualQueue]) {
       if (capacity <= 0) break
@@ -420,8 +432,19 @@ export function requestImmediateRun(storeId: string): ManualRunRequest {
   const runtimeValue = runtime()
   const store = runtimeValue.listStores().find(item => item.id === storeId)
   if (!store) return { queued: false, reasonCode: 'STORE_NOT_FOUND', storeId }
-  const plan = runtimeValue.ledger.getPlan(storeId)
-  if (!plan) return { queued: false, reasonCode: 'PLAN_NOT_FOUND', storeId }
+  let plan = runtimeValue.ledger.getPlan(storeId)
+  if (!plan) {
+    // 还没建计划（刚建店/计划同步还没扫到）→ **按需补建**，别让用户看到"这家店点不动"。
+    // 但平台没有实测档案时不建：那种计划每一轮都只会失败，比拒绝更糟。
+    if (!businessProfileFor(store.platform)) return { queued: false, reasonCode: 'PLATFORM_PROFILE_NOT_MEASURED', storeId }
+    const created = runtimeValue.ledger.ensurePlan({
+      storeId, platform: store.platform, now: runtimeValue.now(),
+      intervalMs: SALES_METRICS_INTERVAL_MS, jitterMs: jitterMsForStore(storeId)
+    })
+    if (created) logMain('info', `[sales-metrics-scheduler] 手动采集按需建计划 store=${storeId} platform=${store.platform}`)
+    plan = runtimeValue.ledger.getPlan(storeId)
+    if (!plan) return { queued: false, reasonCode: 'PLAN_NOT_FOUND', storeId }
+  }
   if (inFlight.has(storeId) || manualQueue.has(storeId)) return { queued: false, reasonCode: 'ALREADY_RUNNING', storeId }
   manualQueue.add(storeId)
   try { runtimeValue.ledger.scheduleImmediate(storeId, runtimeValue.now()) } catch { /* 节拍仍会执行 */ }

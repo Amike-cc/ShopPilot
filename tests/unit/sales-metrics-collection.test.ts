@@ -166,7 +166,8 @@ function syncOnce(ledger: SalesMetricsLedger, stores: Array<{ id: string; platfo
   return ledger.syncPlans({
     stores, now, intervalMs: 600_000,
     anchor: reanchor ? anchorNextRun : (previous, interval, current, jitter) => (previous != null ? previous : current + interval + jitter),
-    jitterFor: jitterMsForStore
+    jitterFor: jitterMsForStore,
+    supported: platform => !!businessProfileFor(platform)
   })
 }
 
