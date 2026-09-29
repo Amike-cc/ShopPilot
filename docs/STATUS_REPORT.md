@@ -298,3 +298,12 @@ cd D:\code\电商浏览器
 - **未闭环（如实声明）**：「昨日」页签无自动采集数据（快手默认视图是昨日但页面上找不到可点控件）；投放花费/ROI 只在「今日」有值；退款来源仍只有快手（+微信退款金额）；未做代码签名，更新包仅 SHA-512 校验。
 
 **「浏览器不能打开新标签页」（2026-09-29，`v0.4.53` 同批修，用户实报）**: 真机逐段复现（生产构建 + CDP + 真鼠标）后定位到两点。① **根因：`<webview>` 没有 `allowpopups`**——Electron 的 `<webview>` 默认禁止弹窗，页面里 `target=_blank` 的链接与 `window.open` 在 webview 层就被丢弃，主进程 `setWindowOpenHandler` **根本不会被调用**（实测真鼠标点一个 `target=_blank` 链接：页签数不变、日志里一条 `window-open` 都没有）；加上 `allowpopups` 后同一次点击立刻开出新标签页并加载目标地址。这不是放开安全边界：该属性只是允许把新窗口请求交给主进程判断，主进程仍 `action:'deny'` 掉原生弹窗、改成同一 `persist:store_<id>` 分区下的**应用内标签页**，`will-attach-webview` 的 preload 剥离与权限锁死照旧。② **失败被静默吞掉**：旧 handler 是 `try { createTab } catch {}`，真出错时表现为"点了没反应"、现场只剩空白页且无日志——现在成功写 info（店铺/页签/disposition/目标）、失败写 warn（含原因）。顺带核实用户路径其它环节本来就正常：点左栏店铺卡会切到「店铺工作台」、工具栏「+」连点 3 次页签 3→6 且每个标签页各挂一个 `<webview>`。测试：`vitest run` **70 文件/759 用例通过**（新增 2 条源码级护栏：`<webview>` 必须带 `allowpopups`；window-open 失败分支必须留日志不许吞异常）；M1 115/115；typecheck / lint（0 errors）/ build 通过。
+
+## v0.4.53 发版记录（2026-09-29）
+
+- **提交**：`1dc6f319c3818280400ce314d7fc72c7dab79a76`（分支 `main`，构建时工作区干净；发布清单 `release/release.json` 的 `git.dirty=false`/`git.rev` 可复核）。
+- **产物**：`release/ShopPilot-Setup-0.4.53.exe`（85,679,952 B）+ `.blockmap` + `latest.yml`；`dbSchemaVersion=18`。
+- **GitHub Release**：https://github.com/Amike-cc/ShopPilot/releases/tag/v0.4.53 （非 draft、非 prerelease、已标记 Latest；tag 指向上面那个提交）。
+- **流程改进**：这次按 0.4.52 的教训**先确认 `git push` 成功再发布**，tag 一次就指对（`gh api …/commits/v0.4.53` 返回 1dc6f31）。
+- **发布前复跑**：`typecheck` 通过、`lint` 0 errors、`vitest run` 70 文件/759 用例通过、`electron-builder --win --x64` 出包成功、M1 115/115。
+- **未闭环（如实声明）**：未做代码签名（Windows 可能显示未知发布者）；更新包只做 SHA-512 校验；安装态「检查更新 → 下载 → 安装」未跑全流程；页面弹出的新窗口统一变成应用内标签页（设计选择，需要独立窗口时用店铺右键菜单）。
