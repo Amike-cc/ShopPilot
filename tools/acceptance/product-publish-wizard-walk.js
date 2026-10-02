@@ -797,11 +797,24 @@ async function main() {
     const FIND_NEXT_SELECT = `(() => {
       const cap = 12000;
       const roots = () => { const rs = [document]; let n = 0; for (const el of document.querySelectorAll('*')) { if (el.shadowRoot) rs.push(el.shadowRoot); if (++n >= cap) break } return rs };
-      // 条件与工具原有的 FIND_SELECT **保持一致**（2026-10-02 修）：
+      // ⚠️ **「请选择」有两种形态，必须都覆盖**（2026-10-02 修，这是"找到 0 个控件"的原因）：
+      //   形态 A：有文本的（如「请选择品牌」）—— 工具原有的 FIND_SELECT 只覆盖了这一种；
+      //   形态 B：**input[placeholder^="请选择"]** —— 11 项必填参数里**多数是这个**，
+      //           它的 textContent 是**空的**，所以按文本找**一个都匹配不到**。（本段在模板字符串里，注释不能用反引号）
+      // 先扫 input，再扫有文本的。
       // 我原来加了 width>40 / height>14 / children<=2 这些额外约束，结果**一个控件都匹配不到**，
       // 而工具原有那套同一场景下能找到（found:true）。**同一个判据不要写两份不同的实现。**
       const vis = (el) => { try { return el.getClientRects().length > 0 } catch { return false } };
       for (const r of roots()) {
+        let ins; try { ins = r.querySelectorAll('input[placeholder]') } catch { ins = [] }
+        for (const el of ins) {
+          const ph = String(el.getAttribute('placeholder') || '').replace(/\\s+/g, '');
+          if (!/^请选择/.test(ph)) continue;
+          if (!vis(el)) continue;
+          const rect = el.getBoundingClientRect();
+          if (rect.width < 20) continue;
+          return JSON.stringify({ found: true, kind: 'input', x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2), label: ph.slice(0, 12) });
+        }
         let els; try { els = r.querySelectorAll('div,span') } catch { continue }
         for (const el of els) {
           const t = String(el.textContent || '').replace(/\\s+/g, '');
