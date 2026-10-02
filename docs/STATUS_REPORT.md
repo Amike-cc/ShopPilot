@@ -429,3 +429,16 @@ cd D:\code\电商浏览器
 重制 Renderer 对话为“会话时间线 + 当前状态”结构：root-ceo 身份、就绪/思考/执行/等待确认/需要恢复状态、用户与 Agent 消息、结果色彩和时间统一显示；思考消息默认折叠为分析摘要，可展开查看。Composer 增加当前店铺/页面作用域、查看店铺/检查商品/看经营数据/看待办快捷意图、字符计数和高风险动作确认提示。失败和 `recovery_required` 状态提供查看恢复入口与明确的回读后恢复建议。
 
 新增文件：`apps/desktop/src/renderer/src/features/agent/conversation-state.ts`；更新 `AgentMessageList.vue`、`AgentComposer.vue`、`AgentDrawer.vue`；新增 `tests/unit/agent-ui.test.ts` 对状态映射、思考分组、恢复提示进行回归覆盖。验证：`pnpm.cmd typecheck`、Agent UI 定向测试 10/10、`pnpm.cmd build` 通过；`vue-tsc` 仍受既有 `UnifiedAppsPage.vue:745` 的 `BatchItem.id` 类型错误阻塞。该改造不改变 Main/Preload 边界、确认门禁或真实平台能力状态，发布状态保持 `INTERNAL_BUILD`。
+
+## v0.4.58 发版记录（2026-10-02）
+
+- **提交**：构建时 `de00d214039dff7d6679c2f812d9c2f7ee027041`（分支 `main`，构建时工作区干净）。本版功能提交为 `64fa415`；其后的 `214868e`（工作区另一处并行改动）与 `de00d21`（本发版说明）都在发布前提交并推送。
+- **产物**：`release/ShopPilot-Setup-0.4.58.exe`（100,820,682 B）+ `.blockmap` + `latest.yml`；`dbSchemaVersion=29`；构建标签 `INTERNAL_BUILD`（未做代码签名）。
+- **GitHub Release**：https://github.com/Amike-cc/ShopPilot/releases/tag/v0.4.58 （Latest；tag 指向 `de00d21`，已复核）。
+- **本版内容（用户四项要求 + 一次全应用巡检）**：① 店铺登录态判定（`needs_login` 此前无生产者、开关页面无证据写 `offline`）；② 采集改用专用标签页、采完自动关闭自己开的页面（不影响用户正在用的浏览器）；③ 店铺工作台头部栏整条移除、侧栏开关挪到标签栏右端；④ 全应用文字对比度收口到 WCAG AA（修复前 641 节点 / 223 不达标 / 32 条规则，最差 1.01:1；修复后 26 个界面状态 / 1368 节点 / 0 条不达标）。
+- **门槛（在已提交的树上跑）**：typecheck ✓ / lint **0 errors** ✓ / vitest **94 文件 1012 用例** ✓ / 打包产物 smoke **8/8** ✓（隔离 profile 直接跑 `release/win-unpacked/ShopPilot.exe`：preload 注入、`store.create`/`store.list` 真库读写、`app_settings` 读写、DB 文件落地、日志无原生模块错误）/ 对比度巡检 26 状态 1368 节点 0 不达标 ✓ / 采集隔离真机验证 ✓（活动标签页未切换、URL 未变、显示店铺未被抢、专用页无残留）。
+- **发布过程中撞到三件事，都按纪律处理了**：
+  1. 打包前工作区里**另一处并行改动仍在写**（最近一次写入在发版前 1 分钟），并带着 **20 条 lint error**（17 处未使用图标 import、1 处未使用变量、1 处 `filled++` 对 `const` 赋值）。门槛要求 lint 0 errors，所以先修掉这些（其中 `filled++` 是**真实运行时缺陷**：一填参数就抛异常、计数永远为 0），再提交。
+  2. 提交后该并行改动**又更新了同一个验收脚本**，于是重跑门槛（`eslint` 0 errors / `node --check` 通过）后作为独立提交 `214868e` 提交，再生成清单（`dirty: false`）——沿用 v0.4.57 的处置方式，**没有**用 `SHOPILOT_ALLOW_DIRTY_RELEASE=1` 绕过。
+  3. 打包时 better-sqlite3 原生模块重建报 `EBUSY`（`better_sqlite3.node` 被占用，prebuild 解包失败）。没有当成无关警告放过，而是**直接对打包产物做 smoke**：真库读写全部通过，证明 ABI 正确；否则这一版会带着"装了打不开"的风险发出去。
+- **未闭环（如实声明）**：未做代码签名（Windows 可能显示未知发布者）；更新包只做 SHA-512 校验；安装态「检查更新 → 下载 → 安装」未随本版重跑；对比度巡检覆盖 26 个界面状态，不是每个对话框/每条错误分支（渐变背景节点不判定）；`vue-tsc` 仍有 4 条**模板级**类型错误来自并行改动（`tsc --noEmit` 门槛为 0 错误）；本版提交里含工作区另一处并行改动（Agent 域/记忆/软件计划、商品管理规则与草稿、图标资源迁移），非本次任务范围、未逐行审查。
