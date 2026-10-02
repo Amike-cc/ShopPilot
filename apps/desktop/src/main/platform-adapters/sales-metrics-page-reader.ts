@@ -1,3 +1,4 @@
+import { logMain } from '../services/logger'
 /**
  * 经营数据页面读取原语（只读 + 一次受信任点击 + 导航）。
  *
@@ -383,8 +384,18 @@ export function navigationErrorCode(error: unknown): string | null {
  * 什么都不是的话——真实探测里三个平台全都失败在导航上，却分不出是断网、DNS、证书
  * 还是被平台拦截（2026-09-28 真机实测踩到）。现在把 Electron 的错误码原样带出来。
  */
+/** 两个 URL 的 pathname 是否相同（判"导航有没有落到目标路径上"用）。 */
+function samePathname(a: string, b: string): boolean {
+  try { return new URL(a).pathname === new URL(b).pathname } catch { return false }
+}
+
 export async function navigateTo(wc: PageHandle, url: string, timeoutMs: number): Promise<NavigationOutcome> {
   if (!/^https?:\/\//i.test(url)) return { ok: false, errorCode: 'ERR_INVALID_URL', timedOut: false }
+  // ⚠️ **必须在 `loadURL` 之前读**（2026-10-02 实测）：被 abort 的导航会让 `wc.getURL()`
+  // 返回**待定 URL**（目标地址），于是"导航前后 URL 相同"这个判据永远不成立 ——
+  // 我的检查因此从未触发，同步仍报误导性的"平台可能已改版"。
+  const readUrl = (): string => { try { return String((wc as { getURL?: () => string }).getURL?.() ?? '') } catch { return '' } }
+  const urlBefore = readUrl()
   try {
     await wc.loadURL(url)
   } catch (error) {
@@ -393,13 +404,46 @@ export async function navigateTo(wc: PageHandle, url: string, timeoutMs: number)
       return { ok: false, errorCode: navigationErrorCode(error) || 'ERR_LOAD_FAILED', timedOut: false }
     }
   }
+  // ⚠️ **导航后必须校验"页面到底动没动"**（2026-10-02 实测踩到）：
+  //
+  // 平台可能用「未保存离开」确认守卫**阻止**导航（抛 `ERR_ABORTED`，上面当成"正常"吞掉了）。
+  // 此时页面**根本没变**、也不在加载 —— 于是下面的 `if (!loading) return { ok: true }`
+  // 会**误报成功**。实测后果：微信小店的商品列表页导航被守卫拦住，navigateTo 返回 ok:true，
+  // 下游怎么也等不到「商品列表」，最后只报一句误导性的"平台可能已改版"，排查时毫无线索。
+  //
+  // 判据：**URL 有没有变**。合法重定向也会变 URL，所以"没变"才是不正常。
   const deadline = Date.now() + Math.max(1000, timeoutMs)
   for (;;) {
     if (wc.isDestroyed()) return { ok: false, errorCode: 'ERR_PAGE_DESTROYED', timedOut: false }
     let loading = false
     try { loading = wc.isLoading() } catch { return { ok: false, errorCode: 'ERR_PAGE_DESTROYED', timedOut: false } }
-    if (!loading) return { ok: true, errorCode: null, timedOut: false }
-    if (Date.now() >= deadline) return { ok: false, errorCode: 'ERR_LOAD_TIMEOUT', timedOut: true }
+    if (!loading) {
+      const urlNow = readUrl()
+      // 判据改成「导航后的 URL 是否落在目标路径上」（2026-10-02 实测）：
+      // `urlBefore` 在导航**前**读经常是空的（那时店铺标签页还没就绪，getURL 拿不到值），
+      // 所以原来那个 urlBefore===urlNow 的判据**从来没生效过**（日志实测 before= 空）。
+      // 而 `urlNow` 是拿得到的 —— 用它和目标路径比即可。
+      if (urlNow && !samePathname(urlNow, url)) {
+        return { ok: false, errorCode: 'ERR_NAVIGATION_BLOCKED', timedOut: false }
+      }
+      logMain('info', `[navigate] ok target=${url} before=${urlBefore} now=${urlNow} same=${urlNow === urlBefore}`)
+      return { ok: true, errorCode: null, timedOut: false }
+    }
+    if (Date.now() >= deadline) {
+      // ⚠️ **超时也要分辨"是不是压根没导航"**（2026-10-02 实测）：被「未保存离开」确认守卫拦住时，
+      // 模态弹窗会让 `isLoading()` **一直是 true**，于是永远走不到上面那个 `if (!loading)` 分支，
+      // 最后只报一句 `ERR_LOAD_TIMEOUT` —— 而下游把它翻译成"平台可能已改版"，指错了方向。
+      // 判据仍然是"URL 有没有变"：超时且 URL 从未变过 = 导航被阻止。
+      const urlAtTimeout = readUrl()
+      if (urlAtTimeout && !samePathname(urlAtTimeout, url)) {
+        return { ok: false, errorCode: 'ERR_NAVIGATION_BLOCKED', timedOut: false }
+      }
+      logMain('info', `[navigate] timeout target=${url} before=${urlBefore} now=${urlAtTimeout} same=${urlAtTimeout === urlBefore}`)
+      if (urlBefore && urlAtTimeout && urlAtTimeout === urlBefore && urlBefore !== url) {
+        return { ok: false, errorCode: 'ERR_NAVIGATION_BLOCKED', timedOut: false }
+      }
+      return { ok: false, errorCode: 'ERR_LOAD_TIMEOUT', timedOut: true }
+    }
     await delay(400)
   }
 }

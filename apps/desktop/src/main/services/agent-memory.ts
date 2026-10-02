@@ -4,7 +4,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, r
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { getDatabase } from '../db/database'
 import { writeAudit, auditRequestId } from './audit-logger'
-import { getAgent, AgentRuntimeError } from './agent-runtime'
+import { assertSingletonJobRow, getAgent, requireSingletonAgentId, AgentRuntimeError } from './agent-runtime'
 import { redactAgentText } from '@shared/agent-privacy'
 import { MEMORY_INJECTION_RE, MEMORY_SENSITIVE_RE } from '@shared/agent-domain-rules'
 import { agentMemoryListQuerySchema, agentMemoryReviewSchema, agentMemorySearchSchema, agentMemoryWriteSchema, type AgentMemoryWrite } from '@shared/schemas/agent-domain'
@@ -22,6 +22,8 @@ import {
   normalizeLearningText
 } from '@shared/agent-memory-rules'
 import { deriveMemoryDedupeKey, maintainMemoryRecords } from './agent-memory-governance'
+import { migrateLegacyAgentMemoryFiles, rewriteAgentMemoryFrontMatter, type AgentMemoryFileMigrationResult } from './agent-memory-agent-migration'
+import { ROOT_AGENT_ID } from '@shared/schemas/agent-domain'
 
 const MEMORY_FORMAT = 'shopilot-agent-memory'
 const MEMORY_VERSION = 1
@@ -92,6 +94,36 @@ export function migrateLegacyMemoryRoot(): { moved: boolean; from?: string; to?:
   } catch (error: any) {
     return { moved: false, reason: `error:${String(error?.message || error).slice(0, 120)}` }
   }
+}
+
+/**
+ * Move legacy per-Agent memory files after the database ownership migration.
+ * Public Markdown is rewritten in place; private envelopes are decrypted and
+ * re-encrypted through the existing safeStorage helpers so their front matter
+ * and integrity hash remain valid.  A failed item stays in its old directory
+ * and is reported for the next startup pass.
+ */
+export function migrateLegacyAgentMemoryFilesToRoot(): AgentMemoryFileMigrationResult {
+  const root = memoryRoot()
+  return migrateLegacyAgentMemoryFiles({
+    root,
+    rootAgentId: ROOT_AGENT_ID,
+    db: getDatabase(),
+    rewriteStored: (stored, oldPath, _targetPath) => {
+      if (oldPath.toLowerCase().endsWith('.mem.enc')) {
+        const body = decodeMemoryFile(stored, oldPath)
+        const migratedBody = rewriteAgentMemoryFrontMatter(body, ROOT_AGENT_ID)
+        return { stored: encodeMemoryFile(migratedBody, 'private') }
+      }
+      return { stored: rewriteAgentMemoryFrontMatter(stored, ROOT_AGENT_ID) }
+    },
+    equivalentStored: (existing, targetPath, desired) => {
+      if (targetPath.toLowerCase().endsWith('.mem.enc')) {
+        try { return decodeMemoryFile(existing, targetPath) === decodeMemoryFile(desired, targetPath) } catch { return existing === desired }
+      }
+      return existing === desired
+    }
+  })
 }
 
 function isDeviceName(segment: string): boolean {
@@ -231,8 +263,8 @@ function memoryDedupeKey(content: unknown): string | null {
   return deriveMemoryDedupeKey(content)
 }
 function assertMemoryWriteScope(agentId: string, storeId: string | null): void {
-  const agent = getAgent(agentId)
-  if (!agent.memoryScope.write && agent.id !== 'root-ceo') throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '当前 Agent 没有写入长期记忆的权限')
+  const agent = requireSingletonAgentId(agentId, '记忆写入')
+  if (!agent.memoryScope.write) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', 'root-ceo 当前没有写入长期记忆的权限')
   if (storeId && agent.storeScope.storeIds.length && !agent.storeScope.storeIds.includes(storeId)) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '当前 Agent 没有该店铺的记忆范围')
   if (agent.memoryScope.storeIds.length && (!storeId || !agent.memoryScope.storeIds.includes(storeId))) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '当前 Agent 的记忆范围未包含该店铺')
 }
@@ -365,6 +397,11 @@ function mapMemory(row: any, includeContent = false): any {
 export function writeMemory(raw: AgentMemoryWrite): any {
   const input = agentMemoryWriteSchema.parse(raw)
   assertMemoryWriteScope(input.agentId, input.storeId)
+  if (input.sourceJobId) {
+    const sourceJob = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(input.sourceJobId) as any
+    if (!sourceJob) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', '记忆来源 Agent Job 不存在')
+    assertSingletonJobRow(sourceJob, '记忆来源 Agent Job')
+  }
   if (input.content.length > memoryTypeLimit(input.type)) throw new AgentRuntimeError('AGENT_MEMORY_TOO_LARGE', '记忆正文超过该类型上限')
   const redacted = redactMemoryContent(input.content)
   const root = memoryRoot()
@@ -526,8 +563,7 @@ export function searchMemories(raw: unknown): any[] {
 
 export function reviewMemory(raw: unknown): any {
   const input = agentMemoryReviewSchema.parse(raw)
-  const reviewer = getAgent(input.reviewerAgentId)
-  if (reviewer.id !== 'root-ceo' && !reviewer.toolPolicy.tools.includes('review_job')) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '当前 Agent 没有审核记忆的权限')
+  const reviewer = requireSingletonAgentId(input.reviewerAgentId, '记忆审核')
   const row = getDatabase().prepare('SELECT * FROM agent_memory_records WHERE id=?').get(input.memoryId) as any
   if (!row) throw new AgentRuntimeError('AGENT_MEMORY_NOT_FOUND', '记忆记录不存在')
   if (!canAccessMemoryRecord(row, reviewer, row.store_id || null)) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '当前 Agent 无权审核该范围的记忆')
@@ -642,6 +678,11 @@ function packMemoryEntries(ranked: any[], maxChars: number): { selected: any[]; 
 /** 记录一次真实召回（用于排序反馈）；同一分钟内重复召回只记一次。 */
 function recordMemoryHits(rows: any[], agentId: string, jobId: string | null): void {
   if (!rows.length) return
+  if (jobId) {
+    const job = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(jobId) as any
+    if (!job) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', '记忆召回关联的 Agent Job 不存在')
+    assertSingletonJobRow(job, '记忆召回关联的 Agent Job')
+  }
   const t = Date.now()
   const statement = getDatabase().prepare('INSERT INTO agent_memory_events(id,memory_id,agent_id,job_id,event_type,created_at) VALUES (?,?,?,?,?,?)')
   const hitCutoff = t - 60 * 1000
@@ -722,25 +763,22 @@ function parseRecord(value: unknown): Record<string, any> | null {
  * the existing root-ceo governance path remains the safe fallback.
  */
 function targetForJob(jobId: string, storeId: string | null): ReturnType<typeof resolveAutoLearningTarget> {
-  const row = getDatabase().prepare('SELECT assigned_agent_id,memory_scope_snapshot_json,store_scope_snapshot_json FROM agent_jobs WHERE id=?').get(jobId) as any
-  const assignedId = String(row?.assigned_agent_id || '')
-  try {
-    const assigned = getAgent(assignedId)
-    const frozenMemory = parseRecord(row?.memory_scope_snapshot_json)
-    const frozenStore = parseRecord(row?.store_scope_snapshot_json)
-    return resolveAutoLearningTarget({
-      assignedAgentId: assigned.id,
-      storeId,
-      currentMemoryWrite: assigned.memoryScope.write,
-      currentMemoryStoreIds: assigned.memoryScope.storeIds,
-      frozenMemoryWrite: frozenMemory?.write,
-      frozenMemoryStoreIds: frozenMemory?.storeIds,
-      currentStoreIds: assigned.storeScope.storeIds,
-      frozenStoreIds: frozenStore?.storeIds
-    })
-  } catch {
-    return resolveAutoLearningTarget({ assignedAgentId: null, storeId, currentMemoryWrite: false })
-  }
+  const row = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(jobId) as any
+  if (!row) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', '自动学习关联的 Agent Job 不存在')
+  assertSingletonJobRow(row, '自动学习关联的 Agent Job')
+  const frozenMemory = parseRecord(row?.memory_scope_snapshot_json)
+  const frozenStore = parseRecord(row?.store_scope_snapshot_json)
+  return resolveAutoLearningTarget({
+    rootAgentId: ROOT_AGENT_ID,
+    assignedAgentId: String(row?.assigned_agent_id || ROOT_AGENT_ID),
+    storeId,
+    currentMemoryWrite: true,
+    currentMemoryStoreIds: [],
+    frozenMemoryWrite: frozenMemory?.write,
+    frozenMemoryStoreIds: frozenMemory?.storeIds,
+    currentStoreIds: [],
+    frozenStoreIds: frozenStore?.storeIds
+  })
 }
 
 /**
@@ -751,16 +789,21 @@ function targetForJob(jobId: string, storeId: string | null): ReturnType<typeof 
  * 抽取规则本身是纯函数（shared/agent-memory-rules），这里只负责写库与配额。
  */
 export function learnFromConversation(input: { agentId: string; storeId: string | null; messages: LearningMessage[] }): { created: number; skipped: number } {
+  // Identity is a hard boundary even when automatic learning is disabled.
+  // Validate the caller before the best-effort feature flag can silently
+  // return, so a legacy/non-root caller can never use this helper as a
+  // side-channel around the single-agent runtime.
+  const actor = requireSingletonAgentId(input.agentId, '对话记忆学习')
   if (!autoCandidateAllowed()) return { created: 0, skipped: 0 }
   const candidates = extractDurableMemoryCandidates(input.messages)
   let created = 0; let skipped = 0
   for (const candidate of candidates) {
     if (!autoCandidateQuotaAvailable()) { skipped += 1; break }
     const scope = input.storeId ? 'store' : 'private'
-    const sourceRef = `conversation:${learningHash(`${input.agentId}|${input.storeId || ''}|${candidate.statement}`)}`
+    const sourceRef = `conversation:${learningHash(`${actor.id}|${input.storeId || ''}|${candidate.statement}`)}`
     try {
       const result = writeMemory({
-        agentId: input.agentId,
+        agentId: actor.id,
         storeId: input.storeId,
         scope,
         type: candidate.type,
@@ -780,7 +823,7 @@ export function learnFromConversation(input: { agentId: string; storeId: string 
       // sensitive candidate is still recorded in the audit/error path by the
       // normal writer; it is simply not promoted here.
       skipped += 1
-      if (error?.code !== 'AGENT_MEMORY_SENSITIVE') writeAudit('agent.memory.learn', 'failure', { actor: input.agentId, requestId: sourceRef })
+      if (error?.code !== 'AGENT_MEMORY_SENSITIVE') writeAudit('agent.memory.learn', 'failure', { actor: actor.id, requestId: sourceRef })
     }
   }
   return { created, skipped }
@@ -794,13 +837,16 @@ export function learnFromJobResults(input: {
   status: string
   results: Array<{ summary?: string; kind?: string; evidence?: unknown }>
 }): { created: number; skipped: number } {
+  // Validate the persisted owner before feature flags/quotas can turn an
+  // invalid historical Job into a silent success.  Callers may still treat
+  // the error as best-effort, but the boundary remains explicit and auditable.
+  const target = targetForJob(input.jobId, input.storeId)
   if (!autoCandidateAllowed() || input.status !== 'succeeded' || !input.results.length || !autoCandidateQuotaAvailable()) return { created: 0, skipped: 0 }
   const summaries = input.results.map(item => normalizeLearningText(item.summary, 420)).filter(item => item.length >= 12).slice(0, 6)
   if (!summaries.length) return { created: 0, skipped: 1 }
   const goal = normalizeLearningText(input.goal, 600)
   const content = `任务目标：${goal}\n执行结果：${summaries.join('；')}`
   const sourceRef = `job:${input.jobId}`
-  const target = targetForJob(input.jobId, input.storeId)
   try {
     const result = writeMemory({
       agentId: target.agentId,
@@ -825,9 +871,15 @@ export function learnFromJobResults(input: {
 
 /** Turn a reviewer correction into a procedural candidate for later approval. */
 export function learnFromFeedback(input: { jobId: string; reviewerAgentId: string; correction: string }): { created: number; skipped: number } {
+  // Keep the singleton identity gate before all best-effort/early-return
+  // paths.  Feedback is a governance input and must never accept a child
+  // reviewer merely because automatic learning is currently disabled or the
+  // correction is empty.
+  const reviewer = requireSingletonAgentId(input.reviewerAgentId, '反馈学习')
   if (!autoCandidateAllowed() || !normalizeLearningText(input.correction, 1200) || !autoCandidateQuotaAvailable()) return { created: 0, skipped: 1 }
-  const job = getDatabase().prepare('SELECT goal,store_id FROM agent_jobs WHERE id=?').get(input.jobId) as any
+  const job = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(input.jobId) as any
   if (!job) return { created: 0, skipped: 1 }
+  assertSingletonJobRow(job, '反馈学习关联的 Agent Job')
   const correction = normalizeLearningText(input.correction, 1200)
   const sourceRef = `feedback:${learningHash(`${input.jobId}|${correction}`)}`
   const target = targetForJob(input.jobId, job.store_id || null)
@@ -848,18 +900,19 @@ export function learnFromFeedback(input: { jobId: string; reviewerAgentId: strin
     })
     return { created: result?.created && result?.sourceRef === sourceRef ? 1 : 0, skipped: result?.created && result?.sourceRef === sourceRef ? 0 : 1 }
   } catch (error: any) {
-    if (error?.code !== 'AGENT_MEMORY_SENSITIVE') writeAudit('agent.memory.learn', 'failure', { actor: target.agentId || input.reviewerAgentId, requestId: sourceRef })
+    if (error?.code !== 'AGENT_MEMORY_SENSITIVE') writeAudit('agent.memory.learn', 'failure', { actor: target.agentId || reviewer.id, requestId: sourceRef })
     return { created: 0, skipped: 1 }
   }
 }
 
 /** Apply explicit reviewer feedback to confidence and retrieval quality. */
 export function assertMemoryFeedbackAllowed(input: { memoryId: string; agentId: string; jobId: string | null }): void {
-  const reviewer = getAgent(input.agentId)
+  const reviewer = requireSingletonAgentId(input.agentId, '记忆反馈')
   const row = getDatabase().prepare('SELECT * FROM agent_memory_records WHERE id=?').get(input.memoryId) as any
   if (!row) throw new AgentRuntimeError('AGENT_MEMORY_NOT_FOUND', '记忆记录不存在')
-  const job = input.jobId ? getDatabase().prepare('SELECT id,store_id FROM agent_jobs WHERE id=?').get(input.jobId) as any : null
+  const job = input.jobId ? getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(input.jobId) as any : null
   if (input.jobId && !job) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Agent Job 不存在')
+  if (job) assertSingletonJobRow(job, '记忆反馈关联的 Agent Job')
   if (row.source_job_id && input.jobId && String(row.source_job_id) !== String(input.jobId)) throw new AgentRuntimeError('AGENT_INVALID_INPUT', '反馈记忆不属于该 Job')
   if (job?.store_id && row.store_id && String(job.store_id) !== String(row.store_id)) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '反馈记忆与 Job 店铺范围不一致')
   if (row.status === 'quarantined') throw new AgentRuntimeError('AGENT_MEMORY_SENSITIVE', '隔离记忆不能接受模型反馈')
@@ -945,8 +998,7 @@ export function inspectMemorySnapshot(path: string): { format: string; version: 
  * 或在展示后被改写）。现在不一致直接拒绝，并把摘要写进审计。
  */
 export function restoreMemorySnapshot(input: { path: string; actorAgentId: string; confirmed: boolean; expectedSha256?: string }): { backupPath: string; restored: number; conflicts: number } {
-  const actor = getAgent(input.actorAgentId)
-  if (actor.id !== 'root-ceo') throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '只有 root-ceo 可以恢复记忆快照')
+  const actor = requireSingletonAgentId(input.actorAgentId, '记忆快照恢复')
   if (!input.confirmed) throw new AgentRuntimeError('AGENT_CONFIRMATION_REQUIRED', '恢复记忆快照需要用户确认')
   const { payload, safePath } = decryptSnapshot(input.path)
   const actualSha = createHash('sha256').update(readFileSync(safePath)).digest('hex')
@@ -964,7 +1016,10 @@ export function restoreMemorySnapshot(input: { path: string; actorAgentId: strin
   for (const record of payload.records) {
     if (!record || typeof record.body !== 'string') throw new AgentRuntimeError('AGENT_MEMORY_SNAPSHOT_INVALID', '快照缺少记忆正文')
     const content = record.body.replace(/^---[\s\S]*?---\n/, '')
-    const normalized = agentMemoryWriteSchema.parse({ agentId: record.agent_id, storeId: record.store_id || null, scope: record.scope, type: record.type, title: record.title, content, confidence: Number(record.confidence), sourceJobId: record.source_job_id || null, origin: record.origin || 'manual', sourceRef: record.source_ref || null, sensitivity: record.sensitivity, expiresAt: record.expires_at || null })
+    // A snapshot can contain rows written by a pre-migration Agent.  Restore
+    // keeps the historical content and governance counters, but ownership is
+    // always rewritten to the only runtime identity and its root directory.
+    const normalized = agentMemoryWriteSchema.parse({ agentId: ROOT_AGENT_ID, storeId: record.store_id || null, scope: record.scope, type: record.type, title: record.title, content, confidence: Number(record.confidence), sourceJobId: record.source_job_id || null, origin: record.origin || 'manual', sourceRef: record.source_ref || null, sensitivity: record.sensitivity, expiresAt: record.expires_at || null })
     const redacted = redactMemoryContent(normalized.content)
     if (redacted.content.length > memoryTypeLimit(normalized.type)) throw new AgentRuntimeError('AGENT_MEMORY_TOO_LARGE', '快照中的记忆正文超过上限')
     let id = String(record.id)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AGENT_CONVERSATION_HISTORY_MAX,
   AGENT_UI_MESSAGE_TEXT_MAX,
   DEFAULT_AGENT_UI_STATE,
   agentConversationTurnSchema,
@@ -34,7 +35,7 @@ describe('Agent UI 状态持久化的正文上限', () => {
     expect(() => agentUiMessageSummarySchema.parse({ role: 'assistant', summary: 'x'.repeat(AGENT_UI_MESSAGE_TEXT_MAX + 1), at: 1 })).toThrow()
     expect(() => agentUiStateSchema.parse({
       ...DEFAULT_AGENT_UI_STATE,
-      messageSummaries: Array.from({ length: 41 }, (_, index) => ({ role: 'user' as const, summary: 'x', at: index }))
+      messageSummaries: Array.from({ length: AGENT_CONVERSATION_HISTORY_MAX + 1 }, (_, index) => ({ role: 'user' as const, summary: 'x', at: index }))
     })).toThrow()
   })
 

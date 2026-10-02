@@ -492,10 +492,23 @@ export function registerBrowserHandlers(): void {
         activeTabId: WindowManager.getActiveTabId(storeId),
         tabs: WindowManager.getStoreTabs(storeId).map(t => ({
           id: t.id, url: t.url, title: t.title, isPinned: t.isPinned, orderIndex: t.orderIndex,
-          guestAttached: t.guestAttached === true && !!t.webContents && !t.webContents.isDestroyed()
+          guestAttached: t.guestAttached === true && !!t.webContents && !t.webContents.isDestroyed(),
+          // 采集专用页必须把标记带给渲染层：渲染层据此"挂隐藏 webview 但不进标签栏"，
+          // 少了这个字段，渲染层重载后会把专用页当成用户的标签页画出来
+          internal: t.internal === true
         }))
       }))
       return success({ displayedStoreId: WindowManager.getDisplayedStoreId(), stores }, requestId)
+    } catch (err: any) {
+      return browserError(err, requestId)
+    }
+  })
+
+  // browser:memoryDiagnostics - 只读性能采样，不返回 Cookie、页面正文或凭据。
+  handle(IPC_CHANNELS.BROWSER_MEMORY_DIAGNOSTICS, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      return success(await WindowManager.getMemoryDiagnostics(), requestId)
     } catch (err: any) {
       return browserError(err, requestId)
     }

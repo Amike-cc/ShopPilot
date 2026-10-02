@@ -70,7 +70,8 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PICK_ELEMENT, { storeId, mode }),
     openWindow: (storeId: string, tabId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_OPEN_WINDOW, { storeId, tabId }),
     /** 只读：当前显示的店铺与各已打开店铺的标签页（渲染层重载后补齐状态用） */
-    state: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_STATE)
+    state: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_STATE),
+    memoryDiagnostics: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_MEMORY_DIAGNOSTICS)
   },
   
   // 书签
@@ -178,6 +179,86 @@ const api = {
     }
   },
 
+  // 商品管理：只暴露"同步（只读采集）+ 分页查询 + 台账"。
+  // **不暴露发布**——发布必须走任务引擎与人工确认门禁（方案 §7.9），不能从这个口子绕过。
+  products: {
+    sync: (input: { storeId: string; trigger?: 'manual' | 'schedule'; maxPages?: number; maxProducts?: number; timeoutMs?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC, input),
+    list: (query: { storeId?: string; platform?: string; onlyOrphan?: boolean; keyword?: string; limit?: number; offset?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIST, query),
+    syncRuns: (query: { storeId?: string } = {}): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC_RUNS, query),
+    // 本地商品库（M2）：归并由用户触发；图片本地化只下载图片到本机
+    library: {
+      list: (query: { keyword?: string; limit?: number; offset?: number } = {}): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_LIST, query),
+      get: (productId: string): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_GET, { productId }),
+      save: (input: { productId: string; platform?: string; draft: unknown }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_SAVE, input),
+      saveAsLocal: (input: { platform: string; storeId: string; platformProductId: string; mergeLink?: boolean }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_SAVE_AS, input),
+      merge: (input: { linkId: string; productId: string }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_MERGE, input),
+      unmerge: (input: { linkId: string }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_UNMERGE, input),
+      remove: (productId: string): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_REMOVE, { productId }),
+      localizeMedia: (productId: string): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_LOCALIZE, { productId }),
+      // 图片本地化队列与保留策略：scan 只算、run 逐张下、orphans 只判定、cleanup 用户确认后才删
+      queueScan: (input: { maxItems?: number } = {}): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_QUEUE_SCAN, input),
+      queueRun: (input: { maxItems?: number } = {}): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_QUEUE_RUN, input),
+      orphans: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_ORPHANS, {}),
+      cleanupOrphans: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_CLEANUP, {})
+    },
+    // 详情页采集：只导航到详情页并读 DOM（商品图 + 规格），**不填写不提交**
+    detail: {
+      collect: (input: { storeId: string; platformProductId: string }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_DETAIL_COLLECT, input)
+    },
+    // 发布（M3）：**只到人工确认门禁为止**。这里没有任何"提交"能力 ——
+    // preflight 只算不写平台，open 只把页面开到发布页，items 是只读台账。
+    publish: {
+      preflight: (input: { productId: string; storeIds: string[] }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_PREFLIGHT, input),
+      open: (input: { itemId: string; fill?: boolean }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_OPEN, input),
+      items: (query: { limit?: number } = {}): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_ITEMS, query),
+      // 人工确认门禁（走任务引擎的 waitForUserConfirmation）：
+      // openGate 只是"开个门禁等人"，confirm 是**"用户说他已在平台上提交了"**（不是让应用去提交），
+      // verify 是只读回查。三个都没有替用户点提交的能力。
+      openGate: (input: { itemId: string; message?: string }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_OPEN_GATE, input),
+      confirm: (input: { itemId: string; approved: boolean }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_CONFIRM, input),
+      verify: (input: { itemId: string }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_VERIFY, input),
+      // 回读闭环（M4，方案 §7.5）：readback **只读页面**产出建议（不写库）；
+      // acceptSuggestion 是**用户逐条确认之后**才落库；checklist 是跨次记住的本地补全清单。
+      readback: (input: { itemId: string }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_READBACK, input),
+      acceptSuggestion: (input: { itemId: string; field: string; kind: 'suggest_default' | 'suggest_writeback' }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_ACCEPT, input),
+      checklist: (input: { productId: string; storeId: string }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_CHECKLIST, input),
+      // 批量编排（M5，方案 §7.8）：create 只建台账、progress 只读、skipStore 只改"还没开始"的项。
+      // 批量下的提交仍然只能由人在浏览器里点 —— 这里没有提交能力。
+      batchCreate: (input: { productIds: string[]; storeIds: string[] }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_BATCH_CREATE, input),
+      batchProgress: (input: { batchId: string }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_BATCH_PROGRESS, input),
+      // 「全部暂停」：只退回正在跑的，已经在等人工的保持等待
+      batchAbort: (input: { batchId: string }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_BATCH_ABORT, input),
+      batchSkipStore: (input: { batchId: string; storeId: string }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_BATCH_SKIP_STORE, input)
+    }
+  },
+
   // 经营数据：只暴露安全的聚合结果和有限查询参数，不暴露 Session/请求凭据。
   // 计划管理只接受 storeId / 周期 / 分页 / 状态过滤——主进程用 Zod strict 再把一道关，
   // 多传一个字段直接判非法（不接受 SQL、URL、Session、WebContents 或任意脚本）。
@@ -269,16 +350,11 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.AGENT_SOFTWARE_EXECUTE, { plan: JSON.parse(JSON.stringify(plan)), confirmed })
   },
 
-  // 多 Agent 管理 API：写操作只通过 Main 的组织、模型、Job、记忆服务。
+  // Agent 域 API：运行时只有 root-ceo；旧组织/绑定通道仅为兼容保留，
+  // 所有写操作仍由 Main 的模型、Job、记忆和技能服务执行。
   agentDomain: {
     orgList: (query: Record<string, unknown> = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_LIST, JSON.parse(JSON.stringify(query))),
     orgGet: (agentId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_GET, { agentId }),
-    orgCreate: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_CREATE, JSON.parse(JSON.stringify(input))),
-    orgUpdate: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_UPDATE, JSON.parse(JSON.stringify(input))),
-    orgActivate: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_ACTIVATE, { agentId, actorAgentId: 'root-ceo', confirmed }),
-    orgPause: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_PAUSE, { agentId, actorAgentId: 'root-ceo', confirmed }),
-    orgResume: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_RESUME, { agentId, actorAgentId: 'root-ceo', confirmed }),
-    orgRetire: (agentId: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_ORG_RETIRE, { agentId, actorAgentId: 'root-ceo', confirmed }),
     skillList: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_LIST),
     skillCreate: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_CREATE, JSON.parse(JSON.stringify(input))),
     skillTools: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_SKILL_TOOLS),
@@ -288,12 +364,10 @@ const api = {
     pluginDelete: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PLUGIN_DELETE, JSON.parse(JSON.stringify(input))),
     packExport: (input: Record<string, unknown> = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PACK_EXPORT, JSON.parse(JSON.stringify(input))),
     packImport: (json: string, confirmed = false): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_PACK_IMPORT, JSON.parse(JSON.stringify({ json, confirmed }))),
-    hrPreview: (role: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_HR_PREVIEW, { mode: 'hr', role, actorAgentId: 'root-ceo' }),
     modelList: (query: Record<string, unknown> = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_LIST, JSON.parse(JSON.stringify(query))),
     modelSet: (profile: ModelProfileInput): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_SET, { profile: JSON.parse(JSON.stringify(profile)), actorAgentId: 'root-ceo' }),
     modelDelete: (profileId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_DELETE, { profileId, actorAgentId: 'root-ceo' }),
     modelTest: (profileId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_TEST, { profileId, actorAgentId: 'root-ceo' }),
-    modelBind: (agentId: string, modelProfileId: string | null): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_BIND, { agentId, modelProfileId, actorAgentId: 'root-ceo' }),
     jobCreate: (input: AgentJobCreate): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_CREATE, JSON.parse(JSON.stringify(input))),
     jobDelegate: (input: AgentTaskDelegate): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_DELEGATE, JSON.parse(JSON.stringify(input))),
     jobList: (query: Record<string, unknown> = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_JOB_LIST, JSON.parse(JSON.stringify(query))),
@@ -321,7 +395,8 @@ const api = {
     memoryLearningSettings: (input?: { autoLearn: boolean; retentionDays: number }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_LEARNING_SETTINGS, input == null ? undefined : JSON.parse(JSON.stringify(input))),
     memoryMaintenance: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MEMORY_MAINTENANCE),
     qualityMetrics: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_QUALITY_METRICS),
-    qualityReview: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_QUALITY_REVIEW)
+    qualityReview: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_QUALITY_REVIEW),
+    commerceLedgerList: (query: { storeId?: string; status?: string; limit?: number } = {}): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_COMMERCE_LEDGER_LIST, JSON.parse(JSON.stringify(query)))
   },
 
   // 店铺指标快照 - §5.11

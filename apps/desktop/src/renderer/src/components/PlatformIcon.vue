@@ -21,10 +21,10 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import douyinIcon from '../assets/douyin-store.png'
-import kuaishouIcon from '../assets/kuaishou-store.png'
-import pinduoduoIcon from '../assets/pinduoduo.png'
-import wechatIcon from '../assets/wechat-store.png'
+import douyinIcon from '../assets/platforms/generated/douyin.png'
+import kuaishouIcon from '../assets/platforms/generated/kuaishou.png'
+import pinduoduoIcon from '../assets/platforms/generated/pinduoduo.png'
+import wechatIcon from '../assets/platforms/generated/wechat.png'
 
 const props = withDefaults(defineProps<{ name?: string; size?: number }>(), {
   name: '',

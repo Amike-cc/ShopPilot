@@ -5,7 +5,7 @@
     <!-- 应用锁 overlay（§6.5/§189）：WebContentsView 已由主进程摘除，此层覆盖全屏 -->
     <div v-if="ws.appLocked" class="lock-overlay">
       <div class="lock-box">
-        <div class="lock-ico">🔒</div>
+        <div class="lock-ico"><img :src="lockIcon" alt="" /></div>
         <h2>ShopPilot 已锁定</h2>
         <p>输入主密码解锁继续</p>
         <input
@@ -29,6 +29,7 @@
 import { ref, watch } from 'vue'
 import DashboardView from '../features/workbench/DashboardView.vue'
 import { useWorkspaceStore } from '../stores/workspace'
+import lockIcon from '../assets/generated/ui-icons/lock.png'
 
 const ws = useWorkspaceStore()
 const cred = ref('')
@@ -165,7 +166,7 @@ input {
   border-radius: var(--radius);
   text-align: center;
 }
-.lock-ico { font-size: 34px; margin-bottom: 10px; }
+.lock-ico { width: 64px; height: 64px; margin: 0 auto 10px; }.lock-ico img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .lock-box h2 { font-size: 16px; margin-bottom: 4px; }
 .lock-box p { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 16px; }
 .lock-box input {

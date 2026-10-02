@@ -36,7 +36,7 @@ import { redactAgentText } from '@shared/agent-privacy'
 import { evaluateDailyBudget, type BudgetUsageSnapshot, type PricingLike } from '@shared/agent-budget'
 import { dailyUsageSnapshot as governanceDailyUsageSnapshot, recordModelUsage } from './model-governance'
 import { buildChatRequestBody, buildChatRequestHeaders, clampMaxOutputTokens } from './model-request'
-import { canRetryModelRequest, canTransition, canUseFallback, deriveJobRisk, isMoneyActionText, MEMORY_SENSITIVE_RE, modelCapabilityVerdict, payloadHash as stablePayloadHash, selectExecutorAgent, stableJson as stableJsonValue } from '@shared/agent-domain-rules'
+import { canRetryModelRequest, canTransition, canUseFallback, deriveJobRisk, isMoneyActionText, MEMORY_SENSITIVE_RE, modelCapabilityVerdict, payloadHash as stablePayloadHash, stableJson as stableJsonValue } from '@shared/agent-domain-rules'
 import { evaluateLeaseSweep } from '@shared/agent-lease'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import * as TaskStore from '../tasks/task-store'
@@ -44,6 +44,7 @@ import * as TaskRunner from '../tasks/task-runner'
 import { getBrowserHostWindow, getOpenStoreIds, openStoreBrowser } from '../browser/window-manager'
 import { compactAgentPrompt, compactSystemPrompt, estimateAgentTokens, readAgentContextUsage, resolveAgentContextBudget, resolveModelContextWindow, type AgentContextBudget, type AgentContextUsage } from '@shared/agent-context'
 import { buildAgentJobSystemPrompt } from '@shared/agent-job-prompt'
+import { migrateLegacyAgentStateToRoot } from './agent-singleton-migration'
 
 export class AgentRuntimeError extends Error {
   constructor(public code: string, message: string) {
@@ -201,14 +202,14 @@ export type EffectiveAgentModel = {
  * database still distinguishes an explicit choice from inheritance.
  */
 export function resolveEffectiveAgentModel(agentId: string): EffectiveAgentModel {
-  const agent = requireAgent(agentId)
+  const agent = requireSingletonAgentId(agentId, '模型解析')
   let profileId = agent.modelProfileId
   let inherited = false
   let sourceAgentId: string | null = profileId ? agent.id : null
 
   if (!profileId) {
     inherited = true
-    const root = agent.id === ROOT_AGENT_ID ? agent : requireAgent(ROOT_AGENT_ID)
+    const root = agent.id === ROOT_AGENT_ID ? agent : requireSingletonAgentId(ROOT_AGENT_ID, '模型解析')
     profileId = root.modelProfileId || MAIN_AGENT_PROFILE_ID
     sourceAgentId = root.modelProfileId ? ROOT_AGENT_ID : null
   }
@@ -236,16 +237,52 @@ export function getAgentContextBudget(agentId: string, requestedOutputTokens = 1
   })
 }
 
-function requireAgent(id: string): AgentRecord {
+function loadAgentRecord(id: string): AgentRecord {
   const row = getDatabase().prepare('SELECT * FROM agents WHERE id = ?').get(id) as any
   if (!row) throw new AgentRuntimeError('AGENT_NOT_FOUND', 'Agent 不存在')
   return mapAgent(row)
 }
 
+/**
+ * Runtime identity boundary for the single-agent architecture.
+ *
+ * Historical Agent rows may exist only while startup migration is repairing
+ * old data. They are never valid callers, owners, reviewers, or model
+ * bindings after the migration boundary. Keeping this check in one exported
+ * helper prevents a newly added IPC/job path from accidentally re-opening the
+ * old multi-Agent surface.
+ */
+export function requireSingletonAgentId(agentId: string, subject = 'Agent'): AgentRecord {
+  if (String(agentId) !== ROOT_AGENT_ID) {
+    throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', `${subject} 仅支持 root-ceo 单 Agent 身份`)
+  }
+  const agent = loadAgentRecord(ROOT_AGENT_ID)
+  if (agent.status !== 'active') throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', 'root-ceo 当前不是 active 状态')
+  return agent
+}
+
+function requireAgent(id: string): AgentRecord {
+  return requireSingletonAgentId(id)
+}
+
 function requireRoot(actorId: string): AgentRecord {
-  const actor = requireAgent(actorId)
-  if (actor.id !== ROOT_AGENT_ID || actor.status !== 'active') throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '只有 active root-ceo 可以管理组织、模型和 Job')
-  return actor
+  return requireSingletonAgentId(actorId, '调用方')
+}
+
+/**
+ * Runtime ownership boundary for persisted Jobs.
+ *
+ * Startup migration rewrites historical rows to root-ceo, but the database
+ * remains user data and can contain a partially migrated/corrupt row.  Never
+ * let such a row re-enter execution, recovery, review, or memory learning.
+ */
+export function assertSingletonJobRow(row: any, subject = 'Agent Job'): void {
+  if (
+    String(row?.created_by_agent_id) !== ROOT_AGENT_ID
+    || String(row?.assigned_agent_id) !== ROOT_AGENT_ID
+  ) {
+    throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', `${subject} 仅支持 root-ceo 单 Agent 归属`)
+  }
 }
 
 function getSettingNumber(key: string, fallback: number, min: number, max: number): number {
@@ -265,7 +302,7 @@ function assertStoreScope(agent: AgentRecord, storeId: string | null): void {
 }
 
 function assertAgentCanCreateJob(actor: AgentRecord, assigned: AgentRecord, input: AgentJobCreate, risk: string, moneyConfirmationSatisfied = false): void {
-  if (assigned.id === ROOT_AGENT_ID) throw new AgentRuntimeError('AGENT_ROOT_CANNOT_EXECUTE', '主 Agent 只负责对话、拆分和派单，不执行任务；需要执行的任务必须派给子 Agent')
+  if (assigned.id === ROOT_AGENT_ID && actor.id !== ROOT_AGENT_ID) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '只有 root-ceo 可以让主 Agent 执行任务')
   if (actor.id !== ROOT_AGENT_ID && !actor.toolPolicy.tools.includes('create_job')) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '当前 Agent 没有派发 Job 的权限')
   const money = isMoneyActionText({ goal: input.goal, inputSummary: input.inputSummary, browserTask: input.browserTask })
   // 自治运营策略：非资金任务不需要审批；只有资金动作必须保留人工确认。
@@ -280,7 +317,7 @@ function assertAgentCanCreateJob(actor: AgentRecord, assigned: AgentRecord, inpu
   if (assigned.status === 'probation' && (risk !== 'read' || input.requiresConfirmation)) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', 'probation Agent 只能执行无副作用的只读试用 Job')
   // storeScope.readOnly 是权限模型的一部分（§4.2/§4.3）：只读范围的 Agent 不能接收会碰店铺的写/提交类 Job。
   // 纯模型 Job（browserTask 为空）不接触店铺，风险词只来自目标文案，不受只读范围限制。
-  if (assigned.storeScope.readOnly && input.browserTask && risk !== 'read') throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '该 Agent 的店铺范围是只读，不能接收写操作 Job；需要写操作请在 Agent 团队里关闭它的“只读范围”')
+  if (assigned.storeScope.readOnly && input.browserTask && risk !== 'read') throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '该 Agent 的店铺范围是只读，不能接收写操作 Job；需要写操作请在 Agent 设置里关闭它的“只读范围”')
   assertStoreScope(actor, input.storeId)
   assertStoreScope(assigned, input.storeId)
 }
@@ -326,8 +363,8 @@ export function ensureAgentRuntimeBootstrap(): void {
   db.transaction(() => {
     if (!existing) {
       db.prepare(`INSERT INTO agents(id,parent_id,name,role,description,status,prompt_version,model_profile_id,tool_policy_json,store_scope_json,memory_scope_json,success_criteria_json,max_concurrency,daily_budget_json,timeout_ms,created_by_agent_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-        ROOT_AGENT_ID, null, 'ShopPilot CEO', 'ceo', '唯一主 Agent：经营决策、拆解、派单、审核和记忆治理', 'active', 'ceo-v1', null,
-        json(agentToolPolicySchema.parse({ canCreateAgent: true, canChangeModel: true, canChangePolicy: true, canReadOtherAgentPrivateMemory: true, tools: ['observe_page', 'read_text', 'read_table', 'model_analyze', 'create_job', 'review_job', 'memory_search', 'memory_write'] })),
+        ROOT_AGENT_ID, null, 'ShopPilot CEO', 'ceo', '唯一主 Agent：经营决策、执行、审核和记忆治理', 'active', 'ceo-v1', null,
+        json(agentToolPolicySchema.parse({ canCreateAgent: false, canChangeModel: true, canChangePolicy: true, canReadOtherAgentPrivateMemory: true, tools: ['observe_page', 'read_text', 'read_table', 'model_analyze', 'create_job', 'review_job', 'memory_search', 'memory_write'] })),
         json(agentScopeSchema.parse({ storeIds: [], readOnly: false })),
         json(agentMemoryScopeSchema.parse({ agentIds: [ROOT_AGENT_ID], includeShared: true, write: true })),
         json(['Job 有明确目标、权限、证据和审核结论']), 4, null, 120000, null, t, t
@@ -336,7 +373,17 @@ export function ensureAgentRuntimeBootstrap(): void {
       // Root identity is immutable; only repair a missing status after a
       // partial migration. Never rename or replace the root row.
       db.prepare("UPDATE agents SET status='active', parent_id=NULL, role='ceo', updated_at=? WHERE id=?").run(t, ROOT_AGENT_ID)
+      const root = db.prepare('SELECT tool_policy_json FROM agents WHERE id=?').get(ROOT_AGENT_ID) as any
+      const rootPolicy = agentToolPolicySchema.parse(parseJson(root?.tool_policy_json, {}))
+      rootPolicy.canCreateAgent = false
+      db.prepare('UPDATE agents SET tool_policy_json=? WHERE id=?').run(json(rootPolicy), ROOT_AGENT_ID)
     }
+    // Single-agent mode: migrate historical references before removing every
+    // child row. Jobs and memory remain available under root-ceo; active work
+    // keeps its state and is executed by the now-authoritative main Agent.
+    // The database-only operation is isolated and tested independently so a
+    // restart cannot silently leave a stale child reference behind.
+    migrateLegacyAgentStateToRoot(db)
   })()
 
   const cfg = getAiConfig()
@@ -383,7 +430,9 @@ export function listRecentAgentJobSummaries(limit = 20): Array<{ id: string; goa
   const rows = getDatabase().prepare(`SELECT j.id, j.goal, j.status, j.assigned_agent_id, j.risk, j.created_at,
       (SELECT COUNT(*) FROM agent_job_results r WHERE r.job_id = j.id) AS result_count,
       (SELECT COUNT(*) FROM agent_job_results r WHERE r.job_id = j.id AND r.approved = 0) AS unapproved_count
-    FROM agent_jobs j ORDER BY j.created_at DESC LIMIT ?`).all(bounded) as any[]
+    FROM agent_jobs j
+    WHERE j.created_by_agent_id=? AND j.assigned_agent_id=?
+    ORDER BY j.created_at DESC LIMIT ?`).all(ROOT_AGENT_ID, ROOT_AGENT_ID, bounded) as any[]
   return rows.map(row => ({
     id: String(row.id),
     goal: redactAgentText(String(row.goal || ''), 200),
@@ -397,33 +446,15 @@ export function listRecentAgentJobSummaries(limit = 20): Array<{ id: string; goa
 }
 
 export function listAgents(): AgentRecord[] {
-  return (getDatabase().prepare('SELECT * FROM agents ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END, created_at ASC').all(ROOT_AGENT_ID) as any[]).map(mapAgent)
+  const root = getDatabase().prepare('SELECT * FROM agents WHERE id=?').get(ROOT_AGENT_ID) as any
+  return root ? [mapAgent(root)] : []
 }
 
 export function listAgentsPage(raw: unknown = {}): { items: AgentRecord[]; nextCursor: string | null; hasMore: boolean } {
   const query = agentOrgListQuerySchema.parse(raw)
-  const rankExpr = "CASE WHEN id='root-ceo' THEN 0 ELSE 1 END"
-  const params: unknown[] = []
-  const where: string[] = []
-  if (query.cursor) {
-    const decoded = Buffer.from(query.cursor, 'base64url').toString('utf8').split('|')
-    if (decoded.length === 3) {
-      const rank = Number(decoded[0]); const createdAt = Number(decoded[1]); const id = decoded[2]
-      if (Number.isFinite(rank) && Number.isFinite(createdAt) && id) {
-        where.push(`(${rankExpr} > ? OR (${rankExpr} = ? AND (created_at > ? OR (created_at = ? AND id > ?))))`)
-        params.push(rank, rank, createdAt, createdAt, id)
-      }
-    }
-  }
-  params.push(query.limit + 1)
-  const rows = getDatabase().prepare(`SELECT * FROM agents ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY ${rankExpr}, created_at ASC, id ASC LIMIT ?`).all(...params) as any[]
-  const hasMore = rows.length > query.limit
-  const items = rows.slice(0, query.limit).map(mapAgent)
-  const last = rows[query.limit - 1]
-  const nextCursor = hasMore && last
-    ? Buffer.from(`${last.id === ROOT_AGENT_ID ? 0 : 1}|${last.created_at}|${last.id}`).toString('base64url')
-    : null
-  return { items, nextCursor, hasMore }
+  const root = getDatabase().prepare('SELECT * FROM agents WHERE id=?').get(ROOT_AGENT_ID) as any
+  if (!root || query.cursor) return { items: [], nextCursor: null, hasMore: false }
+  return { items: [mapAgent(root)], nextCursor: null, hasMore: false }
 }
 
 export function getAgent(id: string): AgentRecord { return requireAgent(id) }
@@ -434,87 +465,29 @@ export function createAgent(input: {
   dailyBudget?: unknown; timeoutMs?: number; successCriteria?: string[]; toolPolicy?: unknown
 }): AgentRecord {
   requireRoot(input.actorAgentId)
-  if (!input.confirmed) throw new AgentRuntimeError('AGENT_CONFIRMATION_REQUIRED', '创建 probation Agent 需要用户确认岗位、权限和预算')
-  const role = String(input.role) as any
-  if (!['operator', 'reviewer', 'analyst', 'content', 'support'].includes(role)) throw new AgentRuntimeError('AGENT_INVALID_INPUT', '子 Agent 岗位不合法')
-  const modelProfileId = input.modelProfileId ?? null
-  if (modelProfileId && !getDatabase().prepare('SELECT id FROM agent_model_profiles WHERE id=? AND enabled=1').get(modelProfileId)) throw new AgentRuntimeError('AGENT_MODEL_NOT_FOUND', '模型 Profile 不存在或已停用')
-  const id = `agent_${randomUUID()}`
-  const storeScope = agentScopeSchema.parse(input.storeScope ?? {})
-  const memoryScope = agentMemoryScopeSchema.parse({ ...(input.memoryScope as any || {}), agentIds: [id] })
-  const defaultTools = role === 'reviewer' ? ['observe_page', 'read_text', 'read_table', 'review_job', 'memory_search'] : ['observe_page', 'read_text', 'read_table', 'model_analyze', 'memory_search']
-  const toolPolicy = agentToolPolicySchema.parse({ ...(input.toolPolicy as any || {}), tools: (input.toolPolicy as any)?.tools ?? defaultTools })
-  if (toolPolicy.canUseShell || toolPolicy.canReadCredentials || toolPolicy.canCreateAgent || toolPolicy.canChangeModel || toolPolicy.canChangePolicy || toolPolicy.canReadOtherAgentPrivateMemory) {
-    throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '子 Agent 不能获得 Shell、凭据、组织、模型或其他 Agent 私有记忆权限')
-  }
-  const t = now()
-  getDatabase().prepare(`INSERT INTO agents(id,parent_id,name,role,description,status,prompt_version,model_profile_id,tool_policy_json,store_scope_json,memory_scope_json,success_criteria_json,max_concurrency,daily_budget_json,timeout_ms,created_by_agent_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    id, ROOT_AGENT_ID, redactAgentText(input.name, 120), role, redactAgentText(input.description, 1000), 'probation', 'operator-v1', modelProfileId,
-    json(toolPolicy),
-    json(storeScope), json(memoryScope), json(input.successCriteria ?? ['只读试用任务有可核验证据']), Math.min(32, Math.max(1, Math.floor(input.maxConcurrency ?? 1))), input.dailyBudget == null ? null : json(input.dailyBudget), Math.min(3600000, Math.max(1000, Math.floor(input.timeoutMs ?? 120000))), ROOT_AGENT_ID, t, t
-  )
-  if (modelProfileId) bindAgentModel({ agentId: id, modelProfileId, actorAgentId: ROOT_AGENT_ID })
-  writeAudit('agent.org.create', 'success', { actor: ROOT_AGENT_ID, requestId: id })
-  return requireAgent(id)
+  throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', '当前系统仅保留主 Agent，不能创建子 Agent')
 }
 
 export function updateAgent(input: { actorAgentId: string; agentId: string; name?: string; description?: string; storeScope?: unknown; memoryScope?: unknown; maxConcurrency?: number; dailyBudget?: unknown; timeoutMs?: number; toolPolicy?: unknown; confirmed?: boolean }): AgentRecord {
   requireRoot(input.actorAgentId)
-  const agent = requireAgent(input.agentId)
-  if (agent.id === ROOT_AGENT_ID && input.name && input.name !== agent.name) throw new AgentRuntimeError('AGENT_ROOT_IMMUTABLE', 'root-ceo 不能改名')
-  const changingBoundary = input.storeScope !== undefined || input.memoryScope !== undefined || input.toolPolicy !== undefined
-  if (changingBoundary && input.confirmed !== true) throw new AgentRuntimeError('AGENT_CONFIRMATION_REQUIRED', '修改 Agent 能力、店铺范围或记忆范围需要用户确认')
-  const updates: string[] = []
-  const values: unknown[] = []
-  if (input.name !== undefined) { updates.push('name=?'); values.push(redactAgentText(input.name, 120)) }
-  if (input.description !== undefined) { updates.push('description=?'); values.push(redactAgentText(input.description, 1000)) }
-  if (input.storeScope !== undefined) { updates.push('store_scope_json=?'); values.push(json(agentScopeSchema.parse(input.storeScope))) }
-  if (input.memoryScope !== undefined) { updates.push('memory_scope_json=?'); values.push(json(agentMemoryScopeSchema.parse({ ...(input.memoryScope as any), agentIds: [agent.id] }))) }
-  if (input.toolPolicy !== undefined) {
-    const toolPolicy = agentToolPolicySchema.parse(input.toolPolicy)
-    if (agent.id !== ROOT_AGENT_ID && (toolPolicy.canUseShell || toolPolicy.canReadCredentials || toolPolicy.canCreateAgent || toolPolicy.canChangeModel || toolPolicy.canChangePolicy || toolPolicy.canReadOtherAgentPrivateMemory)) {
-      throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '子 Agent 不能获得 Shell、凭据、组织、模型或其他 Agent 私有记忆权限')
-    }
-    updates.push('tool_policy_json=?'); values.push(json(toolPolicy))
-  }
-  if (input.maxConcurrency !== undefined) { updates.push('max_concurrency=?'); values.push(Math.min(32, Math.max(1, Math.floor(input.maxConcurrency)))) }
-  if (input.dailyBudget !== undefined) { updates.push('daily_budget_json=?'); values.push(input.dailyBudget == null ? null : json(input.dailyBudget)) }
-  if (input.timeoutMs !== undefined) { updates.push('timeout_ms=?'); values.push(Math.min(3600000, Math.max(1000, Math.floor(input.timeoutMs)))) }
-  if (updates.length) { values.push(now(), input.agentId); getDatabase().prepare(`UPDATE agents SET ${updates.join(',')}, updated_at=? WHERE id=?`).run(...values) }
-  writeAudit('agent.org.update', 'success', { actor: input.actorAgentId, requestId: input.agentId })
-  return requireAgent(input.agentId)
+  void input
+  throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', '当前系统仅保留 root-ceo，不能修改 Agent 组织配置')
 }
 
 function transitionAgent(agentId: string, to: 'active' | 'paused' | 'retired', actorAgentId: string, confirmed: boolean): AgentRecord {
   requireRoot(actorAgentId)
-  const agent = requireAgent(agentId)
-  if (agent.id === ROOT_AGENT_ID) throw new AgentRuntimeError('AGENT_ROOT_IMMUTABLE', 'root-ceo 不能暂停、退休或再次激活')
-  if (!confirmed) throw new AgentRuntimeError('AGENT_CONFIRMATION_REQUIRED', '该组织变更需要用户确认')
-  const allowed: Record<string, string[]> = { probation: ['active', 'paused', 'retired'], active: ['paused', 'retired'], paused: ['active', 'retired'], retired: [] }
-  if (!allowed[agent.status]?.includes(to)) throw new AgentRuntimeError('AGENT_INVALID_STATE', `不允许 ${agent.status} -> ${to}`)
-  const t = now()
-  getDatabase().prepare('UPDATE agents SET status=?, retired_at=?, updated_at=? WHERE id=? AND status=?').run(to, to === 'retired' ? t : null, t, agentId, agent.status)
-  writeAudit(`agent.org.${to}` as any, 'success', { actor: actorAgentId, requestId: agentId })
-  return requireAgent(agentId)
+  void agentId; void to; void confirmed
+  throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', '当前系统不支持暂停、恢复或退休 Agent')
 }
 export const activateAgent = (agentId: string, actorAgentId: string, confirmed: boolean) => transitionAgent(agentId, 'active', actorAgentId, confirmed)
 export const pauseAgent = (agentId: string, actorAgentId: string, confirmed: boolean) => transitionAgent(agentId, 'paused', actorAgentId, confirmed)
 export const resumeAgent = (agentId: string, actorAgentId: string, confirmed: boolean) => transitionAgent(agentId, 'active', actorAgentId, confirmed)
 export const retireAgent = (agentId: string, actorAgentId: string, confirmed: boolean) => transitionAgent(agentId, 'retired', actorAgentId, confirmed)
 
-const ROLE_TEMPLATES: Record<string, Record<string, unknown>> = {
-  operator: { name: '商品运营', description: '只读分析商品标题、价格、库存和上下架状态', tools: ['observe_page', 'read_text', 'read_table', 'model_analyze'], successCriteria: ['每个结论引用页面证据'] },
-  analyst: { name: '数据分析', description: '汇总店铺指标、趋势和异常', tools: ['observe_page', 'read_text', 'read_table', 'model_analyze'], successCriteria: ['指标与来源 Job 可追溯'] },
-  reviewer: { name: '审核 Agent', description: '检查数据完整性、证据和风险', tools: ['observe_page', 'read_text', 'read_table', 'review_job'], successCriteria: ['没有证据的结论必须拒绝'] },
-  content: { name: '内容文案', description: '生成草稿，不直接发布', tools: ['model_analyze', 'memory_search'], successCriteria: ['草稿明确标记为未发布'] },
-  support: { name: '客服质检', description: '只读检查回复质量和漏答问题', tools: ['observe_page', 'read_text', 'read_table', 'model_analyze'], successCriteria: ['只读并保留样本证据'] }
-}
 export function previewHr(role: string, actorAgentId: string, mode: 'hr' = 'hr'): Record<string, unknown> {
   requireRoot(actorAgentId)
-  if (mode !== 'hr') throw new AgentRuntimeError('AGENT_INVALID_INPUT', 'HR 只能使用 root-ceo 的 mode=hr')
-  const t = ROLE_TEMPLATES[role] || ROLE_TEMPLATES.operator
-  writeAudit('agent.hr.preview', 'success', { actor: actorAgentId, requestId: role })
-  return { mode: 'hr', role, ...t, prohibitedTools: ['shell', 'credentials', 'publish', 'send', 'payment', 'delete', 'order', 'account_change'], statusOnCreate: 'probation', requiresUserConfirmation: true, maxConcurrency: 1, dailyBudget: { currency: 'USD', amount: 0 } }
+  void role; void mode
+  throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', '当前系统不支持 HR 或岗位预览')
 }
 
 export function listModelProfiles(): ModelProfile[] {
@@ -610,28 +583,8 @@ export function deleteModelProfile(profileId: string, actorAgentId: string): voi
 
 export function bindAgentModel(input: { agentId: string; modelProfileId: string | null; actorAgentId: string }): AgentRecord {
   requireRoot(input.actorAgentId)
-  const agent = requireAgent(input.agentId)
-  if (agent.id === ROOT_AGENT_ID && !input.modelProfileId) {
-    throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '主 Agent 必须使用“设置 → AI 配置”中的模型')
-  }
-  if (agent.id === ROOT_AGENT_ID && input.modelProfileId !== MAIN_AGENT_PROFILE_ID) {
-    throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '主 Agent 的模型由“设置 → AI 配置”管理')
-  }
-  if (input.modelProfileId) {
-    const profile = getDatabase().prepare('SELECT id FROM agent_model_profiles WHERE id=? AND enabled=1').get(input.modelProfileId)
-    if (!profile) throw new AgentRuntimeError('AGENT_MODEL_NOT_FOUND', '模型 Profile 不存在或已停用')
-  }
-  const t = now()
-  getDatabase().transaction(() => {
-    if (input.modelProfileId) {
-      getDatabase().prepare('INSERT INTO agent_model_bindings(agent_id,model_profile_id,updated_at) VALUES (?,?,?) ON CONFLICT(agent_id) DO UPDATE SET model_profile_id=excluded.model_profile_id,updated_at=excluded.updated_at').run(agent.id, input.modelProfileId, t)
-    } else {
-      getDatabase().prepare('DELETE FROM agent_model_bindings WHERE agent_id=?').run(agent.id)
-    }
-    getDatabase().prepare('UPDATE agents SET model_profile_id=?,updated_at=? WHERE id=?').run(input.modelProfileId, t, agent.id)
-  })()
-  writeAudit(input.modelProfileId ? 'agent.model.bind' : 'agent.model.unbind', 'success', { actor: input.actorAgentId, requestId: `${agent.id}:${input.modelProfileId || 'inherit-main'}` })
-  return requireAgent(agent.id)
+  void input
+  throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', '单 Agent 模式不支持按 Agent 绑定模型；请编辑模型 Profile')
 }
 
 function getProfileSecret(profile: any): string | null {
@@ -708,7 +661,7 @@ function recordChatUsage(agentId: string, profileId: string | null, parsed: any,
  * through agent_model_bindings instead of the legacy global AI settings.
  * 与 Job 链路一致：网络/429 只重试一次；主模型失败且配置了备用 Profile 时按白名单降级一次；
  * 每次调用都写 agent_usage（§7.3）。 */
-export async function chatCompleteForAgent(agentId: string, opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number }): Promise<{ text: string; model: string; elapsedMs: number; profileId: string; fallbackUsed: boolean; usage: AgentContextUsage }> {
+export async function chatCompleteForAgent(agentId: string, opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number; imageDataUrl?: string }): Promise<{ text: string; model: string; elapsedMs: number; profileId: string; fallbackUsed: boolean; usage: AgentContextUsage }> {
   const resolved = resolveEffectiveAgentModel(agentId)
   const profileId = resolved.profileId
   if (!profileId) throw new AgentRuntimeError('AGENT_MODEL_NOT_FOUND', 'Agent 尚未绑定模型 Profile')
@@ -771,7 +724,7 @@ export async function chatCompleteForAgent(agentId: string, opts: { system: stri
 }
 
 /** 单次补全请求（不含降级/记账）：连接失败与 429 只重试一次（§27.2）。 */
-async function requestChatCompletion(profile: any, key: string, opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number }): Promise<{ text: string; model: string; elapsedMs: number; parsed: any; contextWindowTokens: number; maxInputTokens: number; systemPromptDroppedChars: number }> {
+async function requestChatCompletion(profile: any, key: string, opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number; imageDataUrl?: string }): Promise<{ text: string; model: string; elapsedMs: number; parsed: any; contextWindowTokens: number; maxInputTokens: number; systemPromptDroppedChars: number }> {
   assertModelEndpoint(String(profile.endpoint))
   const timeoutMs = Math.min(3600000, Math.max(1000, Math.floor(opts.timeoutMs ?? profile.timeout_ms)))
   const contextBudget = resolveAgentContextBudget({
@@ -937,6 +890,7 @@ async function executeModelJob(row: any, actorAgentId: string): Promise<any> {
   }
   const currentOwnedJob = (): any => {
     const current = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(row.id) as any
+    if (current) assertSingletonJobRow(current, '模型 Job 执行')
     if (!current || current.status !== 'running' || String(current.lease_owner || '') !== String(leaseOwner || '')) return null
     return current
   }
@@ -1174,6 +1128,7 @@ export function resolveFallbackProfile(profileId: string, errorCode: string, sid
 }
 
 function jobRow(row: any): any {
+  assertSingletonJobRow(row)
   const events = (getDatabase().prepare('SELECT id,from_status as fromStatus,to_status as toStatus,actor,reason,evidence_json as evidence,created_at as createdAt FROM agent_job_events WHERE job_id=? ORDER BY created_at ASC LIMIT 200').all(row.id) as any[]).map(event => ({ ...event, evidence: event.evidence ? parseJson(event.evidence, null) : null }))
   const results = (getDatabase().prepare('SELECT id,task_run_id as taskRunId,kind,summary,evidence_json as evidence,approved,reviewer_agent_id as reviewerAgentId,created_at as createdAt FROM agent_job_results WHERE job_id=? ORDER BY created_at ASC LIMIT 100').all(row.id) as any[]).map(result => ({ ...result, approved: !!result.approved, evidence: parseJson(result.evidence, {}) }))
   return {
@@ -1203,6 +1158,8 @@ function transitionJob(jobId: string, to: string, actor: string, reason: string,
   const db = getDatabase()
   const current = db.prepare('SELECT * FROM agent_jobs WHERE id=?').get(jobId) as any
   if (!current) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Agent Job 不存在')
+  assertSingletonJobRow(current, 'Agent Job 状态迁移')
+  requireSingletonAgentId(actor, 'Job 状态迁移调用方')
   if (leaseOwner && String(current.lease_owner || '') !== leaseOwner) throw new AgentRuntimeError('AGENT_JOB_LEASE_LOST', 'Agent Job 租约已失效，拒绝写回旧 Worker 结果')
   if (expected && !expected.includes(current.status)) throw new AgentRuntimeError('AGENT_JOB_BAD_STATE', `不允许 ${current.status} -> ${to}`)
   if (!canTransition(current.status, to)) throw new AgentRuntimeError('AGENT_JOB_BAD_STATE', `不允许 ${current.status} -> ${to}`)
@@ -1244,8 +1201,9 @@ function validateJobDependencies(dependencies: string[]): string[] {
     if (depth > maxDepth) throw new AgentRuntimeError('AGENT_DAG_LIMIT', 'Job dependency DAG 超过最大深度')
     if (visiting.has(id)) throw new AgentRuntimeError('AGENT_DAG_LIMIT', 'Job dependency DAG 存在循环')
     if (visited.has(id)) return
-    const row = getDatabase().prepare('SELECT dependencies_json FROM agent_jobs WHERE id=?').get(id) as any
+    const row = getDatabase().prepare('SELECT dependencies_json,created_by_agent_id,assigned_agent_id FROM agent_jobs WHERE id=?').get(id) as any
     if (!row) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Job dependency 不存在')
+    assertSingletonJobRow(row, 'Job dependency')
     visiting.add(id)
     visited.add(id)
     for (const dependency of parseJson<string[]>(row.dependencies_json, [])) walk(String(dependency), depth + 1)
@@ -1257,10 +1215,12 @@ function validateJobDependencies(dependencies: string[]): string[] {
 }
 
 function dependencyState(row: any): { waiting: string[]; failed: string[]; missing: string[] } {
+  assertSingletonJobRow(row, 'Job dependency owner')
   const waiting: string[] = []; const failed: string[] = []; const missing: string[] = []
   for (const id of parseJson<string[]>(row.dependencies_json, [])) {
-    const dependency = getDatabase().prepare('SELECT id,status FROM agent_jobs WHERE id=?').get(id) as any
+    const dependency = getDatabase().prepare('SELECT id,status,created_by_agent_id,assigned_agent_id FROM agent_jobs WHERE id=?').get(id) as any
     if (!dependency) { missing.push(String(id)); continue }
+    assertSingletonJobRow(dependency, '依赖 Job')
     if (dependency.status === 'succeeded') continue
     if (['failed', 'cancelled', 'expired', 'blocked_budget', 'blocked_permission', 'recovery_required'].includes(dependency.status)) failed.push(String(id))
     else waiting.push(String(id))
@@ -1270,6 +1230,9 @@ function dependencyState(row: any): { waiting: string[]; failed: string[]; missi
 
 export function createAgentJob(raw: AgentJobCreate, opts: { moneyConfirmationSatisfied?: boolean } = {}): any {
   const input = agentJobCreateSchema.parse(raw)
+  if (input.createdByAgentId !== ROOT_AGENT_ID || input.assignedAgentId !== ROOT_AGENT_ID) {
+    throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', '当前系统仅允许 root-ceo 创建并执行 Job')
+  }
   const actor = requireAgent(input.createdByAgentId)
   const assigned = requireAgent(input.assignedAgentId)
   const risk = deriveRisk(input)
@@ -1278,6 +1241,7 @@ export function createAgentJob(raw: AgentJobCreate, opts: { moneyConfirmationSat
   if (input.parentJobId) {
     const parent = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(input.parentJobId) as any
     if (!parent) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', '父 Job 不存在')
+    assertSingletonJobRow(parent, '父 Agent Job')
     const childCount = (getDatabase().prepare('SELECT COUNT(*) c FROM agent_jobs WHERE parent_job_id=?').get(input.parentJobId) as any).c
     if (childCount >= 12) throw new AgentRuntimeError('AGENT_DAG_LIMIT', '单个 Job 最多 12 个直接子 Job')
     const nodeCount = Number((getDatabase().prepare(`WITH RECURSIVE descendants(id) AS (
@@ -1287,7 +1251,12 @@ export function createAgentJob(raw: AgentJobCreate, opts: { moneyConfirmationSat
     ) SELECT COUNT(*) c FROM descendants`).get(input.parentJobId) as any)?.c || 0)
     if (nodeCount + 1 > getSettingNumber('agent.jobs.maxNodes', 50, 1, 200)) throw new AgentRuntimeError('AGENT_DAG_LIMIT', 'Job DAG 超过最大节点数')
     let depth = 1; let cursor = parent
-    while (cursor?.parent_job_id) { depth++; cursor = getDatabase().prepare('SELECT parent_job_id FROM agent_jobs WHERE id=?').get(cursor.parent_job_id) as any }
+    while (cursor?.parent_job_id) {
+      depth++
+      cursor = getDatabase().prepare('SELECT parent_job_id,created_by_agent_id,assigned_agent_id FROM agent_jobs WHERE id=?').get(cursor.parent_job_id) as any
+      if (!cursor) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', '父 Job 不存在')
+      assertSingletonJobRow(cursor, '父 Job 层级')
+    }
     if (depth >= getSettingNumber('agent.jobs.maxDepth', 12, 1, 12)) throw new AgentRuntimeError('AGENT_DAG_LIMIT', 'Job DAG 超过最大深度')
   }
   const safeGoal = redactAgentText(input.goal, 2000)
@@ -1295,6 +1264,7 @@ export function createAgentJob(raw: AgentJobCreate, opts: { moneyConfirmationSat
   const hash = payloadHash(input)
   const existing = getDatabase().prepare('SELECT * FROM agent_jobs WHERE idempotency_key=?').get(input.idempotencyKey) as any
   if (existing) {
+    assertSingletonJobRow(existing, '幂等键关联的 Agent Job')
     if (existing.payload_hash !== hash) throw new AgentRuntimeError('AGENT_JOB_DUPLICATE', '相同幂等键的 payload 不一致')
     return getAgentJob(existing.id)
   }
@@ -1329,9 +1299,11 @@ export function createAgentJob(raw: AgentJobCreate, opts: { moneyConfirmationSat
 }
 
 function syncBrowserJob(row: any): any {
+  assertSingletonJobRow(row)
   if (!row.browser_run_id || !['running', 'accepted', 'waiting_confirmation'].includes(row.status)) return jobRow(row)
   const currentJob = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(row.id) as any
   if (!currentJob) return jobRow(row)
+  assertSingletonJobRow(currentJob)
   if (currentJob.status !== row.status || String(currentJob.lease_owner || '') !== String(row.lease_owner || '') || String(currentJob.browser_run_id || '') !== String(row.browser_run_id || '')) return jobRow(currentJob)
   const run = TaskStore.getRun(row.browser_run_id)
   if (!run) return row
@@ -1372,6 +1344,10 @@ function syncBrowserJob(row: any): any {
 
 function markJobSideEffectStarted(jobId: string, actor: string, evidence: unknown, leaseOwner?: string): void {
   const db = getDatabase()
+  const row = db.prepare('SELECT * FROM agent_jobs WHERE id=?').get(jobId) as any
+  if (!row) return
+  assertSingletonJobRow(row, 'Agent Job 页面副作用')
+  requireSingletonAgentId(actor, 'Job 页面副作用调用方')
   const t = now()
   const changed = leaseOwner
     ? db.prepare('UPDATE agent_jobs SET side_effect_started=1,updated_at=? WHERE id=? AND status IN (\'running\',\'accepted\') AND side_effect_started=0 AND lease_owner=?').run(t, jobId, leaseOwner)
@@ -1384,15 +1360,19 @@ function markJobSideEffectStarted(jobId: string, actor: string, evidence: unknow
 export function getAgentJob(jobId: string): any {
   const row = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(jobId) as any
   if (!row) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Agent Job 不存在')
+  assertSingletonJobRow(row)
   return syncBrowserJob(row)
 }
 
 export function listAgentJobs(raw: unknown = {}): { items: any[]; nextCursor: string | null; hasMore: boolean } {
   const query = agentJobListQuerySchema.parse(raw)
+  if (query.assignedAgentId && query.assignedAgentId !== ROOT_AGENT_ID) {
+    throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', 'Agent Job 查询仅支持 root-ceo')
+  }
   const params: any[] = []
-  const where: string[] = []
+  const where: string[] = ['created_by_agent_id=?', 'assigned_agent_id=?']
+  params.push(ROOT_AGENT_ID, ROOT_AGENT_ID)
   if (query.status) { where.push('status=?'); params.push(query.status) }
-  if (query.assignedAgentId) { where.push('assigned_agent_id=?'); params.push(query.assignedAgentId) }
   if (query.storeId) { where.push('store_id=?'); params.push(query.storeId) }
   if (query.cursor) { const decoded = Buffer.from(query.cursor, 'base64url').toString('utf8').split('|'); if (decoded.length === 2) { where.push('(created_at < ? OR (created_at = ? AND id < ?))'); params.push(Number(decoded[0]), Number(decoded[0]), decoded[1]) } }
   params.push(query.limit + 1)
@@ -1408,6 +1388,7 @@ export async function runAgentJob(jobId: string, actorAgentId: string): Promise<
   const actor = requireRoot(actorAgentId)
   const row = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(jobId) as any
   if (!row) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Agent Job 不存在')
+  assertSingletonJobRow(row, 'Agent Job 执行')
   if (['queued', 'accepted'].includes(row.status)) {
     const dependencies = dependencyState(row)
     if (dependencies.missing.length || dependencies.failed.length) {
@@ -1416,15 +1397,9 @@ export async function runAgentJob(jobId: string, actorAgentId: string): Promise<
     if (dependencies.waiting.length) throw new AgentRuntimeError('AGENT_JOB_DEPENDENCY_WAITING', `Job 依赖尚未完成：${dependencies.waiting.join(', ')}`)
   }
   const assigned = requireAgent(row.assigned_agent_id)
-  if (assigned.id === ROOT_AGENT_ID) {
-    // root-ceo is chat / dispatch / review only. Pre-existing root jobs (if a
-    // database predates the guard) must be blocked instead of executed.
-    if (['queued', 'accepted', 'waiting_confirmation'].includes(row.status)) {
-      transitionJob(row.id, 'blocked_permission', actor.id, '主 Agent 不执行任务；需要执行的任务必须派给子 Agent', { code: 'AGENT_ROOT_CANNOT_EXECUTE' }, [row.status])
-      return getAgentJob(row.id)
-    }
-    throw new AgentRuntimeError('AGENT_ROOT_CANNOT_EXECUTE', '主 Agent 只负责对话、拆分和派单，不执行任务')
-  }
+  // root-ceo may execute Jobs when explicitly assigned by root-ceo.  The same
+  // permission snapshot, confirmation gate, scope, budget, concurrency and
+  // lease checks below still apply to the main Agent.
   if (jobPermissionSnapshotChanged(row, assigned)) {
     if (['queued', 'accepted', 'waiting_confirmation'].includes(row.status)) {
       transitionJob(row.id, 'blocked_permission', actor.id, 'Job 权限快照已失效，拒绝使用变更后的 Agent 能力', { code: 'AGENT_PERMISSION_DENIED', reason: 'job_permission_snapshot_changed' }, [row.status])
@@ -1499,19 +1474,16 @@ export async function runAgentJob(jobId: string, actorAgentId: string): Promise<
 }
 
 /**
- * Main-owned delegation path for the visible root-ceo chat. The CEO never
- * executes a TaskRunner task itself: this resolves an active child Agent that
- * covers the target store, freezes the job snapshot and (optionally) starts it.
+ * The single root-ceo Agent creates and executes its own Job. The legacy
+ * assignedAgentId field remains accepted only when it is root-ceo.
  */
 export async function delegateAgentTask(raw: unknown, opts: { userInitiatedCollect?: boolean } = {}): Promise<{ job: any; executor: { id: string; name: string; role: string }; provisioned: boolean; queued: boolean }> {
   const input = agentTaskDelegateSchema.parse(raw)
   const actor = requireRoot(input.actorAgentId)
-  const loadOf = (agentId: string): number => Number((getDatabase().prepare("SELECT COUNT(*) AS c FROM agent_jobs WHERE assigned_agent_id=? AND status IN ('accepted','running','waiting_confirmation')").get(agentId) as any)?.c || 0)
-  // 自治运营：没有可用执行岗时自动创建/激活一个，而不是让任务失败。
-  // 写/提交类页面任务只选非只读执行者：只读范围是权限模型的一部分（§4.2/§4.3）。
-  // 纯模型任务不接触店铺，按只读处理，不受只读范围过滤。
-  const risk = input.browserTask ? deriveJobRisk({ goal: input.goal, inputSummary: { source: 'ceo-chat' }, browserTask: input.browserTask }) : 'read'
-  const ensured = ensureExecutorAgent(input.storeId, loadOf, risk)
+  if (input.assignedAgentId && input.assignedAgentId !== ROOT_AGENT_ID) {
+    throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', '当前系统仅允许 root-ceo 作为 Job 执行者')
+  }
+  const ensured = { agent: requireAgent(ROOT_AGENT_ID), provisioned: false }
   const executor = ensured.agent
   const jobInput = agentJobCreateSchema.parse({
     createdByAgentId: actor.id,
@@ -1545,45 +1517,11 @@ export async function delegateAgentTask(raw: unknown, opts: { userInitiatedColle
   return { job: current, executor: { id: executor.id, name: executor.name, role: executor.role }, provisioned: ensured.provisioned, queued }
 }
 
-/**
- * 自治执行岗：优先用 active 子 Agent；没有时创建（或重新激活）独立的“执行助手”。
- * 不主动激活 HR 创建的 probation/paused 子 Agent，避免绕过试用与用户意图。
- */
-function ensureExecutorAgent(storeId: string | null, loadOf: (agentId: string) => number, risk: 'read' | 'write' | 'submit' = 'read'): { agent: AgentRecord; provisioned: boolean } {
-  const active = selectExecutorAgent(listAgents(), storeId, loadOf, { requireWritable: risk !== 'read' })
-  if (active) return { agent: active, provisioned: false }
-  const existing = listAgents().find(agent => agent.name === '执行助手' && agent.status !== 'retired')
-  if (existing) {
-    // 执行助手是自治执行岗（创建时 readOnly=false）。它若是只读，说明被人为改窄；
-    // 写任务需要它恢复可写策略——这是 Main 的供给策略，写审计而不是静默扩权。
-    let agent = existing
-    if (risk !== 'read' && existing.storeScope.readOnly) {
-      agent = updateAgent({ actorAgentId: ROOT_AGENT_ID, agentId: existing.id, confirmed: true, storeScope: { ...existing.storeScope, readOnly: false } })
-      writeAudit('agent.org.autoprovision', 'success', { actor: ROOT_AGENT_ID, requestId: `widen:${agent.id}:${risk}` })
-    }
-    const activated = agent.status === 'active' ? agent : activateAgent(agent.id, ROOT_AGENT_ID, true)
-    writeAudit('agent.org.autoprovision', 'success', { actor: ROOT_AGENT_ID, requestId: `activate:${activated.id}` })
-    return { agent: activated, provisioned: true }
-  }
-  const created = createAgent({
-    actorAgentId: ROOT_AGENT_ID,
-    confirmed: true,
-    name: '执行助手',
-    role: 'operator',
-    description: '智能体按自治运营策略自动创建的执行岗位，接收页面任务并通过 TaskRunner 执行',
-    storeScope: { storeIds: [], readOnly: false },
-    memoryScope: { write: false },
-    maxConcurrency: 4
-  })
-  const agent = activateAgent(created.id, ROOT_AGENT_ID, true)
-  writeAudit('agent.org.autoprovision', 'success', { actor: ROOT_AGENT_ID, requestId: `create:${agent.id}` })
-  return { agent, provisioned: true }
-}
-
 export function approveAgentJob(input: { jobId: string; actorAgentId: string; approved: boolean; confirmationId?: string }): any {
   const actor = requireRoot(input.actorAgentId)
   const row = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(input.jobId) as any
   if (!row) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Agent Job 不存在')
+  assertSingletonJobRow(row, 'Agent Job 审批')
   if (row.status !== 'waiting_confirmation') throw new AgentRuntimeError('AGENT_JOB_BAD_STATE', 'Job 当前不在人工确认状态')
   if (row.confirmation_expires_at && Number(row.confirmation_expires_at) <= now()) {
     return transitionJob(row.id, 'expired', actor.id, '人工确认已过期', { confirmationExpired: true }, ['waiting_confirmation'])
@@ -1598,6 +1536,7 @@ export function cancelAgentJob(input: { jobId: string; actorAgentId: string }): 
   const actor = requireRoot(input.actorAgentId)
   const row = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(input.jobId) as any
   if (!row) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Agent Job 不存在')
+  assertSingletonJobRow(row, 'Agent Job 取消')
   if (row.browser_run_id && ['running', 'waiting_confirmation', 'accepted'].includes(row.status)) { try { TaskRunner.cancelRun(row.browser_run_id, 'Agent Job 被用户取消') } catch { /* status transition remains truthful */ } }
   modelJobControllers.get(row.id)?.abort()
   return transitionJob(row.id, 'cancelled', actor.id, row.side_effect_started ? '取消后续步骤；已有页面副作用保留风险记录' : '用户取消 Job', { sideEffectStarted: !!row.side_effect_started }, ['draft', 'delegated', 'queued', 'accepted', 'running', 'waiting_input', 'waiting_confirmation', 'recovery_required', 'blocked_budget', 'blocked_permission'])
@@ -1607,15 +1546,17 @@ export function resumeAgentJob(input: { jobId: string; actorAgentId: string }): 
   const actor = requireRoot(input.actorAgentId)
   const row = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(input.jobId) as any
   if (!row) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Agent Job 不存在')
+  assertSingletonJobRow(row, 'Agent Job 恢复')
   if (row.side_effect_started) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '已有页面副作用的 Job 必须重新观察并由用户决定，不能自动恢复')
   return transitionJob(row.id, 'queued', actor.id, '用户/CEO 选择安全恢复', null, ['recovery_required', 'failed', 'blocked_budget', 'blocked_permission'])
 }
 
 export function markRecoverableJobsOnStartup(): number {
   const db = getDatabase()
-  const rows = db.prepare("SELECT id,status,confirmation_expires_at FROM agent_jobs WHERE status IN ('accepted','running','waiting_input','waiting_confirmation')").all() as any[]
+  const rows = db.prepare("SELECT id,status,confirmation_expires_at,created_by_agent_id,assigned_agent_id FROM agent_jobs WHERE created_by_agent_id=? AND assigned_agent_id=? AND status IN ('accepted','running','waiting_input','waiting_confirmation')").all(ROOT_AGENT_ID, ROOT_AGENT_ID) as any[]
   for (const row of rows) {
     try {
+      assertSingletonJobRow(row, '启动恢复 Job')
       if (row.status === 'waiting_confirmation') {
         if (row.confirmation_expires_at && Number(row.confirmation_expires_at) <= now()) transitionJob(row.id, 'expired', ROOT_AGENT_ID, '应用重启时发现人工确认已过期', { confirmationExpired: true }, ['waiting_confirmation'])
         // A still-valid confirmation remains actionable after restart.
@@ -1636,17 +1577,19 @@ let lastMemoryMaintenanceAt = 0
  */
 function drainDelegatedQueue(): void {
   const db = getDatabase()
-  const rows = db.prepare(`SELECT id, assigned_agent_id FROM agent_jobs
-    WHERE status='queued' AND json_extract(input_summary_json, '$.source')='ceo-chat'
-    ORDER BY created_at ASC LIMIT 10`).all() as any[]
+  const rows = db.prepare(`SELECT id, assigned_agent_id, created_by_agent_id FROM agent_jobs
+    WHERE created_by_agent_id=? AND assigned_agent_id=? AND status='queued' AND json_extract(input_summary_json, '$.source')='ceo-chat'
+    ORDER BY created_at ASC LIMIT 10`).all(ROOT_AGENT_ID, ROOT_AGENT_ID) as any[]
   for (const row of rows) {
     try {
+      assertSingletonJobRow(row, '队列 Job')
       const assigned = requireAgent(row.assigned_agent_id)
       if (assigned.status !== 'active') continue
       const running = Number((db.prepare("SELECT COUNT(*) AS c FROM agent_jobs WHERE assigned_agent_id=? AND status='running'").get(assigned.id) as any)?.c || 0)
       if (running >= assigned.maxConcurrency) continue
       const jobRow = db.prepare('SELECT * FROM agent_jobs WHERE id=?').get(row.id) as any
       if (!jobRow) continue
+      assertSingletonJobRow(jobRow, '队列 Job 执行')
       const dependencies = dependencyState(jobRow)
       if (dependencies.waiting.length || dependencies.failed.length || dependencies.missing.length) continue
       void runAgentJob(row.id, ROOT_AGENT_ID).catch(() => undefined)
@@ -1666,9 +1609,10 @@ function sweepAgentJobs(): void {
   }
   const leaseMs = getSettingNumber('agent.jobs.leaseMs', 30000, 5000, 300000)
   const maxRunMs = getSettingNumber('agent.jobs.maxRunMs', 1800000, 60000, 21600000)
-  const rows = db.prepare("SELECT * FROM agent_jobs WHERE status IN ('running','waiting_confirmation')").all() as any[]
+  const rows = db.prepare("SELECT * FROM agent_jobs WHERE created_by_agent_id=? AND assigned_agent_id=? AND status IN ('running','waiting_confirmation')").all(ROOT_AGENT_ID, ROOT_AGENT_ID) as any[]
   for (const row of rows) {
     try {
+      assertSingletonJobRow(row, '租约扫描 Job')
       if (row.status === 'waiting_confirmation') {
         if (row.confirmation_expires_at && Number(row.confirmation_expires_at) <= t) {
           transitionJob(row.id, 'expired', ROOT_AGENT_ID, '人工确认超时，Job 已过期', { confirmationExpired: true }, ['waiting_confirmation'])
@@ -1687,7 +1631,8 @@ function sweepAgentJobs(): void {
         } catch { /* best effort */ }
         try { syncBrowserJob(row) } catch { /* status is reconciled on the next sweep */ }
       }
-      const current = db.prepare('SELECT status,lease_owner,version,lease_expires_at,started_at,browser_run_id FROM agent_jobs WHERE id=?').get(row.id) as any
+      const current = db.prepare('SELECT status,lease_owner,version,lease_expires_at,started_at,browser_run_id,created_by_agent_id,assigned_agent_id FROM agent_jobs WHERE id=?').get(row.id) as any
+      if (current) assertSingletonJobRow(current, '租约扫描当前 Job')
       if (!current || current.status !== 'running') continue
       // 续租的唯一依据是"还有活着的执行者"（审计 P2-B）：以前这里无条件续租，
       // 于是活进程里卡死的 worker 永不超时；现在没有 live worker 就不再续租，
@@ -1735,14 +1680,14 @@ export function startAgentRuntimeLeaseSweeper(): void {
 
 export function qualityMetrics(): Record<string, unknown> {
   const db = getDatabase()
-  const total = Number((db.prepare('SELECT COUNT(*) c FROM agent_jobs').get() as any).c || 0)
-  const succeeded = Number((db.prepare("SELECT COUNT(*) c FROM agent_jobs WHERE status='succeeded'").get() as any).c || 0)
-  const firstSuccess = Number((db.prepare("SELECT COUNT(*) c FROM agent_jobs WHERE status='succeeded' AND attempt_count=1").get() as any).c || 0)
+  const total = Number((db.prepare('SELECT COUNT(*) c FROM agent_jobs WHERE created_by_agent_id=? AND assigned_agent_id=?').get(ROOT_AGENT_ID, ROOT_AGENT_ID) as any).c || 0)
+  const succeeded = Number((db.prepare("SELECT COUNT(*) c FROM agent_jobs WHERE created_by_agent_id=? AND assigned_agent_id=? AND status='succeeded'").get(ROOT_AGENT_ID, ROOT_AGENT_ID) as any).c || 0)
+  const firstSuccess = Number((db.prepare("SELECT COUNT(*) c FROM agent_jobs WHERE created_by_agent_id=? AND assigned_agent_id=? AND status='succeeded' AND attempt_count=1").get(ROOT_AGENT_ID, ROOT_AGENT_ID) as any).c || 0)
   const feedback = Number((db.prepare('SELECT COUNT(*) c FROM agent_feedback').get() as any).c || 0)
   const corrections = Number((db.prepare('SELECT COUNT(*) c FROM agent_feedback WHERE correction IS NOT NULL AND length(trim(correction)) > 0').get() as any).c || 0)
   const approvedMemory = Number((db.prepare("SELECT COUNT(*) c FROM agent_memory_records WHERE status='approved'").get() as any).c || 0)
   const fallbackCount = Number((db.prepare("SELECT COUNT(*) c FROM agent_job_results WHERE json_extract(evidence_json, '$.fallbackUsed') = 1").get() as any).c || 0)
-  const budgetBlocked = Number((db.prepare("SELECT COUNT(*) c FROM agent_jobs WHERE status='blocked_budget'").get() as any).c || 0)
+  const budgetBlocked = Number((db.prepare("SELECT COUNT(*) c FROM agent_jobs WHERE created_by_agent_id=? AND assigned_agent_id=? AND status='blocked_budget'").get(ROOT_AGENT_ID, ROOT_AGENT_ID) as any).c || 0)
   const memoryGovernance = { stale: 0, conflict: 0, hitCount: 0, adoptionCount: 0, rejectionCount: 0, autoCandidates: 0, archived: 0, adaptiveConfidence: 0 }
   try {
     const rows = db.prepare("SELECT status,COUNT(*) c FROM agent_memory_records WHERE status IN ('stale','conflict') GROUP BY status").all() as any[]
@@ -1816,7 +1761,7 @@ export async function qualityReviewSummary(actorAgentId = ROOT_AGENT_ID): Promis
   const knownCost = knownCosts.length && !mixedCurrency ? costByCurrency[costCurrencies[0]] : null
   const costStatus = knownCosts.length === 0 ? 'unestimated_without_price' : mixedCurrency ? 'mixed_currency' : 'provider_or_configured_cost'
   const pendingMemoryReview = Number((db.prepare("SELECT COUNT(*) AS c FROM agent_memory_records WHERE status IN ('pending-review','conflict','quarantined') AND archived_at IS NULL").get() as { c: number } | undefined)?.c || 0)
-  const blockedJobs = Number((db.prepare("SELECT COUNT(*) AS c FROM agent_jobs WHERE status IN ('blocked_budget','blocked_permission','recovery_required')").get() as { c: number } | undefined)?.c || 0)
+  const blockedJobs = Number((db.prepare("SELECT COUNT(*) AS c FROM agent_jobs WHERE created_by_agent_id=? AND assigned_agent_id=? AND status IN ('blocked_budget','blocked_permission','recovery_required')").get(ROOT_AGENT_ID, ROOT_AGENT_ID) as { c: number } | undefined)?.c || 0)
   const summary = {
     periodStart,
     periodEnd,
@@ -1847,6 +1792,9 @@ export function reviewAgentJobResult(raw: AgentJobResultReview): any {
   if (reviewer.id !== ROOT_AGENT_ID && !reviewer.toolPolicy.tools.includes('review_job')) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '当前 Agent 没有审核 Job 结果的权限')
   const row = getDatabase().prepare('SELECT r.id,r.job_id FROM agent_job_results r WHERE r.id=?').get(input.resultId) as any
   if (!row) throw new AgentRuntimeError('AGENT_JOB_RESULT_NOT_FOUND', 'Job 结果不存在')
+  const job = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(row.job_id) as any
+  if (!job) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Agent Job 不存在')
+  assertSingletonJobRow(job, 'Job 结果审核')
   getDatabase().prepare('UPDATE agent_job_results SET approved=?,reviewer_agent_id=? WHERE id=?').run(input.approved ? 1 : 0, reviewer.id, input.resultId)
   if (input.correction) {
     getDatabase().prepare('INSERT INTO agent_feedback(id,job_id,memory_id,reviewer_agent_id,rating,correction,created_at) VALUES (?,?,?,?,?,?,?)').run(`afb_${randomUUID()}`, row.job_id, null, reviewer.id, input.approved ? 5 : 1, redactAgentText(input.correction, 1000), now())
@@ -1860,7 +1808,9 @@ export async function addJobFeedback(raw: AgentJobFeedback): Promise<void> {
   const input = agentJobFeedbackSchema.parse(raw)
   const reviewer = requireAgent(input.reviewerAgentId)
   if (reviewer.id !== ROOT_AGENT_ID && !reviewer.toolPolicy.tools.includes('review_job')) throw new AgentRuntimeError('AGENT_PERMISSION_DENIED', '当前 Agent 没有提交 Job 反馈的权限')
-  if (!getDatabase().prepare('SELECT id FROM agent_jobs WHERE id=?').get(input.jobId)) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Agent Job 不存在')
+  const job = getDatabase().prepare('SELECT * FROM agent_jobs WHERE id=?').get(input.jobId) as any
+  if (!job) throw new AgentRuntimeError('AGENT_JOB_NOT_FOUND', 'Agent Job 不存在')
+  assertSingletonJobRow(job, 'Job 反馈')
   if (input.memoryId) {
     // Validate the relation and reviewer scope before recording feedback. The
     // asynchronous learner below is best effort, but the permission boundary

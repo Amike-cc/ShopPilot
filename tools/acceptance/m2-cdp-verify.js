@@ -185,17 +185,28 @@ async function main() {
   check('代理在链路中：初始请求经代理并收到 407 挑战', proxyStats.saw407 >= 1, JSON.stringify(proxyStats))
 
   const injStatus = await cdp.evaluate(`return await window.shopilot.session.status(${JSON.stringify(sid)});`)
-  const injection = injStatus.data?.lastProxyAuth
-  check('login 事件触发并注入 safeStorage 解析出的正确凭据', !!injection && injection.username === 'alice', JSON.stringify(injection))
+  const safeSession = injStatus.data || {}
+  check(
+    'login 事件触发并完成 safeStorage 凭据注入',
+    proxyStats.sawAuthed >= 1 || title.includes('PROXIED-407-OK'),
+    JSON.stringify({ saw407: proxyStats.saw407, sawAuthed: proxyStats.sawAuthed, title })
+  )
 
-  if (title.includes('PROXIED-407-OK') || proxyStats.sawAuthed >= 1) {
-    check('Chromium 重放带凭据请求且页面加载', true, 'title=' + title)
-  } else {
-    console.log(`INFO - Chromium 在此无头/CDP 环境未重放 407 GET（桌面正常环境会重放）；注入事实已由 session:status 验证`)
-  }
+  // session:status 只允许返回安全摘要；partition、标签数和代理认证事实由各自的安全接口/链路验证。
+  check(
+    'session:status 只返回安全 Session 摘要',
+    injStatus.ok === true
+      && typeof safeSession.status === 'string'
+      && typeof safeSession.sessionPresent === 'boolean'
+      && typeof safeSession.sessionReady === 'boolean'
+      && safeSession.proxyAuthObserved === true
+      && !Object.prototype.hasOwnProperty.call(safeSession, 'partition')
+      && !Object.prototype.hasOwnProperty.call(safeSession, 'lastProxyAuth'),
+    JSON.stringify({ status: safeSession.status, sessionPresent: safeSession.sessionPresent, sessionReady: safeSession.sessionReady, keys: Object.keys(safeSession) })
+  )
 
-  const status = await cdp.evaluate(`return await window.shopilot.session.status(${JSON.stringify(sid)});`)
-  check('session:status 报告 partition 与标签数', status.ok && status.data.partition === 'persist:store_' + sid && status.data.tabCount >= 1, JSON.stringify(status.data))
+  const tabsAfterAuth = await cdp.evaluate(`return await window.shopilot.browser.tab.list(${JSON.stringify(sid)});`)
+  check('浏览器标签列表通过安全 Browser API 返回当前标签', tabsAfterAuth.ok && tabsAfterAuth.data?.tabs?.length >= 1, JSON.stringify({ tabCount: tabsAfterAuth.data?.tabs?.length || 0 }))
 
   const unbind = await cdp.evaluate(`return await window.shopilot.proxy.bind(${JSON.stringify(sid)}, null);`)
   check('proxy:bind(null) → direct', unbind.ok && unbind.data.binding.mode === 'direct')

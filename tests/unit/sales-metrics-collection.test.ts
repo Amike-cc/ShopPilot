@@ -130,10 +130,14 @@ describe('sales metrics · 迁移与库结构', () => {
     expect(columns('sales_collection_plans')).toContain('last_safe_message')
   })
 
-  realIt('迁移链连续到 v18，重复执行不报错', () => {
+  realIt('迁移链连续到最新版（不硬编码版本号），重复执行不报错', () => {
     const versions = migrations.map(migration => migration.version)
     expect(versions).toEqual(versions.map((_, index) => index + 1))
-    expect(migrations[migrations.length - 1].version).toBe(18)
+    // 这里曾经写死 18：v19（商品域）一加进来就误报。口径改成"最新版跟随代码"，
+    // 与 tests/unit/migrations.test.ts 的同一断言保持一致。
+    expect(migrations[migrations.length - 1].version).toBe(versions.length)
+    // v18 必须仍在链上：它是 sales_metrics 的加列迁移，后续新增不能把它挤掉
+    expect(migrations.find(m => m.version === 18)?.name).toBe('sales_metrics_ad_spend')
     const { db } = setup()
     expect(() => migrate(db)).not.toThrow()
     // v18 只加了一列投放花费；必须是可空列，否则老库里已有的行会被强制写默认值
@@ -768,7 +772,7 @@ describe('sales metrics · 采集服务门禁', () => {
     adapter?: unknown
     hasPage?: boolean
     loginStatus?: string
-    /** 模拟"采集自己开店后页面就绪"：openStorePage 被调用后 waitForStoreWebContents 才有值 */
+    /** 模拟"采集自己准备专用页面后页面就绪"：借用成功后 waitForWebContents 才有值 */
     pageComesAfterOpen?: boolean
   } = {}) {
     const platform = options.platform || '拼多多'
@@ -777,7 +781,7 @@ describe('sales metrics · 采集服务门禁', () => {
       getURL: () => 'https://mms.pinduoduo.com/',
       session: SESSION
     } as unknown as WebContents
-    let opened = false
+    const releaseStorePage = vi.fn()
     const webContents = options.hasPage === false && !options.pageComesAfterOpen ? null : page
     const runtime = {
       getStore: () => fakeStore('store_a', platform),
@@ -787,10 +791,14 @@ describe('sales metrics · 采集服务门禁', () => {
         loginStatus: 'UNKNOWN', platform, lastCheckedAt: NOW, loginCheckedAt: null, loginReasonCode: null,
         loginSafeMessage: null, loginEvidenceType: null, errorCode: null
       }),
-      // 页面句柄现在要等渲染层 DOM <webview> 注册完成：服务侧接口是"等到可用为止"，
-      // 因此这里返回 Promise；hasPage:false 表示等不到（页面没打开）。
-      waitForStoreWebContents: async () => (options.pageComesAfterOpen && !opened ? null : webContents),
-      openStorePage: vi.fn(() => { opened = true }),
+      // 采集借的是**专用页面**（独立标签页），页面句柄要等渲染层 DOM <webview> 注册完成：
+      // 服务侧接口是"等到可用为止"，因此这里返回 Promise；hasPage:false 表示等不到。
+      borrowCollectionPage: vi.fn(() => {
+        return {
+          waitForWebContents: async () => webContents,
+          release: releaseStorePage
+        }
+      }),
       getAdapter: () => (options.adapter === undefined ? null : options.adapter) as never,
       detectLoginStatus: async () => ({
         platform, storeId: 'store_a', status: (options.loginStatus || 'UNKNOWN') as never,
@@ -798,7 +806,9 @@ describe('sales metrics · 采集服务门禁', () => {
       }),
       isLocked: () => !!options.locked,
       repository: { upsertStoreMetricsBatch: () => ({ inserted: 0, updated: 0, skipped: 0 }), upsertProductMetricsBatch: () => ({ inserted: 0, updated: 0, skipped: 0 }) } as never,
-      ledger: { insertEvidenceBatch: () => 0 } as never
+      ledger: { insertEvidenceBatch: () => 0 } as never,
+      /** 归还专用页面的 spy（每次借用都由 release 返回） */
+      releaseStorePage
     }
     return runtime
   }
@@ -830,23 +840,62 @@ describe('sales metrics · 采集服务门禁', () => {
 
   it('页面没打开时采集自己把店铺页面挂起来再读（无人值守采集不能只靠用户手工开页）', async () => {
     // 旧行为：页面句柄为空 → 直接 PAGE_NOT_READY，于是"每 10 分钟自动采集"只要用户没开着店
-    // 就永远采不到（实测 20:47 那一轮四个平台全折在这）。现在必须先自己开页面。
+    // 就永远采不到（实测 20:47 那一轮四个平台全折在这）。现在必须先自己准备页面。
     const runtime = makeRuntime({ hasPage: false, pageComesAfterOpen: true, adapter: capableAdapter() })
     const service = new SalesMetricsCollectionService(runtime as never)
     const result = await service.collect({ storeId: 'store_a', periodType: 'TODAY' })
-    expect((runtime.openStorePage as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(1)
+    expect(runtime.borrowCollectionPage).toHaveBeenCalledTimes(1)
     expect(result.reasonCode).not.toBe('PAGE_NOT_READY')
     expect(result.status).toBe('SUCCEEDED')
   })
 
-  it('自己开店后页面仍不可用时，如实报 PAGE_NOT_READY（不是静默成功）', async () => {
+  it('自己准备页面后仍不可用时，如实报 PAGE_NOT_READY（不是静默成功）', async () => {
     const runtime = makeRuntime({ hasPage: false, adapter: capableAdapter() })
     const service = new SalesMetricsCollectionService(runtime as never)
     const result = await service.collect({ storeId: 'store_a', periodType: 'TODAY' })
-    expect((runtime.openStorePage as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(1)
+    expect(runtime.borrowCollectionPage).toHaveBeenCalledTimes(1)
     expect(result.status).toBe('NETWORK_ERROR')
     expect(result.reasonCode).toBe('PAGE_NOT_READY')
     expect(result.inserted).toBe(0)
+  })
+
+  // ---------- 采集结束归还页面（2026-10-02 用户要求「采集任务完成后关闭网页，优化占用」）----------
+  // 无人值守采集每 10 分钟一轮，如果借来的页面从不归还，每个店铺都会留下一个常驻渲染进程。
+  it('采集成功 → 归还采集专用页面', async () => {
+    const runtime = makeRuntime({ hasPage: false, pageComesAfterOpen: true, adapter: capableAdapter() })
+    const service = new SalesMetricsCollectionService(runtime as never)
+    const result = await service.collect({ storeId: 'store_a', periodType: 'TODAY' })
+    expect(result.status).toBe('SUCCEEDED')
+    expect(runtime.releaseStorePage).toHaveBeenCalledTimes(1)
+  })
+
+  it('采集失败（页面等不到）也要归还页面——失败一轮不能永久占一个渲染进程', async () => {
+    const runtime = makeRuntime({ hasPage: false, adapter: capableAdapter() })
+    const service = new SalesMetricsCollectionService(runtime as never)
+    const result = await service.collect({ storeId: 'store_a', periodType: 'TODAY' })
+    expect(result.reasonCode).toBe('PAGE_NOT_READY')
+    expect(runtime.releaseStorePage).toHaveBeenCalledTimes(1)
+  })
+
+  // ---------- 不碰用户的标签页（2026-10-02 用户要求「采集任务时不要影响浏览器使用」）----------
+  // 旧实现直接用"该店铺的活动标签页"：采集把页面导航到经营数据页、还点周期控件，
+  // 于是每 10 分钟一轮的自动采集会把用户正在填的表单导航走。
+  it('店铺已经开着也仍然借**专用**页面：用户的标签页自始至终没被碰过', async () => {
+    const runtime = makeRuntime({ adapter: capableAdapter() })
+    const service = new SalesMetricsCollectionService(runtime as never)
+    const result = await service.collect({ storeId: 'store_a', periodType: 'TODAY' })
+    expect(result.status).toBe('SUCCEEDED')
+    expect(runtime.borrowCollectionPage).toHaveBeenCalledTimes(1)
+    expect(runtime.releaseStorePage).toHaveBeenCalledTimes(1)
+  })
+
+  it('借不到专用页面（例如窗口不可用）→ 如实报 PAGE_NOT_READY，不偷偷改用用户的标签页', async () => {
+    const runtime = makeRuntime({ hasPage: false, adapter: capableAdapter() })
+    runtime.borrowCollectionPage.mockImplementation(() => { throw new Error('Host window not available') })
+    const service = new SalesMetricsCollectionService(runtime as never)
+    const result = await service.collect({ storeId: 'store_a', periodType: 'TODAY' })
+    expect(result.reasonCode).toBe('PAGE_NOT_READY')
+    expect(result.status).toBe('NETWORK_ERROR')
   })
 
   it('应用锁定时拒绝采集，且不返回成功状态', async () => {

@@ -387,6 +387,32 @@ export function invoiceProfileFor(platformName: string | null | undefined): Invo
 }
 
 /**
+ * 自动创建的「发票采集」任务名前缀（**单一事实来源**：认领任务与"不计入任务"都用它）。
+ *
+ * 两处用途：
+ *  ① 认领同一个任务——点一次「采集发票数据」不该新建一个，按这个前缀找到已有的那个，
+ *     只把步骤与周期更新上去（否则任务中心会堆一串同名任务，定时更新也只会挂在其中一个上）；
+ *  ② **不计入任务**（用户口径）：这是每 3 小时一次的后台刷新，不是用户要管理的活儿。
+ *     任务中心的列表与统计、概览「待办任务」卡、任务总数与工具栏任务红点都不把它算成一项任务。
+ *
+ * 注意：这里**故意不带尾随空格**。历史上生成的任务名是「发票采集 ·微信小店」（中间没有空格，
+ * 与「经营指标采集 · 店铺」那种写法并不一致）。改成带空格会让库里已有的任务认不出来：
+ * 于是又新建一个同名任务，而旧任务会重新冒到任务中心里。
+ */
+export const INVOICE_TASK_PREFIX = '发票采集 ·'
+
+/**
+ * 这个任务是不是「发票自动采集」任务（只按名称前缀判定）。
+ *
+ * 传任务对象或只传名字都可以：渲染层手上是 task 对象，主进程 SQL 侧用 `INVOICE_TASK_PREFIX + '%'`。
+ * 只认前缀，所以用户自己建的任务只要不占用这个前缀就不受影响。
+ */
+export function isInvoiceCollectTask(task: { name?: unknown } | string | null | undefined): boolean {
+  const name = typeof task === 'string' ? task : String((task as { name?: unknown } | null | undefined)?.name ?? '')
+  return name.startsWith(INVOICE_TASK_PREFIX)
+}
+
+/**
  * 单元格文本规范化（主进程映射时统一走这里，界面与 CSV 导出共用同一份结果）。
  *
  * 实测踩到的两种脏文本：

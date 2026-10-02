@@ -1,6 +1,8 @@
 # ShopPilot 开发设计文档
 
-> Agent 多 Agent 功能的专项实施基线见 [`AGENT_DEVELOPMENT_SPEC.md`](AGENT_DEVELOPMENT_SPEC.md)。涉及 CEO/HR/子 Agent、模型路由、Agent Job、本地记忆库和 Agent 验收时，以专项文档为准；通用 Electron 安全、店铺隔离、任务引擎和发布门槛仍以本文档为准。
+> **当前架构覆盖说明（2026-09-30）**：Agent 运行时只有 `root-ceo` 一个执行主体。它同时负责对话、规划、软件操作、浏览器任务、Job 执行、审核和记忆治理；`Job → Task → TaskRun → evidence`、模型 Profile/fallback、预算、技能、插件、确认门禁和恢复机制保持不变。本文历史章节中的 CEO/HR/子 Agent/执行助手/按 Agent 模型绑定只描述旧数据或兼容 IPC，不代表当前运行时能力。
+
+> Agent 专项实施基线见 [`AGENT_DEVELOPMENT_SPEC.md`](AGENT_DEVELOPMENT_SPEC.md)。当前以单一 `root-ceo` 架构章节为准；涉及旧 CEO/HR/子 Agent 名称的内容只用于兼容迁移。通用 Electron 安全、店铺隔离、任务引擎和发布门槛仍以本文档为准。
 
 > 版本：v0.2（审查修订，审查报告见 [REVIEW.md](./REVIEW.md)）  
 > 状态：开发基线  

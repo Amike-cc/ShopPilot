@@ -1,9 +1,8 @@
 import { z } from 'zod'
 import { MODEL_CONTEXT_SOURCES } from '../agent-context'
 
-/** Shared contracts for the multi-agent runtime.  These schemas are closed on
- * purpose: model output and renderer input must never introduce an operation
- * that Main did not explicitly approve. */
+/** Shared Agent-domain contracts. The runtime is root-ceo-only; legacy
+ * organization fields remain closed and parseable for migration/IPC safety. */
 
 export const AGENT_STATUSES = ['probation', 'active', 'paused', 'retired'] as const
 export const AGENT_ROLES = ['ceo', 'operator', 'reviewer', 'analyst', 'content', 'support'] as const
@@ -134,7 +133,7 @@ export const agentBindingInputSchema = z.object({
   modelProfileId: z.string().min(1).max(80).nullable()
 }).strict()
 
-/** HR is a controlled mode of root-ceo, never a second hidden root agent. */
+/** Historical HR preview shape; current runtime rejects organization mutations. */
 export const agentHrPreviewSchema = z.object({
   mode: z.literal('hr'),
   role: z.enum(['operator', 'reviewer', 'analyst', 'content', 'support']).default('operator'),
@@ -168,11 +167,12 @@ export const agentJobActionSchema = z.object({
 }).strict()
 
 /**
- * 主 Agent 派单输入。root-ceo 不执行任务：Main 只接受“派给子 Agent”，
- * 执行者从这里给出的店铺范围外的候选中自动选择。
+ * 单 Agent 派单输入。保留 `assignedAgentId` 作为旧 IPC/数据兼容字段，运行时只接受
+ * root-ceo；执行时仍会重新校验状态、权限、范围和确认门禁。
  */
 export const agentTaskDelegateSchema = z.object({
   actorAgentId: z.string().min(1).max(80).default('root-ceo'),
+  assignedAgentId: z.string().min(1).max(80).optional(),
   goal: z.string().trim().min(1).max(2000),
   storeId: z.string().min(1).max(80),
   planId: z.string().max(80).nullable().default(null),
@@ -300,7 +300,7 @@ export type AgentMemoryLearningSettings = z.infer<typeof agentMemoryLearningSett
 
 export const ROOT_AGENT_ID = 'root-ceo'
 export const DEFAULT_AGENT_TOOL_POLICY = agentToolPolicySchema.parse({
-  canCreateAgent: true,
+  canCreateAgent: false,
   canChangeModel: true,
   canChangePolicy: true,
   canReadOtherAgentPrivateMemory: true,
@@ -310,3 +310,9 @@ export const DEFAULT_AGENT_TOOL_POLICY = agentToolPolicySchema.parse({
 export const DEFAULT_AGENT_MEMORY_SCOPE = agentMemoryScopeSchema.parse({
   agentIds: [ROOT_AGENT_ID], includeShared: true, write: true
 })
+
+export const commerceActionLedgerListQuerySchema = z.object({
+  storeId: z.string().trim().min(1).max(80).optional(),
+  status: z.enum(['queued', 'running', 'waiting_confirmation', 'succeeded', 'failed', 'recovery_required', 'blocked_budget', 'blocked_permission', 'not_verified', 'partial', 'unknown']).optional(),
+  limit: z.number().int().min(1).max(200).default(50)
+}).strict()

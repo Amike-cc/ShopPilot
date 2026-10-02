@@ -30,6 +30,8 @@ export interface TabInfo {
   orderIndex: number
   loading?: boolean
   guestAttached?: boolean
+  /** 采集专用页：不进标签栏、不占活动位，只由浏览器面板挂一个隐藏 webview 给它 */
+  internal?: boolean
 }
 
 declare global {
@@ -75,6 +77,7 @@ declare global {
         setViewsObscured: (obscured: boolean, reason?: 'modal' | 'agent') => Promise<IPCResult>
         /** 只读：当前显示的店铺与各已打开店铺的标签页（渲染层重载后补齐状态用） */
         state: () => Promise<IPCResult<{ displayedStoreId: string | null; stores: Array<{ storeId: string; activeTabId: string | null; tabs: TabInfo[] }> }>>
+        memoryDiagnostics: () => Promise<IPCResult>
       }
       bookmark: {
         list: (storeId?: string) => Promise<IPCResult>
@@ -103,6 +106,7 @@ declare global {
       overview: {
         stats: () => Promise<IPCResult>
         datacenter: () => Promise<IPCResult>
+        orders: () => Promise<IPCResult>
         invoiceCenter: () => Promise<IPCResult>
         invoiceExport: () => Promise<IPCResult>
         /** 店铺主体：把已采到的 entity.* 快照写进店铺营业执照（空则填；不一致不覆盖） */
@@ -144,6 +148,44 @@ declare global {
         observation: {
           start: (input: { storeId: string; timeoutMs?: number; maxResponses?: number }) => Promise<IPCResult>
           stop: (storeId: string) => Promise<IPCResult>
+        }
+      }
+      // 商品管理：只有"同步（只读采集）+ 查询 + 台账"，**没有发布**（发布走任务引擎与人工门禁）
+      products: {
+        sync: (input: { storeId: string; trigger?: 'manual' | 'schedule'; maxPages?: number; maxProducts?: number; timeoutMs?: number }) => Promise<IPCResult>
+        list: (query: { storeId?: string; platform?: string; onlyOrphan?: boolean; keyword?: string; limit?: number; offset?: number }) => Promise<IPCResult>
+        syncRuns: (query?: { storeId?: string }) => Promise<IPCResult>
+        library: {
+          list: (query?: { keyword?: string; limit?: number; offset?: number }) => Promise<IPCResult>
+          get: (productId: string) => Promise<IPCResult>
+          save: (input: { productId: string; platform?: string; draft: unknown }) => Promise<IPCResult>
+          saveAsLocal: (input: { platform: string; storeId: string; platformProductId: string; mergeLink?: boolean }) => Promise<IPCResult>
+          merge: (input: { linkId: string; productId: string }) => Promise<IPCResult>
+          unmerge: (input: { linkId: string }) => Promise<IPCResult>
+          remove: (productId: string) => Promise<IPCResult>
+          localizeMedia: (productId: string) => Promise<IPCResult>
+          queueScan: (input?: { maxItems?: number }) => Promise<IPCResult>
+          queueRun: (input?: { maxItems?: number }) => Promise<IPCResult>
+          orphans: () => Promise<IPCResult>
+          cleanupOrphans: () => Promise<IPCResult>
+        }
+        detail: {
+          collect: (input: { storeId: string; platformProductId: string }) => Promise<IPCResult>
+        }
+        publish: {
+          preflight: (input: { productId: string; storeIds: string[] }) => Promise<IPCResult>
+          open: (input: { itemId: string; fill?: boolean }) => Promise<IPCResult>
+          items: (query?: { limit?: number }) => Promise<IPCResult>
+          openGate: (input: { itemId: string; message?: string }) => Promise<IPCResult>
+          confirm: (input: { itemId: string; approved: boolean }) => Promise<IPCResult>
+          verify: (input: { itemId: string }) => Promise<IPCResult>
+          readback: (input: { itemId: string }) => Promise<IPCResult>
+          acceptSuggestion: (input: { itemId: string; field: string; kind: 'suggest_default' | 'suggest_writeback' }) => Promise<IPCResult>
+          checklist: (input: { productId: string; storeId: string }) => Promise<IPCResult>
+          batchCreate: (input: { productIds: string[]; storeIds: string[] }) => Promise<IPCResult>
+          batchProgress: (input: { batchId: string }) => Promise<IPCResult>
+          batchAbort: (input: { batchId: string }) => Promise<IPCResult>
+          batchSkipStore: (input: { batchId: string; storeId: string }) => Promise<IPCResult>
         }
       }
       salesMetrics: {
@@ -242,18 +284,10 @@ declare global {
       agentDomain: {
         orgList: (query?: Record<string, unknown>) => Promise<IPCResult>
         orgGet: (agentId: string) => Promise<IPCResult>
-        orgCreate: (input: Record<string, unknown>) => Promise<IPCResult>
-        orgUpdate: (input: Record<string, unknown>) => Promise<IPCResult>
-        orgActivate: (agentId: string, confirmed?: boolean) => Promise<IPCResult>
-        orgPause: (agentId: string, confirmed?: boolean) => Promise<IPCResult>
-        orgResume: (agentId: string, confirmed?: boolean) => Promise<IPCResult>
-        orgRetire: (agentId: string, confirmed?: boolean) => Promise<IPCResult>
-        hrPreview: (role: string) => Promise<IPCResult>
         modelList: (query?: Record<string, unknown>) => Promise<IPCResult>
         modelSet: (profile: ModelProfileInput) => Promise<IPCResult>
         modelDelete: (profileId: string) => Promise<IPCResult>
         modelTest: (profileId: string) => Promise<IPCResult>
-        modelBind: (agentId: string, modelProfileId: string | null) => Promise<IPCResult>
         jobCreate: (input: AgentJobCreate) => Promise<IPCResult>
         jobDelegate: (input: AgentTaskDelegate) => Promise<IPCResult>
         jobList: (query?: Record<string, unknown>) => Promise<IPCResult>
@@ -276,6 +310,7 @@ declare global {
         memoryMaintenance: () => Promise<IPCResult>
         qualityMetrics: () => Promise<IPCResult>
         qualityReview: () => Promise<IPCResult>
+        commerceLedgerList: (query?: { storeId?: string; status?: string; limit?: number }) => Promise<IPCResult>
         /** 技能/插件库：面板直接创建技能时走与模型同一套校验，工具下拉来自 Main 的可用目录。 */
         skillList: () => Promise<IPCResult>
         skillCreate: (input: Record<string, unknown>) => Promise<IPCResult>

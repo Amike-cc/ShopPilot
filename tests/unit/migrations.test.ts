@@ -151,6 +151,83 @@ describe('数据库迁移', () => {
     expect(statements.every(sql => sql.includes('IF NOT EXISTS'))).toBe(true)
   })
 
+  realDbIt('v19 商品域建表：表/索引/关键约束都在，且可重复执行（真实 SQLite）', () => {
+    const db = new DatabaseSyncCtor(':memory:')
+    apply(db, 19)
+
+    const TABLES = [
+      'products', 'product_variants', 'product_media',
+      'product_platform_links', 'product_sku_links', 'product_platform_defaults',
+      'product_sync_runs', 'product_publish_jobs', 'product_publish_items'
+    ]
+    const tableNames = (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>)
+      .map(row => row.name)
+    for (const table of TABLES) expect(tableNames, table).toContain(table)
+
+    // 索引：每条都是某个真实查询路径的支撑（见方案 §4.9），漏一个就会退化成全表扫
+    expect(indexNames(db, 'product_platform_links')).toEqual(expect.arrayContaining(['idx_ppl_product', 'idx_ppl_store', 'idx_ppl_orphan']))
+    expect(indexNames(db, 'product_sku_links')).toEqual(expect.arrayContaining(['idx_sku_links_link', 'idx_sku_links_variant']))
+    expect(indexNames(db, 'product_media')).toEqual(expect.arrayContaining(['idx_media_sha', 'idx_media_product', 'idx_media_state']))
+    expect(indexNames(db, 'product_sync_runs')).toContain('idx_sync_runs_store')
+    expect(indexNames(db, 'product_publish_items')).toEqual(expect.arrayContaining(['idx_publish_items_pending', 'idx_publish_items_job']))
+
+    // 重复执行必须安全（老库/重跑都不该炸）
+    expect(() => apply(db, 19)).not.toThrow()
+    db.close()
+  })
+
+  realDbIt('v19 的两条核心不变式：平台商品唯一、已归并的本地商品在同店只允许一条（真实 SQLite）', () => {
+    const db = new DatabaseSyncCtor(':memory:')
+    // 只跑 v19 时 stores 还不存在（它是更早的迁移建的）；这里补一张最小表，专注验证商品域的约束
+    db.exec(`CREATE TABLE stores (id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, created_at INTEGER, updated_at INTEGER);`)
+    apply(db, 19)
+    db.exec(`
+      INSERT INTO stores (id, name, platform, created_at, updated_at) VALUES ('s1', '店', '微信小店', 0, 0);
+      INSERT INTO products (id, title, draft_hash, created_at, updated_at) VALUES ('p1', '商品一', 'h1', 0, 0), ('p2', '商品二', 'h2', 0, 0);
+    `)
+    const insertLink = (id: string, productId: string | null, platformProductId: string): void => {
+      db.prepare(`
+        INSERT INTO product_platform_links (id, product_id, platform, store_id, platform_product_id, first_seen_at, collected_at)
+        VALUES (?, ?, '微信小店', 's1', ?, 0, 0)
+      `).run(id, productId, platformProductId)
+    }
+
+    // ① 未归并的可以有很多条（product_id 为 NULL，SQLite 唯一索引不约束 NULL）
+    expect(() => { insertLink('l1', null, 'A'); insertLink('l2', null, 'B') }).not.toThrow()
+    // ② 同一个平台商品不能重复落库（同步幂等的根基）：l1 已经占了 ('s1','A')
+    expect(() => insertLink('l3', 'p1', 'A')).toThrow()
+    // ③ 先把 C 归给 p1（合法），再想把 D 也归给 p1 → 必须抛
+    //    （防"发重了"被当成两条合法记录：同一店铺里一个本地商品只能对一个平台商品）
+    expect(() => insertLink('l4', 'p1', 'C')).not.toThrow()
+    expect(() => insertLink('l5', 'p1', 'D')).toThrow()
+    // ④ 换成另一个本地商品就合法
+    expect(() => insertLink('l6', 'p2', 'D')).not.toThrow()
+
+    // ⑤ 软删语义：products.deleted_at 存在（硬删会把发布台账级联掉）
+    const productColumns = (db.prepare(`PRAGMA table_info(products)`).all() as Array<{ name: string }>).map(c => c.name)
+    expect(productColumns).toContain('deleted_at')
+
+    db.close()
+  })
+
+  realDbIt('v19 可回滚：down 之后商品表全部消失，且不触碰其它域（真实 SQLite）', () => {
+    const db = new DatabaseSyncCtor(':memory:')
+    apply(db, 12)          // 先建一个别的域的表，验证回滚不误伤
+    apply(db, 19)
+    const migration = migrations.find(m => m.version === 19)!
+    migration.down(db as unknown as MigrationDb)
+
+    const tableNames = (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as Array<{ name: string }>)
+      .map(row => row.name)
+    for (const table of ['products', 'product_variants', 'product_media', 'product_platform_links',
+      'product_sku_links', 'product_platform_defaults', 'product_sync_runs', 'product_publish_jobs', 'product_publish_items']) {
+      expect(tableNames, table).not.toContain(table)
+    }
+    // 订单域（v12）必须原样留着 —— 回滚只能动自己的东西
+    expect(tableNames).toContain('orders')
+    db.close()
+  })
+
   realDbIt('旧库升到 v3 后缺任务查询索引，v4 会补齐（真实 SQLite）', () => {
     const db = createLegacyV3Database()
     expect(indexNames(db, 'task_runs')).not.toContain('idx_task_runs_status')

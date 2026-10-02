@@ -28,7 +28,7 @@ import { writeAudit } from '../services/audit-logger'
 import { logMain } from '../services/logger'
 import { generateInviteScript } from '../services/ai-client'
 import { isAppLocked } from '../services/security-manager'
-import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, closeTab, waitForTabWebContents, openStoreBrowser } from '../browser/window-manager'
+import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, closeTab, waitForTabWebContents, borrowStorePage, setStoreTaskActivity } from '../browser/window-manager'
 import { waitForStoreSessionReady } from '../browser/session-manager'
 import { getDatabase } from '../db/database'
 
@@ -137,6 +137,10 @@ function transition(run: RunHandle, to: string, reason: string): void {
     to === 'queued' ? 'queued' : 'started'
   emitProgress(run, { phase, status: to, message: reason })
 
+  // 跑到终态就归还"定时任务后台开店"借来的页面（2026-10-02 用户要求：采集任务完成后关闭网页）。
+  // 只在终态归还：paused / waiting_confirmation 还要接着跑，页面得留着。
+  if (to === 'succeeded' || to === 'failed' || to === 'cancelled') releaseBorrowedPage(run.runId)
+
   if (to === 'failed') {
     // 重复失败（failed -> queued 重试后再 failed）会二次进入：先去重再入队
     const fi = failedHandles.indexOf(run.runId)
@@ -145,6 +149,25 @@ function transition(run: RunHandle, to: string, reason: string): void {
     while (failedHandles.length > FAILED_HANDLE_KEEP) forgetRun(failedHandles[0])
   } else if (to === 'succeeded' || to === 'cancelled') {
     forgetRun(run.runId)
+  }
+}
+
+/**
+ * 定时任务后台开店借用的页面：runId → 归还函数。
+ *
+ * 为什么按 runId 记账：借页面的是 `fireScheduled`，还页面的是 run 的终态，两者之间隔着
+ * 整个执行循环（可能几分钟）。归还只做一次，重复调用/没有借用记录都是空操作。
+ */
+const borrowedPageReleases = new Map<string, () => void>()
+
+function releaseBorrowedPage(runId: string): void {
+  const release = borrowedPageReleases.get(runId)
+  if (!release) return
+  borrowedPageReleases.delete(runId)
+  try {
+    release()
+  } catch (error) {
+    logMain('warn', `[task] 归还后台借用的店铺页面失败 run=${runId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
   }
 }
 
@@ -330,6 +353,7 @@ function pump(): void {
 // ---------- 执行循环 ----------
 
 async function execute(run: RunHandle): Promise<void> {
+  setStoreTaskActivity(run.storeId, true)
   try {
     if (run.resumeKind === 'new') transition(run, 'running', run.reason)
     else if (run.resumeKind === 'continue') transition(run, 'running', '用户恢复执行')
@@ -469,6 +493,8 @@ async function execute(run: RunHandle): Promise<void> {
     } catch { /* 日志失败不能影响落库 */ }
     try { TaskStore.updateRun(run.runId, { errorCode: 'INTERNAL_ERROR', errorMessage: String(e?.message || e).slice(0, 500) }) } catch { /* ignore */ }
     try { transition(run, 'failed', '引擎异常') } catch { /* 状态机不允许则保留现场 */ }
+  } finally {
+    setStoreTaskActivity(run.storeId, false)
   }
 }
 
@@ -3222,7 +3248,9 @@ export function fireScheduled(taskId: string): TaskScheduledFiredEvent {
   let autoOpened = false
   if (queuedWaiting && (task?.schedule as { backgroundOpen?: boolean } | null | undefined)?.backgroundOpen === true) {
     try {
-      openStoreBrowser(storeId, { display: false, source: 'main' })
+      // 借页面而不是"开完就不管"：run 跑到终态时归还，页面按需关掉（见 releaseBorrowedPage）。
+      // 用户自己开着的店铺页面不会被借用，也永远不会被这次采集关掉。
+      borrowedPageReleases.set(runId, borrowStorePage(storeId))
       autoOpened = true
       queuedWaiting = false
       logMain('info', `[scheduler] 定时任务后台打开店铺页面 store=${storeId} task=${taskId}`)
@@ -3235,7 +3263,7 @@ export function fireScheduled(taskId: string): TaskScheduledFiredEvent {
     message: queuedWaiting
       ? `定时任务「${task?.name}」已触发：店铺浏览器未打开，保持排队等待，不静默拉起`
       : autoOpened
-        ? `定时任务「${task?.name}」已触发：店铺页面已在后台打开，采完即止（不影响你当前页面）`
+        ? `定时任务「${task?.name}」已触发：店铺页面已在后台打开，采完自动关闭（你正在看的页面不受影响）`
         : `定时任务「${task?.name}」已触发并入队`
   }
   emitToRenderer(EVENT_CHANNELS.TASK_SCHEDULED_FIRED, ev)

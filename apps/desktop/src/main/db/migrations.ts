@@ -1030,6 +1030,544 @@ export const migrations: Migration[] = [
     },
     // SQLite 不能删列；旧版本会忽略多出来的可空列，降级是安全的。
     down: () => { /* 无可回滚动作 */ }
+  },
+  {
+    version: 19,
+    name: 'product_catalog',
+    up: (db) => {
+      // 商品域建表（商品管理方案 §4；真机勘察记录见 docs/product-profiles.md）。
+      //
+      // 三条设计纪律（都能在迁移里看出来）：
+      //   1) **平台原值与本地编辑值分开存** —— 平台侧同步回来的真相写进 *_links.platform_*，
+      //      本地商品写进 products。冲突时不覆盖（与 store-license 的 decideLicenseWrite 同哲学：
+      //      宁可少填，不可填错）。
+      //   2) **平台商品与本地商品不自动合并** —— links.product_id 可空，空 = 平台上发现、本地还没归属，
+      //      等用户在界面上确认归并（自动合并错了是两个商品被搅一起，比不合并更糟）。
+      //   3) **SKU 映射单独一张表** —— 平台 SKU 会增删改名（"红/L" → "红色/L码"），
+      //      混在商品行的 JSON 里会让整条映射作废；分开存后商品映射稳定、SKU 逐条增删。
+      db.exec(`
+        ------------------------------------------------------------------ 本地商品
+        CREATE TABLE IF NOT EXISTS products (
+          id              TEXT PRIMARY KEY,
+          title           TEXT NOT NULL,
+          subtitle        TEXT,
+          description     TEXT,
+          brand           TEXT,
+          local_category  TEXT,
+          tags_json       TEXT,
+          cover_media_id  TEXT,
+          status          TEXT NOT NULL DEFAULT 'draft'
+                          CHECK(status IN ('draft','ready','published','archived')),
+          -- 草稿指纹：判断"是否需要重发"，也是发布幂等键的组成部分
+          draft_hash      TEXT NOT NULL,
+          -- 从哪个平台商品"另存为本地商品"来的（可空）
+          source_link_id  TEXT,
+          created_at      INTEGER NOT NULL,
+          updated_at      INTEGER NOT NULL,
+          -- 软删：硬删会把发布台账（审计材料）级联掉
+          deleted_at      INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_products_status  ON products(status, updated_at DESC) WHERE deleted_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_products_title   ON products(title) WHERE deleted_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_products_updated ON products(updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS product_variants (
+          id                 TEXT PRIMARY KEY,
+          product_id         TEXT NOT NULL,
+          spec_json          TEXT,
+          sku_code           TEXT,
+          barcode            TEXT,
+          price_minor        INTEGER,
+          market_price_minor INTEGER,
+          stock              INTEGER,
+          weight_gram        INTEGER,
+          image_media_id     TEXT,
+          sort_order         INTEGER NOT NULL DEFAULT 0,
+          created_at         INTEGER NOT NULL,
+          updated_at         INTEGER NOT NULL,
+          -- 同一商品内规格组合不可重复（"红/L" 只能有一行）
+          UNIQUE(product_id, spec_json),
+          FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_variants_product ON product_variants(product_id, sort_order);
+
+        CREATE TABLE IF NOT EXISTS product_media (
+          id           TEXT PRIMARY KEY,
+          product_id   TEXT,
+          variant_id   TEXT,
+          role         TEXT NOT NULL DEFAULT 'gallery'
+                       CHECK(role IN ('cover','gallery','detail','sku')),
+          origin       TEXT NOT NULL DEFAULT 'platform'
+                       CHECK(origin IN ('platform','local','imported')),
+          remote_url   TEXT,
+          -- userData/product-media/<sha256前2位>/<sha256>.<ext>
+          local_path   TEXT,
+          sha256       TEXT,
+          bytes        INTEGER,
+          width        INTEGER,
+          height       INTEGER,
+          mime         TEXT,
+          state        TEXT NOT NULL DEFAULT 'pending'
+                       CHECK(state IN ('pending','localized','failed','blocked','missing')),
+          -- 'blocked' = 我们主动拒绝（私网地址/格式不允许）；'failed' = 下载失败（网络/防盗链）。话术不同
+          fail_reason  TEXT,
+          sort_order   INTEGER NOT NULL DEFAULT 0,
+          created_at   INTEGER NOT NULL,
+          FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
+        -- 同图只存一份文件：10 个商品共用一张主图 → 1 个文件、10 行记录
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_media_sha     ON product_media(sha256) WHERE sha256 IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_media_product        ON product_media(product_id, role, sort_order);
+        CREATE INDEX IF NOT EXISTS idx_media_state          ON product_media(state) WHERE state != 'localized';
+
+        -------------------------------------------------------- 平台映射（同步幂等的关键）
+        CREATE TABLE IF NOT EXISTS product_platform_links (
+          id                     TEXT PRIMARY KEY,
+          -- NULL = 平台有、本地未归并
+          product_id             TEXT,
+          platform               TEXT NOT NULL,
+          store_id               TEXT NOT NULL,
+          platform_product_id    TEXT NOT NULL,
+          platform_title         TEXT,
+          platform_subtitle      TEXT,
+          platform_status        TEXT
+                                 CHECK(platform_status IN ('on_sale','off_shelf','auditing','violation','missing','unknown')),
+          platform_price_minor   INTEGER,
+          platform_stock         INTEGER,
+          platform_category_path TEXT,
+          platform_image_count   INTEGER,
+          platform_updated_at    INTEGER,
+          first_seen_at          INTEGER NOT NULL,
+          collected_at           INTEGER NOT NULL,
+          -- 保底：整行原始表数据（参与保留策略）
+          raw_snapshot_json      TEXT,
+          UNIQUE(platform, store_id, platform_product_id),
+          -- 同一店铺里一个本地商品只允许一个平台商品（防"发重了"被当成两条合法记录）。
+          -- SQLite 对 NULL 不去重 → 正好实现"未归并的可以很多行、已归并的每店只能一行"
+          UNIQUE(store_id, product_id),
+          FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE,
+          FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ppl_product ON product_platform_links(product_id);
+        CREATE INDEX IF NOT EXISTS idx_ppl_store   ON product_platform_links(store_id, platform_updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_ppl_orphan  ON product_platform_links(store_id) WHERE product_id IS NULL;
+
+        CREATE TABLE IF NOT EXISTS product_sku_links (
+          id                  TEXT PRIMARY KEY,
+          link_id             TEXT NOT NULL,
+          -- NULL = 平台有这个 SKU，本地还没对上
+          variant_id          TEXT,
+          platform_sku_id     TEXT NOT NULL,
+          platform_spec_json  TEXT,
+          platform_price_minor INTEGER,
+          platform_stock      INTEGER,
+          -- missing = 平台侧没了：**不删行**，下次出现可自动复活
+          state               TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','missing')),
+          collected_at        INTEGER NOT NULL,
+          UNIQUE(link_id, platform_sku_id),
+          FOREIGN KEY (link_id) REFERENCES product_platform_links(id) ON DELETE CASCADE,
+          FOREIGN KEY (variant_id) REFERENCES product_variants(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_sku_links_link    ON product_sku_links(link_id, state);
+        CREATE INDEX IF NOT EXISTS idx_sku_links_variant ON product_sku_links(variant_id) WHERE variant_id IS NOT NULL;
+
+        ------------------------------------------- 平台字段默认值（半自动"越用越自动"的来源）
+        CREATE TABLE IF NOT EXISTS product_platform_defaults (
+          id           TEXT PRIMARY KEY,
+          -- NULL = 平台级默认（不区分商品）
+          product_id   TEXT,
+          platform     TEXT NOT NULL,
+          scope        TEXT NOT NULL CHECK(scope IN ('product','platform_default')),
+          field_key    TEXT NOT NULL,
+          field_value  TEXT,
+          -- human_readback = 从人工那一遍回读来的；user_edit = 用户自己在编辑页设的。界面话术不同
+          source       TEXT NOT NULL CHECK(source IN ('human_readback','user_edit')),
+          confirmed_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_defaults_key
+          ON product_platform_defaults(platform, COALESCE(product_id,''), field_key);
+
+        ------------------------------------------------------------------ 台账
+        CREATE TABLE IF NOT EXISTS product_sync_runs (
+          id             TEXT PRIMARY KEY,
+          store_id       TEXT NOT NULL,
+          trigger        TEXT NOT NULL CHECK(trigger IN ('manual','schedule')),
+          status         TEXT NOT NULL,
+          reason_code    TEXT,
+          fetched_count  INTEGER NOT NULL DEFAULT 0,
+          inserted_count INTEGER NOT NULL DEFAULT 0,
+          updated_count  INTEGER NOT NULL DEFAULT 0,
+          missing_count  INTEGER NOT NULL DEFAULT 0,
+          skipped_count  INTEGER NOT NULL DEFAULT 0,
+          has_more       INTEGER NOT NULL DEFAULT 0,
+          page_count     INTEGER NOT NULL DEFAULT 0,
+          duration_ms    INTEGER,
+          started_at     INTEGER NOT NULL,
+          finished_at    INTEGER,
+          safe_message   TEXT,
+          FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_sync_runs_store ON product_sync_runs(store_id, started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS product_publish_jobs (
+          id           TEXT PRIMARY KEY,
+          product_id   TEXT NOT NULL,
+          draft_hash   TEXT NOT NULL,
+          mode         TEXT NOT NULL DEFAULT 'fill' CHECK(mode IN ('fill')),
+          status       TEXT NOT NULL,
+          created_at   INTEGER NOT NULL,
+          finished_at  INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS product_publish_items (
+          id                  TEXT PRIMARY KEY,
+          job_id              TEXT NOT NULL,
+          store_id            TEXT NOT NULL,
+          -- 本次实际用了哪一档（L1 填充 / L2 引导 / L3 接力）
+          tier                TEXT NOT NULL CHECK(tier IN ('L1','L2','L3')),
+          status              TEXT NOT NULL,
+          filled_json         TEXT,
+          manual_field_count  INTEGER NOT NULL DEFAULT 0,
+          platform_product_id TEXT,
+          reason_code         TEXT,
+          safe_message        TEXT,
+          evidence_json       TEXT,
+          task_run_id         TEXT,
+          updated_at          INTEGER NOT NULL,
+          UNIQUE(job_id, store_id),
+          FOREIGN KEY (job_id) REFERENCES product_publish_jobs(id) ON DELETE CASCADE,
+          FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_publish_items_pending ON product_publish_items(status)
+          WHERE status IN ('awaiting_human','needs_review');
+        CREATE INDEX IF NOT EXISTS idx_publish_items_job ON product_publish_items(job_id);
+      `)
+    },
+    // 只删表，**不删 userData/product-media 里的图片文件** —— 迁移的回滚不该动用户磁盘上的东西，
+    // 孤儿图片交给保留策略（services/retention.ts）按 90 天清理。
+    down: (db) => {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_publish_items_job;
+        DROP INDEX IF EXISTS idx_publish_items_pending;
+        DROP TABLE IF EXISTS product_publish_items;
+        DROP TABLE IF EXISTS product_publish_jobs;
+        DROP INDEX IF EXISTS idx_sync_runs_store;
+        DROP TABLE IF EXISTS product_sync_runs;
+        DROP INDEX IF EXISTS idx_defaults_key;
+        DROP TABLE IF EXISTS product_platform_defaults;
+        DROP INDEX IF EXISTS idx_sku_links_variant;
+        DROP INDEX IF EXISTS idx_sku_links_link;
+        DROP TABLE IF EXISTS product_sku_links;
+        DROP INDEX IF EXISTS idx_ppl_orphan;
+        DROP INDEX IF EXISTS idx_ppl_store;
+        DROP INDEX IF EXISTS idx_ppl_product;
+        DROP TABLE IF EXISTS product_platform_links;
+        DROP INDEX IF EXISTS idx_media_state;
+        DROP INDEX IF EXISTS idx_media_product;
+        DROP INDEX IF EXISTS idx_media_sha;
+        DROP TABLE IF EXISTS product_media;
+        DROP INDEX IF EXISTS idx_variants_product;
+        DROP TABLE IF EXISTS product_variants;
+        DROP INDEX IF EXISTS idx_products_updated;
+        DROP INDEX IF EXISTS idx_products_title;
+        DROP INDEX IF EXISTS idx_products_status;
+        DROP TABLE IF EXISTS products;
+      `)
+    }
+  },
+  {
+    version: 20,
+    name: 'product_link_image_urls',
+    up: (db) => {
+      // 商品图片本地化需要**图片地址**，而 v19 只存了张数（platform_image_count）。
+      // 采集时其实拿到了 URL（列表页每行一张缩略图），没地方放就等于丢掉了 —— 于是"图片本地化"
+      // 这一整条链路没有输入。补一列存 URL 数组（JSON）。
+      //
+      // 加列而不是新表：它是**平台商品行的一个属性**，与那一行同生共死，没有独立生命周期。
+      // SQLite 不能删列；旧版本会忽略多出来的可空列，降级安全。
+      const columns = new Set(
+        (db.prepare('PRAGMA table_info(product_platform_links)').all() as Array<{ name: string }>).map(column => column.name)
+      )
+      if (!columns.has('platform_image_urls_json')) {
+        db.exec('ALTER TABLE product_platform_links ADD COLUMN platform_image_urls_json TEXT')
+      }
+    },
+    down: () => { /* SQLite 不能删列；旧版本忽略该列即可 */ }
+  },
+  {
+    version: 21,
+    name: 'product_platform_requirements',
+    up: (db) => {
+      // 平台**必填字段清单**（方案 §7.5 第 3 类回读）：把"发布页必填但本地没有"的字段记下来，
+      // 下次发布前在本地补全清单里提示。
+      //
+      // 为什么单独一张表而不是塞进 defaults：它是**平台的事实**（这个平台要求填这些），
+      // 不是"某次填了什么值"；混在一起会让"默认值"这个概念变脏。
+      // 主键用 (platform, field_key)：同一平台同一字段只留一条，重复观察只更新 observed_at。
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS product_platform_requirements (
+          id          TEXT PRIMARY KEY,
+          platform    TEXT NOT NULL,
+          field_key   TEXT NOT NULL,
+          label       TEXT NOT NULL,
+          observed_at INTEGER NOT NULL,
+          UNIQUE(platform, field_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ppr_platform ON product_platform_requirements(platform);
+      `)
+    },
+    down: (db) => {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_ppr_platform;
+        DROP TABLE IF EXISTS product_platform_requirements;
+      `)
+    }
+  },
+  {
+    version: 22,
+    name: 'product_publish_batch',
+    up: (db) => {
+      // 批量发布（方案 §7.8）：一次批量 = 多个 job（每个商品一个 job，job 里每店一个 item）。
+      // 加一列把同一次批量的 job 归到一起，进度按批次汇总。
+      //
+      // 为什么不是"一个 job 装下所有商品"：`product_publish_items` 上有 `UNIQUE(job_id, store_id)`
+      // 与 `FOREIGN KEY(store_id)`，job 的语义本来就是"**一个商品**发到一批店铺"。
+      // 硬塞多个商品会把这个约束和语义一起弄坏；用 batch_id 归组更干净，也不动既有约束。
+      const columns = new Set(
+        (db.prepare('PRAGMA table_info(product_publish_jobs)').all() as Array<{ name: string }>).map(column => column.name)
+      )
+      if (!columns.has('batch_id')) {
+        db.exec('ALTER TABLE product_publish_jobs ADD COLUMN batch_id TEXT')
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_ppj_batch ON product_publish_jobs(batch_id)')
+    },
+    down: (db) => { db.exec('DROP INDEX IF EXISTS idx_ppj_batch') }
+  },
+  {
+    version: 23,
+    name: 'product_media_attempts',
+    up: (db) => {
+      // 图片本地化的**重试计数**：队列靠它判断"这张还值不值得再试"。
+      // 没有这一列时只能看 state（failed），于是"网络抖一下失败"和"试了十次都不行"长得一模一样，
+      // 队列会一直重试同一张图（拖慢队列、刷满日志，还让人误以为多试几次就好）。
+      const columns = new Set(
+        (db.prepare('PRAGMA table_info(product_media)').all() as Array<{ name: string }>).map(column => column.name)
+      )
+      if (!columns.has('attempts')) {
+        db.exec('ALTER TABLE product_media ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0')
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_pmedia_state ON product_media(state)')
+    },
+    down: (db) => { db.exec('DROP INDEX IF EXISTS idx_pmedia_state') }
+  },
+  {
+    version: 24,
+    name: 'media_sha_not_globally_unique',
+    up: (db) => {
+      // ⚠️ 修一个设计错误（2026-09-30 实测抓到）：`product_media.sha256` 原来是**全局唯一**的，
+      // 但**同一张图合法地出现在多个商品上**（同款商品的图被多个本地商品引用，
+      // 平台侧也确实存在同一张图挂多个商品的情况）。
+      // 结果：给第二个商品写同一张图时直接 `UNIQUE constraint failed: product_media.sha256`，
+      // 整个商品的本地化全部失败（实测：队列跑一个商品，一张都没成功）。
+      //
+      // "同图只存一份**文件**"说的是**文件**（路径按 sha256 生成，天然去重），
+      // 不是"媒体行只能有一条"。所以这里把唯一约束去掉，改成普通索引（仍然查得快），
+      // 唯一性交给 `(product_id, sha256)` —— 同一个商品内不重复引用同一张图。
+      db.exec('DROP INDEX IF EXISTS idx_media_sha')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_media_sha_lookup ON product_media(sha256) WHERE sha256 IS NOT NULL')
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_media_product_sha ON product_media(product_id, sha256) WHERE sha256 IS NOT NULL')
+    },
+    down: (db) => {
+      db.exec('DROP INDEX IF EXISTS idx_media_product_sha')
+      db.exec('DROP INDEX IF EXISTS idx_media_sha_lookup')
+      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_media_sha ON product_media(sha256) WHERE sha256 IS NOT NULL')
+    }
+  }
+  ,{
+    version: 25,
+    name: 'commerce_writeback_proposals',
+    up: (db) => {
+      // 库存/价格/SKU 写回先落人工确认提案，平台适配器完成实测前不得直接写平台。
+      // 幂等键由 storeId + platform + productId + skuId + inputHash 组成，重启后仍可识别重复请求。
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS commerce_writeback_proposals (
+          id TEXT PRIMARY KEY,
+          domain TEXT NOT NULL CHECK(domain IN ('inventory','sku')),
+          store_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          product_id TEXT NOT NULL,
+          sku_id TEXT NOT NULL DEFAULT '',
+          input_hash TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL CHECK(status IN ('WAITING_CONFIRMATION','NOT_VERIFIED','SUCCEEDED','FAILED')),
+          confirmation_id TEXT,
+          before_after_json TEXT NOT NULL,
+          side_effect_started INTEGER NOT NULL DEFAULT 0 CHECK(side_effect_started IN (0,1)),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_commerce_writeback_store ON commerce_writeback_proposals(store_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_commerce_writeback_domain ON commerce_writeback_proposals(domain, status, updated_at DESC);
+      `)
+    },
+    down: (db) => {
+      db.exec('DROP INDEX IF EXISTS idx_commerce_writeback_domain; DROP INDEX IF EXISTS idx_commerce_writeback_store; DROP TABLE IF EXISTS commerce_writeback_proposals;')
+    }
+  },
+  {
+    version: 26,
+    name: 'order_operations',
+    up: (db) => {
+      // 履约/售后只保存脱敏状态摘要；平台写回仍由真实适配器和人工确认门禁负责。
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS order_fulfillments (
+          id TEXT PRIMARY KEY,
+          order_id TEXT NOT NULL UNIQUE,
+          logistics_status TEXT NOT NULL CHECK(logistics_status IN ('NOT_SHIPPED','READY','SHIPPED','DELIVERED','EXCEPTION','UNKNOWN')),
+          carrier TEXT,
+          tracking_no_masked TEXT,
+          platform_status TEXT,
+          source TEXT NOT NULL CHECK(source IN ('PLATFORM_READBACK','LOCAL_LEDGER','UNKNOWN')),
+          collected_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_order_fulfillments_status ON order_fulfillments(order_id, logistics_status, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS after_sale_cases (
+          id TEXT PRIMARY KEY,
+          order_id TEXT NOT NULL,
+          platform_case_id TEXT,
+          case_status TEXT NOT NULL CHECK(case_status IN ('APPLIED','REVIEWING','APPROVED','REJECTED','RETURNING','REFUNDED','CLOSED','UNKNOWN')),
+          refund_status TEXT NOT NULL CHECK(refund_status IN ('NONE','REQUESTED','PROCESSING','SUCCEEDED','FAILED','UNKNOWN')),
+          amount_minor INTEGER,
+          platform_status TEXT,
+          source TEXT NOT NULL CHECK(source IN ('PLATFORM_READBACK','LOCAL_LEDGER','UNKNOWN')),
+          collected_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+          UNIQUE(order_id, platform_case_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_after_sale_cases_order ON after_sale_cases(order_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_after_sale_cases_status ON after_sale_cases(case_status, refund_status, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS order_action_proposals (
+          id TEXT PRIMARY KEY,
+          action_domain TEXT NOT NULL CHECK(action_domain IN ('FULFILLMENT','REFUND')),
+          store_id TEXT NOT NULL,
+          order_id TEXT NOT NULL,
+          input_hash TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL CHECK(status IN ('WAITING_CONFIRMATION','NOT_VERIFIED','SUCCEEDED','FAILED','RECOVERY_REQUIRED')),
+          confirmation_id TEXT,
+          before_after_json TEXT NOT NULL,
+          side_effect_started INTEGER NOT NULL DEFAULT 0 CHECK(side_effect_started IN (0,1)),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE,
+          FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_order_action_proposals_store ON order_action_proposals(store_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_order_action_proposals_domain ON order_action_proposals(action_domain, status, updated_at DESC);
+      `)
+    },
+    down: (db) => {
+      db.exec('DROP INDEX IF EXISTS idx_order_action_proposals_domain; DROP INDEX IF EXISTS idx_order_action_proposals_store; DROP TABLE IF EXISTS order_action_proposals; DROP INDEX IF EXISTS idx_after_sale_cases_status; DROP INDEX IF EXISTS idx_after_sale_cases_order; DROP TABLE IF EXISTS after_sale_cases; DROP INDEX IF EXISTS idx_order_fulfillments_status; DROP TABLE IF EXISTS order_fulfillments;')
+    }
+  },
+  {
+    version: 27,
+    name: 'commerce_content_growth_workspace',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS commerce_content_drafts (
+          id TEXT PRIMARY KEY,
+          store_id TEXT,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('DRAFT','REVIEWED','PUBLISH_PROPOSED','PUBLISHED','REJECTED')),
+          input_hash TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE SET NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_content_draft_hash ON commerce_content_drafts(input_hash);
+        CREATE TABLE IF NOT EXISTS commerce_growth_plans (
+          id TEXT PRIMARY KEY,
+          store_id TEXT NOT NULL,
+          domain TEXT NOT NULL CHECK(domain IN ('CAMPAIGN','COUPON','AD')),
+          name TEXT NOT NULL,
+          budget_minor INTEGER,
+          status TEXT NOT NULL CHECK(status IN ('PLANNED','WAITING_CONFIRMATION','NOT_VERIFIED','SUCCEEDED','FAILED')),
+          input_hash TEXT NOT NULL UNIQUE,
+          confirmation_id TEXT,
+          platform_task_id TEXT,
+          readback_json TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_growth_plans_store ON commerce_growth_plans(store_id, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS commerce_customer_drafts (
+          id TEXT PRIMARY KEY,
+          store_id TEXT NOT NULL,
+          conversation_id TEXT NOT NULL,
+          body TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('DRAFT','WAITING_CONFIRMATION','SENT','NOT_VERIFIED')),
+          input_hash TEXT NOT NULL UNIQUE,
+          confirmation_id TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_customer_drafts_store ON commerce_customer_drafts(store_id, updated_at DESC);
+      `)
+    },
+    down: (db) => db.exec('DROP INDEX IF EXISTS idx_customer_drafts_store; DROP TABLE IF EXISTS commerce_customer_drafts; DROP INDEX IF EXISTS idx_growth_plans_store; DROP TABLE IF EXISTS commerce_growth_plans; DROP INDEX IF EXISTS idx_content_draft_hash; DROP TABLE IF EXISTS commerce_content_drafts;')
+  },
+  {
+    version: 28,
+    name: 'commerce_agent_action_ledger',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS commerce_agent_action_ledger (
+          id TEXT PRIMARY KEY,
+          action_type TEXT NOT NULL,
+          store_id TEXT,
+          input_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('queued','running','waiting_confirmation','succeeded','failed','recovery_required','blocked_budget','blocked_permission','not_verified','partial')),
+          confirmation_id TEXT,
+          side_effect_started INTEGER NOT NULL DEFAULT 0 CHECK(side_effect_started IN (0,1)),
+          evidence_json TEXT,
+          summary_json TEXT,
+          recovery_advice TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(action_type, store_id, input_hash),
+          FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_commerce_agent_ledger_store ON commerce_agent_action_ledger(store_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_commerce_agent_ledger_status ON commerce_agent_action_ledger(status, updated_at DESC);
+      `)
+    },
+    down: (db) => db.exec('DROP INDEX IF EXISTS idx_commerce_agent_ledger_status; DROP INDEX IF EXISTS idx_commerce_agent_ledger_store; DROP TABLE IF EXISTS commerce_agent_action_ledger;')
+  }
+  ,{
+    version: 29,
+    name: 'link_draft_hash',
+    up: (db) => {
+      // 修 §12.11 那个挡死主链路的 bug（2026-10-02 查明）：
+      // `precheckPublish` 的文案说"本地草稿与上次完全一致才拒绝、改了内容就允许再发"，
+      // 但代码只判断"这家店有没有链接"，而"上次的草稿指纹"**根本没落库**，比不了。
+      // 结果：商品在某家店发过一次之后**永远发不出去**，且界面骗用户说改了就能发。
+      // 这里补上这一列：发布成功时写入当时的草稿 hash，预检据此判断是不是真的"白跑一趟"。
+      // nullable：老数据没有这个值 → 预检按"放行"处理（不能因为缺数据就永久禁止发布）。
+      try { db.exec('ALTER TABLE product_platform_links ADD COLUMN draft_hash TEXT') } catch { /* 列已存在 */ }
+    },
+    down: (db) => {
+      try { db.exec('ALTER TABLE product_platform_links DROP COLUMN draft_hash') } catch { /* ignore */ }
+    }
   }
 ]
 

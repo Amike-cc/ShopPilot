@@ -13,6 +13,7 @@ import {
   closeStoreSession as closeUnderlyingStoreSession,
   getActiveSessions,
   getStorePartition,
+  getProxyAuthInjection,
   getStoreSession as getUnderlyingStoreSession,
   waitForStoreSessionReady
 } from './session-manager'
@@ -63,6 +64,7 @@ function emptyStatus(storeId: string, sessionPresent = false): ShopSessionStatus
     loginReasonCode: null,
     loginSafeMessage: null,
     loginEvidenceType: null,
+    proxyAuthObserved: false,
     errorCode: null
   }
 }
@@ -83,7 +85,12 @@ function statusFor(storeId: string): ShopSessionStatusSummary {
     statusByStore.set(storeId, next)
     return next
   }
-  return { ...current, sessionPresent: active || current.sessionPresent }
+  return {
+    ...current,
+    sessionPresent: active || current.sessionPresent,
+    // 只回传是否发生过成功处理，不把代理用户名、时间戳或凭据带到 Renderer。
+    proxyAuthObserved: Boolean(getProxyAuthInjection(storeId))
+  }
 }
 
 function setStatus(

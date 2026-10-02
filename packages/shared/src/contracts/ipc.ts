@@ -67,6 +67,8 @@ export const IPC_CHANNELS = {
   BROWSER_SET_VIEWS_OBSCURED: 'browser:setViewsObscured',
   /** 只读浏览器状态：当前显示的店铺 + 各已打开店铺的标签页（渲染层重载后按它补齐，不靠猜） */
   BROWSER_STATE: 'browser:state',
+  /** 只读内存/WebContents诊断，供性能采样使用，不改变页面行为 */
+  BROWSER_MEMORY_DIAGNOSTICS: 'browser:memoryDiagnostics',
 
   // 书签 - §6.2
   BOOKMARK_LIST: 'bookmark:list',
@@ -104,6 +106,47 @@ export const IPC_CHANNELS = {
   ORDER_GET: 'orders:get',
   ORDER_OBSERVATION_START: 'orders:observation:start',
   ORDER_OBSERVATION_STOP: 'orders:observation:stop',
+
+  // 商品管理（商品管理方案 §5）：同步是**只读采集**；列表与台账供只读商品页使用。
+  // 发布不在这里——发布必须走任务引擎 + 人工确认门禁（方案 §7.9）。
+  PRODUCT_SYNC: 'products:sync',
+  PRODUCT_LIST: 'products:list',
+  PRODUCT_SYNC_RUNS: 'products:syncRuns',
+  // 本地商品库（M2）：归并**必须由用户触发**（方案 D2：绝不自动合并）；
+  // 图片本地化只下载图片到本机，不碰平台任何数据。
+  PRODUCT_LIBRARY_LIST: 'products:library:list',
+  PRODUCT_LIBRARY_GET: 'products:library:get',
+  PRODUCT_LIBRARY_SAVE: 'products:library:save',
+  PRODUCT_LIBRARY_SAVE_AS: 'products:library:saveAsLocal',
+  PRODUCT_LIBRARY_MERGE: 'products:library:merge',
+  PRODUCT_LIBRARY_UNMERGE: 'products:library:unmerge',
+  PRODUCT_LIBRARY_REMOVE: 'products:library:remove',
+  PRODUCT_MEDIA_LOCALIZE: 'products:media:localize',
+  // 详情页采集（商品图 + 规格）：只导航并读 DOM，不填写不提交
+  PRODUCT_DETAIL_COLLECT: 'products:detail:collect',
+  // 发布（M3）：**只到人工确认门禁为止** —— 预检与打开发布页，没有任何提交动作
+  PRODUCT_PUBLISH_PREFLIGHT: 'products:publish:preflight',
+  PRODUCT_PUBLISH_OPEN: 'products:publish:open',
+  PRODUCT_PUBLISH_ITEMS: 'products:publish:items',
+  // 人工确认门禁（走任务引擎的 waitForUserConfirmation）：只开/放行门禁与只读回读，**不提交**
+  PRODUCT_PUBLISH_OPEN_GATE: 'products:publish:openGate',
+  PRODUCT_PUBLISH_CONFIRM: 'products:publish:confirm',
+  PRODUCT_PUBLISH_VERIFY: 'products:publish:verify',
+  // 回读闭环（M4，方案 §7.5）：readback 只读页面产出建议，accept 是**用户逐条确认后**才落库
+  PRODUCT_PUBLISH_READBACK: 'products:publish:readback',
+  PRODUCT_PUBLISH_ACCEPT: 'products:publish:acceptSuggestion',
+  PRODUCT_PUBLISH_CHECKLIST: 'products:publish:checklist',
+  // 批量编排（M5，方案 §7.8）：只建台账/看进度/跳过这家，**没有任何提交能力**
+  PRODUCT_PUBLISH_BATCH_CREATE: 'products:publish:batch:create',
+  PRODUCT_PUBLISH_BATCH_PROGRESS: 'products:publish:batch:progress',
+  PRODUCT_PUBLISH_BATCH_SKIP_STORE: 'products:publish:batch:skipStore',
+  // 「全部暂停」：只退回"正在跑"的，已经在等人工的保持等待（人工交接点不该被冲掉）
+  PRODUCT_PUBLISH_BATCH_ABORT: 'products:publish:batch:abort',
+  // 图片本地化队列与保留策略：scan 只算、run 逐张下、orphans 只判定、cleanup 用户确认后才删
+  PRODUCT_MEDIA_QUEUE_SCAN: 'products:media:queueScan',
+  PRODUCT_MEDIA_QUEUE_RUN: 'products:media:queueRun',
+  PRODUCT_MEDIA_ORPHANS: 'products:media:orphans',
+  PRODUCT_MEDIA_CLEANUP: 'products:media:cleanup',
 
   // 经营指标：只传店铺 ID、周期和分页参数；主进程负责 Session/平台校验。
   SALES_METRICS_COLLECT: 'salesMetrics:collect',
@@ -185,7 +228,7 @@ export const IPC_CHANNELS = {
   /** 数据中心：订单明细汇总（读订单页整表快照）。 */
   OVERVIEW_ORDERS: 'overview:orders',
 
-  // 多 Agent 组织、模型、Job 和本地记忆（A-M0～A-M4）
+  // Agent 域（当前运行时仅 root-ceo；旧组织/HR 通道保留兼容）
   AGENT_ORG_LIST: 'agent:org:list',
   AGENT_ORG_GET: 'agent:org:get',
   AGENT_ORG_CREATE: 'agent:org:create',
@@ -222,6 +265,7 @@ export const IPC_CHANNELS = {
   AGENT_MEMORY_MAINTENANCE: 'agent:memory:maintenance',
   AGENT_QUALITY_METRICS: 'agent:quality:metrics',
   AGENT_QUALITY_REVIEW: 'agent:quality:review',
+  AGENT_COMMERCE_LEDGER_LIST: 'agent:commerce:ledger:list',
 
   // 备份和锁定 - §6.5（setPassword/removePassword/status 为应用锁扩展）
   BACKUP_CREATE: 'backup:create',

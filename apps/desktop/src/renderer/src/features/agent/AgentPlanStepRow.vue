@@ -5,7 +5,7 @@
       <span class="step-type">{{ step.type }}</span>
       <span class="risk-tag" :class="step.risk">{{ riskLabel }}</span>
       <span v-if="step.requiresConfirmation" class="confirm-tag">需人工确认</span>
-      <button class="remove-step" type="button" :disabled="disabled" title="删除此步骤" aria-label="删除此步骤" @click="$emit('remove')">×</button>
+      <button class="remove-step" type="button" :disabled="disabled" title="删除此步骤" aria-label="删除此步骤" @click="$emit('remove')"><img :src="deleteIcon" alt="" /></button>
     </header>
     <label class="field-label">步骤说明<input :value="step.description" :disabled="disabled" maxlength="120" @input="setDescription(($event.target as HTMLInputElement).value)" /></label>
     <div v-if="fieldKey" class="field-label">
@@ -28,6 +28,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { AgentPageObservation, AgentPlanStep } from '@shared/schemas/agent'
+import deleteIcon from '../../assets/generated/ui-icons/delete.png'
 
 const props = defineProps<{ step: AgentPlanStep; index: number; observation: AgentPageObservation | null; disabled?: boolean }>()
 const emit = defineEmits<{ update: [step: AgentPlanStep]; remove: [] }>()
@@ -60,7 +61,7 @@ function setStep(patch: Partial<AgentPlanStep>) { emit('update', { ...props.step
 .risk-tag,.confirm-tag { border-radius:20px;padding:3px 6px;font-size:9px;white-space:nowrap; }
 .risk-tag.read { background:rgba(35,160,123,.14);color:#84dbbd; }.risk-tag.write { background:rgba(224,161,53,.16);color:#efca7e; }.risk-tag.submit { background:rgba(223,91,87,.17);color:#ffa8a0; }
 .confirm-tag { background:rgba(239,181,60,.14);color:#f0c96d; }
-.remove-step { margin-left:auto;border:0;border-radius:6px;width:23px;height:23px;background:transparent;color:#c2c4d1;font-size:17px;cursor:pointer; }.remove-step:hover { background:rgba(220,80,80,.18);color:#ffaaa6; }
+.remove-step { display:grid;place-items:center;margin-left:auto;border:0;border-radius:6px;width:23px;height:23px;background:transparent;cursor:pointer; }.remove-step img { width:15px;height:15px;object-fit:contain; }.remove-step:hover { background:rgba(220,80,80,.18); }
 .field-label { display:block;margin-top:8px;color:var(--color-text-secondary);font-size:10px; }
 .field-label input,.field-label textarea { display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:7px 8px;border:1px solid var(--color-border);border-radius:6px;background:rgba(9,12,24,.35);color:var(--color-text-primary);font:inherit;font-size:11px; }
 .field-label textarea { resize:vertical; }.field-label input:focus,.field-label textarea:focus { outline:1px solid #7776e8; }

@@ -379,7 +379,7 @@ defineExpose({ reload: load })
 .chip.ok{border-color:rgba(90,209,154,.4);background:rgba(90,209,154,.14);color:#027a48}
 .chip.info{border-color:rgba(151,120,255,.4);background:rgba(113,78,231,.18);color:#5b3df5}
 .chip.warn{border-color:rgba(242,165,87,.4);background:rgba(242,165,87,.14);color:#b54708}
-.chip.bad{border-color:rgba(239,99,119,.4);background:rgba(117,37,58,.24);color:#b42318}
+.chip.bad{border-color:rgba(239,99,119,.4);background:rgba(239,99,119,.12);color:#b42318}
 .chip.muted{border-color:var(--dash-border);background:#ededef;color:var(--dash-text-muted)}
 .sparkline{width:100px;height:24px}
 .sparkline polyline{fill:none;stroke:#7c5cff;stroke-width:1.4;vector-effect:non-scaling-stroke}

@@ -47,8 +47,9 @@ describe('主窗口 DOM <webview> 嵌入边界', () => {
     expect(MAIN_INDEX).toContain('webPreferences.sandbox = true')
     // guest 里不允许再建 webview（否则任意远程页面可以继续开窗）
     expect(MAIN_INDEX).toContain('webPreferences.webviewTag = false')
-    // 遮挡时 rAF 停摆会让平台弹层停在屏幕外：guest 必须关掉节流
-    expect(MAIN_INDEX).toContain('webPreferences.backgroundThrottling = false')
+    // 默认允许后台节流，窗口管理器按活动页/任务页动态解除，避免隐藏店铺持续占用资源。
+    expect(MAIN_INDEX).toContain('webPreferences.backgroundThrottling = true')
+    expect(WINDOW_MANAGER).toContain('setBackgroundThrottling')
   })
 
   it('只放行真实店铺自己的 persist:store_<id> 分区，非法附件一律 preventDefault', () => {
@@ -116,6 +117,12 @@ describe('主窗口 DOM <webview> 嵌入边界', () => {
     // display:none / visibility:hidden 会让 guest 自认不可见 —— 平台（微应用）会停摆
     expect(styleBlock).not.toMatch(/\.dashboard-browser-webview[^{]*\{[^}]*visibility:\s*hidden/)
     expect(styleBlock).not.toMatch(/\.dashboard-browser-webview[^{]*\{[^}]*display:\s*none/)
+  })
+
+  it('浏览器面板只为每家店铺的活动标签页渲染 guest，历史标签只保留元数据', () => {
+    expect(SURFACE).toContain('const activeId = ws.activeTabIdByStore[storeId]')
+    expect(SURFACE).toContain('const activeTab = tabs.find(tab => tab.id === activeId)')
+    expect(SURFACE).not.toMatch(/for \(const tab of ws\.tabsByStore\[storeId\] \|\| \[\]\)/)
   })
 
   it('guest 宿主在离开浏览器页时只隐藏不销毁（销毁会丢页面状态与登录流程）', () => {

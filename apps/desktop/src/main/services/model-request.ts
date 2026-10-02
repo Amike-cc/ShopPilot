@@ -32,6 +32,8 @@ export interface ChatRequestBodyInput {
   temperature?: number | null
   /** 本次请求的最大输出 token（先经 clampMaxOutputTokens 收敛） */
   maxTokens: number
+  /** Optional bounded multimodal content for vision-capable Profiles. */
+  userContent?: unknown
   /** 默认 false：非流式响应（历史实现也是这样，显式写出来省得依赖服务端默认） */
   stream?: boolean
 }
@@ -49,7 +51,7 @@ export function buildChatRequestBody(input: ChatRequestBodyInput): Record<string
     model: String(input.model),
     messages: [
       { role: 'system', content: String(input.system ?? '') },
-      { role: 'user', content: String(input.user ?? '') }
+      { role: 'user', content: input.userContent === undefined ? String(input.user ?? '') : input.userContent }
     ],
     temperature,
     [MAX_OUTPUT_FIELD]: maxTokens,

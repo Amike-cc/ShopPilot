@@ -23,9 +23,35 @@ import type { PlatformLoginResult } from '@shared/contracts/platform-adapter'
 import type { PlatformAdapterContext, SalesMetricsCapableAdapter } from './platform-adapter'
 import { createLoginResult, LOGIN_DETECTION_ONLY_CAPABILITIES } from './platform-adapter'
 import { clickText, navigateTo, parseSalesValue, readLabelValue, readPeriodControlState, waitForUrlMarker, type LabelReadAttempt, type PageHandle } from './sales-metrics-page-reader'
+import { clickNextPage, readProductImages, readProductTable, waitForProductListReady } from './product-page-reader'
+import { productProfileFor, type ProductProfile } from '@shared/constants/product'
+import { logMain } from '../services/logger'
+import { mapProductRows } from '@shared/product-rules'
+import type {
+  PlatformProduct,
+  PlatformProductCollectionOptions,
+  PlatformProductCollectionResult
+} from '@shared/contracts/platform-product'
+
+/** 翻页之间的等待：给平台留余量，也避免连续请求触发风控（方案 §5.4 的限速口径）。 */
+const PRODUCT_PAGE_DELAY_MS = 1200
+/** 表格比数据行先渲染：读到 0 行时的重试次数与间隔（实测各平台都需要等一次重新渲染）。
+ *  12 次 × 1.2s ≈ 14s：四平台验收里出现过"7s 还不够"的情况（微信/快手都碰到过），
+ *  但即使等满仍为 0 行也不会破坏数据（0 行按不完整轮次处理，见 collectProducts）。 */
+const EMPTY_ROWS_RETRY = 12
+const EMPTY_ROWS_RETRY_DELAY_MS = 1200
+
 export interface PlatformLoginProbe {
-  /** 允许的 host（精确匹配，不做后缀模糊） */
-  host: string
+  /**
+   * 允许的 host，**精确匹配（不做后缀模糊）**。
+   *
+   * 为什么是列表而不是单个字符串：同一家平台的商家后台常由多个域名承载。实测 2026-09-30：
+   * 快手小店的店铺平时停在 `https://s.kwaixiaodian.com/zone/home`（页面标题「快手小店」，
+   * 页面上有店铺名/商户 ID/商家后台导航），而经营数据档案页在 `syt.kwaixiaodian.com`——
+   * 只登记一个域名时，停在另一个域名上的店铺永远返回 `PAGE_NOT_RECOGNIZED`，
+   * 于是"登录成功了，界面还一直显示离线"（这正是本轮实测复现的故障）。
+   */
+  hosts: readonly string[]
   /** 明确的登录/过期页面文案；命中即 LOGIN_REQUIRED（复用项目已有实测文案） */
   expiredText?: RegExp
   /** 明确的"需要安全验证"文案 */
@@ -97,8 +123,22 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
 
   supports(platform: string): boolean { return platform === this.platform }
 
+  /**
+   * 能力位只描述**真实实现边界**（方案 §5.2 的纪律：声明了就必须真的能采）：
+   * `products` 为真 ⟺ 这个平台登记了**真机实测过**的商品档案。
+   * 没实测过的平台不许点亮，否则界面会给出一个点了没用的「同步」按钮。
+   */
   getCapabilities() {
-    return Object.freeze({ ...LOGIN_DETECTION_ONLY_CAPABILITIES, salesMetrics: true })
+    return Object.freeze({
+      ...LOGIN_DETECTION_ONLY_CAPABILITIES,
+      salesMetrics: true,
+      products: productProfileFor(this.platform) !== null
+    })
+  }
+
+  /** 商品档案（未实测登记的平台为 null）。 */
+  protected get productProfile(): ProductProfile | null {
+    return productProfileFor(this.platform)
   }
 
   /** 档案固定住的周期；Main 按它请求，避免把 7 天数据标成今天。 */
@@ -107,18 +147,22 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
   }
 
   /**
-   * 登录检测。
+   * 登录检测。证据分两类，**明确证据优先**：
+   *   ① 否定证据（页面自己说没登录）：命中 loginPath / verifyText / expiredText
+   *      → LOGIN_REQUIRED / VERIFY_REQUIRED；
+   *   ② 肯定证据：档案里登记的**经营数据锚点真的渲染出来了**（未登录时平台挡在登录页/
+   *      选角色页，那些页面不会有成交金额这类卡片）→ LOGGED_IN。
    *
-   * 正向证据只有两种：① URL 主机属于本平台且没有命中登录/验证文案；② 经营数据锚点
-   * 真的渲染出来了（未登录看不到成交金额卡片）。没有证据就返回 UNKNOWN——**绝不返回
-   * LOGGED_IN**，否则采集会在一个未登录的页面上读到登录页的其它数字。
+   * 两类都不成立 → UNKNOWN：**不猜**。只凭"主机对得上"绝不返回 LOGGED_IN（未登录时平台
+   * 同样会在这个主机上给出登录页），"当前页恰好不是档案页"也同样是 UNKNOWN——
+   * 这两种情况由调用方按"没拿到证据"处理，不得据此断言离线。
    */
   async detectLoginStatus(context: PlatformAdapterContext): Promise<PlatformLoginResult> {
     let url: URL
     try { url = new URL(context.currentUrl) } catch {
       return createLoginResult(context, 'UNKNOWN', 'PAGE_NOT_READY', 'NONE')
     }
-    if (url.hostname.toLowerCase() !== this.probe.host) {
+    if (!this.probe.hosts.includes(url.hostname.toLowerCase())) {
       return createLoginResult(context, 'UNKNOWN', 'PAGE_NOT_RECOGNIZED', 'URL')
     }
     if (this.probe.loginPath && this.probe.loginPath.test(url.pathname)) {
@@ -136,7 +180,64 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
       const expired = await this.pageTextMatches(wc, this.probe.expiredText)
       if (expired === true) return createLoginResult(context, 'LOGIN_REQUIRED', 'EXPLICIT_LOGIN_PAGE', 'DOM')
     }
+    // 正向证据：档案里登记的经营数据锚点**真的渲染出来了**（见 anyProfileAnchorRendered 的说明）。
+    // 放在最后：明确的登录页/验证页证据优先，不能被"页面上恰好有同名字样"翻过来。
+    if (await this.anyProfileAnchorRendered(wc)) {
+      return createLoginResult(context, 'LOGGED_IN', 'PROFILE_ANCHOR_RENDERED', 'DOM')
+    }
+    // 第二条正向证据：**商品列表页**的表格真的渲染出来了。
+    // 为什么需要它：经营数据锚点只存在于后台**首页**，而商品同步会把店铺标签页导航到商品列表页
+    // 并留在那里 —— 重启后再打开该店，`openStoreBrowser` 先置 OFFLINE，随后在列表页上拿不到任何
+    // 正向证据 → 一个明明登录着、页面上还摆着商品的店铺一直显示离线（2026-09-30 真机截图抓到）。
+    // 判据同样是"实测过的 DOM 渲染"（未登录会跳到登录页，那种页面渲染不出商品表格），不是新猜的选择器。
+    if (await this.productListRendered(wc, context.currentUrl)) {
+      return createLoginResult(context, 'LOGGED_IN', 'PROFILE_ANCHOR_RENDERED', 'DOM')
+    }
     return createLoginResult(context, 'UNKNOWN', 'DETECTION_EVIDENCE_INSUFFICIENT', 'DOM')
+  }
+
+  /**
+   * 商品列表页是否已渲染（第二条正向证据）。
+   *
+   * 只在"当前地址确实是这个平台已登记的商品列表页"时才判断，避免把"某个恰好有表格的页面"当证据；
+   * 且必须等表格真的可见（`waitForProductListReady` 同时校验 urlMarker 与表格可见性）。
+   */
+  protected async productListRendered(wc: PageHandle, currentUrl: string): Promise<boolean> {
+    const profile = this.productProfile
+    if (!profile) return false
+    const url = String(currentUrl || '')
+    // 用 path 前缀比对，忽略查询串与末尾斜杠
+    let path = ''
+    try { path = new URL(url).pathname } catch { return false }
+    let expected = ''
+    try { expected = new URL(profile.listUrl).pathname } catch { return false }
+    if (!expected || !path.startsWith(expected.replace(/\/$/, ''))) return false
+    return waitForProductListReady(wc, profile, 2_500)
+  }
+
+  /**
+   * 正向证据：档案里登记的**经营数据锚点**真的渲染在页面上 → 已登录。
+   *
+   * 为什么"锚点在"就能证明登录：这些锚点就是采集要读的指标卡片（成交金额 / 成交订单数 /
+   * 退款金额…）。未登录时平台把访问挡在登录页或选角色页，那种页面根本不会渲染这些卡片——
+   * 而它们已被上面的 loginPath / verifyText / expiredText 判据拦走（明确证据优先）。
+   *
+   * 为什么只判文案在不在、不去读值：登录检测只回答"这个页面能不能用"，
+   * 值对不对是采集阶段的事；读值要轮询、要处理周期控件，放进检测既慢又容易假阴性。
+   *
+   * 这不是"猜"：锚点来自 BUSINESS_PROFILES 的**实测档案**，档案没登记的平台
+   * （profile 为 null）直接返回 false，仍然只能落到 UNKNOWN。
+   *
+   * 2026-09-30 修复：此前这个方法不存在，`detectLoginStatus` 只有"登录页/验证页"这些
+   * **否定**证据，正常页面一律落到 UNKNOWN；而全项目唯一把店铺置为 online 的路径就是
+   * 本方法所在函数返回 LOGGED_IN —— 于是"登录成功了，界面还一直显示离线"。
+   */
+  private async anyProfileAnchorRendered(wc: PageHandle): Promise<boolean> {
+    const anchors = this.profile?.metrics || []
+    for (const anchor of anchors) {
+      if (await this.pageHasTextDeep(wc, anchor.anchorText)) return true
+    }
+    return false
   }
 
   /** 在页面内跑正则，只回布尔；页面不可读时返回 null（区别于"不匹配"）。 */
@@ -558,6 +659,216 @@ export abstract class SalesMetricsDomAdapter implements SalesMetricsCapableAdapt
       metricDefinitionVersion: SALES_METRICS_METRIC_DEFINITION_VERSION,
       dataStatus: 'REAL_VALUE',
       runId: null
+    }
+  }
+
+  /**
+   * 采集商品列表（商品管理方案 §5.3）。
+   *
+   * 这一份实现是**档案驱动**的，四个平台共用：差异全部在 `ProductProfile` 里
+   * （地址、表头/列序、是否穿透 ShadowRoot、翻页文案、总数文案），代码里不写平台分支。
+   *
+   * 失败一律**如实分类**，绝不返回半真半假的数据：
+   *   · 打开后跳到登录页 → LOGIN_REQUIRED（命中各平台已实测的登录/过期文案）；
+   *   · 表头整体对不上 / 读不到表格 → PAGE_CHANGED，上层**不得写任何数据**；
+   *   · 达上限截断 → hasMore=true，界面必须如实说"还有更多"。
+   *
+   * 只读语义：只导航、只点「下一页」，不点任何有副作用的按钮。
+   */
+  async collectProducts(
+    context: PlatformAdapterContext,
+    options: PlatformProductCollectionOptions
+  ): Promise<PlatformProductCollectionResult> {
+    const empty = (
+      status: PlatformProductCollectionResult['status'],
+      reasonCode: string,
+      safeMessage: string
+    ): PlatformProductCollectionResult => ({
+      status, products: [], fetchedCount: 0, skippedCount: 0, pageCount: 0, hasMore: false, reasonCode, safeMessage
+    })
+
+    const profile = this.productProfile
+    if (!profile) {
+      return empty('DATA_SOURCE_NOT_VERIFIED', 'PRODUCT_PROFILE_MISSING', '该平台尚未实测到商品列表，暂不能同步')
+    }
+    const wc = context.webContents
+    if (!wc || wc.isDestroyed()) {
+      return empty('FAILED', 'PAGE_NOT_READY', '店铺页面不可用，请先打开店铺浏览器')
+    }
+
+    const startedAt = Date.now()
+    const products: PlatformProduct[] = []
+    let pageCount = 0
+    let skippedCount = 0
+    let hasMore = false
+    let totalOnPage: number | null = null
+    /** 累计读到的数据行数（含没有 ID 被跳过的）——收尾时拿它与页面自报条数对账 */
+    let rowCount = 0
+
+    for (let page = 1; page <= Math.max(1, options.maxPages); page++) {
+      if (page === 1) {
+        const nav = await navigateTo(wc, profile.listUrl, Math.min(options.timeoutMs, 30000))
+        if (!nav.ok) {
+          return empty('FAILED', nav.timedOut ? 'NAVIGATION_TIMEOUT' : 'NAVIGATION_FAILED',
+            '打开商品列表页失败，请确认已登录该店铺')
+        }
+      }
+
+      const ready = await waitForProductListReady(wc, profile, Math.min(30_000, options.timeoutMs))
+      if (!ready) {
+        // 先排除"其实是登录页"：命中已实测的登录/过期文案就如实报 LOGIN_REQUIRED，
+        // 而不是笼统地说"平台改版"（页面没就绪有两种可能，必须让用户看出是哪一种）。
+        if (await this.pageLooksLikeLogin(wc)) {
+          return empty('LOGIN_REQUIRED', 'LOGIN_PAGE', '打开商品列表页跳到了登录页，请在店铺浏览器里登录后再同步')
+        }
+        if (page === 1) {
+          return empty('PAGE_CHANGED', 'PAGE_NOT_READY',
+            `没有等到商品列表页就绪（未出现「${profile.urlMarker}」且表格未渲染），平台可能已改版`)
+        }
+        hasMore = true
+        break
+      }
+
+      // 表格比数据行先渲染（实测）：拿到"表格可见"之后仍可能 0 行，等一会儿再读。
+      let read = await readProductTable(wc, profile)
+      for (let attempt = 1; attempt <= EMPTY_ROWS_RETRY && read.ok && read.rows.length === 0; attempt++) {
+        await delay(EMPTY_ROWS_RETRY_DELAY_MS)
+        read = await readProductTable(wc, profile)
+      }
+      if (read.ok && read.rows.length === 0) {
+        // 读到 0 行要留痕：把"页面上有几张表、各多少行"记进日志，
+        // 下次再出现"同步成功但 0 件"时能一眼看出是选错了表还是这家店真没商品。
+        logMain('warn', `[product-collect] 读到 0 行 platform=${this.platform} url=${String(context.currentUrl || '').slice(0, 80)} tables=${JSON.stringify(read.diagnostics ?? [])}`)
+      }
+      if (!read.ok) {
+        if (page === 1) {
+          // 读不到表格有两种可能，**两种都要说**。状态一律 PAGE_CHANGED（= 不写任何数据）是**故意的
+          // fail-closed**：页面读不到时若按"0 个商品"落库，完整轮次会把该店已有商品全部标成 missing。
+          return empty('PAGE_CHANGED', read.reason === 'TABLE_NOT_FOUND' ? 'PRODUCT_TABLE_NOT_FOUND' : 'PAGE_READ_FAILED',
+            '页面上没有读到商品表格（可能是这家店确实 0 个商品，也可能平台已改版）——本次未写入任何数据，请打开店铺后台确认一次')
+        }
+        hasMore = true
+        break
+      }
+
+      const mapped = mapProductRows(profile, read.headers, read.rows)
+      if (mapped.headerMismatch) {
+        // 表头一条都没对上 → 平台改版。**绝不硬套列**（错位的库存会被当成价格写进库）
+        return empty('PAGE_CHANGED', 'HEADERS_CHANGED',
+          `商品列表表头与登记的不一致（缺：${mapped.missingHeaders.join('、')}），平台可能已改版（本次未写入任何数据）`)
+      }
+      pageCount += 1
+      rowCount += mapped.rows.length
+      if (read.total != null) totalOnPage = read.total
+      logMain('info', `[product-collect] page=${page} rows=${read.rows.length} mapped=${mapped.rows.length} products=${products.length} headers=${JSON.stringify(read.headers).slice(0, 140)} total=${String(read.total)} tables=${JSON.stringify(read.diagnostics ?? [])}`)
+
+      // ⚠️ 读到 **0 行**时必须 fail-closed（2026-09-30 四平台验收抓到的数据破坏性缺陷）：
+      // 页面刚打开时表格可能是"已渲染但还没填数据"的中间态（实测：微信/快手都会出现，
+      // 同一秒读到的「共0条」在几秒后变成「共4条」）。若把它当成完整轮次，
+      // 下游的 markMissing 会把**该店已有的商品全部标成 missing** —— 数据被自己的同步破坏。
+      // 所以：0 行一律按"不完整轮次"处理（hasMore=true → 上层不标 missing），并如实说明两种可能。
+      if (mapped.rows.length === 0) {
+        logMain('warn', `[product-collect] 读到 0 行，按不完整轮次处理 platform=${this.platform} tables=${JSON.stringify(read.diagnostics ?? [])} total=${String(read.total)}`)
+        return {
+          status: 'SUCCEEDED',
+          products,
+          fetchedCount: products.length,
+          skippedCount,
+          pageCount,
+          hasMore: true,
+          reasonCode: 'EMPTY_TABLE',
+          safeMessage: '这次没有读到商品行（可能是这家店确实 0 个商品，也可能是页面还没渲染完）——本次不会改动已有数据，请再同步一次或打开店铺后台确认'
+        }
+      }
+
+      // 图片：列表页只有缩略图，按行取不到精确归属，这里只给"这一屏的第一张"，不硬凑整组
+      const pageImages = await readProductImages(wc, profile)
+
+      for (const row of mapped.rows) {
+        if (products.length >= options.maxProducts) { hasMore = true; break }
+        if (!row.platformProductId) { skippedCount += 1; continue }
+        products.push({
+          platformProductId: row.platformProductId,
+          title: row.title,
+          subtitle: row.subtitle,
+          status: row.status,
+          priceMinor: row.priceMinor,
+          stock: row.stock,
+          categoryPath: row.categoryPath,
+          imageUrls: pageImages.slice(0, 1),
+          skus: row.skus,
+          platformUpdatedAt: row.platformUpdatedAt,
+          rawRow: row.rawRow
+        })
+      }
+
+      if (products.length >= options.maxProducts) { hasMore = true; break }
+      if (Date.now() - startedAt >= options.timeoutMs) { hasMore = true; break }
+      if (!read.nextEnabled) break                       // 最后一页
+      const clicked = await clickNextPage(wc, profile)
+      if (!clicked) break
+      await delay(PRODUCT_PAGE_DELAY_MS)
+    }
+
+    const totalText = totalOnPage == null ? '' : `（页面显示共 ${totalOnPage} 条）`
+
+    // ⚠️ 收尾对账：**页面自报的条数必须与读到的行数一致**，否则按"页面还没渲染完"处理。
+    // 2026-09-30 四平台验收实测到的形态：快手的列表在冷启动时会短暂处于
+    // 「只有 1 行骨架 + 自报共0条」的中间态 —— 只判"0 行"挡不住它（1 行假数据就绕过去了），
+    // 那一轮被当成完整轮次，把该店已有 4 个商品全标成了 missing。
+    // 判据用页面自己给的数字，比任何启发式都可靠；不一致时 hasMore=true → 上层不标 missing。
+    const incompleteRender = totalOnPage != null && rowCount !== totalOnPage
+    if (incompleteRender) {
+      logMain('warn', `[product-collect] 条数对不上，按未渲染完处理 platform=${this.platform} 页面自报=${String(totalOnPage)} 读到=${rowCount} 页数=${pageCount}`)
+      return {
+        status: 'SUCCEEDED',
+        products,
+        fetchedCount: products.length,
+        skippedCount,
+        pageCount,
+        hasMore: true,
+        reasonCode: 'INCOMPLETE_RENDER',
+        safeMessage: `页面显示共 ${totalOnPage} 条，但只读到 ${rowCount} 行 —— 页面可能还没渲染完，本次不改动已有数据，请再同步一次`
+      }
+    }
+
+    return {
+      status: 'SUCCEEDED',
+      products,
+      fetchedCount: products.length,
+      skippedCount,
+      pageCount,
+      hasMore,
+      reasonCode: hasMore ? 'TRUNCATED' : 'OK',
+      safeMessage: hasMore
+        ? `本次只同步了前 ${products.length} 件${totalText}，还有更多`
+        : `已同步 ${products.length} 件${totalText}`
+    }
+  }
+
+  /**
+   * 页面是不是登录/过期页。判据是各平台**已实测的登录文案**（`probe.expiredText`），不是新猜的选择器；
+   * 微信小店整页在 ShadowRoot 内（实测 body.innerText 只有 160 字），所以文本要穿透 shadowRoot 收集。
+   */
+  protected async pageLooksLikeLogin(wc: PageHandle): Promise<boolean> {
+    const pattern = this.probe.expiredText
+    if (!pattern || wc.isDestroyed()) return false
+    const code = `(() => {
+      const parts = [String(document.title || '')];
+      const roots = [document];
+      for (const el of document.querySelectorAll('*')) { if (el.shadowRoot) roots.push(el.shadowRoot) }
+      for (const root of roots) {
+        let text = '';
+        try { text = String(root.innerText || '') } catch { text = '' }
+        if (text) parts.push(text);
+        if (parts.join(' ').length > 20000) break;
+      }
+      return ${pattern}.test(parts.join(' '));
+    })()`
+    try {
+      return (await wc.executeJavaScript(code, false)) === true
+    } catch {
+      return false
     }
   }
 }

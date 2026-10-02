@@ -10,8 +10,15 @@ import {
   agentSoftwareContextSchema,
   agentSoftwarePlanSchema
 } from '@shared/schemas/agent'
+import { AGENT_CONFIRM_REQUIRED_ACTIONS, AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS } from '@shared/agent-domain-rules'
+import { collectionDispatchResult } from '../../apps/desktop/src/main/services/agent-service'
 
 describe('Agent software scope', () => {
+  it('returns an explicit unverified receipt when a collection dispatch adds no jobs', () => {
+    expect(collectionDispatchResult('collectBusiness', 2, 0)).toMatchObject({ status: 'NOT_VERIFIED', reasonCode: 'NO_JOB_DISPATCHED', summary: { stores: 2, jobs: 0 } })
+    expect(collectionDispatchResult('collectBusiness', 2, 1)).toMatchObject({ status: 'PARTIAL', reasonCode: 'BUSINESS_JOB_DISPATCHED', summary: { stores: 2, jobs: 1 } })
+  })
+
   it('accepts only closed application actions', () => {
     expect(agentSoftwareActionSchema.parse({ type: 'displayStore', storeId: 'store_a' })).toEqual({ type: 'displayStore', storeId: 'store_a' })
     expect(agentSoftwareActionSchema.safeParse({ type: 'executeJavaScript', script: 'document.cookie' }).success).toBe(false)
@@ -31,13 +38,12 @@ describe('Agent software scope', () => {
     expect(context.recentTasks).toHaveLength(0)
   })
 
-  it('accepts the closed team-management and panel actions with confirmation defaults', () => {
-    expect(agentSoftwareActionSchema.parse({ type: 'createAgent', role: 'analyst', name: '数据分析' })).toEqual({ type: 'createAgent', role: 'analyst', name: '数据分析', description: '' })
-    expect(agentSoftwareActionSchema.parse({ type: 'activateAgent', agentId: 'agent_a' })).toEqual({ type: 'activateAgent', agentId: 'agent_a' })
+  it('keeps single-agent organization boundaries closed', () => {
+    for (const type of ['createAgent', 'activateAgent', 'pauseAgent', 'resumeAgent', 'retireAgent', 'updateAgent', 'bindAgentModel']) {
+      expect(agentSoftwareActionSchema.safeParse({ type, agentId: 'agent_a' }).success, type).toBe(false)
+    }
     expect(agentSoftwareActionSchema.parse({ type: 'openPanel', panel: 'agentTeam' })).toEqual({ type: 'openPanel', panel: 'agentTeam' })
-    expect(agentSoftwareActionSchema.safeParse({ type: 'createAgent', role: 'ceo', name: 'x' }).success).toBe(false)
     expect(agentSoftwareActionSchema.safeParse({ type: 'openPanel', panel: 'devtools' }).success).toBe(false)
-    expect(agentSoftwareActionSchema.safeParse({ type: 'createAgent', role: 'analyst', name: 'x', code: 'shell' }).success).toBe(false)
   })
 
   it('accepts store/task/backup/memory actions with bounded parameters', () => {
@@ -49,6 +55,26 @@ describe('Agent software scope', () => {
     expect(agentSoftwareActionSchema.safeParse({ type: 'updateStore', storeId: 's', password: 'x' }).success).toBe(false)
     expect(agentSoftwareActionSchema.parse({ type: 'pauseTaskRun', taskId: 't1' })).toEqual({ type: 'pauseTaskRun', taskId: 't1' })
     expect(agentSoftwareActionSchema.safeParse({ type: 'createBookmark', storeId: 's', title: 'x' }).success).toBe(false)
+  })
+
+  it('uses closed order status and requires explicit refund amount', () => {
+    expect(agentSoftwareActionSchema.safeParse({ type: 'orderList', storeId: 'store_a', status: 'MAGIC_STATUS' }).success).toBe(false)
+    expect(agentSoftwareActionSchema.safeParse({ type: 'refundConfirm', storeId: 'store_a', orderId: 'order_1' }).success).toBe(false)
+    expect(agentSoftwareActionSchema.safeParse({ type: 'refundConfirm', storeId: 'store_a', orderId: 'order_1', amountMinor: 500 }).success).toBe(true)
+    expect(AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS.has('fulfillmentPrepare')).toBe(true)
+    for (const type of ['fulfillmentConfirm', 'refundConfirm']) expect(AGENT_CONFIRM_REQUIRED_ACTIONS.has(type)).toBe(true)
+  })
+
+  it('keeps every commerce confirmation action inside the side-effect boundary', () => {
+    const commerceConfirmationActions = [
+      'productPublishOpen', 'productPublishAccept', 'inventoryWriteback', 'skuWriteback',
+      'fulfillmentConfirm', 'refundConfirm', 'entityApply', 'applyEntity',
+      'contentPublish', 'adConfirm', 'customerSendReply'
+    ]
+    for (const type of commerceConfirmationActions) {
+      expect(AGENT_CONFIRM_REQUIRED_ACTIONS.has(type), `${type} must require confirmation`).toBe(true)
+      expect(AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS.has(type), `${type} must remain side-effectful`).toBe(true)
+    }
   })
 
   it('accepts a bounded conversation history for agent memory', () => {

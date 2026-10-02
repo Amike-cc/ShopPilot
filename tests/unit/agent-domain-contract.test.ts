@@ -110,31 +110,25 @@ describe('A-M0 Agent contract', () => {
     expect(canRetryModelRequest('http', 400, 0)).toBe(false)
   })
 
-  it('selects an active child executor and never root-ceo', () => {
+  it('selects only the active root-ceo executor', () => {
     const base = { status: 'active', storeScope: { storeIds: [] as string[] }, createdAt: 1 }
     const root = { ...base, id: 'root-ceo', role: 'ceo' }
     const probation = { ...base, id: 'agent_p', role: 'operator', status: 'probation', createdAt: 2 }
     const analyst = { ...base, id: 'agent_a', role: 'analyst', createdAt: 3 }
     const operator = { ...base, id: 'agent_o', role: 'operator', createdAt: 4 }
-    expect(selectExecutorAgent([root, probation, analyst, operator], null, id => (id === 'agent_o' ? 5 : 0))?.id).toBe('agent_o')
-    expect(selectExecutorAgent([root, probation], null, () => 0)).toBe(null)
-    const operatorIdle = { ...base, id: 'agent_i', role: 'operator', createdAt: 6 }
-    expect(selectExecutorAgent([operator, operatorIdle], null, id => (id === 'agent_o' ? 5 : 0))?.id).toBe('agent_i')
+    expect(selectExecutorAgent([root, probation, analyst, operator], null, id => (id === 'root-ceo' ? 5 : 0))?.id).toBe('root-ceo')
+    expect(selectExecutorAgent([probation, analyst, operator], null, () => 0)).toBe(null)
     const scoped = { ...base, id: 'agent_s', role: 'operator', storeScope: { storeIds: ['store_1'] }, createdAt: 5 }
-    expect(selectExecutorAgent([operator, scoped], 'store_2', () => 0)?.id).toBe('agent_o')
+    expect(selectExecutorAgent([root, scoped], 'store_2', () => 0)?.id).toBe('root-ceo')
     expect(selectExecutorAgent([scoped], 'store_2', () => 0)).toBe(null)
-    expect(selectExecutorAgent([scoped], 'store_1', () => 0)?.id).toBe('agent_s')
+    expect(selectExecutorAgent([root, scoped], 'store_1', () => 0)?.id).toBe('root-ceo')
   })
 
-  it('excludes read-only scope agents from page write/submit jobs (权限模型 §4.2)', () => {
+  it('applies the root read-only boundary to page write/submit jobs', () => {
     const base = { status: 'active', storeScope: { storeIds: [] as string[] }, createdAt: 1 }
-    const readOnly = { ...base, id: 'agent_ro', role: 'operator', storeScope: { storeIds: [] as string[], readOnly: true }, createdAt: 2 }
-    const writable = { ...base, id: 'agent_rw', role: 'operator', storeScope: { storeIds: [] as string[], readOnly: false }, createdAt: 3 }
-    // 只读任务：只读 Agent 可用
-    expect(selectExecutorAgent([readOnly], null, () => 0, { requireWritable: false })?.id).toBe('agent_ro')
-    // 写/提交任务：跳过只读 Agent，选可写执行者
-    expect(selectExecutorAgent([readOnly, writable], null, () => 0, { requireWritable: true })?.id).toBe('agent_rw')
-    expect(selectExecutorAgent([readOnly], null, () => 0, { requireWritable: true })).toBe(null)
+    const readOnlyRoot = { ...base, id: 'root-ceo', role: 'ceo', storeScope: { storeIds: [] as string[], readOnly: true } }
+    expect(selectExecutorAgent([readOnlyRoot], null, () => 0, { requireWritable: false })?.id).toBe('root-ceo')
+    expect(selectExecutorAgent([readOnlyRoot], null, () => 0, { requireWritable: true })).toBe(null)
   })
 
   it('accepts only dispatch-shaped delegate input and defaults the actor to root-ceo', () => {
@@ -142,17 +136,19 @@ describe('A-M0 Agent contract', () => {
     expect(parsed.actorAgentId).toBe('root-ceo')
     expect(parsed.run).toBe(true)
     expect(parsed.requiresConfirmation).toBe(false)
+    expect(agentTaskDelegateSchema.parse({ ...parsed, assignedAgentId: 'root-ceo' }).assignedAgentId).toBe('root-ceo')
+    expect(() => agentTaskDelegateSchema.parse({ ...parsed, assignedAgentId: 'agent_child' })).not.toThrow()
     expect(() => agentTaskDelegateSchema.parse({ goal: 'x', storeId: 's', browserTask: { name: 'n', steps: [] } })).toThrow()
     expect(() => agentTaskDelegateSchema.parse({ goal: 'x', browserTask: { name: 'n', steps: [{ type: 'readText', input: {} }] } })).toThrow()
   })
 
-  it('keeps HR as a root-ceo mode instead of a second root agent', () => {
+  it('keeps the legacy HR preview shape rooted at root-ceo for compatibility', () => {
     expect(agentHrPreviewSchema.parse({ mode: 'hr', role: 'operator', actorAgentId: 'root-ceo' })).toEqual({ mode: 'hr', role: 'operator', actorAgentId: 'root-ceo' })
     expect(() => agentHrPreviewSchema.parse({ mode: 'root-hr', role: 'operator', actorAgentId: 'root-ceo' })).toThrow()
   })
 
   it('normalises idempotency payloads and derives risk from controlled input', () => {
-    const a = { createdByAgentId: 'root-ceo', assignedAgentId: 'agent_a', idempotencyKey: 'same-key-1', goal: '只读盘点', inputSummary: { b: 2, a: 1 } }
+    const a = { createdByAgentId: 'root-ceo', assignedAgentId: 'root-ceo', idempotencyKey: 'same-key-1', goal: '只读盘点', inputSummary: { b: 2, a: 1 } }
     const b = { ...a, inputSummary: { a: 1, b: 2 } }
     expect(stableJson(a)).toBe(stableJson(b))
     expect(payloadHash(a)).toBe(payloadHash(b))

@@ -7,12 +7,12 @@ describe('automatic Agent memory ownership', () => {
     expect(resolveAutoLearningTarget({ assignedAgentId: 'root-ceo', storeId: 'store-1', currentMemoryWrite: true })).toEqual({ agentId: 'root-ceo', scope: 'store' })
   })
 
-  it('routes a writable store job to the child store memory', () => {
-    expect(resolveAutoLearningTarget({ assignedAgentId: 'operator-1', storeId: 'store-1', currentMemoryWrite: true, frozenMemoryWrite: true })).toEqual({ agentId: 'operator-1', scope: 'store' })
+  it('routes historical child store jobs to root-ceo store memory', () => {
+    expect(resolveAutoLearningTarget({ assignedAgentId: 'operator-1', storeId: 'store-1', currentMemoryWrite: true, frozenMemoryWrite: true })).toEqual({ agentId: 'root-ceo', scope: 'store' })
   })
 
-  it('routes a writable model-only job to child private memory', () => {
-    expect(resolveAutoLearningTarget({ assignedAgentId: 'operator-1', storeId: null, currentMemoryWrite: true, frozenMemoryWrite: true })).toEqual({ agentId: 'operator-1', scope: 'private' })
+  it('routes a writable model-only job to root shared memory', () => {
+    expect(resolveAutoLearningTarget({ assignedAgentId: 'operator-1', storeId: null, currentMemoryWrite: true, frozenMemoryWrite: true })).toEqual({ agentId: 'root-ceo', scope: 'shared' })
   })
 
   it('falls back when the frozen or current write boundary is revoked', () => {

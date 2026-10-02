@@ -30,7 +30,7 @@
             :disabled="picking"
             :data-test="`custom-palette-${e.type}`"
             @click="add(e.type)"
-          >{{ e.label }}</button>
+          ><img class="ct-pal-icon" :src="stepAddIcon" alt="" />{{ e.label }}</button>
         </div>
       </div>
     </section>
@@ -62,9 +62,9 @@
             <span class="ct-step-s">{{ summarize(s) }}</span>
           </span>
           <span class="ct-step-btns">
-            <button class="ct-mini" :disabled="i === 0 || picking" title="上移" :data-test="`custom-up-${i}`" @click.stop="move(i, -1)">↑</button>
-            <button class="ct-mini" :disabled="i === steps.length - 1 || picking" title="下移" :data-test="`custom-down-${i}`" @click.stop="move(i, 1)">↓</button>
-            <button class="ct-mini ct-del" :disabled="picking" title="删除这一步" :data-test="`custom-del-${i}`" @click.stop="removeAt(i)">✕</button>
+            <button class="ct-mini" :disabled="i === 0 || picking" title="上移" :data-test="`custom-up-${i}`" @click.stop="move(i, -1)"><img :src="stepUpIcon" alt="上移" /></button>
+            <button class="ct-mini" :disabled="i === steps.length - 1 || picking" title="下移" :data-test="`custom-down-${i}`" @click.stop="move(i, 1)"><img :src="stepDownIcon" alt="下移" /></button>
+            <button class="ct-mini ct-del" :disabled="picking" title="删除这一步" :data-test="`custom-del-${i}`" @click.stop="removeAt(i)"><img :src="stepRemoveIcon" alt="删除" /></button>
           </span>
         </div>
       </div>
@@ -153,7 +153,7 @@
                     title="到店铺页面上点一下：取该行（表格行/列表项）的选择器"
                     :data-test="`custom-pick-${selected}-${f.key}-selector`"
                     @click="pick(selected, f.key, 'selector', 'selector')"
-                  >拾取</button>
+                  ><img :src="elementPickIcon" alt="" />拾取</button>
                 </div>
                 <div class="ct-within-row">
                   <div class="ct-pick-row">
@@ -171,7 +171,7 @@
                       title="到店铺页面上点一下：取该行的整行文案"
                       :data-test="`custom-pick-${selected}-${f.key}-text`"
                       @click="pick(selected, f.key, 'text', 'text')"
-                    >拾取</button>
+                      ><img :src="elementPickIcon" alt="" />拾取</button>
                   </div>
                   <input
                     type="number"
@@ -203,7 +203,7 @@
                   :title="f.pick === 'text' ? '到店铺页面上点一下：取该元素的文案' : '到店铺页面上点一下：取该元素的选择器'"
                   :data-test="`custom-pick-${selected}-${f.key}`"
                   @click="pick(selected, f.key, f.pick)"
-                >拾取</button>
+                ><img :src="elementPickIcon" alt="" />拾取</button>
               </div>
 
               <input
@@ -237,10 +237,10 @@
            不知道去哪儿改——这是从单列改成三栏时最容易丢掉的可用性。 -->
       <div v-if="issues.length" class="ct-issues" data-test="custom-issues">
         <div v-for="(is, k) in issues" :key="k" :class="['ct-issue', is.level]">
-          <b>{{ is.level === 'error' ? '✕' : '!' }}</b> {{ is.message }}
+          <b><img :src="is.level === 'error' ? validationErrorIcon : validationWarningIcon" :alt="is.level === 'error' ? '错误' : '提示'" /></b> {{ is.message }}
         </div>
       </div>
-      <div v-else-if="steps.length" class="ct-ok" data-test="custom-ok">✓ 校验通过，可以创建</div>
+      <div v-else-if="steps.length" class="ct-ok" data-test="custom-ok"><img :src="validationSuccessIcon" alt="通过" />校验通过，可以创建</div>
     </section>
   </div>
 </template>
@@ -274,6 +274,14 @@ import {
   type CustomStepDraft, type CustomStepIssue
 } from '@shared/custom-task'
 import { describePickResult, type ElementPickResult, type PickMode } from '@shared/element-pick'
+import stepUpIcon from '../../assets/generated/ui-icons/custom-step-up-gen.png'
+import stepDownIcon from '../../assets/generated/ui-icons/custom-step-down-gen.png'
+import stepRemoveIcon from '../../assets/generated/ui-icons/custom-step-remove-gen.png'
+import stepAddIcon from '../../assets/generated/ui-icons/custom-step-add-gen.png'
+import elementPickIcon from '../../assets/generated/ui-icons/custom-element-pick-gen.png'
+import validationErrorIcon from '../../assets/generated/ui-icons/custom-validation-error-gen.png'
+import validationWarningIcon from '../../assets/generated/ui-icons/warning.png'
+import validationSuccessIcon from '../../assets/generated/ui-icons/custom-validation-success-gen.png'
 
 const props = defineProps<{
   steps: CustomStepDraft[]
@@ -576,15 +584,17 @@ function move(i: number, delta: number) {
 .ct-filter:focus { outline: none; border-color: var(--color-primary); }
 .ct-group + .ct-group { margin-top: 6px; }
 .ct-group-h {
-  font-size: 10px; color: var(--color-text-muted); padding: 1px 2px 2px;
+  /* --color-text-muted(#98a2b3) 在浅底上只有 2.34:1，2026-10-02 全应用巡检后换成可读灰 */
+  font-size: 10px; color: #5b6472; padding: 1px 2px 2px;
   border-bottom: 1px dashed var(--color-border); margin-bottom: 2px;
 }
 /* 条目压紧：目录共 22 项，栏内高度有限，能多露出一项就少一次滚动 */
 .ct-pal-item {
-  display: block; width: 100%; text-align: left; font-size: 11px; line-height: 1.35;
+  display: flex; align-items: center; gap: 5px; width: 100%; text-align: left; font-size: 11px; line-height: 1.35;
   padding: 3px 6px; border-radius: 4px; color: var(--color-text-secondary);
   border: 1px solid transparent; background: none;
 }
+.ct-pal-icon { width: 14px; height: 14px; flex: 0 0 14px; object-fit: contain; }
 .ct-pal-item:hover { color: #fff; background: var(--color-bg-secondary); border-color: var(--color-primary); }
 /* 拾取期间目录新增被锁定，必须看得出来是禁用而不是"点了没反应" */
 .ct-pal-item:disabled { opacity: .45; cursor: not-allowed; border-color: transparent; color: var(--color-text-muted); }
@@ -616,10 +626,12 @@ function move(i: number, delta: number) {
 }
 .ct-step-btns { display: flex; gap: 3px; flex: 0 0 auto; }
 .ct-mini {
+  display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 20px; font-size: 11px; line-height: 1;
   color: var(--color-text-secondary); border: 1px solid var(--color-border);
   border-radius: 4px; background: var(--color-bg-tertiary);
 }
+.ct-mini img { width: 14px; height: 14px; object-fit: contain; }
 .ct-mini:hover:not(:disabled) { color: #fff; border-color: var(--color-primary); }
 .ct-mini:disabled { opacity: .35; cursor: not-allowed; }
 .ct-del:hover:not(:disabled) { color: #fff; border-color: var(--color-error); background: rgba(239, 68, 68, .18); }
@@ -648,10 +660,12 @@ function move(i: number, delta: number) {
 .ct-pick-row { display: flex; gap: 5px; align-items: stretch; }
 .ct-pick-row input { flex: 1 1 0; width: auto; min-width: 0; }
 .ct-pick {
+  display: inline-flex; align-items: center; gap: 4px;
   flex: 0 0 auto; padding: 0 9px; font-size: 11px; font-family: inherit; white-space: nowrap;
   color: var(--color-text-primary); background: var(--color-bg-elevated);
   border: 1px solid var(--color-primary); border-radius: 4px;
 }
+.ct-pick img { width: 14px; height: 14px; object-fit: contain; }
 .ct-pick:hover { color: #fff; background: var(--color-primary); }
 .ct-pick:disabled { opacity: .45; cursor: not-allowed; border-color: var(--color-border); }
 .ct-within { display: flex; flex-direction: column; gap: 5px; }
@@ -679,10 +693,13 @@ function move(i: number, delta: number) {
   font-size: 10px; line-height: 1.55; padding: 6px 7px;
   border-radius: 4px; border: 1px solid transparent;
 }
+.ct-issue b { display: inline-flex; vertical-align: -3px; margin-right: 2px; }
+.ct-issue b img { width: 14px; height: 14px; object-fit: contain; }
 .ct-issue.error { color: #b54708; background: rgba(239, 68, 68, .12); border-color: rgba(239, 68, 68, .35); }
 .ct-issue.warning { color: #b54708; background: rgba(245, 158, 11, .1); border-color: rgba(245, 158, 11, .3); }
 .ct-ok {
-  flex: 0 0 auto; font-size: 10px; color: var(--color-success);
+  display: flex; align-items: center; gap: 4px; flex: 0 0 auto; font-size: 10px; color: var(--color-success);
   padding: 7px; border-top: 1px solid var(--color-border); background: var(--color-bg-secondary);
 }
+.ct-ok img { width: 14px; height: 14px; object-fit: contain; }
 </style>

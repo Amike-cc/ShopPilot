@@ -154,6 +154,11 @@ export const ERROR_CODES = {
     message: '当前 Agent 没有执行该操作的权限',
     retryable: false
   },
+  AGENT_SINGLETON_ONLY: {
+    code: 'AGENT_SINGLETON_ONLY',
+    message: '当前系统仅支持 root-ceo 单 Agent 运行',
+    retryable: false
+  },
   AGENT_FORBIDDEN: {
     code: 'AGENT_FORBIDDEN',
     message: '当前调用方不能访问 Agent IPC',
@@ -191,12 +196,12 @@ export const ERROR_CODES = {
   },
   AGENT_ROOT_CANNOT_EXECUTE: {
     code: 'AGENT_ROOT_CANNOT_EXECUTE',
-    message: '主 Agent 只负责对话、拆分和派单，不执行任务；需要执行的任务必须派给子 Agent',
+    message: '兼容错误码：当前单 Agent 架构由 root-ceo 统一执行；请检查主 Agent 状态、店铺范围和权限配置',
     retryable: false
   },
   AGENT_NO_EXECUTOR: {
     code: 'AGENT_NO_EXECUTOR',
-    message: '没有可用的 active 子 Agent；请先在“设置 → Agent 团队”创建并激活执行岗位',
+    message: '兼容错误码：当前单 Agent 架构不创建子 Agent；请检查 root-ceo 状态和权限配置',
     retryable: false
   },
   AGENT_INVALID_STATE: {

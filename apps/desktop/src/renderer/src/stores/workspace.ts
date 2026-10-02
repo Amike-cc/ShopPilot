@@ -20,6 +20,20 @@ const BUILTIN_PLATFORM_NAMES = new Set(PLATFORM_CATALOG.map(p => p.name))
 /** 事件监听只挂一次：热重载/重复 init 时重复挂会让每个事件被处理多遍（重复 toast、重复刷新） */
 let eventsSubscribed = false
 
+const MAX_LIVE_RUNS = 128
+const MAX_TASK_LOG_RUNS = 96
+
+function pruneRunRecordMap(map: Record<string, any>, max: number): Record<string, any> {
+  const entries = Object.entries(map)
+  if (entries.length <= max) return map
+  const ranked = entries.slice().map((entry, index) => ({ entry, index }))
+    .sort((a, b) => (Number(b.entry[1]?.updatedAt || 0) || b.index) - (Number(a.entry[1]?.updatedAt || 0) || a.index))
+  const keep = new Set(ranked.slice(0, max).map(({ entry: [id] }) => id))
+  const next: Record<string, any> = {}
+  for (const [id, value] of entries) if (keep.has(id)) next[id] = value
+  return next
+}
+
 export interface StoreRow {
   id: string
   name: string
@@ -155,12 +169,14 @@ export const useWorkspaceStore = defineStore('workspace', {
         .sort((a, b) => (a.group === '未分组' ? 1 : b.group === '未分组' ? -1 : a.group.localeCompare(b.group)))
     },
     displayedTabs(state): TabInfo[] {
-      return state.displayedStoreId ? (state.tabsByStore[state.displayedStoreId] || []) : []
+      const tabs = state.displayedStoreId ? (state.tabsByStore[state.displayedStoreId] || []) : []
+      // 采集专用页是主进程的内部页面：不进用户的标签栏（用户没开过它，就不该看见它出现/消失）
+      return tabs.filter(tab => tab.internal !== true)
     },
     activeTab(state): TabInfo | null {
       if (!state.displayedStoreId) return null
       const activeId = state.activeTabIdByStore[state.displayedStoreId]
-      const tabs = state.tabsByStore[state.displayedStoreId] || []
+      const tabs = (state.tabsByStore[state.displayedStoreId] || []).filter(tab => tab.internal !== true)
       return tabs.find(t => t.id === activeId) || tabs[0] || null
     },
     selectedStore(state): StoreRow | null {
@@ -246,12 +262,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       // ---- 任务事件 - §6.6 ----
       window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, (ev: any) => {
         const prev = this.runLive[ev.runId] || {}
-        this.runLive = {
+        this.runLive = pruneRunRecordMap({
           ...this.runLive,
           [ev.runId]: { ...prev, status: ev.status, phase: ev.phase, stepIndex: ev.stepIndex ?? prev.stepIndex ?? null, message: ev.message || prev.message || '', updatedAt: Date.now() }
-        }
+        }, MAX_LIVE_RUNS)
         const log = (this.taskLogs[ev.runId] || []).concat([{ ...ev, at: Date.now() }])
-        this.taskLogs = { ...this.taskLogs, [ev.runId]: log.slice(-80) }
+        this.taskLogs = pruneRunRecordMap({ ...this.taskLogs, [ev.runId]: log.slice(-80) }, MAX_TASK_LOG_RUNS)
         if (['succeeded', 'failed', 'cancelled'].includes(ev.status)) this.clearConfirmation(ev.runId)
         if (ev.phase === 'finished' || ev.phase === 'failed') { this.refreshTasks() }
       })

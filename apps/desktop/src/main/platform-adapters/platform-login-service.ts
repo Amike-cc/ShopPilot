@@ -256,6 +256,37 @@ function logResult(
 }
 
 /**
+ * 登录检测结果 → 店铺状态。返回 null = **不改状态**。
+ *
+ * 为什么 UNKNOWN / ERROR 不改状态：这两种是"这次没拿到证据"（页面还没渲染、当前标签页
+ * 不是档案页、检测超时、适配器报错），**不是**"确认未登录"。以前这里把非 LOGGED_IN 一律
+ * 写成 offline，于是出现两类假离线（2026-09-30 实测）：
+ *   · 正常页面上检测恒返回 UNKNOWN（适配器缺正向证据）→ 登录成功后仍永久显示离线；
+ *   · 刚登录好的店铺一旦切到没有经营数据锚点的页面（如发票页）→ 立刻被打回离线。
+ * 没证据就保持上一次已确认的结论。
+ *
+ * 为什么明确的否定证据要写 `needs_login` 而**不是** `offline`（2026-10-02 修）：
+ * `offline` 在整套语义里是"**浏览器窗口没开 / 还没确认登录**"，不是"确认没登录"——
+ * 这一点是产品其它地方明确定义并依赖的（`product-publish-rules.precheckPublish` 里
+ * `offline`/`launching` 只记 warning，而 `needs_login` 才阻断发布；`docs/DEVELOPMENT_SPEC.md`
+ * §9.1 的状态机也写着 `launching -> needs_login` / `online -> needs_login` / `needs_login -> online`）。
+ * 此前这里把两种否定证据都塌成 `offline`，于是 `StoreStatus.NEEDS_LOGIN` **在整个代码库里
+ * 一个生产者都没有**，后果是登录已失效的店铺：
+ *   · 店铺卡/侧栏显示成灰色「离线」，和"窗口没开"长得一模一样，看不出要重新登录；
+ *   · 概览页 `hasLoginIssue`（只认 `needs_login`）恒为 false → 登录失效永远不上报；
+ *   · 发布预检里 `needs_login` 的阻断项永不触发 → 明明登录失效仍被放行到后续步骤。
+ *
+ * VERIFY_REQUIRED（平台要求安全验证）同样落到 `needs_login`：它和"登录失效"一样是
+ * "需要用户回店铺浏览器处理"的明确否定证据，状态枚举里没有更贴切的值，而发布/采集
+ * 都必须停在这里等人处理，不能当成"只是窗口没开"放过去。
+ */
+export function storeStatusForLoginResult(status: PlatformLoginStatus): StoreStatus | null {
+  if (status === 'LOGGED_IN') return StoreStatus.ONLINE
+  if (status === 'LOGIN_REQUIRED' || status === 'VERIFY_REQUIRED') return StoreStatus.NEEDS_LOGIN
+  return null
+}
+
+/**
  * 检测某店铺当前页面的登录摘要。检测只使用该店铺 Session 与当前标签页，
  * 不接受 partition、Session 或页面对象来自 Renderer 的输入。
  */
@@ -277,10 +308,12 @@ export function detectStoreLoginStatus(
     if (current) return current
   }
   const promise = runDetection(storeId, runtime, registry, timeoutMs).then(result => {
-    // 在线只表示平台登录态已被真实页面证据确认；打开 Session、页面加载完成或
-    // 检测失败都不能把未登录店铺标成 online。仅默认运行时落库，测试运行时不触碰 DB。
+    // 只有**明确的**证据才改店铺状态：确认登录 → online；确认是登录页/验证页 → needs_login。
+    // 没拿到证据（UNKNOWN/ERROR）不改——理由见 storeStatusForLoginResult 的注释。
+    // 仅默认运行时落库，测试运行时不触碰 DB。
     if (useDedupe) {
-      StoreManager.updateStoreStatus(storeId, result.status === 'LOGGED_IN' ? StoreStatus.ONLINE : StoreStatus.OFFLINE)
+      const nextStatus = storeStatusForLoginResult(result.status)
+      if (nextStatus) StoreManager.updateStoreStatus(storeId, nextStatus)
     }
     return result
   })

@@ -422,7 +422,7 @@ describe('经营采集调度器 · 节拍', () => {
     expect(h.collectCalls).toHaveLength(0)
   })
 
-  realIt('手动刷新放宽并发到 4：四家店同一拍全部开跑（用户在看，不两两排队）', () => {
+  realIt('手动刷新放宽并发到 4：四家店同一拍全部开跑（用户在看，不两两排队）', async () => {
     // 周期采集仍是保守的 2 家；但"刷新数据"是用户按下的，四家串行要等一分多钟。
     const h = use(harness([
       { id: 'store_a', platform: '拼多多' },
@@ -437,7 +437,7 @@ describe('经营采集调度器 · 节拍', () => {
     tickSalesMetricsScheduler()
     expect(h.collectCalls).toHaveLength(4)
     for (const release of releases.splice(0)) release()
-    void drain(6_000, releases, () => (h.db.prepare("SELECT COUNT(*) AS n FROM sales_collection_runs WHERE status='RUNNING'").get() as { n: number }).n)
+    await drain(6_000, releases, () => (h.db.prepare("SELECT COUNT(*) AS n FROM sales_collection_runs WHERE status='RUNNING'").get() as { n: number }).n)
   })
 
   realIt('暂停/恢复/改周期都会推送计划变更事件并反映在视图里', () => {

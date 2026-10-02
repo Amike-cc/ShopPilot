@@ -52,7 +52,7 @@ async function main() {
       await waitForCDP()
       focusApp(child.pid)
       const verifier = spawn(process.execPath, [path.join(ROOT, 'tools', 'acceptance', 'agent-cdp-verify.js')], {
-        stdio: 'inherit', env: { ...process.env, SHOPILOT_CDP_PORT: String(PORT) }
+        stdio: 'inherit', env: { ...process.env, SHOPILOT_CDP_PORT: String(PORT), SHOPPILOT_TEST_AUTOCONFIRM: '1' }
       })
       code = await new Promise(resolve => verifier.on('exit', resolve))
       if (logs.includes('temporary-agent-cdp-key-123456')) {

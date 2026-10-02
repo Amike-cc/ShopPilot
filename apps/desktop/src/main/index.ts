@@ -17,6 +17,7 @@ import { registerProxyAndBackupHandlers } from './ipc/proxy-backup-handlers'
 import { registerPlatformHandlers } from './ipc/platform-handlers'
 import { registerOrderHandlers } from './ipc/order-handlers'
 import { registerSalesMetricsHandlers } from './ipc/sales-metrics-handlers'
+import { registerProductHandlers } from './ipc/product-handlers'
 import { stopSalesMetricsScheduler } from './sales-metrics/sales-metrics-scheduler'
 import { registerTaskHandlers } from './ipc/task-handlers'
 import { registerSessionAndSecurityHandlers } from './ipc/session-security-handlers'
@@ -36,7 +37,7 @@ import { assertNavigableUrl } from '@shared/navigation'
 import { openStoreBrowser, closeStoreBrowser, getStoreTabs } from './browser/window-manager'
 import { startSessionPersistence } from './services/session-persistence'
 import { latestBackupFileOnDisk, recoverDatabaseFromLatestBackup } from './services/backup-manager'
-import { migrateLegacyMemoryRoot } from './services/agent-memory'
+import { migrateLegacyAgentMemoryFilesToRoot, migrateLegacyMemoryRoot } from './services/agent-memory'
 import * as TaskRunner from './tasks/task-runner'
 import { logMain } from './services/logger'
 
@@ -214,7 +215,8 @@ function createWindow(): void {
     webPreferences.contextIsolation = true
     webPreferences.sandbox = true
     webPreferences.webviewTag = false
-    webPreferences.backgroundThrottling = false
+    // 默认允许 Chromium 对隐藏页面节流；当前活动页/任务页由 window-manager 按场景解除。
+    webPreferences.backgroundThrottling = true
 
     const storeId = getWebviewStoreId(params.partition)
     let validPartition = false
@@ -401,6 +403,7 @@ async function initialize(): Promise<void> {
     registerPlatformHandlers()
     registerOrderHandlers()
     registerSalesMetricsHandlers()
+  registerProductHandlers()
     registerTaskHandlers()
     registerSessionAndSecurityHandlers()
     registerUpdateHandlers()
@@ -424,6 +427,17 @@ async function initialize(): Promise<void> {
       if (migrated.moved) logMain('info', `Agent 记忆目录已迁移：${migrated.from} → ${migrated.to}`)
     } catch (e: any) {
       logMain('warn', 'Agent 记忆目录迁移失败（不影响其他功能）: ' + String(e?.message || e))
+    }
+    // 数据库归属迁移后，旧 Agent 的文件目录、Markdown front matter、manifest
+    // 和 SQLite file_path/content_hash 也必须收敛到 root-ceo；失败项留在原处，
+    // 下一次启动会幂等重试，不阻断主窗口启动。
+    try {
+      const migrated = migrateLegacyAgentMemoryFilesToRoot()
+      if (migrated.scanned || migrated.errors.length) {
+        logMain('info', `Agent 记忆文件归属迁移：扫描 ${migrated.scanned}，迁移 ${migrated.migrated}，冲突 ${migrated.conflicts}，失败 ${migrated.failed}`)
+      }
+    } catch (e: any) {
+      logMain('warn', 'Agent 记忆文件归属迁移失败（不影响其他功能）: ' + String(e?.message || e))
     }
 
     // 自动更新（§21）：update.autoCheck 开启时启动后延迟自动检查一次

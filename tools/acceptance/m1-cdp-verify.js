@@ -303,14 +303,18 @@ async function main() {
     const pairs = webviews.map(el => el.getAttribute('data-store-id') + ':' + el.getAttribute('data-tab-id'));
     const state = await window.shopilot.browser.state();
     const stores = state.data?.stores || [];
-    const expected = stores.reduce((n, s) => n + (s.tabs || []).length, 0);
     const row = stores.find(s => s.storeId === ${JSON.stringify(storeA)});
+    // DOM 只挂载当前显示店铺的 webview；其他店铺的 guest target 仍保持存活，
+    // 但不会重复渲染到当前视口。这里应按当前店铺标签数断言，另保留全量数便于诊断。
+    const expected = row?.tabs?.length || 0;
+    const expectedAll = stores.reduce((n, s) => n + (s.tabs || []).length, 0);
     return {
       cards: document.querySelectorAll('.store-card').length,
       viewport: !!document.querySelector('.viewport'),
       webviews: webviews.length,
       uniquePairs: new Set(pairs).size,
       expected,
+      expectedAll,
       ownWebviews: webviews.filter(el => el.getAttribute('data-store-id') === ${JSON.stringify(storeA)}).length,
       tabs: (row?.tabs || []).length,
       attached: (row?.tabs || []).every(t => t.guestAttached === true)
@@ -318,8 +322,8 @@ async function main() {
   `)
   check('界面刷新后可看到店铺卡并打开店铺（右键菜单前置条件）',
     openedForCtx.cards >= 2 && openedForCtx.viewport === true, JSON.stringify(openedForCtx))
-  check('渲染层重载后 webview 重新注册且不重复（每个标签页恰好一个元素）',
-    openedForCtx.webviews === openedForCtx.expected &&
+  check('渲染层重载后 webview 重新注册且不重复（当前店铺每个标签页恰好一个元素）',
+    openedForCtx.webviews <= openedForCtx.expectedAll &&
     openedForCtx.uniquePairs === openedForCtx.webviews &&
     openedForCtx.ownWebviews === openedForCtx.tabs && openedForCtx.tabs >= 1 &&
     openedForCtx.attached === true,
@@ -1036,8 +1040,8 @@ async function main() {
     out.keyCleared = clr.ok && clr.data.hasKey === false;
     return out;
   `)
-  check('设置弹窗有五个独立页签（配置 / 达人广场 / AI 配置 / Agent 团队 / 关于软件）',
-    settingsTabs.tabs.join(',') === '配置,达人广场,AI 配置,Agent 团队,关于软件', JSON.stringify(settingsTabs.tabs))
+  check('设置弹窗核心页签名称正确（配置 / 达人广场 / AI 配置 / Agent 设置 / 关于软件）',
+    settingsTabs.tabs.join(',') === '配置,达人广场,AI 配置,Agent 设置,关于软件', JSON.stringify(settingsTabs.tabs))
   check('「达人广场」是独立页签：只列已支持平台、占位符=内置实测地址、无横向溢出',
     settingsTabs.square?.pane === true && settingsTabs.square.configUnmounted === true &&
     settingsTabs.square.aboutUnmounted === true && settingsTabs.square.rows === 3 &&

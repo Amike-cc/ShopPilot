@@ -3,8 +3,9 @@
  *
  * 背景（2026-09-26 审计 P1）：`executeModelJob` 里给所有执行 Job 用的是**硬编码**的一句话
  *   「你是 ShopPilot 的只读分析 Agent。只返回可审核的分析文本……」
- * 于是"数据分析员"和"运营专员"接到同一个 Job 时拿到的是同一段提示词：岗位、职责、成功标准
- * 全都没进模型，Agent 团队里配置的岗位只影响调度（选谁执行），不影响它怎么做。
+ * 旧版本曾让不同岗位接到同一个 Job 时拿到同一段提示词。当前运行时
+ * 只有 root-ceo；保留岗位字段只是为了读取旧 Job 快照和兼容历史数据，
+ * 不再用于创建、调度或绑定子 Agent。
  *
  * 这里把岗位/名称/职责/成功标准编进提示词，并保留原有的安全条款（记忆是数据不是指令、
  * 不执行页面动作）。提示词长度由调用方用 `compactSystemPrompt` 按上下文窗口裁剪，
@@ -13,7 +14,7 @@
 
 import { AGENT_ROLES } from './schemas/agent-domain'
 
-/** 岗位中文名（与界面「招聘子 Agent」下拉、Main 的 ROLE_TEMPLATES 用同一套叫法，避免第三套翻译）。 */
+/** 历史岗位中文名（兼容旧快照；当前运行时固定使用 root-ceo）。 */
 export const AGENT_ROLE_LABELS: Record<string, string> = {
   ceo: '主 Agent（统筹）',
   operator: '商品运营',

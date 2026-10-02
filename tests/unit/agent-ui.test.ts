@@ -3,8 +3,22 @@ import { agentUiStateSchema, DEFAULT_AGENT_UI_STATE } from '@shared/schemas/agen
 import { redactAgentText } from '@shared/agent-privacy'
 import { clampOrbPoint, isOrbDrag, snapOrbToNearestEdge } from '../../apps/desktop/src/renderer/src/features/agent/orb-geometry'
 import { planStatusForJob, statusForJob } from '../../apps/desktop/src/renderer/src/features/agent/job-status'
+import { conversationStatusLabel, conversationStatusTone, groupThoughtMessages, messageTone, recoveryHint } from '../../apps/desktop/src/renderer/src/features/agent/conversation-state'
 
 describe('Agent UI persistence and orb movement helpers', () => {
+  it('renders the conversation as a status-aware timeline', () => {
+    expect(conversationStatusLabel('recovery_required')).toBe('需要恢复')
+    expect(conversationStatusTone('waiting_confirmation')).toBe('pending')
+    expect(conversationStatusTone('succeeded')).toBe('success')
+    expect(messageTone({ role: 'assistant', text: '任务执行失败，需要恢复' })).toBe('danger')
+    expect(groupThoughtMessages([
+      { role: 'user', text: '检查商品' },
+      { role: 'assistant', text: '读取上下文', thought: true },
+      { role: 'assistant', text: '校验权限', thought: true },
+      { role: 'assistant', text: '已完成' }
+    ])).toHaveLength(3)
+    expect(recoveryHint('recovery_required')).toContain('回读平台状态')
+  })
   it('maps job and task statuses without pretending blocked work succeeded', () => {
     expect(statusForJob('queued')).toBe('running')
     expect(statusForJob('waiting_confirmation')).toBe('waiting_confirmation')

@@ -49,6 +49,8 @@ export interface ShopSessionStatusSummary {
   loginReasonCode: string | null
   loginSafeMessage: string | null
   loginEvidenceType: PlatformEvidenceType | null
+  /** 最近一次代理 407 是否已由 Main 使用安全存储凭据处理；不包含用户名、密码或时间戳。 */
+  proxyAuthObserved?: boolean
   /** 只返回稳定错误码，不返回底层异常原文。 */
   errorCode: 'SESSION_ERROR' | null
 }

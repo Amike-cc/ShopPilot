@@ -129,16 +129,21 @@ export function softwareActionNeedsApproval(type: string): boolean {
  * 都会顺手把风险降级成 read（审计 P0-1 的同一类问题）。
  */
 export const AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS: ReadonlySet<string> = new Set([
-  'closeStore', 'closeTab', 'createAgent', 'activateAgent', 'pauseAgent', 'resumeAgent', 'retireAgent',
+  'closeStore', 'closeTab',
   'createTask', 'deleteTask', 'runTask', 'cancelTaskRun', 'updateTask',
   'createStore', 'updateStore', 'archiveStore', 'restoreStore', 'deleteStorePermanent',
   'restoreBackup',
   'createBookmark', 'deleteBookmark',
   // 达人邀约会把私信真的发出去（提交类），风险等级必须是 write
   'runInvite',
+  // 商品域：采集/预检/回读会写本地台账，发布页代填和接受回读建议会产生明确写入
+  'productSync', 'productDetailCollect', 'productPublishPreflight',
+  'productPublishOpen', 'productPublishVerify', 'productPublishReadback', 'productPublishAccept',
+  'inventoryWriteback', 'skuWriteback', 'fulfillmentPrepare', 'fulfillmentConfirm', 'refundConfirm',
+  'entityApply', 'contentDraft', 'contentPublish',
+  'campaignPlan', 'couponPlan', 'adPlan', 'adConfirm', 'customerDraftReply', 'customerSendReply',
   'createSkill', 'updateSkill', 'deleteSkill', 'createPlugin', 'updatePlugin', 'deletePlugin',
   'approveJob', 'reviewJobResult', 'cancelJob',
-  'updateAgent', 'bindAgentModel',
   'applyEntity'
 ])
 
@@ -161,15 +166,17 @@ export function softwareActionHasSideEffect(type: string): boolean {
  * 必须用同一份判定，否则表单会给出一个提交时才被拒的步骤。
  */
 export const AGENT_CONFIRM_REQUIRED_ACTIONS: ReadonlySet<string> = new Set([
-  'closeStore', 'closeTab', 'createAgent', 'activateAgent', 'pauseAgent', 'resumeAgent', 'retireAgent',
+  'closeStore', 'closeTab',
   'createTask',
   'createStore', 'updateStore', 'archiveStore', 'restoreStore', 'deleteStorePermanent',
   'deleteTask', 'runTask', 'cancelTaskRun', 'restoreBackup',
   'createBookmark', 'deleteBookmark', 'deleteSkill',
+  // 发布页可选代填、以及接受回读建议都可能改变页面或本地草稿，必须人工确认。
+  'productPublishOpen', 'productPublishAccept',
+  'inventoryWriteback', 'skuWriteback', 'fulfillmentConfirm', 'refundConfirm', 'entityApply',
+  'contentPublish', 'adConfirm', 'customerSendReply',
   // Job 闭环里的判定类动作：批准/驳回等待人工确认的 Job、审阅结果、取消 Job。
   'approveJob', 'reviewJobResult', 'cancelJob',
-  // 组织与权限：改岗位边界（店铺范围/工具权限/预算）与模型绑定。
-  'updateAgent', 'bindAgentModel',
   // 插件与任务定义的可逆变更。
   'updatePlugin', 'deletePlugin', 'updateTask',
   // 把平台主体写进店铺营业执照（写库，且可能产生冲突需要人判断）。
@@ -245,9 +252,8 @@ export function parseAgentTurnOutput(raw: string, maxActions = 8): { thought: st
 }
 
 /**
- * 主 Agent（root-ceo）只负责对话、拆分、派单和审核，永远不作为 Job 的执行者。
- * 需要浏览器动作的任务由 Main 从 active 子 Agent 中选一个执行者：
- * 岗位优先级 → 当前负载 → 创建时间，店铺范围必须覆盖目标店铺。
+ * 单 Agent 模式下 root-ceo 负责对话、规划、执行和审核；保留旧执行者类型
+ * 仅用于兼容共享测试和历史数据解析，不参与当前运行时路由。
  */
 export const AGENT_EXECUTOR_ROLE_PRIORITY: Record<string, number> = {
   operator: 0,
@@ -266,8 +272,8 @@ export type AgentExecutorCandidate = {
 }
 
 /**
- * 选择 Job 执行者：岗位优先级 → 当前负载 → 创建时间。
- * requireWritable=true（页面写/提交类任务）时只选非只读范围的 Agent（§4.2/§4.3）。
+ * 选择 Job 执行者：单 Agent 模式只允许 active root-ceo。
+ * requireWritable=true（页面写/提交类任务）时仍应用 root-ceo 的只读范围门禁。
  */
 export function selectExecutorAgent<T extends AgentExecutorCandidate>(
   candidates: readonly T[],
@@ -276,7 +282,7 @@ export function selectExecutorAgent<T extends AgentExecutorCandidate>(
   options: { requireWritable?: boolean } = {}
 ): T | null {
   const eligible = candidates.filter(agent =>
-    agent.id !== ROOT_AGENT_ID
+    agent.id === ROOT_AGENT_ID
     && agent.status === 'active'
     && (!options.requireWritable || agent.storeScope.readOnly !== true)
     && (!storeId || !agent.storeScope.storeIds.length || agent.storeScope.storeIds.includes(storeId))

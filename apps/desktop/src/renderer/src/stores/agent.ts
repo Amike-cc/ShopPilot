@@ -7,7 +7,7 @@ import type {
   AgentSoftwarePlan,
   AgentUiState
 } from '@shared/schemas/agent'
-import { AGENT_UI_MESSAGE_TEXT_MAX, DEFAULT_AGENT_UI_STATE } from '@shared/schemas/agent'
+import { AGENT_CONVERSATION_HISTORY_MAX, AGENT_UI_MESSAGE_TEXT_MAX, DEFAULT_AGENT_UI_STATE } from '@shared/schemas/agent'
 import { describeAgentContextUsage } from '@shared/agent-context'
 import type { TaskCreateInput } from '@shared/schemas/task'
 import { statusForJob, planStatusForJob, type AgentUiStatus } from '../features/agent/job-status'
@@ -65,7 +65,7 @@ export const useAgentStore = defineStore('agent', {
     stateLabel(state): string {
       return ({
         idle: '在线', thinking: '思考中', observing: '观察页面', plan_ready: '计划待确认', validating: '校验计划',
-        creating_task: '派单中', executing_software: '操作软件中', running: '子 Agent 执行中', paused: '已暂停', waiting_confirmation: '等待人工确认',
+        creating_task: '执行中', executing_software: '操作软件中', running: '主 Agent 执行中', paused: '已暂停', waiting_confirmation: '等待人工确认',
         succeeded: '已完成', failed: '执行失败', cancelled: '已取消'
       } as Record<AgentUiStatus, string>)[state.status]
     },
@@ -117,7 +117,7 @@ export const useAgentStore = defineStore('agent', {
       if (!this.uiLoaded) return
       // 存正文而不是 200 字摘要：重载时这里会被用来重建 messages（见 initialize），
       // 存摘要等于每次重启都把旧轮次砍到 200 字，模型随即丢失指代对象。
-      this.ui.messageSummaries = this.messages.slice(-40).map(message => ({
+      this.ui.messageSummaries = this.messages.slice(-AGENT_CONVERSATION_HISTORY_MAX).map(message => ({
         role: message.role, summary: message.text.slice(0, AGENT_UI_MESSAGE_TEXT_MAX), at: message.at
       }))
       // Store state and preload return values are Vue/ContextBridge proxies. Clone in Renderer
@@ -144,7 +144,7 @@ export const useAgentStore = defineStore('agent', {
 
     addMessage(role: AgentMessage['role'], text: string, options: { thought?: boolean; meta?: string } = {}) {
       this.messages.push({ id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, role, text: String(text).slice(0, 2000), at: Date.now(), thought: options.thought === true, meta: options.meta })
-      this.messages = this.messages.slice(-40)
+      this.messages = this.messages.slice(-AGENT_CONVERSATION_HISTORY_MAX)
       this.persistUi()
     },
 
@@ -220,7 +220,7 @@ export const useAgentStore = defineStore('agent', {
       this.lastGoal = trimmed
       // Main 会按当前模型的上下文窗口压缩旧轮次；Renderer 保留更长的
       // 最近历史，让大窗口模型能够继续大型任务，低窗口模型仍能安全裁剪。
-      const history = this.messages.filter(message => !message.thought).slice(-40).map(message => ({ role: message.role, text: message.text.slice(0, 2000) }))
+      const history = this.messages.filter(message => !message.thought).slice(-AGENT_CONVERSATION_HISTORY_MAX).map(message => ({ role: message.role, text: message.text.slice(0, 2000) }))
       if (options.echo !== false) this.addMessage('user', trimmed)
       this.error = null; this.status = 'thinking'; this.busy = true; this.plan = null; this.softwarePlan = null; this.pendingGoal = ''
       let autoRun: 'software' | 'dispatch' | null = null
@@ -232,7 +232,7 @@ export const useAgentStore = defineStore('agent', {
           this.plan = null
           this.softwarePlan = null
           for (const thought of result.data.thoughts || []) this.addMessage('assistant', thought, { thought: true })
-          this.addMessage('assistant', String(result.data.text || '当前没有打开的店铺页面。页面任务需要先打开店铺；打开后我可以生成计划并派给子 Agent。'), {
+          this.addMessage('assistant', String(result.data.text || '当前没有打开的店铺页面。页面任务需要先打开店铺；打开后我可以生成计划并由主 Agent 执行。'), {
             meta: result.data.usage ? describeAgentContextUsage(result.data.usage) : undefined
           })
           if (Array.isArray(result.data.jobIds) && result.data.jobIds.length) void this.watchDelegatedJobs(result.data.jobIds.map(String), trimmed)
@@ -253,8 +253,8 @@ export const useAgentStore = defineStore('agent', {
           this.status = 'plan_ready'
           const auto = result.data.requiresApproval !== true
           this.addMessage('assistant', auto
-            ? `已生成任务计划（${result.data.model}，${result.data.elapsedMs} ms），按自治策略自动派给子 Agent 执行。`
-            : `已生成任务计划（${result.data.model}，${result.data.elapsedMs} ms）。涉及资金，确认后才会派发执行。`)
+            ? `已生成任务计划（${result.data.model}，${result.data.elapsedMs} ms），按自治策略由主 Agent 自动执行。`
+            : `已生成任务计划（${result.data.model}，${result.data.elapsedMs} ms）。涉及资金，确认后才会执行。` )
           if (auto) autoRun = 'dispatch'
         }
       } catch (error: any) {
@@ -319,7 +319,7 @@ export const useAgentStore = defineStore('agent', {
         }
 
         this.status = 'creating_task'
-        // 主 Agent 不执行任务：Main 会把已校验的计划派给店铺范围覆盖、当前负载最低的 active 子 Agent。
+        // 单 Agent 模式：Main 将已校验的计划创建为 root-ceo Job，并由主 Agent 执行。
         const delegated = await window.shopilot.agentDomain.jobDelegate({
           actorAgentId: 'root-ceo',
           goal: normalized.plan.goal,
@@ -340,12 +340,12 @@ export const useAgentStore = defineStore('agent', {
           id: String(data.job.browserTaskId || data.job.id), jobId: String(data.job.id), executorName: data.executor.name,
           name: String(data.job.goal || normalized.plan.name), runId: data.job.browserRunId ? String(data.job.browserRunId) : null,
           status: String(data.job.status), currentStep: null, totalSteps: normalized.taskInput.steps.length,
-          message: runAfterCreate ? `已派给子 Agent「${data.executor.name}」执行` : `已派给子 Agent「${data.executor.name}」，尚未运行`,
+          message: runAfterCreate ? `已由主 Agent「${data.executor.name}」执行` : `已创建主 Agent Job「${data.executor.name}」，尚未运行`,
           errorCode: null, errorMessage: null, results: null, confirmation: null
         }
         this.addMessage('assistant', runAfterCreate
-          ? `主 Agent 不执行任务；已派给子 Agent「${data.executor.name}」执行（Job ${data.job.id}）。进度、证据和审核以 Agent Job 看板为准。`
-          : `已派给子 Agent「${data.executor.name}」（Job ${data.job.id}），尚未运行。`)
+          ? `已由主 Agent「${data.executor.name}」执行（Job ${data.job.id}）。进度、证据和审核以 Agent Job 看板为准。`
+          : `已创建主 Agent Job「${data.executor.name}」（Job ${data.job.id}），尚未运行。` )
         await this.refreshJob()
       } catch (error: any) {
         this.error = { code: error?.code || 'AGENT_TASK_FAILED', message: error?.message || '派单失败' }
@@ -355,7 +355,7 @@ export const useAgentStore = defineStore('agent', {
       } finally { this.busy = false }
     },
 
-    /** 子 Agent 执行期间只读地跟踪 Job；主 Agent 不参与执行。 */
+    /** 主 Agent 执行期间只读地跟踪 Job。 */
     async refreshJob() {
       const jobId = this.task?.jobId
       if (!jobId) return
@@ -403,10 +403,10 @@ export const useAgentStore = defineStore('agent', {
 
     jobMessage(job: any, last: any): string {
       const status = String(job.status)
-      if (status === 'queued') return 'Job 已进入队列，等待子 Agent 执行'
-      if (status === 'accepted') return '子 Agent 已接受 Job'
-      if (status === 'running') return '子 Agent 正在通过现有 TaskRunner 执行'
-      if (status === 'succeeded') return '子 Agent 执行完成，证据已由 Main 落库；请到 Job 看板审核结果'
+      if (status === 'queued') return 'Job 已进入队列，等待主 Agent 执行'
+      if (status === 'accepted') return '主 Agent 已接受 Job'
+      if (status === 'running') return '主 Agent 正在通过现有 TaskRunner 执行'
+      if (status === 'succeeded') return '主 Agent 执行完成，证据已由 Main 落库；请到 Job 看板审核结果'
       if (status === 'cancelled') return 'Job 已取消'
       if (status === 'failed' || ['blocked_permission', 'blocked_budget', 'recovery_required', 'expired'].includes(status)) {
         return String(last?.reason || last?.evidence?.code || status)
@@ -459,7 +459,7 @@ export const useAgentStore = defineStore('agent', {
        this.followUpCompletedKey = followUpKey
        this.followUpInFlight = true
       try {
-        const history = this.messages.filter(message => !message.thought).slice(-40).map(message => ({ role: message.role, text: message.text.slice(0, 2000) }))
+        const history = this.messages.filter(message => !message.thought).slice(-AGENT_CONVERSATION_HISTORY_MAX).map(message => ({ role: message.role, text: message.text.slice(0, 2000) }))
         const result = await window.shopilot.agent.jobFollowUp(goal, jobIds.slice(0, 100), history)
         if (!result.ok) throw result.error
         if (result.data.kind === 'software') {
@@ -489,21 +489,21 @@ export const useAgentStore = defineStore('agent', {
     /** Job 终态复盘：结果/失败原因/下一步建议；不代替人工审核，也不自动重派。 */
     announceJobRecap(job: any, status: string, last: any) {      if (!this.task?.jobId || this.recapAnnouncedJobId === this.task.jobId) return
       this.recapAnnouncedJobId = this.task.jobId
-      const assigned = this.softwareContext?.agents.find(item => item.id === job.assignedAgentId)?.name || String(job.assignedAgentId || '子 Agent')
+      const assigned = this.softwareContext?.agents.find(item => item.id === job.assignedAgentId)?.name || String(job.assignedAgentId || 'root-ceo')
       const results = Array.isArray(job.results) ? job.results.length : 0
       if (status === 'succeeded') {
-        this.addMessage('assistant', `Job ${job.id} 已完成（子 Agent「${assigned}」，证据 ${results} 条）。请到 Job 看板审核结果；未审核的证据不会进入长期记忆。`)
+        this.addMessage('assistant', `Job ${job.id} 已完成（主 Agent「${assigned}」，证据 ${results} 条）。请到 Job 看板审核结果；未审核的证据不会进入长期记忆。`)
         return
       }
       if (status === 'cancelled') {
-        this.addMessage('assistant', `Job ${job.id} 已取消（子 Agent「${assigned}」）。`)
+        this.addMessage('assistant', `Job ${job.id} 已取消（主 Agent「${assigned}」）。`)
         return
       }
       const code = String(last?.evidence?.code || status)
       const hint = code === 'AGENT_MODEL_KEY_REQUIRED' ? '先在“设置 → AI 配置”补齐模型 Key'
-        : code === 'AGENT_BUDGET_BLOCKED' || status === 'blocked_budget' ? '在“Agent 团队”调整 Agent 或模型的日预算后重新派发'
+         : code === 'AGENT_BUDGET_BLOCKED' || status === 'blocked_budget' ? '在“Agent 设置”调整模型 Profile 的日预算后重新运行'
         : code === 'AGENT_PERMISSION_DENIED' ? '检查目标店铺是否已打开、Agent 是否 active、权限快照是否变化'
-        : code === 'AGENT_NO_EXECUTOR' ? '先在“Agent 团队”创建并激活执行子 Agent'
+         : code === 'AGENT_SINGLETON_ONLY' ? '当前系统仅保留 root-ceo 主 Agent，不支持子 Agent、HR 或按 Agent 绑定模型'
         : status === 'recovery_required' ? '在 Job 看板选择“安全恢复”或取消后重派'
         : '查看 Job 事件和证据后决定是否重新派发'
       this.addMessage('assistant', `Job ${job.id} ${status === 'failed' ? '执行失败' : `未完成（${status}）`}（${code}）：${this.task.message}。建议：${hint}。`)
@@ -611,7 +611,7 @@ export const useAgentStore = defineStore('agent', {
           // 只有到这里（确认 + 启动都成功）才能清空确认卡：
           // 此前先清后跑，jobRun 失败时确认卡消失而 Job 仍停在等待确认，用户就再没有入口了。
           task.confirmation = null
-          task.message = approved ? '已确认，子 Agent 继续执行' : '已拒绝，Job 已取消'
+          task.message = approved ? '已确认，主 Agent 继续执行' : '已拒绝，Job 已取消'
         } else {
           // task 门禁同样只在 confirm 成功后才清空；没有运行实例时按失败处理，保留确认态。
           if (!task.runId) throw Object.assign(new Error('任务还没有运行实例，确认无法送达 TaskRunner；请重新派发任务'), { code: 'AGENT_TASK_RUN_MISSING' })

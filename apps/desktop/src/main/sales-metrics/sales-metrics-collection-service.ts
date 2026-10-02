@@ -27,7 +27,7 @@ import { platformAdapterRegistry } from '../platform-adapters/platform-adapter-r
 import { detectStoreLoginStatus } from '../platform-adapters/platform-login-service'
 import * as StoreManager from '../stores/store-manager'
 import * as ShopSessionManager from '../browser/shop-session-manager'
-import { waitForStoreWebContents, openStoreBrowser } from '../browser/window-manager'
+import { borrowCollectionPage } from '../browser/window-manager'
 import { getDatabase } from '../db/database'
 import { isAppLocked } from '../services/security-manager'
 import { logMain } from '../services/logger'
@@ -38,10 +38,15 @@ export interface SalesMetricsRuntime {
   getStore: (storeId: string) => Store | null
   ensureSession: (storeId: string) => Promise<Session>
   getSessionStatus: (storeId: string) => ShopSessionStatusSummary
-  /** 等店铺页面可用（含 DOM <webview> guest 注册）：页面现在由渲染层承载，开店后需要一点时间 */
-  waitForStoreWebContents: (storeId: string, timeoutMs?: number) => Promise<WebContents | null>
-  /** 把店铺页面在后台挂起来（display:false：不抢用户当前页），供无人值守采集自己准备页面 */
-  openStorePage: (storeId: string) => void
+  /**
+   * 借一个**采集专用页面**（独立标签页，不碰用户正在用的标签页）：无人值守采集自己准备页面。
+   * 返回的 `release()` 在采集结束时归还（关专用页；店铺页面按租约规则决定关不关）。
+   * 见 `window-manager.borrowCollectionPage`。
+   */
+  borrowCollectionPage: (storeId: string) => {
+    waitForWebContents: (timeoutMs?: number) => Promise<WebContents | null>
+    release: () => void
+  }
   getAdapter: (platform: string) => PlatformAdapter | null
   detectLoginStatus: (storeId: string) => Promise<PlatformLoginResult>
   isLocked: () => boolean
@@ -55,8 +60,7 @@ function createDefaultRuntime(): SalesMetricsRuntime {
     getStore: StoreManager.getStore,
     ensureSession: ShopSessionManager.ensureSession,
     getSessionStatus: ShopSessionManager.getSessionStatus,
-    waitForStoreWebContents,
-    openStorePage: storeId => openStoreBrowser(storeId, { display: false, source: 'main' }),
+    borrowCollectionPage,
     getAdapter: platform => platformAdapterRegistry.resolveAdapter(platform),
     detectLoginStatus: detectStoreLoginStatus,
     isLocked: isAppLocked,
@@ -227,9 +231,13 @@ export function statusForFailureCode(code: string): SalesMetricsCollectionResult
 
 /**
  * 采集前等待页面就绪的上限：要覆盖"后台打开店铺 → 渲染层挂 webview → 主进程注册 guest →
- * 页面首次导航"这一段。调度器的单轮硬超时是 180s、Adapter 预算 90s，25s 留得下。
+ * 页面首次导航"这一段。调度器的单轮硬超时是 180s、Adapter 预算 120s，45s 留得下。
+ *
+ * 45s（原 25s）：采集现在用的是**专用标签页**（见 borrowCollectionPage），每一轮都要走一遍
+ * "新建标签页 → 渲染层挂隐藏 webview → guest 注册"的冷路径，不再是"复用用户已经开着的页面"。
+ * task-runner 在同一段路径上实测过 15s 不够（2026-09-29 发票采集定时触发），因此对齐到 45s。
  */
-const PAGE_READY_TIMEOUT_MS = 25 * 1000
+const PAGE_READY_TIMEOUT_MS = 45 * 1000
 
 const inFlight = new Map<string, Promise<SalesMetricsCollectionResult>>()
 
@@ -263,6 +271,8 @@ export class SalesMetricsCollectionService {
   private async run(input: { storeId: string; periodType?: SalesMetricsPeriodType; periodStart?: number; periodEnd?: number; timeoutMs?: number }, runContext?: { runId: string }): Promise<SalesMetricsCollectionResult> {
     const store = this.runtime.getStore(input.storeId)
     const result = baseResult(input.storeId, store?.platform || '', input)
+    /** 这一轮采集的**专用页面**：结束时归还（见 finally）。用户的标签页自始至终没被碰过。 */
+    let borrowedPage: ReturnType<SalesMetricsRuntime['borrowCollectionPage']> | null = null
     try {
       if (this.runtime.isLocked()) throw new Error('APP_LOCKED')
       if (!store) throw new Error('STORE_NOT_FOUND')
@@ -291,22 +301,23 @@ export class SalesMetricsCollectionService {
         return this.finish(result, runContext)
       }
 
-      // 页面：无人值守采集必须**自己**把店铺页面准备好。
+      // 页面：无人值守采集必须**自己**准备页面，而且是**采集专用页**（独立标签页）。
       // 调度器每 10 分钟一轮，用户没开着这家店时页面句柄就是空的 —— 旧实现直接报
       // PAGE_NOT_READY（实测 20:47 那一轮四个平台全部折在这里），于是"自动采集"实际上
       // 只在对应用户手工打开过页面时才工作，数据看上去永远不更新。
-      // display:false = 只把页面在后台挂起来（渲染层用隐藏的 webview 承载），不抢用户当前页。
-      let webContents = await this.runtime.waitForStoreWebContents(input.storeId, 1500)
-      if (!webContents) {
-        try {
-          this.runtime.openStorePage(input.storeId)
-          logMain('info', `[sales-metrics] 采集前自动打开店铺页面 store=${input.storeId} platform=${store.platform}`)
-        } catch (error) {
-          // 打开失败不是这里的终局：下面仍按 PAGE_NOT_READY 如实报出（带原因）
-          logMain('warn', `[sales-metrics] 自动打开店铺页面失败 store=${input.storeId}: ${String((error as Error)?.message || error)}`)
-        }
-        webContents = await this.runtime.waitForStoreWebContents(input.storeId, PAGE_READY_TIMEOUT_MS)
+      //
+      // ⚠️ 为什么不用"该店铺的活动标签页"（2026-10-02 用户要求「采集任务时不要影响浏览器使用」）：
+      // 采集要把页面导航到经营数据页、还要点周期控件。用用户的活动标签页 = 每 10 分钟把用户
+      // 正在填的表单/正在看的订单页导航走一次，用户看到的就是"采集一跑我的页面就跳了"。
+      // 专用页不占活动位、不进标签栏（渲染层只挂一个隐藏 webview 给它），用户的标签页一点没动。
+      try {
+        borrowedPage = this.runtime.borrowCollectionPage(input.storeId)
+        logMain('info', `[sales-metrics] 采集前准备采集专用页面 store=${input.storeId} platform=${store.platform}`)
+      } catch (error) {
+        // 打开失败不是这里的终局：下面仍按 PAGE_NOT_READY 如实报出（带原因）
+        logMain('warn', `[sales-metrics] 准备采集专用页面失败 store=${input.storeId}: ${String((error as Error)?.message || error)}`)
       }
+      const webContents = borrowedPage ? await borrowedPage.waitForWebContents(PAGE_READY_TIMEOUT_MS) : null
       if (!webContents || webContents.isDestroyed()) {
         result.status = 'NETWORK_ERROR'; result.reasonCode = 'PAGE_NOT_READY'
         result.safeMessage = `请先打开${store.platform}店铺页面`
@@ -451,6 +462,15 @@ export class SalesMetricsCollectionService {
         : result.status === 'PERMISSION_DENIED' ? 'PERMISSION_DENIED'
         : result.status === 'PAGE_CHANGED' ? 'PAGE_CHANGED' : 'COLLECTION_FAILED'
       return this.finish(result, runContext)
+    } finally {
+      // 采集结束（成功 / 失败 / 异常）一律归还采集专用页：无人值守的采集（每 10 分钟一轮）
+      // 不能把页面一直挂在后台——那是常驻渲染进程，一轮轮攒下来就是用户实报的"占用"问题。
+      // 归还 = 关掉专用标签页 + 按租约规则决定关不关整个店铺页面（用户自己开着/看过的页面不关）。
+      if (borrowedPage) {
+        try { borrowedPage.release() } catch (error) {
+          logMain('warn', `[sales-metrics] 归还采集专用页面失败 store=${input.storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
+        }
+      }
     }
   }
 

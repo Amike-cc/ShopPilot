@@ -1,20 +1,5 @@
 <template>
   <section :class="['dashboard-browser-surface', { 'picker-mode': props.pickerMode }]" data-test="dashboard-browser-surface" aria-label="店铺浏览器">
-    <header class="dashboard-browser-head">
-      <div class="dashboard-browser-store">
-        <PlatformIcon :name="store?.platform" :size="30" />
-        <div class="dashboard-browser-store-copy">
-          <strong>{{ store?.name || '店铺浏览器' }}</strong>
-          <span>{{ store?.platform || '平台' }} · 主界面工作区</span>
-        </div>
-      </div>
-      <div class="dashboard-browser-actions">
-        <button type="button" class="browser-head-button" @click="panel = 'tasks'; panelOpen = true">任务中心</button>
-        <button type="button" class="browser-head-button" data-test="panel-collapse" @click="togglePanel">{{ panelOpen ? '收起侧栏' : '展开侧栏' }}</button>
-        <button type="button" class="browser-head-button primary" @click="emit('back-dashboard')">返回经营总览</button>
-      </div>
-    </header>
-
     <div class="dashboard-browser-tabs" role="tablist" aria-label="店铺标签页">
       <button
         v-for="tab in ws.displayedTabs"
@@ -27,18 +12,29 @@
       >
         <span v-if="tab.loading" class="browser-tab-spinner" aria-hidden="true"></span>
         <span class="browser-tab-title" :title="tab.title || tab.url">{{ tab.title || '新标签页' }}</span>
-        <span class="browser-tab-close" title="关闭标签页" @click.stop="ws.closeTab(tab.id)">×</span>
+        <span class="browser-tab-close" title="关闭标签页" @click.stop="ws.closeTab(tab.id)"><img :src="closeIcon" alt="" /></span>
       </button>
-      <button type="button" class="dashboard-browser-tab-add" title="新标签页" @click="ws.newTab()">＋</button>
+      <button type="button" class="dashboard-browser-tab-add" title="新标签页" @click="ws.newTab()"><img :src="addIcon" alt="" /></button>
+      <!-- 侧栏开关：原先在头部栏里（整条已按用户要求移除），只保留这一个动作挪到标签栏右端。
+           用地址栏同一套图标（透明底），展开/收起靠翻转同一个箭头，避免引入第二个资源。 -->
+      <button
+        type="button"
+        class="dashboard-browser-panel-toggle"
+        :class="{ collapsed: !panelOpen }"
+        data-test="panel-toggle"
+        :title="panelOpen ? '收起侧栏（Ctrl+Shift+B）' : '展开侧栏（Ctrl+Shift+B）'"
+        :aria-expanded="panelOpen"
+        @click="togglePanel"
+      ><img :src="panelToggleIcon" alt="" /></button>
     </div>
 
     <div class="dashboard-browser-address address-bar">
-      <button type="button" class="browser-nav-button" title="后退" @click="ws.tabControl('back')">‹</button>
-      <button type="button" class="browser-nav-button" title="前进" @click="ws.tabControl('forward')">›</button>
-      <button type="button" class="browser-nav-button" title="刷新" @click="ws.tabControl('reload')">⟳</button>
-      <button type="button" class="browser-nav-button home-btn nav-btn" data-test="nav-home" :disabled="!homeUrl" :title="homeUrl ? `店铺首页：${homeUrl}` : '店铺首页'" @click="goHome">⌂</button>
+      <button type="button" class="browser-nav-button" title="后退" @click="ws.tabControl('back')"><img :src="backIcon" alt="" /></button>
+      <button type="button" class="browser-nav-button" title="前进" @click="ws.tabControl('forward')"><img :src="forwardIcon" alt="" /></button>
+      <button type="button" class="browser-nav-button" title="刷新" @click="ws.tabControl('reload')"><img :src="reloadIcon" alt="" /></button>
+      <button type="button" class="browser-nav-button home-btn nav-btn" data-test="nav-home" :disabled="!homeUrl" :title="homeUrl ? `店铺首页：${homeUrl}` : '店铺首页'" @click="goHome"><img :src="homeIcon" alt="" /></button>
       <label class="dashboard-browser-url" aria-label="当前页面地址">
-        <span aria-hidden="true">⌕</span>
+        <img :src="searchIcon" alt="" />
         <input v-model="urlDraft" spellcheck="false" @keydown.enter="submitUrl" />
       </label>
       <span class="dashboard-browser-hint">页面内嵌 · 每店独立会话</span>
@@ -50,7 +46,7 @@
           <webview
             v-for="item in openWebviews"
             :key="item.key"
-            :ref="element => setWebviewRef(item.key, element)"
+            :ref="webviewRefCallback(item.key)"
             class="dashboard-browser-webview"
             :class="{ active: item.storeId === ws.displayedStoreId && item.tabId === ws.activeTab?.id }"
             :partition="`persist:store_${item.storeId}`"
@@ -68,7 +64,7 @@
             <strong>浏览器视图诊断</strong>
             <span v-for="diagnostic in webviewDiagnostics" :key="diagnostic.key">
               {{ diagnostic.text }}
-              <button v-if="diagnostic.failed" type="button" class="mini-btn" @click="retryWebview(diagnostic.key)">重试</button>
+              <button v-if="diagnostic.failed" type="button" class="mini-btn icon-btn" @click="retryWebview(diagnostic.key)"><img class="button-icon" :src="browserRetryIcon" alt="" />重试</button>
             </span>
           </div>
         </div>
@@ -77,7 +73,7 @@
       <aside v-if="panelOpen" class="dashboard-browser-panel right-panel" data-test="right-panel" data-dashboard-test="dashboard-browser-panel" aria-label="店铺工作台侧栏">
         <div class="dashboard-browser-panel-tabs panel-tabs" role="tablist" aria-label="店铺工作台面板">
           <button v-for="item in panelItems" :key="item.key" type="button" :class="['ptab', { active: panel === item.key, on: panel === item.key }]" role="tab" :aria-selected="panel === item.key" @click="selectPanel(item.key)">
-            <span class="panel-tab-icon" :data-icon="item.icon" aria-hidden="true"></span>{{ item.label }}
+            <img class="panel-tab-icon" :src="item.icon" alt="" />{{ item.label }}
           </button>
         </div>
 
@@ -87,90 +83,91 @@
         </div>
 
         <div v-if="panel === 'bookmarks'" class="dashboard-browser-panel-body">
-          <div class="browser-panel-heading"><strong>收藏</strong><button type="button" @click="ws.refreshBookmarks()">刷新</button></div>
+          <div class="browser-panel-heading"><strong>收藏</strong><button type="button" @click="ws.refreshBookmarks()"><img class="button-icon" :src="workspaceRefreshIcon" alt="" />刷新</button></div>
           <div v-if="entryRoutes.length" class="env-sec" data-test="entry-routes">
             <div class="env-h"><PlatformIcon :name="displayedPlatformName" :size="14" /><span class="entry-routes-title">{{ displayedPlatformName }} · 平台入口</span></div>
-            <button v-for="route in entryRoutes" :key="route.id" type="button" class="browser-panel-row entry-route" data-test="entry-route" @click="ws.navigate(route.url)"><span class="browser-panel-row-copy"><strong class="row-main">{{ route.title }}</strong><small>{{ shortUrl(route.url) }}</small></span><span class="browser-panel-row-action">›</span></button>
+            <button v-for="route in entryRoutes" :key="route.id" type="button" class="browser-panel-row entry-route" data-test="entry-route" @click="ws.navigate(route.url)"><span class="browser-panel-row-copy"><strong class="row-main">{{ route.title }}</strong><small>{{ shortUrl(route.url) }}</small></span><span class="browser-panel-row-action"><img :src="forwardIcon" alt="" /></span></button>
             <div class="env-note">平台入口由内置适配器提供，页面改版可能调整地址；失效可直接在下方自建收藏。</div>
           </div>
-          <div v-if="!ws.bookmarks.length" class="browser-panel-empty">暂无收藏</div>
+          <div v-if="!ws.bookmarks.length" class="browser-panel-empty"><img class="browser-state-art" :src="bookmarksArt" alt="暂无收藏" /><span>暂无收藏</span></div>
           <button v-for="bookmark in ws.bookmarks" :key="bookmark.id" type="button" class="browser-panel-row" @click="ws.navigate(bookmark.url)">
             <span class="browser-panel-row-copy"><strong>{{ bookmark.title || bookmark.url }}</strong><small>{{ shortUrl(bookmark.url) }}</small></span>
-            <span class="browser-panel-row-action" title="删除收藏" @click.stop="removeBookmark(bookmark.id)">×</span>
+            <span class="browser-panel-row-action" title="删除收藏" @click.stop="removeBookmark(bookmark.id)"><img :src="deleteIcon" alt="" /></span>
           </button>
         </div>
 
         <div v-else-if="panel === 'downloads'" class="dashboard-browser-panel-body">
-          <div class="browser-panel-heading"><strong>下载</strong><button type="button" @click="ws.refreshDownloads()">刷新</button></div>
-          <div v-if="!ws.downloads.length" class="browser-panel-empty">暂无下载</div>
+          <div class="browser-panel-heading"><strong>下载</strong><button type="button" @click="ws.refreshDownloads()"><img class="button-icon" :src="workspaceRefreshIcon" alt="" />刷新</button></div>
+          <div v-if="!ws.downloads.length" class="browser-panel-empty"><img class="browser-state-art" :src="downloadsArt" alt="暂无下载" /><span>暂无下载</span></div>
           <button v-for="download in ws.downloads" :key="download.id" type="button" class="browser-panel-row" @click="showInFolder(download.id)">
             <span class="browser-panel-row-copy"><strong :title="download.fileName">{{ download.fileName || '未命名文件' }}</strong><small>{{ downloadState(download.state) }}<template v-if="download.sizeBytes"> · {{ formatSize(download.sizeBytes) }}</template></small></span>
-            <span class="browser-panel-row-action">↗</span>
+            <span class="browser-panel-row-action"><img :src="openIcon" alt="" /></span>
           </button>
         </div>
 
         <div v-else-if="panel === 'env'" class="dashboard-browser-panel-body panel-body env-body">
-          <div class="browser-panel-heading"><strong>环境与安全</strong><button type="button" @click="refreshEnvironment">刷新</button></div>
+          <div class="browser-panel-heading"><strong>环境与安全</strong><button type="button" @click="refreshEnvironment"><img class="button-icon" :src="workspaceRefreshIcon" alt="" />刷新</button></div>
           <div class="env-sec">
             <div class="env-h">网络出口</div>
             <div class="bind-row"><select v-model="proxyBindId" aria-label="网络出口" @change="applyBind"><option value="">直连（不使用代理）</option><option v-for="p in proxies" :key="p.id" :value="p.id">{{ p.label || `${p.host}:${p.port}` }}</option></select></div>
             <div v-if="envBindingNote" class="env-note">{{ envBindingNote }}</div>
-            <div v-if="lastProxyAuth" class="env-note ok">✔ 已注入代理凭据 {{ lastProxyAuth.username }}（{{ new Date(lastProxyAuth.at).toLocaleTimeString() }}）</div>
+            <div v-if="proxyAuthObserved" class="env-note ok">✔ 最近一次代理认证已由主进程安全处理</div>
           </div>
 
           <div class="env-sec">
             <div class="env-h">代理列表</div>
-            <div v-if="!proxies.length" class="proxy-item proxy-empty-row"><div class="p-info"><div class="row-main">暂无代理</div><div class="row-sub">添加代理后可检测或删除</div></div><button type="button" class="row-del" disabled aria-label="暂无可删除代理">×</button></div>
+            <div v-if="!proxies.length" class="proxy-item proxy-empty-row"><img class="browser-inline-art" :src="networkArt" alt="暂无代理" /><div class="p-info"><div class="row-main">暂无代理</div><div class="row-sub">添加代理后可检测或删除</div></div><button type="button" class="row-del" disabled aria-label="暂无可删除代理"><img :src="deleteIcon" alt="" /></button></div>
             <div v-for="p in proxies" :key="p.id" class="proxy-item">
               <span class="p-dot" :class="`proxy-${p.status}`" :title="`状态：${p.status}`"></span>
               <div class="p-info"><div class="row-main">{{ p.label || p.host }}<span v-if="p.hasCredential" title="含凭据"> 🔑</span></div><div class="row-sub">{{ p.type }}://{{ p.host }}:{{ p.port }} · {{ p.lastLatencyMs != null ? `${p.lastLatencyMs} ms` : '未检测' }}</div></div>
               <button type="button" class="mini-btn" :disabled="testingIds.includes(p.id)" @click="testProxy(p)">{{ testingIds.includes(p.id) ? '…' : '检测' }}</button>
-              <button type="button" class="row-del" title="删除" @click="removeProxy(p.id)">×</button>
+              <button type="button" class="row-del" title="删除" @click="removeProxy(p.id)"><img :src="deleteIcon" alt="" /></button>
             </div>
             <div class="proxy-add">
               <input v-model="np.label" placeholder="名称（可选）" />
               <div class="add-line"><select v-model="np.type" aria-label="代理类型"><option value="http">http</option><option value="https">https</option><option value="socks5">socks5</option></select><input v-model="np.host" class="f-host" placeholder="主机" /><input v-model.number="np.port" class="f-port" type="number" placeholder="端口" /></div>
               <div class="add-line"><input v-model="np.user" placeholder="用户名（可选）" autocomplete="off" /><input v-model="np.pass" type="password" placeholder="密码（可选，本机加密存储）" autocomplete="new-password" /></div>
-              <button type="button" class="mini-btn primary" :disabled="!np.host || !np.port" @click="addProxy">保存代理</button>
+              <button type="button" class="mini-btn primary" :disabled="!np.host || !np.port" @click="addProxy"><img class="button-icon" :src="settingsSaveIcon" alt="" />保存代理</button>
             </div>
           </div>
 
           <div class="env-sec">
             <div class="env-h">环境指纹 <button type="button" class="mini-btn env-action" :disabled="verifying" @click="verifyEnv">{{ verifying ? '验证中…' : '打开店铺页面后验证' }}</button></div>
-            <div v-if="!verifyItems.length" class="env-note">未验证。字段实际值需在店铺浏览器打开后采集，无法验证的字段如实标记“未验证”。</div>
-            <div v-for="item in verifyItems" :key="item.field" class="verify-item"><span>{{ item.state === 'verified' ? '✅' : '❓' }}</span><div class="v-info"><div class="row-main">{{ item.field }}</div><div class="row-sub" :title="`期望 ${item.expected} / 实际 ${item.actual ?? '—'}`">期望 {{ clip(item.expected) }} → 实际 {{ clip(item.actual) }}</div></div></div>
+            <div v-if="!verifyItems.length" class="env-note env-empty-note"><img class="browser-inline-art" :src="networkArt" alt="环境尚未验证" /><span>未验证。字段实际值需在店铺浏览器打开后采集，无法验证的字段如实标记“未验证”。</span></div>
+            <div v-for="item in verifyItems" :key="item.field" class="verify-item"><img class="verify-status-icon" :src="item.state === 'verified' ? verifiedIcon : unknownIcon" :alt="item.state === 'verified' ? '已验证' : '未验证'" /><div class="v-info"><div class="row-main">{{ item.field }}</div><div class="row-sub" :title="`期望 ${item.expected} / 实际 ${item.actual ?? '—'}`">期望 {{ clip(item.expected) }} → 实际 {{ clip(item.actual) }}</div></div></div>
           </div>
 
           <div class="env-sec" data-test="session-sec">
             <div class="env-h">会话与 Cookie</div>
-            <div class="cf-btns"><button type="button" class="mini-btn" data-test="btn-export-session" :disabled="secBusy" @click="exportSession">导出加密会话包…</button><button type="button" class="mini-btn" data-test="btn-import-session" :disabled="secBusy" @click="importSession">导入会话包…</button></div>
+            <div class="cf-btns"><button type="button" class="mini-btn" data-test="btn-export-session" :disabled="secBusy" @click="exportSession"><img class="button-icon" :src="sessionExportIcon" alt="" />导出加密会话包…</button><button type="button" class="mini-btn" data-test="btn-import-session" :disabled="secBusy" @click="importSession"><img class="button-icon" :src="sessionImportIcon" alt="" />导入会话包…</button></div>
             <div class="env-note">导出包经口令加密并带有效期；口令由主进程托管窗口采集，不经过界面脚本。</div>
             <input v-model="ckSearch" class="ck-search" placeholder="搜索 Cookie（名称/域）" @input="refreshCookies" />
             <div class="row-sub cookie-count">共 {{ cookiesTotal }} 条<span v-if="ckSearch">（筛选后 {{ cookies.length }}）</span></div>
-            <div v-for="cookie in cookies.slice(0, 40)" :key="cookie.domain + cookie.path + cookie.name" class="proxy-item ck-item"><div class="p-info"><div class="row-main" :title="cookie.valuePreview">{{ cookie.name }}<span v-if="cookie.httpOnly" class="ck-flag">HttpOnly</span><span v-if="cookie.secure" class="ck-flag">Secure</span></div><div class="row-sub">{{ cookie.domain }}{{ cookie.path }} · {{ cookie.session ? '会话级' : cookie.expires }} · {{ cookie.valuePreview }}</div></div><button type="button" class="row-del" title="删除该 Cookie" @click="delCookie(cookie)">×</button></div>
+            <div v-for="cookie in cookies.slice(0, 40)" :key="cookie.domain + cookie.path + cookie.name" class="proxy-item ck-item"><div class="p-info"><div class="row-main" :title="cookie.valuePreview">{{ cookie.name }}<span v-if="cookie.httpOnly" class="ck-flag">HttpOnly</span><span v-if="cookie.secure" class="ck-flag">Secure</span></div><div class="row-sub">{{ cookie.domain }}{{ cookie.path }} · {{ cookie.session ? '会话级' : cookie.expires }} · {{ cookie.valuePreview }}</div></div><button type="button" class="row-del" title="删除该 Cookie" @click="delCookie(cookie)"><img :src="deleteIcon" alt="" /></button></div>
             <button v-if="cookiesTotal > 0" type="button" class="mini-btn danger-btn" @click="clearCookies">清空该店铺全部 Cookie</button>
           </div>
 
           <div class="env-sec" data-test="lock-sec">
             <div class="env-h">应用锁</div>
             <template v-if="!ws.securityEnabled"><div class="env-note">未设置主密码。设置后可随时锁定应用；锁定会隐藏浏览器视图并拒绝业务操作。</div><input v-model="pw1" type="password" placeholder="新主密码（≥8 位）" autocomplete="new-password" /><input v-model="pw2" type="password" placeholder="再次输入" autocomplete="new-password" /><button type="button" class="mini-btn primary" data-test="btn-set-pw" :disabled="pw1.length < 8 || pw1 !== pw2" @click="setMasterPw">设置主密码</button></template>
-            <template v-else><div class="cf-btns"><button type="button" class="mini-btn primary" data-test="btn-lock-now" @click="lockNow">🔒 立即锁定</button><button type="button" class="mini-btn" @click="showChangePw = !showChangePw">{{ showChangePw ? '收起' : '更换密码' }}</button><button type="button" class="mini-btn danger-btn" @click="removePw">移除主密码</button></div><div class="bind-row idle-row"><span class="row-sub">空闲自动锁定</span><select v-model.number="idleMinSel" data-test="sel-idle" @change="applyIdle"><option :value="0">关闭</option><option :value="5">5 分钟</option><option :value="15">15 分钟</option><option :value="30">30 分钟</option><option :value="60">60 分钟</option></select></div><template v-if="showChangePw"><input v-model="oldPw" type="password" placeholder="旧主密码" autocomplete="off" /><input v-model="pw1" type="password" placeholder="新主密码（≥8 位）" autocomplete="new-password" /><input v-model="pw2" type="password" placeholder="再次输入" autocomplete="new-password" /><button type="button" class="mini-btn primary" :disabled="!oldPw || pw1.length < 8 || pw1 !== pw2" @click="setMasterPw">更新</button></template></template>
+            <template v-else><div class="cf-btns"><button type="button" class="mini-btn primary" data-test="btn-lock-now" @click="lockNow"><img class="button-icon" :src="securityLockIcon" alt="" />立即锁定</button><button type="button" class="mini-btn" @click="showChangePw = !showChangePw">{{ showChangePw ? '收起' : '更换密码' }}</button><button type="button" class="mini-btn danger-btn" @click="removePw">移除主密码</button></div><div class="bind-row idle-row"><span class="row-sub">空闲自动锁定</span><select v-model.number="idleMinSel" data-test="sel-idle" @change="applyIdle"><option :value="0">关闭</option><option :value="5">5 分钟</option><option :value="15">15 分钟</option><option :value="30">30 分钟</option><option :value="60">60 分钟</option></select></div><template v-if="showChangePw"><input v-model="oldPw" type="password" placeholder="旧主密码" autocomplete="off" /><input v-model="pw1" type="password" placeholder="新主密码（≥8 位）" autocomplete="new-password" /><input v-model="pw2" type="password" placeholder="再次输入" autocomplete="new-password" /><button type="button" class="mini-btn primary" :disabled="!oldPw || pw1.length < 8 || pw1 !== pw2" @click="setMasterPw">更新</button></template></template>
             <div v-if="secMsg" class="env-note" :class="{ ok: secMsgOk }">{{ secMsg }}</div>
           </div>
 
           <div class="env-sec" data-test="diag-sec">
-            <div class="env-h">备份与诊断</div><div class="cf-btns wrap"><button type="button" class="mini-btn" data-test="btn-backup" :disabled="busyBackup" @click="doBackup">{{ busyBackup ? '备份中…' : '立即备份数据库' }}</button><button type="button" class="mini-btn" data-test="btn-diag" :disabled="busyDiag" @click="doDiagnostics">导出诊断包</button><button type="button" class="mini-btn" @click="doAuditExport">导出审计日志</button></div>
-            <div v-if="backups.length" class="row-sub backup-row">最近备份：{{ backups[0].createdAt ? new Date(backups[0].createdAt).toLocaleString() : '—' }}（{{ backups[0].sizeBytes ? (backups[0].sizeBytes / 1024).toFixed(0) : '—' }} KB） <button type="button" class="mini-btn" @click="doRestore(backups[0].id)">恢复到此备份</button></div>
+            <div class="env-h">备份与诊断</div><div class="cf-btns wrap"><button type="button" class="mini-btn" data-test="btn-backup" :disabled="busyBackup" @click="doBackup"><img class="button-icon" :src="databaseBackupIcon" alt="" />{{ busyBackup ? '备份中…' : '立即备份数据库' }}</button><button type="button" class="mini-btn" data-test="btn-diag" :disabled="busyDiag" @click="doDiagnostics"><img class="button-icon" :src="diagnosticsIcon" alt="" />导出诊断包</button><button type="button" class="mini-btn" data-test="btn-memory-diag" :disabled="busyMemoryDiag" @click="readMemoryDiagnostics"><img class="button-icon" :src="memorySnapshotIcon" alt="" />{{ busyMemoryDiag ? '读取中…' : '读取内存快照' }}</button><button type="button" class="mini-btn" @click="doAuditExport"><img class="button-icon" :src="auditLogIcon" alt="" />导出审计日志</button></div>
+            <div v-if="backups.length" class="row-sub backup-row">最近备份：{{ backups[0].createdAt ? new Date(backups[0].createdAt).toLocaleString() : '—' }}（{{ backups[0].sizeBytes ? (backups[0].sizeBytes / 1024).toFixed(0) : '—' }} KB） <button type="button" class="mini-btn" @click="doRestore(backups[0].id)"><img class="button-icon" :src="backupRestoreIcon" alt="" />恢复到此备份</button></div>
+            <div v-if="memoryDiag" class="row-sub memory-diag" data-test="memory-diag-result">内存 {{ formatMemory(memoryDiag.main?.rss) }} · 店铺 {{ memoryDiag.totals?.openStores || 0 }} · 标签 {{ memoryDiag.totals?.tabs || 0 }} · guest {{ memoryDiag.totals?.attachedGuests || 0 }} · WebContents {{ memoryDiag.totals?.webContents || 0 }}</div>
             <div class="env-note">诊断包只含版本、系统、迁移版本、代理体检与脱敏日志，不含会话 Cookie、密码或订单原文。</div>
           </div>
         </div>
 
         <div v-else class="dashboard-browser-panel-body task-panel-body">
-          <div class="browser-panel-heading"><strong>任务中心</strong><span class="browser-panel-heading-actions"><button type="button" @click="ws.refreshTasks()">刷新</button><button type="button" data-test="task-new" @click="emit('open-tasks', true)">新建任务</button></span></div>
+          <div class="browser-panel-heading"><strong>任务中心</strong><span class="browser-panel-heading-actions"><button type="button" @click="ws.refreshTasks()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button><button type="button" data-test="task-new" @click="emit('open-tasks', true)"><img class="button-icon" :src="taskAddIcon" alt="" />新建任务</button></span></div>
           <div class="task-subtabs" data-test="task-subtabs" role="tablist"><button type="button" :class="{ on: taskSubTab === 'tasks' }" data-test="task-tab-tasks" @click="taskSubTab = 'tasks'">任务列表</button><button type="button" :class="{ on: taskSubTab === 'invite' }" data-test="task-tab-invite" @click="taskSubTab = 'invite'">达人邀约</button><button type="button" class="pending" :class="{ on: taskSubTab === 'todo' }" data-test="task-tab-todo" @click="taskSubTab = 'todo'">待开发</button></div>
           <template v-if="taskSubTab === 'tasks'">
             <div v-if="!taskRows.length" class="browser-panel-empty">当前店铺暂无任务</div>
-            <article v-for="task in taskRows" :key="task.id" class="browser-task-row task-card" data-test="task-card"><div class="browser-task-copy"><strong :title="task.name">{{ task.name }}</strong><small>{{ taskStatus(task) }}</small><span class="browser-task-progress"><i :style="{ width: `${taskProgress(task)}%` }"></i></span></div><span class="browser-task-percent">{{ taskProgress(task) }}%</span><button type="button" class="mini-btn task-run-button" data-test="task-run" :disabled="taskActive(task)" @click="runTask(task)">{{ taskActive(task) ? '运行中' : '运行' }}</button><button v-if="taskActive(task)" type="button" class="browser-panel-row-action" title="取消任务" @click="cancelTask(task)">×</button></article>
+            <article v-for="task in taskRows" :key="task.id" class="browser-task-row task-card" data-test="task-card"><div class="browser-task-copy"><strong :title="task.name">{{ task.name }}</strong><small>{{ taskStatus(task) }}</small><span class="browser-task-progress"><i :style="{ width: `${taskProgress(task)}%` }"></i></span></div><span class="browser-task-percent">{{ taskProgress(task) }}%</span><button type="button" class="mini-btn task-run-button" data-test="task-run" :disabled="taskActive(task)" @click="runTask(task)"><img class="button-icon" :src="taskActive(task) ? browserPauseIcon : browserStartIcon" alt="" />{{ taskActive(task) ? '运行中' : '运行' }}</button><button v-if="taskActive(task)" type="button" class="browser-panel-row-action" title="取消任务" @click="cancelTask(task)"><img :src="deleteIcon" alt="" /></button></article>
             <button type="button" class="browser-panel-link" @click="emit('open-tasks', false)">打开完整任务中心 <span>›</span></button>
           </template>
           <section v-else-if="taskSubTab === 'invite'" class="invite-panel" data-test="invite-panel">
@@ -202,7 +199,7 @@
                   <div class="invite-form-grid"><label class="invite-field"><span>邀约联系人</span><input v-model="invite.contact" data-test="invite-contact" placeholder="联系人" /></label><label class="invite-field"><span>微信号</span><input v-model="invite.wechat" data-test="invite-wechat" placeholder="微信号" /></label><label class="invite-field"><span>手机号</span><input v-model="invite.phone" data-test="invite-phone" placeholder="手机号" /></label></div>
                 </template>
                 <ul v-if="inviteMissingItems.length" class="invite-missing" data-test="invite-missing"><li v-for="item in inviteMissingItems" :key="item">{{ item }}</li></ul>
-                <div class="invite-start-row"><button type="button" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="startInvite">{{ inviteSubmitting ? '正在启动…' : '▶ 开始邀约' }}</button><span class="row-sub">{{ inviteReady ? '配置完整，可创建真实任务' : '补齐必填项后可开始' }}</span></div>
+                <div class="invite-start-row"><button type="button" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="startInvite"><img class="button-icon" :src="browserStartIcon" alt="" />{{ inviteSubmitting ? '正在启动…' : '开始邀约' }}</button><span class="row-sub">{{ inviteReady ? '配置完整，可创建真实任务' : '补齐必填项后可开始' }}</span></div>
               </template>
             </div>
             <div class="env-sec invite-live-sec"><div class="env-h">达人邀约实时日志<span v-if="inviteLatest" class="row-sub"> · {{ inviteStatus(inviteLatest) }}</span></div>
@@ -210,7 +207,7 @@
               <template v-else>
                 <div class="invite-live-stuck" data-test="invite-live-stuck">{{ inviteStuckText(inviteLatest) }}</div>
                 <div class="step-row" v-for="(step, index) in (inviteLatest.steps || [])" :key="`${inviteLatest.id}-${index}`"><span class="s-ico">{{ inviteStepIcon(inviteLatest, index) }}</span><div class="v-info"><div class="row-main">第 {{ index + 1 }} 步 · {{ inviteStepLabel(step) }}</div><div class="row-sub">{{ inviteStepInput(step) }}</div></div></div>
-                <div class="tc-btns" v-if="inviteRunId(inviteLatest)"><button v-if="inviteActive(inviteLatest)" type="button" class="mini-btn" data-test="invite-live-stop" @click="stopInvite(inviteLatest)">停止</button><button type="button" class="mini-btn" @click="ws.refreshTasks()">刷新</button></div>
+                <div class="tc-btns" v-if="inviteRunId(inviteLatest)"><button v-if="inviteActive(inviteLatest)" type="button" class="mini-btn" data-test="invite-live-stop" @click="stopInvite(inviteLatest)"><img class="button-icon" :src="browserStopIcon" alt="" />停止</button><button type="button" class="mini-btn" @click="ws.refreshTasks()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button></div>
                 <div v-if="inviteLiveMessage(inviteLatest)" class="row-sub invite-message">{{ inviteLiveMessage(inviteLatest) }}</div>
                 <div ref="inviteLiveLogEl" class="log-box invite-live-log" data-test="invite-live-log"><div v-if="!inviteLogs(inviteLatest).length" class="log-line">等待运行输出…开始邀约后，这里的日志会实时滚动，卡住时看停在最后几行。</div><div v-for="(log, index) in inviteLogs(inviteLatest)" :key="`${inviteRunId(inviteLatest)}-${index}`" class="log-line">{{ inviteLogText(log) }}</div></div>
               </template>
@@ -222,8 +219,8 @@
       </aside>
 
       <aside v-else class="dashboard-browser-panel right-panel collapsed panel-rail" data-test="right-panel" data-dashboard-test="dashboard-browser-panel" aria-label="已收起的店铺工作台侧栏">
-        <button type="button" class="panel-rail-expand" data-test="panel-expand" title="展开侧栏" @click="setPanelOpen(true)">‹</button>
-        <button v-for="item in panelItems" :key="item.key" type="button" class="panel-rail-button" :class="{ on: panel === item.key }" :data-test="`rail-${item.key}`" :title="item.label" @click="openPanel(item.key)">{{ item.icon }}</button>
+        <button type="button" class="panel-rail-expand" data-test="panel-expand" title="展开侧栏" @click="setPanelOpen(true)"><img :src="panelExpandIcon" alt="" /></button>
+        <button v-for="item in panelItems" :key="item.key" type="button" class="panel-rail-button" :class="{ on: panel === item.key }" :data-test="`rail-${item.key}`" :title="item.label" @click="openPanel(item.key)"><img :src="item.icon" alt="" /></button>
       </aside>
     </div>
   </section>
@@ -232,13 +229,50 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import PlatformIcon from '../../components/PlatformIcon.vue'
+import bookmarksArt from '../../assets/ui/browser/bookmarks.png'
+import downloadsArt from '../../assets/ui/browser/downloads.png'
+import networkArt from '../../assets/ui/browser/network.png'
+import homeIcon from '../../assets/icons/utility-home.svg'
+import bookmarksIcon from '../../assets/icons/browser-bookmarks.svg'
+import downloadsIcon from '../../assets/icons/browser-downloads.svg'
+import envIcon from '../../assets/icons/browser-env.svg'
+import tasksIcon from '../../assets/icons/browser-tasks.svg'
+import addIcon from '../../assets/generated/ui-icons/add.png'
+import closeIcon from '../../assets/generated/ui-icons/close.png'
+import deleteIcon from '../../assets/generated/ui-icons/delete-gen.png'
+import searchIcon from '../../assets/generated/ui-icons/search.png'
+import securityLockIcon from '../../assets/generated/ui-icons/security-lock-gen.png'
+import backIcon from '../../assets/generated/ui-icons/back-gen.png'
+import forwardIcon from '../../assets/generated/ui-icons/forward-gen.png'
+import reloadIcon from '../../assets/generated/ui-icons/reload-gen.png'
+import openIcon from '../../assets/generated/ui-icons/open-gen.png'
+import browserRetryIcon from '../../assets/generated/ui-icons/browser-retry-gen.png'
+import sessionExportIcon from '../../assets/generated/ui-icons/session-export-gen.png'
+import sessionImportIcon from '../../assets/generated/ui-icons/session-import-gen.png'
+import databaseBackupIcon from '../../assets/generated/ui-icons/database-backup-gen.png'
+import diagnosticsIcon from '../../assets/generated/ui-icons/diagnostics-gen.png'
+import memorySnapshotIcon from '../../assets/generated/ui-icons/memory-snapshot-gen.png'
+import auditLogIcon from '../../assets/generated/ui-icons/audit-log-gen.png'
+import backupRestoreIcon from '../../assets/generated/ui-icons/backup-restore-gen.png'
+import workspaceRefreshIcon from '../../assets/generated/ui-icons/workspace-refresh-gen.png'
+import settingsSaveIcon from '../../assets/generated/ui-icons/settings-save-gen.png'
+import panelExpandIcon from '../../assets/generated/ui-icons/panel-expand-gen.png'
+import panelToggleIcon from '../../assets/generated/ui-icons/chevron-right-gen.png'
+import verifiedIcon from '../../assets/generated/ui-icons/browser-verified-gen.png'
+import unknownIcon from '../../assets/generated/ui-icons/browser-unknown-gen.png'
+import browserRefreshIcon from '../../assets/generated/ui-icons/browser-refresh-gen.png'
+import taskAddIcon from '../../assets/generated/ui-icons/browser-task-add-gen.png'
+import browserStartIcon from '../../assets/generated/ui-icons/browser-start-gen.png'
+import browserStopIcon from '../../assets/generated/ui-icons/browser-stop-gen.png'
+import browserPauseIcon from '../../assets/generated/ui-icons/browser-pause-gen.png'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { inviteProfileFor, isBatchProfile, type CategoryNode } from '@shared/constants/invite'
 import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig } from '@shared/invite-task'
 import { inviteConfigKey, legacyInviteConfigKey } from '@shared/invite-config'
+import { isInvoiceCollectTask } from '@shared/constants/invoice'
 
 const emit = defineEmits<{
-  'back-dashboard': []
+  // 头部栏（含「返回经营总览」）已按用户要求整条移除；回经营总览走左栏导航，这里不再有该事件。
   'open-tasks': [create?: boolean]
 }>()
 const props = defineProps<{ pickerMode?: boolean; active?: boolean }>()
@@ -252,17 +286,17 @@ type PanelKey = 'bookmarks' | 'downloads' | 'env' | 'tasks'
 const panel = ref<PanelKey>('tasks')
 const panelOpen = ref(true)
 const panelItems: Array<{ key: PanelKey; label: string; icon: string }> = [
-  { key: 'bookmarks', label: '收藏', icon: '★' },
-  { key: 'downloads', label: '下载', icon: '↓' },
-  { key: 'env', label: '环境', icon: '⚙' },
-  { key: 'tasks', label: '任务', icon: '☑' }
+  { key: 'bookmarks', label: '收藏', icon: bookmarksIcon },
+  { key: 'downloads', label: '下载', icon: downloadsIcon },
+  { key: 'env', label: '环境', icon: envIcon },
+  { key: 'tasks', label: '任务', icon: tasksIcon }
 ]
 const sessionState = ref({ kind: 'loading', label: '读取中', detail: '正在读取店铺会话状态' })
 interface ProxyLite { id: string; type: string; host: string; port: number; label: string | null; status: string; hasCredential: boolean; lastLatencyMs: number | null }
 const proxies = ref<ProxyLite[]>([])
 const proxyBindId = ref('')
 const envBindingNote = ref('')
-const lastProxyAuth = ref<{ at: number; username: string; proxyId: string } | null>(null)
+const proxyAuthObserved = ref(false)
 const testingIds = ref<string[]>([])
 const verifyItems = ref<Array<{ field: string; expected: unknown; actual: unknown; state: string }>>([])
 const verifying = ref(false)
@@ -281,18 +315,20 @@ const idleMinSel = ref(0)
 const backups = ref<any[]>([])
 const busyBackup = ref(false)
 const busyDiag = ref(false)
+const busyMemoryDiag = ref(false)
+const memoryDiag = ref<any | null>(null)
 const confirmations = computed(() => Object.values(ws.confirmations).filter(Boolean))
 
 /**
- * 店铺页面 = 主窗口 Renderer DOM 里的真实 Electron `<webview>`，每个 store/tab 一个。
+ * 店铺页面 = 主窗口 Renderer DOM 里的真实 Electron `<webview>`，每个打开店铺保留当前活动页一个。
  *
  * 生命周期：元素挂载 → `did-attach` → 主进程 `browser:registerWebview` 校验并绑定 guest →
  * 用主进程返回的 `pendingUrl` 做首次导航（此时店铺 Session、代理配置与指纹注入都已就绪）。
  * 主进程只认自己注册过的 guest，Renderer 不能凭 webContentsId 直接拿到页面句柄。
  *
- * 隐藏的店铺/标签页**不销毁**元素，只降视觉与命中层级（见样式里的 opacity/pointer-events）：
- * 用 `display:none` 或 `visibility:hidden` 会让 guest 自认不可见，平台页面（微应用、后台首页）
- * 会顺着这条判断停止渲染 —— 实测踩过，所以隐藏方式不能省。
+ * 每家打开的店铺只保留当前活动标签页的 guest；切换标签页时旧 guest 随 DOM 卸载，
+ * URL/标题/登录态由主进程数据库与持久化 partition 保留，重新切回再按 URL 恢复。
+ * 这避免一个店铺的历史标签页数量直接线性放大 Chromium renderer 内存。
  */
 interface OpenWebviewEntry {
   key: string
@@ -300,9 +336,12 @@ interface OpenWebviewEntry {
   tabId: string
   storeName: string
   tabTitle: string
+  /** 采集专用页：挂隐藏 webview 给后台采集用，不进标签栏、不参与"未就绪"诊断 */
+  internal?: boolean
 }
 
 const webviewEls = new Map<string, any>()
+const webviewRefCallbacks = new Map<string, (element: unknown) => void>()
 /** 注册/加载失败的如实原因（key → 文案），成功即清除；界面据此显示诊断而不是空白页。 */
 const webviewFailures = reactive<Record<string, string>>({})
 const registeringKeys = new Set<string>()
@@ -311,13 +350,29 @@ const openWebviews = computed<OpenWebviewEntry[]>(() => {
   const entries: OpenWebviewEntry[] = []
   for (const storeId of ws.openStoreIds) {
     const store = ws.stores.find(item => item.id === storeId)
-    for (const tab of ws.tabsByStore[storeId] || []) {
+    const tabs = ws.tabsByStore[storeId] || []
+    const activeId = ws.activeTabIdByStore[storeId] || tabs.slice().sort((a, b) => a.orderIndex - b.orderIndex)[0]?.id
+    const activeTab = tabs.find(tab => tab.id === activeId)
+    if (activeTab) {
+      entries.push({
+        key: `${storeId}:${activeTab.id}`,
+        storeId,
+        tabId: activeTab.id,
+        storeName: store?.name || '店铺',
+        tabTitle: activeTab.title || ''
+      })
+    }
+    // 采集专用标签页：**隐藏挂载**（class 计算天然不是 active → opacity:0），
+    // 后台采集因此有真实页面可读，而用户的标签页一点没动（2026-10-02「采集任务时不要影响浏览器使用」）。
+    for (const tab of tabs) {
+      if (tab.internal !== true || tab.id === activeTab?.id) continue
       entries.push({
         key: `${storeId}:${tab.id}`,
         storeId,
         tabId: tab.id,
         storeName: store?.name || '店铺',
-        tabTitle: tab.title || ''
+        tabTitle: tab.title || '',
+        internal: true
       })
     }
   }
@@ -330,6 +385,8 @@ function webviewAttached(item: OpenWebviewEntry): boolean {
 }
 
 const webviewDiagnostics = computed(() => openWebviews.value
+  // 采集专用页不参与诊断：它是后台自己的页面，用户没让它出现，就不该在界面上闪"正在连接店铺页面…"
+  .filter(item => !item.internal)
   .filter(item => !webviewAttached(item))
   .map(item => ({
     key: item.key,
@@ -339,9 +396,17 @@ const webviewDiagnostics = computed(() => openWebviews.value
       : `${item.storeName}：正在连接店铺页面…`
   })))
 
-function setWebviewRef(key: string, element: any): void {
+function setWebviewRef(key: string, element: unknown): void {
   if (element) webviewEls.set(key, element)
   else webviewEls.delete(key)
+}
+
+function webviewRefCallback(key: string): (element: unknown) => void {
+  const existing = webviewRefCallbacks.get(key)
+  if (existing) return existing
+  const callback = (element: unknown): void => setWebviewRef(key, element)
+  webviewRefCallbacks.set(key, callback)
+  return callback
 }
 
 async function handleWebviewAttach(item: OpenWebviewEntry): Promise<void> {
@@ -398,7 +463,9 @@ function handleWebviewDestroyed(item: OpenWebviewEntry): void {
   webviewEls.delete(item.key)
 }
 
-const taskRows = computed(() => ws.tasks.filter((task: any) => !task.storeScope || task.storeScope === ws.displayedStoreId).slice(0, 6))
+// 右侧「任务中心 → 任务列表」：发票自动采集任务不列（用户口径：发票采集不计入任务）。
+// 这里只取 6 条，不排除的话每 3 小时自动建的采集任务会把真正的任务挤出面板。
+const taskRows = computed(() => ws.tasks.filter((task: any) => !isInvoiceCollectTask(task) && (!task.storeScope || task.storeScope === ws.displayedStoreId)).slice(0, 6))
 const taskSubTab = ref<'tasks' | 'invite' | 'todo'>('tasks')
 const inviteLiveLogEl = ref<HTMLElement | null>(null)
 const squareUrls = ref<Record<string, string>>({})
@@ -545,6 +612,7 @@ async function refreshEnvironment() {
   if (proxyResult.ok) proxies.value = proxyResult.data || []
   const storeId = ws.displayedStoreId
   if (!storeId) return
+  proxyAuthObserved.value = false
   sessionState.value = { kind: 'loading', label: '读取中', detail: '正在读取店铺会话状态' }
   const sessionResult = await window.shopilot.session.status(storeId)
   if (ws.displayedStoreId !== storeId) return
@@ -557,7 +625,7 @@ async function refreshEnvironment() {
     const binding = sessionResult.data?.binding
     proxyBindId.value = binding?.mode === 'bound' ? (binding.proxyId || '') : ''
     envBindingNote.value = binding?.mode === 'bound' ? '当前：绑定代理' : '当前：直连'
-    lastProxyAuth.value = sessionResult.data?.lastProxyAuth || null
+    proxyAuthObserved.value = sessionResult.data?.proxyAuthObserved === true
   }
   await Promise.all([refreshCookies(), refreshBackups(), ws.refreshSecurity()])
 }
@@ -707,6 +775,21 @@ async function doDiagnostics() {
   busyDiag.value = false
   if (result.ok) ws.toast(`诊断包已导出：${result.data.path}`, 'success')
   else if (result.error.code !== 'SESSION_CANCELLED') ws.toast(`导出失败：${result.error.message}`, 'error')
+}
+function formatMemory(bytes: unknown): string {
+  const value = Number(bytes)
+  if (!Number.isFinite(value) || value <= 0) return '—'
+  return `${(value / 1024 / 1024).toFixed(0)} MB`
+}
+async function readMemoryDiagnostics() {
+  busyMemoryDiag.value = true
+  try {
+    const result = await window.shopilot.browser.memoryDiagnostics()
+    if (result.ok) memoryDiag.value = result.data
+    else ws.toast(`读取内存快照失败：${result.error.message}`, 'error')
+  } finally {
+    busyMemoryDiag.value = false
+  }
 }
 async function doAuditExport() {
   const result = await window.shopilot.audit.export({ limit: 5000 })
@@ -1000,6 +1083,10 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .dashboard-browser-surface {
+  /* 这块是**浅色**表面：面板里不少文字沿用深色主题的浅色 token，在白底上对比度只有 1~2.6:1
+     （用户实报「字体颜色看不清楚」，2026-10-02）。这里就地换掉 muted 灰，面板内所有 muted 文字
+     （页签、空状态、进度百分比、字段标签、行副标题）一起回到 WCAG AA 之上；其余浅色字逐个改。 */
+  --dash-text-muted: #5b6472;
   min-width: 0;
   min-height: 0;
   flex: 1;
@@ -1010,49 +1097,42 @@ onBeforeUnmount(() => {
   overflow: hidden;
   background: radial-gradient(circle at 60% 0%, rgba(55, 76, 130, .14), transparent 40%);
 }
-.dashboard-browser-head,
-.dashboard-browser-store,
-.dashboard-browser-actions,
 .dashboard-browser-address {
   display: flex;
   align-items: center;
 }
-.dashboard-browser-head { justify-content: space-between; gap: 16px; min-height: 42px; }
-.dashboard-browser-store { min-width: 0; gap: 10px; }
-.dashboard-browser-store-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.dashboard-browser-store-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
-.dashboard-browser-store-copy span { color: var(--dash-text-muted); font-size: 11px; }
-.dashboard-browser-actions { gap: 8px; }
-.browser-head-button,
 .browser-nav-button,
-.dashboard-browser-tab-add {
+.dashboard-browser-tab-add,
+.dashboard-browser-panel-toggle {
   border: 1px solid var(--dash-border);
   border-radius: 8px;
   background: #ffffff;
   color: var(--dash-text-soft);
   cursor: pointer;
 }
-.browser-head-button { height: 32px; padding: 0 11px; font-size: 11px; }
-.browser-head-button:hover,
-.browser-head-button:focus-visible,
 .browser-nav-button:hover,
 .browser-nav-button:focus-visible,
 .dashboard-browser-tab-add:hover,
-.dashboard-browser-tab-add:focus-visible { border-color: rgba(145, 116, 255, .7); color: #fff; outline: none; }
-.browser-head-button.primary { border-color: rgba(129, 96, 240, .68); background: rgba(102, 73, 208, .35); color: #eeeaff; }
+.dashboard-browser-tab-add:focus-visible,
+.dashboard-browser-panel-toggle:hover,
+.dashboard-browser-panel-toggle:focus-visible { border-color: rgba(145, 116, 255, .7); color: var(--dash-text); outline: none; }
 .dashboard-browser-tabs { display: flex; min-width: 0; align-items: stretch; gap: 5px; min-height: 34px; overflow-x: auto; }
 .dashboard-browser-tab { display: flex; min-width: 130px; max-width: 240px; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid transparent; border-radius: 8px 8px 0 0; background: #f4f6fb; color: var(--dash-text-muted); cursor: pointer; }
 .dashboard-browser-tab.active { border-color: var(--dash-border); border-bottom-color: rgba(139, 92, 246, .75); background: #ffffff; color: var(--dash-text); }
-.dashboard-browser-tab:hover { color: #fff; }
+.dashboard-browser-tab:hover { color: var(--dash-text); }
 .browser-tab-title { overflow: hidden; flex: 1; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: 11px; }
-.browser-tab-close { flex: 0 0 auto; color: var(--dash-text-muted); font-size: 15px; line-height: 1; }
-.browser-tab-close:hover { color: #fff; }
+.browser-tab-close { display:grid;place-items:center;flex: 0 0 auto; color: var(--dash-text-muted); line-height: 1; }.browser-tab-close img { width:13px;height:13px;object-fit:contain; }
+.browser-tab-close:hover { color: #d92d20; }
 .browser-tab-spinner { width: 9px; height: 9px; flex: 0 0 auto; border: 1px solid rgba(150, 137, 255, .28); border-top-color: #b99aff; border-radius: 50%; animation: dashboard-browser-spin .8s linear infinite; }
-.dashboard-browser-tab-add { width: 34px; min-width: 34px; height: 30px; align-self: center; font-size: 17px; }
+.dashboard-browser-tab-add { display:grid;place-items:center;width: 34px; min-width: 34px; height: 30px; align-self: center; }.dashboard-browser-tab-add img { width:16px;height:16px;object-fit:contain; }
+/* 侧栏开关：原先在头部栏，头部整条移除后挪到标签栏右端（margin-left:auto 保证永远贴在右端）。
+   收起时把箭头翻转成"指向左"，语义与面板从右侧收/放一致 */
+.dashboard-browser-panel-toggle { display:grid;place-items:center; width: 30px; min-width: 30px; height: 30px; margin-left: auto; align-self: center; }.dashboard-browser-panel-toggle img { width:16px;height:16px;object-fit:contain; }
+.dashboard-browser-panel-toggle.collapsed img { transform: scaleX(-1); }
 .dashboard-browser-address { gap: 6px; min-height: 38px; padding: 0 8px; border: 1px solid var(--dash-border); border-radius: 10px; background: #f7f9fd; }
-.browser-nav-button { width: 28px; height: 28px; padding: 0; font-size: 17px; line-height: 1; }
+.browser-nav-button { display:grid;place-items:center; width: 28px; height: 28px; padding: 0; line-height: 1; }.browser-nav-button img { width:16px;height:16px;object-fit:contain; }
 .browser-nav-button:disabled { cursor: default; opacity: .4; }
-.dashboard-browser-url { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px; border: 1px solid rgba(111, 137, 177, .16); border-radius: 7px; background: #ffffff; color: var(--dash-text-muted); }
+.dashboard-browser-url img { width:15px;height:15px;object-fit:contain;flex:0 0 auto; }.dashboard-browser-url { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px; border: 1px solid rgba(111, 137, 177, .16); border-radius: 7px; background: #ffffff; color: var(--dash-text-muted); }
 .dashboard-browser-url:focus-within { border-color: rgba(135, 102, 246, .7); box-shadow: 0 0 0 2px rgba(135, 102, 246, .12); }
 .dashboard-browser-url input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--dash-text-soft); font-size: 11px; }
 .dashboard-browser-hint { flex: 0 0 auto; color: var(--dash-text-muted); font-size: 10px; }
@@ -1066,41 +1146,44 @@ onBeforeUnmount(() => {
    opacity 保持"页面可见"语义，同时用户看不到也点不到。 */
 .dashboard-browser-webview { position: absolute; inset: 0; display: flex; width: 100%; height: 100%; border: 0; opacity: 0; pointer-events: none; z-index: 0; }
 .dashboard-browser-webview.active { opacity: 1; pointer-events: auto; z-index: 1; }
-.dashboard-browser-webview-diagnostics { position: absolute; left: 10px; bottom: 10px; z-index: 3; display: flex; max-width: calc(100% - 20px); flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid rgba(242, 165, 87, .36); border-radius: 8px; background: #fff8ec; color: #ffc77c; font-size: 10px; line-height: 1.5; }
-.dashboard-browser-webview-diagnostics strong { color: #ffd7a1; font-size: 10px; }
+.dashboard-browser-webview-diagnostics { position: absolute; left: 10px; bottom: 10px; z-index: 3; display: flex; max-width: calc(100% - 20px); flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid rgba(242, 165, 87, .36); border-radius: 8px; background: #fff8ec; color: #92400e; font-size: 10px; line-height: 1.5; }
+.dashboard-browser-webview-diagnostics strong { color: #7a3d0a; font-size: 10px; }
 .dashboard-browser-webview-diagnostics span { display: flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 .dashboard-browser-panel { width: 320px; min-width: 320px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--dash-border); border-radius: 12px; background: #ffffff; }
 .dashboard-browser-panel.collapsed { width: 44px; min-width: 44px; align-items: center; }
 .panel-rail-expand, .panel-rail-button { width: 30px; height: 30px; margin: 7px 0 0; border: 0; border-radius: 7px; background: transparent; color: var(--dash-text-muted); cursor: pointer; }
-.panel-rail-expand:hover, .panel-rail-expand:focus-visible, .panel-rail-button:hover, .panel-rail-button:focus-visible, .panel-rail-button.on { background: rgba(124, 92, 255, .14); color: #fff; outline: none; }
-.panel-rail-expand { border-bottom: 1px solid var(--dash-border); border-radius: 0; font-size: 18px; }
+.panel-rail-expand:hover, .panel-rail-expand:focus-visible, .panel-rail-button:hover, .panel-rail-button:focus-visible, .panel-rail-button.on { background: rgba(124, 92, 255, .14); color: #4c1d95; outline: none; }.panel-rail-button img { width: 17px; height: 17px; object-fit: contain; }
+.panel-rail-expand { display:grid;place-items:center; border-bottom: 1px solid var(--dash-border); border-radius: 0; }.panel-rail-expand img { width:16px;height:16px;object-fit:contain; }
 .dashboard-browser-panel-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 7px; border-bottom: 1px solid var(--dash-border); background: #f7f9fd; }
 .dashboard-browser-panel-tabs button { min-width: 0; height: 30px; padding: 0 3px; border: 0; border-radius: 6px; background: transparent; color: var(--dash-text-muted); font-size: 10px; cursor: pointer; }
-.dashboard-browser-panel-tabs button:hover, .dashboard-browser-panel-tabs button:focus-visible { background: rgba(255,255,255,.06); color: #fff; outline: none; }
-.dashboard-browser-panel-tabs button.active { background: var(--brand-soft); color: #eeeaff; }.panel-tab-icon::before { content: attr(data-icon); margin-right: 3px; }
-.confirm-bar { display: flex; align-items: flex-start; gap: 9px; padding: 9px 10px; border-bottom: 1px solid rgba(242, 165, 87, .26); background: rgba(116, 75, 29, .18); }
+.dashboard-browser-panel-tabs button:hover, .dashboard-browser-panel-tabs button:focus-visible { background: rgba(124, 92, 255, .12); color: var(--dash-text); outline: none; }
+.dashboard-browser-panel-tabs button.active { background: var(--brand-soft); color: #4c1d95; }.panel-tab-icon { width: 14px; height: 14px; margin-right: 4px; object-fit: contain; vertical-align: -2px; }
+.confirm-bar { display: flex; align-items: flex-start; gap: 9px; padding: 9px 10px; border-bottom: 1px solid rgba(242, 165, 87, .26); background: rgba(245, 158, 11, .12); }
 .env-confirm-bar { position: fixed; top: 108px; right: 24px; z-index: 300; width: min(296px, calc(100vw - 48px)); box-sizing: border-box; border: 1px solid rgba(242,165,87,.38); border-radius: 9px; box-shadow: 0 14px 32px rgba(0,0,0,.3); }
-.confirm-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; color: #ffc77c; font-size: 10px; line-height: 1.45; }
+.confirm-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; color: #92400e; font-size: 10px; line-height: 1.45; }
 .confirm-copy span { overflow-wrap: anywhere; color: var(--dash-text-soft); }
 .confirm-actions { display: flex; flex: 0 0 auto; gap: 4px; }
-.confirm-actions button { height: 25px; padding: 0 7px; border: 1px solid var(--dash-border); border-radius: 6px; background: rgba(24, 34, 54, .76); color: var(--dash-text-soft); cursor: pointer; font-size: 10px; }
-.confirm-actions button:hover, .confirm-actions button:focus-visible { outline: none; border-color: rgba(255, 255, 255, .45); color: #fff; }
-.confirm-actions .confirm-allow { border-color: rgba(32, 209, 154, .35); color: #7de9c5; }
+.confirm-actions button { height: 25px; padding: 0 7px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); cursor: pointer; font-size: 10px; }
+.confirm-actions button:hover, .confirm-actions button:focus-visible { outline: none; border-color: rgba(124, 92, 255, .55); color: var(--dash-text); }
+.confirm-actions .confirm-allow { border-color: rgba(6, 118, 71, .35); color: #067647; }
 .dashboard-browser-panel-body { min-height: 0; flex: 1; overflow-y: auto; padding: 12px; scrollbar-width: thin; scrollbar-color: rgba(137,153,189,.32) transparent; }
 .browser-panel-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; color: var(--dash-text-soft); font-size: 12px; }
 .browser-panel-heading-actions { display: inline-flex; align-items: center; gap: 7px; }
-.browser-panel-heading button { border: 0; background: transparent; color: #9e91ff; font-size: 10px; cursor: pointer; }
-.browser-panel-heading button:hover { color: #fff; text-decoration: underline; }
-.browser-panel-empty { display: grid; min-height: 150px; place-items: center; color: var(--dash-text-muted); font-size: 11px; text-align: center; }
+.browser-panel-heading button { border: 0; background: transparent; color: #5b3df5; font-size: 10px; cursor: pointer; }
+.browser-panel-heading button:hover { color: #4326d9; text-decoration: underline; }
+.browser-panel-empty { display: grid; min-height: 150px; place-items: center; color: var(--dash-text-muted); font-size: 11px; text-align: center; gap: 4px; }
+.browser-state-art { display: block; width: min(132px, 72%); height: auto; border-radius: 14px; opacity: .92; }
+.browser-inline-art { display: block; width: 44px; height: 44px; object-fit: contain; border-radius: 9px; opacity: .9; }
+.env-empty-note { display: flex; align-items: center; gap: 8px; }
 .browser-panel-empty.compact { min-height: 44px; }
 .browser-panel-row { display: flex; width: 100%; min-height: 48px; align-items: center; gap: 8px; padding: 7px 5px; border: 0; border-bottom: 1px solid rgba(111,137,177,.1); background: transparent; color: var(--dash-text-soft); text-align: left; cursor: pointer; }
-.browser-panel-row:hover, .browser-panel-row:focus-visible { background: rgba(255,255,255,.05); color: #fff; outline: none; }
+.browser-panel-row:hover, .browser-panel-row:focus-visible { background: #f7f9fd; color: var(--dash-text); outline: none; }
 .browser-panel-row-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
 .browser-panel-row-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
 .browser-panel-row-copy small { overflow: hidden; color: var(--dash-text-muted); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.browser-panel-row-action { flex: 0 0 auto; border: 0; background: transparent; color: var(--dash-text-muted); font-size: 15px; cursor: pointer; }
-.browser-panel-row-action:hover { color: #fff; }
-.browser-env-card { display: flex; min-height: 42px; flex-direction: column; justify-content: center; gap: 4px; margin-bottom: 7px; padding: 8px 9px; border: 1px solid rgba(111,137,177,.13); border-radius: 8px; background: rgba(255,255,255,.025); }
+.browser-panel-row-action { display:grid;place-items:center; flex: 0 0 auto; border: 0; background: transparent; color: var(--dash-text-muted); cursor: pointer; }.browser-panel-row-action img { width:15px;height:15px;object-fit:contain; }
+.browser-panel-row-action:hover { color: var(--dash-text); }
+.browser-env-card { display: flex; min-height: 42px; flex-direction: column; justify-content: center; gap: 4px; margin-bottom: 7px; padding: 8px 9px; border: 1px solid rgba(111,137,177,.13); border-radius: 8px; background: #f7f9fd; }
 .browser-env-card span, .browser-env-card small { color: var(--dash-text-muted); font-size: 10px; }
 .browser-env-card strong { color: var(--dash-text-soft); font-size: 11px; }
 .browser-env-card strong.state-online, .browser-env-card strong.state-ready { color: var(--dash-green); }
@@ -1115,15 +1198,15 @@ onBeforeUnmount(() => {
 .bind-row select, .proxy-add input, .add-line select, .add-line input, [data-test="session-sec"] input, [data-test="lock-sec"] input, [data-test="diag-sec"] input { box-sizing: border-box; border: 1px solid var(--dash-border); border-radius: 7px; background: #ffffff; color: var(--dash-text-soft); font: inherit; }
 .bind-row select { width: 100%; min-height: 30px; padding: 0 8px; font-size: 10px; }
 .env-note { margin-top: 7px; color: var(--dash-text-muted); font-size: 10px; line-height: 1.5; }
-.env-note.ok { color: #75e2bd; }
+.env-note.ok { color: #067647; }
 .proxy-item { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 7px 0; border-top: 1px solid rgba(111,137,177,.08); }
 .p-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #78849b; }.p-dot.proxy-ok { background: #20d19a; }.p-dot.proxy-error { background: #ef6a7b; }
 .p-info, .v-info { min-width: 0; flex: 1; }
 .row-main { overflow: hidden; color: var(--dash-text-soft); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }.row-sub { overflow: hidden; color: var(--dash-text-muted); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
-.mini-btn { min-height: 25px; padding: 0 8px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); cursor: pointer; font-size: 9px; white-space: nowrap; }.mini-btn:hover:not(:disabled), .mini-btn:focus-visible { border-color: rgba(145,116,255,.7); color: #fff; outline: none; }.mini-btn:disabled { cursor: not-allowed; opacity: .48; }.mini-btn.primary { border-color: rgba(127,92,243,.72); background: rgba(103,69,214,.55); color: #fff; }
-.row-del { width: 21px; height: 23px; flex: 0 0 21px; border: 0; border-radius: 5px; background: transparent; color: #78849b; cursor: pointer; font-size: 15px; }.row-del:hover, .row-del:focus-visible { background: rgba(239,106,123,.14); color: #ffacb8; outline: none; }.row-del:disabled { cursor: default; opacity: .56; }
+.button-icon { width:14px;height:14px;object-fit:contain;vertical-align:middle;margin-right:4px; }.mini-btn { min-height: 25px; padding: 0 8px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); cursor: pointer; font-size: 9px; white-space: nowrap; }.mini-btn:hover:not(:disabled), .mini-btn:focus-visible { border-color: rgba(145,116,255,.7); color: var(--dash-text); outline: none; }.mini-btn:disabled { cursor: not-allowed; opacity: .48; }.mini-btn.primary { border-color: #5b3df5; background: #6d4aff; color: #ffffff; }
+.row-del { display:grid;place-items:center; width: 21px; height: 23px; flex: 0 0 21px; border: 0; border-radius: 5px; background: transparent; color: #78849b; cursor: pointer; font-size: 15px; }.row-del img { width:14px;height:14px;object-fit:contain; }.row-del:hover, .row-del:focus-visible { background: rgba(217,45,32,.14); color: #d92d20; outline: none; }.row-del:disabled { cursor: default; opacity: .56; }
 .proxy-add { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }.proxy-add > input, .add-line input, .add-line select { min-height: 28px; padding: 0 7px; font-size: 9px; }.add-line { display: flex; gap: 6px; }.add-line select { width: 74px; min-width: 74px; flex: 0 0 74px; }.add-line .f-host { min-width: 60px; flex: 1 1 auto; }.add-line .f-port { width: 72px; min-width: 72px; flex: 0 0 72px; }.proxy-add > .mini-btn { align-self: flex-start; margin-top: 1px; }
-.verify-item { display: flex; align-items: center; gap: 7px; padding: 6px 0; }.cf-btns { display: flex; flex-wrap: wrap; gap: 6px; }.cf-btns.wrap { gap: 6px; }.cf-btns .mini-btn { margin-top: 0; }.ck-search { width: 100%; min-height: 28px; margin-top: 7px; padding: 0 7px; font-size: 9px; }.cookie-count { margin: 5px 0; }.ck-item { padding: 5px 0; }.ck-flag { margin-left: 4px; padding: 1px 3px; border: 1px solid var(--dash-border); border-radius: 4px; color: var(--dash-text-muted); font-size: 8px; }.danger-btn { border-color: rgba(239,106,123,.35); color: #ffacb8; }.idle-row { margin-top: 7px; justify-content: space-between; }.idle-row select { width: auto; min-width: 94px; }.backup-row { display: flex; align-items: center; gap: 5px; margin-top: 7px; white-space: normal; }.backup-row .mini-btn { margin-left: auto; }
+.verify-item { display: flex; align-items: center; gap: 7px; padding: 6px 0; }.verify-status-icon { width: 17px; height: 17px; flex: 0 0 17px; object-fit: contain; }.cf-btns { display: flex; flex-wrap: wrap; gap: 6px; }.cf-btns.wrap { gap: 6px; }.cf-btns .mini-btn { margin-top: 0; }.ck-search { width: 100%; min-height: 28px; margin-top: 7px; padding: 0 7px; font-size: 9px; }.cookie-count { margin: 5px 0; }.ck-item { padding: 5px 0; }.ck-flag { margin-left: 4px; padding: 1px 3px; border: 1px solid var(--dash-border); border-radius: 4px; color: var(--dash-text-muted); font-size: 8px; }.danger-btn { border-color: rgba(217,45,32,.35); color: #d92d20; }.idle-row { margin-top: 7px; justify-content: space-between; }.idle-row select { width: auto; min-width: 94px; }.backup-row { display: flex; align-items: center; gap: 5px; margin-top: 7px; white-space: normal; }.backup-row .mini-btn { margin-left: auto; }
 .browser-task-row { display: flex; align-items: center; gap: 7px; min-height: 54px; padding: 7px 3px; border-bottom: 1px solid rgba(111,137,177,.1); }
 .browser-task-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
 .browser-task-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dash-text-soft); font-size: 11px; }
@@ -1131,16 +1214,13 @@ onBeforeUnmount(() => {
 .browser-task-progress { height: 4px; overflow: hidden; border-radius: 4px; background: rgba(116, 132, 166, .2); }
 .browser-task-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6563ff, #25baf1); }
 .browser-task-percent { flex: 0 0 31px; color: var(--dash-text-muted); font-size: 10px; text-align: right; }
-.browser-panel-link { width: 100%; margin-top: 12px; padding: 8px 0; border: 0; border-radius: 6px; background: rgba(124, 92, 255, .1); color: #b4a8ff; font-size: 10px; cursor: pointer; }
-.browser-panel-link:hover, .browser-panel-link:focus-visible { background: rgba(124, 92, 255, .18); color: #fff; outline: none; }
-.task-subtabs { display: flex; gap: 4px; margin: 0 -2px 10px; padding: 3px; border-radius: 7px; background: #f2f4f8; }.task-subtabs button { flex: 1; min-height: 26px; border: 0; border-radius: 5px; background: transparent; color: var(--dash-text-muted); cursor: pointer; font-size: 9px; }.task-subtabs button:hover, .task-subtabs button:focus-visible { color: #fff; outline: none; }.task-subtabs button.on { background: rgba(117,83,235,.34); color: #eeeaff; }.task-subtabs button.pending { color: #8d7d66; }
-.invite-panel { min-width: 0; }.invite-config-sec { padding-bottom: 12px; }.invite-config-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 9px; }.invite-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }.invite-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: var(--dash-text-muted); font-size: 10px; }.invite-field input,.invite-field select { min-width: 0; height: 29px; padding: 0 7px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); font-size: 10px; }.invite-field input:focus,.invite-field select:focus { border-color: rgba(145,113,255,.78); outline: none; box-shadow: 0 0 0 2px rgba(145,113,255,.14); }.invite-choice-group { margin-top: 9px; color: var(--dash-text-muted); font-size: 10px; }.invite-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }.inv-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0 6px; border: 1px solid rgba(111,137,177,.22); border-radius: 999px; background: rgba(24,34,54,.72); color: var(--dash-text-muted); cursor: pointer; font-size: 9px; }.inv-chip input { position: absolute; opacity: 0; pointer-events: none; }.inv-chip.on { border-color: rgba(135,102,246,.72); background: rgba(111,77,225,.27); color: #f1edff; }.invite-missing { margin: 8px 0 0; padding: 7px 8px 7px 21px; border: 1px solid rgba(242,165,87,.2); border-radius: 7px; background: rgba(116,75,29,.12); color: #ffc77c; font-size: 9px; line-height: 1.5; }.invite-start-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; }.entry-routes-title { margin-left: 6px; }.entry-route { min-height: 42px; padding-left: 4px; }.invite-live-sec { padding: 3px 2px 12px; border-bottom: 0; }.invite-live-empty { min-height: 150px; padding: 12px; line-height: 1.6; }.invite-live-stuck { padding: 8px 9px; border: 1px solid rgba(242,165,87,.24); border-radius: 7px; background: rgba(116,75,29,.16); color: #ffc77c; font-size: 10px; line-height: 1.45; }.step-row { display: flex; align-items: flex-start; gap: 7px; padding: 7px 0 0 3px; }.s-ico { width: 17px; flex: 0 0 17px; text-align: center; font-size: 11px; }.tc-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }.invite-message { padding: 5px 0 2px; line-height: 1.5; white-space: normal; }.log-box { max-height: 210px; margin-top: 8px; padding: 7px 8px; overflow-y: auto; border: 1px solid var(--dash-border); border-radius: 7px; background: #f7f9fd; }.log-line { color: #8795ad; font-family: Consolas, monospace; font-size: 9px; line-height: 1.6; overflow-wrap: anywhere; }.invite-unavailable { padding: 10px 2px; border-bottom: 0; }.invite-unavailable .mini-btn { margin-top: 8px; }
+.browser-panel-link { width: 100%; margin-top: 12px; padding: 8px 0; border: 0; border-radius: 6px; background: rgba(124, 92, 255, .1); color: #5b3df5; font-size: 10px; cursor: pointer; }
+.browser-panel-link:hover, .browser-panel-link:focus-visible { background: rgba(124, 92, 255, .18); color: #4326d9; outline: none; }
+.task-subtabs { display: flex; gap: 4px; margin: 0 -2px 10px; padding: 3px; border-radius: 7px; background: #f2f4f8; }.task-subtabs button { flex: 1; min-height: 26px; border: 0; border-radius: 5px; background: transparent; color: var(--dash-text-muted); cursor: pointer; font-size: 9px; }.task-subtabs button:hover, .task-subtabs button:focus-visible { color: var(--dash-text); outline: none; }.task-subtabs button.on { background: rgba(117,83,235,.34); color: #4c1d95; }.task-subtabs button.pending { color: #8a5a12; }
+.invite-panel { min-width: 0; }.invite-config-sec { padding-bottom: 12px; }.invite-config-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 9px; }.invite-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }.invite-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: var(--dash-text-muted); font-size: 10px; }.invite-field input,.invite-field select { min-width: 0; height: 29px; padding: 0 7px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); font-size: 10px; }.invite-field input:focus,.invite-field select:focus { border-color: rgba(145,113,255,.78); outline: none; box-shadow: 0 0 0 2px rgba(145,113,255,.14); }.invite-choice-group { margin-top: 9px; color: var(--dash-text-muted); font-size: 10px; }.invite-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }.inv-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0 6px; border: 1px solid rgba(111,137,177,.22); border-radius: 999px; background: #f7f9fd; color: var(--dash-text-muted); cursor: pointer; font-size: 9px; }.inv-chip input { position: absolute; opacity: 0; pointer-events: none; }.inv-chip.on { border-color: rgba(135,102,246,.72); background: rgba(111,77,225,.18); color: #4c1d95; }.invite-missing { margin: 8px 0 0; padding: 7px 8px 7px 21px; border: 1px solid rgba(242,165,87,.2); border-radius: 7px; background: rgba(245,158,11,.12); color: #92400e; font-size: 9px; line-height: 1.5; }.invite-start-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; }.entry-routes-title { margin-left: 6px; }.entry-route { min-height: 42px; padding-left: 4px; }.invite-live-sec { padding: 3px 2px 12px; border-bottom: 0; }.invite-live-empty { min-height: 150px; padding: 12px; line-height: 1.6; }.invite-live-stuck { padding: 8px 9px; border: 1px solid rgba(242,165,87,.24); border-radius: 7px; background: rgba(245,158,11,.12); color: #92400e; font-size: 10px; line-height: 1.45; }.step-row { display: flex; align-items: flex-start; gap: 7px; padding: 7px 0 0 3px; }.s-ico { width: 17px; flex: 0 0 17px; text-align: center; font-size: 11px; }.tc-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }.invite-message { padding: 5px 0 2px; line-height: 1.5; white-space: normal; }.log-box { max-height: 210px; margin-top: 8px; padding: 7px 8px; overflow-y: auto; border: 1px solid var(--dash-border); border-radius: 7px; background: #f7f9fd; }.log-line { color: #4a5568; font-family: Consolas, monospace; font-size: 9px; line-height: 1.6; overflow-wrap: anywhere; }.invite-unavailable { padding: 10px 2px; border-bottom: 0; }.invite-unavailable .mini-btn { margin-top: 8px; }
 @keyframes dashboard-browser-spin { to { transform: rotate(360deg); } }
 @media (max-width: 820px) {
   .dashboard-browser-surface { padding: 12px 14px 16px; }
-  .dashboard-browser-head { align-items: flex-start; flex-direction: column; }
-  .dashboard-browser-actions { width: 100%; }
-  .browser-head-button { flex: 1; }
   .dashboard-browser-hint { display: none; }
   .dashboard-browser-panel { width: 244px; min-width: 244px; }
 }
@@ -1148,5 +1228,4 @@ onBeforeUnmount(() => {
   .dashboard-browser-body { flex-direction: column; overflow-y: auto; }
   .dashboard-browser-main { min-height: 420px; flex: 1 1 420px; }
   .dashboard-browser-panel { width: auto; min-width: 0; min-height: 230px; flex: 0 0 230px; }
-}
-</style>
+}</style>

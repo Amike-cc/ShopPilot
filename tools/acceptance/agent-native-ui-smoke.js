@@ -129,9 +129,9 @@ async function main() {
     const agentSettingsRect = await waitFor(() => rectFor(cdp, '[data-test="settings-tab-agents"]'))
     await clickRect(child.pid, agentSettingsRect, scale)
     const team = await waitFor(() => cdp.eval('return {root:!!document.querySelector("[data-test=\\"agent-admin-panel\\"]"),org:!!document.querySelector("[data-test=\\"agent-org-panel\\"]")}').catch(() => null))
-    check('native click opens Agent 团队 page', team?.root === true && team.org === true, JSON.stringify(team))
+    check('native click opens Agent 设置 page', team?.root === true && team.org === true, JSON.stringify(team))
 
-    for (const [label, selector] of [['组织 / HR', 'agent-org-panel'], ['模型 Profile', 'agent-model-panel'], ['本地记忆', 'agent-memory-panel'], ['Job 看板', 'agent-job-panel']]) {
+    for (const [label, selector] of [['Agent 设置', 'agent-org-panel'], ['模型 Profile', 'agent-model-panel'], ['本地记忆', 'agent-memory-panel'], ['Job 看板', 'agent-job-panel']]) {
       const rect = await waitFor(() => tabRectFor(cdp, label))
       await clickRect(child.pid, rect, scale)
       const visible = await waitFor(() => cdp.eval(`return !!document.querySelector('[data-test="${selector}"]')`).catch(() => false))

@@ -15,12 +15,8 @@
       @pointercancel="onPointerCancel"
       @click="onClick"
     >
-      <svg class="orb-sparkle" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 2.5 14.6 9.4 21.5 12l-6.9 2.6L12 21.5l-2.6-6.9L2.5 12l6.9-2.6L12 2.5Z" fill="currentColor" />
-        <path d="m19 2 .8 2.2L22 5l-2.2.8L19 8l-.8-2.2L16 5l2.2-.8L19 2Z" fill="currentColor" opacity=".8" />
-      </svg>
-      <span class="orb-ai">AI</span>
-      <span v-if="props.needsConfirmation" class="orb-alert" aria-hidden="true">!</span>
+      <img class="orb-image" :src="aiAssistantImage" alt="" aria-hidden="true" draggable="false" />
+      <span v-if="props.needsConfirmation" class="orb-alert" aria-hidden="true"><img :src="warningIcon" alt="" /></span>
     </button>
   </div>
 </template>
@@ -29,6 +25,8 @@
 import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useAgentStore } from '../../stores/agent'
 import { clampOrbPoint, isOrbDrag, snapOrbToNearestEdge } from './orb-geometry'
+import aiAssistantImage from '../../assets/generated/ai-assistant-generated.png'
+import warningIcon from '../../assets/generated/ui-icons/warning.png'
 
 const props = defineProps<{ needsConfirmation?: boolean; expanded?: boolean }>()
 const emit = defineEmits<{
@@ -49,7 +47,7 @@ let suppressClick = false
 
 function bounds() {
   const rect = host.value?.getBoundingClientRect()
-  const size = button.value?.offsetWidth || 52
+  const size = button.value?.offsetWidth || 64
   return { width: Math.max(0, (rect?.width || 0) - size), height: Math.max(0, (rect?.height || 0) - size) }
 }
 function emitPosition() { emit('position-change', { x: position.x, y: position.y }) }
@@ -121,13 +119,12 @@ onBeforeUnmount(() => { resizeObserver?.disconnect(); window.removeEventListener
 
 <style scoped>
 .agent-orb-host { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: visible; }
-.agent-orb { position: absolute; width: 54px; height: 54px; border: 1px solid rgba(255,255,255,.72); border-radius: 50%; color: #fff; background: linear-gradient(145deg,#2689f5 0%,#6059e9 54%,#9a4be8 100%); box-shadow: 0 5px 20px rgba(79,86,230,.4),0 0 18px rgba(106,99,255,.28); display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;pointer-events:auto;-webkit-app-region:no-drag;transition:box-shadow .18s,transform .18s; }
-.agent-orb:hover { transform: translateY(-1px); box-shadow: 0 7px 24px rgba(79,86,230,.5),0 0 23px rgba(106,99,255,.4); }
+.agent-orb { position: absolute; width: 64px; height: 64px; padding: 0; border: 0; border-radius: 50%; background: transparent; display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;pointer-events:auto;-webkit-app-region:no-drag;transition:filter .18s,transform .18s; }
+.agent-orb:hover { transform: translateY(-1px); filter: drop-shadow(0 7px 12px rgba(54, 83, 219, .42)); }
 .agent-orb:focus-visible { outline: 2px solid #b6e0ff; outline-offset: 3px; }
 .agent-orb.dragging { cursor:grabbing;transition:none; }
-.orb-sparkle { width:25px;height:25px;filter:drop-shadow(0 1px 3px rgba(0,0,0,.22)); }
-.orb-ai { position:absolute;right:-3px;bottom:-1px;border:1px solid rgba(255,255,255,.9);border-radius:7px;background:#2b2d66;padding:1px 4px;font-size:8px;font-weight:800;line-height:12px;letter-spacing:.3px; }
-.orb-alert { position:absolute;right:-3px;top:-4px;width:17px;height:17px;border:2px solid #24253c;border-radius:50%;background:#f5b942;color:#30230a;font-size:11px;font-weight:900;line-height:13px;box-shadow:0 0 10px rgba(245,185,66,.75);animation:agent-pulse 1.4s ease-in-out infinite; }
-.needs-confirm { border-color:#ffd476;box-shadow:0 0 0 2px rgba(245,185,66,.55),0 0 22px rgba(245,185,66,.35); }
+.orb-image { display: block; width: 64px; height: 64px; object-fit: contain; user-select: none; pointer-events: none; }
+.orb-alert img { width:14px;height:14px;object-fit:contain; }.orb-alert { position:absolute;right:-3px;top:-4px;width:17px;height:17px;border:2px solid #24253c;border-radius:50%;background:#f5b942;color:#30230a;font-size:11px;font-weight:900;line-height:13px;box-shadow:0 0 10px rgba(245,185,66,.75);animation:agent-pulse 1.4s ease-in-out infinite; }
+.needs-confirm { filter: drop-shadow(0 0 9px rgba(245,185,66,.78)); }
 @keyframes agent-pulse { 50% { transform:scale(1.14);box-shadow:0 0 15px rgba(245,185,66,.9); } }
 </style>

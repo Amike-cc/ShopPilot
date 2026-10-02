@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     active.delete(storeId)
   })
   const getStorePartition = vi.fn((storeId: string) => `persist:store_${storeId}`)
+  const getProxyAuthInjection = vi.fn(() => null)
   const clearStoreSessionSnapshot = vi.fn()
   const fromPartition = vi.fn((partition: string) => {
     let value = partitions.get(partition)
@@ -50,6 +51,7 @@ const mocks = vi.hoisted(() => {
     waitForStoreSessionReady,
     closeStoreSession,
     getStorePartition,
+    getProxyAuthInjection,
     clearStoreSessionSnapshot,
     fromPartition
   }
@@ -68,7 +70,8 @@ vi.mock('../../apps/desktop/src/main/browser/session-manager', () => ({
   waitForStoreSessionReady: mocks.waitForStoreSessionReady,
   closeStoreSession: mocks.closeStoreSession,
   getActiveSessions: () => mocks.active,
-  getStorePartition: mocks.getStorePartition
+  getStorePartition: mocks.getStorePartition,
+  getProxyAuthInjection: mocks.getProxyAuthInjection
 }))
 
 vi.mock('../../apps/desktop/src/main/services/session-persistence', () => ({
@@ -93,6 +96,7 @@ describe('ShopSessionManager', () => {
     mocks.waitForStoreSessionReady.mockClear()
     mocks.closeStoreSession.mockClear()
     mocks.getStorePartition.mockClear()
+    mocks.getProxyAuthInjection.mockClear()
     mocks.clearStoreSessionSnapshot.mockClear()
     mocks.fromPartition.mockClear()
     resetSessionStatusForTests()
@@ -178,6 +182,17 @@ describe('ShopSessionManager', () => {
     expect(serialized).not.toContain('cookies')
     expect(serialized).not.toContain('token')
     expect('session' in summary).toBe(false)
+    expect(summary.proxyAuthObserved).toBe(false)
+  })
+
+  it('只回传代理认证是否已处理，不回传凭据身份或时间戳', async () => {
+    mocks.getProxyAuthInjection.mockReturnValue({ at: Date.now(), username: 'alice', proxyId: 'proxy_a' })
+    await checkSessionHealth('store_a')
+    const summary = getSessionStatus('store_a') as Record<string, unknown>
+    expect(summary.proxyAuthObserved).toBe(true)
+    expect(summary).not.toHaveProperty('lastProxyAuth')
+    expect(JSON.stringify(summary)).not.toContain('alice')
+    expect(JSON.stringify(summary)).not.toContain('proxy_a')
   })
 
   it('Session 状态输入只允许合法 storeId，锁定态普通 IPC 仍由统一守卫拒绝', () => {

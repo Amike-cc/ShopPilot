@@ -14,7 +14,6 @@ import type {
   OrderObservationCapableAdapter,
   PlatformAdapterContext
 } from './platform-adapter'
-import { createLoginResult } from './platform-adapter'
 import { SalesMetricsDomAdapter } from './sales-metrics-dom-adapter'
 import { buildPddOrderObservationReport } from '../orders/pdd-observation-report'
 import { ElectronNetworkObserver, type NetworkObservationResult, type NetworkObserver } from '../orders/network-observer'
@@ -62,7 +61,8 @@ function logObservationReport(report: PddOrderObservationReport): void {
  * 反抓取字体（私有区码位），而首页卡片的数字是纯文本，实测可读，所以走 DOM 档案。
  *
  * 订单能力（observation）仍走网络观察实现，与本类继承的 DOM 采集互不影响。
- * 登录检测保持 UNKNOWN：拼多多的登录/验证页文案从未实测过，宁可不判，也不猜。
+ * 登录检测：拼多多的登录/验证页文案从未实测过，所以不登记 probe 的否定判据（宁可不判）；
+ * 能确认登录的只有"首页经营数据卡片真的渲染出来了"（见基类 anyProfileAnchorRendered）。
  */
 export class PddAdapter extends SalesMetricsDomAdapter implements OrderObservationCapableAdapter {
   private readonly createNetworkObserver: (context: PlatformAdapterContext) => NetworkObserver
@@ -73,7 +73,7 @@ export class PddAdapter extends SalesMetricsDomAdapter implements OrderObservati
     super(platform, {
       profile: businessProfileFor(platform.name),
       // 只校验主机；登录/验证页文案未实测，因此不登记（见 detectLoginStatus 的说明）
-      probe: { host: PDD_HOST },
+      probe: { hosts: [PDD_HOST] },
       // v1 = 网络观察式（注册表为空，从未产出数据）；v2 = DOM 锚点档案（首页卡片，实测可读）
       adapterVersion: 'pdd-sales-v2'
     })
@@ -93,9 +93,10 @@ export class PddAdapter extends SalesMetricsDomAdapter implements OrderObservati
   }
 
   async detectLoginStatus(context: PlatformAdapterContext) {
-    // 拼多多从未实测到明确的登录页/验证页文案：保持 UNKNOWN（不猜）。
-    // 采集阶段的"锚点是否渲染出来"才是它真正的登录态证据。
-    return createLoginResult(context, 'UNKNOWN', 'DETECTION_EVIDENCE_INSUFFICIENT', 'NONE')
+    // 拼多多没有实测到任何明确的登录页/验证页文案 → 拿不出**否定**证据，所以直接复用基类：
+    // 基类只用"经营数据锚点真的渲染出来"给出肯定的 LOGGED_IN，拿不到证据就是 UNKNOWN（不猜）。
+    // 以前这里恒返回 UNKNOWN —— 等于把拼多多永久钉死在离线（2026-09-30 修）。
+    return super.detectLoginStatus(context)
   }
 
   async collectOrders(

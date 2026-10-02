@@ -53,7 +53,7 @@ const orbPosition = ref({ x: 0, y: 0 })
 const drawerStyle = computed(() => {
   const margin = 12
   const gap = 12
-  const orbSize = 54
+  const orbSize = 64
   const width = Math.max(280, Math.min(400, viewport.width - margin * 2))
   const height = Math.max(300, Math.min(680, viewport.height - margin * 2))
   const onRight = orbPosition.value.x + orbSize + gap + width <= viewport.width - margin

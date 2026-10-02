@@ -35,6 +35,14 @@ describe('Agent tool catalog', () => {
     expect(toolApprovalRequired('collectBusiness')).toBe(false)
   })
 
+  it('exposes the commerce ledger as a read-only root-ceo tool', () => {
+    const parsed = agentSoftwareActionSchema.safeParse({ type: 'commerceLedgerList', status: 'recovery_required', limit: 20 })
+    expect(parsed.success).toBe(true)
+    expect(AGENT_CONFIRM_REQUIRED_ACTIONS.has('commerceLedgerList')).toBe(false)
+    expect(softwareActionHasSideEffect('commerceLedgerList')).toBe(false)
+    expect(AGENT_TOOL_LABELS.commerceLedgerList).toBe('查看电商动作台账')
+  })
+
   it('renders a whitelist prompt with approval markers and no script surface', () => {
     const text = buildToolWhitelistText()
     expect(text).toContain('需确认')
@@ -102,7 +110,7 @@ describe('Agent tool catalog', () => {
   // 一旦把 approveJob/deletePlugin 这类动作漏出确认门，智能体就能自我批准或直接删插件。
   it('second batch of tools splits auto-run reads from approval-gated changes', () => {
     const autoRun = ['getJobDetail', 'jobFeedback', 'resumeJob', 'qualityMetrics', 'qualityReview', 'overviewStats', 'overviewDatacenter', 'overviewInvoiceCenter', 'memoryRebuild', 'memorySnapshot']
-    const gated = ['approveJob', 'reviewJobResult', 'cancelJob', 'updateAgent', 'bindAgentModel', 'updatePlugin', 'deletePlugin', 'updateTask', 'applyEntity']
+    const gated = ['approveJob', 'reviewJobResult', 'cancelJob', 'updatePlugin', 'deletePlugin', 'updateTask', 'applyEntity']
     for (const type of autoRun) expect(toolApprovalRequired(type), `${type} 不应要求确认`).toBe(false)
     for (const type of gated) expect(toolApprovalRequired(type), `${type} 必须要求确认`).toBe(true)
     // 两个集合互斥且都在目录里（防止名字写错导致断言空转）
@@ -139,7 +147,7 @@ describe('Agent tool catalog', () => {
     for (const type of ['getJobDetail', 'qualityMetrics', 'qualityReview', 'overviewStats', 'overviewDatacenter', 'overviewInvoiceCenter']) {
       expect(skillStepEligible(type), `${type} 是只读工具，应可用于技能`).toBe(true)
     }
-    for (const type of ['approveJob', 'reviewJobResult', 'cancelJob', 'updatePlugin', 'deletePlugin', 'updateTask', 'updateAgent', 'applyEntity', 'jobFeedback', 'resumeJob', 'memoryRebuild', 'memorySnapshot']) {
+    for (const type of ['approveJob', 'reviewJobResult', 'cancelJob', 'updatePlugin', 'deletePlugin', 'updateTask', 'applyEntity', 'jobFeedback', 'resumeJob', 'memoryRebuild', 'memorySnapshot']) {
       expect(skillStepEligible(type), `${type} 不该出现在技能步骤里`).toBe(false)
     }
     // isSkillStepAllowed 只回答「嵌套管理/维护类」这一个问题；确认门禁类由 skillStepEligible 叠加判定

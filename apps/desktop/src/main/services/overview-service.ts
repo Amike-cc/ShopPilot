@@ -15,7 +15,7 @@
 import { getDatabase } from '../db/database'
 import * as StoreManager from '../stores/store-manager'
 import { writeAudit } from './audit-logger'
-import { invoiceProfileFor, INVOICE_COLUMNS, INVOICE_UNSUPPORTED_NOTE, normalizeCellText } from '@shared/constants/invoice'
+import { invoiceProfileFor, INVOICE_COLUMNS, INVOICE_TASK_PREFIX, INVOICE_UNSUPPORTED_NOTE, normalizeCellText } from '@shared/constants/invoice'
 import type { InvoiceColumnKey } from '@shared/constants/invoice'
 import { ENTITY_METRIC_NAME, ENTITY_METRIC_NO, entityProfileFor, entityUnsupportedNote } from '@shared/constants/entity'
 import { decideLicenseWrite, normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
@@ -88,9 +88,9 @@ export function collectInvoiceRows(): any[] {
       FROM task_runs r
       JOIN tasks t ON t.id = r.task_id
       JOIN stores s ON s.id = r.store_id
-      WHERE t.name LIKE '发票采集 ·%'
+      WHERE t.name LIKE ?
     ) WHERE rn = 1
-  `).all() as any[]
+  `).all(`${INVOICE_TASK_PREFIX}%`) as any[]
   const failByStore = new Map<string, any>()
   for (const f of lastRunRows) {
     if (failByStore.has(f.storeId)) continue
@@ -262,11 +262,12 @@ export function overviewInvoiceCenter() {
  *  - 平台给的是掩码 / 形态不对 → 不写，如实说明（实测微信的信用代码是掩码）。
  * 只读快照、只改这两列，不做任何页面操作（采集在任务里）。
  */
-export function applyEntityToStores() {
+export function applyEntityToStores(storeIds?: readonly string[]) {
   const db = getDatabase()
-  const stores = db.prepare(
-    `SELECT id, name, platform, license_name, license_no FROM stores WHERE deleted_at IS NULL ORDER BY platform, name`
-  ).all() as any[]
+  const selected = [...new Set((storeIds || []).filter(Boolean))]
+  const stores = (selected.length
+    ? db.prepare(`SELECT id, name, platform, license_name, license_no FROM stores WHERE deleted_at IS NULL AND id IN (${selected.map(() => '?').join(',')}) ORDER BY platform, name`).all(...selected)
+    : db.prepare(`SELECT id, name, platform, license_name, license_no FROM stores WHERE deleted_at IS NULL ORDER BY platform, name`).all()) as any[]
   const entities = collectEntities()
   const rows = stores.map(s => {
     const profile = entityProfileFor(s.platform)
@@ -316,7 +317,9 @@ export function overviewDatacenterSummary() {
     trash: (db.prepare('SELECT COUNT(*) c FROM stores WHERE deleted_at IS NOT NULL').get() as any).c,
     platforms: byPlatform.length,
     snapshots: (db.prepare('SELECT COUNT(*) c FROM store_snapshots').get() as any).c,
-    tasks: (db.prepare('SELECT COUNT(*) c FROM tasks').get() as any).c
+    // 「发票采集」是每 3 小时一次的**后台刷新**，不是用户要管理的任务 → 不计入任务总数
+    // （口径与任务中心的列表/统计一致，见 shared/constants/invoice 的 INVOICE_TASK_PREFIX）
+    tasks: (db.prepare('SELECT COUNT(*) c FROM tasks WHERE COALESCE(name, \'\') NOT LIKE ?').get(`${INVOICE_TASK_PREFIX}%`) as any).c
   }
 
   // 每店每指标的最新一条 + **上一条**（用于数据中心显示"较上次采集的增减"）。

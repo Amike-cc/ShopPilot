@@ -3,7 +3,7 @@ import type { AgentPageObservation } from '@shared/schemas/agent'
 import { redactAgentText, sanitizeAgentUrl } from '@shared/agent-privacy'
 import {
   getActiveTabId, getDisplayedStoreId, getOpenStoreIds, getStoreTabs,
-  getTabWebContents, isBrowserTabMounted, isBrowserTabReadableForAgent, waitForTabWebContents
+  getTabWebContents, isBrowserTabMounted, isBrowserTabReadableForAgent, waitForTabWebContents, captureTab
 } from '../browser/window-manager'
 import { getStore } from '../stores/store-manager'
 import { isAppLocked } from './security-manager'
@@ -174,8 +174,16 @@ export async function observeCurrentPage(): Promise<AgentPageObservation> {
     .map((x: string) => redactAgentText(x, 500)).filter(Boolean).slice(0, 60)
   const url = sanitizeAgentUrl(wc.getURL())
   const pageTitle = redactAgentText(wc.getTitle() || snapshot?.title || tab.title || '', 240)
-  // 截图功能已移除（用户要求）：观察只返回有界 DOM 摘要；字段保留为不可用，避免破坏旧契约。
-  const screenshot = { ref: randomUUID(), capturedAt: Date.now(), available: false, dataUrl: null, errorCode: 'AGENT_CAPTURE_REMOVED' }
+  let screenshot: AgentPageObservation['screenshot']
+  try {
+    const base64 = await captureTab(storeId, tabId, 'jpeg')
+    const dataUrl = `data:image/jpeg;base64,${base64}`
+    screenshot = dataUrl.length <= 1_500_000
+      ? { ref: randomUUID(), capturedAt: Date.now(), available: true, dataUrl, errorCode: null }
+      : { ref: randomUUID(), capturedAt: Date.now(), available: false, dataUrl: null, errorCode: 'AGENT_CAPTURE_TOO_LARGE' }
+  } catch {
+    screenshot = { ref: randomUUID(), capturedAt: Date.now(), available: false, dataUrl: null, errorCode: 'AGENT_CAPTURE_FAILED' }
+  }
 
   return {
     storeId, storeName: redactAgentText(store.name, 120), storePlatform: redactAgentText(store.platform, 80),

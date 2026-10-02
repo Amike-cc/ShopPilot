@@ -1,8 +1,17 @@
 # ShopPilot 开发状态报告
 
-**报告时间**: 2026-09-26
+> **当前架构方向（2026-09-30）**：Agent 已收敛为单一 `root-ceo` 主 Agent，负责对话、规划、软件/浏览器操作、Job 执行、审核和记忆治理。Job → Task → TaskRun → evidence、模型 Profile/fallback、预算、技能、插件、确认门禁和恢复机制继续保留。旧 HR/子 Agent/执行助手/按 Agent 绑定模型内容仅作为历史兼容记录，不能用于当前完成度判断。
+
+**报告时间**: 2026-10-01
 **开发阶段**: M0 ✅ + M1 工作台核心 ✅ + M2 环境·代理·备份 ✅ + M3 任务辅助 ✅ + M4 发布工程 ✅ + 自动更新（§21）✅
-**当前状态**: `v0.4.48` 已完成内部发版：本轮 `pnpm.cmd typecheck`、`pnpm.cmd test -- --run`（58 文件/589 测试）、`pnpm.cmd build`、`pnpm.cmd lint`（0 errors）和 Windows x64 NSIS 打包均通过；GitHub Release `v0.4.48` 已更新安装包、blockmap 与 `latest.yml`。构建标签仍为 `INTERNAL_BUILD`（未做代码签名）；真实店铺、完整人工桌面和跨设备验收仍按边界保留。
+**当前状态**: 当前工作区版本为 `v0.4.57`，单 Agent 架构改造已完成并达到 `PACKAGED / PARTIAL`：唯一运行时 Agent 为 `root-ceo`，Job、TaskRunner、evidence、模型 Profile/fallback、预算、技能、插件、确认门禁和恢复机制继续保留。`pnpm.cmd typecheck` 与 `pnpm.cmd exec vue-tsc --noEmit` 通过；当前全量 Vitest 为 **87 个文件 / 960 项测试**；`pnpm.cmd lint` 退出码为 0（保留既有 warning）；`pnpm.cmd build`、`pnpm.cmd dist:dir` 通过；M2 代理/407/备份套件 **30/30**、Agent 域 CDP 验收 **13/13**、打包 Agent smoke **10/10**、Windows 原生 UI smoke **7/7** 通过。Session 状态现在只回传安全摘要，并以布尔值显示代理认证处理事实；对话历史上限统一为 64 轮。打包产物为 `release/win-unpacked/ShopPilot.exe`（本轮产物 SHA-256 见 `artifacts/agent/packaged-report.json`）。2026-10-01 使用用户配置，经 Windows 原生界面完成真实 `deepseek-flash` 连接测试（1338ms）和 Agent 单轮对话，两次请求的 root 用量均已落库；随后完成一个真实只读纯模型 Job，返回并审核通过 `JOB-SP1001-42`，证据分别见 `artifacts/agent/real-model-smoke-20261001.json` 和 `artifacts/agent/real-model-job-smoke-20261001.json`。构建标签仍为 `INTERNAL_BUILD`（未做代码签名）；真实 fallback、费用对账、真实店铺副作用、完整人工桌面/跨设备验收和正式生产发布仍未完成。
+
+**商品域 Agent M1 接入（2026-10-01，本轮）**: 11 个商品动作已接入共享 schema、工具目录、Main 参数/店铺校验和现有 ProductSync/ProductDetail/ProductPublish 服务。Agent 软件执行 IPC 现在同时返回结构化 `results[]`（状态、原因码、安全摘要、字段级摘要和脱敏 evidence）；发布打开/代填、回读建议接受仍走人工确认，应用不代点发布/保存/提交。`pnpm.cmd typecheck` 通过；商品/Agent 定向套件 8 个文件 / 145 条通过，结构化回执契约 2 条通过。代码与测试见 `packages/shared/src/contracts/agent-software.ts`、`apps/desktop/src/main/services/agent-service.ts`、`tests/unit/agent-product-result.test.ts`。真实同步验收已尝试但因打包启动后未发现 `window.shopilot.products` 阻塞，证据见 `artifacts/agent/product-m1-sync-real-verify-20261001.json`；未把它记为平台成功。真实四平台 Agent 调用、登录过期/页面改版/网络失败/重启恢复、真实人工发布回读和 Windows 逐项验收仍为 `PARTIAL/UNTESTED/NOT_VERIFIED`，整体保持 `INTERNAL_BUILD`。
+
+**库存/价格/SKU Agent M2 接入（2026-10-01，当前轮）**: 新增 `inventoryCollect`、`inventoryDiff`、`inventoryWriteback`、`skuCollect`、`skuDiff`、`skuWriteback`。`apps/desktop/src/main/products/inventory-sku-service.ts` 读取本地平台快照，生成字段级 before/after 与 `storeId + platform + productId + skuId + inputHash` 幂等键；写回先写入迁移 v25 的 `commerce_writeback_proposals`，人工确认后仍因平台适配器未实测返回 `NOT_VERIFIED`，不执行平台写入，多规格 SKU 不降级。`tests/unit/inventory-sku-service.test.ts` 2/2 通过；schema/catalog/迁移测试通过。真实四平台采集、写回和回读尚未执行，状态保持 `IMPLEMENTED/PARTIAL` 与 `NOT_VERIFIED/UNTESTED`。
+证据清单：`artifacts/agent/inventory-sku-m2-20261001.json`。
+
+**订单履约/售后/退款 Agent M3 接入（2026-10-01，当前轮）**: 新增 `OrderLifecycleService`，接入 `fulfillmentPrepare`、`fulfillmentConfirm`、`fulfillmentVerify`、`afterSaleCollect`、`refundReview`、`refundConfirm`、`refundVerify`。迁移 v26 新增履约、售后快照和人工动作提案表，退款必须提供金额并校验不超过本地实付金额；确认后没有真实平台适配器时只返回 `NOT_VERIFIED`，不提交发货/退款，不把未知状态猜成成功。定向 36 条测试与 `pnpm.cmd typecheck` 通过。证据：`artifacts/agent/order-lifecycle-m3-20261001.json`。真实平台发货、售后、退款和平台回读仍未验证，整体保持 `INTERNAL_BUILD`。
 
 **店铺页面改为真正的 DOM `<webview>` 嵌入（2026-09-28，`v0.4.50`，已发布）**: 用户实报"浏览器没有真正嵌入"——根因是旧实现把店铺页面画在主窗口 `BrowserWindow.contentView` 的原生 `WebContentsView` 上，Renderer 里只有一块透明占位 div：HTML 弹层/抽屉/右键菜单**永远盖不住**店铺页（只能靠 `removeChildView` 摘挂原生视图来"避让"），页面尺寸/圆角/`overflow` 也不受 DOM 约束。本轮改为**主窗口 Renderer DOM 里真实的 Electron `<webview>`**：每个 store/tab 一个元素、`partition="persist:store_<storeId>"`、初始 `src=about:blank`，`did-attach` 后调 `browser:registerWebview` 由主进程校验并绑定 guest（校验 sender 是主窗口渲染层、guest 宿主是主窗口、`guest.session` 与店铺分区同实例、无重复占用），再用主进程返回的 `pendingUrl` 做首次导航（此时 session/代理/指纹已就绪）。主进程 `Tab` 句柄从 `WebContentsView` 改为**已注册的 guest WebContents**，`getTabWebContents`/`captureTab`/`pickElement`/导航控制/Agent 可读性/任务引擎全部改走 guest；`displayStore`/`activateTab` 只更新元数据，可见性由渲染层 CSS 控制（隐藏用 `opacity:0 + pointer-events:none`，**不**用 `display:none`/`visibility:hidden`——后者会让 guest 自认不可见，微应用/后台首页会停止渲染，这是本仓库踩过的坑）。安全边界：主窗口 `webviewTag:true` 且注册 `will-attach-webview`，逐次剥掉 Renderer 传来的 `preload`、强制 `nodeIntegration:false`/`contextIsolation:true`/`sandbox:true`/`webviewTag:false`/`backgroundThrottling:false`，只放行真实店铺自己的 `persist:store_<id>` 分区与非 `file:/javascript:` 初始地址，非法附件 `preventDefault()` 并写脱敏日志（远程店铺页拿不到主窗口 preload bridge）。就绪语义：新增 `BROWSER_NOT_READY`（标签页还在、guest 未注册/正在重载——等一会儿就能继续）与既有 `BROWSER_CLOSED`（确实关闭）分开，任务引擎启动前 `waitForTabWebContents`、采集/订单/登录检测入口改用 `waitForStoreWebContents`（等页面可用再判 `PAGE_NOT_READY`）、`captureTab` 不带 rect 截"页面可见区"、Agent 观察先等 5s 再报未就绪。渲染层：`DashboardBrowserSurface` 渲染真元素并显示未注册/加载失败诊断（可重试），`DashboardView` 让 guest 宿主在有店铺打开时常驻（切页只隐藏不销毁，页面状态与登录中间步骤不丢），拾取与任务启动改为"等 guest 注册 + 两帧稳定"而不是固定 650ms/160ms，`UnifiedTaskPage` 去掉 `setViewsObscured`/`setViewport` 的旧原生摘挂逻辑。**真机验证（生产构建 + CDP 驱动真实界面）**：`typecheck` 通过；`vitest run` **67 文件/730 用例通过**（新增 `webview-embedding-boundary` 10 例焊住"退回旧架构/隐藏方式用错/漏校验"三类退化）；`lint` 0 errors；`pnpm build` 通过；**M1 115/115**（含新增判据：DOM 里存在 `WEBVIEW` 元素、分区正确、`getWebContentsId()` 有效且主进程 `guestAttached=true`、guest 页面 `innerWidth/innerHeight` = 元素尺寸、渲染层重载后每标签恰好一个元素且重新注册、菜单层级 220 > webview 层级 1 且页面未被摘除、左右栏折叠时页面真的跟着变宽）；**M3 114/114**；**安全 44/44**（弹层遮挡判据改为"弹窗层级确实压住 webview + 页面未被重建"）；**Agent 78/78**；**自定义任务本地 54/54**（含真跑仿真页：读值 42、页面收到 1 次真实点击、截图工件哈希一致、失败码 `TASK_TEXT_PRESENT` 如实落库，以及拾取遮罩/悬停高亮/自动填选择器/Esc 取消）。验收脚本同步：CDP 目标类型放宽为 `page|webview`（DOM guest 在目标列表里的 type 是 `webview`）、渲染层重载后重新解析店铺 target（元素重建会换调试端点）、左右栏宽度改比 `<webview>` 元素内容盒（容器有 1px 边框，旧断言拿 border-box 比会误报 2px）。**已知边界（本轮未闭环，如实声明）**：① `M2` 阶段1 有两条断言仍按旧的 `session:status` 契约取 `partition`/`tabCount`/`lastProxyAuth`，而当前实现**故意不把这些交给 Renderer**（防分区/凭据外泄）——属于既有断言与加固后契约不一致，与本次改动无关，需要另派一轮把这两条改写成按行为/日志断言；同一原因下环境面板的"已注入代理凭据"一行读不到该字段（既有缺口）。② 窗口被操作系统遮挡时 Chromium 停帧导致平台 rAF 弹层停在屏外的问题照旧（`TASK_TARGET_OUT_OF_VIEWPORT` 如实报出，不是本次引入）。③ 版本发布见本报告末条「v0.4.50 发版记录」。
 
@@ -351,3 +360,72 @@ cd D:\code\电商浏览器
   1. 打包后工作区**又变脏**（另一处并行改动正在写 `DashboardView.vue`），发布门禁如实拒绝发布（`dirty: true`）。没有用 `SHOPILOT_ALLOW_DIRTY_RELEASE=1` 绕过，而是**先在当前整棵树上重跑门槛**（typecheck ✓ / vitest 72 文件 770 用例 ✓ / M1 115/115 ✓），确认是"整树绿"的快照后把它作为独立提交提交，再重新生成清单（`dirty: false`）发布。
   2. `git push` 仍是先失败后重试成功——沿用"先确认推送成功再发布"，tag 一次指对。
 - **未闭环（如实声明）**：未做代码签名（Windows 可能显示未知发布者）；更新包只做 SHA-512 校验；安装态「检查更新 → 下载 → 安装」未随本版重跑；本版提交里含工作区另一处并行改动（店铺登录态自动复核、待办卡纳入发票待开票项），非本次任务范围、未逐行审查。
+# 2026-10-01 ShopPilot Agent 继续开发
+
+本轮完成 M4/M5 的 Main 领域接入：经营指标比较与健康检查、发票导出、主体回填、内容草稿/审核/发布提案、活动/优惠券/广告计划、客服草稿/收件箱摘要/发送提案。新增数据库迁移 v27 与两组领域服务单测。所有外部平台写入仍要求人工确认；未实测平台明确返回 `NOT_VERIFIED`，整体发布状态保持 `INTERNAL_BUILD`。
+
+验证：`pnpm.cmd typecheck` 通过；M4/M5、Agent、迁移定向测试 4 文件 24 条通过。完整 `pnpm.cmd test`、lint、build 和真实店铺/Windows 验收仍需继续执行并记录。
+
+后续增量修正已验证：内容发布未审核时被拦截；客服草稿发送校验店铺和会话归属；发票导出按请求 ID 过滤；主体回填限定目标店铺。M4/M5 定向测试 4 条通过。
+
+本轮继续：迁移 v28 新增 Main-only `commerce_agent_action_ledger`，M4/M5 领域动作写入稳定 inputHash、确认凭证、副作用标记、证据和恢复建议，重复输入幂等更新；台账故障不会阻断领域回执。新增台账测试 1 条，真实平台和 Windows 恢复验收仍未验证。
+
+台账覆盖范围已扩展到库存/价格/SKU、订单/履约/售后/退款及商品域动作；本地查询和提案状态可以统一追溯，未验证平台仍不会执行外部写入。
+
+
+**M6 台账闭环增量（2026-10-01）**：补齐订单采集派发、退款审核/确认/回读和全部商品发布 Agent 分支的统一台账写入；统一映射 `RECOVERY_REQUIRED`、`blocked_budget`、`blocked_permission`，并按回执摘要保存 `side_effect_started`。新增 Main-only `agent:commerce:ledger:list`，返回脱敏摘要、evidence、确认 ID 和恢复建议。台账测试 2/2 通过。真实店铺、真实平台回读、重启恢复和 Windows 验收仍是 `NOT_VERIFIED/UNTESTED`，发布状态继续为 `INTERNAL_BUILD`。
+
+**M6 运行中状态增量（2026-10-01）**：受跟踪领域动作在 Agent Service 进入执行分支前写入 `running` 台账；已有 `recovery_required` 或 `side_effect_started=1` 时不会被重复执行覆盖，进程中断后可依据台账恢复建议人工回读或取消。新增台账运行中状态测试，真实平台和 Windows 恢复验收仍未验证。
+
+**M6 异常恢复闭环增量（2026-10-01）**：领域动作执行前写入 `running`；异常时纯读动作进入 `failed`，可能产生页面/外部副作用的动作进入 `recovery_required`，提示先人工回读再恢复或取消；重复开始不会覆盖已有终态或副作用记录。定向验证 31 条通过，真实平台、重启恢复和 Windows 验收仍为 `NOT_VERIFIED/UNTESTED`，发布状态继续 `INTERNAL_BUILD`。
+**M6 最终验证（2026-10-01）**：本轮复跑 `pnpm.cmd typecheck`、`pnpm.cmd exec vue-tsc --noEmit`、`pnpm.cmd test`（90 文件/966 测试）、`pnpm.cmd lint`（0 errors，1137 warnings）和 `pnpm.cmd build`，全部通过；M6 定向测试 31/31 通过。证据文件：`artifacts/agent/commerce-m6-ledger-20261001.json`。真实平台、重启恢复、Windows 验收尚未完成，整体保持 `INTERNAL_BUILD`。
+**M6 安全重试修正（2026-10-01）**：修复同一输入在 `failed/partial/not_verified/waiting_confirmation` 后无法留下新的 `running` 轨迹的问题；仅 `recovery_required` 或已有页面副作用的动作继续禁止盲目重试。台账测试 4/4；全量 Vitest 90 文件/968 测试通过；typecheck、vue-tsc、lint（0 errors）和 build 通过。真实平台与 Windows 验收边界不变，仍为 `NOT_VERIFIED/UNTESTED`，发布状态 `INTERNAL_BUILD`。
+**M6 采集派单台账补齐（2026-10-01）**：旧的发票、经营、主体、订单采集动作现在也在 Agent Service 执行前写入 `running`，派单回执带统一原因码、Job 数量和 evidence；未实测平台仍保持 `PARTIAL/NOT_VERIFIED`。`pnpm.cmd typecheck` 通过，Agent/台账定向测试 15/15 通过。
+**M6 采集证据计数修正（2026-10-01）**：修复多动作计划中采集回执重复累计 Job 数量的问题，当前 evidence 只记录本步骤新增 Job；全量 Vitest 90 文件/968 测试通过，build 通过。
+**M6 空派单状态修正（2026-10-01）**：采集动作没有可执行 Job 时返回 `NOT_VERIFIED/NO_JOB_DISPATCHED`，避免空派单被误报为部分成功；新增 Agent 契约测试，完整 Vitest 90 文件/969 测试通过，build 通过。
+**M6 电商确认门禁审计（2026-10-01）**：新增 11 项跨领域断言，锁定高风险电商动作必须同时位于确认集合和副作用集合；Agent 工具、领域契约和台账定向测试 42/42 通过，lint 仍为 0 errors。
+**M3 UNKNOWN 状态修正（2026-10-01）**：订单履约和退款回读在缺少可靠平台证据时返回 `UNKNOWN`，`NOT_VERIFIED` 保留给未实测平台能力；更新 Agent 回执、台账状态枚举和订单单测。全量 Vitest 90 文件/970 测试通过，build 通过。
+
+### 2026-10-01 真实店铺与 Windows 验收边界（本轮）
+
+本轮先运行了只读四平台商品同步探针 `node tools/acceptance/product-sync-real-verify.js`，仅打开店铺、读取商品列表、核对页面条数、重复同步和本地回读，不执行发布、库存/SKU 写回、发货或退款。结果：快手小店 `SUCCEEDED`（页面 4 条、本地 4 条、重复同步 0 新增/4 跳过）；微信小店、抖店、拼多多至少一次返回 `NAVIGATION_FAILED`，抖店页面观察到 2 条但同步返回 0，拼多多重复运行出现不一致。该结果只能标记为 `PARTIAL/BLOCKED/UNTESTED`，不能视为四平台完整真实验收。证据：`artifacts/agent/commerce-real-acceptance-20261001.json`。
+
+登录过期、安全验证、页面改版、网络断开/恢复、真实商品发布、库存/价格/SKU 写回、发货、退款、平台回读和电商副作用的进程重启恢复，本轮均未执行或无法安全执行，保持 `UNTESTED/BLOCKED/NOT_VERIFIED`。Computer Use 发现无可见 ShopPilot/店铺窗口，Chrome 连接器报 `unsupported Codex auth method: apikey`；不使用模拟页面或静态文本替代真实证据。阻塞记录：`artifacts/agent/commerce-real-acceptance-blocked-20261001.json`。
+
+本轮本地/打包边界验证：Windows SendInput Agent 设置 smoke `7/7`（`artifacts/agent/native-ui-report.json`）；打包 Electron/CDP smoke 通过（无真实店铺副作用，`artifacts/agent/packaged-report.json`）；记忆原子恢复故障夹具 `4/4`（`artifacts/agent/memory-resilience-report.json`）。这些证据不升级真实电商能力状态，发布状态继续 `INTERNAL_BUILD`。
+
+要完成剩余验收，需要用户提供四个平台已登录的 Windows ShopPilot 会话、可安全测试的商品/SKU 与订单号、允许的库存/价格范围，以及是否授权真实发货/退款等高风险副作用；不应提供密码、OTP、Cookie 或 Token 到报告中。
+
+本轮回归：`pnpm.cmd typecheck`、`pnpm.cmd exec vue-tsc --noEmit`、定向/全量 Vitest（90 文件/970 测试）、`pnpm.cmd build`、`pnpm.cmd lint` 均完成；lint 为 0 errors / 1142 warnings。为恢复 lint 可执行性，仅移除验收脚本中未使用常量 `MODAL_TITLE`，不改变业务或平台动作。
+
+### 2026-10-01 真实发布预检跟进
+
+清理旧 Electron 进程后重新运行发布验收脚本，成功进入微信小店测试店铺的真实发布预检：店铺状态为 `offline`；预检因已有未完成发布和缺少类目返回 `blocked`，没有打开发布页、没有代填、没有保存、没有提交，也没有进入人工确认。测试商品已由脚本 finally 软删除，并通过 SQLite 核对 `deleted_at`。证据已更新到 `artifacts/agent/commerce-real-acceptance-followup-20261001.json`。
+
+回读仍因店铺离线和主窗口商品 API 不稳定而未执行。库存/SKU 写回、发货、退款、平台回读、登录过期、安全验证、页面改版、网络失败、重启恢复和 Windows 完整逐项验收仍未完成，状态保持 `BLOCKED/UNTESTED/NOT_VERIFIED`。
+
+### 2026-10-01 串行四平台只读跟进
+
+清理残留 Electron 进程后串行运行商品同步探针：拼多多本次 `SUCCEEDED`，读取 3 条、页面 3 行、重复同步 0 新增/3 跳过；抖店与快手首轮导航失败但后续重试进入成功，说明会话/页面就绪不稳定；微信小店仍 `NAVIGATION_FAILED`。因此四平台只读能力仍不能标记 `VERIFIED`，真实发布、库存/SKU 写回、发货、退款和平台回读未执行。证据：`artifacts/agent/commerce-real-acceptance-latest-20261001.json`。
+
+本轮本地桌面边界：M3 TaskRunner 套件 114/114、root-ceo Agent domain 13/13、Windows Agent 设置 7/7。它们不替代真实店铺副作用验收。登录过期、安全验证、页面改版、网络失败和电商副作用进程重启恢复仍未完成，发布状态保持 `INTERNAL_BUILD`。
+
+### Agent 能力增量：电商动作台账查询工具（2026-10-01）
+
+新增只读 Agent 工具 `commerceLedgerList`：root-ceo 可以按店铺和状态读取电商动作台账的脱敏摘要、证据计数和恢复/人工确认数量。它复用 Main-only `commerce_agent_action_ledger` 查询，不暴露 SQL、路径、Cookie、Token 或平台原始数据；不在副作用集合和确认集合中，不会改变执行权限。
+
+变更文件：`packages/shared/src/agent-tools.ts`、`packages/shared/src/schemas/agent.ts`、`packages/shared/src/agent-tool-labels.ts`、`apps/desktop/src/main/services/agent-service.ts`、`tests/unit/agent-tools.test.ts`。
+
+验证：`pnpm.cmd typecheck` 通过；Agent/台账定向测试 3 文件 32 条通过；此前 build 已通过，新增改动仅为受控工具分支和标签。真实平台状态边界不变。
+
+### Agent 对话交互重制（2026-10-01）
+
+对话层改为“会话时间线 + 当前状态”：root-ceo 身份、用户消息、Agent 回复、折叠思考过程、执行结果和人工确认上下文统一显示；失败与 `recovery_required` 明确提示先回读平台再恢复。Composer 增加当前店铺/页面作用域、查看店铺/检查商品/看经营数据/看待办快捷意图、字符计数和高风险动作提示。
+
+新增 `apps/desktop/src/renderer/src/features/agent/conversation-state.ts`；更新 `AgentMessageList.vue`、`AgentComposer.vue`、`AgentDrawer.vue`；新增 UI 状态回归测试。验证：`pnpm.cmd typecheck`、Agent UI 定向测试 10/10、`pnpm.cmd build` 通过；`vue-tsc` 仍被既有 `UnifiedAppsPage.vue:745` 的 `BatchItem.id` 类型错误阻塞。该改造不改变 Main/Preload 边界、确认门禁或真实平台能力状态，发布状态保持 `INTERNAL_BUILD`。
+
+### Agent 对话交互重制（2026-10-01）
+
+重制 Renderer 对话为“会话时间线 + 当前状态”结构：root-ceo 身份、就绪/思考/执行/等待确认/需要恢复状态、用户与 Agent 消息、结果色彩和时间统一显示；思考消息默认折叠为分析摘要，可展开查看。Composer 增加当前店铺/页面作用域、查看店铺/检查商品/看经营数据/看待办快捷意图、字符计数和高风险动作确认提示。失败和 `recovery_required` 状态提供查看恢复入口与明确的回读后恢复建议。
+
+新增文件：`apps/desktop/src/renderer/src/features/agent/conversation-state.ts`；更新 `AgentMessageList.vue`、`AgentComposer.vue`、`AgentDrawer.vue`；新增 `tests/unit/agent-ui.test.ts` 对状态映射、思考分组、恢复提示进行回归覆盖。验证：`pnpm.cmd typecheck`、Agent UI 定向测试 10/10、`pnpm.cmd build` 通过；`vue-tsc` 仍受既有 `UnifiedAppsPage.vue:745` 的 `BatchItem.id` 类型错误阻塞。该改造不改变 Main/Preload 边界、确认门禁或真实平台能力状态，发布状态保持 `INTERNAL_BUILD`。

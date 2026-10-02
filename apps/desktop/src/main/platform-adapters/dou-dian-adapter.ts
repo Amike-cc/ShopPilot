@@ -21,7 +21,7 @@ export class DouDianAdapter extends SalesMetricsDomAdapter {
   constructor(platform: PlatformDef) {
     super(platform, {
       profile: businessProfileFor(platform.name),
-      probe: { host: DOUYIN_HOST, expiredText: KNOWN_LOGIN_TEXT, loginPath: LOGIN_PATH },
+      probe: { hosts: [DOUYIN_HOST], expiredText: KNOWN_LOGIN_TEXT, loginPath: LOGIN_PATH },
       adapterVersion: 'doudian-sales-v1'
     })
   }

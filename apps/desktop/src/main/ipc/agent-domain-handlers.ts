@@ -1,12 +1,14 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
 import { IPC_CHANNELS, EVENT_CHANNELS, type IPCResult } from '@shared/contracts/ipc'
-import { agentHrPreviewSchema, agentJobCreateSchema, agentJobFeedbackSchema, agentJobListQuerySchema, agentJobResultReviewSchema, agentMemoryListQuerySchema, agentMemoryReviewSchema, agentMemorySearchSchema, agentMemoryWriteSchema, agentMemorySnapshotRestoreSchema, agentOrgListQuerySchema, agentMemoryLearningSettingsSchema, modelProfileInputSchema, modelProfileListQuerySchema } from '@shared/schemas/agent-domain'
+import { agentJobCreateSchema, agentJobFeedbackSchema, agentJobListQuerySchema, agentJobResultReviewSchema, agentMemoryListQuerySchema, agentMemoryReviewSchema, agentMemorySearchSchema, agentMemoryWriteSchema, agentMemorySnapshotRestoreSchema, agentOrgListQuerySchema, agentMemoryLearningSettingsSchema, modelProfileInputSchema, modelProfileListQuerySchema, commerceActionLedgerListQuerySchema } from '@shared/schemas/agent-domain'
 import { getBrowserHostWindow } from '../browser/window-manager'
 import { assertTrustedRenderer as assertTrustedIpc } from '../services/renderer-trust'
-import { AgentRuntimeError, activateAgent, addJobFeedback, bindAgentModel, cancelAgentJob, createAgent, createAgentJob, delegateAgentTask, deleteModelProfile, ensureAgentRuntimeBootstrap, getAgent, getAgentJob, listAgentJobs, listAgentsPage, listModelProfilesPage, markRecoverableJobsOnStartup, pauseAgent, previewHr, qualityMetrics, qualityReviewSummary, resumeAgent, resumeAgentJob, retireAgent, runAgentJob, setModelProfile, testModelProfile, updateAgent, approveAgentJob, reviewAgentJobResult, startAgentRuntimeLeaseSweeper } from '../services/agent-runtime'
+import { AgentRuntimeError, addJobFeedback, cancelAgentJob, createAgentJob, delegateAgentTask, deleteModelProfile, ensureAgentRuntimeBootstrap, getAgent, getAgentJob, listAgentJobs, listAgentsPage, listModelProfilesPage, markRecoverableJobsOnStartup, qualityMetrics, qualityReviewSummary, resumeAgentJob, runAgentJob, setModelProfile, testModelProfile, approveAgentJob, reviewAgentJobResult, startAgentRuntimeLeaseSweeper } from '../services/agent-runtime'
 import { buildApprovedMemoryContext, createMemorySnapshot, getMemoryLearningSettings, inspectMemorySnapshot, listMemories, maintainMemories, rebuildMemoryIndex, restoreMemorySnapshot, reviewMemory, searchMemories, setMemoryLearningSettings, writeMemory } from '../services/agent-memory'
 import { createAgentSkillByUser, deleteAgentPluginByUser, deleteAgentSkill, exportAgentPack, importAgentPack, listAgentSkillLibrary, updateAgentPluginByUser, updateAgentSkill } from '../services/agent-service'
+import { commerceActionLedgerFor } from '../services/commerce-action-ledger'
+import { getDatabase } from '../db/database'
 import { listSkillStepTools } from '@shared/agent-tools'
 import { askConfirm } from '../services/password-dialog'
 
@@ -24,11 +26,24 @@ function sendEvent(channel: string, payload: unknown): void {
   try { getBrowserHostWindow()?.webContents.send(channel, payload) } catch { /* UI event is best effort */ }
 }
 
+/**
+ * 高风险 Agent 操作必须由 Main 托管的原生确认窗口授权。
+ * Renderer 传入的 confirmed 字段仅为旧版兼容字段，不能作为授权依据。
+ */
+async function requireNativeConfirmation(title: string, detail: string, detail2?: string): Promise<void> {
+  const confirmed = await askConfirm({ title, detail, detail2, danger: true })
+  if (!confirmed) throw new AgentRuntimeError('AGENT_CONFIRMATION_REQUIRED', '该 Agent 操作需要用户确认')
+}
+
 function handleError(error: unknown, rid: string): IPCResult {
   if (error instanceof AgentRuntimeError) return fail(error.code, error.message, rid)
   if ((error as any)?.name === 'ZodError') return fail('AGENT_INVALID_INPUT', '参数校验失败', rid)
   const code = typeof (error as any)?.code === 'string' ? String((error as any).code) : 'AGENT_INTERNAL_ERROR'
   return fail(code, code === 'AGENT_INTERNAL_ERROR' ? 'Agent 操作失败' : String((error as any)?.message || code), rid)
+}
+
+function rejectLegacyOrganizationMutation(): never {
+  throw new AgentRuntimeError('AGENT_SINGLETON_ONLY', '当前系统仅保留 root-ceo，不支持 HR、子 Agent 或按 Agent 绑定模型')
 }
 
 function register<T>(channel: string, fn: (event: IpcMainInvokeEvent, raw: unknown) => T | Promise<T>): void {
@@ -47,36 +62,32 @@ export function registerAgentDomainHandlers(): void {
 
   register(IPC_CHANNELS.AGENT_ORG_LIST, (_event, raw) => listAgentsPage(agentOrgListQuerySchema.parse(raw || {})))
   register(IPC_CHANNELS.AGENT_ORG_GET, (_event, raw) => getAgent(String((raw as any)?.agentId || '')))
-  register(IPC_CHANNELS.AGENT_ORG_CREATE, (_event, raw) => {
-    const input = raw as any
-    return createAgent({ ...input, actorAgentId: String(input.actorAgentId || 'root-ceo') })
-  })
-  register(IPC_CHANNELS.AGENT_ORG_UPDATE, (_event, raw) => updateAgent(raw as any))
-  register(IPC_CHANNELS.AGENT_ORG_ACTIVATE, (_event, raw) => { const agent = activateAgent(String((raw as any).agentId), String((raw as any).actorAgentId || 'root-ceo'), !!(raw as any).confirmed); sendEvent(EVENT_CHANNELS.AGENT_STATUS_CHANGED, { agentId: agent.id, status: agent.status }); return agent })
-  register(IPC_CHANNELS.AGENT_ORG_PAUSE, (_event, raw) => { const agent = pauseAgent(String((raw as any).agentId), String((raw as any).actorAgentId || 'root-ceo'), !!(raw as any).confirmed); sendEvent(EVENT_CHANNELS.AGENT_STATUS_CHANGED, { agentId: agent.id, status: agent.status }); return agent })
-  register(IPC_CHANNELS.AGENT_ORG_RESUME, (_event, raw) => { const agent = resumeAgent(String((raw as any).agentId), String((raw as any).actorAgentId || 'root-ceo'), !!(raw as any).confirmed); sendEvent(EVENT_CHANNELS.AGENT_STATUS_CHANGED, { agentId: agent.id, status: agent.status }); return agent })
-  register(IPC_CHANNELS.AGENT_ORG_RETIRE, (_event, raw) => { const agent = retireAgent(String((raw as any).agentId), String((raw as any).actorAgentId || 'root-ceo'), !!(raw as any).confirmed); sendEvent(EVENT_CHANNELS.AGENT_STATUS_CHANGED, { agentId: agent.id, status: agent.status }); return agent })
-  register(IPC_CHANNELS.AGENT_HR_PREVIEW, (_event, raw) => {
-    const input = agentHrPreviewSchema.parse({ mode: 'hr', ...(raw as any) })
-    return previewHr(input.role, input.actorAgentId, input.mode)
-  })
+  // These channels remain registered for old renderers, but no longer expose
+  // organization or HR mutations after the architecture switched to one Agent.
+  register(IPC_CHANNELS.AGENT_ORG_CREATE, () => rejectLegacyOrganizationMutation())
+  register(IPC_CHANNELS.AGENT_ORG_UPDATE, () => rejectLegacyOrganizationMutation())
+  register(IPC_CHANNELS.AGENT_ORG_ACTIVATE, () => rejectLegacyOrganizationMutation())
+  register(IPC_CHANNELS.AGENT_ORG_PAUSE, () => rejectLegacyOrganizationMutation())
+  register(IPC_CHANNELS.AGENT_ORG_RESUME, () => rejectLegacyOrganizationMutation())
+  register(IPC_CHANNELS.AGENT_ORG_RETIRE, () => rejectLegacyOrganizationMutation())
+  register(IPC_CHANNELS.AGENT_HR_PREVIEW, () => rejectLegacyOrganizationMutation())
 
   register(IPC_CHANNELS.AGENT_MODEL_LIST, (_event, raw) => listModelProfilesPage(modelProfileListQuerySchema.parse(raw || {})))
-  register(IPC_CHANNELS.AGENT_MODEL_SET, (_event, raw) => {
+  register(IPC_CHANNELS.AGENT_MODEL_SET, async (_event, raw) => {
     const input = raw as any
     const profile = modelProfileInputSchema.parse(input.profile || input)
-    return setModelProfile(profile, String(input.actorAgentId || 'root-ceo'))
+    await requireNativeConfirmation('保存模型 Profile？', `将保存模型「${String(profile.name || profile.model || '未命名')}」及其 Endpoint、预算和能力配置。`)
+    return setModelProfile(profile, 'root-ceo')
   })
-  register(IPC_CHANNELS.AGENT_MODEL_DELETE, (_event, raw) => { deleteModelProfile(String((raw as any).profileId), String((raw as any).actorAgentId || 'root-ceo')); return { success: true } })
-  register(IPC_CHANNELS.AGENT_MODEL_TEST, (_event, raw) => testModelProfile(String((raw as any).profileId), String((raw as any).actorAgentId || 'root-ceo')))
-  register(IPC_CHANNELS.AGENT_MODEL_BIND, (_event, raw) => {
-    const input = raw as any
-    const rawProfileId = input?.modelProfileId
-    const modelProfileId = rawProfileId == null || String(rawProfileId).trim() === '' ? null : String(rawProfileId)
-    return bindAgentModel({ agentId: String(input?.agentId || ''), modelProfileId, actorAgentId: String(input?.actorAgentId || 'root-ceo') })
-  })
+  register(IPC_CHANNELS.AGENT_MODEL_DELETE, async (_event, raw) => { await requireNativeConfirmation('删除模型 Profile？', `将删除模型 Profile「${String((raw as any).profileId || '')}」。`); deleteModelProfile(String((raw as any).profileId), 'root-ceo'); return { success: true } })
+  register(IPC_CHANNELS.AGENT_MODEL_TEST, (_event, raw) => testModelProfile(String((raw as any).profileId), 'root-ceo'))
+  register(IPC_CHANNELS.AGENT_MODEL_BIND, () => rejectLegacyOrganizationMutation())
 
-  register(IPC_CHANNELS.AGENT_JOB_CREATE, (_event, raw) => agentJobCreateSchema.parse(raw) && createAgentJob(raw as any))
+  register(IPC_CHANNELS.AGENT_JOB_CREATE, async (_event, raw) => {
+    const input = agentJobCreateSchema.parse(raw)
+    await requireNativeConfirmation('创建 Agent Job？', `将创建并保存 Job「${String(input.goal || '未命名')}」。`)
+    return createAgentJob({ ...input, createdByAgentId: 'root-ceo' })
+  })
   register(IPC_CHANNELS.AGENT_JOB_DELEGATE, async (_event, raw) => {
     const result = await delegateAgentTask(raw)
     sendEvent(EVENT_CHANNELS.AGENT_JOB_PROGRESS, { jobId: result.job.id, status: result.job.status, version: result.job.version, executorAgentId: result.executor.id })
@@ -85,18 +96,21 @@ export function registerAgentDomainHandlers(): void {
   register(IPC_CHANNELS.AGENT_JOB_LIST, (_event, raw) => listAgentJobs(agentJobListQuerySchema.parse(raw || {})))
   register(IPC_CHANNELS.AGENT_JOB_GET, (_event, raw) => getAgentJob(String((raw as any)?.jobId || '')))
   register(IPC_CHANNELS.AGENT_JOB_RUN, async (_event, raw) => {
-    const result = await runAgentJob(String((raw as any).jobId), String((raw as any).actorAgentId || 'root-ceo'))
+    await requireNativeConfirmation('运行 Agent Job？', `将运行 Job「${String((raw as any).jobId || '')}」。`)
+    const result = await runAgentJob(String((raw as any).jobId), 'root-ceo')
     sendEvent(EVENT_CHANNELS.AGENT_JOB_PROGRESS, { jobId: result.id, status: result.status, version: result.version })
     return result
   })
-  register(IPC_CHANNELS.AGENT_JOB_CANCEL, (_event, raw) => {
-    const result = cancelAgentJob({ jobId: String((raw as any).jobId), actorAgentId: String((raw as any).actorAgentId || 'root-ceo') })
+  register(IPC_CHANNELS.AGENT_JOB_CANCEL, async (_event, raw) => {
+    await requireNativeConfirmation('取消 Agent Job？', `将取消 Job「${String((raw as any).jobId || '')}」，已发生的页面副作用无法撤销。`)
+    const result = cancelAgentJob({ jobId: String((raw as any).jobId), actorAgentId: 'root-ceo' })
     sendEvent(EVENT_CHANNELS.AGENT_JOB_PROGRESS, { jobId: result.id, status: result.status, version: result.version })
     return result
   })
-  register(IPC_CHANNELS.AGENT_JOB_APPROVE, (_event, raw) => {
+  register(IPC_CHANNELS.AGENT_JOB_APPROVE, async (_event, raw) => {
     const input = raw as any
-    const result = approveAgentJob({ jobId: String(input.jobId), actorAgentId: String(input.actorAgentId || 'root-ceo'), approved: !!input.approved, confirmationId: input.confirmationId == null ? undefined : String(input.confirmationId) })
+    await requireNativeConfirmation(input.approved ? '批准 Agent Job？' : '拒绝 Agent Job？', `将${input.approved ? '批准并继续执行' : '拒绝并取消'} Job「${String(input.jobId || '')}」。`)
+    const result = approveAgentJob({ jobId: String(input.jobId), actorAgentId: 'root-ceo', approved: !!input.approved, confirmationId: input.confirmationId == null ? undefined : String(input.confirmationId) })
     sendEvent(EVENT_CHANNELS.AGENT_JOB_PROGRESS, { jobId: result.id, status: result.status, version: result.version, confirmationApproved: result.confirmationApproved })
     return result
   })
@@ -148,6 +162,7 @@ export function registerAgentDomainHandlers(): void {
   register(IPC_CHANNELS.AGENT_PLUGIN_DELETE, (_event, raw) => deleteAgentPluginByUser(raw || {}))
   register(IPC_CHANNELS.AGENT_QUALITY_METRICS, () => qualityMetrics())
   register(IPC_CHANNELS.AGENT_QUALITY_REVIEW, () => qualityReviewSummary('root-ceo'))
+  register(IPC_CHANNELS.AGENT_COMMERCE_LEDGER_LIST, (_event, raw) => commerceActionLedgerFor(getDatabase()).list(commerceActionLedgerListQuerySchema.parse(raw || {})))
 
   // Kept Main-only for future CEO review flows; no renderer endpoint returns
   // the full memory context by default.

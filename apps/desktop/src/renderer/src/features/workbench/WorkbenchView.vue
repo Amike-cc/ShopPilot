@@ -292,7 +292,7 @@
             </select>
           </div>
           <div class="env-note" v-if="envBindingNote">{{ envBindingNote }}</div>
-          <div class="env-note ok" v-if="lastProxyAuth">✔ 已注入代理凭据 {{ lastProxyAuth.username }}（{{ new Date(lastProxyAuth.at).toLocaleTimeString() }}）</div>
+          <div class="env-note ok" v-if="proxyAuthObserved">✔ 最近一次代理认证已由主进程安全处理</div>
         </div>
 
         <div class="env-sec">
@@ -1551,7 +1551,7 @@
           <button :class="['stab', { on: settingsTab === 'config' }]" data-test="settings-tab-config" @click="openSettingsTab('config')">配置</button>
           <button :class="['stab', { on: settingsTab === 'square' }]" data-test="settings-tab-square" @click="openSettingsTab('square')">达人广场</button>
           <button :class="['stab', { on: settingsTab === 'ai' }]" data-test="settings-tab-ai" @click="openSettingsTab('ai')">AI 配置</button>
-          <button :class="['stab', { on: settingsTab === 'agents' }]" data-test="settings-tab-agents" @click="openSettingsTab('agents')">Agent 团队</button>
+          <button :class="['stab', { on: settingsTab === 'agents' }]" data-test="settings-tab-agents" @click="openSettingsTab('agents')">Agent 设置</button>
           <button :class="['stab', { on: settingsTab === 'skills' }]" data-test="settings-tab-skills" @click="openSettingsTab('skills')">技能</button>
           <button :class="['stab', { on: settingsTab === 'plugins' }]" data-test="settings-tab-plugins" @click="openSettingsTab('plugins')">插件</button>
           <button :class="['stab', { on: settingsTab === 'about' }]" data-test="settings-tab-about" @click="openSettingsTab('about')">关于软件</button>
@@ -2550,7 +2550,7 @@ interface ProxyLite { id: string; type: string; host: string; port: number; labe
 const proxies = ref<ProxyLite[]>([])
 const proxyBindId = ref('')
 const envBindingNote = ref('')
-const lastProxyAuth = ref<{ at: number; username: string; proxyId: string } | null>(null)
+const proxyAuthObserved = ref(false)
 const testingIds = ref<string[]>([])
 const verifyItems = ref<Array<{ field: string; expected: any; actual: any; state: string }>>([])
 const verifying = ref(false)
@@ -2561,6 +2561,7 @@ async function refreshEnv() {
   if (pl.ok) proxies.value = pl.data
   const sid = ws.displayedStoreId
   if (!sid) return
+  proxyAuthObserved.value = false
   const st = await window.shopilot.session.status(sid)
   // 请求期间可能已切到另一家店铺：迟到的会话状态不能覆盖当前环境面板。
   if (ws.displayedStoreId !== sid) return
@@ -2568,7 +2569,7 @@ async function refreshEnv() {
     const b = st.data.binding
     proxyBindId.value = b && b.mode === 'bound' ? (b.proxyId || '') : ''
     envBindingNote.value = b && b.mode === 'bound' ? '当前：绑定代理' : '当前：直连'
-    lastProxyAuth.value = st.data.lastProxyAuth || null
+    proxyAuthObserved.value = st.data.proxyAuthObserved === true
   }
 }
 

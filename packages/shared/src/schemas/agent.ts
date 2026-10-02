@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { UNIFIED_ORDER_STATUSES } from '../contracts/unified-order'
 
 /** Agent 只允许产出可以映射到 TaskRunner 白名单的受控步骤。 */
 export const AGENT_STEP_TYPES = [
@@ -40,6 +41,7 @@ export const AGENT_SOFTWARE_ACTION_TYPES = [
   'listTasks',
   'listAgents',
   'listJobs',
+  'commerceLedgerList',
   'listTrashStores',
   'listBackups',
   'getTaskDetail',
@@ -54,11 +56,6 @@ export const AGENT_SOFTWARE_ACTION_TYPES = [
   'pinTab',
   'closeTab',
   'closeStore',
-  'createAgent',
-  'activateAgent',
-  'pauseAgent',
-  'resumeAgent',
-  'retireAgent',
   'openPanel',
   'createStore',
   'updateStore',
@@ -74,7 +71,52 @@ export const AGENT_SOFTWARE_ACTION_TYPES = [
   'collectBusiness',
   'collectEntity',
   'collectOrders',
+  'orderCollect',
   'getOrderDetails',
+  'inventoryCollect',
+  'inventoryDiff',
+  'inventoryWriteback',
+  'skuCollect',
+  'skuDiff',
+  'skuWriteback',
+  'orderList',
+  'orderGet',
+  'fulfillmentPrepare',
+  'fulfillmentConfirm',
+  'fulfillmentVerify',
+  'afterSaleCollect',
+  'refundReview',
+  'refundConfirm',
+  'refundVerify',
+  'businessMetricsCollect',
+  'businessMetricsCompare',
+  'commerceHealth',
+  'invoiceCollect',
+  'invoiceExport',
+  'entityCollect',
+  'entityApply',
+  'contentDraft',
+  'contentReview',
+  'contentPublish',
+  'campaignPlan',
+  'couponPlan',
+  'adPlan',
+  'adConfirm',
+  'customerInbox',
+  'customerDraftReply',
+  'customerSendReply',
+  // 商品域 Agent 工具（复用 Main 商品服务；不暴露平台 URL/选择器）
+  'productSync',
+  'productList',
+  'productLibraryList',
+  'productDetailCollect',
+  'productPublishPreflight',
+  'productPublishOpen',
+  'productPublishVerify',
+  'productPublishReadback',
+  'productPublishAccept',
+  'productPublishChecklist',
+  'productPublishBatchProgress',
   'listDownloads',
   'listBookmarks',
   'createBookmark',
@@ -98,9 +140,6 @@ export const AGENT_SOFTWARE_ACTION_TYPES = [
   'approveJob',
   'resumeJob',
   'cancelJob',
-  // 组织变更（岗位参数与模型绑定，走确认门禁）
-  'updateAgent',
-  'bindAgentModel',
   // 插件改删与任务定义编辑
   'updatePlugin',
   'deletePlugin',
@@ -120,7 +159,7 @@ export const AGENT_SOFTWARE_ACTION_TYPES = [
 /** 主 Agent 可以打开的应用面板；不包含任何数据写入。 */
 export const AGENT_SOFTWARE_PANELS = ['settings', 'agentTeam', 'aiConfig', 'tasks', 'invoiceCenter', 'dataCenter'] as const
 
-/** 允许通过对话创建的子 Agent 岗位。 */
+/** 历史岗位枚举，仅为旧数据/旧 IPC 解析保留；当前运行时不创建岗位。 */
 export const AGENT_CREATABLE_ROLES = ['operator', 'analyst', 'reviewer', 'content', 'support'] as const
 
 export const AGENT_RISK_LEVELS = ['read', 'write', 'submit'] as const
@@ -213,7 +252,7 @@ export const agentTaskSummarySchema = z.object({
   }).strict().nullable()
 }).strict()
 
-/** 软件级上下文里的子 Agent 摘要：只含身份、岗位、状态和模型绑定，不含提示词或私有记忆。 */
+/** 软件级上下文里的 Agent 摘要。单 Agent 模式下只返回 root-ceo；保留数组形状兼容旧 IPC。 */
 export const agentSoftwareAgentSchema = z.object({
   id: z.string().min(1).max(80),
   name: z.string().max(120),
@@ -388,6 +427,12 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('listTasks') }).strict(),
   z.object({ type: z.literal('listAgents') }).strict(),
   z.object({ type: z.literal('listJobs') }).strict(),
+  z.object({
+    type: z.literal('commerceLedgerList'),
+    storeId: agentStoreIdSchema.optional(),
+    status: z.enum(['queued', 'running', 'waiting_confirmation', 'succeeded', 'failed', 'recovery_required', 'blocked_budget', 'blocked_permission', 'not_verified', 'partial', 'unknown']).optional(),
+    limit: z.number().int().min(1).max(200).optional()
+  }).strict(),
   z.object({ type: z.literal('openStore'), storeId: agentStoreIdSchema }).strict(),
   z.object({ type: z.literal('displayStore'), storeId: agentStoreIdSchema }).strict(),
   z.object({ type: z.literal('activateTab'), storeId: agentStoreIdSchema, tabId: agentTabIdSchema }).strict(),
@@ -397,16 +442,6 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('pinTab'), storeId: agentStoreIdSchema, tabId: agentTabIdSchema, pinned: z.boolean() }).strict(),
   z.object({ type: z.literal('closeTab'), storeId: agentStoreIdSchema, tabId: agentTabIdSchema }).strict(),
   z.object({ type: z.literal('closeStore'), storeId: agentStoreIdSchema }).strict(),
-  z.object({
-    type: z.literal('createAgent'),
-    role: z.enum(AGENT_CREATABLE_ROLES),
-    name: z.string().trim().min(1).max(120),
-    description: z.string().trim().max(500).default('')
-  }).strict(),
-  z.object({ type: z.literal('activateAgent'), agentId: agentStoreIdSchema }).strict(),
-  z.object({ type: z.literal('pauseAgent'), agentId: agentStoreIdSchema }).strict(),
-  z.object({ type: z.literal('resumeAgent'), agentId: agentStoreIdSchema }).strict(),
-  z.object({ type: z.literal('retireAgent'), agentId: agentStoreIdSchema }).strict(),
   z.object({ type: z.literal('openPanel'), panel: z.enum(AGENT_SOFTWARE_PANELS) }).strict(),
   z.object({ type: z.literal('listTrashStores') }).strict(),
   z.object({ type: z.literal('listBackups') }).strict(),
@@ -442,8 +477,73 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('collectBusiness'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
   z.object({ type: z.literal('collectEntity'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
   z.object({ type: z.literal('collectOrders'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
+  z.object({ type: z.literal('orderCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
   /** 读取已采集的订单明细快照（只读；买家列不进上下文）。 */
   z.object({ type: z.literal('getOrderDetails'), storeId: z.string().max(80).optional(), limit: z.number().int().min(1).max(20).optional() }).strict(),
+  // ── 库存、价格与 SKU：先读取本地平台快照；写回只产生人工确认提案 ──
+  z.object({ type: z.literal('inventoryCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]), productIds: z.array(z.string().trim().min(1).max(128)).max(200).default([]), includeSku: z.boolean().default(true) }).strict(),
+  z.object({ type: z.literal('inventoryDiff'), storeId: agentStoreIdSchema, changes: z.array(z.object({ productId: z.string().trim().min(1).max(128), skuId: z.string().trim().max(128).nullable().optional(), stock: z.number().int().min(0).max(100000000).nullable().optional(), priceMinor: z.number().int().min(0).max(100000000).nullable().optional() }).strict()).min(1).max(500) }).strict(),
+  z.object({ type: z.literal('inventoryWriteback'), storeId: agentStoreIdSchema, changes: z.array(z.object({ productId: z.string().trim().min(1).max(128), skuId: z.string().trim().max(128).nullable().optional(), stock: z.number().int().min(0).max(100000000).nullable().optional(), priceMinor: z.number().int().min(0).max(100000000).nullable().optional() }).strict()).min(1).max(500), confirmationId: z.string().trim().max(160).optional() }).strict(),
+  z.object({ type: z.literal('skuCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]), productIds: z.array(z.string().trim().min(1).max(128)).max(200).default([]) }).strict(),
+  z.object({ type: z.literal('skuDiff'), storeId: agentStoreIdSchema, productId: z.string().trim().min(1).max(128), changes: z.array(z.object({ skuId: z.string().trim().min(1).max(128), spec: z.array(z.object({ name: z.string().trim().min(1).max(40), value: z.string().trim().max(80) }).strict()).max(12), stock: z.number().int().min(0).max(100000000).nullable().optional(), priceMinor: z.number().int().min(0).max(100000000).nullable().optional() }).strict()).min(1).max(500) }).strict(),
+  z.object({ type: z.literal('skuWriteback'), storeId: agentStoreIdSchema, productId: z.string().trim().min(1).max(128), changes: z.array(z.object({ skuId: z.string().trim().min(1).max(128), spec: z.array(z.object({ name: z.string().trim().min(1).max(40), value: z.string().trim().max(80) }).strict()).max(12), stock: z.number().int().min(0).max(100000000).nullable().optional(), priceMinor: z.number().int().min(0).max(100000000).nullable().optional() }).strict()).min(1).max(500), confirmationId: z.string().trim().max(160).optional() }).strict(),
+  // ── 订单、履约、售后与退款：当前未开放平台写回，统一保留受控输入 ──
+  z.object({ type: z.literal('orderList'), storeId: agentStoreIdSchema, status: z.enum(UNIFIED_ORDER_STATUSES).optional(), page: z.number().int().min(1).max(10000).optional(), pageSize: z.number().int().min(1).max(200).optional() }).strict(),
+  z.object({ type: z.literal('orderGet'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128) }).strict(),
+  z.object({ type: z.literal('fulfillmentPrepare'), storeId: agentStoreIdSchema, orderIds: z.array(z.string().trim().min(1).max(128)).min(1).max(200) }).strict(),
+  z.object({ type: z.literal('fulfillmentConfirm'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128), confirmationId: z.string().trim().max(160).optional() }).strict(),
+  z.object({ type: z.literal('fulfillmentVerify'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128) }).strict(),
+  z.object({ type: z.literal('afterSaleCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
+  z.object({ type: z.literal('refundReview'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128) }).strict(),
+  z.object({ type: z.literal('refundConfirm'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128), amountMinor: z.number().int().min(1).max(100000000), confirmationId: z.string().trim().max(160).optional() }).strict(),
+  z.object({ type: z.literal('refundVerify'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128) }).strict(),
+  // ── 经营、财务、主体、内容、广告、优惠券与客服 ──
+  z.object({ type: z.literal('businessMetricsCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
+  z.object({ type: z.literal('businessMetricsCompare'), storeId: agentStoreIdSchema, period: z.string().trim().max(40).optional() }).strict(),
+  z.object({ type: z.literal('commerceHealth'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
+  z.object({ type: z.literal('invoiceCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
+  z.object({ type: z.literal('invoiceExport'), storeId: agentStoreIdSchema, invoiceIds: z.array(z.string().trim().min(1).max(128)).min(1).max(200) }).strict(),
+  z.object({ type: z.literal('entityCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
+  z.object({ type: z.literal('entityApply'), storeId: agentStoreIdSchema, confirmationId: z.string().trim().max(160).optional() }).strict(),
+  z.object({ type: z.literal('contentDraft'), storeId: agentStoreIdSchema.optional(), title: z.string().trim().min(1).max(200), body: z.string().trim().min(1).max(20000) }).strict(),
+  z.object({ type: z.literal('contentReview'), draftId: z.string().trim().min(1).max(128) }).strict(),
+  z.object({ type: z.literal('contentPublish'), draftId: z.string().trim().min(1).max(128), confirmationId: z.string().trim().max(160).optional() }).strict(),
+  z.object({ type: z.literal('campaignPlan'), storeId: agentStoreIdSchema, name: z.string().trim().min(1).max(120), budgetMinor: z.number().int().min(0).max(100000000).nullable().optional() }).strict(),
+  z.object({ type: z.literal('couponPlan'), storeId: agentStoreIdSchema, name: z.string().trim().min(1).max(120), budgetMinor: z.number().int().min(0).max(100000000).nullable().optional() }).strict(),
+  z.object({ type: z.literal('adPlan'), storeId: agentStoreIdSchema, name: z.string().trim().min(1).max(120), budgetMinor: z.number().int().min(0).max(100000000).nullable().optional() }).strict(),
+  z.object({ type: z.literal('adConfirm'), storeId: agentStoreIdSchema, planId: z.string().trim().min(1).max(128), confirmationId: z.string().trim().max(160).optional() }).strict(),
+  z.object({ type: z.literal('customerInbox'), storeId: agentStoreIdSchema, limit: z.number().int().min(1).max(100).optional() }).strict(),
+  z.object({ type: z.literal('customerDraftReply'), storeId: agentStoreIdSchema, conversationId: z.string().trim().min(1).max(128), body: z.string().trim().min(1).max(4000) }).strict(),
+  z.object({ type: z.literal('customerSendReply'), storeId: agentStoreIdSchema, conversationId: z.string().trim().min(1).max(128), draftId: z.string().trim().min(1).max(128), confirmationId: z.string().trim().max(160).optional() }).strict(),
+  // ── 商品域 Agent 工具（领域服务仍在 Main，平台 URL/选择器由档案生成）──
+  z.object({
+    type: z.literal('productSync'),
+    storeIds: z.array(agentStoreIdSchema).max(50).default([]),
+    maxPages: z.number().int().min(1).max(200).optional(),
+    maxProducts: z.number().int().min(1).max(5000).optional()
+  }).strict(),
+  z.object({
+    type: z.literal('productList'),
+    storeId: agentStoreIdSchema.optional(),
+    keyword: z.string().trim().max(64).optional(),
+    onlyOrphan: z.boolean().optional(),
+    limit: z.number().int().min(1).max(50).optional(),
+    offset: z.number().int().min(0).max(100000).optional()
+  }).strict(),
+  z.object({
+    type: z.literal('productLibraryList'),
+    keyword: z.string().trim().max(64).optional(),
+    limit: z.number().int().min(1).max(50).optional(),
+    offset: z.number().int().min(0).max(100000).optional()
+  }).strict(),
+  z.object({ type: z.literal('productDetailCollect'), storeId: agentStoreIdSchema, platformProductId: z.string().trim().min(1).max(64) }).strict(),
+  z.object({ type: z.literal('productPublishPreflight'), productId: z.string().trim().min(1).max(128), storeIds: z.array(agentStoreIdSchema).min(1).max(20) }).strict(),
+  z.object({ type: z.literal('productPublishOpen'), itemId: z.string().trim().min(1).max(128), fill: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal('productPublishVerify'), itemId: z.string().trim().min(1).max(128), resync: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal('productPublishReadback'), itemId: z.string().trim().min(1).max(128) }).strict(),
+  z.object({ type: z.literal('productPublishAccept'), itemId: z.string().trim().min(1).max(128), field: z.string().trim().min(1).max(40), kind: z.enum(['suggest_default', 'suggest_writeback']) }).strict(),
+  z.object({ type: z.literal('productPublishChecklist'), productId: z.string().trim().min(1).max(128), storeId: agentStoreIdSchema }).strict(),
+  z.object({ type: z.literal('productPublishBatchProgress'), batchId: z.string().trim().min(1).max(128) }).strict(),
   z.object({ type: z.literal('createBackup'), label: z.string().trim().max(80).default('') }).strict(),
   z.object({ type: z.literal('restoreBackup'), backupId: z.string().min(1).max(100) }).strict(),
   z.object({ type: z.literal('writeMemory'), title: z.string().trim().min(1).max(200), content: z.string().min(1).max(8000) }).strict(),
@@ -473,7 +573,7 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
     skillIds: z.array(z.string().min(1).max(80)).min(1).max(8)
   }).strict(),
   z.object({ type: z.literal('listPlugins') }).strict(),
-  /** 达人邀约发送：按店铺已保存的邀约配置构造任务并派给子 Agent（提交类，按自治策略执行）。 */
+  /** 达人邀约发送：按店铺已保存的邀约配置构造任务并由主 Agent 默认执行（提交类，按自治策略执行）。 */
   z.object({ type: z.literal('runInvite'), storeId: z.string().max(80).optional(), count: z.number().int().min(1).max(50).optional() }).strict(),
 
   // ── Job 闭环（详情 / 反馈 / 结果审阅 / 人工确认 / 安全恢复 / 取消）──
@@ -495,27 +595,6 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
   /** 安全恢复：只有未产生页面副作用的 Job 能被恢复（副作用由 Main 判定并拒绝）。 */
   z.object({ type: z.literal('resumeJob'), jobId: z.string().min(1).max(100) }).strict(),
   z.object({ type: z.literal('cancelJob'), jobId: z.string().min(1).max(100) }).strict(),
-
-  // ── 组织变更（走人工确认门禁）──
-  z.object({
-    type: z.literal('updateAgent'),
-    agentId: z.string().min(1).max(80),
-    name: z.string().trim().min(1).max(120).optional(),
-    description: z.string().trim().max(1000).optional(),
-    storeScope: z.object({ storeIds: z.array(z.string().min(1).max(80)).max(200), readOnly: z.boolean().optional() }).strict().optional(),
-    dailyBudget: z.object({ currency: z.string().trim().min(1).max(8), amount: z.number().nonnegative() }).strict().nullable().optional(),
-    toolPolicy: z.object({
-      canCreateAgent: z.boolean().optional(),
-      canChangeModel: z.boolean().optional(),
-      canChangePolicy: z.boolean().optional(),
-      canReadOtherAgentPrivateMemory: z.boolean().optional(),
-      tools: z.array(z.enum(['observe_page', 'read_text', 'read_table', 'model_analyze', 'create_job', 'review_job', 'memory_search', 'memory_write'])).max(32).optional()
-    }).strict().optional(),
-    maxConcurrency: z.number().int().min(1).max(32).optional(),
-    timeoutMs: z.number().int().min(1000).max(3600000).optional()
-  }).strict(),
-  /** 绑定/解绑子 Agent 的模型 Profile（null = 解绑，回退继承）。 */
-  z.object({ type: z.literal('bindAgentModel'), agentId: z.string().min(1).max(80), modelProfileId: z.string().trim().max(80).nullable() }).strict(),
 
   // ── 插件改删（插件是技能分组，不携带新权限）──
   z.object({
@@ -622,6 +701,8 @@ export const agentPlanSchema = z.object({
  * `agentConversationTurnSchema.text`（进模型的单轮上限）保持一致。
  */
 export const AGENT_UI_MESSAGE_TEXT_MAX = 2000
+/** UI 快照、Renderer 历史和 Main IPC 共同使用的对话轮次上限。 */
+export const AGENT_CONVERSATION_HISTORY_MAX = 64
 
 export const agentUiMessageSummarySchema = z.object({
   role: z.enum(['user', 'assistant']),
@@ -635,7 +716,7 @@ export const agentUiStateSchema = z.object({
     y: z.number().min(0).max(1)
   }).strict(),
   drawerOpen: z.boolean(),
-  messageSummaries: z.array(agentUiMessageSummarySchema).max(40)
+  messageSummaries: z.array(agentUiMessageSummarySchema).max(AGENT_CONVERSATION_HISTORY_MAX)
 }).strict()
 
 /** 对话记忆：只带最近几轮的脱敏文本，供模型消除指代和延续上下文。 */
@@ -646,7 +727,7 @@ export const agentConversationTurnSchema = z.object({
 
 export const agentPlanGenerateInputSchema = z.object({
   goal: z.string().trim().min(1).max(AGENT_MAX_GOAL_CHARS),
-  history: z.array(agentConversationTurnSchema).max(64).default([])
+  history: z.array(agentConversationTurnSchema).max(AGENT_CONVERSATION_HISTORY_MAX).default([])
 }).strict()
 
 export type AgentPlanStatus = (typeof AGENT_PLAN_STATUSES)[number]

@@ -1,38 +1,80 @@
 # ShopPilot Agent 实施进度
 
-更新时间：2026-09-27
+> **架构迁移记录（2026-09-30）**：已从多 Agent 编排切换为单一 `root-ceo` 运行时。主 Agent 直接执行软件操作和 Job；历史 Agent、HR、执行助手和按 Agent 模型绑定数据在启动时迁移到 root-ceo 后清理，旧 IPC/schema 仅保留兼容并统一返回 `AGENT_SINGLETON_ONLY`。因此本文件早期的子 Agent 验收结果属于历史快照，不代表当前能力；当前验收必须断言只有一个 active root-ceo。
+
+更新时间：2026-10-01
 
 ## 当前级别
 
-`PACKAGED`（本地 Electron、目录包、NSIS 安装/升级/卸载、隔离降级回滚和 CDP 夹具通过；真实店铺、真实模型、完整人工桌面逐项验收和 OS 级破坏性夹具仍为 partial/untested）。
+`PACKAGED / PARTIAL`（本地 Electron、目录包、NSIS 安装/升级/卸载、隔离降级回滚和 CDP 夹具通过；当前唯一运行时 Agent 为 `root-ceo`。真实文本接口连接、单轮 Agent 对话和一个只读纯模型 Job 已于 2026-10-01 通过实测；真实 fallback、费用对账、真实店铺副作用、完整人工桌面逐项验收和 OS 级破坏性夹具仍为 partial/untested）。
+
+> **当前能力口径（2026-09-30）**：运行时只保留 `root-ceo`。它直接负责对话、规划、软件/浏览器操作、Job 执行、审核和记忆治理；Job 仍复用 `TaskRunner` 并保留 evidence、模型 Profile/fallback、预算、技能、插件、确认和恢复机制。历史 Agent、HR、执行助手和按 Agent 模型绑定数据会在启动迁移到 `root-ceo`，旧接口统一返回 `AGENT_SINGLETON_ONLY`。下方 A-M0–A-M6 阶段表、旧多 Agent 验收数字和设计冲突记录保留作迁移历史，不代表当前可创建或调度子 Agent。
+
+## 电商运营能力设计基线（2026-10-01）
+
+- `docs/ECOMMERCE_AGENT_CAPABILITY_SPEC.md` 已完成 `DESIGNED`：定义商品、库存/SKU、订单履约、售后退款、经营数据、财务、内容营销、客服、调度恢复的完整闭环，以及统一动作、确认、幂等、隐私和真实验收门槛。
+- M0 文档与契约设计完成；M1～M6 仍按文档逐阶段实施，尚未因此宣称“全部电商能力完成”。
+- 商品 IPC/服务已经存在，但只有接入 Agent 工具目录、Main 执行分支、测试和真实平台证据后，才可把对应领域从 `PARTIAL` 升为 `VERIFIED`。
+
+### M1 商品域 Agent 接入（2026-10-01，本轮）
+
+- **状态：`IMPLEMENTED / PARTIAL`**。11 个商品动作已统一经过 `agentSoftwareActionSchema → Main 校验 → Product*Service → SQLite 台账`；发布打开/代填与回读建议仍受人工确认，应用不会点击发布、保存或提交。
+- Agent 软件执行结果新增 `results[]` 结构化回执：包含 `status`、`reasonCode`、`safeMessage`、脱敏摘要和 evidence（source/capturedAt/runId/counts）；技能嵌套执行会透传商品回执。
+- 验证：`pnpm.cmd typecheck` 通过；商品/Agent 定向套件 8 个文件、145 条通过；结构化回执契约 `tests/unit/agent-product-result.test.ts` 2 条通过。
+- 未闭环：真实店铺四平台 Agent 调用、登录过期/安全验证/页面改版/网络失败/重复执行/进程重启，以及真实人工发布回读和 Windows 逐项验收；这些保持 `PARTIAL`、`UNTESTED` 或 `NOT_VERIFIED`，不提升为 `VERIFIED`。
+- 真实只读验收尝试因打包启动后 60 秒内未发现 `window.shopilot.products` 而阻塞，未触达平台页面；证据：`artifacts/agent/product-m1-sync-real-verify-20261001.json`。
+
+### M2 库存、价格和 SKU Agent 接入（2026-10-01，当前轮）
+
+- **状态：`IMPLEMENTED / PARTIAL`**。新增 `inventoryCollect`、`inventoryDiff`、`inventoryWriteback`、`skuCollect`、`skuDiff`、`skuWriteback`，并登记 `orderCollect`，统一经过共享 schema、Main 店铺校验和 `InventorySkuService`/TaskRunner。
+- 采集和差异只读取 `product_platform_links` / `product_sku_links` 快照；差异保留字段级 before/after，并用 `storeId + platform + productId + skuId + inputHash` 生成幂等键。
+- 写回只创建 `commerce_writeback_proposals` 人工确认提案，记录 confirmation、before/after、幂等键和 `side_effect_started`；没有真实平台适配器证据时返回 `NOT_VERIFIED`，不会写平台或把多规格降级为单规格。
+- 新增迁移 v25、服务测试 `tests/unit/inventory-sku-service.test.ts`；schema/catalog/migration/Agent 测试均通过。当前全量套件为 87 个文件、960 条测试。
+- 证据文件：`artifacts/agent/inventory-sku-m2-20261001.json`；真实四平台采集、写回和回读仍明确标记 `NOT_VERIFIED`。
+- 未闭环：四平台真实库存/价格/SKU 页面采集、登录过期/安全验证/页面改版/网络失败、人工确认后的真实写回与平台回读，保持 `NOT_VERIFIED/UNTESTED`。
+
+### M3 订单履约、售后和退款 Agent 接入（2026-10-01，当前轮）
+
+- **状态：`IMPLEMENTED / PARTIAL`**。新增 `fulfillmentPrepare`、`fulfillmentConfirm`、`fulfillmentVerify`、`afterSaleCollect`、`refundReview`、`refundConfirm`、`refundVerify` 的 Main 执行分支。
+- 新增 `OrderLifecycleService` 和迁移 v26。发货和退款只创建 `order_action_proposals`；记录确认 ID、before/after、幂等键和 `side_effect_started`，确认后没有真实平台能力时返回 `NOT_VERIFIED`。
+- 订单隐私边界保持不变：提案只保存脱敏订单状态、金额和时间，不保存买家身份、联系方式、地址、聊天正文或原始页面数据。
+- 退款必须提供明确 `amountMinor`，超过本地实付金额直接拒绝；没有平台回读时发货/退款状态返回 `UNKNOWN`。
+- 验证：M3 定向套件 36 条通过，`pnpm.cmd typecheck` 通过。证据文件：`artifacts/agent/order-lifecycle-m3-20261001.json`。
+- 未闭环：真实平台发货、物流单号、售后列表、退款提交和回读，以及登录过期、页面改版、网络失败、重启恢复和 Windows 逐项验收，继续保持 `NOT_VERIFIED/UNTESTED`。
 
 ## 阶段状态
 
 | 阶段 | 状态 | 已落库 | 未闭环 |
 |---|---|---|---|
 | A-M0 | IMPLEMENTED | `packages/shared/src/schemas/agent-domain.ts`、错误码、IPC、迁移 v5→v11（v6 租约/确认、v7 价格、v8 技能/插件、v9 上下文窗口、v10 自动记忆治理、v11 记忆近重复指纹）、root-ceo、路径/隐私规则和契约测试 | 正式人工评审记录 |
-| A-M1 | PARTIAL | Profile CRUD、safeStorage、`hasKey` DTO、绑定/解绑继承、真实测试入口、能力探测落库、fallback 白名单（503 降级 / 401 拒绝降级）、真实 fallback 路由（本地夹具） | 真实服务商凭据下的模型调用 |
+| A-M1 | PARTIAL | Profile CRUD、safeStorage、`hasKey` DTO、绑定/解绑继承、真实测试入口、能力探测落库、fallback 白名单（503 降级 / 401 拒绝降级）、真实 fallback 路由（本地夹具）、真实 `deepseek-flash` 文本连接和纯模型 Job | 真实 fallback、能力探测完整闭环、服务商费用对账 |
 | A-M2 | PARTIAL | root-ceo + `mode=hr`、岗位预览、probation、确认激活、暂停/恢复/退休（暂停 Agent 拒绝新 Job 有本地验收）；可见智能体回合（模型自选白名单软件操作：查询/店铺/任务/采集/备份/记忆，只读与采集立即派单、危险动作先确认；全局设置禁入）、工具目录（提示词白名单由 `agent-tools.ts` 生成）、技能与插件（`createSkill`/`runSkill` 自动执行，声明式、无新权限）、技能/插件 JSON 分享包导入导出（设置面板，需确认、整体校验）、团队/Job 感知问答、对话创建/激活子 Agent、打开应用面板；打包版设置页 Agent SendInput smoke 7/7 | 完整 Windows 桌面逐项人工确认 |
-| A-M3 | PARTIAL | Job 状态机、幂等、租约心跳/过期、重启恢复（running → recovery_required → 安全重新排队）、取消、人工确认一次性消费、结果审核、TaskRunner 证据链和 lease owner 防旧 Worker 写回；CEO 经 `job:delegate` 派单，root-ceo 禁止作为执行者（AGENT_ROOT_CANNOT_EXECUTE / AGENT_NO_EXECUTOR）；自治运营：非资金 Job 无需审批，资金 Job 保留确认门禁 | 真实服务商模型请求和真实店铺副作用 |
+| A-M3 | PARTIAL | Job 状态机、幂等、租约心跳/过期、重启恢复（running → recovery_required → 安全重新排队）、取消、人工确认一次性消费、结果审核、TaskRunner 证据链和 lease owner 防旧 Worker 写回；root-ceo 直接完成真实只读纯模型 Job 并落库用量、结果和审核；自治运营：非资金 Job 无需审批，资金 Job 保留确认门禁 | 真实 fallback、真实浏览器/店铺副作用和完整人工确认 |
 | A-M4 | PARTIAL | 独立记忆目录、manifest、hash、FTS5/LIKE + 中文 bigram、脱敏、quarantine、审核、对话/Job/反馈自动候选、sourceRef 去重、**可写子 Agent 按冻结 `memoryScope` 归属 private/store 候选，权限撤销时安全回退 root-ceo**、**private 记忆使用 safeStorage 包装密钥的 AES-256-GCM 文件格式（兼容旧 `.md` 读取）**、**近重复收敛（规范正文指纹 `dedupe_key` + `repeat_count`，合并后标记 `origin=consolidated`，被合并项保留为 stale+archived 可追溯）**、**模型主动检索（`searchMemory`）回传已审核正文**、加密快照、Main 原生确认恢复、损坏正文恢复为 conflict 版本、重启恢复、正文和加密快照原子 I/O 故障回滚、符号链接 containment | OS 级断电/磁盘满和跨设备恢复、跨设备恢复密钥迁移和真实人工桌面验收 |
 | A-M5 | PARTIAL | 成功率、首次成功率、人工修正率、fallback/预算阻塞（日预算阻断有本地 Job 证据）、可配置单价（币种 + 每百万 token 输入/输出价）与按 token 的成本估算（未配置价格时保持“未估算”）、命中/采纳/拒绝反馈驱动 confidence/排序、stale/conflict/retention 归档、近重复合并、Profile 健康度、Job 结果反馈、CEO 周期复盘摘要（复盘直接复用 `maintainMemories`，不再复刻一份治理 SQL） | 真实成本仍依赖用户配置单价而非服务商对账；后台周期调度和完整破坏性可靠性治理仍待专用夹具 |
 | A-M6 | PACKAGED/PARTIAL | typecheck、单测、build、目录包、NSIS 安装/升级/卸载、隔离降级回滚、本地 Electron/CDP、真实 Windows SendInput Agent 设置 smoke 7/7 | 完整 Windows 桌面逐项验收、真实店铺、真实模型 |
 
 ## 关键证据
 
-- `node tools/acceptance/agent-domain-cdp-verify.js`：本地临时 userData、临时店铺和只读页面，**87/87**（2026-09-26 确认门禁定调后复跑）。此前挂账的 4 项失败（技能停用/启用、达人邀约 ×3）根因是：在途改动把 `runInvite`、`updateSkill` 纳入 `AGENT_CONFIRM_REQUIRED_ACTIONS`，而验收脚本仍按“无需确认即可执行”断言；用户定调**把这两个动作撤出确认名单**后 4 项全部转绿。撤出时顺带把「风险等级」与「是否需要确认」拆成两个集合——risk 看 `AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS`、确认看 `AGENT_CONFIRM_REQUIRED_ACTIONS`——否则“少要一次确认”就会顺手把该动作降级成 `read`（只读执行者能接、`side_effect_started` 不置位、允许安全恢复重放）；覆盖模型快照、子 Agent 未绑定模型时继承 default-main（主 Agent AI 配置）、设置页 AI 配置同步到主 Profile 并被子 Agent 继承、解绑恢复继承、CEO 无可用子 Agent 时自动创建并激活「执行助手」（不再报 AGENT_NO_EXECUTOR）、执行者并发已满时派单转入排队而不是失败、root-ceo 禁止作为执行者（AGENT_ROOT_CANNOT_EXECUTE）、CEO 派单经子 Agent 执行并落 TaskRunner 证据、**Job 结束后自动续办（结果交回回合判断下一步）**、浏览器 Job 在店铺未打开时自动开店并真实执行（真机修复回归）、只读范围的 Agent 不能接收写操作 Job / 写任务派单自动跳过只读执行者（权限模型回归）、非资金写操作无需审批即可运行、资金 Job 仍必须确认、工具/技能/插件（createSkill 走受控计划并进入软件上下文、runSkill 逐步执行回传结果、技能可停用/启用且停用后拒绝运行、技能禁止包含资金/不可逆工具、禁止包含关店/删任务等需人工确认动作、禁止嵌套技能管理动作、createPlugin 打包并可列出、未知技能如实报错）、分享包（导出含格式标记且不含 id/时间戳、导入必须先确认、含需确认动作的包整体拒绝不半导入、导入成功且同名幂等更新、插件引用缺失如实报错、非法 JSON 拒绝）、达人邀约（未实测平台拒绝、配置不完整逐条说明、按店铺配置派发 Job）、订单明细（未实测不猜锚点、按实测档案整表采集并逐行落库、数据中心按实测列映射、读型意图直接查快照且不含买家列）、聊天日预算硬阻断与恢复、Job 载荷嵌套超限如实拒绝、HTTP 429 只重试一次后成功、能力探测落库（JSON 能力 + healthy）、主模型 503 后按白名单切换备用 Profile（证据记录 fallbackUsed）、401 认证失败不降级（Job failed 且无结果）、日预算阻断、未配置价格时成本“未估算”、配置每百万 token 单价后按 token 估算成本（evidence 和 CEO 复盘同步）、进程被杀后 running → recovery_required → 安全重新排队、暂停 Agent 拒绝新 Job 并可恢复、启用备用 Profile、备用 Profile 循环/停用校验、权限变更阻塞、无 Key 阻塞、safeStorage Key 下本地模型 Job 真实结果、Job 依赖、取消竞态、空/非法 JSON 模型响应的 IPC 错误 envelope、结果审核、记忆隔离、FTS 索引重建 hash 保持、损坏正文 quarantine 后快照恢复为 conflict 版本、同一 userData 重启后记忆检索、CEO 周期复盘摘要和快照路径校验。
+- 真实模型实测（2026-10-01，使用用户已保存配置）：通过 Windows 原生界面点击「测试文本接口」，`api.deepseek.com` / `deepseek-flash` 连接成功（1338ms）；随后在 Agent 对话框发送仅要求原样回复的校验文本，收到 `SP1001-42`。两次请求均以 `root-ceo` / `model_default-main` 成功写入用量，总计输入 6689、输出 94 tokens；证据见 `artifacts/agent/real-model-smoke-20261001.json`。
+- 真实纯模型 Job（2026-10-01，打包 Electron + Agent domain IPC）：Job `ajob_e5c7b9ef-c8d1-4131-be2d-a8af46f8e97f` 使用 `deepseek-flash` 从 `queued → running → succeeded`，返回精确标记 `JOB-SP1001-42`，输入 239 / 输出 217 tokens，结果 `ajres_610d6871-69b7-4d3d-b1f6-275d0c1184b8` 已由 `root-ceo` 审核通过；`storeId`、浏览器 Task/Run 均为空且 `sideEffectStarted=false`。证据见 `artifacts/agent/real-model-job-smoke-20261001.json`。未配置单价，费用保持“未估算”；本次不覆盖 fallback、真实店铺副作用或服务商费用对账。
+- `node tools/acceptance/agent-domain-cdp-verify.js`：当前单 Agent 域验收 **13/13**（仅 `root-ceo`；旧多 Agent 87/87 记录保留在下方历史说明）。覆盖单例迁移、旧 Agent 拒绝、root-ceo 通过 TaskRunner 完成浏览器 Job、步骤 evidence 落库、快照归属、模型 Profile、记忆写入与审核。
+- `node tools/acceptance/m1-runner.js`：当前工作台全链路真实 Electron/CDP **115/115**；本轮同步验证“Agent 设置”页签名称，并按当前显示店铺校验 webview 重载后的唯一性。
 - `node tools/acceptance/agent-cdp-runner.js`：可见智能体真实 Electron/CDP **78/78**（2026-09-26 工具扩充轮）；覆盖经营指标检查走已实测采集（订单/销量/销售额）、多店任务（逐店打开/规划/派发 + 完成后在对话里汇总结果）、**Job 结束后智能体自动续办（读结果并给出下一步）**、对话记忆（后续回合带最近对话与已审核记忆，第二个回合能引用第一句的暗号）、**对话自动滚动到最新消息（消息满 40 条上限后仍贴底，用户报告回归）+ 上翻阅读不打断（「有新消息」按钮、点击回到最新）**、**截图功能已移除（观察不截图、抽屉无预览）**、**待办事件（待确认计划 / 等待确认的 Job / 待审核记忆以通知展示）**、智能体回合（思考过程可见、模型自选只读操作立即执行、第二轮基于结果收尾、非资金计划自动派发/自动执行、资金动作保留确认、例外审批：彻底删除店铺未确认不执行）、自然语言关闭/新建/移入回收站、创建备份、采集派单、工具目录（“查看工具”返回全部工具并执行计划）、技能（**复合指令“制作技能：…看最近 Job 的执行情况”不被查看 Job 快捷路由劫持**、模型自选 createSkill 自动执行并进入软件上下文、思考可见；“运行技能 验收巡检技能”确定性路由逐步执行并回传结果）、插件（“把巡检技能打包成插件”自动执行、“查看插件”列出打包结果、**删插件需人工确认：确认前插件仍在、确认后只删分组而成员技能保留**）、设置面板技能页与插件页（技能页列出技能、带「新建技能」表单可直接创建并落库 `source='user'`、“生成分享包”导出 `shopilot-agent-pack` JSON、粘贴导入后面板与列表更新；插件页独立列出插件与成员技能并可单独导出插件分享包、**插件可改名与改说明并保存**）、**本轮新增只读工具可直接执行（概览统计 / 质量指标 / 重建记忆索引，断言以会话消息回执为准）**、任务详情即时执行且不被当成页面任务、模型 429 自动重试一次、不打开店铺也能对话、主 Agent 自己操作软件（打开目标店铺并自动继续规划）、团队与 Job 感知问答、对话创建/激活子 Agent、打开 Agent 团队面板、Job 完成自动复盘、页面计划经 `job:delegate` 派给 active 子 Agent、主 Agent 不再直接 `task:create/task:run`、TaskRunner 真实读取页面标题、抽屉展示 Job 结果、AI Key 不进入 Job/DOM，runner 已隔离 APPDATA 临时目录。
 - `node tools/acceptance/m3-runner.js`：现有 Main-only TaskRunner、Scheduler、人工确认门禁和 AI 任务套件 113/113（2026-09-25 随工具/技能/插件改动复跑通过）；结果写入 `artifacts/agent/m3-runner-latest.txt`。
 - `pnpm.cmd typecheck`：通过。
-- `pnpm.cmd test`：**58 个文件、589 个测试通过**（2026-09-26 AI 架构审计 P3 收敛轮后复跑；此前基线为 P2 的 54 文件/546 条）；`pnpm.cmd lint`：**0 errors / 935 warnings**（`packages/shared/**` 的显式 `any` 已是 error 级棘轮）。
+- `pnpm.cmd exec vue-tsc --noEmit`：通过；本轮补齐工作台联合类型、orders IPC 声明和 webview ref 类型。
+- `node tools/acceptance/m2-runner.js stage1`：代理/407/备份套件 **30/30**；旧的 `session:status` 敏感字段断言已改为安全摘要、407 重放和 Browser 标签列表行为，环境面板改为只显示 `proxyAuthObserved` 布尔事实。
+- 对话历史上限已统一为 **64 轮**（协议、UI 快照、Renderer、Main 入口共用 `AGENT_CONVERSATION_HISTORY_MAX`）；模型侧仍按上下文窗口预算压缩。
+- `pnpm.cmd test`：当前 **85 个文件、955 个测试通过**；`pnpm.cmd lint`：退出码为 0，仍保留商品探针等文件的既有 warning；不把 lint 结果冒充单 Agent 完成证据。
 - `pnpm.cmd exec vitest run`：同上 54 个文件、546 个测试通过（含 `agent-tools.test.ts`：工具目录与动作类型一一对应、示例均为合法 action、技能步骤禁入清单、审批标记与真实门禁同源、**只读汇总可用而 Job 控制/定义变更/记忆维护不可做技能步骤**、插件改删输入 schema、**计划卡标签表与目录一致**；`agent-step-effects.test.ts`：**副作用/不可重放集合的单一事实来源、`NON_RESUMABLE_TYPES` 集合同一性、`deriveJobRisk` 对 clickByText/setInput/typeText/aiGenerate/loop 判 write 且只读步骤仍判 read**；`agent-step-catalog.test.ts`：编辑器目录 `sideEffect` 与运行时判定逐项一致；`agent-budget.test.ts`：**日预算纯函数（tokens 口径、预留、USD 无单价报不可核算、币种不一致、限额 0）**；`agent-system-prompt.test.ts`：**系统提示词降级（不超预算不改写、从后往前丢保留治理条款、裁剪标记与 droppedChars、单段超长硬截断、无空行长文可裁、用量水位文案）**；`agent-job-prompt.test.ts`：**岗位提示词（岗位/职责/成功标准入提示、治理条款在首行、审核/分析岗专属条款、纯分析 Job 声明、未知岗位与空值退化、字段长度上限）**；`renderer-trust.test.ts`：**渲染层可信判定（主窗口放行、非主窗口/无 host 拒绝、锁定时 APP_LOCKED、Agent 与 AI 家族错误码与文案区分）**；`agent-domain-contract.test.ts`：只读指标（退款金额/退款订单数）不触发资金门禁、三个已实测平台档案逐一守卫、写任务执行者过滤只读 Agent；`agent-invite-task.test.ts`：面板/智能体共用的邀约构造器（缺项逐条说明、AI 话术、商品 ID 规范化、超上限不静默收敛）；`agent-orders-task.test.ts`：订单明细档案红线、整表步骤与统一列映射（表头匹配/多余列/无表头回退）；`agent-software.test.ts`：技能/插件动作与分享包 schema 的边界与拒绝形状；`task-update.test.ts`：任务定义部分更新的字段语义与运行中保护；`agent-memory-rules.test.ts`：自动学习抽取（线索词/忘记优先/8 字下限/4 句与 8 条上限/同轮去重/先脱敏）、近重复归一、中文 bigram 检索、召回打分、类型限额无死分支；`agent-memory-governance.test.ts`：真实迁移建表后覆盖近重复合并（approved 优先、计数折算、隔离/已归档/跨范围/跨类型不合并、可重入）与过期/低置信/保留期归档；`agent-context.test.ts`：token 估算不变式（字符预算永不超 token 预算）、窗口推断优先级、两遍分配（拉丁内容回填到 2 倍以上且仍不超预算）、真实用量累加与峰值水位、面板窗口文案；`agent-ui-state.test.ts`：UI 状态持久化正文上限与进模型单轮上限一致（重启不许塌缩）；`main-bundle-require.test.ts`：主进程/preload 禁止相对 `require` 本地模块；`agent-lease.test.ts`：**租约 sweep 不再无条件续租（无活执行者时让它照常过期）、最长运行时限优先于续租、宽限窗口、startedAt 未知不误杀**；`agent-model-routing.test.ts`：**能力探测参与路由（chat:false 拦、json:false 只警告、离线 fixture 形状必须可用）**；`ipc-trust-guard.test.ts`：**业务 IPC 统一入口（裸 ipcMain.handle 只允许在 family-handle 或断言数≥通道数的家族、每个家族都有校验来源、allowWhenLocked 只属会话安全家族）**）。
 - `pnpm.cmd build`：已通过（Electron main/preload/renderer 构建）。
-- `pnpm.cmd lint`：通过（0 errors；仓库现有 935 条 `any`/风格 warnings，其中 941 处 `no-explicit-any` 分布在 70 个文件——**`packages/shared/**` 已升为 error 级棘轮**，其余四层仍是 warn 的存量债；`pnpm.cmd build` 与 `pnpm.cmd typecheck` 同轮复跑通过）。
-- `pnpm.cmd dist:dir` + `node tools/acceptance/packaged-agent-smoke.js`：目录包 smoke 10/10，设置页七个一级页签（配置/达人广场/AI 配置/Agent 团队/技能/插件/关于软件）可切换；Agent 团队四个子页（组织/模型/记忆/Job）均可渲染；技能页只渲染技能面板（插件卡片 0 张）且带「新建技能」表单（工具下拉实测 33 项、来自 Main 目录），插件页只渲染插件面板（无技能面板），两者都不再重复子页签条。
+- `pnpm.cmd lint`：通过（0 errors；仓库现有 **1110 条** `any`/风格 warnings——**`packages/shared/**` 已升为 error 级棘轮**，其余四层仍是 warn 的存量债；`pnpm.cmd build`、`pnpm.cmd typecheck` 与 `pnpm.cmd exec vue-tsc --noEmit` 同轮复跑通过）。
+- `pnpm.cmd dist:dir` + `node tools/acceptance/packaged-agent-smoke.js`：当前目录包 smoke **10/10**，设置页七个一级页签（配置/达人广场/AI 配置/Agent 设置/技能/插件/关于软件）可切换；Agent 设置四个子页（Agent 设置/模型/记忆/Job）均可渲染；技能页只渲染技能面板（插件卡片 0 张）且带「新建技能」表单（工具下拉实测 33 项、来自 Main 目录），插件页只渲染插件面板（无技能面板），两者都不再重复子页签条。
 - `node tools/acceptance/sec-runner.js`：安全能力 44/44（会话包、Cookie、应用锁、代理边界）。
 - `node tools/acceptance/m4-runner.js`：完整发布验收 13/13；内含解包版对话链路 19/19、单实例和日志清理、NSIS 静默安装 3/3、覆盖升级 4/4、静默卸载和用户数据保留。
 - `node tools/acceptance/agent-memory-resilience-verify.js`：验收专用断电/磁盘满时序（正文重命名前、正文写完、manifest 写完、加密快照重命名前）4/4；文件、加密快照、manifest、SQLite 台账和临时文件均无残留。
-- `node tools/acceptance/agent-native-ui-smoke.js`：真实 Windows `SendInput` 聚焦打包窗口、打开设置、进入 Agent 团队并切换组织/模型/记忆/Job 四个子页 7/7。
+- `node tools/acceptance/agent-native-ui-smoke.js`：真实 Windows `SendInput` 聚焦打包窗口、打开设置、进入 Agent 设置并切换 Agent 设置/模型/记忆/Job 四个子页 7/7。
 - `pnpm.cmd dist`：NSIS x64 安装包构建通过；安装/升级/卸载由 M4 在临时目录实测。
 - `node tools/acceptance/installer-rollback-verify.js`：隔离临时目录中 0.4.47 → 0.4.46 → 0.4.47 降级/恢复 11/11；临时店铺数据在旧版和恢复后的新版均可读取，卸载清理完成。
 - `node tools/acceptance/m2-runner.js stage2`：既有环境指纹验收通过。
@@ -47,7 +89,7 @@
 - 可见 Agent 的团队/Job 感知只读且脱敏（名称、岗位、状态、目标摘要、结果数量）；组织变更（创建/激活/暂停/恢复/退休）与关闭店铺必须经计划卡确认，root-ceo 不可变由 Main 校验；面板导航只发 UI 事件，不改数据。
 - 模型请求不再吞错：失败保留 HTTP 状态与脱敏响应片段（日志 + 错误消息）；连接失败与明确的 429 按 §27.2 只重试一次，聊天与 Job 两条链路策略一致，401/403/400、取消和超时不重试。
 - 主 Agent 改为智能体回合：模型输出 `{"reply","actions"}`，actions 逐条按闭合白名单校验；查询/采集类即时执行并回传模型总结，危险动作先展示计划等确认；协议外输出只当对话，不执行任何动作。确定性关键词快路径（打开/关闭店铺、查看列表、组织管理、面板导航）保留在最前面，省一次模型调用。
-- 智能体可操作软件所有非设置功能：店铺增删改/回收站、任务查看/删除/派单运行/暂停恢复/取消、发票/经营数据/主体采集、下载与书签、备份、记忆写入；关闭删除、运行任务、备份恢复与组织变更必须先确认。全局设置（AI 配置与 Key、平台地址、应用锁、代理、会话导出、更新）永不进入白名单。
+- 智能体当前可操作已登记的软件能力：店铺增删改/回收站、任务查看/删除/派单运行/暂停恢复/取消、发票/经营数据/主体采集、下载与书签、备份、记忆写入，以及已接入的商品域动作；电商全闭环能力以 `ECOMMERCE_AGENT_CAPABILITY_SPEC.md` 的矩阵为准。关闭删除、运行任务、备份恢复、商品发布代填/回读写入和组织变更必须先确认。全局设置（AI 配置与 Key、平台地址、应用锁、代理、会话导出、更新）永不进入白名单。
 - 路由修复（对话审查发现）：软件功能词（任务/发票/备份/团队/书签等）优先走智能体回合，不再把“读取任务详情”“采集发票”这类软件指令误判成页面任务去观察页面；只有标题/表格/库存/点击等真正的页面任务才进入页面规划。
 - 智能体思考能力：回合输出 `{"thought","reply","actions"}`，thought 在对话里以“思考”块展示；最多 3 轮“思考→只读动作→看结果再决定”，真实模型下已验证两轮清点团队、三轮核实任务状态。
 - 对话记忆（对话审查发现“没记忆”）：每个回合注入最近 8 轮脱敏对话（conversationHistory）和已审核长期记忆（approvedMemory，≤4000 字符）；Renderer 传最近对话摘要、Main 二次脱敏截断。真机验证：第二句“我刚才说的暗号是什么”正确答出第一句的暗号。
@@ -102,7 +144,7 @@
   3. **P1b 字符子预算欠填充**：预算侧按最坏情况（全中文，1 token≈1.35 字）折算字符份额，拉丁/JSON 为主的内容只用到约 1/2.7 容量，而最终 `compactAgentPrompt` 只缩不放，欠填充被固化。修复：新增 `fitTextToTokens`（先保守切片兜住“绝不超预算”，再用真实估算二分回填）作为“两遍分配”的第二遍，`compactTextForContext` 改为按 token 份额填充，记忆条目打包从字符核算改为 token 核算（中文口径不变，拉丁内容不再白扔）。`compressAgentHistory` 保留字符核算：它的结构性测试已固定该口径，且中文内容本就接近最坏情况、无欠填充可捡。
   4. **P2 真机验收补上下文断言**：`agent-domain-cdp-verify.js` 新增 5 项——模型名提示推导 128k（来源 `model-name`）、手动 override 优先（8192/`override`）、未知家族保守兜底 32k（`provider-default`）、**40 轮 × 1900 字长历史压缩后仍能完成回合（不超窗失败）**、回合结果携带真实用量与生效窗口（实测 `{"calls":1,"inputTokens":5,"outputTokens":7,"peakInputTokens":5,"contextWindowTokens":32768,"usageReported":true}`，即本地夹具返回的真实 usage）。
   验证：`pnpm.cmd typecheck` 通过；`pnpm.cmd test` 44 文件/467 测试通过；`pnpm.cmd build` 通过；`agent-memory-resilience-verify.js` 4/4；`agent-domain-cdp-verify.js` **83/87**，新增 5 项全部通过，失败 4 项仍为上一轮记录在案的“技能停用/启用 + 达人邀约 ×3”（工作区在途把 `runInvite`/`deleteSkill`/`updateSkill` 加入强制确认清单、验收脚本口径未跟进），与上下文改动无关。
-  未闭环（本轮未改）：对话历史仍只保存在 Renderer（仓库无对话表），硬地平线是 40 条且不可恢复；`compressAgentHistory` 的字符口径未改为 token 口径（见 P1b 说明）；无真实 tokenizer、无 prompt 缓存/流式，多轮回合仍整段重发（成本随轮次近似线性放大）；截图能力移除后上下文里没有图像。
+  未闭环（本轮未改）：对话历史仍使用 `app_settings` 中的有界 UI 快照（尚无独立 conversation table），硬地平线已统一为 64 条；`compressAgentHistory` 的字符口径未改为 token 口径（见 P1b 说明）；无真实 tokenizer、无 prompt 缓存/流式，多轮回合仍整段重发（成本随轮次近似线性放大）；截图能力移除后上下文里没有图像。
 - 设置页拆分（2026-09-26，用户要求“设置中增加：插件和技能”后再明确“插件、技能 是分开的，不要合并在一起”）：设置页签条为 **配置 / 达人广场 / AI 配置 / Agent 团队 / 技能 / 插件 / 关于软件** 七个一级页签，`Agent 团队` 只留组织 / 模型 / 记忆 / Job 四项。实现上不复制代码也不复制样式：`AgentAdminPanel` 用可选 `panels` 挂载参数按传入页签集渲染（`['skills']`、`['plugins']` 各挂一处），单一页签时不渲染子页签条，且只挂技能或插件面板时不再顺带拉组织/模型/Job/记忆。两个面板数据与状态完全独立：技能页=技能列表（导出此技能/停用·启用/删除）+ 技能分享包导入导出；插件页=插件列表（含成员技能名）+ 插件分享包导入导出。插件不能脱离成员技能单独存在，因此插件页的导出按**成员技能名反查**后复用同一个 `packExport` 接口（Main 只在“该插件的所有技能都在选中集合里”时才导出插件本身），未新增插件专属接口；技能页的“所属插件”与插件页的“成员技能”都由同一份列表解析，不额外请求 Main。
   验收脚本同步改口径并**验证“不混”**：`packaged-agent-smoke.js` 断言七个一级页签、技能页只渲染技能面板（插件卡片数 0）、插件页只渲染插件面板（无技能面板），9/9；`agent-cdp-verify.js` 把原来“插件和技能页列出已创建的技能”拆成两条——技能页只列技能、不混插件；插件页独立列出插件与成员技能、技能面板不混入，并新增“插件页可单独导出插件分享包”（断言导出 JSON 里 `plugins.length >= 1`）；`agent-native-ui-smoke.js` 只遍历四个子页，无需改。
   验证：`pnpm.cmd typecheck` 通过；`pnpm.cmd test` 44 文件/467 测试通过；`pnpm.cmd dist:dir` + 打包 smoke 9/9；`agent-cdp-runner.js` 69/69。
@@ -183,3 +225,56 @@
 - 本轮只修改 Renderer 页面/组件及其现有 IPC 调用编排；没有新增或修改后端 API、IPC 白名单、数据库表、权限边界或任务执行器。
 - 未闭环：真实登录的拼多多/微信小店/快手小店/抖店副作用验收、真实第三方模型凭据和付费生图、真实 Windows 人工逐项点击、OS 级故障恢复、生产发版；这些仍需人工确认，当前不宣称已验证。
 - 重启：已使用最新构建启动 `pnpm.cmd dev`，ShopPilot Electron 窗口存在（标题 `ShopPilot`）；因 5173 已被占用，本次 Renderer 选择 5174，未关闭或覆盖其他用户进程。
+# 2026-10-01 M4/M5 Agent 领域接入
+
+- `businessMetricsCompare`、`commerceHealth` 已读取 `sales_metrics` 并返回来源/周期/平台/采集时间/缺失原因；null 不补零，跨店健康保留平台和新鲜度差异。
+- `invoiceExport` 复用 Main 发票纯函数生成应用管理目录下 CSV，必须人工确认；`entityApply` 复用主体冲突规则，冲突保留原值。
+- 迁移 v27 新增内容草稿、经营计划、客服草稿台账；M5 动作已从通用占位切换为本地结构化领域服务。外部内容发布、广告/优惠券投放和客服发送在未实测平台上只生成提案并返回 `NOT_VERIFIED`。
+- 新增测试：`tests/unit/commerce-insight-service.test.ts`、`tests/unit/commerce-growth-service.test.ts`；定向套件 24 条通过。
+- 状态：M4/M5 本地实现为 `IMPLEMENTED / PARTIAL`；真实平台与 Windows 验收保持 `NOT_VERIFIED/UNTESTED`。
+- 继续修正：内容发布必须先经过 `contentReview`；客服发送同时校验 `storeId + conversationId + draftId`；发票导出只导出请求的 invoice ID；主体回填支持按单店作用域，避免跨店写入。
+- M6 增量：迁移 v28 增加 `commerce_agent_action_ledger`，Main 为 M4/M5 领域动作记录 inputHash、状态、confirmationId、sideEffectStarted、evidence 和恢复建议；相同动作幂等更新。新增 `tests/unit/commerce-action-ledger.test.ts`。
+- M6 扩展：库存/价格/SKU、订单台账、履约/售后/退款和商品域动作纳入同一台账范围；统一记录仍不改变未实测平台的 `NOT_VERIFIED` 边界。
+
+
+### M6 台账闭环增量（2026-10-01）
+
+本轮补齐订单采集派发、退款审核/确认/回读和全部商品发布 Agent 分支的统一台账写入；`RECOVERY_REQUIRED`、`blocked_budget`、`blocked_permission` 不再降级为普通失败，回执摘要中的副作用标记会持久化为 `side_effect_started=1`。新增 Main-only `agent:commerce:ledger:list` 脱敏查询和 preload 类型声明。台账测试覆盖恢复状态、副作用标记与查询解析。真实平台、真实店铺、重启恢复和 Windows 验收仍为 `NOT_VERIFIED/UNTESTED`，整体保持 `INTERNAL_BUILD`。
+
+M6 继续增量：受跟踪领域动作现在在 Agent Service 进入执行分支前写入 `running` 台账；若已有 `recovery_required` 或 `side_effect_started=1`，不会被新的开始记录覆盖。台账单测新增运行中状态与恢复状态保护用例。
+
+M6 异常恢复闭环增量：跟踪动作在执行前写入 `running`；异常时按副作用风险分别收敛到 `failed` 或 `recovery_required`，并保留人工回读建议；已有恢复状态或副作用标记的同一输入不会被新的开始记录覆盖。定向台账/Agent/订单测试 31 条通过，真实平台和 Windows 验收仍未验证。
+M6 最终本地验证（2026-10-01）：`typecheck`、`vue-tsc`、全量 Vitest（90 文件/966 测试）、lint（0 errors）和 build 全部通过；M6 定向台账/订单/Agent 测试 31/31 通过。真实平台、重启恢复与 Windows 验收仍为 `NOT_VERIFIED/UNTESTED`，发布状态保持 `INTERNAL_BUILD`。
+M6 安全重试语义增量（2026-10-01）：允许纯读失败和人工确认等待状态在再次通过 Main 门禁后重新进入 `running`；`recovery_required` 与 `side_effect_started=1` 继续保护。台账测试 4/4、全量测试 90 文件/968 条通过。
+M6 采集派单台账增量（2026-10-01）：补齐四个旧采集动作 `collectInvoices/collectBusiness/collectEntity/collectOrders` 的统一台账记录，与 M4/M5 和新领域动作保持一致；typecheck 与定向 Agent/台账测试通过。
+M6 采集证据计数修正（2026-10-01）：多动作计划按本步骤新增 Job 数量写入 evidence，避免累计计数污染后续动作摘要；全量测试 90 文件/968 条通过，build 通过。
+M6 空派单状态增量（2026-10-01）：采集无可执行平台或没有新增 Job 时明确返回 `NOT_VERIFIED/NO_JOB_DISPATCHED`；全量测试 90 文件/969 条通过。
+M6 电商确认门禁审计增量（2026-10-01）：新增契约测试确保商品、库存/SKU、履约、退款、主体、内容、广告和客服发送动作同时受人工确认与副作用保护。定向 42/42 通过。
+M3 UNKNOWN 状态语义增量（2026-10-01）：履约/退款回读的未知结果显式返回 `UNKNOWN`，台账和查询 schema 同步支持；不再与 `NOT_VERIFIED` 混淆。
+
+### 2026-10-01 真实店铺验收尝试与阻塞
+
+- 只读探针 `node tools/acceptance/product-sync-real-verify.js` 已运行：快手小店真实页面条数 4 与本地 4 一致，重复同步 0 新增/4 跳过；微信小店、抖店、拼多多存在 `NAVIGATION_FAILED` 或运行间不一致，状态保持 `PARTIAL/BLOCKED/UNTESTED`。
+- 真实发布、库存/SKU 写回、发货、退款、平台回读、登录过期/安全验证/页面改版/网络失败和电商副作用重启恢复没有可用四平台店铺会话，未执行，不伪造成功。Computer Use 当前无可见 ShopPilot/店铺窗口，Chrome 连接器错误为 `unsupported Codex auth method: apikey`。
+- Windows/本地边界证据：打包 Agent 设置 SendInput 7/7、记忆原子恢复 4/4；仍不能替代真实店铺完整验收。证据：`artifacts/agent/commerce-real-acceptance-20261001.json`、`artifacts/agent/commerce-real-acceptance-blocked-20261001.json`。
+- 发布状态继续 `INTERNAL_BUILD`。下一步需要四个平台已登录 Windows 会话、测试商品/SKU、可安全测试订单和高风险动作授权；不得提交凭据到报告。
+
+### 真实发布预检跟进（2026-10-01）
+
+微信小店真实预检可达，但店铺为 `offline`，且既有未完成发布与缺少类目导致阻断；应用没有打开页面或提交任何平台数据。测试商品已软删除并核对。其余真实副作用和故障场景仍待可用在线店铺会话与安全测试数据。
+
+### 串行四平台只读跟进（2026-10-01）
+
+进程清理后串行探针观察到：拼多多一次稳定只读成功；抖店/快手首轮失败后重试成功；微信仍导航失败。结果说明当前真实会话/页面就绪不稳定，不能提升到 `VERIFIED`。M3 任务引擎 114/114、root-ceo 域 13/13、Windows Agent 设置 7/7 已通过；真实副作用和故障场景仍待在线店铺会话。
+
+### Agent 能力增量：电商动作台账查询（2026-10-01）
+
+root-ceo 新增只读 `commerceLedgerList` 工具，可查询恢复中、等待确认和最近电商动作的脱敏台账摘要。该工具走共享 schema/catalog、Main ledger service 和结构化 evidence，不访问 Renderer 数据库，也不改变高风险确认门禁。验证：typecheck 通过，相关 32 条测试通过。
+
+### Agent 对话交互重制（2026-10-01）
+
+- root-ceo 对话改为时间线视图，统一呈现用户消息、Agent 回复、折叠思考过程、执行状态和结果。
+- 顶部新增会话状态条，明确显示等待确认、执行失败、恢复所需动作；恢复状态提示先回读平台，不盲目重试。
+- Composer 增加店铺/页面作用域、快捷意图、发送状态、字符计数和人工确认提示。
+- 状态映射、思考分组、恢复提示已补回归测试；Agent UI 定向测试 10/10，typecheck/build 通过。vue-tsc 仍有既有 `UnifiedAppsPage.vue:745` 类型错误。
+- 真实平台能力、确认门禁、单 Agent root-ceo 约束未改变，发布状态继续 `INTERNAL_BUILD`。

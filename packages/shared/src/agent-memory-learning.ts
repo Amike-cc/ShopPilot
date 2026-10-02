@@ -21,24 +21,13 @@ export interface AutoLearningTargetInput {
   frozenStoreIds?: readonly string[]
 }
 
-function allowsStore(storeId: string | null, allowed: readonly string[] | undefined): boolean {
-  const ids = (allowed || []).map(String).filter(Boolean)
-  return !ids.length || (!!storeId && ids.includes(storeId))
-}
-
 /**
- * A child can learn only when both the frozen Job permission and the current
- * permission still grant memory writes and cover the target store. Otherwise
- * the candidate remains under root-ceo governance for compatibility and audit.
+ * Single-agent mode keeps automatic learning under root-ceo governance. The
+ * historical permission/snapshot fields remain in the input so old Jobs can
+ * still be evaluated and audited, but they never create a child-owned record.
  */
 export function resolveAutoLearningTarget(input: AutoLearningTargetInput): AutoLearningTarget {
   const rootAgentId = input.rootAgentId || 'root-ceo'
-  const assignedAgentId = String(input.assignedAgentId || '')
   const storeId = input.storeId || null
-  const rootTarget: AutoLearningTarget = { agentId: rootAgentId, scope: storeId ? 'store' : 'shared' }
-  if (!assignedAgentId || assignedAgentId === rootAgentId) return rootTarget
-  if (input.frozenMemoryWrite === false || !input.currentMemoryWrite) return rootTarget
-  if (!allowsStore(storeId, input.frozenMemoryStoreIds) || !allowsStore(storeId, input.currentMemoryStoreIds)) return rootTarget
-  if (!allowsStore(storeId, input.frozenStoreIds) || !allowsStore(storeId, input.currentStoreIds)) return rootTarget
-  return { agentId: assignedAgentId, scope: storeId ? 'store' : 'private' }
+  return { agentId: rootAgentId, scope: storeId ? 'store' : 'shared' }
 }

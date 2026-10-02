@@ -12,6 +12,7 @@
 
 import { BrowserWindow, Menu, clipboard, webContents } from 'electron'
 import { getSession, waitForSessionReady } from './shop-session-manager'
+import { StorePageLeases } from './page-lease'
 import { registerFingerprintTarget, unregisterFingerprintTarget } from './fingerprint-injector'
 import {
   buildStoreContextMenu, runStoreMenuAction, toStoreMenuInput, toElectronMenuTemplate,
@@ -20,7 +21,7 @@ import {
 import { buildElementProbeScript, formatElementProbe, type ElementProbeResult } from './element-probe'
 import { buildElementPickerScript, describePickResult, type ElementPickResult, type PickMode } from './element-picker'
 import { getDatabase } from '../db/database'
-import { updateStoreStatus, updateStoreLastActive, onStoreStatusChanged } from '../stores/store-manager'
+import { getStore, updateStoreStatus, updateStoreLastActive, onStoreStatusChanged } from '../stores/store-manager'
 import { StoreStatus } from '@shared/enums/store-status'
 import { assertNavigableUrl } from '@shared/navigation'
 export { assertNavigableUrl } from '@shared/navigation'
@@ -35,6 +36,12 @@ export interface Tab {
   title: string
   isPinned: boolean
   orderIndex: number
+  /**
+   * 采集专用标签页（应用内部使用）：**不是**用户的活动标签页，界面不把它显示在标签栏、
+   * 也不会因为它的存在而切换用户正在看的页面。渲染层仍会为它挂一个隐藏 webview，
+   * 这样采集有真实页面可读，而用户的标签页（URL、表单、滚动位置）一点没动。
+   */
+  internal?: boolean
   /** Renderer DOM <webview> 注册后的 guest 句柄；不向 Renderer 暴露。 */
   webContents?: Electron.WebContents
   guestWebContentsId?: number
@@ -66,6 +73,32 @@ let viewport: ViewportBounds = { x: 0, y: 0, width: 0, height: 0 }
 const guestTabs = new Map<number, Tab>()
 /** 注册完成前等待页面句柄的任务/页面工具。 */
 const guestWaiters = new Map<string, Set<(wc: Electron.WebContents | null) => void>>()
+/** 任务执行期间即使页面未显示也必须保持活动；任务结束后恢复后台节流。 */
+const taskAwakeStores = new Set<string>()
+/** 后台采集借用店铺页面的租约账本：采集结束按需关页面（见 page-lease.ts）。 */
+const pageLeases = new StorePageLeases()
+
+function applyBackgroundThrottling(tab: Tab): void {
+  const wc = tab.webContents
+  if (!wc || wc.isDestroyed()) return
+  const state = browserStates.get(tab.storeId)
+  const isActiveVisibleTab = displayedStoreId === tab.storeId && state?.activeTabId === tab.id
+  const shouldThrottle = !isActiveVisibleTab && !taskAwakeStores.has(tab.storeId)
+  try { wc.setBackgroundThrottling(shouldThrottle) } catch { /* 页面正在销毁 */ }
+}
+
+function applyStoreBackgroundThrottling(storeId: string): void {
+  const state = browserStates.get(storeId)
+  if (!state) return
+  for (const tab of state.tabs.values()) applyBackgroundThrottling(tab)
+}
+
+/** 任务引擎调用：后台任务期间暂不节流该店铺页面。 */
+export function setStoreTaskActivity(storeId: string, active: boolean): void {
+  if (active) taskAwakeStores.add(storeId)
+  else taskAwakeStores.delete(storeId)
+  applyStoreBackgroundThrottling(storeId)
+}
 
 // 店铺状态由 Main 统一计算，Renderer 只接收安全的 storeId/status 摘要。
 // 部分纯适配器单测会替换 store-manager 模块，只提供 CRUD 方法；兼容该最小 mock。
@@ -73,6 +106,27 @@ if (typeof onStoreStatusChanged === 'function') {
   onStoreStatusChanged((storeId, status) => {
     emit(EVENT_CHANNELS.STORE_STATUS_CHANGED, { storeId, status })
   })
+}
+
+/**
+ * 打开/关闭店铺浏览器只说明"窗口开没开"，**不是**登录证据。
+ *
+ * 登录结论只由平台适配器给出（`platform-login-service.storeStatusForLoginResult`）：
+ * 明确证据 → `online` / `needs_login`；拿不到证据 → **不改状态**。
+ * 所以这里**不能**无条件写 `offline`（2026-10-02 修）——适配器的正向证据只存在于后台首页
+ * （经营数据锚点）和商品列表页，店铺停在发布页/订单页/发票页时永远拿不到证据，无条件写
+ * `offline` 会让"明明登录着、页面刚代填成功"的店铺被永久显示成离线。真机复现：微信小店
+ * 16:51:05 被这次打开打回 `offline`，随后 3 秒一轮的复核在发布页上恒为 UNKNOWN，
+ * 状态再也没回到 online（同一时刻 `[product-publish] 打开发布页 reached=true 代填=1` 成功）。
+ * 这与"未知证据不得当作否定证据"是同一条纪律（见 docs/product-profiles.md §7.2①）。
+ *
+ * 唯一要在这里推进的是**从未确认过登录**的新店：`incomplete -> offline`（§9.1 状态机的起点），
+ * 否则新店会一直停在 `incomplete`，发布预检会按"店铺配置不完整"阻断。
+ */
+function markBrowserWindowState(storeId: string): void {
+  let current: string | undefined
+  try { current = getStore(storeId)?.status } catch { return /* 取不到就什么都不改 */ }
+  if (current === StoreStatus.INCOMPLETE) updateStoreStatus(storeId, StoreStatus.OFFLINE)
 }
 
 function tabKey(storeId: string, tabId: string): string {
@@ -162,7 +216,9 @@ function tabSnapshot(tab: Tab) {
     isPinned: tab.isPinned,
     orderIndex: tab.orderIndex,
     loading,
-    guestAttached: !!tab.webContents && !tab.webContents.isDestroyed() && tab.guestAttached === true
+    guestAttached: !!tab.webContents && !tab.webContents.isDestroyed() && tab.guestAttached === true,
+    // 采集专用标签页：渲染层据此"挂隐藏 webview 但不进标签栏、不当作活动页"
+    internal: tab.internal === true
   }
 }
 
@@ -192,13 +248,16 @@ export function openStoreBrowser(storeId: string, opts: { display?: boolean; sou
     const state: BrowserState = { tabs: new Map(), activeTabId: null }
     browserStates.set(storeId, state)
     restoreTabs(storeId)
-    // 打开浏览器只代表 Session 已建立，不能据此推断平台已登录。
-    // 只有平台适配器确认 LOGGED_IN 后才会切换为 online。
-    updateStoreStatus(storeId, StoreStatus.OFFLINE)
+    // 打开浏览器只代表 Session 已建立，不能据此推断平台已登录——但**同样不能据此断言未登录**。
+    // 只有平台适配器给出明确证据才会切换为 online / needs_login（见 markBrowserWindowState）。
+    markBrowserWindowState(storeId)
     // 唤醒等待该店铺的排队任务 run（§4.4：不静默拉起，但已拉起后要放行队列）
     queueMicrotask(() => storeOpenListeners.forEach(cb => { try { cb(storeId) } catch { /* ignore */ } }))
   }
   updateStoreLastActive(storeId)
+  for (const id of browserStates.keys()) applyStoreBackgroundThrottling(id)
+  // 界面自己开的店铺（渲染层入口）＝ 用户在用它：标记成"用户接手"，后台采集结束不得自动关
+  if (opts.source === 'renderer') pageLeases.claimByUser(storeId)
   // display:false = 只把店铺"打开"（建 session/标签、放行排队任务），**不把它显示出来**。
   // ⚠ 只给"不需要用户看着"的调用方用：渲染层会把它的 webview 留着但隐藏（DOM overlay 只
   // 影响可见性，不再摘除页面），需要真实点击的自动化（采集任务/邀约）应当显示店铺，
@@ -223,6 +282,9 @@ export function displayStore(storeId: string | null, source: 'renderer' | 'main'
     return
   }
   displayedStoreId = storeId
+  // 页面被显示出来了（用户切过去/界面打开/主进程为可交互任务打开）：它归用户。
+  // 后台采集借用的页面一旦被显示过，采集结束后就不再自动关闭——否则用户正看着的页面会凭空消失。
+  pageLeases.claimByUser(storeId)
   const state = browserStates.get(storeId)!
   if (!state.activeTabId) {
     const first = Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)[0]
@@ -289,6 +351,10 @@ export function closeStoreBrowser(storeId: string): void {
     inPageSaveAt.delete(tab.id)
   })
   browserStates.delete(storeId)
+  taskAwakeStores.delete(storeId)
+  collectionTabs.delete(storeId)
+  // 页面已经关了：清掉该店铺的借用/接手账，避免下次借用拿着旧状态做判断
+  pageLeases.forget(storeId)
 
   if (displayedStoreId === storeId) {
     displayedStoreId = null
@@ -302,14 +368,137 @@ export function closeStoreBrowser(storeId: string): void {
     loginDetectionTimers.delete(storeId)
   }
   // 注意：不删除 tabs 行 —— 店铺下次打开/应用重启时按 §4.3 恢复
-  updateStoreStatus(storeId, StoreStatus.OFFLINE)
+  // 关掉窗口不代表登录失效（Cookie 仍在分区里），所以这里不写状态：
+  // 关一次窗口就把"已确认登录/需要登录"的结论抹成 offline，界面会显示成"登录没了"。
   emitTabs(storeId)
 }
 
 /**
- * 新建标签页
+ * 后台采集**借用**店铺页面（2026-10-02 用户要求「采集任务完成后关闭网页，优化占用」）。
+ *
+ * 无人值守的采集（经营数据每 10 分钟、发票每 3 小时）为了拿到页面句柄会自己把店铺浏览器
+ * 后台开起来（`display:false`，不抢用户当前页）。以前没人关它 —— 一轮轮下来每个店铺都留下
+ * 一个常驻渲染进程。这里把"开"和"关"配成一对：
+ *
+ *   · 借用时：页面本来没开才开（不抢当前页），并记下"这个页面是后台任务开的"；
+ *   · 归还时：只有"我们开的 + 没有别的借用者 + 用户期间没接手过"才真的关掉。
+ *
+ * 判据全部在 `page-lease.ts`（纯状态机，单测逐条钉住）。用户自己开着/看过一眼的页面
+ * **永远不会**被自动关闭——采集顺手关掉用户正在登录的页面，比多占一点内存糟得多。
+ *
+ * 用法：`const release = borrowStorePage(storeId); try { ...采集... } finally { release() }`
  */
-export function createTab(storeId: string, url?: string): string {
+export function borrowStorePage(storeId: string): () => void {
+  const openedByUs = !browserStates.has(storeId)
+  if (openedByUs) openStoreBrowser(storeId, { display: false, source: 'main' })
+  pageLeases.borrow(storeId, openedByUs)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (!pageLeases.release(storeId)) return
+    // 正在前台显示 = 用户看着它（正常路径下 displayStore 已经标成用户接手，这里再挡一道时序缝隙）
+    if (displayedStoreId === storeId) { pageLeases.claimByUser(storeId); return }
+    if (!browserStates.has(storeId)) return
+    try {
+      closeStoreBrowser(storeId)
+      logMain('info', `[browser] 后台采集结束，已关闭借用的店铺页面 store=${storeId}`)
+    } catch (error) {
+      // 关不掉不是采集的错：如实留日志，不把异常抛回采集流程
+      logMain('warn', `[browser] 关闭借用的店铺页面失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
+    }
+  }
+}
+
+/** 借用/接手状态快照：内存诊断据此说明"页面为什么还开着"。 */
+export function getStorePageLeaseSnapshot(): ReturnType<StorePageLeases['snapshot']> {
+  return pageLeases.snapshot()
+}
+
+/** 采集专用标签页：storeId → tabId。它不占活动位、不落库、不进标签栏，只服务采集。 */
+const collectionTabs = new Map<string, string>()
+
+/** 取当前有效的采集专用标签页 id（已被关掉/店铺已关则返回 null）。 */
+export function getCollectionTabId(storeId: string): string | null {
+  const tabId = collectionTabs.get(storeId)
+  if (!tabId) return null
+  const state = browserStates.get(storeId)
+  if (!state || !state.tabs.has(tabId)) { collectionTabs.delete(storeId); return null }
+  return tabId
+}
+
+/** 取（必要时建）采集专用标签页。**不激活**：用户正在看的页面不会被切走。 */
+export function acquireCollectionTab(storeId: string): string {
+  const existing = getCollectionTabId(storeId)
+  if (existing) return existing
+  const tabId = createTab(storeId, 'about:blank', { activate: false, internal: true })
+  collectionTabs.set(storeId, tabId)
+  return tabId
+}
+
+/** 关掉采集专用标签页（采集结束调用；重复调用是空操作）。 */
+export function releaseCollectionTab(storeId: string, tabId?: string): void {
+  const current = collectionTabs.get(storeId)
+  if (!current) return
+  if (tabId && tabId !== current) return
+  collectionTabs.delete(storeId)
+  try { closeTab(storeId, current) } catch { /* 标签页已经不在了 */ }
+}
+
+/**
+ * 借一个**采集专用**的店铺页面（2026-10-02 用户要求「采集任务时不要影响浏览器使用」）。
+ *
+ * 与 `borrowStorePage` 的区别：这里给的页面是**独立标签页**，不是用户正在用的那个。
+ * 采集的导航、点击、读值全部落在自己的标签页上，用户的标签页（URL、表单、滚动位置）
+ * 一点没动；它也不占活动位、不进标签栏（渲染层只挂一个隐藏 webview 给它）。
+ *
+ * 为什么必须独立标签页：采集会把页面导航到经营数据页、还会点周期控件。以前它直接用
+ * "该店铺的活动标签页"，于是每 10 分钟一轮的自动采集会把用户正在填的表单导航走——
+ * 用户看到的就是"采集一跑，我的页面就跳了"。
+ *
+ * 归还（release）：关掉专用标签页；若店铺页面本来就是这次采集开的，再按 `borrowStorePage`
+ * 的租约规则决定关不关整个店铺页面（用户自己开着/看过的页面永远不关）。
+ *
+ * 用法：`const page = borrowCollectionPage(storeId); try { const wc = await page.waitForWebContents(); ... } finally { page.release() }`
+ */
+export function borrowCollectionPage(storeId: string): {
+  waitForWebContents: (timeoutMs?: number) => Promise<Electron.WebContents | null>
+  release: () => void
+} {
+  const releaseBorrowedStore = borrowStorePage(storeId)
+  let tabId: string | null = null
+  let released = false
+  return {
+    async waitForWebContents(timeoutMs = 15_000): Promise<Electron.WebContents | null> {
+      if (released) return null
+      if (!tabId) {
+        try { tabId = acquireCollectionTab(storeId) } catch { return null }
+      }
+      try {
+        return await waitForTabWebContents(storeId, tabId, timeoutMs)
+      } catch {
+        return null
+      }
+    },
+    release(): void {
+      if (released) return
+      released = true
+      if (tabId) {
+        releaseCollectionTab(storeId, tabId)
+        tabId = null
+      }
+      releaseBorrowedStore()
+    }
+  }
+}
+
+/**
+ * 新建标签页
+ *
+ * @param opts.activate false = 建完**不**设为活动标签页（采集专用页用它：用户的当前页不被切走）
+ * @param opts.internal true = 采集专用页（渲染层挂隐藏 webview，不进标签栏）
+ */
+export function createTab(storeId: string, url?: string, opts: { activate?: boolean; internal?: boolean } = {}): string {
   const state = browserStates.get(storeId)
   if (!state) throw new Error('Browser not open for this store')
 
@@ -327,11 +516,14 @@ export function createTab(storeId: string, url?: string): string {
     title: '新标签页',
     isPinned: false,
     orderIndex: state.tabs.size,
-    guestAttached: false
+    guestAttached: false,
+    internal: opts.internal === true
   }
   state.tabs.set(tab.id, tab)
 
-  const shouldActivate = state.activeTabId === null || displayedStoreId === storeId
+  // 内部页（采集专用）**永不**抢活动位：活动位是用户正在看的那个页面。
+  const shouldActivate = opts.activate !== false && opts.internal !== true &&
+    (state.activeTabId === null || displayedStoreId === storeId)
   if (shouldActivate) activateTab(storeId, tab.id)
   saveTabToDatabase(tab)
   emitTabs(storeId)
@@ -450,6 +642,7 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
   tab.guestWebContentsId = wc.id
   tab.guestAttached = true
   guestTabs.set(wc.id, tab)
+  applyBackgroundThrottling(tab)
 
   wc.setWindowOpenHandler(({ url: targetUrl, disposition }) => {
     // 页面里 target=_blank 的链接、window.open、以及外站"在新标签页打开"都走这里。
@@ -581,6 +774,7 @@ export function activateTab(storeId: string, tabId: string): void {
   if (!tab) throw new Error('Tab not found')
 
   state.activeTabId = tabId
+  applyStoreBackgroundThrottling(storeId)
 
   const db = getDatabase()
   db.prepare('UPDATE tabs SET last_active_at = ?, updated_at = ? WHERE id = ?')
@@ -603,6 +797,8 @@ export function closeTab(storeId: string, tabId: string): void {
 
   state.tabs.delete(tabId)
   getDatabase().prepare('DELETE FROM tabs WHERE id = ?').run(tabId)
+  // 采集专用页被关掉（用户手动关/采集归还）：同步清掉登记，避免拿着死 id 去找页面
+  if (collectionTabs.get(storeId) === tabId) collectionTabs.delete(storeId)
 
   // 重排只改内存会让"重启恢复顺序"错乱：orderIndex 同步落库
   const db = getDatabase()
@@ -899,8 +1095,8 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // 同主窗口的店铺标签页：独立窗口同样可能被遮挡，节流会让页面里的 rAF 依赖型组件失灵
-      backgroundThrottling: false,
+      // 独立窗口默认允许节流；只有可见交互或任务页面需要时再解除。
+      backgroundThrottling: true,
       partition: `persist:store_${storeId}`
     }
   })
@@ -1025,6 +1221,44 @@ export function getOpenStoreIds(): string[] {
   return Array.from(browserStates.keys())
 }
 
+/** 只读性能采样：返回主进程、Electron 子进程和店铺页面生命周期摘要。 */
+export async function getMemoryDiagnostics(): Promise<{
+  capturedAt: number
+  main: NodeJS.MemoryUsage
+  appMetrics: Array<{ pid: number; type: string; memory: number; cpu: number }>
+  stores: Array<{ storeId: string; tabs: number; attachedGuests: number; taskAwake: boolean; standaloneWindows: number }>
+  /** 后台采集借用的页面：谁还开着、是借用中还是用户接手 */
+  pageLeases: ReturnType<StorePageLeases['snapshot']>
+  totals: { openStores: number; tabs: number; attachedGuests: number; standaloneWindows: number; webContents: number }
+}> {
+  const storeRows = Array.from(browserStates.entries()).map(([storeId, state]) => ({
+    storeId,
+    tabs: state.tabs.size,
+    attachedGuests: Array.from(state.tabs.values()).filter(tab => !!tab.webContents && !tab.webContents.isDestroyed() && tab.guestAttached).length,
+    taskAwake: taskAwakeStores.has(storeId),
+    standaloneWindows: standaloneWindows.get(storeId)?.size || 0
+  }))
+  const { app } = await import('electron')
+  const metrics = app.getAppMetrics().map(metric => ({
+    pid: metric.pid,
+    type: metric.type,
+    memory: metric.memory?.workingSetSize || 0,
+    cpu: metric.cpu?.percentCPUUsage || 0
+  }))
+  const tabs = storeRows.reduce((sum, row) => sum + row.tabs, 0)
+  const attachedGuests = storeRows.reduce((sum, row) => sum + row.attachedGuests, 0)
+  const standaloneCount = storeRows.reduce((sum, row) => sum + row.standaloneWindows, 0)
+  return {
+    capturedAt: Date.now(),
+    main: process.memoryUsage(),
+    appMetrics: metrics,
+    stores: storeRows,
+    /** 后台采集借用的页面：谁还开着、是借用中还是用户接手（"占用为什么没降下来"看这里） */
+    pageLeases: pageLeases.snapshot(),
+    totals: { openStores: storeRows.length, tabs, attachedGuests, standaloneWindows: standaloneCount, webContents: webContents.getAllWebContents().length }
+  }
+}
+
 /**
  * 从数据库恢复标签页（§4.3 重启恢复）
  */
@@ -1090,6 +1324,8 @@ function saveTabs(storeId: string): void {
 }
 
 function saveTabToDatabase(tab: Tab): void {
+  // 采集专用页是**临时**的：不落库，否则下次开店/重启会被当成用户的标签页恢复出来
+  if (tab.internal === true) return
   const db = getDatabase()
   const now = Date.now()
   const existing = db.prepare('SELECT id FROM tabs WHERE id = ?').get(tab.id)

@@ -2,28 +2,23 @@
   <section :class="['dashboard-shell welcome', { 'picker-mode': taskPicking }]" data-test="dashboard-home">
     <aside class="dashboard-sidebar sidebar" :class="{ collapsed: leftSidebarCollapsed }" data-test="sidebar" aria-label="ShopPilot 主导航">
       <div v-if="leftSidebarCollapsed" class="sidebar-rail">
-        <button type="button" class="rail-btn" data-test="sidebar-expand" title="展开左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(true)">›</button>
-        <button type="button" class="rail-btn btn-new" data-test="rail-new" title="添加店铺" @click="openStoreCreate">＋</button>
-        <button type="button" class="rail-btn" data-test="rail-tasks" title="任务中心" @click="openTasks(false)">☑</button>
+        <button type="button" class="rail-btn" data-test="sidebar-expand" title="展开左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(true)"><img :src="forwardIcon" alt="" /></button>
+        <button type="button" class="rail-btn btn-new" data-test="rail-new" title="添加店铺" @click="openStoreCreate"><img :src="addIcon" alt="" /></button>
+        <button type="button" class="rail-btn" data-test="rail-tasks" title="任务中心" @click="openTasks(false)"><img :src="utilityTasksIcon" alt="" /></button>
         <button type="button" class="rail-btn" data-test="rail-trash" title="回收站" @click="openTrash">
-          ♧
+          <img :src="utilityTrashIcon" alt="" />
           <span v-if="ws.trashStores.length" class="rail-badge" data-test="rail-trash-badge"></span>
         </button>
-        <button type="button" class="rail-btn" data-test="rail-settings" title="设置中心" @click="navigateTo('settings')">⚙</button>
+        <button type="button" class="rail-btn" data-test="rail-settings" title="设置中心" @click="navigateTo('settings')"><img :src="settingsIcon" alt="" /></button>
       </div>
       <template v-else>
       <div class="dashboard-brand">
-        <div class="dashboard-brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 8h16l-1.2 11.2a1.6 1.6 0 0 1-1.6 1.4H6.8a1.6 1.6 0 0 1-1.6-1.4Z" />
-            <path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8" />
-          </svg>
-        </div>
+<div class="dashboard-brand-mark" aria-hidden="true"><img :src="brandMark" alt="" /></div>
         <div class="dashboard-brand-copy">
           <strong>ShopPilot</strong>
           <span>多平台经营工作台</span>
         </div>
-        <button type="button" class="sidebar-collapse" data-test="sidebar-collapse" title="收起左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(false)">‹</button>
+        <button type="button" class="sidebar-collapse" data-test="sidebar-collapse" title="收起左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(false)"><img :src="backIcon" alt="" /></button>
       </div>
 
       <nav class="dashboard-nav" aria-label="主功能导航">
@@ -37,7 +32,7 @@
             :aria-current="activeNav === item.label ? 'page' : undefined"
             @click="handleNav(item)"
           >
-            <span class="nav-glyph" aria-hidden="true">{{ item.glyph }}</span>
+            <span class="nav-glyph" aria-hidden="true"><img v-if="item.icon" :src="item.icon" alt="" /> <span v-else>{{ item.glyph }}</span></span>
             <span class="nav-label">{{ item.label }}</span>
           </button>
         </template>
@@ -47,11 +42,12 @@
         <div class="store-area-title">
           <span>我的店铺</span>
           <span class="store-count">{{ ws.stores.length }}</span>
-          <button type="button" class="add-store-button btn-new" title="添加店铺" @click="openStoreCreate">＋</button>
+          <button type="button" class="add-store-button btn-new" title="添加店铺" @click="openStoreCreate"><img :src="addIcon" alt="" /></button>
         </div>
         <div class="store-area-body">
           <div v-if="!ws.ready" class="sidebar-state">正在读取店铺…</div>
           <div v-else-if="!ws.stores.length" class="sidebar-state">
+            <img class="sidebar-state-art" :src="emptyStoreArt" alt="暂无店铺" />
             <span>暂无店铺</span>
             <button type="button" class="inline-link" @click="navigateTo('stores')">添加第一家店铺</button>
           </div>
@@ -79,7 +75,7 @@
                 @click.stop="openStoreFromPage(store.id)"
                 @keydown.enter.stop.prevent="openStoreFromPage(store.id)"
                 @keydown.space.stop.prevent="openStoreFromPage(store.id)"
-              >▶</span>
+              ><img :src="openIcon" alt="" /></span>
             </button>
           </div>
         </div>
@@ -89,7 +85,7 @@
         <button type="button" class="pro-card" @click="navigateTo('settings')">
           <span class="pro-avatar" aria-hidden="true">SP</span>
           <span class="pro-copy"><strong>ShopPilot Pro</strong><span class="pro-badge">专业版</span></span>
-          <span class="pro-arrow" aria-hidden="true">›</span>
+          <span class="pro-arrow" aria-hidden="true"><img :src="forwardIcon" alt="" /></span>
         </button>
         <div class="foot-row">
           <button
@@ -98,11 +94,11 @@
             data-test="settings-open-btn"
             @click="handleNav(settingsNav)"
           >
-            <span class="nav-glyph" aria-hidden="true">⚙</span>
+            <span class="nav-glyph" aria-hidden="true"><img :src="settingsNav.icon" alt="" /></span>
             <span class="nav-label">设置</span>
           </button>
           <button type="button" class="foot-btn foot-icon" data-test="trash-open" title="回收站" aria-label="回收站" @click="openTrash">
-            🗑<span v-if="ws.trashStores.length" class="badge">{{ ws.trashStores.length }}</span>
+            <img :src="utilityTrashIcon" alt="" /><span v-if="ws.trashStores.length" class="badge">{{ ws.trashStores.length }}</span>
           </button>
         </div>
       </div>
@@ -118,13 +114,13 @@
         </div>
         <div class="toolbar-actions">
           <button type="button" class="toolbar-datetime" title="时间取自本机系统时钟" @click="showNotice('时间取自本机系统时钟；采集周期与调用记录都以它为准')">
-            <span class="dt-icon" aria-hidden="true">▦</span>{{ nowLabel }}<span class="dt-caret" aria-hidden="true">⌄</span>
+            <img class="dt-icon" :src="dateIcon" alt="" />{{ nowLabel }}<img class="dt-caret" :src="caretDownIcon" alt="" />
           </button>
           <button type="button" class="toolbar-icon-button" title="通知" @click="showNotice('通知中心暂未接入独立页面')">
-            <span aria-hidden="true">♧</span>
+            <img class="toolbar-action-icon" :src="notificationIcon" alt="" />
             <i v-if="activeTaskCount" class="notification-dot" aria-label="有进行中的任务"></i>
           </button>
-          <button type="button" class="toolbar-icon-button" title="帮助（Ctrl+K 打开命令面板）" @click="showNotice('按 Ctrl+K 打开命令面板；店铺、任务与设置入口在左栏与各页面内')">?</button>
+          <button type="button" class="toolbar-icon-button" title="帮助（Ctrl+K 打开命令面板）" @click="showNotice('按 Ctrl+K 打开命令面板；店铺、任务与设置入口在左栏与各页面内')"><img :src="helpIcon" alt="" /></button>
           <span class="toolbar-avatar" aria-hidden="true" title="ShopPilot Pro">SP</span>
         </div>
       </header>
@@ -140,7 +136,6 @@
         <DashboardBrowserSurface
           :picker-mode="taskPicking"
           :active="browserHostActive"
-          @back-dashboard="goOverview"
           @open-tasks="openTasks"
         />
       </div>
@@ -162,9 +157,9 @@
       <UnifiedAppsPage v-else-if="activePage === 'products' || activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-store="openStoreFromPage" @open-assistant="openAssistant" />
       <div v-else-if="activePage === 'overview'" class="overview-page">
         <div v-if="dataState === 'error'" class="dashboard-error" role="alert">
-          <span class="state-icon">!</span>
+          <img class="state-icon" :src="errorIcon" alt="" />
           <span>{{ dataError || '首页数据暂时无法读取' }}</span>
-          <button type="button" @click="loadDashboardData">重试</button>
+          <button type="button" @click="loadDashboardData"><img class="inline-action-icon" :src="dashboardRetryIcon" alt="" />重试</button>
         </div>
 
         <div class="ov-grid">
@@ -175,7 +170,7 @@
                   <div class="ov-title-row">
                     <h2>销售概览</h2>
                     <button type="button" class="ov-refresh" data-test="overview-refresh" :disabled="collectState.running || dataState === 'loading'" @click="refreshData">
-                      <span aria-hidden="true">⟳</span>{{ refreshLabel }}
+                      <img class="refresh-icon" :src="refreshIcon" alt="" />{{ refreshLabel }}
                     </button>
                   </div>
                   <span>核心经营指标</span>
@@ -195,15 +190,15 @@
                 <div v-for="kpi in kpiRow" :key="kpi.key" :class="['ov-kpi', `tone-${kpi.tone}`]" :title="kpi.hint">
                   <span class="kpi-label">{{ kpi.label }}</span>
                   <strong class="kpi-value" :class="{ placeholder: kpi.value === '—' }">{{ kpi.value }}</strong>
-                  <span v-if="kpi.delta !== null" :class="['kpi-delta', deltaClass(kpi)]">{{ kpi.delta >= 0 ? '↑' : '↓' }} {{ Math.abs(kpi.delta).toFixed(1) }}%</span>
+                  <span v-if="kpi.delta !== null" :class="['kpi-delta', deltaClass(kpi)]"><img class="delta-icon" :src="kpi.delta >= 0 ? trendUpIcon : trendDownIcon" alt="" /> {{ Math.abs(kpi.delta).toFixed(1) }}%</span>
                   <span v-else class="kpi-delta muted">{{ kpi.note }}</span>
                 </div>
               </div>
 
               <div class="trend-chart-wrap">
                 <div v-if="snapshotState === 'loading' || collectedState === 'loading'" class="section-state chart-state"><span class="loader"></span> 正在读取趋势数据…</div>
-                <div v-else-if="snapshotState === 'error' && collectedState === 'error'" class="section-state chart-state error-state">趋势数据读取失败 <button type="button" @click="loadSnapshots(); loadCollectedMetrics()">重试</button></div>
-                <div v-else-if="!trendPlot.length" class="section-state chart-state"><span class="empty-chart-icon">⌁</span><strong>暂无可用趋势数据</strong><span>{{ trendEmptyHint }}</span></div>
+                <div v-else-if="snapshotState === 'error' && collectedState === 'error'" class="section-state chart-state error-state">趋势数据读取失败 <button type="button" @click="loadSnapshots(); loadCollectedMetrics()"><img class="inline-action-icon" :src="dashboardRetryIcon" alt="" />重试</button></div>
+                <div v-else-if="!trendPlot.length" class="section-state chart-state"><img class="dashboard-state-art analytics-state-art" :src="emptyAnalyticsArt" alt="暂无趋势数据" /><strong>暂无可用趋势数据</strong><span>{{ trendEmptyHint }}</span></div>
                 <template v-else>
                   <svg class="trend-chart" viewBox="0 0 900 260" role="img" aria-label="销售额和订单数趋势图" @mouseleave="hoveredPoint = null">
                     <defs>
@@ -246,9 +241,9 @@
               <div class="ov-card-head"><div class="ov-card-title"><h2>快捷操作</h2><span>常用能力一键直达</span></div></div>
               <div class="shortcut-grid">
                 <article v-for="tile in quickActions" :key="tile.key" :class="['shortcut-tile', `tone-${tile.tone}`, { disabled: !tile.available }]">
-                  <span class="tile-icon" aria-hidden="true">{{ tile.icon }}</span>
+                  <span class="tile-icon" aria-hidden="true"><img :src="tile.icon" alt="" /></span>
                   <div class="tile-copy"><strong>{{ tile.label }}</strong><small>{{ tile.description }}</small></div>
-                  <button type="button" class="tile-action" :disabled="!tile.available" @click="handleQuickAction(tile)">{{ tile.available ? `${tile.actionLabel} →` : '待接入' }}</button>
+                  <button type="button" class="tile-action" :disabled="!tile.available" @click="handleQuickAction(tile)"><template v-if="tile.available">{{ tile.actionLabel }} <img class="inline-action-icon" :src="forwardIcon" alt="" /></template><template v-else>待接入</template></button>
                 </article>
               </div>
             </section>
@@ -260,21 +255,21 @@
                 <div class="ov-card-title"><h2>平台同步状态</h2></div>
                 <span class="ov-pill success">{{ platformOnlineSummary }}</span>
               </div>
-              <div v-if="!platformSyncRows.length" class="ov-empty">暂无店铺连接</div>
+              <div v-if="!platformSyncRows.length" class="ov-empty"><img class="dashboard-state-art compact-state-art" :src="emptyStoreArt" alt="暂无店铺连接" /><span>暂无店铺连接</span></div>
               <div v-for="row in platformSyncRows" :key="row.name" class="sync-row">
                 <PlatformIcon :name="row.name" :size="34" />
                 <div class="sync-copy"><strong>{{ row.name }}</strong><span>{{ row.count }} 家店铺</span></div>
                 <div class="sync-meta"><span :class="['sync-dot', row.state]"></span><strong>{{ row.stateLabel }}</strong><small>{{ row.lastSync }}</small></div>
               </div>
-              <button type="button" class="ov-link" @click="navigateTo('stores')">管理店铺 <span aria-hidden="true">→</span></button>
+              <button type="button" class="ov-link" @click="navigateTo('stores')">管理店铺 <img class="inline-action-icon" :src="forwardIcon" alt="" /></button>
             </section>
 
             <section id="ai-assistant" class="ov-card ov-ai">
               <div class="ov-ai-glow" aria-hidden="true"></div>
               <div class="ov-ai-copy">
-                <h2><span aria-hidden="true">✦</span> AI 电商助手</h2>
+                <h2><img class="ai-heading-icon" :src="recommendIcon" alt="" /> AI 电商助手</h2>
                 <p>创作、优化、分析，一站完成</p>
-                <button type="button" class="ov-ai-button" @click="openAssistant">开始对话 <span aria-hidden="true">→</span></button>
+                <button type="button" class="ov-ai-button" @click="openAssistant">开始对话 <img class="inline-action-icon" :src="forwardIcon" alt="" /></button>
               </div>
             </section>
 
@@ -282,10 +277,10 @@
               <div class="ov-card-head">
                 <div class="ov-card-title"><h2>待办任务</h2></div>
                 <span class="ov-pill info">{{ pendingTasks.length }} 项待处理</span>
-                <button type="button" class="ov-link inline" @click="navigateTo('tasks')">查看全部 <span aria-hidden="true">→</span></button>
+                <button type="button" class="ov-link inline" @click="navigateTo('tasks')">查看全部 <img class="inline-action-icon" :src="forwardIcon" alt="" /></button>
               </div>
               <div v-if="taskState === 'loading'" class="ov-empty"><span class="loader"></span> 正在读取任务…</div>
-              <div v-else-if="!pendingTasks.length" class="ov-empty">暂无待办：没有需要人工处理的任务或待开发票店铺</div>
+              <div v-else-if="!pendingTasks.length" class="ov-empty"><img class="dashboard-state-art compact-state-art" :src="emptyTasksArt" alt="暂无待办" /><span>暂无待办：没有需要人工处理的任务或待开发票店铺</span></div>
               <ul v-else class="todo-list">
                 <li v-for="item in pendingTasks" :key="item.id" class="todo-item" :class="{ clickable: item.kind === 'invoice' }" :role="item.kind === 'invoice' ? 'button' : undefined" :tabindex="item.kind === 'invoice' ? 0 : undefined" @click="item.kind === 'invoice' && navigateTo('invoices')" @keydown.enter="item.kind === 'invoice' && navigateTo('invoices')">
                   <span class="todo-check" aria-hidden="true"></span>
@@ -300,14 +295,14 @@
     </main>
 
     <div v-if="storeContext.open && storeContext.store" class="dashboard-context-menu" data-test="store-ctx" :style="{ left: `${storeContext.x}px`, top: `${storeContext.y}px` }" @click.stop>
-      <button type="button" class="ctx-item" data-test="ctx-toggle" @click="storeContextAction('toggle')">{{ ws.openStoreIds.includes(storeContext.store.id) ? '关闭浏览器' : '打开浏览器' }}</button>
-      <button type="button" class="ctx-item" data-test="ctx-standalone" :disabled="!canOpenStandalone" @click="storeContextAction('standalone')">在独立窗口打开当前标签页</button>
+      <button type="button" class="ctx-item" data-test="ctx-toggle" @click="storeContextAction('toggle')"><img :src="ws.openStoreIds.includes(storeContext.store.id) ? dashboardTrashIcon : dashboardBrowserIcon" alt="" />{{ ws.openStoreIds.includes(storeContext.store.id) ? '关闭浏览器' : '打开浏览器' }}</button>
+      <button type="button" class="ctx-item" data-test="ctx-standalone" :disabled="!canOpenStandalone" @click="storeContextAction('standalone')"><img :src="dashboardExternalIcon" alt="" />在独立窗口打开当前标签页</button>
       <div class="ctx-sep"></div>
-      <button type="button" class="ctx-item" data-test="ctx-rename" @click="storeContextAction('rename')">重命名…</button>
-      <button type="button" class="ctx-item" data-test="ctx-copycfg" :disabled="otherStoreOptions.length === 0" @click="storeContextAction('copycfg')">复制环境配置到其他店铺…</button>
-      <button type="button" class="ctx-item" data-test="ctx-copyid" @click="storeContextAction('copyid')">复制店铺 ID</button>
+      <button type="button" class="ctx-item" data-test="ctx-rename" @click="storeContextAction('rename')"><img :src="dashboardRenameIcon" alt="" />重命名…</button>
+      <button type="button" class="ctx-item" data-test="ctx-copycfg" :disabled="otherStoreOptions.length === 0" @click="storeContextAction('copycfg')"><img :src="dashboardCopyIcon" alt="" />复制环境配置到其他店铺…</button>
+      <button type="button" class="ctx-item" data-test="ctx-copyid" @click="storeContextAction('copyid')"><img :src="dashboardCopyIcon" alt="" />复制店铺 ID</button>
       <div class="ctx-sep"></div>
-      <button type="button" class="ctx-item danger" data-test="ctx-trash" @click="storeContextAction('trash')">移入回收站</button>
+      <button type="button" class="ctx-item danger" data-test="ctx-trash" @click="storeContextAction('trash')"><img :src="dashboardTrashIcon" alt="" />移入回收站</button>
     </div>
 
     <div v-if="renameDialog.open" class="dashboard-overlay" data-test="rename-dialog" @click.self="renameDialog.open = false">
@@ -352,8 +347,8 @@
         <div v-for="trashStore in ws.trashStores" :key="trashStore.id" class="trash-row">
           <PlatformIcon :name="trashStore.platform" :size="28" />
           <div class="trash-meta"><div>{{ trashStore.name }}</div><div class="row-sub">{{ trashStore.platform }}</div></div>
-          <button type="button" class="btn-ghost sm" @click="ws.restoreStore(trashStore.id)">恢复</button>
-          <button type="button" class="btn-danger sm" @click="confirmPurge(trashStore)">彻底删除</button>
+          <button type="button" class="btn-ghost sm" @click="ws.restoreStore(trashStore.id)"><img class="inline-action-icon" :src="dashboardRestoreIcon" alt="" />恢复</button>
+          <button type="button" class="btn-danger sm" @click="confirmPurge(trashStore)"><img class="inline-action-icon" :src="dashboardPurgeIcon" alt="" />彻底删除</button>
         </div>
         <div class="modal-actions"><button type="button" class="btn-ghost" @click="closeTrash">关闭</button></div>
       </div>
@@ -366,8 +361,8 @@
 
     <div v-if="commandOpen" class="command-backdrop" @click.self="commandOpen = false">
       <section class="command-palette" role="dialog" aria-modal="true" aria-label="全局搜索">
-        <div class="command-search"><span aria-hidden="true">⌕</span><input ref="commandInput" v-model="globalQuery" autofocus placeholder="搜索功能、店铺或任务…" @keydown.esc="commandOpen = false" /></div>
-        <div v-if="commandResults.length" class="command-results"><button v-for="result in commandResults" :key="result.key" type="button" @click="runCommand(result)"><span class="command-result-icon">{{ result.icon }}</span><span><strong>{{ result.label }}</strong><small>{{ result.description }}</small></span><kbd>↵</kbd></button></div>
+        <div class="command-search"><img class="command-search-icon" :src="observeIcon" alt="" /><input ref="commandInput" v-model="globalQuery" autofocus placeholder="搜索功能、店铺或任务…" @keydown.esc="commandOpen = false" /></div>
+        <div v-if="commandResults.length" class="command-results"><button v-for="result in commandResults" :key="result.key" type="button" @click="runCommand(result)"><span class="command-result-icon"><img :src="result.icon" alt="" /></span><span><strong>{{ result.label }}</strong><small>{{ result.description }}</small></span><kbd>↵</kbd></button></div>
         <div v-else class="command-empty">没有匹配的功能或店铺</div>
       </section>
     </div>
@@ -397,8 +392,47 @@ import UnifiedStorePage from './UnifiedStorePage.vue'
 import UnifiedTaskPage from './UnifiedTaskPage.vue'
 import { useAgentStore } from '../../stores/agent'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
+import homeIcon from '../../assets/icons/nav-home.svg'
+import productsIcon from '../../assets/icons/nav-products.svg'
+import storeIcon from '../../assets/icons/nav-store.svg'
+import aiIcon from '../../assets/icons/nav-ai.svg'
+import analyticsIcon from '../../assets/icons/nav-analytics.svg'
+import appsIcon from '../../assets/icons/nav-apps.svg'
+import settingsIcon from '../../assets/icons/nav-settings.svg'
+import utilityTrashIcon from '../../assets/icons/utility-trash.svg'
+import utilityTasksIcon from '../../assets/icons/browser-tasks.svg'
+import notificationIcon from '../../assets/icons/utility-notifications.svg'
+import brandMark from '../../assets/generated/shopilot-logo-generated.png'
+import ordersIcon from '../../assets/icons/app-orders.svg'
+import tasksIcon from '../../assets/icons/app-tasks.svg'
+import invoicesIcon from '../../assets/icons/app-invoices.svg'
+import dateIcon from '../../assets/generated/ui-icons/date.png'
+import helpIcon from '../../assets/generated/ui-icons/help.png'
+import refreshIcon from '../../assets/generated/ui-icons/refresh.png'
+import errorIcon from '../../assets/generated/ui-icons/error.png'
+import addIcon from '../../assets/generated/ui-icons/add.png'
+import openIcon from '../../assets/generated/ui-icons/open.png'
+import recommendIcon from '../../assets/generated/ui-icons/recommend.png'
+import observeIcon from '../../assets/generated/ui-icons/observe.png'
+import forwardIcon from '../../assets/generated/ui-icons/forward-gen.png'
+import backIcon from '../../assets/generated/ui-icons/back-gen.png'
+import trendUpIcon from '../../assets/generated/ui-icons/trend-up-gen.png'
+import trendDownIcon from '../../assets/generated/ui-icons/trend-down-gen.png'
+import caretDownIcon from '../../assets/generated/ui-icons/caret-down-gen.png'
+import dashboardRetryIcon from '../../assets/generated/ui-icons/dashboard-retry-gen.png'
+import dashboardBrowserIcon from '../../assets/generated/ui-icons/dashboard-browser-window-gen.png'
+import dashboardExternalIcon from '../../assets/generated/ui-icons/dashboard-external-window-gen.png'
+import dashboardRenameIcon from '../../assets/generated/ui-icons/dashboard-rename-gen.png'
+import dashboardCopyIcon from '../../assets/generated/ui-icons/dashboard-copy-gen.png'
+import dashboardTrashIcon from '../../assets/generated/ui-icons/dashboard-trash-gen.png'
+import dashboardRestoreIcon from '../../assets/generated/ui-icons/dashboard-restore-gen.png'
+import dashboardPurgeIcon from '../../assets/generated/ui-icons/dashboard-purge-gen.png'
+import emptyStoreArt from '../../assets/ui/dashboard/empty-store.png'
+import emptyTasksArt from '../../assets/ui/dashboard/empty-tasks.png'
+import emptyAnalyticsArt from '../../assets/ui/dashboard/empty-analytics.png'
 import type { SalesMetrics, SalesMetricsPlanView } from '@shared/contracts/sales-metrics'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import { isInvoiceCollectTask } from '@shared/constants/invoice'
 
 type LoadState = 'loading' | 'ready' | 'empty' | 'error'
 type PeriodKey = 'today' | 'yesterday' | '7d' | '30d' | 'custom'
@@ -421,14 +455,14 @@ const emit = defineEmits<{
 const ws = useWorkspaceStore()
 const agent = useAgentStore()
 const navItems = [
-  { label: '经营总览', glyph: '⌂' },
-  { label: '商品管理', glyph: '◈' },
+  { label: '经营总览', glyph: '⌂', icon: homeIcon },
+  { label: '商品管理', glyph: '◈', icon: productsIcon },
   // 订单管理不在侧栏（设计稿只有 经营总览/商品管理/店铺管理 三项）：
   // 页面本身保留，入口是命令面板（Ctrl+K → 最近订单）与「数据分析 → 订单明细」。
-  { label: '店铺管理', glyph: '▣' },
-  { label: 'AI 创作', glyph: '✦' },
-  { label: '数据分析', glyph: '◫' },
-  { label: '应用中心', glyph: '⊞' }
+  { label: '店铺管理', glyph: '▣', icon: storeIcon },
+  { label: 'AI 创作', glyph: '✦', icon: aiIcon },
+  { label: '数据分析', glyph: '◫', icon: analyticsIcon },
+  { label: '应用中心', glyph: '⊞', icon: appsIcon }
 ]
 const activeNav = ref('经营总览')
 /** 侧栏导航分组（设计稿：主功能区三项 + 「智能运营」三项；设置单独落在左下角） */
@@ -437,7 +471,7 @@ const navGroups = computed(() => [
   { key: 'smart', title: '智能运营', items: navItems.filter(item => ['AI 创作', '数据分析', '应用中心'].includes(item.label)) }
 ])
 /** 左下角「设置」入口（设计稿放在侧栏底部，不在主分组里；仍用 .dashboard-nav-item 语义保证高亮与跳转一致） */
-const settingsNav = { label: '设置中心', glyph: '⚙' }
+const settingsNav = { label: '设置中心', glyph: '⚙', icon: settingsIcon }
 /** 顶栏面包屑右侧的当前页名（与导航标签同源，不另造一套文案） */
 const PAGE_TITLES: Record<string, string> = {
   overview: '经营总览', browser: '店铺工作台', products: '商品管理', orders: '订单管理', stores: '店铺管理',
@@ -501,14 +535,15 @@ const periodOptions: Array<{ key: PeriodKey; label: string }> = [
   { key: '30d', label: '近 30 天' }, { key: 'custom', label: '自定义日期' }
 ]
 const quickActions = [
-  { key: 'image', label: 'AI 生成商品图', description: '一键生成专业商品图', icon: '▣', tone: 'purple', available: true, actionLabel: '立即创作' },
-  { key: 'publish', label: '批量发布商品', description: '高效上架多平台商品', icon: '▤', tone: 'blue', available: false, actionLabel: '待接入' },
-  { key: 'dedupe', label: '短视频去重', description: '检测相似视频内容', icon: '▶', tone: 'teal', available: false, actionLabel: '待接入' },
-  { key: 'interference', label: '影像级干扰', description: '智能处理商品图片', icon: '▧', tone: 'rose', available: false, actionLabel: '待接入' }
+  { key: 'image', label: 'AI 生成商品图', description: '一键生成专业商品图', icon: aiIcon, tone: 'purple', available: true, actionLabel: '立即创作' },
+  { key: 'publish', label: '批量发布商品', description: '高效上架多平台商品', icon: ordersIcon, tone: 'blue', available: false, actionLabel: '待接入' },
+  { key: 'dedupe', label: '短视频去重', description: '检测相似视频内容', icon: tasksIcon, tone: 'teal', available: false, actionLabel: '待接入' },
+  { key: 'interference', label: '影像级干扰', description: '智能处理商品图片', icon: invoicesIcon, tone: 'rose', available: false, actionLabel: '待接入' }
 ]
 
 const platformOptions = computed(() => [...new Set(snapshots.value.map(item => item.platform))].sort((a, b) => a.localeCompare(b, 'zh-CN')))
-const activeTaskCount = computed(() => ws.tasks.filter((task: any) => task.latestRun && isTaskActive(task)).length)
+/** 工具栏任务红点：发票采集是后台刷新、不计入任务，所以也不点亮红点 */
+const activeTaskCount = computed(() => ws.tasks.filter((task: any) => task.latestRun && isTaskActive(task) && !isInvoiceCollectTask(task)).length)
 const otherStoreOptions = computed(() => ws.stores.filter(store => store.id !== storeContext.store?.id))
 const canOpenStandalone = computed(() => !!storeContext.store && ws.displayedStoreId === storeContext.store.id && !!ws.activeTab)
 
@@ -537,7 +572,7 @@ function metricAggregate(metric: string, platform = 'all') {
 //   · 只在**同一口径**（periodType）内相加：今日累计 / 近 7 天滚动 / 近 30 天滚动不能混加；
 //   · 采集数据缺失时才回落到任务快照，并在卡片上标明来源（数字必须能说清"从哪来、什么时候"）；
 //   · 订单数取 paidOrderCount（平台页面上的"成交订单"），无值时如实显示"该口径未提供"。
-type CollectedPeriodType = 'TODAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS'
+type CollectedPeriodType = 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS'
 const PERIOD_TO_TYPE: Record<PeriodKey, CollectedPeriodType> = { today: 'TODAY', yesterday: 'YESTERDAY', '7d': 'LAST_7_DAYS', '30d': 'LAST_30_DAYS', custom: 'LAST_30_DAYS' }
 const PERIOD_CAPTION: Record<PeriodKey, string> = { today: '今日累计', yesterday: '昨日', '7d': '近 7 天滚动', '30d': '近 30 天滚动', custom: '近 30 天滚动' }
 
@@ -850,30 +885,35 @@ const platformOnlineSummary = computed(() => {
 /**
  * 待办任务（设计稿右栏第三张卡）：只列**需要人工处理**的任务，以及发票中心已采到
  * 待开票记录的店铺。排队中/进行中的自动任务不会占用待办名额。
+ * **发票自动采集任务不算待办**（用户口径：发票采集不计入任务）——它是每 3 小时一次的后台刷新，
+ * 采集失败时该去发票中心看，不该在这里显示成「较紧急」。
  */
-const pendingTasks = computed(() => ws.tasks
-  .map((task: any) => {
-    const run = task.latestRun
-    const status = run?.id ? (ws.runLive[run.id]?.status || run.status) : run?.status
-    return { id: task.id as string, name: String(task.name || '未命名任务'), status: String(status || ''), kind: 'task' as const }
-  })
-  .filter(item => ['waiting_confirmation', 'failed', 'paused'].includes(item.status))
-  .map(item => ({
-    id: item.id,
-    name: item.name,
-    badge: item.status === 'waiting_confirmation' ? '待确认' : item.status === 'failed' ? '较紧急' : item.status === 'paused' ? '已暂停' : '进行中',
-    tone: ['waiting_confirmation', 'failed'].includes(item.status) ? 'urgent' : 'info',
-    kind: item.kind
-  }))
-  .concat(invoiceTodoRows.value.map(row => ({
+type PendingTaskItem = { id: string; name: string; badge: string; tone: string; kind: 'task' | 'invoice' }
+const pendingTasks = computed((): PendingTaskItem[] => {
+  const taskItems: PendingTaskItem[] = ws.tasks
+    .filter((task: any) => !isInvoiceCollectTask(task))
+    .map((task: any) => {
+      const run = task.latestRun
+      const status = run?.id ? (ws.runLive[run.id]?.status || run.status) : run?.status
+      return { id: task.id as string, name: String(task.name || '未命名任务'), status: String(status || ''), kind: 'task' as const }
+    })
+    .filter(item => ['waiting_confirmation', 'failed', 'paused'].includes(item.status))
+    .map(item => ({
+      id: item.id,
+      name: item.name,
+      badge: item.status === 'waiting_confirmation' ? '待确认' : item.status === 'failed' ? '较紧急' : item.status === 'paused' ? '已暂停' : '进行中',
+      tone: ['waiting_confirmation', 'failed'].includes(item.status) ? 'urgent' : 'info',
+      kind: item.kind
+    }))
+  const invoiceItems: PendingTaskItem[] = invoiceTodoRows.value.map(row => ({
     id: `invoice:${row.storeId}`,
     name: `${row.storeName} · 待开发票`,
     badge: `${row.count} 条`,
-    tone: 'urgent' as const,
-    kind: 'invoice' as const
-  })))
-  .slice(0, 3)
-)
+    tone: 'urgent',
+    kind: 'invoice'
+  }))
+  return [...taskItems, ...invoiceItems].slice(0, 3)
+})
 
 const platformSyncRows = computed(() => {
   const names = [...new Set([...((window.shopilot.platforms || []).map(platform => platform.name)), ...ws.stores.map(store => store.platform)])]
@@ -1088,7 +1128,6 @@ function navigateTo(page: DashboardPage) {
   else if (page === 'analytics' || page === 'invoices') activeNav.value = '数据分析'
   else if (page === 'apps') activeNav.value = '应用中心'
   else if (page === 'image-studio') activeNav.value = 'AI 创作'
-  else if (page === 'settings') activeNav.value = '设置中心'
 }
 function openTasks(create = false) {
   if (create && activePage.value === 'browser' && ws.displayedStoreId) {
@@ -1242,7 +1281,6 @@ async function syncStoreContextOcclusion() {
   const overlap = !(m.right <= v.left || m.left >= v.right || m.bottom <= v.top || m.top >= v.bottom)
   await window.shopilot.browser.setViewsObscured(overlap)
 }
-function goOverview() { navigateTo('overview') }
 function openAgentSettings() { settingsTab.value = 'agents'; navigateTo('settings') }
 function openImageSettings() { settingsTab.value = 'ai'; navigateTo('settings') }
 /**
@@ -1266,12 +1304,12 @@ function openCommandPalette() { commandOpen.value = true; nextTick(() => command
 const commandResults = computed(() => {
   const query = globalQuery.value.trim().toLowerCase()
   const results = [
-    { key: 'home', icon: '⌂', label: '经营总览', description: '回到经营总览', action: () => navigateTo('overview') },
-    { key: 'orders', icon: '▤', label: '最近订单', description: '打开订单管理页面', action: () => navigateTo('orders') },
-    { key: 'trend', icon: '◫', label: '销售趋势', description: '打开数据分析页面', action: () => navigateTo('analytics') },
-    { key: 'tasks', icon: '◎', label: 'AI 任务中心', description: '查看真实任务运行状态', action: () => navigateTo('tasks') },
-    { key: 'settings', icon: '⚙', label: '设置中心', description: '打开统一设置页面', action: () => navigateTo('settings') },
-    ...ws.stores.map(store => ({ key: `store-${store.id}`, icon: '▣', label: store.name, description: `${store.platform} · 打开店铺浏览器`, action: () => openStoreFromPage(store.id) }))
+    { key: 'home', icon: homeIcon, label: '经营总览', description: '回到经营总览', action: () => navigateTo('overview') },
+    { key: 'orders', icon: ordersIcon, label: '最近订单', description: '打开订单管理页面', action: () => navigateTo('orders') },
+    { key: 'trend', icon: analyticsIcon, label: '销售趋势', description: '打开数据分析页面', action: () => navigateTo('analytics') },
+    { key: 'tasks', icon: tasksIcon, label: 'AI 任务中心', description: '查看真实任务运行状态', action: () => navigateTo('tasks') },
+    { key: 'settings', icon: settingsIcon, label: '设置中心', description: '打开统一设置页面', action: () => navigateTo('settings') },
+    ...ws.stores.map(store => ({ key: `store-${store.id}`, icon: storeIcon, label: store.name, description: `${store.platform} · 打开店铺浏览器`, action: () => openStoreFromPage(store.id) }))
   ]
   return query ? results.filter(item => `${item.label} ${item.description}`.toLowerCase().includes(query)).slice(0, 8) : results.slice(0, 6)
 })
@@ -1365,13 +1403,20 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
   --dash-border-strong: #dbe2ee;
   --dash-text: #0f1729;
   --dash-text-soft: #4a5568;
-  --dash-text-muted: #98a2b3;
+  /* muted 灰原为 #98a2b3：在白底上只有 2.58:1、在浅灰卡底上 2.2:1，用户实报「字体颜色看不清」。
+     2026-10-02 全应用巡检（641 个文字节点）后统一提到 AA 之上——这是浅色主题里用量最大的一个 token。 */
+  --dash-text-muted: #5b6472;
   --dash-purple: #7c5cff;
   --dash-blue: #2e90fa;
   --dash-cyan: #06aed4;
   --dash-green: #12b76a;
   --dash-orange: #f79009;
   --dash-red: #f04438;
+  /* 文字专用的深色变体：上面几个是**装饰色**（点/条/边框），当文字色用时对比度不够
+     （红 3.76:1、紫 4.35:1、青 2.22:1），所以文字一律走这三个，装饰仍用原色。 */
+  --dash-red-text: #d92d20;
+  --dash-purple-text: #5b3df5;
+  --dash-cyan-text: #0e7490;
   --dash-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 10px 28px rgba(16, 24, 40, .06);
   display: flex;
   width: 100%;
@@ -1405,11 +1450,11 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 }
 .dashboard-shell.picker-mode .dashboard-sidebar { width: 0; min-width: 0; overflow: hidden; border-right: 0; }
 .dashboard-sidebar.collapsed { width: 60px; min-width: 60px; }
-.sidebar-collapse { margin-left: auto; width: 24px; height: 24px; flex: 0 0 auto; border: 0; border-radius: 6px; background: transparent; color: var(--side-text-muted); cursor: pointer; font-size: 15px; line-height: 1; }
+.sidebar-collapse { display:grid;place-items:center;margin-left: auto; width: 24px; height: 24px; flex: 0 0 auto; border: 0; border-radius: 6px; background: transparent; color: var(--side-text-muted); cursor: pointer; line-height: 1; }.sidebar-collapse img { width:15px;height:15px;object-fit:contain; }
 .sidebar-collapse:hover, .sidebar-collapse:focus-visible { background: var(--side-surface); color: #fff; outline: none; }
 .sidebar-rail { display: flex; height: 100%; flex-direction: column; align-items: center; gap: 6px; padding: 14px 0 12px; -webkit-app-region: drag; }
 .sidebar-rail .rail-btn { position: relative; display: inline-flex; width: 34px; height: 34px; align-items: center; justify-content: center; border: 0; border-radius: 9px; background: transparent; color: var(--side-text-soft); cursor: pointer; font-size: 16px; -webkit-app-region: no-drag; }
-.sidebar-rail .rail-btn:hover, .sidebar-rail .rail-btn:focus-visible { background: var(--side-surface); color: #fff; outline: none; }
+.sidebar-rail .rail-btn:hover, .sidebar-rail .rail-btn:focus-visible { background: var(--side-surface); color: #fff; outline: none; }.sidebar-rail .rail-btn img { width: 18px; height: 18px; object-fit: contain; }
 .sidebar-rail .rail-btn:first-child { margin-bottom: 4px; font-size: 19px; }
 .rail-badge { position: absolute; top: 5px; right: 4px; width: 7px; height: 7px; border: 1px solid var(--side-bg); border-radius: 50%; background: #fb5470; }
 .dashboard-brand { height: 74px; display: flex; align-items: center; gap: 11px; padding: 16px 16px 10px; }
@@ -1418,7 +1463,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
   border-radius: 12px; background: var(--brand-gradient); box-shadow: 0 8px 18px rgba(124, 92, 255, .42);
   color: #fff; font-size: 19px; font-weight: 800;
 }
-.dashboard-brand-mark svg { width: 22px; height: 22px; }
+.dashboard-brand-mark img { width: 32px; height: 32px; object-fit: contain; }
 .dashboard-brand-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .dashboard-brand-copy strong { color: #fff; font-size: 16px; letter-spacing: -.02em; }
 .dashboard-brand-copy span { color: var(--side-text-muted); font-size: 10.5px; white-space: nowrap; }
@@ -1431,7 +1476,8 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 }
 .dashboard-nav-item:hover, .dashboard-nav-item:focus-visible { background: var(--side-surface); color: #fff; outline: none; }
 .dashboard-nav-item.active { background: var(--brand-gradient); color: #fff; box-shadow: 0 10px 22px rgba(124, 92, 255, .38); }
-.nav-glyph { width: 20px; flex: 0 0 20px; color: currentColor; font-size: 16px; line-height: 1; text-align: center; opacity: .95; }
+.nav-glyph { display: inline-flex; width: 20px; height: 20px; flex: 0 0 20px; align-items: center; justify-content: center; color: currentColor; font-size: 16px; line-height: 1; text-align: center; opacity: .95; overflow: hidden; border-radius: 6px; }
+.nav-glyph img { display: block; width: 20px; height: 20px; object-fit: contain; }
 .nav-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dashboard-store-area { min-height: 0; flex: 1; display: flex; flex-direction: column; border-top: 1px solid var(--side-border); margin-top: 4px; padding: 12px 12px 0; }
 .store-area-title { display: flex; align-items: center; gap: 7px; padding: 2px 4px 10px; color: #cfd7e6; font-size: 12px; font-weight: 600; }
@@ -1439,7 +1485,8 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .add-store-button { margin-left: auto; width: 24px; height: 24px; flex: 0 0 auto; border: 0; border-radius: 7px; background: rgba(124, 92, 255, .22); color: #c3b2ff; font-size: 16px; line-height: 1; cursor: pointer; }
 .add-store-button:hover, .add-store-button:focus-visible { background: rgba(124, 92, 255, .34); color: #fff; outline: none; }
 .store-area-body { min-height: 0; flex: 1; display: flex; flex-direction: column; }
-.sidebar-state { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 22px 8px; color: var(--side-text-muted); font-size: 11.5px; text-align: center; }
+.sidebar-state { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 16px 8px; color: var(--side-text-muted); font-size: 11.5px; text-align: center; }
+.sidebar-state-art { display: block; width: 74px; height: 58px; object-fit: cover; border-radius: 10px; opacity: .9; }
 .inline-link { border: 0; background: transparent; color: #b9a6ff; cursor: pointer; font-size: 11.5px; }
 .inline-link:hover { text-decoration: underline; }
 .store-groups { min-height: 0; overflow-y: auto; padding: 0 0 10px; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .16) transparent; }
@@ -1467,7 +1514,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .pro-copy { display: flex; min-width: 0; flex: 1; align-items: center; gap: 6px; }
 .pro-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 12.5px; }
 .pro-badge { padding: 2px 6px; border-radius: 6px; background: #f5c451; color: #3a2c0c; font-size: 10px; font-weight: 600; }
-.pro-arrow { color: var(--side-text-muted); font-size: 16px; }
+.pro-arrow img { width:14px;height:14px;object-fit:contain; }.pro-arrow { color: var(--side-text-muted); font-size: 16px; }
 .foot-btn { display: flex; width: 100%; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: var(--side-text-soft); cursor: pointer; font-size: 12.5px; text-align: left; }
 .foot-btn:hover, .foot-btn:focus-visible { background: var(--side-surface); color: #fff; outline: none; }
 .foot-btn.foot-settings.active { background: rgba(124, 92, 255, .24); color: #cbbcff; }
@@ -1475,7 +1522,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .foot-row { display: flex; align-items: center; gap: 6px; }
 .foot-row .foot-settings { flex: 1; min-width: 0; }
 .foot-icon { position: relative; width: 36px; flex: 0 0 36px; justify-content: center; padding: 0; font-size: 13px; }
-.foot-icon .badge { position: absolute; top: 3px; right: 1px; min-width: 14px; margin: 0; padding: 0 4px; font-size: 9.5px; }
+.foot-icon img { width: 17px; height: 17px; object-fit: contain; }.foot-icon .badge { position: absolute; top: 3px; right: 1px; min-width: 14px; margin: 0; padding: 0 4px; font-size: 9.5px; }
 .storage-status.connected { color: #38d39f; }
 
 /* ---------------- 主区域 + 顶栏 ---------------- */
@@ -1494,13 +1541,17 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
   -webkit-app-region: drag;
 }
 .toolbar-crumb { display: flex; align-items: center; gap: 8px; color: var(--dash-text-muted); font-size: 13px; }
+/* 面包屑根节点原本继承 toolbar-crumb 的 muted 灰（#98a2b3 → 白底 2.58:1，实测看不清）。
+   2026-10-02 用户实报"字体颜色看不清楚"后统一提到 AA 之上。 */
+.crumb-root { color: var(--dash-text-soft); }
 .crumb-current { color: var(--dash-text); font-weight: 600; }
-.crumb-sep { color: #cbd5e1; }
+/* 分隔符是纯装饰（aria-hidden），但太浅会在浅底上看不见；给到 AA 之上最省事 */
+.crumb-sep { color: #64748b; }
 .toolbar-actions { display: flex; min-width: 0; align-items: center; gap: 10px; margin-left: auto; -webkit-app-region: no-drag; }
 .toolbar-datetime { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border: 1px solid var(--dash-border); border-radius: 11px; background: #fff; color: var(--dash-text-soft); font-size: 12.5px; }
-.dt-icon { color: var(--dash-text-muted); font-size: 13px; }
-.dt-caret { margin-left: 1px; color: var(--dash-text-muted); font-size: 12px; }
-.toolbar-icon-button { position: relative; width: 34px; height: 34px; border: 0; border-radius: 10px; background: transparent; color: var(--dash-text-soft); font-size: 16px; cursor: pointer; }
+.dt-icon { width: 18px; height: 18px; object-fit: contain; }
+.dt-caret { width:13px;height:13px;margin-left: 2px;object-fit:contain; }
+.toolbar-icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: 0; border-radius: 10px; background: transparent; color: var(--dash-text-soft); font-size: 16px; cursor: pointer; }.toolbar-icon-button img { width: 20px; height: 20px; object-fit: contain; }
 .toolbar-icon-button:hover, .toolbar-icon-button:focus-visible { background: #f2f4f8; color: var(--dash-text); outline: none; }
 .notification-dot { position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border: 1.5px solid #fff; border-radius: 50%; background: #fb5470; }
 .toolbar-avatar { display: inline-flex; width: 34px; height: 34px; align-items: center; justify-content: center; border-radius: 50%; background: var(--brand-gradient); color: #fff; font-size: 11px; font-weight: 800; }
@@ -1514,7 +1565,9 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .ov-refresh:hover:not(:disabled), .ov-refresh:focus-visible { filter: brightness(1.05); outline: none; }
 .ov-refresh:disabled { cursor: wait; opacity: .72; }
 .dashboard-error { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; padding: 10px 13px; border: 1px solid rgba(240, 68, 56, .28); border-radius: 12px; background: #fef3f2; color: #b42318; font-size: 12px; }
-.dashboard-error .state-icon { display: inline-flex; width: 18px; height: 18px; align-items: center; justify-content: center; border-radius: 50%; background: var(--dash-red); color: #fff; font-weight: 700; }
+.dashboard-error .state-icon { display: inline-flex; width: 22px; height: 22px; object-fit: contain; }
+.refresh-icon { width: 17px; height: 17px; object-fit: contain; }
+.btn-new img { width: 18px; height: 18px; object-fit: contain; }.store-action img { width: 16px; height: 16px; object-fit: contain; }.ai-heading-icon { width: 22px; height: 22px; object-fit: contain; vertical-align: -5px; }.command-search-icon { width: 20px; height: 20px; object-fit: contain; }
 .dashboard-error button, .error-state button { margin-left: auto; border: 0; background: transparent; color: #b42318; text-decoration: underline; cursor: pointer; }
 
 .ov-grid { display: grid; grid-template-columns: minmax(0, 1fr) 336px; gap: 16px; align-items: start; }
@@ -1544,9 +1597,9 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .kpi-label { color: var(--dash-text-muted); font-size: 12px; }
 .kpi-value { overflow: hidden; color: var(--dash-text); font-size: 25px; font-weight: 750; letter-spacing: -.03em; text-overflow: ellipsis; white-space: nowrap; }
 .kpi-value.placeholder { color: var(--dash-text-muted); font-weight: 500; }
-.kpi-delta { font-size: 11.5px; font-weight: 600; }
+.delta-icon { width:13px;height:13px;vertical-align:-2px;object-fit:contain; }.kpi-delta { font-size: 11.5px; font-weight: 600; }
 .kpi-delta.up { color: var(--dash-green); }
-.kpi-delta.down { color: var(--dash-red); }
+.kpi-delta.down { color: var(--dash-red-text); }
 .kpi-delta.muted { color: var(--dash-text-muted); font-weight: 400; }
 
 .trend-chart-wrap { position: relative; margin-top: 8px; }
@@ -1621,9 +1674,12 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .section-state strong { color: var(--dash-text-soft); font-size: 12.5px; font-weight: 600; }
 .chart-state { height: 268px; }
 .empty-chart-icon { display: inline-flex; width: 36px; height: 36px; align-items: center; justify-content: center; border: 1px solid var(--dash-border); border-radius: 11px; color: var(--dash-text-muted); font-size: 20px; }
+.dashboard-state-art { display: block; width: 86px; height: 64px; object-fit: cover; border-radius: 12px; opacity: .88; }
+.analytics-state-art { width: 112px; height: 78px; }
+.compact-state-art { width: 62px; height: 48px; }
 .loader { width: 16px; height: 16px; border: 2px solid #e3e8f1; border-top-color: var(--dash-purple); border-radius: 50%; animation: dashboard-spin .8s linear infinite; }
 @keyframes dashboard-spin { to { transform: rotate(360deg); } }
-.error-state { color: var(--dash-red); }
+.error-state { color: var(--dash-red-text); }
 
 .shortcut-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 /* 设计稿排版：图标在左、标题/副标题在右，按钮在文字下方（不是图标下方） */
@@ -1633,14 +1689,14 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .shortcut-tile.tone-teal { background: #eefaf7; border-color: #dcf3ee; }
 .shortcut-tile.tone-rose { background: #fff3f4; border-color: #ffe4e8; }
 .shortcut-tile.disabled { opacity: .96; }
-.tile-icon { grid-row: 1; grid-column: 1; display: inline-flex; width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 13px; background: var(--brand-gradient); color: #fff; font-size: 19px; }
+.tile-icon img { width: 23px; height: 23px; object-fit: contain; }.tile-icon { grid-row: 1; grid-column: 1; display: inline-flex; width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 13px; background: var(--brand-gradient); color: #fff; font-size: 19px; }
 .shortcut-tile.tone-blue .tile-icon { background: linear-gradient(135deg, #3f9bff, #1f6fea); }
 .shortcut-tile.tone-teal .tile-icon { background: linear-gradient(135deg, #21c8a8, #0e9f8c); }
 .shortcut-tile.tone-rose .tile-icon { background: linear-gradient(135deg, #ff8a8a, #ef4a5f); }
 .tile-copy { grid-row: 1; grid-column: 2; display: flex; min-width: 0; flex-direction: column; gap: 5px; }
 .tile-copy strong { overflow: hidden; color: var(--dash-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .tile-copy small { overflow: hidden; color: var(--dash-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.tile-action { grid-row: 2; grid-column: 2; align-self: start; justify-self: start; min-height: 34px; padding: 0 15px; border: 0; border-radius: 10px; background: var(--brand-gradient); color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }
+.inline-action-icon { width:14px;height:14px;object-fit:contain;vertical-align:-2px; }.tile-action { grid-row: 2; grid-column: 2; align-self: start; justify-self: start; min-height: 34px; padding: 0 15px; border: 0; border-radius: 10px; background: var(--brand-gradient); color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }
 .tile-action:hover:not(:disabled), .tile-action:focus-visible { filter: brightness(1.05); outline: none; }
 .tile-action:disabled { background: #eef1f7; color: var(--dash-text-muted); cursor: not-allowed; font-weight: 500; }
 
@@ -1649,7 +1705,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .ov-pill.success { background: #ecfdf3; color: #027a48; }
 .ov-pill.info { background: #eef2f7; color: #475467; }
 .ov-empty { padding: 16px 2px; color: var(--dash-text-muted); font-size: 12px; text-align: center; }
-.ov-link { display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin-top: 10px; padding-top: 12px; width: 100%; border: 0; border-top: 1px solid #f2f4f8; background: transparent; color: var(--dash-purple); cursor: pointer; font-size: 12.5px; font-weight: 600; }
+.ov-link img { width:14px;height:14px;object-fit:contain; }.ov-link { display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin-top: 10px; padding-top: 12px; width: 100%; border: 0; border-top: 1px solid #f2f4f8; background: transparent; color: var(--dash-purple-text); cursor: pointer; font-size: 12.5px; font-weight: 600; }
 .ov-link.inline { width: auto; margin: 0; padding: 0; border: 0; font-size: 12px; }
 .ov-link:hover, .ov-link:focus-visible { color: #5b3df5; outline: none; }
 .sync-row { display: flex; align-items: center; gap: 11px; padding: 11px 0; border-bottom: 1px solid #f4f6fa; }
@@ -1659,7 +1715,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .sync-copy span { color: var(--dash-text-muted); font-size: 11.5px; }
 .sync-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
 .sync-meta strong { display: inline-flex; align-items: center; gap: 5px; color: var(--dash-green); font-size: 12px; }
-.sync-meta:has(.sync-dot.offline) strong { color: var(--dash-red); }
+.sync-meta:has(.sync-dot.offline) strong { color: var(--dash-red-text); }
 .sync-meta:has(.sync-dot.login) strong { color: var(--dash-orange); }
 .sync-meta small { color: var(--dash-text-muted); font-size: 11px; white-space: nowrap; }
 .sync-dot { display: none; }
@@ -1668,7 +1724,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .ov-ai-copy { position: relative; display: flex; flex-direction: column; gap: 8px; }
 .ov-ai-copy h2 { display: flex; align-items: center; gap: 8px; color: #fff; font-size: 16px; }
 .ov-ai-copy p { color: rgba(255, 255, 255, .76); font-size: 12px; }
-.ov-ai-button { display: inline-flex; align-self: flex-start; align-items: center; gap: 8px; margin-top: 4px; height: 36px; padding: 0 16px; border: 0; border-radius: 11px; background: #fff; color: #3a2a92; cursor: pointer; font-size: 12.5px; font-weight: 700; }
+.ov-ai-button .inline-action-icon { width:14px;height:14px;object-fit:contain; }.ov-ai-button { display: inline-flex; align-self: flex-start; align-items: center; gap: 8px; margin-top: 4px; height: 36px; padding: 0 16px; border: 0; border-radius: 11px; background: #fff; color: #3a2a92; cursor: pointer; font-size: 12.5px; font-weight: 700; }
 .ov-ai-button:hover, .ov-ai-button:focus-visible { background: #f3efff; outline: none; }
 .todo-list { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 0; padding: 0; list-style: none; }
 .todo-item { display: flex; align-items: center; gap: 10px; padding: 9px 2px; }
@@ -1684,7 +1740,8 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 
 /* ---------------- 弹窗 / 菜单 / 提示 ---------------- */
 .dashboard-context-menu { position: fixed; z-index: 220; width: 252px; padding: 6px; border: 1px solid var(--dash-border-strong); border-radius: 14px; background: #fff; box-shadow: var(--shadow-pop); }
-.ctx-item { display: block; width: 100%; min-height: 31px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--dash-text-soft); text-align: left; cursor: pointer; font-size: 12px; }
+.ctx-item { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 31px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--dash-text-soft); text-align: left; cursor: pointer; font-size: 12px; }
+.ctx-item img { width: 15px; height: 15px; flex: 0 0 15px; object-fit: contain; }
 .ctx-item:hover, .ctx-item:focus-visible { background: #f2f4f8; color: var(--dash-text); outline: none; }
 .ctx-item:disabled { cursor: not-allowed; opacity: .45; }
 .ctx-item.danger:hover { background: #fef3f2; color: #b42318; }
@@ -1732,7 +1789,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .command-results { display: flex; max-height: 330px; flex-direction: column; overflow-y: auto; padding: 7px; }
 .command-results button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: 10px; background: transparent; text-align: left; cursor: pointer; }
 .command-results button:hover, .command-results button:focus-visible { background: #f2f4f8; outline: none; }
-.command-result-icon { display: flex; width: 28px; height: 28px; align-items: center; justify-content: center; border-radius: 8px; background: var(--brand-soft); color: var(--dash-purple); }
+.command-result-icon img { width: 16px; height: 16px; object-fit: contain; }.toolbar-action-icon { width: 17px; height: 17px; object-fit: contain; }.command-result-icon { display: flex; width: 28px; height: 28px; align-items: center; justify-content: center; border-radius: 8px; background: var(--brand-soft); color: var(--dash-purple); }
 .command-results button span:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 2px; }
 .command-results strong { color: var(--dash-text); font-size: 12px; }
 .command-results small { color: var(--dash-text-muted); font-size: 11px; }
