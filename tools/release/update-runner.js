@@ -175,13 +175,16 @@ async function main() {
 
     // 2. 更新界面可打开（已搬进「设置 → 关于软件」）、通道默认 stable
     const ui = await c.ev(`
-      const settings = [...document.querySelectorAll('.dashboard-nav-item')].find(el => (el.textContent || '').includes('设置中心'))
+      // 侧栏设置入口的标签是「设置」（0.4.5x 起不再叫「设置中心」，旧选择器在这里静默失效，
+      // 表现为本套件 UI 三项全红而 IPC 链路全绿——2026-10-04 发版时按当前 DOM 对齐）
+      const settings = [...document.querySelectorAll('.dashboard-nav-item')].find(el => (el.textContent || '').includes('设置'))
       if (settings) settings.click()
       await new Promise(r => setTimeout(r, 500))
       const about = [...document.querySelectorAll('.settings-nav button')].find(el => (el.textContent || '').includes('关于软件'))
       if (about) about.click()
       await new Promise(r => setTimeout(r, 600))
-      const dlg = document.querySelector('[data-test="unified-settings-about"] [data-test="update-dialog"]')
+      // 「关于软件」面板的 data-test 同时提供了新名与 data-unified-test 旧名，两个都认
+      const dlg = document.querySelector('[data-test="settings-about"] [data-test="update-dialog"], [data-unified-test="unified-settings-about"] [data-test="update-dialog"]')
       return { open: !!dlg, channel: document.querySelector('[data-test="update-channel"]')?.value, autocheck: document.querySelector('[data-test="update-autocheck"]')?.checked, message: document.querySelector('[data-test="update-message"]')?.textContent?.trim() }`)
     record('更新界面可打开且含通道选择', ui.open && ui.channel === 'stable' && ui.autocheck === false, ui)
 
