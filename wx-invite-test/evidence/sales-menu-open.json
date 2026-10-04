@@ -1,0 +1,248 @@
+{
+ "dtCls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text weui-desktop-form__dropdown__dt__active placeholder",
+ "menuStyle": "",
+ "menuCount": 1,
+ "items": [
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "不限"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "不限"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "不限"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥1万以下"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥1万以下"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥1万以下"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥1万-5万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥1万-5万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥1万-5万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥5万-10万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥5万-10万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥5万-10万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥10万-20万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥10万-20万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥10万-20万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥20万-30万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥20万-30万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥20万-30万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥30万-40万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥30万-40万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥30万-40万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥40万-50万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥40万-50万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥40万-50万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥50万-100万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥50万-100万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥50万-100万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥100万-200万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥100万-200万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥100万-200万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥200万-300万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥200万-300万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥200万-300万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥300万-400万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥300万-400万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥300万-400万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥400万-500万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥400万-500万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥400万-500万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥500万-700万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥500万-700万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥500万-700万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥700万-1000万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥700万-1000万"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥700万-1000万"
+  },
+  {
+   "tag": "DIV",
+   "cls": "talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] t",
+   "t": "￥1000万以上"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "weui-desktop-form__check-content",
+   "t": "￥1000万以上"
+  },
+  {
+   "tag": "SPAN",
+   "cls": "",
+   "t": "￥1000万以上"
+  }
+ ],
+ "html": "<div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if--><!--[--><!--[--><div class=\"py-[8px]\" data-v-8b27f77a=\"\"><div data-v-8b27f77a=\"\"><!--[--><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"0\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>不限</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"1\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥1万以下</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"2\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥1万-5万</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"3\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥5万-10万</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"4\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥10万-20万</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"5\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥20万-30万</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var("
+}

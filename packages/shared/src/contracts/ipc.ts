@@ -57,6 +57,11 @@ export const IPC_CHANNELS = {
   BROWSER_TAB_LIST: 'browser:tab:list',
   BROWSER_NAVIGATE: 'browser:navigate',
   BROWSER_PREPARE_INVITE_SQUARE: 'browser:prepareInviteSquare',
+  /**
+   * 邀约台账：近 N 天已邀过的达人昵称（默认 7 天）。
+   * 面板「开始邀约」时取它 → 交给任务，点「详情」时跳过这些行（7 天内不重复邀约）。
+   */
+  INVITE_RECENT_HISTORY: 'invite:recentHistory',
   BROWSER_TAB_CONTROL: 'browser:tab:control',   // 前进/后退/重载（地址栏）
   BROWSER_CLEAR_DATA: 'browser:clearData',
   BROWSER_CAPTURE: 'browser:capture',
@@ -319,7 +324,11 @@ export const IPC_CHANNELS = {
   AI_IMAGE_TEXT_MODELS_LIST: 'ai:image-text:models:list',
   AI_IMAGE_TEXT_ANALYZE: 'ai:image-text:analyze',
   // 生成图片（主进程持有 API Key，渲染层只提交受限提示词）
-  AI_IMAGE_GENERATE: 'ai:image:generate'
+  AI_IMAGE_GENERATE: 'ai:image:generate',
+  // 保存生成结果到本地磁盘（另存为对话框；带 outputPath 时直接写该路径，供验收脚本使用）
+  AI_IMAGE_SAVE: 'ai:image:save',
+  // 在文件管理器里定位刚保存的图片
+  AI_IMAGE_REVEAL: 'ai:image:reveal'
 } as const
 
 /**

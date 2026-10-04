@@ -64,6 +64,20 @@ export function buildChatRequestHeaders(apiKey: string): Record<string, string> 
   return { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` }
 }
 
+/**
+ * 多模态用户内容：一段文本 + 若干图片（OpenAI 兼容的 `image_url` + data URL）。
+ *
+ * 为什么放在这里：`messages[].content` 的形状属于"请求协议"的一部分，
+ * 各处自己拼数组迟早会拼出不一致的字段名。纯函数、可直接单测。
+ * 调用方负责先做白名单与大小校验（这里只负责形状）。
+ */
+export function buildVisionUserContent(text: string, images: Array<{ mimeType: string; b64Json: string }>): Array<Record<string, unknown>> {
+  return [
+    { type: 'text', text: String(text ?? '') },
+    ...images.map(image => ({ type: 'image_url', image_url: { url: `data:${String(image.mimeType)};base64,${String(image.b64Json)}` } }))
+  ]
+}
+
 /** 最大输出收敛：[min, min(max, MAX_OUTPUT_TOKENS_CEILING)]；非数字按 min 处理（如实少要，不多要） */
 export function clampMaxOutputTokens(value: number, min: number, max = MAX_OUTPUT_TOKENS_CEILING): number {
   const n = Number(value)

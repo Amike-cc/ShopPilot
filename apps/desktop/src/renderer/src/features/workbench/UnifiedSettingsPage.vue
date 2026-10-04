@@ -70,7 +70,7 @@ import pluginsIcon from '../../assets/icons/settings-plugins.svg'
 import aboutIcon from '../../assets/icons/settings-about.svg'
 import brandMark from '../../assets/generated/shopilot-logo-generated.png'
 import { INVITE_PROFILES } from '@shared/constants/invite'
-import { AI_PROVIDER_PRESETS, DEFAULT_AI_ENDPOINT, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, INVITE_SQUARE_URLS_SETTING, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint } from '@shared/constants/ai'
+import { AI_PROVIDER_PRESETS, DEFAULT_AI_ENDPOINT, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL, DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, INVITE_SQUARE_URLS_SETTING, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint } from '@shared/constants/ai'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import settingsSaveIcon from '../../assets/generated/ui-icons/settings-save-gen.png'
 import refreshGenIcon from '../../assets/generated/ui-icons/workspace-refresh-gen.png'
@@ -103,7 +103,7 @@ const aiTesting = ref(false)
 const aiMessage = ref('')
 const aiOk = ref(false)
 const aiModels = ref<string[]>([])
-const imageDraft = reactive({ endpoint: DEFAULT_AI_IMAGE_ENDPOINT, model: DEFAULT_AI_IMAGE_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS })
+const imageDraft = reactive({ endpoint: DEFAULT_AI_IMAGE_ENDPOINT, model: DEFAULT_AI_IMAGE_MODEL, timeoutMs: DEFAULT_AI_IMAGE_TIMEOUT_MS })
 const imageKey = ref('')
 const imageHasKey = ref(false)
 const imageSaving = ref(false)
@@ -112,7 +112,7 @@ const imageTesting = ref(false)
 const imageMessage = ref('')
 const imageOk = ref(false)
 const imageModels = ref<string[]>([])
-const imageTextDraft = reactive({ endpoint: DEFAULT_AI_IMAGE_TEXT_ENDPOINT, model: DEFAULT_AI_IMAGE_TEXT_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS })
+const imageTextDraft = reactive({ endpoint: DEFAULT_AI_IMAGE_TEXT_ENDPOINT, model: DEFAULT_AI_IMAGE_TEXT_MODEL, timeoutMs: DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS })
 const imageTextKey = ref('')
 const imageTextHasKey = ref(false)
 const imageTextSaving = ref(false)
@@ -154,12 +154,12 @@ async function loadAi() {
   aiHasKey.value = result.data.hasKey
   imageDraft.endpoint = result.data.imageEndpoint || DEFAULT_AI_IMAGE_ENDPOINT
   imageDraft.model = result.data.imageModel || DEFAULT_AI_IMAGE_MODEL
-  imageDraft.timeoutMs = result.data.imageTimeoutMs || DEFAULT_AI_TIMEOUT_MS
+  imageDraft.timeoutMs = result.data.imageTimeoutMs || DEFAULT_AI_IMAGE_TIMEOUT_MS
   imageHasKey.value = Boolean(result.data.hasImageKey)
   const imageTextData = imageTextResult.ok ? imageTextResult.data : null
   imageTextDraft.endpoint = imageTextData?.imageTextEndpoint || DEFAULT_AI_IMAGE_TEXT_ENDPOINT
   imageTextDraft.model = imageTextData?.imageTextModel || DEFAULT_AI_IMAGE_TEXT_MODEL
-  imageTextDraft.timeoutMs = imageTextData?.imageTextTimeoutMs || DEFAULT_AI_TIMEOUT_MS
+  imageTextDraft.timeoutMs = imageTextData?.imageTextTimeoutMs || DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS
   imageTextHasKey.value = Boolean(imageTextData?.hasImageTextKey)
   aiProvider.value = '__custom__'
 }
@@ -179,7 +179,7 @@ async function saveAi() {
 
 async function saveImageAi() {
   imageSaving.value = true
-  const result = await window.shopilot.ai.imageConfigSet({ endpoint: imageDraft.endpoint.trim(), model: imageDraft.model.trim(), timeoutMs: Number(imageDraft.timeoutMs) || DEFAULT_AI_TIMEOUT_MS })
+  const result = await window.shopilot.ai.imageConfigSet({ endpoint: imageDraft.endpoint.trim(), model: imageDraft.model.trim(), timeoutMs: Number(imageDraft.timeoutMs) || DEFAULT_AI_IMAGE_TIMEOUT_MS })
   if (!result.ok) { imageSaving.value = false; ws.toast('保存生图 API 配置失败：' + result.error.message, 'error'); return }
   imageHasKey.value = Boolean(result.data.hasImageKey)
   if (imageKey.value.trim()) {
@@ -191,7 +191,7 @@ async function saveImageAi() {
 }
 async function saveImageTextAi() {
   imageTextSaving.value = true
-  const result = await window.shopilot.ai.imageTextConfigSet({ endpoint: imageTextDraft.endpoint.trim(), model: imageTextDraft.model.trim(), timeoutMs: Number(imageTextDraft.timeoutMs) || DEFAULT_AI_TIMEOUT_MS })
+  const result = await window.shopilot.ai.imageTextConfigSet({ endpoint: imageTextDraft.endpoint.trim(), model: imageTextDraft.model.trim(), timeoutMs: Number(imageTextDraft.timeoutMs) || DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS })
   if (!result.ok) { imageTextSaving.value = false; ws.toast('保存生图文本 API 配置失败：' + result.error.message, 'error'); return }
   imageTextHasKey.value = Boolean(result.data.hasImageTextKey)
   if (imageTextKey.value.trim()) {

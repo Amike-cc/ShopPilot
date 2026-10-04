@@ -1,0 +1,48 @@
+{
+ "config": {
+  "category": "",
+  "subcategory": "",
+  "category3": "",
+  "levels": [],
+  "count": 1,
+  "script": "您好，我们是店铺方，想邀请您合作带货：专属高佣 + 免费寄样。",
+  "scriptMode": "ai",
+  "benefits": [],
+  "strengths": [],
+  "mainCategory": "",
+  "extraFilters": {},
+  "batchContact": "",
+  "batchPhone": "",
+  "batchWechat": "",
+  "batchProductCount": 1,
+  "contact": "刘涛",
+  "wechat": "jiaoe988",
+  "phone": "15057937334",
+  "productIds": [
+   "10000687986563"
+  ],
+  "finderType": "全部带货者",
+  "finderCategories": [
+   "母婴"
+  ],
+  "finderSalesTiers": [
+   "不限"
+  ],
+  "finderOtherFilters": [
+   "优质带货者"
+  ]
+ },
+ "configSource": "invite.config.store.<storeId>",
+ "squareUrlOverride": null,
+ "square": {
+  "ok": true,
+  "error": null
+ },
+ "page": {
+  "url": "https://store.weixin.qq.com/shop/findersquare/find",
+  "login": false,
+  "quota": null,
+  "detailLinks": 40,
+  "names": []
+ }
+}

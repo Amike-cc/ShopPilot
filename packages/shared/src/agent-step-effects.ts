@@ -77,13 +77,27 @@ export function isIdempotentStepType(type: unknown): boolean {
 }
 
 /**
- * 允许原地重试的判定（`retryLimit > 0` 且该类型幂等）。
+ * 允许原地重试的判定（`retryLimit > 0` 且该步骤**构造上幂等**）。
  * 主进程落库侧与引擎运行侧**必须都走这一个函数**：
  * 前者挡新数据，后者挡"修复前已落库的旧任务"（那些行里可能已经存着非幂等步骤的 retryLimit）。
+ *
+ * 除了幂等类型，还放行一类**构造上幂等的点击**：带 `skipIfChecked + verifyChecked` 的复选框筛选
+ * （2026-10-04 真机：用户连发时第 1 轮就死在 `TASK_FILTER_NOT_APPLIED: 「母婴」点了但没有生效`）。
+ * 它重跑是安全的——已勾选则 skipIfChecked 命中不点、未勾选则重新定位再点；
+ * 勾选态本身就是它的幂等判据，没有任何不可逆副作用。判据放在 `isIdempotentCheckboxFilterStep`，
+ * 与落库侧的 `normalizeStepRetryLimit` 共用，避免两处漂移。
  */
-export function canRetryStepInPlace(type: unknown, retryLimit: unknown): boolean {
+export function canRetryStepInPlace(type: unknown, retryLimit: unknown, input?: unknown): boolean {
   const limit = Number(retryLimit)
-  return Number.isFinite(limit) && limit > 0 && isIdempotentStepType(type)
+  if (!Number.isFinite(limit) || limit <= 0) return false
+  return isIdempotentStepType(type) || isIdempotentCheckboxFilterStep(type, input)
+}
+
+/** 带 skipIfChecked + verifyChecked 的复选框筛选点击：构造上幂等（见 canRetryStepInPlace） */
+export function isIdempotentCheckboxFilterStep(type: unknown, input?: unknown): boolean {
+  if (type !== 'clickByText' || !input || typeof input !== 'object') return false
+  const record = input as Record<string, unknown>
+  return record.skipIfChecked === true && record.verifyChecked === true
 }
 
 export function isSideEffectStepType(type: unknown): boolean {

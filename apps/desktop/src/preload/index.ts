@@ -63,6 +63,8 @@ const api = {
     
     navigate: (storeId: string, tabId: string, url: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_NAVIGATE, { storeId, tabId, url }),
     prepareInviteSquare: (storeId: string, input: any): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PREPARE_INVITE_SQUARE, { storeId, ...input }),
+    /** 邀约台账：近 N 天已邀过的达人昵称（"7 天内不重复邀约"的判据来源） */
+    recentInviteHistory: (input: { storeId: string; days?: number; limit?: number }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.INVITE_RECENT_HISTORY, input),
     clearData: (storeId: string, types: string[], origin?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLEAR_DATA, { storeId, types, origin }),
     capture: (storeId: string, tabId: string, format: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CAPTURE, { storeId, tabId, format }),
     /** 编排器「拾取元素」：picker-mode 下在店铺页面上点一下，取回锚点填进参数框 */
@@ -441,10 +443,15 @@ const api = {
     clearImageTextKey: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_KEY_CLEAR),
     testImageText: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_TEST),
     listImageTextModels: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_MODELS_LIST),
-    analyzeImageProduct: (input: { name?: string; tags?: string; price?: string; originalPrice?: string }): Promise<IPCResult> =>
+    analyzeImageProduct: (input: { name?: string; tags?: string; price?: string; originalPrice?: string; images?: Array<{ mimeType: string; b64Json: string }> }): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_ANALYZE, JSON.parse(JSON.stringify(input))),
-    generateImage: (input: { prompt: string; model?: string; size?: string; n?: number; confirmed?: boolean; sourceImages?: Array<{ name: string; mimeType: string; b64Json: string }> }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_GENERATE, JSON.parse(JSON.stringify(input)))
+    generateImage: (input: { prompt: string; size?: string; n?: number; confirmed?: boolean; sourceImages?: Array<{ name: string; mimeType: string; b64Json: string }> }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_GENERATE, JSON.parse(JSON.stringify(input))),
+    // 把生成结果存到本地（不传 outputPath 时主进程弹"另存为"）
+    saveImage: (input: { b64Json: string; mimeType?: string; suggestedName?: string; outputPath?: string }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_SAVE, JSON.parse(JSON.stringify(input))),
+    revealImage: (path: string): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_REVEAL, { path })
   },
 
   // 事件监听

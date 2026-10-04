@@ -8,8 +8,10 @@
  *   不做静默重试或假装成功。
  */
 
-import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
+import { existsSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import { IPC_CHANNELS, type IPCResult } from '@shared/contracts/ipc'
 import { AI_IMAGE_SETTING_KEYS, AI_IMAGE_TEXT_SETTING_KEYS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS } from '@shared/constants/ai'
 import { getDatabase } from '../db/database'
@@ -347,8 +349,8 @@ export function registerAiHandlers(): void {
     }
   })
 
-  // 商品分析只接受结构化字段，由 Main 负责组装提示词，避免 Renderer 注入任意 system/工具指令。
-  ipcMain.handle(IPC_CHANNELS.AI_IMAGE_TEXT_ANALYZE, async (event: IpcMainInvokeEvent, input: { name?: string; tags?: string; price?: string; originalPrice?: string }): Promise<IPCResult> => {
+  // 商品分析只接受结构化字段 + 受限图片，由 Main 负责组装提示词，避免 Renderer 注入任意 system/工具指令。
+  ipcMain.handle(IPC_CHANNELS.AI_IMAGE_TEXT_ANALYZE, async (event: IpcMainInvokeEvent, input: { name?: string; tags?: string; price?: string; originalPrice?: string; images?: Array<{ mimeType?: string; b64Json?: string }> }): Promise<IPCResult> => {
     const requestId = randomUUID()
     try {
       assertTrusted(event)
@@ -356,13 +358,23 @@ export function registerAiHandlers(): void {
       const tags = String(input?.tags || '').trim().slice(0, 240)
       const price = String(input?.price || '').trim().slice(0, 24)
       const originalPrice = String(input?.originalPrice || '').trim().slice(0, 24)
-      if (!name && !tags) {
+      // 图片：最多 2 张，单张 ≤ 8MB，类型白名单（与上传时一致）
+      const images = (Array.isArray(input?.images) ? input.images : []).slice(0, 3).map(item => ({
+        mimeType: String(item?.mimeType || '').split(';')[0].trim().toLowerCase(),
+        b64Json: String(item?.b64Json || '')
+      })).filter(item => {
+        if (!item.b64Json || !['image/png', 'image/jpeg', 'image/webp'].includes(item.mimeType)) return false
+        return Math.ceil(item.b64Json.length * 3 / 4) <= 8 * 1024 * 1024
+      })
+      if (!name && !tags && !images.length) {
         writeAudit('ai.imageText.analyze', 'failure', { requestId: auditRequestId(requestId, 'AI_EMPTY_SOURCE') })
-        return failure('AI_EMPTY_SOURCE', '请先填写商品名称或卖点，再请求 AI 分析')
+        return failure('AI_EMPTY_SOURCE', '请先上传商品图，或填写商品名称/卖点，再请求 AI 分析')
       }
-      const result = await AiClient.analyzeImageProductText({ name, tags, price, originalPrice })
-      writeAudit('ai.imageText.analyze', 'success', { requestId: auditRequestId(requestId, result.model) })
-      return success({ text: result.text, model: result.model, elapsedMs: result.elapsedMs })
+      const result = await AiClient.analyzeImageProductText({ name, tags, price, originalPrice, images })
+      const usedVision = images.length > 0
+      writeAudit('ai.imageText.analyze', 'success', { requestId: auditRequestId(requestId, `${result.model}${usedVision ? `(读图${images.length}张)` : ''}${result.source === 'main-text' ? '(回退主文本 API)' : ''}`) })
+      // source / 读图张数一并回传：界面要如实显示这次分析用的是哪套配置、有没有真的看图
+      return success({ text: result.text, model: result.model, elapsedMs: result.elapsedMs, source: result.source, imageCount: images.length })
     } catch (e: any) {
       const denied = deniedResult(e)
       if (denied) return denied
@@ -376,7 +388,7 @@ export function registerAiHandlers(): void {
 
   // 图片生成：只接受受限的提示词和用户明确选择的图片数据，API Key 和网络请求始终留在主进程。
   // 是否产生第三方费用由渲染层在调用前向用户明确确认；这里不自动重试、不伪造结果。
-  ipcMain.handle(IPC_CHANNELS.AI_IMAGE_GENERATE, async (event: IpcMainInvokeEvent, input: { prompt?: string; model?: string; size?: string; n?: number; confirmed?: boolean; sourceImages?: Array<{ name?: string; mimeType?: string; b64Json?: string }> }): Promise<IPCResult> => {
+  ipcMain.handle(IPC_CHANNELS.AI_IMAGE_GENERATE, async (event: IpcMainInvokeEvent, input: { prompt?: string; size?: string; n?: number; confirmed?: boolean; sourceImages?: Array<{ name?: string; mimeType?: string; b64Json?: string }> }): Promise<IPCResult> => {
     const requestId = randomUUID()
     try {
       assertTrusted(event)
@@ -386,18 +398,18 @@ export function registerAiHandlers(): void {
       }
       const prompt = String(input?.prompt || '').trim()
       if (!prompt || prompt.length > 4000) return failure('AI_BAD_INPUT', '图片描述不能为空且不能超过 4000 个字符')
-      const model = String(input?.model || '').trim().slice(0, 120)
       const size = String(input?.size || '1024x1024')
       const n = Number(input?.n ?? 1)
       if (!['1024x1024', '1536x1024', '1024x1536'].includes(size) || !Number.isInteger(n) || n < 1 || n > 4) {
         return failure('AI_BAD_INPUT', '图片尺寸或生成数量不受支持')
       }
-      const sourceImages = Array.isArray(input?.sourceImages) ? input.sourceImages.slice(0, 2).map((source) => ({
+      const sourceImages = Array.isArray(input?.sourceImages) ? input.sourceImages.slice(0, 10).map((source) => ({
         name: String(source?.name || 'reference-image'),
         mimeType: String(source?.mimeType || ''),
         b64Json: String(source?.b64Json || '')
       })) : []
-      const result = await AiClient.generateImage({ prompt, model, size, n, sourceImages })
+      // model 字段不从渲染层透传；AiClient 会从设置中心读取唯一生图模型。
+      const result = await AiClient.generateImage({ prompt, size, n, sourceImages })
       writeAudit('ai.generate', 'success', { requestId: auditRequestId(requestId, `${result.model}/${result.images.length}张`) })
       return success(result)
     } catch (e: any) {
@@ -408,6 +420,74 @@ export function registerAiHandlers(): void {
       writeAudit('ai.generate', 'failure', { requestId: auditRequestId(requestId, code) })
       logMain('warn', `[ai] 图片生成失败 ${code}: ${message}`)
       return failure(code, message)
+    }
+  })
+
+  /**
+   * 保存生成结果到本地。
+   *
+   * 为什么必须有这条：生成结果此前只以 data URL 活在渲染层内存里——页面一切走就没了，
+   * 用户拿不到图（"生成成功但用不了"）。这里把它落盘，并且**如实返回真实写入路径**。
+   *
+   * `outputPath` 与其它导出通道（发票 CSV / 诊断包 / 会话包）一致：验收脚本可以直传路径，
+   * 界面不传就走系统"另存为"对话框。只接受受信任渲染层调用，写入内容限图片类型与大小。
+   */
+  ipcMain.handle(IPC_CHANNELS.AI_IMAGE_SAVE, async (event: IpcMainInvokeEvent, input: { b64Json?: string; mimeType?: string; suggestedName?: string; outputPath?: string }): Promise<IPCResult> => {
+    const requestId = randomUUID()
+    try {
+      assertTrusted(event)
+      const b64 = String(input?.b64Json || '')
+      if (!b64) return failure('AI_BAD_INPUT', '没有可保存的图片数据')
+      let buffer: Buffer
+      try { buffer = Buffer.from(b64, 'base64') } catch { return failure('AI_BAD_INPUT', '图片数据不是合法 base64') }
+      if (!buffer.length) return failure('AI_BAD_INPUT', '图片数据为空')
+      if (buffer.length > 24 * 1024 * 1024) return failure('AI_BAD_INPUT', '图片超过 24MB，已拒绝保存')
+      const mimeType = String(input?.mimeType || 'image/png').split(';')[0].trim().toLowerCase()
+      const ext = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : mimeType === 'image/png' ? 'png' : ''
+      if (!ext) return failure('AI_BAD_INPUT', `不支持的图片类型：${mimeType || '未知'}`)
+      // 文件名只保留安全字符，避免用户输入拼出奇怪路径
+      const safeName = String(input?.suggestedName || '').replace(/[^\w\u4e00-\u9fa5.-]/g, '').slice(0, 60)
+      const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)
+
+      let targetPath = String(input?.outputPath || '').trim()
+      if (!targetPath) {
+        const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+        const res = await dialog.showSaveDialog(win, {
+          title: '保存生成的商品图',
+          defaultPath: join(app.getPath('pictures'), `${safeName || '商品图'}-${stamp}.${ext}`),
+          filters: [{ name: ext.toUpperCase() + ' 图片', extensions: [ext] }]
+        })
+        if (res.canceled || !res.filePath) return success({ canceled: true })
+        targetPath = res.filePath
+      } else {
+        // 脚本直传路径时补上扩展名，避免存出没有后缀的文件
+        if (!new RegExp(`\\.${ext}$`, 'i').test(targetPath)) targetPath = `${targetPath}.${ext}`
+      }
+      writeFileSync(targetPath, buffer)
+      writeAudit('ai.imageSave', 'success', { requestId: auditRequestId(requestId, `${Math.round(buffer.length / 1024)}KB`) })
+      logMain('info', `[ai:image] 生成结果已保存 ${Math.round(buffer.length / 1024)}KB`)
+      return success({ canceled: false, path: targetPath, bytes: buffer.length })
+    } catch (e: any) {
+      const denied = deniedResult(e)
+      if (denied) return denied
+      writeAudit('ai.imageSave', 'failure', { requestId: auditRequestId(requestId, String(e?.code || 'AI_IMAGE_SAVE_FAILED')) })
+      return failure('AI_IMAGE_SAVE_FAILED', String(e?.message || e))
+    }
+  })
+
+  /** 在文件管理器里定位刚保存的图片（用户点了"打开所在文件夹"）。 */
+  ipcMain.handle(IPC_CHANNELS.AI_IMAGE_REVEAL, async (event: IpcMainInvokeEvent, input: { path?: string }): Promise<IPCResult> => {
+    try {
+      assertTrusted(event)
+      const target = String(input?.path || '').trim()
+      if (!target) return failure('AI_BAD_INPUT', '没有要定位的文件路径')
+      if (!existsSync(target)) return failure('AI_IMAGE_NOT_FOUND', '文件不存在，可能已被移动或删除')
+      shell.showItemInFolder(target)
+      return success({ path: target })
+    } catch (e: any) {
+      const denied = deniedResult(e)
+      if (denied) return denied
+      return failure('AI_IMAGE_REVEAL_FAILED', String(e?.message || e))
     }
   })
 }

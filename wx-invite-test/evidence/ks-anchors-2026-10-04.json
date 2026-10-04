@@ -1,0 +1,90 @@
+{
+ "at": "2026-10-04T05:38:56.331Z",
+ "audit": {
+  "url": "https://login.kwaixiaodian.com/?biz=&redirect_url=https%3A%2F%2Fcps.kwaixiaodian.com%2Fzone%2Fdaren-match%2Fdaren-square-pro",
+  "title": "快手小店",
+  "loginish": false,
+  "rows": [
+   {
+    "label": "内容标签",
+    "found": false,
+    "up2Class": null,
+    "up2ChildCount": 0,
+    "up2Text": null
+   },
+   {
+    "label": "带货类目",
+    "found": false,
+    "up2Class": null,
+    "up2ChildCount": 0,
+    "up2Text": null
+   },
+   {
+    "label": "带货数据",
+    "found": false,
+    "up2Class": null,
+    "up2ChildCount": 0,
+    "up2Text": null
+   },
+   {
+    "label": "合作信息",
+    "found": false,
+    "up2Class": null,
+    "up2ChildCount": 0,
+    "up2Text": null
+   }
+  ],
+  "categories": {
+   "inRow": 0,
+   "of": 18,
+   "missingInRow": [
+    "零食饮料",
+    "家居百货",
+    "女装女鞋",
+    "美妆护肤",
+    "个护家清",
+    "营养健康",
+    "母婴玩具",
+    "生鲜食品",
+    "男装男鞋",
+    "运动户外",
+    "数码家电",
+    "珠宝文玩",
+    "茶叶酒水",
+    "箱包配饰",
+    "图书学习",
+    "花宠园艺",
+    "童装童鞋",
+    "内衣裤袜"
+   ]
+  },
+  "tagsInRow": [],
+  "coopsInRow": [],
+  "selectors": {
+   "categoryPopover": 0,
+   "filteredScope": 0,
+   "rowCheckbox_tbody": 0,
+   "allCheckbox": 0,
+   "tbody": 0,
+   "textarea": 0,
+   "rowClass": 0,
+   "modalBody": 0
+  },
+  "texts": {
+   "batchInvite": false,
+   "quotaToday": false,
+   "quotaSample": null,
+   "counterSample": null,
+   "chooseGoods": false,
+   "contactPlaceholder": 0,
+   "phonePlaceholder": 0,
+   "wechatPlaceholder": 0,
+   "cooperationTag": false,
+   "benefitsPresent": [],
+   "searchButton": false,
+   "levelTrigger": false
+  },
+  "tables": [],
+  "bodyHead": "选择您登录的身份 我是店主 快手账号登录 我是员工 小店子账号登录 0元开店 想要开店？立即注册 加入快手电商，让生活再好一点 网安备案 | 蜀ICP备19035576号-2 增值电信业务经营许可证：川B2-20200036 www.kwaixiaodian.com 2019-现在 @ All rights Reserved 下载快手App 服务 电商服务商入驻 招商团长入驻 服务市场服务商入驻 "
+ }
+}

@@ -1,0 +1,132 @@
+[
+ {
+  "label": "带货销售总额",
+  "tag": "DT",
+  "cls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-tex",
+  "rect": [
+   312,
+   348,
+   108,
+   28
+  ],
+  "wrapCls": "weui-desktop-form__dropdown-label",
+  "wrapHtml": "<dl class=\"weui-desktop-form__dropdown-label\"><dt class=\"weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text weui-desktop-form__dropdown__dt__active placeholder\"><!--[--><!--]--><!--[--><!--[--><!--v-if--><!--[-->带货销售总额<!--]--><!--]--><!--]--></dt><div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"\"><ul class=\"weui-desktop-dropdown__list\" style=\"ma"
+ },
+ {
+  "label": "直播观众数",
+  "tag": "DT",
+  "cls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-tex",
+  "rect": [
+   444,
+   348,
+   94,
+   28
+  ],
+  "wrapCls": "weui-desktop-form__dropdown-label",
+  "wrapHtml": "<dl class=\"weui-desktop-form__dropdown-label\"><dt class=\"weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text placeholder\"><!--[--><!--]--><!--[--><!--[--><!--v-if--><!--[-->直播观众数<!--]--><!--]--><!--]--></dt><div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"display:none;\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if--><"
+ },
+ {
+  "label": "直播销售额",
+  "tag": "DT",
+  "cls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-tex",
+  "rect": [
+   562,
+   348,
+   94,
+   28
+  ],
+  "wrapCls": "weui-desktop-form__dropdown-label",
+  "wrapHtml": "<dl class=\"weui-desktop-form__dropdown-label\"><dt class=\"weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text placeholder\"><!--[--><!--]--><!--[--><!--[--><!--v-if--><!--[-->直播销售额<!--]--><!--]--><!--]--></dt><div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"display:none;\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if--><"
+ },
+ {
+  "label": "直播GPM",
+  "tag": "DT",
+  "cls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-tex",
+  "rect": [
+   680,
+   348,
+   85,
+   28
+  ],
+  "wrapCls": "weui-desktop-form__dropdown-label",
+  "wrapHtml": "<dl class=\"weui-desktop-form__dropdown-label\"><dt class=\"weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text placeholder\"><!--[--><!--]--><!--[--><!--[--><!--v-if--><!--[-->直播GPM<!--]--><!--]--><!--]--></dt><div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"display:none;\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if--><"
+ },
+ {
+  "label": "视频观众数",
+  "tag": "DT",
+  "cls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-tex",
+  "rect": [
+   789,
+   348,
+   94,
+   28
+  ],
+  "wrapCls": "weui-desktop-form__dropdown-label",
+  "wrapHtml": "<dl class=\"weui-desktop-form__dropdown-label\"><dt class=\"weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text placeholder\"><!--[--><!--]--><!--[--><!--[--><!--v-if--><!--[-->视频观众数<!--]--><!--]--><!--]--></dt><div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"display:none;\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if--><"
+ },
+ {
+  "label": "视频销售额",
+  "tag": "DT",
+  "cls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-tex",
+  "rect": [
+   907,
+   348,
+   94,
+   28
+  ],
+  "wrapCls": "weui-desktop-form__dropdown-label",
+  "wrapHtml": "<dl class=\"weui-desktop-form__dropdown-label\"><dt class=\"weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text placeholder\"><!--[--><!--]--><!--[--><!--[--><!--v-if--><!--[-->视频销售额<!--]--><!--]--><!--]--></dt><div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"display:none;\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if--><"
+ },
+ {
+  "label": "视频GPM",
+  "tag": "DT",
+  "cls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-tex",
+  "rect": [
+   1025,
+   348,
+   85,
+   28
+  ],
+  "wrapCls": "weui-desktop-form__dropdown-label",
+  "wrapHtml": "<dl class=\"weui-desktop-form__dropdown-label\"><dt class=\"weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text placeholder\"><!--[--><!--]--><!--[--><!--[--><!--v-if--><!--[-->视频GPM<!--]--><!--]--><!--]--></dt><div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"display:none;\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if--><"
+ },
+ {
+  "label": "公众号篇均阅读量",
+  "tag": "DT",
+  "cls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-tex",
+  "rect": [
+   312,
+   388,
+   136,
+   28
+  ],
+  "wrapCls": "weui-desktop-form__dropdown-label",
+  "wrapHtml": "<dl class=\"weui-desktop-form__dropdown-label\"><dt class=\"weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text placeholder\"><!--[--><!--]--><!--[--><!--[--><!--v-if--><!--[-->公众号篇均阅读量<!--]--><!--]--><!--]--></dt><div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"display:none;\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if-"
+ },
+ {
+  "label": "公众号销售额",
+  "tag": "DT",
+  "cls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-tex",
+  "rect": [
+   472,
+   388,
+   108,
+   28
+  ],
+  "wrapCls": "weui-desktop-form__dropdown-label",
+  "wrapHtml": "<dl class=\"weui-desktop-form__dropdown-label\"><dt class=\"weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text placeholder\"><!--[--><!--]--><!--[--><!--[--><!--v-if--><!--[-->公众号销售额<!--]--><!--]--><!--]--></dt><div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"display:none;\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if-->"
+ },
+ {
+  "label": "客单价",
+  "tag": "DT",
+  "cls": "weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-tex",
+  "rect": [
+   604,
+   388,
+   66,
+   28
+  ],
+  "wrapCls": "weui-desktop-form__dropdown-label",
+  "wrapHtml": "<dl class=\"weui-desktop-form__dropdown-label\"><dt class=\"weui-desktop-form__dropdown__dt weui-desktop-form__dropdown__inner-text placeholder\"><!--[--><!--]--><!--[--><!--[--><!--v-if--><!--[-->客单价<!--]--><!--]--><!--]--></dt><div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"display:none;\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if--><!-"
+ }
+]

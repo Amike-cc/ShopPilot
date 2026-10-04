@@ -1,0 +1,213 @@
+{
+  "title": "微信小店达人邀约：整条功能真机实测（2026-10-03）",
+  "store": {
+    "id": "store_4eb9b43cffeee0094041894a9f1f93bf",
+    "name": "微信小店测试",
+    "config": {
+      "contact": "刘涛",
+      "wechat": "jiaoe988",
+      "phone": "15057937334",
+      "scriptMode": "ai",
+      "productIds": ["10000687986563"],
+      "finderType": "直播带货者",
+      "finderCategories": [],
+      "finderOtherFilters": ["有联系方式"]
+    }
+  },
+  "realSend": {
+    "verified": true,
+    "how": "用面板同一条链路：shared 的 buildInviteTaskPayload 出载荷（只把末尾 loop 的 maxRounds 钉成 1）→ renderer 的 task.create + task.run",
+    "runId": "run_fd70ac94a58f4d9202d466a2",
+    "taskId": "task_9ef5610d0078f8766f78364a",
+    "status": "succeeded",
+    "startedAt": "2026-10-03T00:53:04+08:00",
+    "finishedAt": "2026-10-03T00:53:30+08:00",
+    "roundMs": 24576,
+    "platformProof": {
+      "page": "https://store.weixin.qq.com/shop/findersquare/my-invite → 邀请中(1)",
+      "row": "恩妹阅读 50-50% 2026/10/03 00:53 邀请中",
+      "screenshot": "wx-invite-test/evidence/my-invite-inviting.png",
+      "sendMomentScreenshot": "wx-invite-test/evidence/engine-run_fd70ac94a58f4d9202d466a2_step4.16r1.png"
+    },
+    "note": "该轮用的是**手填话术**（WX_SCRIPT_MODE=manual）：店铺配置是 AI 模式，但当前网关的文本模型是推理型，会把 max_tokens 全花在 reasoning_content 上、正文为空（见 aiFinding）。AI 链路本身另见 diag-ai-generate.json。"
+  },
+  "filtersVerified": {
+    "how": "verify-wx-square-filters.js（真机）19/19：IPC 应用筛选 + 任务引擎跑真实生成的筛选步骤 + 负路径 + 面板 UI",
+    "date": "2026-10-02 23:5x",
+    "detail": "类型 直播带货者 / 类目 母婴 / 销售额 ￥10万-20万 / 其他 有认证 —— 逐项回读勾选态通过；不存在的档位如实失败"
+  },
+  "defectsFound": [
+    {
+      "id": 1,
+      "what": "useTab 切标签页后不等 guest 注册，下一步 wcOrThrow 直接 BROWSER_NOT_READY",
+      "impact": "广场页已打开时点「开始邀约」，首轮必失败（本次实测第 1 轮子步骤 2/19）",
+      "fix": "task-runner useTab：激活后 waitForTabWebContents(20s)",
+      "status": "fixed"
+    },
+    {
+      "id": 2,
+      "what": "useTab 按地址挑到**用户那个没筛选的广场页**，并把本次运行（已应用筛选）的标签页关掉",
+      "impact": "筛选静默丢失（会邀到不该邀的人）",
+      "fix": "task-runner useTab：按运行记忆已选定的标签页（run.useTabPick），优先就地留下",
+      "status": "fixed"
+    },
+    {
+      "id": 3,
+      "what": "任务开跑时**先等 guest、后 activateTab**；复用上一轮遗留在后台的运行标签页时白等 45s 报 BROWSER_NOT_READY",
+      "impact": "一次失败后紧接着复跑必失败",
+      "fix": "task-runner：先 activateTab 再 waitForTabWebContents",
+      "status": "fixed"
+    },
+    {
+      "id": 4,
+      "what": "点「详情」跟到新标签页（followTab）后不等 guest 注册，下一步 waitForPage 报 BROWSER_NOT_READY",
+      "impact": "每轮第一步就断",
+      "fix": "task-runner：followTab 切换后 waitForTabWebContents(20s)",
+      "status": "fixed"
+    },
+    {
+      "id": 5,
+      "what": "结构性冲突：应用只为**当前活动标签页**保留 DOM <webview>（刻意省内存），切走再切回时广场页会重新加载 → 页内筛选/分页丢失",
+      "evidence": "verify-tab-state-persist.mjs：页内标记 + 刚勾的「有联系方式」在切走再切回后都没了（marker=null, others=[]）",
+      "impact": "旧实现把「导航+筛选」放在 loop 外面 → 第 1 位没问题，**第 2 轮起在没筛选的名单上继续邀约**",
+      "fix": "invite-steps：把导航+筛选搬进轮内（每轮重新应用，verifyChecked 回读保证生效）；followTab 改为 closeOld:true 以免每轮泄漏标签页；loop.steps 上限 40→80",
+      "status": "fixed",
+      "regressionGuard": "tests/unit/invite.test.ts『每轮重新进广场并应用筛选』一条钉死该契约（轮内必须有导航+筛选、轮内不得有 useTab、loop 外不得有筛选点击）"
+    }
+  ],
+  "aiFinding": {
+    "what": "「AI 生成话术」在当前 AI 配置下必然失败：模型把 max_tokens 全花在 reasoning_content 上，content 为空",
+    "evidence": "finish_reason=length，message 字段=[role,content,reasoning_content]，reasoning_content 1249~1869 字，content 空",
+    "rootCause": "网关上的 deepseek-flash / deepseek-v4-pro 都是推理型；chatComplete 的 max_tokens 上限被写死 1200，思路一长就没预算写正文",
+    "impact": "aiGenerate 报 AI_EMPTY_OUTPUT；且设置里的「测试连接」（短提示词）是通的，只看它会把问题误判成"AI 没问题"",
+    "partialFix": "错误信息带上 finish_reason 与各字段长度（不再只有一句"模型返回了空内容"）；邀约话术的 max_tokens 从 maxLen*4 提到 max(2000, maxLen*10)（被 1200 上限夹住）",
+    "remaining": "要让 AI 模式真正可用，需要放开 chatComplete 的输出上限（或对推理型模型按 reasoning 预算放宽），或把模型换成非推理模型"
+  },
+  "flakinessObserved": {
+    "condition": "该店铺 profile 里有 129 个标签页（历史遗留），渲染进程压力大",
+    "symptoms": [
+      "广场页 micro-app 未渲染 → 找不到「直播带货者」（同构建下前两次两轮彩排都通过）",
+      "类型页签切换后立刻点「有联系方式」，点在了被替换掉的旧节点上 → verifyChecked 报 TASK_FILTER_NOT_APPLIED（守卫生效，未静默放行）"
+    ],
+    "suggestion": "复选框型筛选点击可加一次"回读未勾选就重新定位再点"的容错（clickByText 非幂等，现行策略是 retryLimit=0）；另外建议清理店铺里堆积的历史标签页"
+  },
+  "finalVerificationAfterAiFix": {
+    "what": "修好 AI 话术链路后，在**真实应用**上（AI 模式）真发 1 位做闭环确认",
+    "task": "task_2ef80eab2090af52a8932138",
+    "run": "run_6cf120afef4b4d9ffab44464",
+    "status": "succeeded",
+    "startedAt": "2026-10-03T10:50:33+08:00",
+    "finishedAt": "2026-10-03T10:51:10+08:00",
+    "roundSteps": 26,
+    "roundIncludes": ["navigate", "waitForText(筛选区就绪)", "6×筛选", "aiGenerate", "readText", "ensureRowsById", "发送邀约", "确认", "waitForGone", "screenshot"],
+    "platformProof": {
+      "page": "我的邀约 → 邀请中(2)",
+      "row": "郑奶奶科学育儿 50-50% 2026/10/03 10:51 邀请中",
+      "banner": "「已成功发送邀约」（引擎在发送后截到的平台绿色横幅）",
+      "screenshots": [
+        "wx-invite-test/evidence/my-invite-inviting.png",
+        "wx-invite-test/evidence/engine-send-ai-2026-10-03.png"
+      ]
+    },
+    "aiFixEvidence": {
+      "before": "同一店铺同一配置 2026-10-03 09:57 的 run_f3ad7408875cad8c210ee5f4：aiGenerate 连续 3 次 finish_reason=length、reasoning_content 1832/1905/1860 字、content 空 → AI_EMPTY_OUTPUT，第 1/50 轮中止",
+      "after": "本次运行日志里**没有任何** [ai] 空内容告警（首次调用就拿到正文），整轮 37s 完成"
+    },
+    "config": {
+      "scriptMode": "ai",
+      "model": "deepseek-flash",
+      "finderType": "全部带货者",
+      "categories": ["母婴"],
+      "salesTiers": ["不限"],
+      "otherFilters": ["优质带货者"]
+    }
+  },
+  "continuousSendVerification": {
+    "what": "连续发送（连发 3 位）真机验证 —— 用户要的就是这个",
+    "task": "task_6a1e774adfd1892ad1b2ade2",
+    "run": "run_e366e081dc730a8364d3f691",
+    "status": "succeeded",
+    "startedAt": "2026-10-03T11:32:12+08:00",
+    "finishedAt": "2026-10-03T11:33:59+08:00",
+    "loopPayload": { "maxRounds": 3, "completedRounds": 3, "stopReason": null, "rounds": [{ "round": 1, "ok": true, "ms": 37286 }, { "round": 2, "ok": true, "ms": 37040 }, { "round": 3, "ok": true, "ms": 33113 }] },
+    "platformProof": {
+      "page": "我的邀约 → 邀请中(6)",
+      "newRowsThisRun": [
+        "小小郭和小郭 50-50% 2026/10/03 11:32 邀请中",
+        "神奇麻麻在哪里 50-50% 2026/10/03 11:33 邀请中",
+        "主持人王小骞 50-50% 2026/10/03 11:34 邀请中"
+      ],
+      "earlierRows": ["可乐cora小朋友 11:08", "郑奶奶科学育儿 10:51", "恩妹阅读 00:53"],
+      "perRoundScreenshots": [
+        "run_e366e081dc730a8364d3f691_step0.25r1.png",
+        "run_e366e081dc730a8364d3f691_step0.25r2.png",
+        "run_e366e081dc730a8364d3f691_step0.25r3.png"
+      ]
+    },
+    "blockersFoundAndFixedBeforeThis": [
+      {
+        "symptom": "第 1 轮第 26/26 步 screenshot 超时 20s → 整单 failed（此时邀约**已经真实发出**：可乐cora小朋友 11:08）",
+        "cause": "窗口被遮挡/最小化时 Chromium 不产出帧，capturePage 挂住（我的探针一直带 --disable-features=CalculateNativeWinOcclusion，真机应用没带）",
+        "fix": [
+          "main/index.ts：Windows 下 app.commandLine.appendSwitch('disable-features','CalculateNativeWinOcclusion')（app ready 前）",
+          "task-runner：screenshot 改为尽力而为（超时/空图只记 warn，不再打挂批次），预算压到 8s"
+        ]
+      },
+      {
+        "symptom": "连发第一次尝试：第 1 轮第 3 步 waitForText「带货类目」超 40s（页面渲染时序抖动，同环境彩排刚跑通 3 轮）",
+        "fix": "轮内导航后先 waitForText(筛选区行标签) 再点筛选（本次修复前已加）"
+      }
+    ],
+    "note": "轮末的 waitForGone（商品行消失）在第 3 轮截图里确认弹窗仍在提交动画中，即该判据可能略早于弹窗关闭；本次三轮的平台侧回读（各新增一条邀请中）证明三次都真实发出。"
+  },
+  "polishRound2026_10_03_pm": {
+    "what": "按用户要求补齐 4 处未完善项（额度护栏 / 发送后双判据 / 平台改版跑前自检 / 长跑与翻页验证）",
+    "fixes": [
+      {
+        "item": "额度护栏",
+        "detail": "平台两版页面都读不到「今日剩余 N 次邀请机会」→ requireQuota 拿不到数、TASK_QUOTA_EXCEEDED 实际不触发。新增「本次最多邀约 N 位」（面板输入框，默认 10，范围 1..50）→ 直接作为 loop 的 maxRounds；任务名带上「最多 N 位」；越界/缺省在 inviteTaskIssues 里逐条报缺项",
+        "tests": "invite.test.ts（缺省=10、坏值收敛、显式生效）+ agent-invite-task.test.ts（越界拦截、任务名、maxRounds）"
+      },
+      {
+        "item": "发送后校验加强",
+        "detail": "原来只查「邀约商品行消失」，实测会**早于确认弹窗关闭**就通过（第 3 轮截图抓到弹窗仍在提交动画）。给 waitForGone 增加 text 判据（等某段可见文案消失，selector/text 二选一），轮内改为**双判据**：① 弹窗「确认发送邀约」消失 ② 商品行消失",
+        "tests": "invite.test.ts（27 步顺序断言）+ schema（二选一校验）"
+      },
+      {
+        "item": "平台改版跑前自检",
+        "detail": "prepareInviteSquare 增加 detailLinks（可见「详情」条数）；面板在「打开达人广场」时若为 0，直接提示「平台可能改版或页面未就绪，建议先别开始邀约」，并把条数写进成功提示",
+        "tests": "面板 IPC 返回值 + 提示分支"
+      },
+      {
+        "item": "长跑/翻页验证",
+        "detail": "真机验证「下一页」：按钮在长列表底部（实测 y≈2528，视口 757），必须先滚进视口再点——受信任鼠标点击后名单整页换掉（57→60 行，无重名）",
+        "tests": "verify-paging.mjs（真机）"
+      }
+    ],
+    "criticalRootCauseFound": {
+      "symptom": "真机连发反复在第 1 轮第 3 步 `waitForText「带货类目」` 超 40s（三次），而同一环境下彩排能连过 3 轮",
+      "investigation": "受控实验：手动导航 2s 渲染完成、最小任务连跑 8/8 成功 → 间歇性；采样发现任务自报「导航成功」，页面却整轮停在旧地址",
+      "rootCause": "切页/重挂载后渲染层会换一个新 guest，而引擎在步骤里抓的是**旧 guest 句柄**：loadURL 与后续等待都作用在已卸载的页面上（后台标签页的 webview 不挂在文档上，元素 rect 全为 0 → 所有可见性判据必然失败，而 URL 类判据照常通过）",
+      "fix": "task-runner：新增 ensureRunTabForeground（每步开头确认运行标签页仍在前台且 guest 已注册，被切走就切回来、切不回来明确报 TASK_TAB_NOT_FOREGROUND）+ navigate 步现取 wc",
+      "verification": "复现脚本 diag-repro-preamble.mjs 修前必失败 → 修后 1.6s 成功（页面 = 广场、文案可见 rect 112×28）"
+    },
+    "realSendVerification": {
+      "twoRounds": { "task": "task_99ff412daac4401b50715e9f", "run": "run_0725cd07784221d5c0d8b909", "status": "succeeded", "rounds": [34928, 34836], "roundSteps": 27 },
+      "platform": "我的邀约 → 邀请中(13)，本次新增：颜家三千金 17:20、新东方直播间 17:21",
+      "earlierFiveRounds": { "task": "task_59388281c4f76c0638fd0c9c", "status": "succeeded", "platform": "新增 5 位（女特工baby / 谢谢老板上班啦 / 叶子流体艺术原创 / 十三姐冲鸭 / 福州亲子营，17:00–17:02）" }
+    },
+    "appliedTotal2026_10_03": 13
+  },
+  "artifacts": [
+    "wx-invite-test/evidence/my-invite-inviting.png",
+    "wx-invite-test/evidence/engine-run_fd70ac94a58f4d9202d466a2_step4.16r1.png",
+    "wx-invite-test/evidence/wx-invite-send-one.json",
+    "wx-invite-test/evidence/diag-ai-generate.json",
+    "wx-invite-test/evidence/verify-square-filters.json"
+  ],
+  "gates": {
+    "typecheck": "clean",
+    "unit": "97 files / 1030 tests passed",
+    "lint": "0 errors"
+  }
+}

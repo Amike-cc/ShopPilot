@@ -826,7 +826,32 @@ async function main() {
       }
       return JSON.stringify({ found: false });
     })()`
-    const FIRST_OPTION = `(() => {
+    // ⚠️ 选项要**限定在点击点下方的弹层区域**（2026-10-02 修）：
+    // 原来筛 `li,div` 全页找、取最靠上的 —— 拿到的是**页面顶部的字段标签**「商品类目」，
+    // 候选数 144/149 个（正常弹层只有几个）。必须按**位置**限定，不能按标签名全页找。
+    const firstOptionAt = (cx, cy) => `(() => {
+      const LO = ${cy} + 5, HI = ${cy} + 340, XW = 280;
+      const cap = 12000;
+      const roots = () => { const rs = [document]; let n = 0; for (const el of document.querySelectorAll('*')) { if (el.shadowRoot) rs.push(el.shadowRoot); if (++n >= cap) break } return rs };
+      const vis = (el) => { try { const r = el.getBoundingClientRect(); return r.width > 20 && r.height > 12 } catch { return false } };
+      const cands = [];
+      for (const r of roots()) {
+        let els; try { els = r.querySelectorAll('li,div,span') } catch { continue }
+        for (const el of els) {
+          const t = String(el.textContent || '').replace(/\\s+/g, '');
+          if (!t || t.length > 12) continue;
+          if (el.children.length > 0) continue;
+          if (!vis(el)) continue;
+          const rect = el.getBoundingClientRect();
+          if (rect.y < LO || rect.y > HI) continue;
+          if (Math.abs((rect.x + rect.width / 2) - ${cx}) > XW) continue;
+          cands.push({ x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2), t });
+        }
+      }
+      cands.sort((a, b) => a.y - b.y);
+      return JSON.stringify({ n: cands.length, first: cands[0] || null });
+    })()`
+    const _UNUSED_FIRST_OPTION = `(() => {
       const cap = 12000;
       const roots = () => { const rs = [document]; let n = 0; for (const el of document.querySelectorAll('*')) { if (el.shadowRoot) rs.push(el.shadowRoot); if (++n >= cap) break } return rs };
       const vis = (el) => { try { const r = el.getBoundingClientRect(); return r.width > 20 && r.height > 12 } catch { return false } };
@@ -855,14 +880,90 @@ async function main() {
     }
     let filledCount = 0
     for (let i = 1; i <= 14; i++) {
+      // **每轮开头先关掉弹窗**（2026-10-02 补，这是"填不上"的根因）：
+      // 点表单控件会让平台**重新校验 → 弹窗再次出现**，盖住控件，之后所有点击都打在弹窗上
+      // （Round 117 的截图证实）。三个零件都是现成的：可靠判据 + 动态取关闭按钮坐标 + 视口已调宽。
+      for (let k = 0; k < 3; k++) {
+        // **不检测，直接点**（2026-10-02 定案）：检测器（readModal/modalOpen）有**假阴性** ——
+        // 截图明明有弹窗、它报"不在"（Round 119）；于是"先检测再动作"变成了"永远不动作"。
+        // 而 ✕ 在视口调宽后位置稳定（约 innerWidth-58, 79），弹窗不在时点那里也无副作用。
+        const hit = JSON.parse(await probe.eval(`(() => {
+          const cap = 12000;
+          const roots = () => { const rs = [document]; let n = 0; for (const el of document.querySelectorAll('*')) { if (el.shadowRoot) rs.push(el.shadowRoot); if (++n >= cap) break } return rs };
+          const vis = (el) => { try { const r = el.getBoundingClientRect(); return r.width > 2 && r.height > 2 } catch { return false } };
+          for (const r of roots()) {
+            let els; try { els = r.querySelectorAll('[class*="dialog-close"], [class*="icon-close"]') } catch { continue }
+            for (const el of els) {
+              if (!vis(el)) continue;
+              const rect = el.getBoundingClientRect();
+              if (rect.x < innerWidth * 0.5) continue;
+              return JSON.stringify({ found: true, x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) });
+            }
+          }
+          return JSON.stringify({ found: false });
+        })()`).catch(() => ({ found: false })))
+        if (!hit.found) { hit.x = 0; hit.y = 79 }
+        if (!hit.x) { const vw = await probe.eval('innerWidth').catch(() => 1440); hit.x = Number(vw) - 58 }
+        await clickAtPoint(hit.x, hit.y)
+        await sleep(1200)
+      }
       const ctl = JSON.parse(await probe.eval(FIND_NEXT_SELECT).catch(() => '{"found":false}'))
       if (!ctl.found) { log('   没有更多「请选择」控件了（共填 ' + filledCount + ' 项）'); break }
       await clickAtPoint(ctl.x, ctl.y)
       await sleep(1500)
-      const opt = JSON.parse(await probe.eval(FIRST_OPTION).catch(() => '{"n":0,"first":null}'))
+      // **点开之后立刻截图**（2026-10-02 补，照搬"立即抓弹窗"那套）：
+      // 用来看清"点了「请选择」之后弹层到底开没开" —— 这一张图就能把问题分成两半：
+      //   弹层开了 → 问题在"选选项"；没开 → 问题在"点击"（时序/坐标/需要 hover）。
+      if (i === 1) {
+        const shotDd = await probe.send('Page.captureScreenshot', { format: 'png' }, 15000).catch(() => null)
+        if (shotDd) { fs.writeFileSync(path.join(OUT_DIR, 'publish-select-after-click.png'), Buffer.from(shotDd.data, 'base64')); log('      已截图：publish-select-after-click.png') }
+        // **判定实验**（2026-10-02）：点一次控件后弹窗是否出现？关掉后再点一次，它还会出现吗？
+        //   - 只在第一次出现 → 可绕开（点后检测+关闭+重试）
+        //   - 每次都出现   → 程序化填充走不通（平台在阻止），这条链路的边界就在这里
+        const mo1 = await readModal()
+        log('      第 1 次点击后：弹窗' + (mo1.open ? '**在**' : '不在'))
+        if (mo1.open) {
+          const h1 = JSON.parse(await probe.eval(`(() => {
+            const cap = 12000;
+            const roots = () => { const rs = [document]; let n = 0; for (const el of document.querySelectorAll('*')) { if (el.shadowRoot) rs.push(el.shadowRoot); if (++n >= cap) break } return rs };
+            const vis = (el) => { try { const r = el.getBoundingClientRect(); return r.width > 2 && r.height > 2 } catch { return false } };
+            for (const r of roots()) {
+              let els; try { els = r.querySelectorAll('[class*="dialog-close"], [class*="icon-close"]') } catch { continue }
+              for (const el of els) {
+                if (!vis(el)) continue;
+                const rect = el.getBoundingClientRect();
+                if (rect.x < innerWidth * 0.5) continue;
+                return JSON.stringify({ found: true, x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) });
+              }
+            }
+            return JSON.stringify({ found: false });
+          })()`).catch(() => ({ found: false })))
+          if (h1.found) { await clickAtPoint(h1.x, h1.y); await sleep(1200) }
+          const mo2 = await readModal()
+          log('      关掉后：弹窗' + (mo2.open ? '**还在**' : '已关掉'))
+          await clickAtPoint(ctl.x, ctl.y)
+          await sleep(1500)
+          const mo3 = await readModal()
+          log('      **第 2 次点击后：弹窗' + (mo3.open ? '又出现了（→ 每次点击都弹，程序化填充走不通）' : '没出现（→ 可绕开，加"点后检测+关闭+重试"即可）') + '**')
+          const shotR = await probe.send('Page.captureScreenshot', { format: 'png' }, 15000).catch(() => null)
+          if (shotR) { fs.writeFileSync(path.join(OUT_DIR, 'publish-select-after-reclick.png'), Buffer.from(shotR.data, 'base64')); log('      已截图：publish-select-after-reclick.png') }
+        }
+      }
+      const opt = JSON.parse(await probe.eval(firstOptionAt(ctl.x, ctl.y)).catch(() => '{"n":0,"first":null}'))
       if (!opt.first) { log(`   「${ctl.label}」弹层里没找到选项，跳过`); continue }
       await clickAtPoint(opt.first.x, opt.first.y)
       await sleep(1200)
+      // **进度检查**（2026-10-02 补）：填完再看一眼 —— 如果**同一位置**的控件还写着「请选择…」，
+      // 说明这一项**没填上**。此时**中止并如实报数**，而不是继续空转。
+      // 没有这个检查时，14 轮全在同一个控件上打转，还报了"共填了 14 项"（假成功 —— 实际 0 项）。
+      {
+        const still = JSON.parse(await probe.eval(FIND_NEXT_SELECT).catch(() => '{"found":false}'))
+        if (still.found && Math.abs(still.x - ctl.x) < 6 && Math.abs(still.y - ctl.y) < 6) {
+          log('   ⚠️ 这一项**没填上**（同一位置仍是「请选择…」）→ 中止，不再空转')
+          log('   **实际填上的项数：' + filledCount + '（不是 ' + i + '）**')
+          break
+        }
+      }
       filledCount++
       log(`   第 ${i} 项：「${ctl.label}」→ 选了「${opt.first.t}」（候选 ${opt.n} 个）`)
     }

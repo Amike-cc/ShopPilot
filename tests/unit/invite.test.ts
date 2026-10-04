@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+﻿import { describe, it, expect } from 'vitest'
 import {
   INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, inviteProfileFor,
   isBatchProfile, isAssistProfile
@@ -69,10 +69,29 @@ describe('达人邀约平台档案', () => {
       expect(p.selectors.script).toContain('合作说明')
       expect(p.texts.sendInvite).toBe('发送邀约')
       expect(p.texts.dialogMarker).toBe('确认发送邀约')
-      // 广场筛选：四个类型页签 + 带货类目 + 其他筛选（真实页面实测 2026-09-14）
+      // 广场筛选：四个类型页签 + 带货类目 + 带货销售总额 + 其他筛选（2026-10-02 真机逐项重测）
       expect(p.finderTypes).toEqual(['全部带货者', '直播带货者', '短视频带货者', '公众号带货者'])
+      expect(p.finderCategoryLabel).toBe('带货类目')
       expect(p.finderCategories).toContain('母婴')
       expect(p.finderCategories).toContain('美妆护肤')
+      // 34 项，且是**平台当前**的叫法：2026-09-14 那版记的「汽车电动」平台已改名为「汽摩电动」，
+      // 按旧文案点只会得到"页面上找不到"（真机实测确认）
+      expect(p.finderCategories.length).toBe(34)
+      expect(p.finderCategories).toContain('汽摩电动')
+      expect(p.finderCategories).not.toContain('汽车电动')
+      // 带货销售总额：只是「近30日带货数据」里的一个指标下拉，区间是复选框组（16 档，含「不限」）
+      expect(p.finderSalesMetric).toBe('带货销售总额')
+      expect(p.finderSalesTiers?.length).toBe(16)
+      expect(p.finderSalesTiers?.[0]).toBe('不限')
+      expect(p.finderSalesTiers).toContain('￥1万以下')
+      expect(p.finderSalesTiers).toContain('￥10万-20万')
+      expect(p.finderSalesTiers).toContain('￥700万-1000万')
+      expect(p.finderSalesTiers?.at(-1)).toBe('￥1000万以上')
+      // 实测：只有「全部带货者」这一档有「带货销售总额」指标（直播/短视频/公众号各只有本类型指标）
+      expect(p.finderSalesTypes).toEqual(['全部带货者'])
+      // 其他筛选 7 项（2026-09-14 那版只有 2 项）
+      expect(p.finderOtherLabel).toBe('其他筛选')
+      expect(p.finderOtherFilters).toEqual(['可开发票', '有联系方式', '有认证', '回复率高', '优质带货者', '近期选品活跃', '品牌好物推荐官'])
       expect(p.finderOtherFilters).toContain('有联系方式')
     }
   })
@@ -159,22 +178,35 @@ describe('微信小店（assist-form）步骤构造', () => {
     return loop.input.steps as any[]
   }
 
-  it('广场只导航+筛选一次；一轮=一个达人（回广场→详情→邀请带货→表单→发送→校验→回广场）', () => {
-    const steps = buildAssistSteps(WX as any, base, 'https://store.weixin.qq.com/shop/findersquare/find')
+  it('每轮重新进广场并应用筛选；一轮=一个达人（进广场→筛选→详情→邀请带货→表单→发送→校验）', () => {
+    const steps = buildAssistSteps(WX as any, { ...base, finderType: '直播带货者', finderOtherFilters: ['有联系方式'] }, 'https://store.weixin.qq.com/shop/findersquare/find')
     const { opening, loop } = wxParts(steps)
-    // 开头只导航一次（不再每轮重载：重载会重置分页/筛选，且候选顺序重新洗牌）
-    expect(opening[0].type).toBe('navigate')
-    expect(opening.some(s => s.type === 'waitForPage')).toBe(true)
     expect(loop.type).toBe('loop')
     expect(loop.input.stopOn).toContain('TASK_QUOTA_EXCEEDED')
     expect(loop.input.stopOn).toContain('TASK_SELECTION_SHORTFALL')
     expect(loop.input.maxRounds).toBeGreaterThan(1)
     const round = wxRound(steps)
     const types = round.map(s => s.type)
-    // 一轮开头先切回"一直活着的"广场标签页；轮内不再有 navigate
-    expect(types[0]).toBe('useTab')
-    expect(types[types.length - 1]).toBe('useTab')
-    expect(types).not.toContain('navigate')
+    /**
+     * **筛选必须在轮内**（这是 2026-10-03 真机实测后定下的契约）：
+     * 应用只为"当前活动标签页"保留 DOM <webview>，切到详情页再切回来时广场页是**重新加载**的，
+     * 页内筛选随之丢失。旧实现把"导航 + 筛选"放在 loop 外面（以为广场页一直活着），
+     * 第 1 位没错、第 2 轮起就会在没筛选的名单上继续邀约——所以这里钉死：
+     * 每轮自己导航 + 自己筛选，且轮内不再有 useTab。
+     */
+    expect(types[0]).toBe('navigate')
+    expect(types[1]).toBe('waitForPage')
+    // 地址到了不等于筛选区渲染好了：先等类目行的行标签出现，再点筛选
+    // （真机实测：不等就会点空，报"找不到「全部带货者」/「不限」"）
+    expect(types[2]).toBe('waitForText')
+    expect(round[2].input).toMatchObject({ text: '带货类目', deep: true })
+    const roundTexts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(roundTexts).toContain('直播带货者')
+    expect(roundTexts).toContain('有联系方式')
+    expect(types).not.toContain('useTab')
+    // loop 外面不再有任何筛选点击（否则就是又回到"只应用一次"的旧写法）
+    const outside = opening.filter(s => s.type === 'clickByText')
+    expect(outside.length).toBe(0)
     // 额度预检在轮内（额度为 0 → 干净停止）
     expect(types).toContain('requireQuota')
     const quota = round.find(s => s.type === 'requireQuota')!
@@ -187,16 +219,50 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect(types).toContain('ensureRows')
     // **没有人工确认门禁**（用户明确要求；点开始即真实发送）
     expect(types).not.toContain('waitForUserConfirmation')
-    // 发送 → 等平台确认弹窗 → 确认 → 校验表单商品行消失 → 截图
+    // 发送 → 等平台确认弹窗 → 确认 → **双判据**（弹窗关闭 + 商品行清空）→ 截图
     const sendIdx = round.findIndex(s => s.type === 'clickByText' && s.input.text === '发送邀约')
     expect(sendIdx).toBeGreaterThan(-1)
     expect(round[sendIdx].input).toMatchObject({ text: '发送邀约', deep: true, mode: 'real' })
     expect(round[sendIdx + 1]).toMatchObject({ type: 'waitForText', input: { text: '确认发送邀约', deep: true } })
     expect(round[sendIdx + 2]).toMatchObject({ type: 'clickByText', input: { text: '确认', deep: true, mode: 'real' } })
-    expect(round[sendIdx + 3].type).toBe('waitForGone')
+    // ① 确认弹窗真的关掉（按文案等消失：弹窗是平台通用组件、没有稳定选择器）
+    expect(round[sendIdx + 3]).toMatchObject({ type: 'waitForGone', input: { text: '确认发送邀约', deep: true } })
+    // ② 平台清空了「邀约商品」行
+    expect(round[sendIdx + 4]).toMatchObject({ type: 'waitForGone', input: { selector: WX.selectors.goodsRows, deep: true } })
     expect(types).toContain('screenshot')
-    // 一轮步骤数在 loop 的 40 步上限内
-    expect(round.length).toBeLessThanOrEqual(40)
+    // 一轮步骤数在 loop 的 80 步上限内（含筛选：极限配置约 78 步）
+    expect(round.length).toBeLessThanOrEqual(80)
+  })
+
+  it('7 天内邀过的达人：点「详情」时按台账昵称跳过，并回传昵称供记账', () => {
+    const withLedger = wxRound(buildAssistSteps(WX as any, { ...base, recentlyInvited: ['恩妹阅读', '郑奶奶科学育儿'] }, SQUARE))
+    const detail = withLedger.find(s => s.type === 'clickByText' && String(s.input.text) === '详情')!
+    // 台账昵称清单 → 引擎在点「详情」前把这些行剔掉（省一次详情页访问）
+    expect(detail.input.skipTexts).toEqual(['恩妹阅读', '郑奶奶科学育儿'])
+    // 无论有没有台账，都要回传"这一行是谁"，本轮真发出后写入台账
+    expect(detail.input.recordRowText).toBe(true)
+    // 没有台账时不生成 skipTexts（不猜），但仍要记账
+    const noLedger = wxRound(buildAssistSteps(WX as any, base, SQUARE)).find(s => s.type === 'clickByText' && String(s.input.text) === '详情')!
+    expect(noLedger.input.skipTexts).toBeUndefined()
+    expect(noLedger.input.recordRowText).toBe(true)
+    // 台账清单最多带 500 条（防止任务载荷被撑爆）
+    const many = wxRound(buildAssistSteps(WX as any, { ...base, recentlyInvited: Array.from({ length: 600 }, (_, i) => `达人${i}`) }, SQUARE))
+      .find(s => s.type === 'clickByText' && String(s.input.text) === '详情')!
+    expect((many.input.skipTexts as string[]).length).toBe(500)
+  })
+
+  it('额度护栏：本次最多邀约几位 = loop 的轮数上限（平台读不到剩余额度，这是我们唯一的硬上限）', () => {
+    // 显式设置 → 原样生效
+    const three = wxParts(buildAssistSteps(WX as any, { ...base, maxInvites: 3 }, SQUARE)).loop
+    expect(three.input.maxRounds).toBe(3)
+    // 缺省 → 面板默认值（10），不是"不限"
+    const fallback = wxParts(buildAssistSteps(WX as any, base, SQUARE)).loop
+    expect(fallback.input.maxRounds).toBe(10)
+    // 坏值 → 收敛到合法区间，绝不变成"无限发"
+    expect(wxParts(buildAssistSteps(WX as any, { ...base, maxInvites: 0 }, SQUARE)).loop.input.maxRounds).toBe(10)
+    expect(wxParts(buildAssistSteps(WX as any, { ...base, maxInvites: -5 }, SQUARE)).loop.input.maxRounds).toBe(10)
+    expect(wxParts(buildAssistSteps(WX as any, { ...base, maxInvites: 999 }, SQUARE)).loop.input.maxRounds).toBe(50)
+    expect(wxParts(buildAssistSteps(WX as any, { ...base, maxInvites: 7.6 }, SQUARE)).loop.input.maxRounds).toBe(8)
   })
 
   it('本页取不出人 → onCode 点「下一页」重试；单个人打不开 → 跳过换人；翻不动 → 由 stopOn 收工', () => {
@@ -211,12 +277,15 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect(next.input.missingCode).toBe('TASK_SELECTION_SHORTFALL')
     expect(next.input.disabledCode).toBe('TASK_SELECTION_SHORTFALL')
     expect(loop.input.stopOn).toContain('TASK_SELECTION_SHORTFALL')
-    // 单个达人详情页打不开（微应用间歇性不渲染）→ restart 跳过换人，且带连续跳过上限
+    // 单个达人详情页打不开（微应用间歇性不渲染）→ restart 跳过换人，且带连续跳过上限。
+    // 恢复步骤只退避：restart 会**重开本轮**，而本轮第一步就是"重新进广场 + 重新筛选"，
+    // 所以不需要（也不该）再插一个 useTab 去切标签页。
     const skip = (loop.input.onCode || []).find((r: any) => r.code === 'TASK_DAREN_PAGE_UNOPENABLE')!
     expect(skip).toBeTruthy()
     expect(skip.restart).toBe(true)
     expect(skip.limit).toBeGreaterThan(1)
-    expect(skip.steps.some((s: any) => s.type === 'useTab')).toBe(true)
+    expect(skip.steps.some((s: any) => s.type === 'waitMs')).toBe(true)
+    expect(skip.steps.some((s: any) => s.type === 'useTab')).toBe(false)
     // 这一位不满足平台合作条件（页面正常、只是不能邀约）→ advance：换下一位，且**不退避**
     // （不是限流，等多久都一样）。restart 与 advance 的差别在"要不要回滚已访问记录"，
     // 用 restart 会原地重试同一位直到耗尽次数。
@@ -236,24 +305,85 @@ describe('微信小店（assist-form）步骤构造', () => {
     expect((loop.input.onCode || []).some((r: any) => r.code === 'TASK_SELECTION_SHORTFALL')).toBe(false)
   })
 
-  it('筛选在开头应用一次；点不到「详情」=本页取不出（翻页恢复）', () => {
+  it('广场三行筛选：都限定在对应行内、点完回读勾选态（点了没选上就如实失败）', () => {
+    const steps = buildAssistSteps(WX as any, {
+      ...base,
+      finderType: '全部带货者',
+      finderCategories: ['汽摩电动'],
+      finderSalesTiers: ['￥10万-20万', '￥20万-30万'],
+      finderOtherFilters: ['有认证']
+    }, SQUARE)
+    const round = wxRound(steps)
+    const clicks = round.filter(s => s.type === 'clickByText')
+    const find = (text: string) => clicks.find(s => String(s.input.text) === text)!
+
+    // 类目：限定「带货类目」行（行标签文字在 DIV 里，上溯 2 层才是行容器）；
+    // 折叠态下受信任鼠标点不中行外的 chip → 用默认 JS 点击（真机实测合成 click 在折叠态一样生效）
+    const cat = find('汽摩电动')
+    expect(cat.input.within).toEqual({ text: '带货类目', climb: 2 })
+    expect(cat.input.mode).toBeUndefined()
+    expect(cat.input.skipIfChecked).toBe(true)
+    expect(cat.input.verifyChecked).toBe(true)
+    expect(cat.input.verifyCode).toBe('TASK_FILTER_NOT_APPLIED')
+    // 勾选类筛选允许重试：构造上幂等（已勾选则跳过、未勾选才重新定位再点）
+    expect(cat.retryLimit).toBe(2)
+
+    /**
+     * 带货销售总额：**状态无关**地打开下拉（2026-10-04 真机失败后改）。
+     *
+     * 旧写法"先点开 → 点档位 → 再点收"依赖"开局一定是收起"；用户连发到第 13 轮时面板已开，
+     * "先点开"反而点收了 → `找不到「不限」` → 已发出 12 位的整批中止。
+     * 现在：档位步骤带 openVia（不可见才去点 DT），收尾步骤带 onlyIfVisible（只在确实开着时收）。
+     */
+    const sale = find('￥10万-20万')
+    expect(sale.input.within).toEqual({ text: '带货销售总额', climb: 1 })
+    expect(sale.input.exact).toBe(true)
+    expect(sale.input.skipIfChecked).toBe(true)
+    expect(sale.input.verifyChecked).toBe(true)
+    expect(sale.input.openVia).toEqual({ text: '带货销售总额', exact: true, deep: true })
+    expect(sale.retryLimit).toBe(2)
+    expect(clicks.filter(s => String(s.input.text).startsWith('￥')).length).toBe(2)
+    const toggles = clicks.filter(s => String(s.input.text) === '带货销售总额')
+    expect(toggles.length).toBe(1) // 只剩"条件性收起"（开面板由档位步骤的 openVia 负责）
+    expect(toggles[0].input.exact).toBe(true)
+    expect(toggles[0].input.onlyIfVisible).toMatchObject({ text: '￥10万-20万', within: { text: '带货销售总额', climb: 1 } })
+    // 顺序：两个档位 → 收面板（档位在收起之前）
+    const order = clicks.map(s => String(s.input.text))
+    expect(order.indexOf('￥20万-30万')).toBeLessThan(order.lastIndexOf('带货销售总额'))
+
+    // 其他筛选：同样限定在「其他筛选」行内，同样允许安全重试
+    const other = find('有认证')
+    expect(other.input.within).toEqual({ text: '其他筛选', climb: 2 })
+    expect(other.input.verifyChecked).toBe(true)
+    expect(other.retryLimit).toBe(2)
+
+    // 没配筛选时不生成任何筛选点击（不猜、不多点）
+    const none = wxRound(buildAssistSteps(WX as any, base, SQUARE))
+      .filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(none).not.toContain('直播带货者')
+    expect(none).not.toContain('汽摩电动')
+    expect(none).not.toContain('带货销售总额')
+    expect(none).not.toContain('有认证')
+  })
+
+  it('每轮都重新应用筛选；点不到「详情」=本页取不出（翻页恢复）', () => {
     const steps = buildAssistSteps(WX as any, {
       ...base, finderType: '直播带货者', finderCategories: ['母婴'], finderOtherFilters: ['有联系方式']
     }, 'https://store.weixin.qq.com/shop/findersquare/find')
-    const { opening } = wxParts(steps)
-    const openTexts = opening.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
-    expect(openTexts).toContain('直播带货者')
-    expect(openTexts).toContain('母婴')
-    expect(openTexts).toContain('有联系方式')
     const round = wxRound(steps)
     const texts = round.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    // 三个筛选都在轮内（每轮重新点，理由见上面那条用例的契约说明）
+    expect(texts).toContain('直播带货者')
+    expect(texts).toContain('母婴')
+    expect(texts).toContain('有联系方式')
     // 进达人详情：取不出就按 PAGE_EXHAUSTED 交给 onCode 翻页（而不是直接收工）
     const detail = round.find(s => s.type === 'clickByText' && String(s.input.text) === '详情')!
     expect(detail.input.missingCode).toBe('TASK_PAGE_EXHAUSTED')
     // 平台点「详情」是 window.open 开新标签页（页面本身不跳转）→ 必须带 followTab，
-    // 否则引擎留在旧标签页等 finder-detail，整轮超时失败（2026-09-14 真店实测）
-    // 详情点击：广场必须留着（分页/筛选是页面内部状态，关了就得重载 → 分页丢、名单重洗）
-    expect(detail.input.followTab).toMatchObject({ urlIncludes: 'finder-detail', closeOld: false })
+    // 否则引擎留在旧标签页等 finder-detail，整轮超时失败（2026-09-14 真店实测）。
+    // closeOld:true —— 跟到详情页时关掉广场页：每轮开头会重新导航+筛选，
+    // 广场不再需要保活；留着它每轮泄漏一个标签页（实测两轮 123 → 126）。
+    expect(detail.input.followTab).toMatchObject({ urlIncludes: 'finder-detail', closeOld: true })
     // 选人靠"还没点过的第一条"：列表每次加载都会洗牌，"第几条"保证不了换人
     expect(detail.input.nth).toBe('unvisited')
     // 详情页的「邀请带货」是普通 BUTTON、点击后**同标签页 pushState** 到 initiate-invite
@@ -278,10 +408,12 @@ describe('微信小店（assist-form）步骤构造', () => {
     for (const inc of ['finder-detail', 'initiate-invite']) {
       expect(round.some(s => s.type === 'waitForPage' && String(s.input.urlIncludes) === inc)).toBe(true)
     }
-    // 不传筛选时不该出现这些点击
+    // 不传筛选时不该出现这些点击（轮内也没有）
     const step2 = buildAssistSteps(WX as any, base, SQUARE)
-    const openTexts2 = wxParts(step2).opening.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
-    expect(openTexts2).not.toContain('直播带货者')
+    const roundTexts2 = wxRound(step2).filter(s => s.type === 'clickByText').map(s => String(s.input.text))
+    expect(roundTexts2).not.toContain('直播带货者')
+    expect(roundTexts2).not.toContain('母婴')
+    expect(roundTexts2).not.toContain('有联系方式')
   })
 
   it('assist-form 的 aiGenerate 带 retryLimit（模型抖动不该把整批已发出的邀约打成失败）', () => {
@@ -369,17 +501,19 @@ describe('抖店（batch-list）步骤构造', () => {
     const types = round.map(s => s.type)
     expect(types[0]).toBe('navigate')
 
-    // 类目：chip + 级联项 + 校验（只点 chip 筛选不生效，这是实测修掉的缺陷）
+    // 类目：先等筛选区渲染（2026-10-04 快手真机：不等就点，弹层被留在屏幕外 -9999），
+    // 再点 chip + 级联项 + 校验（只点 chip 筛选不生效，这是实测修掉的缺陷）
+    const filterReady = round.find(s => s.type === 'waitForText' && String(s.input.text) === DD.texts.categoryLabel)!
+    expect(filterReady.input.within).toBeUndefined()
     const catChip = round.find(s => s.type === 'clickByText' && String(s.input.text) === '生鲜')!
     expect(catChip.input.within).toEqual({ selector: DD.categoryChipScope })
     const catLeaf = round.find(s => s.type === 'clickByText' && String(s.input.text) === '不限')!
     expect(catLeaf.input.within).toEqual({ selector: DD.categoryPopoverSelector })
-    const catVerify = round.find(s => s.type === 'waitForText')!
-    expect(String(catVerify.input.text)).toBe('生鲜')
+    // 生效校验：按锚点文案上溯定位（抖店），不是那个"等筛选区"的步骤
+    const catVerify = round.find(s => s.type === 'waitForText' && String(s.input.text) === '生鲜')!
     expect(catVerify.input.within).toEqual({ text: '已筛选', climb: 1 })
-    // 顺序：chip → 叶子；校验在列表出现之后（勾人之前）
-    expect(types.indexOf('clickByText')).toBeLessThan(types.lastIndexOf('clickByText'))
-    expect(types.indexOf('waitForText')).toBeGreaterThan(types.indexOf('waitForSelector'))
+    // 顺序：等筛选区 → chip → 叶子；校验在列表出现之后（勾人之前）
+    expect(types.indexOf('waitForText')).toBeLessThan(types.indexOf('clickByText'))
     expect(types.indexOf('waitForText')).toBeLessThan(types.indexOf('clickAll'))
 
     // 逐个勾选：clickAll 限定 tbody（不含表头全选），上限取用户设定值，允许滚动续选
@@ -502,7 +636,8 @@ describe('抖店（batch-list）步骤构造', () => {
     expect(texts).toContain('个护家清')
     expect(texts).toContain('家清纸品')
     expect(texts).not.toContain('不限')
-    const verifies = round.filter(s => s.type === 'waitForText').map(s => String(s.input.text))
+    // 生效校验那几条（排除"等筛选区渲染"的步骤：它按行标签等，不是校验）
+    const verifies = round.filter(s => s.type === 'waitForText' && String(s.input.text) !== DD.texts.categoryLabel).map(s => String(s.input.text))
     expect(verifies).toEqual(['个护家清', '家清纸品'])
     // loop 标签带上二级
     expect(String(build({ category: '个护家清', subcategory: '家清纸品' })[0].input.label)).toContain('个护家清/家清纸品')
@@ -512,7 +647,7 @@ describe('抖店（batch-list）步骤构造', () => {
     const texts2 = round2.filter(s => s.type === 'clickByText').map(s => String(s.input.text))
     expect(texts2).toContain('不限')
     expect(texts2).not.toContain('家清纸品')
-    expect(round2.filter(s => s.type === 'waitForText')).toHaveLength(1)
+    expect(round2.filter(s => s.type === 'waitForText' && String(s.input.text) !== DD.texts.categoryLabel)).toHaveLength(1)
 
     // 一级不筛 → 不生成类目相关步骤（不猜、不多点）
     const round3 = roundSteps(build({ category: '', subcategory: '' }))
@@ -543,7 +678,7 @@ describe('抖店（batch-list）步骤构造', () => {
     })
     // 悬停必须在点三级之前（顺序反了就点不到）
     expect(round.indexOf(hoverStep)).toBeLessThan(round.indexOf(thirdClick))
-    const verificationSteps = round.filter(s => s.type === 'waitForText')
+    const verificationSteps = round.filter(s => s.type === 'waitForText' && String(s.input.text) !== DD.texts.categoryLabel)
     const verifies = verificationSteps.map(s => String(s.input.text))
     expect(verifies).toEqual(['个护家清', '家清纸品', '纸品'])
     expect(verificationSteps.find(s => s.input.text === '纸品')!.input).toMatchObject({ token: true })
@@ -552,7 +687,7 @@ describe('抖店（batch-list）步骤构造', () => {
     // 没有三级值时仍保留原来的两级行为：直接点二级（不悬停、不猜叶子）
     const twoLevel = roundSteps(build({ category: '个护家清', subcategory: '家清纸品', category3: '' }))
     expect(twoLevel.map(s => s.type)).not.toContain('hover')
-    expect(twoLevel.filter(s => s.type === 'waitForText').map(s => String(s.input.text))).toEqual(['个护家清', '家清纸品'])
+    expect(twoLevel.filter(s => s.type === 'waitForText' && String(s.input.text) !== DD.texts.categoryLabel).map(s => String(s.input.text))).toEqual(['个护家清', '家清纸品'])
     // 快手（两级平台）同样不生成 hover
     const KS2 = inviteProfileFor('快手小店')!
     const ksSteps = buildBatchSteps(KS2 as any, {
@@ -640,6 +775,42 @@ describe('快手小店（batch-list）步骤构造', () => {
     expect(String(ksBuild({ count: 1 })[0].input.label)).toContain('每批 2 位')
   })
 
+  it('抽屉没开要报得清楚：独立错误码 + 计入 stopOn（2026-10-04 快手真机）', () => {
+    /**
+     * 实测：点「批量邀约」时平台把"近 7 天内已邀过（含被拒）"的达人**静默剔除**；
+     * 勾中的全被剔除时这次点击等于没发生（选择清空、抽屉不开、页面无任何提示）。
+     * 旧写法只报 TASK_TIMEOUT: 等待选择器… → 看日志的人以为页面卡了。
+     */
+    const round = ksRound()
+    const waitDrawer = round.find(s => s.type === 'waitForSelector' && s.input.code)!
+    expect(waitDrawer.input.code).toBe('TASK_DRAWER_NOT_OPEN')
+    expect(String(waitDrawer.input.hint)).toContain('一位都没发出去')
+    // 它必须**紧跟**在「批量邀约」之后（顺序错了就变成"等别的元素"）
+    const types = round.map(s => `${s.type}:${String(s.input.text || s.input.selector || '')}`)
+    expect(types.indexOf('clickByText:批量邀约')).toBeLessThan(types.indexOf(`waitForSelector:${KS.scriptSelector}`))
+    // loop 侧当"按预期收工"：这一轮没发出去，重试同一批人也不会变
+    expect(ksBuild()[0].input.stopOn).toContain('TASK_DRAWER_NOT_OPEN')
+  })
+
+  it('7 天内已邀过的达人在勾选阶段就跳过（平台会静默剔除他们，剔光了整批白跑）', () => {
+    const withLedger = ksRound({ recentlyInvited: ['力哥', '九零后老母亲一拖二的日常', '  ', '力哥'] })
+    const clickAll = withLedger.find(s => s.type === 'clickAll')!
+    // 去空 + 去重由载荷侧收口；这里确认清单真的进了步骤（平台没标记，只能靠台账）
+    expect(clickAll.input.skipTexts).toEqual(['力哥', '九零后老母亲一拖二的日常', '力哥'])
+    // 没有台账时不生成 skipTexts（不猜）
+    expect(ksRound().find(s => s.type === 'clickAll')!.input.skipTexts).toBeUndefined()
+    // 最多 500 条，防止载荷被撑爆
+    const many = ksRound({ recentlyInvited: Array.from({ length: 700 }, (_, i) => `达人${i}`) })
+    expect((many.find(s => s.type === 'clickAll')!.input.skipTexts as string[]).length).toBe(500)
+  })
+
+  it('合作信息行按 2026-10-04 实测收敛为 3 项（「专属推荐」已从页面消失）', () => {
+    // 真机实测：整页 innerText 里搜不到「专属推荐」；档案若保留它，面板勾上就必然点空
+    const coop = (KS.extraFilterRows || []).find(r => r.label === '合作信息')!
+    expect(coop.options).toEqual(['有联系方式', '无坑位费', '招商中达人'])
+    expect(JSON.stringify(KS)).not.toContain('专属推荐')
+  })
+
   it('类目：chip 与叶子都限定范围；快手用「行标签+上溯」，点「全部」= 不限子类', () => {
     const round = ksRound()
     const chip = round.find(s => s.type === 'clickByText' && String(s.input.text) === '个护家清')!
@@ -649,7 +820,8 @@ describe('快手小店（batch-list）步骤构造', () => {
     // 生效校验：在**选择器定位的标记容器**里找类目名。
     // 快手那条标记（.pro-tagForm-result）整段是子元素、自身没有文本节点，
     // 按文案上溯找不到 → 必须用 filteredScope 的选择器（真机彩排实测踩到）。
-    const verify = round.find(s => s.type === 'waitForText')!
+    // 生效校验那条（排除"等筛选区渲染"的步骤）
+    const verify = round.find(s => s.type === 'waitForText' && String(s.input.text) !== KS.categoryLabelText)!
     expect(String(verify.input.text)).toBe('个护家清')
     expect(verify.input.within).toEqual({ selector: KS.filteredScope })
   })
@@ -914,9 +1086,12 @@ describe('buildInviteSteps 分派与 urlPathHint', () => {
     expect(() => buildInviteSteps(WX, {}, 'https://x')).toThrow('assist')
     expect(() => buildInviteSteps(DD, {}, 'https://x')).toThrow('batch')
     const steps = buildInviteSteps(WX, { assist: { contact: 'a', wechat: 'wx', phone: '13800000000', script: 'b', scriptMode: 'manual', productCount: 1 } }, 'https://x')
-    // 微信：先开广场（navigate 一次），随后才是 loop（每轮一个达人）
-    expect(steps[0].type).toBe('navigate')
-    expect(steps[steps.length - 1].type).toBe('loop')
+    // 微信：整条序列就是那一个 loop（每轮自己进广场 + 筛选 + 邀一位）；
+    // 广场导航在**轮内**，不再是 loop 前面的独立步骤（见"每轮重新进广场并应用筛选"那条用例）
+    expect(steps).toHaveLength(1)
+    expect(steps[0].type).toBe('loop')
+    const round = steps[0].input.steps as any[]
+    expect(round[0].type).toBe('navigate')
   })
   it('urlPathHint 取末段路径', () => {
     expect(urlPathHint('https://store.weixin.qq.com/shop/findersquare/find')).toBe('find')
@@ -933,6 +1108,14 @@ describe('任务步骤输入 schema', () => {
     expect(stepInputSchemas.waitForText.safeParse({ text: '确认发送邀约', deep: true }).success).toBe(true)
     expect(stepInputSchemas.waitForText.safeParse({ text: '纸品', token: true }).success).toBe(true)
     expect(stepInputSchemas.waitForText.safeParse({ text: '纸品', exact: true, token: true }).success).toBe(false)
+    /**
+     * waitForGone 的两种判据（2026-10-03 加 text）：selector 与 text **二选一**。
+     * 都缺 = 等了个寂寞；都给 = 判据含糊（到底等哪个消失？），所以两种都拒绝。
+     */
+    expect(stepInputSchemas.waitForGone.safeParse({ selector: 'tbody tr', deep: true }).success).toBe(true)
+    expect(stepInputSchemas.waitForGone.safeParse({ text: '确认发送邀约', deep: true }).success).toBe(true)
+    expect(stepInputSchemas.waitForGone.safeParse({ deep: true }).success).toBe(false)
+    expect(stepInputSchemas.waitForGone.safeParse({ selector: 'tbody tr', text: '确认发送邀约' }).success).toBe(false)
     expect(stepInputSchemas.ensureRows.safeParse({
       rowsSelector: 'tbody tr', checkboxSelector: 'tbody label',
       addText: '添加商品', confirmText: '确认', min: 1, max: 3, deep: true
@@ -1029,6 +1212,41 @@ describe('任务步骤输入 schema', () => {
     expect(stepInputSchemas.clickByText.safeParse({ text: 'x', absentText: 'y'.repeat(201) }).success).toBe(false)
     expect(stepInputSchemas.clickByText.safeParse({ text: 'x', absentCode: 'z'.repeat(41) }).success).toBe(false)
     expect(stepInputSchemas.clickByText.safeParse({ text: 'x', absentText: 'y', evil: 1 }).success).toBe(false)
+  })
+
+  it('verifyChecked：点完回读勾选态（平台只把"筛选生效没有"表达在勾选态上时用它兜底）', () => {
+    const ok = {
+      text: '有认证', deep: true, within: { text: '其他筛选', climb: 2 },
+      skipIfChecked: true, verifyChecked: true, verifyCode: 'TASK_FILTER_NOT_APPLIED'
+    }
+    expect(stepInputSchemas.clickByText.safeParse(ok).success).toBe(true)
+    // 只给 verifyChecked 也可以（错误码取默认值）
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', verifyChecked: true }).success).toBe(true)
+    // 类型/长度/多余键照旧被拒
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', verifyChecked: 'yes' }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', verifyCode: 'z'.repeat(41) }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', verifyChecked: true, evil: 1 }).success).toBe(false)
+  })
+
+  it('下拉开关语义的步骤输入：openVia / onlyIfVisible 可过校验，坏值被拒', () => {
+    // 档位步骤：面板没开就先点开（状态无关）
+    expect(stepInputSchemas.clickByText.safeParse({ text: '￥10万-20万', exact: true, openVia: { text: '带货销售总额', exact: true, deep: true } }).success).toBe(true)
+    // 收尾步骤：只在面板确实开着时才点（判据限定在该指标 dl 内）
+    expect(stepInputSchemas.clickByText.safeParse({ text: '带货销售总额', exact: true, onlyIfVisible: { text: '￥10万-20万', deep: true, within: { text: '带货销售总额', climb: 1 } } }).success).toBe(true)
+    // 缺 text / 多余键 / within 写法不对 → 拒
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', openVia: {} }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', openVia: { text: 'y', evil: 1 } }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', onlyIfVisible: {} }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: 'x', onlyIfVisible: { text: 'y', within: { selector: '.a', evil: 1 } } }).success).toBe(false)
+  })
+
+  it('7 天内不重复邀约的步骤输入：skipTexts / recordRowText 可过校验，坏值被拒', () => {
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', deep: true, mode: 'real', nth: 'unvisited', skipTexts: ['恩妹阅读', '郑奶奶科学育儿'], recordRowText: true }).success).toBe(true)
+    // 空串/超长/超量都不接受（空串会让"包含"判断恒真，等于把整页剔光）
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', skipTexts: [''] }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', skipTexts: ['x'.repeat(121)] }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', skipTexts: Array.from({ length: 501 }, (_, i) => `n${i}`) }).success).toBe(false)
+    expect(stepInputSchemas.clickByText.safeParse({ text: '详情', recordRowText: 'yes' }).success).toBe(false)
   })
 
   it('loop.onCode：恢复步骤同样走白名单（未登记类型/超量被拒）', () => {

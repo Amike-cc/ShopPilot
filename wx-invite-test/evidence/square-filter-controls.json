@@ -1,0 +1,1565 @@
+{
+ "count": 193,
+ "items": [
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": null,
+   "v": null,
+   "cls": "flex items-center justify-start",
+   "rect": [
+    24,
+    24,
+    132,
+    32
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "支付摇优惠开通条件 代发售后对商家的影响 搜索",
+   "v": null,
+   "cls": "",
+   "rect": [
+    188,
+    20,
+    260,
+    40
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "支付摇优惠开通条件 代发售后对商家的影响",
+   "v": null,
+   "cls": "search_input__content",
+   "rect": [
+    229,
+    21,
+    154,
+    38
+   ]
+  },
+  {
+   "tag": "INPUT",
+   "type": "text",
+   "t": null,
+   "v": null,
+   "cls": "search_input__native",
+   "rect": [
+    229,
+    21,
+    154,
+    38
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "支付摇优惠开通条件",
+   "v": null,
+   "cls": "rolling_word rolling_word--current is-leaving",
+   "rect": [
+    229,
+    30,
+    154,
+    20
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "代发售后对商家的影响",
+   "v": null,
+   "cls": "rolling_word rolling_word--incoming is-entering",
+   "rect": [
+    229,
+    50,
+    154,
+    20
+   ]
+  },
+  {
+   "tag": "BUTTON",
+   "type": "submit",
+   "t": "搜索",
+   "v": null,
+   "cls": "search_input__button",
+   "rect": [
+    391,
+    26,
+    50,
+    28
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "成长中心 开发文档 商家社区 微信小店官网",
+   "v": null,
+   "cls": "text-black90 flex items-center justify-start ml-[3",
+   "rect": [
+    480,
+    20,
+    324,
+    40
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "成长中心",
+   "v": null,
+   "cls": "cursor-pointer mr-[24px] last:mr-0 whitespace-nowr",
+   "rect": [
+    480,
+    29,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "开发文档",
+   "v": null,
+   "cls": "cursor-pointer mr-[24px] last:mr-0 whitespace-nowr",
+   "rect": [
+    560,
+    29,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "商家社区",
+   "v": null,
+   "cls": "cursor-pointer mr-[24px] last:mr-0 whitespace-nowr",
+   "rect": [
+    640,
+    29,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "微信小店官网",
+   "v": null,
+   "cls": "cursor-pointer mr-[24px] last:mr-0 whitespace-nowr",
+   "rect": [
+    720,
+    29,
+    84,
+    22
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "99+",
+   "v": null,
+   "cls": "flex items-center justify-end text-[14px] text-bla",
+   "rect": [
+    1028,
+    24,
+    253,
+    32
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": null,
+   "v": null,
+   "cls": "weui-desktop-popover__target",
+   "rect": [
+    1028,
+    24,
+    20,
+    32
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "99+",
+   "v": null,
+   "cls": "header_icon_dot_notices_back longer_tip",
+   "rect": [
+    1163,
+    21,
+    33,
+    20
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "首页",
+   "v": null,
+   "cls": "big_menu-name big_menu-name__home",
+   "rect": [
+    52,
+    116,
+    100,
+    20
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "店铺管理",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    148,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "商品管理",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    192,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "订单/配送",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    236,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "售后管理",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    280,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "推荐运营",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    324,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "营销中心",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    368,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "用户运营",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    412,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "小店推广",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    456,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "优选联盟",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    500,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "平台服务",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    544,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "资金结算",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    588,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "店铺数据",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    632,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "服务市场",
+   "v": null,
+   "cls": "flex items-center justify-start h-[44px] pl-[28px]",
+   "rect": [
+    24,
+    676,
+    128,
+    44
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "推荐 找带货者 带货者招商 我的邀约 邀约模版",
+   "v": null,
+   "cls": "flex items-center h-[56px] px-[24px] mb-[16px] bg-",
+   "rect": [
+    152,
+    142,
+    1064,
+    56
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "推荐",
+   "v": null,
+   "cls": "text-[17px] mr-[32px] cursor-pointer flex items-ce",
+   "rect": [
+    176,
+    157,
+    34,
+    27
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "找带货者",
+   "v": null,
+   "cls": "text-[var(--minishop-Theme)] font-medium text-[17p",
+   "rect": [
+    242,
+    157,
+    68,
+    27
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "带货者招商",
+   "v": null,
+   "cls": "text-[17px] mr-[32px] cursor-pointer flex items-ce",
+   "rect": [
+    342,
+    157,
+    85,
+    27
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "我的邀约",
+   "v": null,
+   "cls": "text-[17px] mr-[32px] cursor-pointer flex items-ce",
+   "rect": [
+    459,
+    157,
+    68,
+    27
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "邀约模版",
+   "v": null,
+   "cls": "text-[17px] mr-[32px] cursor-pointer flex items-ce",
+   "rect": [
+    559,
+    157,
+    68,
+    27
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "全部带货者 直播带货者 短视频带货者 公众号带货者",
+   "v": null,
+   "cls": "mt-4 flex justify-between items-center mb-3 border",
+   "rect": [
+    176,
+    214,
+    1016,
+    66
+   ]
+  },
+  {
+   "tag": "LI",
+   "type": null,
+   "t": "全部带货者",
+   "v": null,
+   "cls": "weui-desktop-tab__nav weui-desktop-tab__nav_curren",
+   "rect": [
+    176,
+    218,
+    80,
+    62
+   ]
+  },
+  {
+   "tag": "LI",
+   "type": null,
+   "t": "直播带货者",
+   "v": null,
+   "cls": "weui-desktop-tab__nav",
+   "rect": [
+    296,
+    218,
+    80,
+    62
+   ]
+  },
+  {
+   "tag": "LI",
+   "type": null,
+   "t": "短视频带货者",
+   "v": null,
+   "cls": "weui-desktop-tab__nav",
+   "rect": [
+    416,
+    218,
+    96,
+    62
+   ]
+  },
+  {
+   "tag": "LI",
+   "type": null,
+   "t": "公众号带货者",
+   "v": null,
+   "cls": "weui-desktop-tab__nav",
+   "rect": [
+    552,
+    218,
+    96,
+    62
+   ]
+  },
+  {
+   "tag": "BUTTON",
+   "type": "button",
+   "t": null,
+   "v": null,
+   "cls": "weui-desktop-icon-btn weui-desktop-search__btn",
+   "rect": [
+    1160,
+    237,
+    20,
+    20
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "带货类目",
+   "v": null,
+   "cls": "weui-desktop-form__label",
+   "rect": [
+    176,
+    304,
+    112,
+    28
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "带货类目",
+   "v": null,
+   "cls": "text-[var(--minishop-Black-0)]/55",
+   "rect": [
+    176,
+    304,
+    112,
+    28
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "文玩文创",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    312,
+    304,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "文玩文创",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    333,
+    307,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "珠宝首饰",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    413,
+    304,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "珠宝首饰",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    434,
+    307,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "家纺",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    514,
+    304,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "家纺",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    535,
+    307,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "运动户外",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    587,
+    304,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "运动户外",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    608,
+    307,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "母婴",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    688,
+    304,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "母婴",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    709,
+    307,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "家用电器",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    761,
+    304,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "家用电器",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    782,
+    307,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "数码",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    862,
+    304,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "数码",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    883,
+    307,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "鞋靴",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    935,
+    304,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "鞋靴",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    956,
+    307,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "家庭清洁/纸品",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    1008,
+    304,
+    111,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "家庭清洁/纸品",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    1029,
+    307,
+    90,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "箱包皮具",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    312,
+    344,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "箱包皮具",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    333,
+    347,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "个人护理",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    413,
+    344,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "个人护理",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    434,
+    347,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "食品饮料",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    514,
+    344,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "食品饮料",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    535,
+    347,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "生鲜",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    615,
+    344,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "生鲜",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    636,
+    347,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "家居日用",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    688,
+    344,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "家居日用",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    709,
+    347,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "家具",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    789,
+    344,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "家具",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    810,
+    347,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "酒类",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    862,
+    344,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "酒类",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    883,
+    347,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "钟表",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    935,
+    344,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "钟表",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    956,
+    347,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "图书",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    1008,
+    344,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "图书",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    1029,
+    347,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "保健食品/膳食营养补充食品",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    312,
+    384,
+    195,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "保健食品/膳食营养补充食品",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    333,
+    387,
+    174,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "服饰内衣",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    531,
+    384,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "服饰内衣",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    552,
+    387,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "家装建材",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    632,
+    384,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "家装建材",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    653,
+    387,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "美妆护肤",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    733,
+    384,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "美妆护肤",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    754,
+    387,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "汽摩电动",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    834,
+    384,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "汽摩电动",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    855,
+    387,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "玩具乐器",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    935,
+    384,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "玩具乐器",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    956,
+    387,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "教育培训",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    1036,
+    384,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "教育培训",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    1057,
+    387,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "农资园艺",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    312,
+    424,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "农资园艺",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    333,
+    427,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "宠物生活",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    413,
+    424,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "宠物生活",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    434,
+    427,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "成人用品",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    514,
+    424,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "成人用品",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    535,
+    427,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "酒旅",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    615,
+    424,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "酒旅",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    636,
+    427,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "餐饮",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    688,
+    424,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "餐饮",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    709,
+    427,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "电脑、办公",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    761,
+    424,
+    91,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "电脑、办公",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    782,
+    427,
+    70,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "手机通讯",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    876,
+    424,
+    77,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "手机通讯",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    897,
+    427,
+    56,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "厨具",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    977,
+    424,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "厨具",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    998,
+    427,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "其他",
+   "v": null,
+   "cls": "weui-desktop-form__check-label",
+   "rect": [
+    1050,
+    424,
+    49,
+    28
+   ]
+  },
+  {
+   "tag": "SPAN",
+   "type": null,
+   "t": "其他",
+   "v": null,
+   "cls": "weui-desktop-form__check-content",
+   "rect": [
+    1071,
+    427,
+    28,
+    22
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "展开",
+   "v": null,
+   "cls": "whitespace-nowrap text-[var(--minishop-Link)] curs",
+   "rect": [
+    1146,
+    304,
+    46,
+    22
+   ]
+  },
+  {
+   "tag": "LABEL",
+   "type": null,
+   "t": "近30日带货数据",
+   "v": null,
+   "cls": "weui-desktop-form__label",
+   "rect": [
+    176,
+    348,
+    112,
+    28
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "近30日带货数据",
+   "v": null,
+   "cls": "text-[var(--minishop-Black-0)]/55",
+   "rect": [
+    176,
+    348,
+    112,
+    28
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "带货销售总额",
+   "v": null,
+   "cls": "weui-desktop-form__dropdown weui-desktop-form__dro",
+   "rect": [
+    312,
+    348,
+    108,
+    28
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "直播观众数",
+   "v": null,
+   "cls": "weui-desktop-form__dropdown weui-desktop-form__dro",
+   "rect": [
+    444,
+    348,
+    94,
+    28
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "直播销售额",
+   "v": null,
+   "cls": "weui-desktop-form__dropdown weui-desktop-form__dro",
+   "rect": [
+    562,
+    348,
+    94,
+    28
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "直播GPM",
+   "v": null,
+   "cls": "weui-desktop-form__dropdown weui-desktop-form__dro",
+   "rect": [
+    680,
+    348,
+    85,
+    28
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "视频观众数",
+   "v": null,
+   "cls": "weui-desktop-form__dropdown weui-desktop-form__dro",
+   "rect": [
+    789,
+    348,
+    94,
+    28
+   ]
+  },
+  {
+   "tag": "DIV",
+   "type": null,
+   "t": "视频销售额",
+   "v": null,
+   "cls": "weui-desktop-form__dropdown weui-desktop-form__dro",
+   "rect": [
+    907,
+    348,
+    94,
+    28
+   ]
+  }
+ ]
+}

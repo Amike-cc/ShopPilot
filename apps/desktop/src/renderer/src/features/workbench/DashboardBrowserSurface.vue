@@ -197,9 +197,66 @@
                 </template>
                 <template v-else>
                   <div class="invite-form-grid"><label class="invite-field"><span>邀约联系人</span><input v-model="invite.contact" data-test="invite-contact" placeholder="联系人" /></label><label class="invite-field"><span>微信号</span><input v-model="invite.wechat" data-test="invite-wechat" placeholder="微信号" /></label><label class="invite-field"><span>手机号</span><input v-model="invite.phone" data-test="invite-phone" placeholder="手机号" /></label></div>
+                  <!-- 广场筛选（带货者广场上真实存在的三行筛选：带货类目 / 近30日带货数据·带货销售总额 / 其他筛选）。
+                       选项全部来自真机逐项实测（见 shared/constants/invite.ts 的微信档案注释）：
+                       面板只提供实测过的文案，避免点了页面又找不到（实测平台把「汽车电动」改成了「汽摩电动」）。 -->
+                  <label class="invite-field" style="margin-top:8px"><span>带货者类型</span>
+                    <select v-model="invite.finderType" data-test="invite-finder-type">
+                      <option v-for="t in inviteProfile.finderTypes" :key="t" :value="t">{{ t }}</option>
+                    </select>
+                  </label>
+                  <div class="invite-choice-group">
+                    <span>{{ inviteProfile.finderCategoryLabel }}
+                      <small v-if="invite.finderCategories.length"> · 已选 {{ invite.finderCategories.length }} 项</small>
+                      <button v-if="invite.finderCategories.length" type="button" class="browser-panel-row-action" data-test="invite-finder-cats-clear" @click="invite.finderCategories.splice(0)">清空</button>
+                    </span>
+                    <input v-if="inviteCatsExpanded || inviteCatQuery" v-model="inviteCatQuery" type="text" class="invite-cat-search" data-test="invite-cat-search" placeholder="搜索类目，如 母婴 / 生鲜" />
+                    <div class="invite-chips">
+                      <label v-for="c in inviteCategoryShown" :key="c" class="inv-chip" :class="{ on: invite.finderCategories.includes(c) }">
+                        <input type="checkbox" :value="c" v-model="invite.finderCategories" :data-test="'invite-finder-category-' + c" />{{ c }}
+                      </label>
+                    </div>
+                    <button
+                      v-if="!inviteCatQuery && (inviteCategoryHidden > 0 || inviteCatsExpanded)"
+                      type="button" class="mini-btn" data-test="invite-finder-cats-toggle"
+                      @click="inviteCatsExpanded = !inviteCatsExpanded"
+                    >{{ inviteCatsExpanded ? '收起类目' : `展开全部 ${inviteProfile.finderCategories.length} 项（还有 ${inviteCategoryHidden} 项）` }}</button>
+                  </div>
+                  <div v-if="inviteProfile.finderSalesMetric && inviteProfile.finderSalesTiers?.length" class="invite-choice-group">
+                    <span>{{ inviteProfile.finderSalesMetric }} <small>近30日 · 可多选 · 选完立即生效</small></span>
+                    <div class="invite-chips">
+                      <label
+                        v-for="tier in inviteProfile.finderSalesTiers" :key="tier"
+                        class="inv-chip" :class="{ on: invite.finderSalesTiers.includes(tier) }"
+                      >
+                        <input
+                          type="checkbox" :value="tier" :checked="invite.finderSalesTiers.includes(tier)"
+                          :data-test="'invite-finder-sales-' + tier" @change="toggleSalesTier(tier)"
+                        />{{ tier }}
+                      </label>
+                    </div>
+                    <div class="env-note" v-if="inviteSalesTypeWarning">{{ inviteSalesTypeWarning }}</div>
+                  </div>
+                  <div class="invite-choice-group">
+                    <span>{{ inviteProfile.finderOtherLabel }}</span>
+                    <div class="invite-chips">
+                      <label v-for="f in inviteProfile.finderOtherFilters" :key="f" class="inv-chip" :class="{ on: invite.finderOtherFilters.includes(f) }">
+                        <input type="checkbox" :value="f" v-model="invite.finderOtherFilters" :data-test="'invite-finder-other-' + f" />{{ f }}
+                      </label>
+                    </div>
+                  </div>
+                  <div class="env-note">广场筛选会在「开始邀约」时由任务引擎按顺序应用（点完会回读勾选态，没选上就如实失败）。</div>
                 </template>
                 <ul v-if="inviteMissingItems.length" class="invite-missing" data-test="invite-missing"><li v-for="item in inviteMissingItems" :key="item">{{ item }}</li></ul>
-                <div class="invite-start-row"><button type="button" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="startInvite"><img class="button-icon" :src="browserStartIcon" alt="" />{{ inviteSubmitting ? '正在启动…' : '开始邀约' }}</button><span class="row-sub">{{ inviteReady ? '配置完整，可创建真实任务' : '补齐必填项后可开始' }}</span></div>
+                <div class="invite-start-row">
+                  <button type="button" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="startInvite"><img class="button-icon" :src="browserStartIcon" alt="" />{{ inviteSubmitting ? '正在启动…' : '开始邀约' }}</button>
+                  <label class="invite-max-invites" title="平台不显示今日剩余次数，这里是我们自己的上限：到量就干净收工">本次最多邀约
+                    <input type="number" min="1" max="50" step="1" v-model.number="invite.maxInvites" data-test="invite-max-invites" />
+                    位
+                  </label>
+                  <span class="row-sub">{{ inviteReady ? `配置完整，最多发 ${invite.maxInvites} 位` : '补齐必填项后可开始' }}</span>
+                  <span v-if="inviteRecentCount" class="row-sub" data-test="invite-recent-count">· 近 7 天已邀 {{ inviteRecentCount }} 位，会自动跳过</span>
+                </div>
               </template>
             </div>
             <div class="env-sec invite-live-sec"><div class="env-h">达人邀约实时日志<span v-if="inviteLatest" class="row-sub"> · {{ inviteStatus(inviteLatest) }}</span></div>
@@ -478,10 +535,18 @@ const invite = reactive({
   category: '', subcategory: '', category3: '', levels: [] as string[], count: 5,
   script: '', scriptMode: 'manual' as 'manual' | 'ai', benefits: [] as string[], strengths: [] as string[],
   mainCategory: '', extraFilters: {} as Record<string, string[]>, batchContact: '', batchPhone: '', batchWechat: '', batchProductCount: 1,
-  contact: '', wechat: '', phone: '', productIds: '', finderType: '全部带货者', finderCategories: [] as string[], finderOtherFilters: [] as string[]
+  contact: '', wechat: '', phone: '', productIds: '', finderType: '全部带货者', finderCategories: [] as string[], finderSalesTiers: [] as string[], finderOtherFilters: [] as string[],
+  /**
+   * 额度护栏：本次最多邀约几位。
+   * 平台页面读不到「今日剩余 N 次邀请机会」（2026-10-02/03 两次真机实测都没有），
+   * 所以 `requireQuota` 拿不到数、`TASK_QUOTA_EXCEEDED` 实际不会触发——这个值是我们唯一能保证的上限。
+   */
+  maxInvites: 10
 })
 const inviteSaving = ref(false)
 const inviteSubmitting = ref(false)
+/** 近 7 天已邀过的达人数（开跑时查台账得到；用于面板提示"会自动跳过"） */
+const inviteRecentCount = ref(0)
 const inviteConfigLoaded = ref(false)
 let inviteConfigLoadSerial = 0
 let inviteConfigLoadedStoreId = ''
@@ -511,6 +576,49 @@ const inviteMissingItems = computed(() => {
   if (!profile || !ws.displayedStoreId) return ['请先打开一个店铺']
   return inviteTaskIssues({ profile, config: JSON.parse(JSON.stringify(invite)) })
 })
+/**
+ * 广场筛选的界面辅助（仅 assist-form/微信小店用到）：
+ * 类目 34 项在侧栏里太长，默认只铺一屏 + 搜索；销售总额档位的「不限」与具体档位互斥
+ * （实测平台允许同时勾，但那等于"不限或某档"，语义含糊——面板按互斥处理，避免出现
+ * 一个用户自己都读不懂的组合，运行时会如实按所选档位点击）。
+ */
+const inviteCatQuery = ref('')
+const inviteCatsExpanded = ref(false)
+const inviteCategoryShown = computed(() => {
+  const profile = inviteProfile.value
+  if (!profile || isBatchProfile(profile)) return []
+  const all = profile.finderCategories as readonly string[]
+  const query = inviteCatQuery.value.trim()
+  if (query) return all.filter(c => c.includes(query))
+  if (inviteCatsExpanded.value) return [...all]
+  const chosen = all.filter(c => invite.finderCategories.includes(c))
+  const rest = all.filter(c => !invite.finderCategories.includes(c))
+  // 已选的排在前面（收起时也要能看到自己选了什么），最多铺 16 个
+  return [...chosen, ...rest].slice(0, 16)
+})
+const inviteCategoryHidden = computed(() => {
+  const profile = inviteProfile.value
+  if (!profile || isBatchProfile(profile)) return 0
+  return Math.max(0, profile.finderCategories.length - inviteCategoryShown.value.length)
+})
+/** 「带货销售总额」只在档案声明的那几个类型页签下存在（实测：微信只有「全部带货者」） */
+const inviteSalesTypeWarning = computed(() => {
+  const profile = inviteProfile.value
+  if (!profile || isBatchProfile(profile)) return ''
+  const types = profile.finderSalesTypes || []
+  if (!types.length || !types.includes(invite.finderType)) {
+    return `这一版广场上「${profile.finderSalesMetric}」只在「${types.join('、')}」下提供；当前类型「${invite.finderType}」没有这一维，选了的档位会点不到（开始邀约前会拦住）。`
+  }
+  return ''
+})
+function toggleSalesTier(tier: string) {
+  if (tier === '不限') {
+    invite.finderSalesTiers = invite.finderSalesTiers.includes('不限') ? [] : ['不限']
+    return
+  }
+  const rest = invite.finderSalesTiers.filter(item => item !== '不限')
+  invite.finderSalesTiers = rest.includes(tier) ? rest.filter(item => item !== tier) : [...rest, tier]
+}
 const inviteReady = computed(() => Boolean(inviteProfile.value && !inviteMissingItems.value.length && inviteConfigLoaded.value))
 const inviteTasks = computed(() => ws.tasks.filter((task: any) => String(task.name || '').startsWith('达人邀约 · ') && (!task.storeScope || task.storeScope === ws.displayedStoreId)))
 const inviteLatest = computed(() => {
@@ -805,7 +913,8 @@ function resetInviteDefaults() {
   invite.count = profile && isBatchProfile(profile) ? Math.max(1, Math.min(5, profile.maxBatch)) : 1
   invite.script = ''; invite.scriptMode = 'manual'; invite.benefits = []; invite.strengths = []; invite.mainCategory = ''
   invite.extraFilters = {}; invite.batchContact = ''; invite.batchPhone = ''; invite.batchWechat = ''; invite.batchProductCount = 1
-  invite.contact = ''; invite.wechat = ''; invite.phone = ''; invite.productIds = ''; invite.finderType = '全部带货者'; invite.finderCategories = []; invite.finderOtherFilters = []
+  invite.contact = ''; invite.wechat = ''; invite.phone = ''; invite.productIds = ''; invite.finderType = '全部带货者'; invite.finderCategories = []; invite.finderSalesTiers = []; invite.finderOtherFilters = []; invite.maxInvites = 10
+  inviteCatQuery.value = ''; inviteCatsExpanded.value = false
 }
 
 async function readInviteSetting(key: string) {
@@ -831,6 +940,15 @@ async function loadInviteConfig() {
   }
   if (serial !== inviteConfigLoadSerial || ws.displayedStoreId !== storeId) return
   if (saved) Object.assign(invite, normalizeInviteTaskConfig(profile.flow, saved))
+  // 档案实测清单之外的值（旧配置 / 平台改名后的遗留，如「汽车电动」→「汽摩电动」）不进界面：
+  // 面板只能提供实测过的选项，否则勾选列表里点不亮，运行到页面又必然找不到。
+  // （智能体/其它调用方塞进来的清单外值不受此影响：inviteTaskIssues 会把它们逐条报成缺项。）
+  if (!isBatchProfile(profile)) {
+    invite.finderCategories = invite.finderCategories.filter(c => profile.finderCategories.includes(c))
+    invite.finderSalesTiers = invite.finderSalesTiers.filter(t => (profile.finderSalesTiers || []).includes(t))
+    invite.finderOtherFilters = invite.finderOtherFilters.filter(f => profile.finderOtherFilters.includes(f))
+    if (!profile.finderTypes.includes(invite.finderType)) invite.finderType = profile.finderTypes[0] || '全部带货者'
+  }
   if (serial !== inviteConfigLoadSerial || ws.displayedStoreId !== storeId) return
   inviteConfigLoaded.value = true
   inviteConfigLoadedStoreId = storeId
@@ -847,7 +965,7 @@ function inviteSnapshot() {
     mainCategory: invite.mainCategory, extraFilters: invite.extraFilters, batchContact: invite.batchContact, batchPhone: invite.batchPhone,
     batchWechat: invite.batchWechat, batchProductCount: invite.batchProductCount, contact: invite.contact, wechat: invite.wechat,
     phone: invite.phone, productIds: invite.productIds, finderType: invite.finderType, finderCategories: invite.finderCategories,
-    finderOtherFilters: invite.finderOtherFilters
+    finderSalesTiers: invite.finderSalesTiers, finderOtherFilters: invite.finderOtherFilters, maxInvites: invite.maxInvites
   }))
 }
 
@@ -900,6 +1018,47 @@ async function openInvitePage() {
     }
     return
   }
+  /**
+   * 微信小店（assist-form）：把面板上的广场筛选**真的应用上**再让用户看列表。
+   * 以前这里只是导航过去，用户得自己在页面上点一遍筛选；现在与任务引擎同一套选项
+   * （同样来自实测档案），逐项应用并**回读勾选态**，没生效的项如实报出来。
+   */
+  if (!isBatchProfile(profile)) {
+    const storeId = ws.displayedStoreId
+    if (!storeId) { ws.toast('请先打开一个店铺', 'info'); return }
+    const filters = {
+      finderType: invite.finderType,
+      categories: JSON.parse(JSON.stringify(invite.finderCategories)) as string[],
+      salesTiers: JSON.parse(JSON.stringify(invite.finderSalesTiers)) as string[],
+      otherFilters: JSON.parse(JSON.stringify(invite.finderOtherFilters)) as string[]
+    }
+    const total = filters.categories.length + filters.salesTiers.length + filters.otherFilters.length
+    try {
+      const result = await window.shopilot.browser.prepareInviteSquare(storeId, {
+        url, finderType: filters.finderType, categories: filters.categories, salesTiers: filters.salesTiers, otherFilters: filters.otherFilters
+      })
+      if (!result.ok) { ws.toast(`打开达人广场失败：${result.error.message}`, 'error'); return }
+      const data = result.data as { applied?: boolean, detailLinks?: number, finderType?: { ok: boolean, name: string, reason?: string }, categories?: Array<{ ok: boolean, name: string, reason?: string }>, salesTiers?: Array<{ ok: boolean, name: string, reason?: string }>, otherFilters?: Array<{ ok: boolean, name: string, reason?: string }> } | undefined
+      const bad = [
+        ...(data?.finderType && data.finderType.ok === false ? [`类型「${data.finderType.name}」${data.finderType.reason ? `（${data.finderType.reason}）` : ''}`] : []),
+        ...(data?.categories || []).filter(item => !item.ok).map(item => `类目「${item.name}」${item.reason ? `（${item.reason}）` : ''}`),
+        ...(data?.salesTiers || []).filter(item => !item.ok).map(item => `销售额「${item.name}」${item.reason ? `（${item.reason}）` : ''}`),
+        ...(data?.otherFilters || []).filter(item => !item.ok).map(item => `其他「${item.name}」${item.reason ? `（${item.reason}）` : ''}`)
+      ]
+      // 跑前自检：列表里一条可见「详情」都没有 → 微应用没挂载/平台改版/登录刚过期，
+      // 这时候点「开始邀约」会在第 1 轮才失败，不如现在就明说。
+      if (!bad.length && data?.detailLinks === 0) {
+        ws.toast('达人广场已打开，但列表里没有可见的「详情」入口——平台可能改版或页面还没就绪，建议先别开始邀约', 'error', 9000)
+        return
+      }
+      if (bad.length) ws.toast(`达人广场已打开，但有 ${bad.length} 项筛选没生效：${bad.join('、')}`, 'error', 8000)
+      else ws.toast(total ? `达人广场已打开，${total} 项筛选已生效（列表 ${data?.detailLinks ?? '?'} 位可点详情）` : `达人广场已打开（列表 ${data?.detailLinks ?? '?'} 位可点详情）`, 'success')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      ws.toast(`打开达人广场失败：${message}`, 'error')
+    }
+    return
+  }
   void ws.navigate(url)
 }
 
@@ -907,13 +1066,34 @@ async function startInvite() {
   if (inviteSubmitting.value || !inviteProfile.value || !ws.displayedStoreId || !inviteReady.value) return
   inviteSubmitting.value = true
   try {
-    const payload = buildInviteTaskPayload({ profile: inviteProfile.value, storeId: ws.displayedStoreId, squareUrl: inviteSquareUrl(), config: inviteSnapshot() })
+    const storeId = ws.displayedStoreId
+    /**
+     * 7 天内邀过的达人**不再重复邀约**（用户要求）：开跑前把台账里的昵称清单查出来塞进配置。
+     * 广场列表行没有"已邀约"标记（真机实测），所以任务侧只能靠这份清单在点「详情」前跳过；
+     * 清单没覆盖到的（手工邀过等）由平台的"7 天内不可再次邀请"兜底。
+     */
+    let recentlyInvited: string[] = []
+    try {
+      const history = await window.shopilot.browser.recentInviteHistory({ storeId, days: 7 })
+      if (history.ok) {
+        recentlyInvited = ((history.data as { nicknames?: string[] })?.nicknames || []).filter(Boolean)
+        inviteRecentCount.value = recentlyInvited.length
+      }
+    } catch { /* 台账读不到不该拦住开跑：平台侧仍会拦重复邀约 */ }
+    const payload = buildInviteTaskPayload({
+      profile: inviteProfile.value,
+      storeId,
+      squareUrl: inviteSquareUrl(),
+      config: { ...inviteSnapshot(), recentlyInvited }
+    })
     if (!payload) { ws.toast('邀约配置不完整，无法创建任务', 'error'); return }
     const created = await window.shopilot.task.create(payload)
     if (!created.ok) { ws.toast(`创建邀约任务失败：${created.error.message}`, 'error'); return }
     const started = await window.shopilot.task.run(created.data.id)
     if (!started.ok) { await ws.refreshTasks(); ws.toast(`邀约任务已创建但启动失败：${started.error.message}`, 'error'); return }
-    ws.toast('邀约任务已启动，进度和日志会实时显示在当前面板', 'success')
+    ws.toast(recentlyInvited.length
+      ? `邀约任务已启动：近 7 天已邀的 ${recentlyInvited.length} 位会自动跳过`
+      : '邀约任务已启动，进度和日志会实时显示在当前面板', 'success')
     await ws.refreshTasks()
   } finally {
     inviteSubmitting.value = false

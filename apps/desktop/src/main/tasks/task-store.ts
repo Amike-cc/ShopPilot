@@ -86,8 +86,9 @@ function validateStepInput(s: { type: string; input?: unknown; timeoutMs?: numbe
   const input = out.data as any
   const timeoutMs = s.timeoutMs ?? (DEFAULT_STEP_TIMEOUT[s.type] ?? 15000)
   // 重试闸：非幂等步骤（click*/loop/门禁/切标签）一律 0——重试等于重复提交。
+  // 例外：带 skipIfChecked+verifyChecked 的复选框筛选在**构造上幂等**（见 normalizeStepRetryLimit）。
   // 归一化在落库侧完成，引擎运行侧还有一道同源判定（挡修复前已落库的旧行）。
-  const retryLimit = normalizeStepRetryLimit(s.type, s.retryLimit)
+  const retryLimit = normalizeStepRetryLimit(s.type, s.retryLimit, input)
   if (s.type === 'loop' && Array.isArray(input?.steps)) {
     input.steps = input.steps.map((child: any, k: number) => validateStepInput(child, `${label}.${k + 1}`))
     // onCode 的恢复步骤同样是"会被执行的步骤"，必须一起过白名单（否则循环恢复里塞未登记类型就绕过了校验）

@@ -68,6 +68,8 @@ declare global {
         }
         navigate: (storeId: string, tabId: string, url: string) => Promise<IPCResult>
         prepareInviteSquare: (storeId: string, input: any) => Promise<IPCResult>
+        /** 邀约台账：近 N 天已邀过的达人昵称（"7 天内不重复邀约"的判据来源） */
+        recentInviteHistory: (input: { storeId: string; days?: number; limit?: number }) => Promise<IPCResult>
         clearData: (storeId: string, types: string[], origin?: string) => Promise<IPCResult>
         capture: (storeId: string, tabId: string, format: string) => Promise<IPCResult>
         /** 编排器「拾取元素」：picker-mode 下在店铺页面上点一下，取回锚点（对话框贴右保留） */
@@ -259,8 +261,11 @@ declare global {
         clearImageTextKey: () => Promise<IPCResult>
         testImageText: () => Promise<IPCResult>
         listImageTextModels: () => Promise<IPCResult>
-        analyzeImageProduct: (input: { name?: string; tags?: string; price?: string; originalPrice?: string }) => Promise<IPCResult>
-        generateImage: (input: { prompt: string; model?: string; size?: string; n?: number; confirmed?: boolean; sourceImages?: Array<{ name: string; mimeType: string; b64Json: string }> }) => Promise<IPCResult>
+        analyzeImageProduct: (input: { name?: string; tags?: string; price?: string; originalPrice?: string; images?: Array<{ mimeType: string; b64Json: string }> }) => Promise<IPCResult>
+        generateImage: (input: { prompt: string; size?: string; n?: number; confirmed?: boolean; sourceImages?: Array<{ name: string; mimeType: string; b64Json: string }> }) => Promise<IPCResult>
+        // 生成结果落盘与定位（不传 outputPath 时主进程弹"另存为"）
+        saveImage: (input: { b64Json: string; mimeType?: string; suggestedName?: string; outputPath?: string }) => Promise<IPCResult>
+        revealImage: (path: string) => Promise<IPCResult>
       }
       agent: {
         uiGet: () => Promise<IPCResult<AgentUiState>>

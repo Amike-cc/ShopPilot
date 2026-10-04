@@ -15,10 +15,13 @@ import { getDatabase } from '../db/database'
 import { getAiImageKey, getAiImageTextKey, getAiKey, hasAiImageKey, hasAiImageTextKey, hasAiKey } from './credential-store'
 import { logMain } from './logger'
 import { ModelGovernanceError, assertMeteredBudget, recordModelUsage, resolveMeteringTarget } from './model-governance'
-import { buildChatRequestBody, buildChatRequestHeaders, clampMaxOutputTokens, DEFAULT_TEMPERATURE } from './model-request'
+import { buildChatRequestBody, buildChatRequestHeaders, buildVisionUserContent, clampMaxOutputTokens, DEFAULT_TEMPERATURE } from './model-request'
+// 生图 / 生图文本两条链路各自的默认超时（30 秒对这两条链路太紧，见 constants/ai.ts 注释）
+import { DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS } from '@shared/constants/ai'
 
 export {
   DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL,
+  DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS,
   AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint, imageUrlFromChat,
   imageEditUrlFromGeneration
 } from '@shared/constants/ai'
@@ -75,16 +78,16 @@ export function getAiConfig(): AiConfig {
     : DEFAULT_AI_TIMEOUT_MS
   const imageEndpoint = String(readSetting(AI_IMAGE_SETTING_KEYS.endpoint) ?? '').trim() || DEFAULT_AI_IMAGE_ENDPOINT
   const imageModel = String(readSetting(AI_IMAGE_SETTING_KEYS.model) ?? '').trim() || DEFAULT_AI_IMAGE_MODEL
-  const rawImageTimeout = Number(readSetting(AI_IMAGE_SETTING_KEYS.timeoutMs) ?? DEFAULT_AI_TIMEOUT_MS)
+  const rawImageTimeout = Number(readSetting(AI_IMAGE_SETTING_KEYS.timeoutMs) ?? DEFAULT_AI_IMAGE_TIMEOUT_MS)
   const imageTimeoutMs = Number.isFinite(rawImageTimeout)
     ? Math.min(Math.max(Math.round(rawImageTimeout), AI_TIMEOUT_MIN_MS), AI_TIMEOUT_MAX_MS)
-    : DEFAULT_AI_TIMEOUT_MS
+    : DEFAULT_AI_IMAGE_TIMEOUT_MS
   const imageTextEndpoint = String(readSetting(AI_IMAGE_TEXT_SETTING_KEYS.endpoint) ?? '').trim() || DEFAULT_AI_IMAGE_TEXT_ENDPOINT
   const imageTextModel = String(readSetting(AI_IMAGE_TEXT_SETTING_KEYS.model) ?? '').trim() || DEFAULT_AI_IMAGE_TEXT_MODEL
-  const rawImageTextTimeout = Number(readSetting(AI_IMAGE_TEXT_SETTING_KEYS.timeoutMs) ?? DEFAULT_AI_TIMEOUT_MS)
+  const rawImageTextTimeout = Number(readSetting(AI_IMAGE_TEXT_SETTING_KEYS.timeoutMs) ?? DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS)
   const imageTextTimeoutMs = Number.isFinite(rawImageTextTimeout)
     ? Math.min(Math.max(Math.round(rawImageTextTimeout), AI_TIMEOUT_MIN_MS), AI_TIMEOUT_MAX_MS)
-    : DEFAULT_AI_TIMEOUT_MS
+    : DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS
   // 中转站/自建网关常只给"基础地址"：统一规范化后再用（拼接规则见 shared/constants/ai.ts）
   return {
     endpoint,
@@ -113,7 +116,25 @@ function assertEndpointUsable(endpoint: string): void {
   throw new AiError('AI_BAD_ENDPOINT', '接口地址须为 https://（仅 127.0.0.1 / localhost 允许 http://）')
 }
 
-export interface AiChatResult { text: string; model: string; elapsedMs: number; inputTokens: number; outputTokens: number }
+/**
+ * legacy 文本补全（chatComplete）的输出 token 上限。
+ *
+ * 为什么不是 1200（原值）：推理型模型会把预算先花在 `reasoning_content`（思考）上，
+ * 1200 用尽时 `finish_reason=length`、`content` 为空——真机实测（2026-10-03）用户的
+ * 「微信小店达人邀约」任务就因此恒定失败在「AI 生成话术」这一步。
+ * 放宽到 8192 只影响"调用方主动申请更大预算"的场景，默认值仍是 400。
+ */
+const LEGACY_CHAT_MAX_OUTPUT_TOKENS = 8192
+
+export interface AiChatResult {
+  text: string
+  model: string
+  elapsedMs: number
+  inputTokens: number
+  outputTokens: number
+  /** 这次文本补全实际用的是哪一套配置：单独的"生图文本 API"还是回退到主文本 API。 */
+  source?: 'image-text' | 'main-text'
+}
 
 /**
  * 单轮补全。system/user 都由本文件或调用方构造，不接受渲染层传入的任意角色/消息数组。
@@ -123,13 +144,21 @@ export interface AiChatResult { text: string; model: string; elapsedMs: number; 
  * 响应后（成功/失败都）写一条用量记录，单价取自主 Agent 绑定的那个 Profile。
  * 未绑定 Profile 时如实跳过计量并记一条 warn —— 不假装已经计过。
  */
-export async function chatComplete(opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number; safeErrors?: boolean }): Promise<AiChatResult> {
+export async function chatComplete(opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number; safeErrors?: boolean; images?: Array<{ mimeType: string; b64Json: string }> }): Promise<AiChatResult> {
   const cfg = getAiConfig()
   const key = getAiKey()
   if (!key || !key.trim()) throw new AiError('AI_NOT_CONFIGURED', '未配置大模型 API Key（设置 → AI 配置）')
   assertEndpointUsable(cfg.resolvedEndpoint)
 
-  const maxTokens = clampMaxOutputTokens(opts.maxTokens ?? 400, 64, 1200)
+  /**
+   * 输出预算上限。原先写死 1200，对**推理型模型**不够用：
+   * 实测该网关（api.deepseek.com）上的 `deepseek-flash` / `deepseek-v4-pro` 都是推理型，
+   * 会先把思考写进 `reasoning_content`、正文才轮到 `content`；预算用尽时返回
+   * `finish_reason=length` + 空 `content`（实测 800 → 思考 1249 字；1200 → 思考 1860 字，均无正文），
+   * 于是「AI 生成话术」恒定失败（用户 2026-10-03 09:57 的邀约任务就折在这一步）。
+   * 这里只放宽**上限**：默认仍是 400，调用方按需申请（邀约话术那条链路申请更宽并带一次加倍重试）。
+   */
+  const maxTokens = clampMaxOutputTokens(opts.maxTokens ?? 400, 64, LEGACY_CHAT_MAX_OUTPUT_TOKENS)
   const target = resolveMeteringTarget()
   if (target) {
     // 预算不足时如实拒绝：宁可让用户看到"今日预算已用完"，也不静默消耗
@@ -152,6 +181,8 @@ export async function chatComplete(opts: { system: string; user: string; maxToke
         user: opts.user,
         temperature: DEFAULT_TEMPERATURE,
         maxTokens,
+        // 有图时走多模态（content 数组）；没图时保持原来的纯字符串，行为不变
+        userContent: opts.images?.length ? buildVisionUserContent(opts.user, opts.images) : undefined,
         stream: false
       })),
       signal: ac.signal
@@ -165,7 +196,28 @@ export async function chatComplete(opts: { system: string; user: string; maxToke
       throw new AiError('AI_REQUEST_FAILED', '响应不是合法 JSON')
     }
     const text = String(data?.choices?.[0]?.message?.content ?? '').trim()
-    if (!text) throw new AiError('AI_EMPTY_OUTPUT', '模型返回了空内容')
+    if (!text) {
+      /**
+       * 空内容时把"为什么空"带出来（2026-10-03 真机实测驱动）。
+       *
+       * 原先只报「模型返回了空内容」，看不出是超长截断、内容审核还是**推理型模型把正文写进了
+       * `reasoning_content`**（后者实测遇到：同一个 Key，短提示词的「测试连接」能过，而邀约话术
+       * 这条中等长度的提示词 content 恒为空）。这里只记录 finish_reason 与各字段**长度**，
+       * 不落正文（可能含商品/店铺信息）。
+       */
+      const choice = data?.choices?.[0] || {}
+      const message = choice?.message || {}
+      const reasoningLen = String(message.reasoning_content ?? '').length
+      const refusal = String(message.refusal ?? '').length
+      const detail = [
+        `finish_reason=${String(choice?.finish_reason ?? '未知')}`,
+        `message 字段=[${Object.keys(message).join(',') || '无'}]`,
+        reasoningLen ? `reasoning_content ${reasoningLen} 字` : '',
+        refusal ? `refusal ${refusal} 字` : ''
+      ].filter(Boolean).join('，')
+      logMain('warn', `[ai] 空内容 model=${String(data?.model || cfg.model)} ${detail}`)
+      throw new AiError('AI_EMPTY_OUTPUT', `模型返回了空内容（${detail}）`)
+    }
     if (target) recordModelUsage({ agentId: target.agentId, profileId: target.profileId, parsed: data, status: 'succeeded' })
     return {
       text,
@@ -269,16 +321,28 @@ export async function listModels(): Promise<{ models: string[]; elapsedMs: numbe
 /**
  * 商品图片工作台专用文本补全。
  *
- * 这条链路故意不调用 chatComplete：它不能读取 Agent 文本 Key、不能解析
- * root-ceo Profile，也不能写入 Agent 用量或同步 Agent 配置。它只使用
- * ai.imageText.* 与 ai_cred.imageTextKey。
+ * **生图文本 API 是可选的**（2026-10-02 重构）：单独配置了 `ai.imageText.*` + `ai_cred.imageTextKey`
+ * 就用那一套；没配置时**回退到设置里那一套文本 API**（与 Agent 同源）。为什么改：
+ * 用户明明已经配好了文本模型，却因为"没有单独再配一套"导致「AI 整理卖点」整块不可用、
+ * 页面还顶着一行"需要配置生图文本 API"的警告——功能看起来是坏的。
+ *
+ * 回退时走 `chatComplete` 而不是自己拼请求：这样用量与日预算仍然被计量，
+ * 不会出现"从图片工作台绕开预算"的隐藏消耗（审计 P1 的口径）。返回值里带 `source`，
+ * 界面据此如实显示这次分析用的是哪一套配置。
  */
-export async function chatCompleteForImageText(opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number }): Promise<AiChatResult> {
+export async function chatCompleteForImageText(opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number; images?: Array<{ mimeType: string; b64Json: string }> }): Promise<AiChatResult> {
   const cfg = getAiConfig()
   const key = getAiImageTextKey()
-  if (!key || !key.trim()) throw new AiError('AI_IMAGE_TEXT_NOT_CONFIGURED', '未配置生图文本 API Key（设置 → AI 配置 → 生图文本 API）')
-  if (!cfg.imageTextEndpoint || !cfg.imageTextModel) {
-    throw new AiError('AI_IMAGE_TEXT_NOT_CONFIGURED', '请先配置生图文本 API 地址和模型（设置 → AI 配置 → 生图文本 API）')
+  if (!key || !key.trim() || !cfg.imageTextEndpoint || !cfg.imageTextModel) {
+    try {
+      const result = await chatComplete({ system: opts.system, user: opts.user, maxTokens: opts.maxTokens, images: opts.images })
+      return { ...result, source: 'main-text' }
+    } catch (e: any) {
+      if (e instanceof AiError && e.code === 'AI_NOT_CONFIGURED') {
+        throw new AiError('AI_IMAGE_TEXT_NOT_CONFIGURED', '既没有单独的"生图文本 API"，也没有可用的文本 API；请在「设置中心 → AI 配置」里配置其中一套')
+      }
+      throw e
+    }
   }
   const endpoint = cfg.resolvedImageTextEndpoint || normalizeAiEndpoint(cfg.imageTextEndpoint)
   if (!endpoint) throw new AiError('AI_BAD_ENDPOINT', '生图文本接口地址无效，请填写基础地址或完整的 /chat/completions 地址')
@@ -299,6 +363,7 @@ export async function chatCompleteForImageText(opts: { system: string; user: str
         user: opts.user,
         temperature: DEFAULT_TEMPERATURE,
         maxTokens,
+        userContent: opts.images?.length ? buildVisionUserContent(opts.user, opts.images) : undefined,
         stream: false
       })),
       signal: ac.signal
@@ -314,11 +379,16 @@ export async function chatCompleteForImageText(opts: { system: string; user: str
       model: String(data?.model || cfg.imageTextModel),
       elapsedMs: Date.now() - t0,
       inputTokens: usageTokensFrom(data, 'prompt_tokens'),
-      outputTokens: usageTokensFrom(data, 'completion_tokens')
+      outputTokens: usageTokensFrom(data, 'completion_tokens'),
+      source: 'image-text' as const
     }
   } catch (e: any) {
     if (e instanceof AiError) throw e
-    if (e?.name === 'AbortError') throw new AiError('AI_TIMEOUT', `生图文本请求超过 ${timeoutMs}ms 未返回`)
+    if (e?.name === 'AbortError') {
+      // 如实说清"这不是配置错，是模型慢"并给出可执行的下一步：
+      // 用户配的是对的，但 30 秒默认值会让一次 25~40 秒的分析被判成失败。
+      throw new AiError('AI_TIMEOUT', `生图文本请求超过 ${timeoutMs}ms 未返回（当前文本模型较慢）。可在「设置中心 → AI 配置 → 生图文本 API」把超时调到 ${AI_TIMEOUT_MAX_MS}ms 后重试。`)
+    }
     throw new AiError('AI_REQUEST_FAILED', String(e?.message || e).slice(0, 180))
   } finally {
     clearTimeout(timer)
@@ -326,23 +396,29 @@ export async function chatCompleteForImageText(opts: { system: string; user: str
 }
 
 /** 商品图片页面的受限商品分析输入；提示词由 Main 组装，Renderer 不可注入任意 system。 */
-export async function analyzeImageProductText(input: { name?: string; tags?: string; price?: string; originalPrice?: string }): Promise<AiChatResult> {
+export async function analyzeImageProductText(input: { name?: string; tags?: string; price?: string; originalPrice?: string; images?: Array<{ mimeType?: string; b64Json?: string }> }): Promise<AiChatResult> {
   const name = String(input.name ?? '').trim().slice(0, 120)
   const tags = String(input.tags ?? '').trim().slice(0, 240)
   const price = String(input.price ?? '').trim().slice(0, 24)
   const originalPrice = String(input.originalPrice ?? '').trim().slice(0, 24)
-  if (!name && !tags) throw new AiError('AI_EMPTY_SOURCE', '请先填写商品名称或卖点，再请求 AI 分析')
+  // 图片白名单与数量上限：最多 3 张（商品素材图，与界面上的上传上限一致）
+  const images = (Array.isArray(input.images) ? input.images : [])
+    .slice(0, 3)
+    .map(item => ({ mimeType: String(item?.mimeType || '').split(';')[0].trim().toLowerCase(), b64Json: String(item?.b64Json || '') }))
+    .filter(item => item.b64Json && ['image/png', 'image/jpeg', 'image/webp'].includes(item.mimeType))
+  if (!name && !tags && !images.length) throw new AiError('AI_EMPTY_SOURCE', '请先上传商品素材图，或填写商品名称/卖点，再请求 AI 分析')
   const user = [
     name ? `商品名称：${name}` : '',
     tags ? `卖点/标签：${tags}` : '',
     price ? `用户填写售价：${price}` : '',
-    originalPrice ? `用户填写原价：${originalPrice}` : ''
+    originalPrice ? `用户填写原价：${originalPrice}` : '',
+    images.length ? `随本次请求附上 ${images.length} 张商品图片，请以图片里**真实可见**的内容为准。` : ''
   ].filter(Boolean).join('\n')
-  return chatCompleteForImageText({
-    system: '你是商品图片工作台的文本分析助手。只返回商品电商素材分析文字，不执行任何外部操作。请整理可核对的核心卖点、适用场景和图片生成建议；输入没有提供的内容标记为待补充，不要自行补写；信息不足时明确指出。',
-    user,
-    maxTokens: 800
-  })
+  // 有图 → 视觉提示词（只写看得见的）；没图 → 原来的文本提示词（行为不变）
+  const system = images.length
+    ? '你是商品图片工作台的视觉分析助手。用户会附上商品图片：请只描述图片里**真实可见**的主体、材质观感、颜色、风格、构图、场景与可辨认文字，再据此整理可核对的卖点、适用场景和图片生成建议。看不到或无法确认的一律写"待补充"，不要凭常识补写，也不要执行任何外部操作。'
+    : '你是商品图片工作台的文本分析助手。只返回商品电商素材分析文字，不执行任何外部操作。请整理可核对的核心卖点、适用场景和图片生成建议；输入没有提供的内容标记为待补充，不要自行补写；信息不足时明确指出。'
+  return chatCompleteForImageText({ system, user, maxTokens: 800, images })
 }
 
 /** 生图文本配置的模型列表读取，使用独立端点与独立 Key。 */
@@ -500,7 +576,7 @@ async function materializeImageUrl(rawUrl: string, timeoutMs: number): Promise<{
  * 由界面在调用前完成费用确认。存在上传图时使用明确推导出的 `/images/edits`
  * multipart 端点；供应商不支持该端点时返回真实错误，不回退成伪造结果。
  */
-export async function generateImage(opts: { prompt: string; model?: string; size?: string; n?: number; sourceImages?: AiImageSource[] }): Promise<AiImageResult> {
+export async function generateImage(opts: { prompt: string; size?: string; n?: number; sourceImages?: AiImageSource[] }): Promise<AiImageResult> {
   const cfg = getAiConfig()
   const key = getAiImageKey()
   if (!key || !key.trim()) throw new AiError('AI_IMAGE_NOT_CONFIGURED', '未配置生图 API Key（设置 → AI 配置 → 生图 API）')
@@ -512,8 +588,9 @@ export async function generateImage(opts: { prompt: string; model?: string; size
   if (!prompt) throw new AiError('AI_EMPTY_SOURCE', '请输入图片生成描述')
   const size = ['1024x1024', '1536x1024', '1024x1536'].includes(String(opts.size)) ? String(opts.size) : '1024x1024'
   const n = Math.min(Math.max(Math.round(Number(opts.n) || 1), 1), 4)
-  const model = String(opts.model || cfg.imageModel).trim().slice(0, 120) || cfg.imageModel
-  const sourceImages = Array.isArray(opts.sourceImages) ? opts.sourceImages.slice(0, 2) : []
+  // 生图模型唯一以设置中心的 AI_IMAGE_SETTING_KEYS.model 为准，调用参数不提供模型覆盖口。
+  const model = cfg.imageModel
+  const sourceImages = Array.isArray(opts.sourceImages) ? opts.sourceImages.slice(0, 10) : []
   const allowedMime = new Set(['image/png', 'image/jpeg', 'image/webp'])
   const normalizedSources = sourceImages.map((source, index) => {
     const mimeType = String(source?.mimeType || '').split(';')[0].trim().toLowerCase()
@@ -609,7 +686,32 @@ export async function generateInviteScript(opts: { goodsText: string; maxLen: nu
     goods
   ].filter(Boolean).join('\n')
 
-  const r = await chatComplete({ system, user, maxTokens: Math.min(800, maxLen * 4) })
+  /**
+   * 输出预算与超时：**给推理型模型留出"思考 + 正文"的余量**。
+   *
+   * 实测（2026-10-03 真机，用户店铺的网关配置）：
+   *   · `maxLen * 4`（200 字 → 800 token）：思考 1249 字，正文空，finish_reason=length；
+   *   · 1200 token（当时的硬上限）：思考 1860 字，正文仍空；
+   *   · 该模型是推理型，预算越大思考越长 —— 所以预算要给足，并且**失败时再翻倍重试一次**，
+   *     而不是一次用尽就判死刑（旧实现在这里恒定失败，邀约任务第 1 轮就停）。
+   * 超时同理：思考阶段本身就慢，30s 的默认超时对这条链路太紧，这里放宽到至少 120s
+   * （步骤侧 aiGenerate 的 timeoutMs 是 120s，与它对齐）。
+   */
+  const baseTokens = Math.min(6000, Math.max(3000, maxLen * 16))
+  const callOpts = { system, user, timeoutMs: Math.max(getAiConfig().timeoutMs, 120_000) }
+  let r: AiChatResult
+  try {
+    r = await chatComplete({ ...callOpts, maxTokens: baseTokens })
+  } catch (e) {
+    if (e instanceof AiError && e.code === 'AI_EMPTY_OUTPUT') {
+      // 预算被思考吃光（finish_reason=length + content 空）：加倍预算再试一次。
+      // 仍然拿不到正文时把原因如实抛给上层（错误信息里带 finish_reason 与思考长度）。
+      logMain('warn', `[ai] 邀约话术首次空输出（预算 ${baseTokens}），加倍预算重试一次`)
+      r = await chatComplete({ ...callOpts, maxTokens: Math.min(LEGACY_CHAT_MAX_OUTPUT_TOKENS, baseTokens * 2) })
+    } else {
+      throw e
+    }
+  }
   const script = cleanScript(r.text, maxLen)
   if (!script) throw new AiError('AI_EMPTY_OUTPUT', '模型输出清洗后为空')
   return { script, model: r.model, sourceChars: goods.length }

@@ -7,7 +7,7 @@
 
 import { z } from 'zod'
 import { TASK_STEP_TYPES } from '@shared/schemas/task'
-import { AGENT_NON_RESUMABLE_STEP_TYPES, isIdempotentStepType } from '@shared/agent-step-effects'
+import { AGENT_NON_RESUMABLE_STEP_TYPES, isIdempotentCheckboxFilterStep, isIdempotentStepType } from '@shared/agent-step-effects'
 import { agentScheduleSchema } from '@shared/schemas/agent'
 
 const selector = z.string().min(1).max(500)
@@ -44,7 +44,13 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   navigate: z.object({ url: httpUrl }).strict(),
   waitForPage: z.object({ urlIncludes: z.string().max(300).optional() }).strict(),
   // deep = 穿透 ShadowRoot 查询（微信小店整页在 micro-app 的 ShadowRoot 里）
-  waitForSelector: z.object({ selector, deep: z.boolean().optional() }).strict(),
+  /**
+   * `code` / `hint`：等不到时的**错误码与说明**（2026-10-04 加）。
+   * 动机：快手点「批量邀约」后抽屉没开（平台把近 7 天已邀的达人静默剔除、一位都没发出去），
+   * 旧写法只报 `TASK_TIMEOUT: 等待选择器…`——看日志的人只会以为页面卡了。
+   * 有了独立码，loop 才能把它当"按预期收工"（stopOn）而不是"任务失败"。
+   */
+  waitForSelector: z.object({ selector, deep: z.boolean().optional(), code: z.string().min(1).max(40).optional(), hint: z.string().max(300).optional() }).strict(),
   readText: z.object({
     selector, metric: z.string().min(1).max(60).optional(), deep: z.boolean().optional(),
     /** Agent 读取页面时必须开启：先脱敏再进入 task_step_results。 */
@@ -104,6 +110,31 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * （实测抖店抽屉：核心优势/权益/主营都会保留，重复点击等于反选）。
      */
     skipIfChecked: z.boolean().optional(),
+    /**
+     * 跳过"所在行文本含这些文案"的候选（2026-10-04）。
+     * 用途：**7 天内邀过的达人不再重复邀约** —— 台账里的昵称清单从这里进来，
+     * 点「详情」之前就把那些行剔掉，省掉一次详情页访问；全被剔掉则交给 loop 翻页。
+     */
+    skipTexts: z.array(z.string().min(1).max(120)).max(500).optional(),
+    /** 命中后回传"这一行的达人昵称"（供引擎写邀约台账） */
+    recordRowText: z.boolean().optional(),
+    /**
+     * "找不到目标就先点这个开关"（2026-10-04 加）。
+     *
+     * 真机场景：微信广场「带货销售总额」下拉里的档位。下拉面板收起时档位是 display:none、
+     * 引擎的可见性判据直接报"找不到"；而 DT 是**开关**（点开/点收），
+     * 上一轮如果因为页面重渲染把"收起"点丢了，这一轮先点一次"开"就变成了"收"——
+     * 于是第 13 轮死在 `TASK_SELECTOR_CHANGED: 页面上找不到「不限」`（用户真机实测）。
+     * 用 openVia 表达"目标不可见时才去点开关"，就同时兼容"面板已开"与"面板已收"两种前置状态。
+     */
+    openVia: z.object({ text: z.string().min(1).max(120), exact: z.boolean().optional(), deep: z.boolean().optional() }).strict().optional(),
+    /**
+     * "只有这段文案可见时才点"（2026-10-04 加）：用于**条件性收尾**，例如把指标下拉收起来——
+     * 面板已经收起时不该再点（那会把面板点开，反而盖住列表）。
+     * `within` 用于把判据限定在具体容器里（例如"某个指标 dl 内的档位"），
+     * 否则同一段文案在表格/摘要里出现就会误判成"面板开着"。
+     */
+    onlyIfVisible: z.object({ text: z.string().min(1).max(120), deep: z.boolean().optional(), within: within.optional() }).strict().optional(),
     within: within.optional(),
     /**
      * 找不到目标时用的错误码（默认 TASK_SELECTOR_CHANGED）。
@@ -184,7 +215,19 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
       selector,
       classIncludes: z.string().min(1).max(60),
       text: z.string().min(1).max(200).optional()
-    }).strict().optional()
+    }).strict().optional(),
+    /**
+     * 点完校验它**真的处于勾选态**（读回目标自己或所属 label 里的 checkbox.checked）。
+     *
+     * 用途（真机实测驱动，2026-10-02 微信小店带货者广场）：有的平台把"筛选到底生效没有"
+     * **只**表达在控件勾选态上——「带货销售总额」的下拉区间选完即生效、浮层自己收起，
+     * 而 DT 文案永远是指标名、页面也没有「已筛选」摘要，"点过了"与"筛上了"在页面上无从区分。
+     * 筛选静默失效＝把不该邀的达人放进名单，所以这里宁可如实失败（默认错误码
+     * TASK_FILTER_NOT_APPLIED），也不能把一次无效点击当成成功。
+     */
+    verifyChecked: z.boolean().optional(),
+    /** verifyChecked 失败时的错误码（默认 TASK_FILTER_NOT_APPLIED） */
+    verifyCode: z.string().min(1).max(40).optional()
   }).strict().refine((v) => !v.nth || v.mode === 'real', { message: 'nth 仅支持 mode:"real"（需要真实鼠标点击）' }),
   // 条件点击：目标出现就点、没出现就跳过（不入库失败）。
   // 用途：平台**可能**弹二次确认框（没实测到确定行为时不能硬等，也不能假设没有）——
@@ -249,7 +292,16 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * 页面上达人选人区的「已选2条」还在，被当成本次计数 → progress 恒为 0 →
      * 误报"只勾中 0 位"（其实商品勾上了）。给了它才启用宽松计数写法。
      */
-    counterIncludes: z.string().min(1).max(40).optional()
+    counterIncludes: z.string().min(1).max(40).optional(),
+    /**
+     * 行文本包含这些词的**不勾**（2026-10-04 加，快手真机动机）。
+     *
+     * 快手广场点「批量邀约」时，平台会把**近 7 天内已邀过（含被拒）的达人静默剔除**，
+     * 而列表行上没有任何"已邀约"标记（真机逐行量过）。全被剔除时这次点击等于没发生
+     * （选择被清空、抽屉不开），整批就在"等抽屉"上白等到超时。
+     * 台账里记着我们自己近 7 天邀过的昵称 → 勾选时直接跳过这些行，别让平台替我们剔。
+     */
+    skipTexts: z.array(z.string().min(1).max(120)).max(500).optional()
   }).strict().refine((v) => !!v.selector !== !!v.text, { message: 'selector 与 text 必须二选一' }),
   setInput: z.object({ selector, text: z.string().max(2000) }).strict(),
   // AI 生成：从 sourceSelector 读商品信息 → 主进程调大模型 → 写入 selector（参数仍只有选择器与文本/数值）
@@ -389,8 +441,13 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
   }).strict(),
   // 显式等待（读型步骤，上限 2 分钟）：等 SPA 按新筛选条件刷新数据
   waitMs: z.object({ ms: z.number().int().min(100).max(120000) }).strict(),
-  // 等元素消失/不可见（读型步骤）：提交后校验结果（如邀约抽屉应关闭）
-  waitForGone: z.object({ selector, deep: z.boolean().optional() }).strict(),
+  // 等元素消失/不可见（读型步骤）：提交后校验结果（如邀约抽屉应关闭）。
+  // 2026-10-03 起也支持 `text`：等"某段可见文案消失"。微信邀约发送后要确认**弹窗真的关了**
+  // ——弹窗是平台通用组件、没有稳定选择器，只能按文案等（实测文案「确认发送邀约」）。
+  // 二者必须给一个且只能给一个（都缺 = 等了个寂寞，都给 = 判据含糊）。
+  waitForGone: z.object({ selector: selector.optional(), text: z.string().min(1).max(200).optional(), deep: z.boolean().optional() })
+    .strict()
+    .refine(value => Boolean(value.selector) !== Boolean(value.text), { message: 'selector 与 text 必须二选一' }),
   // 切到已打开的某个标签页（不导航）：微信邀约逐轮换人时回到"一直活着的"广场页——
   // 重载会重置分页与筛选（平台翻页是内部状态、URL 不变）。path 按 pathname 精确匹配，
   // urlIncludes 按子串匹配（path 更稳妥，避免 '/find' 前缀误命中 '/finder-detail'）。
@@ -417,16 +474,23 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
    */
   loop: z.object({
     label: z.string().max(60).optional(),
+    /** 平台名（微信小店/抖店…）：仅用于写"邀约台账"时留档，不参与任何点击逻辑 */
+    platform: z.string().max(40).optional(),
     maxRounds: z.number().int().min(1).max(50),
     stopOn: z.array(z.string().min(1).max(40)).min(1).max(8),
     onCode: z.array(z.object({
       code: z.string().min(1).max(40),
       // 恢复动作（如「点下一页」）；同样逐条走白名单校验
       steps: z.array(taskStepSchema).min(1).max(10),
-      // 本轮内最多恢复几次（防止"翻页点不动"时空转）。
-      // 上限给到 30：advance（跳过不满足平台合作条件的达人）在一屏里可能连续遇到多位，
-      // 实测广场里这类占约 1/4，20 位上限留了余量；loop.maxRounds 本身还有 50 的硬顶。
-      limit: z.number().int().min(1).max(30).optional(),
+      /**
+       * 本轮内最多恢复几次（防止"翻页点不动"时空转）。
+       *
+       * 上限从 30 提到 60（2026-10-04）：用户要求"7 天内邀过的达人不再重复邀约"，
+       * 而平台的"已邀约"标记**只在详情页**（列表行没有，真机实测），本地台账又只能覆盖我们自己邀过的
+       * ——手工邀过的人只能靠平台兜底：点进详情页发现按钮禁用 → TASK_DAREN_ALREADY_INVITED → advance 跳过。
+       * 连着遇到 20~30 位已邀过的（发过几轮之后很正常）就会把上限耗尽而**误判成平台异常收工**。
+       */
+      limit: z.number().int().min(1).max(60).optional(),
       /**
        * restart=true：命中后**重开本轮**（而不是重试当前子步骤）。
        * 用途：这一位达人打不开（平台间歇性渲染失败）→ 记下他、回广场取下一位继续。
@@ -443,8 +507,13 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
        */
       advance: z.boolean().optional()
     }).strict()).max(4).optional(),
-    // 一轮动作的步骤数上限：抖店一轮 ≈ 17–28 步（含多等级/多权益），给到 40 步余量
-    steps: z.array(taskStepSchema).min(1).max(40)
+    // 一轮动作的步骤数上限。原先 40（抖店一轮 ≈ 17–28 步，含多等级/多权益）。
+    // 提到 80 是因为微信小店的辅助流把**广场筛选搬进了轮内**（2026-10-03 真机实测：
+    // 切到详情页再切回来时广场页会被重新加载、页内筛选随之丢失，所以必须每轮重新应用）：
+    // 一份把可选项全选上的极端配置 = 类型 1 + 类目 34 + 销售总额 16+2 + 其他 7 步筛选 +
+    // 一轮邀约动作 ≈ 18 步 ≈ 78 步。上限给到 80 只是"允许合法配置建得出来"，
+    // 不会让任何一步绕过白名单校验（嵌套步骤仍逐条过 taskStepSchema）。
+    steps: z.array(taskStepSchema).min(1).max(80)
   }).strict()
 }
 
@@ -471,10 +540,20 @@ export const NON_RESUMABLE_TYPES: ReadonlySet<string> = AGENT_NON_RESUMABLE_STEP
  * 口径是"归一化"而不是"抛错"：用户已存的旧任务行里可能就带着非幂等步骤的 retryLimit，
  * 抛错会让这些任务直接无法加载/无法编辑；归零既安全又不破坏兼容。
  */
-export function normalizeStepRetryLimit(type: string, retryLimit?: number | null): number {
-  if (!isIdempotentStepType(type)) return 0
+export function normalizeStepRetryLimit(type: string, retryLimit?: number | null, input?: unknown): number {
   const n = Number(retryLimit)
   if (!Number.isFinite(n) || n <= 0) return 0
+  /**
+   * 除了幂等类型，**还有一类"构造上幂等"的点击**：带 `skipIfChecked + verifyChecked` 的复选框筛选。
+   *
+   * 为什么它能重试（2026-10-04 真机：用户连发时第 1 轮就死在
+   * `TASK_FILTER_NOT_APPLIED: 「母婴」点了但没有生效`）：这类步骤重跑一次是安全的——
+   *   · 已经勾上了 → skipIfChecked 命中，**不点**，直接通过；
+   *   · 还没勾上 → 重新定位再点一次（页面重渲染后旧坐标/旧节点会失效，这正是失败原因）。
+   * 与"重复提交"完全不同：它没有任何不可逆副作用，且勾选态就是它的幂等判据。
+   */
+  const checkboxFilter = isIdempotentCheckboxFilterStep(type, input)
+  if (!isIdempotentStepType(type) && !checkboxFilter) return 0
   return Math.min(5, Math.trunc(n))
 }
 

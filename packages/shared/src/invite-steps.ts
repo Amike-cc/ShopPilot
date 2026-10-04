@@ -54,6 +54,11 @@ export interface BatchInviteOptions {
    */
   mainCategory?: string
   /**
+   * 台账里"近 7 天已邀过"的达人昵称（`invite_history`）→ 勾选阶段跳过这些行。
+   * 平台侧同样会剔除他们，但那是静默的、剔光了整批就白跑（见 buildBatchSteps 的 clickAll 注释）。
+   */
+  recentlyInvited?: string[]
+  /**
    * 额外的筛选行选择（快手特有）：`{ '内容标签': ['美妆'], '合作信息': ['有联系方式'] }`。
    * 这些是**页面上独立的多选筛选行**，与类目是不同维度，可以同时生效。
    */
@@ -101,11 +106,41 @@ export interface AssistInviteOptions {
   /** 带货者广场筛选：每轮进广场后重新应用（类型/类目/其他） */
   finderType?: string
   finderCategories?: string[]
+  /** 「近30日带货数据 → 带货销售总额」的区间档位（真实文案；空数组 = 不筛这一维） */
+  finderSalesTiers?: string[]
   finderOtherFilters?: string[]
+  /**
+   * **本次最多邀约几位**（额度护栏）。
+   *
+   * 为什么必须有：平台的「今日剩余 N 次邀请机会」在广场/我的邀约页都读不到（2026-10-02/03 两次实测），
+   * 所以 `requireQuota` 拿不到数、`TASK_QUOTA_EXCEEDED` 实际不会触发——**没有任何东西拦着它一直发**。
+   * 这里给一个我们自己能保证的上限（面板可改，默认 10）：到量就干净收工，不依赖平台自述。
+   * 缺省/非法值一律按 `ASSIST_LOOP_MAX_ROUNDS`（50）兜底，绝不因为一个坏值变成"无限发"。
+   */
+  maxInvites?: number
+  /**
+   * **近 7 天已邀过的达人昵称**（本地台账）：点「详情」时直接跳过这些行，不花详情页访问。
+   *
+   * 为什么需要：平台只在**详情页**拦"7 天内不可再次邀请"，而广场列表行没有任何"已邀约"标记
+   * （2026-10-04 真机实测：列表无标记、详情链接是 javascript:void(0)、拿不到 finderUsername），
+   * 所以只能拿我们自己的台账提前剔。台账没覆盖到的（例如手工在页面上邀过的）仍由平台兜底
+   * → `TASK_DAREN_ALREADY_INVITED` → 换下一位。
+   */
+  recentlyInvited?: string[]
 }
 
 /** 微信逐个邀约的批次上限（安全阀）：真实停止条件是"额度用完/没有更多达人" */
 export const ASSIST_LOOP_MAX_ROUNDS = 50
+
+/** 面板默认的"本次最多邀约几位"：平台不暴露剩余额度，默认给一个保守值，用户可改 */
+export const ASSIST_DEFAULT_MAX_INVITES = 10
+
+/** 把任意输入夹成合法的"本次最多邀约几位"（1..50，非法值回落到上限而不是无限） */
+export function normalizeMaxInvites(value: unknown): number {
+  const n = Math.round(Number(value))
+  if (!Number.isFinite(n) || n < 1) return ASSIST_DEFAULT_MAX_INVITES
+  return Math.min(ASSIST_LOOP_MAX_ROUNDS, n)
+}
 
 /** 从达人广场地址取末段路径作为 waitForPage 的就绪判据（换成自定义地址也要能用） */
 export function urlPathHint(url: string): string {
@@ -138,6 +173,21 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
     { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrl) }, timeoutMs: 45000 }
   ]
   if (opts.category) {
+    /**
+     * 等筛选区**真的渲染出来**再点（2026-10-04 快手真机踩到后加，与微信流同一个教训）。
+     *
+     * 为什么必须等：`waitForPage` 只认地址。地址到了但筛选区还没挂载完时点类目 chip，
+     * 点击本身"成功"、弹层也创建了，可平台的浮层定位依赖布局完成——实测这时弹层被留在
+     * **屏幕外 (-9963,-9884)**，下一步点叶子必然 `TASK_TARGET_OUT_OF_VIEWPORT`，
+     * 整批在第一个筛选步骤上就挂掉（彩排真机复现）。
+     * 手工在页面就绪后点同一个 chip，弹层位置是正常的 (656,474) —— 差别就在"等没等"。
+     *
+     * 判据取"类目行标签"：`categoryLabelText`（快手有）优先，退回 `texts.categoryLabel`
+     * （抖店「主推类目」）。两者都没有的档案就**不加这一步**（不猜文案；那种档案的
+     * chip 范围是选择器，本来也不依赖行标签）。
+     */
+    const filterRowLabel = String(p.categoryLabelText || p.texts.categoryLabel || '').trim()
+    if (filterRowLabel) round.push({ type: 'waitForText', input: { text: filterRowLabel, deep: true }, timeoutMs: 40000 })
     // ① 点类目 chip：限定在"类目快捷选项行"里——类目名在达人卡片的类目文案里也有，
     //    不限范围可能点到卡片上（实测就是筛选静默失效的原因之一）；
     // ② 点级联弹层里的叶子项：限定在弹层内——别处也有同名"不限/全部"。
@@ -217,6 +267,8 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   // 勾选数下限（实测快手：只勾 1 位点「批量邀约」静默无反应）→ 不足就把本批要的人数抬到下限，
   // 否则每轮都会白跑一次"点了没反应"。count 本身已由面板按 maxBatch 收过口。
   const need = Math.max(opts.count, p.minSelect || 1)
+  /** 台账里"近 7 天已邀过"的昵称 → 勾选时跳过这些行（快手/抖店列表行都没有"已邀约"标记） */
+  const recentlyInvited = (opts.recentlyInvited || []).map(n => String(n).trim()).filter(Boolean).slice(0, 500)
   // scroll=true：广场列表在固定容器里滚动加载（无分页），一屏放不下 40 位——
   // 点完当前可点的行后向下滚动、等新行渲染再继续（实测修掉"要勾 40 位却只勾中 1 位"）。
   round.push({
@@ -228,7 +280,16 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
       maxRounds: 40,
       // 计数消歧义：快手达人选人区的计数写作「已选N条」（不是抖店的「已选择N位达人」）。
       // 不给这一段只认抖店写法；给了才启用宽松写法（见 clickAll 的 counterIncludes 说明）。
-      counterIncludes: '已选'
+      counterIncludes: '已选',
+      /**
+       * 近 7 天已邀过的达人**不勾**（2026-10-04 快手真机实测后加）。
+       *
+       * 快手广场点「批量邀约」时，平台会把"近 7 天内已邀过（含被拒）"的达人**静默剔除**，
+       * 而列表行上没有任何标记；如果勾的全被剔除，这次点击等于没发生（选择清空、抽屉不开），
+       * 整批就卡在"等抽屉"上白等到超时。台账里记着我们自己邀过谁 → 勾选阶段就绕开他们。
+       * 平台侧仍是权威兜底（没被台账覆盖到的、手工邀过的，仍会被剔除）。
+       */
+      ...(recentlyInvited.length ? { skipTexts: recentlyInvited } : {})
     },
     timeoutMs: 240000
   })
@@ -241,7 +302,24 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   // 别等到运行时拿一个 undefined 选择器去空等超时。
   const drawerSelector = p.drawerSelector || p.scriptSelector
   if (!drawerSelector) throw new Error(`batch-list 档案「${p.platform}」缺少抽屉判据：drawerSelector 与 scriptSelector 至少要有一个`)
-  round.push({ type: 'waitForSelector', input: { selector: drawerSelector }, timeoutMs: 30000 })
+  /**
+   * 抽屉没开 = 这一批**一位都没发出去**，必须报得清楚（2026-10-04 快手真机实测）。
+   *
+   * 实测：点「批量邀约」时平台会把"近 7 天内已邀过（含被拒）"的达人**静默剔除**；
+   * 勾中的全被剔除时，这次点击等于没发生——选择被清空、抽屉不开、页面上也没有任何提示。
+   * 旧写法在这里只报一句 `TASK_TIMEOUT: 等待选择器…`，看日志的人只会以为"页面卡了"。
+   * 现在用独立错误码 + 说明，并且 loop 侧把它当"按预期收工"（stopOn）：
+   * 这一轮什么都没发出去，重试同一批人也不会变，继续跑只是白耗。
+   */
+  round.push({
+    type: 'waitForSelector',
+    input: {
+      selector: drawerSelector,
+      code: 'TASK_DRAWER_NOT_OPEN',
+      hint: '点「批量邀约」后邀约抽屉没打开：平台把这一批里"近 7 天内已邀过/被拒"的达人静默剔除了，本轮**一位都没发出去**。请换一批达人，或先到「我的达人 → 邀约中/已拒绝」确认'
+    },
+    timeoutMs: 30000
+  })
   // 额度先行（按档案选择方式）：
   //  - requireEnabled：平台不展示剩余额度，额度用尽表现为抽屉确认按钮禁用（抖店）；
   //  - requireQuota  ：页面**明示**剩余额度（快手「今日剩余N条发送邀请机会」），取数字判断。
@@ -494,7 +572,14 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
     input: {
       label: labelParts.join(' · '),
       maxRounds: BATCH_LOOP_MAX_ROUNDS,
-      stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL'],
+      /**
+       * 按预期收工（不算失败）的三种情况：
+       *   · 额度用完（平台明示的剩余邀请机会为 0）；
+       *   · 可选达人不足（clickAll 勾不满）；
+       *   · **抽屉没开**（2026-10-04 加）：勾中的达人被平台按"近 7 天已邀过/被拒"静默剔除光，
+       *     这次点击等于没发生、一位都没发出去——重试同一批人也不会变，继续跑只是白耗。
+       */
+      stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL', 'TASK_DRAWER_NOT_OPEN'],
       steps: round
     }
   }]
@@ -518,25 +603,169 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
  * - 结果校验：发送成功后平台会清空表单里的商品行 → waitForGone 复核，没清空就如实失败。
  */
 export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptions, squareUrl: string): StepDraft[] {
-  const squarePath = (() => { try { return new URL(squareUrl).pathname } catch { return squareUrl } })()
   const typeIn = (selector: string, text: string) =>
     round.push({ type: 'typeText', input: { selector, text, deep: true }, timeoutMs: 30000 })
-  // 一轮 = 从广场取一个"还没邀约过的"达人 → 详情 → 邀请带货 → 表单 → 发送 → 回广场
+  /** 近 7 天已邀过的达人昵称（台账）→ 点「详情」时跳过这些行；最多带 500 条 */
+  const recentlyInvited = (opts.recentlyInvited || []).map(n => String(n).trim()).filter(Boolean).slice(0, 500)
+  /**
+   * 广场筛选三行（2026-10-02 真机逐项实测，见 constants/invite.ts 的微信档案注释）。
+   * **每轮都要重新应用**（原因见下面 round 的注释：切走再切回时广场页是重新加载的）。
+   *
+   * 共同点：这三行都是**复选框组**，而且平台把"筛没筛上"只表达在控件自己的勾选态上
+   * （页面这一版没有「已筛选」摘要）——所以每次点击都带 verifyChecked：点了没选上就如实失败，
+   * 绝不把一次静默无效的点击当成筛选成功（那会把不该邀的达人放进名单）。
+   *
+   * 手势用 clickByText 的**默认 JS 点击**（不是 mode:'real'）：
+   *   · 类目行**折叠时只显示第一行**（其余 chip 在行的盒子之外、被下一行盖住），
+   *     受信任鼠标按坐标点会落到别的元素上（真机实测点了没反应）；
+   *   · 而合成 click 在折叠态一样生效（实测：折叠下点「其他」「美妆护肤」，复选框状态真的变了）。
+   * 所以不点「展开」也能筛——少一步，就少一个"展开/收起"文案随状态变化踩坑的机会。
+   *
+   * skipIfChecked：留着做幂等保护（重跑/页面没重载时，重复点已勾选项等于反选）。
+   *
+   * 点击范围必须限定在对应行内：类目名/其他筛选项在达人卡片的文案里也会出现，
+   * 不限范围就可能点到达人卡片上（抖店那套「点错位置=筛选静默失效」的教训）。
+   * 行锚点写法 `{ text: 行标签, climb: 2 }`：行标签文字在 DIV 里，往上两层才是行容器
+   * （DIV.text → LABEL.weui-desktop-form__label → DIV.weui-desktop-form__control-group）。
+   *
+   * 找不到时的错误码用默认的 TASK_SELECTOR_CHANGED（= 页面改版了）：这几步不在 loop 的
+   * stopOn 判据里（那是"额度用完/没有候选"），报 SELECTION_SHORTFALL 只会把"页面改版"说成"没有候选"。
+   */
+  const finderFilterSteps = (profile: AssistInviteProfile, options: AssistInviteOptions): StepDraft[] => {
+    const out: StepDraft[] = []
+    const rowScope = (label: string) => ({ text: label, climb: 2 })
+    if (options.finderType) out.push({ type: 'clickByText', input: { text: options.finderType, deep: true, mode: 'real' }, timeoutMs: 25000 })
+    for (const c of (options.finderCategories || [])) {
+      out.push({
+        type: 'clickByText',
+        input: {
+          text: c, deep: true, within: rowScope(profile.finderCategoryLabel),
+          skipIfChecked: true, verifyChecked: true,
+          verifyCode: 'TASK_FILTER_NOT_APPLIED'
+        },
+        timeoutMs: 25000,
+        // 构造上幂等（已勾选则跳过、未勾选则重新定位再点）→ 允许重试：
+        // 真机实测「母婴」点了没生效（页面刚重渲染、旧节点已失效），重跑一次即可
+        retryLimit: 2
+      })
+    }
+    // 「近30日带货数据 → 带货销售总额」：区间项在**指标下拉面板**里。
+    //
+    // 实测语义（2026-10-02，2026-10-04 因真机失败改）：
+    //   · 面板收起时区间项是 display:none（DOM 在、但元素不可见）→ 引擎的点击目标必须是**可见元素**；
+    //   · DT 是**开关**：点一下开、再点一下收（Escape 无效）；
+    //   · 点区间**不会**自动收起面板，所以多档可以连着点。
+    //
+    // 旧写法是"先点开 → 点档位 → 再点收"，**依赖"开局一定是收起"**。真机实测（用户连发到第 13 轮）
+    // 就是死在这一点：某轮开头面板已开（页面重渲染/上一轮收没收掉），"先点开"反而把它点收了，
+    // 于是 `TASK_SELECTOR_CHANGED: 页面上找不到「不限」`，整批（已发出 12 位）当场中止。
+    //
+    // 现在改成**状态无关**：
+    //   · 档位步骤带 `openVia`：目标不可见时才去点 DT（已开则直接找到，绝不会误点成"收"）；
+    //   · 收尾步骤带 `onlyIfVisible`：**只有面板确实开着**（该指标 dl 内能看到档位）才点 DT 收起。
+    // 范围锚点 climb=1：DT（自有文本 = 指标名）→ 它的父级 <dl>，区间项都在这个 dl 里。
+    // exact 必须开：'不限' 这类短文案在别的指标下拉里也有一份。
+    if (profile.finderSalesMetric && (options.finderSalesTiers || []).length) {
+      const metric = profile.finderSalesMetric
+      const tiers = options.finderSalesTiers || []
+      for (const tier of tiers) {
+        out.push({
+          type: 'clickByText',
+          input: {
+            text: tier, deep: true, exact: true, within: { text: metric, climb: 1 },
+            skipIfChecked: true, verifyChecked: true,
+            verifyCode: 'TASK_FILTER_NOT_APPLIED',
+            // 面板没开就先点开（已开则直接命中，不会误点成"收"）
+            openVia: { text: metric, exact: true, deep: true }
+          },
+          timeoutMs: 25000,
+          // 构造上幂等（已勾选则跳过、未勾选则重新定位再点）
+          retryLimit: 2
+        })
+      }
+      out.push({
+        type: 'clickByText',
+        input: {
+          text: metric, deep: true, exact: true,
+          // 只在"面板确实开着"时收起：判据限定在该指标的 dl 内，避免表格/摘要里的同文案误判
+          onlyIfVisible: { text: tiers[0], deep: true, within: { text: metric, climb: 1 } }
+        },
+        timeoutMs: 20000
+      })
+    }
+    for (const f of (options.finderOtherFilters || [])) {
+      out.push({
+        type: 'clickByText',
+        input: {
+          text: f, deep: true, within: rowScope(profile.finderOtherLabel),
+          skipIfChecked: true, verifyChecked: true,
+          verifyCode: 'TASK_FILTER_NOT_APPLIED'
+        },
+        timeoutMs: 25000,
+        retryLimit: 2
+      })
+    }
+    return out
+  }
+  /**
+   * 一轮 = 重新进广场并应用筛选 → 取一个"还没邀约过的"达人 → 详情 → 邀请带货 → 表单 → 发送。
+   *
+   * ⚠️ **筛选每轮都要重新应用**（2026-10-03 真机实测后改，不再"只在开头应用一次"）。
+   *
+   * 为什么必须这样：整个应用刻意只为"当前活动标签页"保留 DOM `<webview>`（见
+   * `DashboardBrowserSurface` 的 openWebviews 注释：一个店铺历史标签页可以上百个，全留着会线性放大
+   * 渲染进程内存）。于是**切到详情页再切回来时，广场页是重新加载的**——实测证据：
+   * 在广场页写一个页内标记并勾上「有联系方式」→ 切到别的标签页 → 切回来，
+   * 标记与勾选都没了，页面回到了默认筛选（verify-tab-state-persist）。
+   *
+   * 旧实现把"导航 + 筛选"放在 loop **外面**、并假设广场页一直活着（用 useTab 切回），
+   * 在那个前提下第 1 位没错，**第 2 轮起就会在重新加载过、没有任何筛选的名单上继续邀约**
+   * ——比"少邀几位"严重得多的一类错误（邀到不该邀的人）。现在改成每轮自己导航 + 重新筛选，
+   * 筛选是否生效由 verifyChecked 回读保证；分页也不用再指望页内状态（每轮从第一页开始，
+   * 本页取尽时由 onCode 点「下一页」）。
+   */
   const round: StepDraft[] = [
-    { type: 'useTab', input: { path: squarePath }, timeoutMs: 30000 }
+    { type: 'navigate', input: { url: squareUrl }, timeoutMs: 45000 },
+    { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrl) }, timeoutMs: 45000 },
+    /**
+     * 等**筛选区真的渲染出来**再开始点。
+     *
+     * 为什么需要（2026-10-03 真机实测）：`waitForPage` 只认地址，而广场整页在 micro-app 里，
+     * 地址到了之后筛选区还要几秒才挂载；此时直接点「全部带货者」/「带货销售总额」会点空，
+     * 表现为 `TASK_SELECTOR_CHANGED: 页面上找不到文案为「全部带货者」/「不限」的可点击元素`
+     * （真机连续两次踩到，且每次失败点不同 —— 典型的"页面还没就绪"而不是"页面改版"）。
+     * 用类目行的行标签当"筛选区已挂载"的判据：它在筛选区里，且是后面所有筛选点击的范围锚点。
+     */
+    { type: 'waitForText', input: { text: p.finderCategoryLabel, deep: true }, timeoutMs: 40000 },
+    ...finderFilterSteps(p, opts),
+    // 进达人详情：平台是 window.open 开**新标签页**（页面自身不跳转），所以点完要跟随新标签页。
+    // nth:'unvisited'：取第一条还没点过的（列表每次加载都洗牌，"第几条"不可靠）；
+    // 本页都点过了 → TASK_PAGE_EXHAUSTED → loop 的 onCode 点「下一页」后重试。
+    { type: 'waitForText', input: { text: '详情', deep: true }, timeoutMs: 30000 }
   ]
-  // 进达人详情：平台是 window.open 开**新标签页**（页面自身不跳转），所以点完要跟随新标签页。
-  // nth:'unvisited'：取第一条还没点过的（列表每次加载都洗牌，"第几条"不可靠）；
-  // 本页都点过了 → TASK_PAGE_EXHAUSTED → loop 的 onCode 点「下一页」后重试。
-  round.push({ type: 'waitForText', input: { text: '详情', deep: true }, timeoutMs: 30000 })
   round.push({
     type: 'clickByText',
     input: {
       text: '详情', deep: true, mode: 'real', nth: 'unvisited',
       missingCode: 'TASK_PAGE_EXHAUSTED',
-      // closeOld:false —— 详情页是新标签页，但**广场必须留着**（分页/筛选是页面内部状态，
-      // 关了就得重新加载：分页丢、名单重新洗牌）。广场由轮末的 useTab 负责切回。
-      followTab: { urlIncludes: 'finder-detail', closeOld: false }
+      /**
+       * 7 天内邀过的达人**不重复邀约**（用户要求）：
+       *   · skipTexts：本地台账里的昵称 → 这些行在"点详情之前"就被剔掉（省掉一次详情页访问）；
+       *     全被剔掉时报 TASK_PAGE_EXHAUSTED → loop 翻页继续找，而不是把这一页当"邀完了"。
+       *   · recordRowText：把选中那一行的达人昵称回传，本轮真发出后由引擎写入台账。
+       * 平台自己的"7 天内不可再次邀请"仍是兜底（台账没覆盖到的会以 TASK_DAREN_ALREADY_INVITED 跳过）。
+       */
+      ...(recentlyInvited.length ? { skipTexts: recentlyInvited } : {}),
+      recordRowText: true,
+      /**
+       * closeOld: **true** —— 跟到详情页时把广场页关掉。
+       *
+       * 旧版这里是 false（"广场必须留着"），因为那套设计把分页/筛选当页内状态、指望下一轮
+       * 切回去继续用。现在每轮开头自己导航+筛选（见 round 注释），广场页没有保活价值；
+       * 留着它反而**每轮泄漏一个标签页**（实测两轮彩排：标签页 123 → 126）。
+       * 关掉之后整轮只用一个标签页，轮与轮之间复用它。
+       */
+      followTab: { urlIncludes: 'finder-detail', closeOld: true }
     },
     timeoutMs: 40000
   })
@@ -629,12 +858,19 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
   round.push({ type: 'clickByText', input: { text: p.texts.sendInvite, deep: true, mode: 'real' }, timeoutMs: 20000 })
   round.push({ type: 'waitForText', input: { text: p.texts.dialogMarker, deep: true }, timeoutMs: 25000 })
   round.push({ type: 'clickByText', input: { text: p.texts.confirmSend, deep: true, mode: 'real' }, timeoutMs: 20000 })
+  /**
+   * 发送后的**双判据**（2026-10-03 真机实测后加严）：
+   *   ① 确认弹窗真的关掉（按文案等它消失——弹窗是平台通用组件，没有稳定选择器）；
+   *   ② 平台清空了「邀约商品」行。
+   * 只查 ② 会**早于弹窗关闭**就通过（第 3 轮截图抓到弹窗还在提交动画中，判据已经过了），
+   * 那样"这次提交到底被接受没有"就没被真正验证。两条都过才算这一位发出去了。
+   */
+  round.push({ type: 'waitForGone', input: { text: p.texts.dialogMarker, deep: true }, timeoutMs: 30000 })
   // 发送成功后平台会清空「邀约商品」行；没清空说明这次提交没被接受，如实失败
   round.push({ type: 'waitForGone', input: { selector: p.selectors.goodsRows, deep: true }, timeoutMs: 30000 })
   round.push({ type: 'screenshot', input: {}, timeoutMs: 20000 })
-  // 收尾：回广场（下一轮开头那次 useTab 会再切一次，这里先回来是为了让"本轮已发出"的
-  // 现场留在广场页上，同时把详情/表单页关掉）
-  round.push({ type: 'useTab', input: { path: squarePath }, timeoutMs: 30000 })
+  // 轮末不再 useTab 回广场：每轮开头自己导航过去（页内状态本来就不跨标签页保留，
+  // 见 round 的注释），少一次切换就少一次"切页后 webview 重新挂载"的等待。
 
   const contactDesc = [
     `联系人 ${opts.contact.trim()}`,
@@ -642,24 +878,22 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
     opts.phone?.trim() ? `手机 ${opts.phone.trim()}` : null
   ].filter(Boolean).join('｜')
 
-  // 广场页只开一次：先导航过去、应用一次筛选（每轮重载会丢分页/筛选，且列表会重新洗牌）
-  const opening: StepDraft[] = [
-    { type: 'navigate', input: { url: squareUrl }, timeoutMs: 45000 },
-    { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrl) }, timeoutMs: 45000 }
-  ]
-  if (opts.finderType) opening.push({ type: 'clickByText', input: { text: opts.finderType, deep: true, mode: 'real' }, timeoutMs: 25000 })
-  for (const c of (opts.finderCategories || [])) opening.push({ type: 'clickByText', input: { text: c, deep: true, mode: 'real', missingCode: 'TASK_SELECTION_SHORTFALL' }, timeoutMs: 25000 })
-  for (const f of (opts.finderOtherFilters || [])) opening.push({ type: 'clickByText', input: { text: f, deep: true, mode: 'real' }, timeoutMs: 25000 })
-
+  /**
+   * 旧版把"导航 + 筛选"放在 loop 外面的那段构造已删：那种写法只对第 1 位有效
+   * （广场页在切到详情页后会被重新加载，筛选随页内状态一起丢），见 round 的注释。
+   */
   return [
-    ...opening,
     {
       type: 'loop',
       input: {
         // label 上限 60 字（Zod）：联系人/微信/手机都可能很长，这里必须截断——
         // 实测超限会让任务创建整单被拒，而失败提示不易察觉，表现成"点开始邀约没反应"
         label: (`${contactDesc} · 逐个邀约${productIds.length ? ` · 商品ID ${productIds.join('/')}` : ''}`).slice(0, 60),
-        maxRounds: ASSIST_LOOP_MAX_ROUNDS,
+        // 平台名：仅用于写"邀约台账"时留档（不参与点击逻辑）
+        platform: String(p.platform || '').slice(0, 40),
+        // 额度护栏：面板设的"本次最多邀约几位"（缺省 50）。平台不暴露剩余额度，
+        // 所以这是我们自己能保证的上限——到量就干净收工（见 AssistInviteOptions.maxInvites）。
+        maxRounds: normalizeMaxInvites(opts.maxInvites),
         // 收工条件：额度用完 / 翻到最后一页也没有新候选（onCode 里点不动「下一页」时会报它）
         stopOn: ['TASK_QUOTA_EXCEEDED', 'TASK_SELECTION_SHORTFALL'],
         // 本页候选都点过了 → 点「下一页」再重试；「下一页」点不动（最后一页）→ 交给 stopOn 收工
@@ -691,8 +925,8 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
             code: 'TASK_DAREN_PAGE_UNOPENABLE',
             limit: 6,
             restart: true,
+            // restart 会重开本轮（本轮第一步就是"重新进广场 + 重新筛选"），所以这里只退避等待
             steps: [
-              { type: 'useTab', input: { path: squarePath }, timeoutMs: 30000 },
               { type: 'waitMs', input: { ms: 20000 }, timeoutMs: 30000 }
             ]
           },

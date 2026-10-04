@@ -1,0 +1,20 @@
+﻿const PORT='9250'
+const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()
+const renderer = list.find(t => t.type === 'page' && String(t.url).includes('out/renderer/index.html'))
+const ws = new WebSocket(renderer.webSocketDebuggerUrl)
+await new Promise((ok,err)=>{ws.onopen=ok;ws.onerror=err})
+let s=0; const pend=new Map()
+ws.onmessage=e=>{const m=JSON.parse(e.data); if(m.id&&pend.has(m.id)){pend.get(m.id)(m);pend.delete(m.id)}}
+const send=(method,params={})=>new Promise((ok,err)=>{const id=++s;pend.set(id,m=>m.error?err(new Error(JSON.stringify(m.error))):ok(m.result));ws.send(JSON.stringify({id,method,params}))})
+const ev=async expr=>{const r=await send('Runtime.evaluate',{expression:expr,returnByValue:true,awaitPromise:true,userGesture:true}); if(r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails).slice(0,200)); return r.result.value}
+const call = async (expr) => JSON.parse(await ev(`(async()=>JSON.stringify(await ${expr}))()`))
+const state = await call(`window.shopilot.browser.state()`)
+const st = state?.data?.stores?.find(x => x.storeId === 'store_4eb9b43cffeee0094041894a9f1f93bf')
+console.log('activeTabId =', st?.activeTabId)
+const tabs = (st?.tabs || [])
+console.log('标签数 =', tabs.length, '｜字段样例 =', JSON.stringify(tabs[0]))
+console.log('finder 相关:')
+for (const t of tabs.filter(x => /finder/.test(String(x.url || '')))) console.log('  ', t.id, String(t.url).slice(0,70), 'guest=', t.guestAttached)
+const dom = await ev(`(() => { const w=document.querySelector('webview'); return JSON.stringify({ tab: w && w.getAttribute('data-tab-id'), src: w && String(w.src).slice(-45), n: document.querySelectorAll('webview').length }) })()`)
+console.log('渲染层挂载 =', dom)
+ws.close(); process.exit(0)

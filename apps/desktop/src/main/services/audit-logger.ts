@@ -25,7 +25,7 @@ export type AuditAction =
   | 'agent.memory.review' | 'agent.memory.rebuild' | 'agent.memory.snapshot' | 'agent.memory.restore' | 'agent.memory.learn' | 'agent.memory.maintenance' | 'agent.feedback.create' | 'agent.quality.review'
   | 'update.check' | 'update.download' | 'update.install'
   | 'ai.keySet' | 'ai.keyClear' | 'ai.test' | 'ai.generate' | 'ai.models' | 'ai.config'
-  | 'ai.imageConfig' | 'ai.imageKeySet' | 'ai.imageKeyClear' | 'ai.image.test' | 'ai.image.models'
+  | 'ai.imageConfig' | 'ai.imageKeySet' | 'ai.imageKeyClear' | 'ai.image.test' | 'ai.image.models' | 'ai.imageSave'
   | 'ai.imageTextConfig' | 'ai.imageTextKeySet' | 'ai.imageTextKeyClear' | 'ai.imageText.test' | 'ai.imageText.models' | 'ai.imageText.analyze'
   // 技能/插件/分享包属于「定义变更」：会改变后续 Job 能自动执行什么，必须留痕（2026-09-26 审计 P2）。
   | 'agent.skill.create' | 'agent.skill.update' | 'agent.skill.delete' | 'agent.skill.run'

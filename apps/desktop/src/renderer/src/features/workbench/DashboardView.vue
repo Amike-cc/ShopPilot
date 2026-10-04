@@ -1,5 +1,5 @@
 <template>
-  <section :class="['dashboard-shell welcome', { 'picker-mode': taskPicking }]" data-test="dashboard-home">
+  <section :class="['dashboard-shell welcome', { 'picker-mode': taskPicking && activePage === 'browser', 'image-studio-shell': activePage === 'image-studio' }]" data-test="dashboard-home">
     <aside class="dashboard-sidebar sidebar" :class="{ collapsed: leftSidebarCollapsed }" data-test="sidebar" aria-label="ShopPilot 主导航">
       <div v-if="leftSidebarCollapsed" class="sidebar-rail">
         <button type="button" class="rail-btn" data-test="sidebar-expand" title="展开左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(true)"><img :src="forwardIcon" alt="" /></button>
@@ -153,7 +153,7 @@
       <UnifiedDataPage v-else-if="activePage === 'invoices'" mode="invoices" @change-mode="changeDataPage" @open-store="openStoreFromPage" />
       <UnifiedTaskPage v-else-if="activePage === 'tasks'" :auto-create="taskAutoCreate" @open-store="openStoreFromPage" />
       <UnifiedSettingsPage v-else-if="activePage === 'settings'" :initial-tab="settingsTab" @close="closeSettings" />
-      <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @open-settings="openImageSettings" @open-assistant="openAssistant" />
+      <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" />
       <UnifiedAppsPage v-else-if="activePage === 'products' || activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-store="openStoreFromPage" @open-assistant="openAssistant" />
       <div v-else-if="activePage === 'overview'" class="overview-page">
         <div v-if="dataState === 'error'" class="dashboard-error" role="alert">
@@ -368,6 +368,7 @@
     </div>
 
     <AgentDock
+      v-if="hasNativeBridge"
       :store-name="''"
       :tab-title="'首页 Dashboard'"
       :current-url="''"
@@ -509,13 +510,16 @@ const confirmDialog = reactive({ open: false, title: '', message: '', action: nu
 const createStoreDialog = reactive({ open: false, name: '', platform: '拼多多', adminUrl: '' })
 const createStoreError = ref('')
 const createStoreBusy = ref(false)
-const availablePlatforms = ((window.shopilot.platforms || []) as Array<{ name: string; adminUrl: string }>)
+const availablePlatforms = (((window as Window & { shopilot?: Window['shopilot'] }).shopilot?.platforms || []) as Array<{ name: string; adminUrl: string }>)
 const leftSidebarCollapsed = ref(false)
+const hasNativeBridge = typeof window !== 'undefined' && !!(window as Window & { shopilot?: Window['shopilot'] }).shopilot
 const globalQuery = ref('')
 const commandOpen = ref(false)
 const commandInput = ref<HTMLInputElement | null>(null)
 const notice = ref('')
-const period = ref<PeriodKey>('7d')
+// 默认口径 = 今日（用户要求，2026-10-02）。这里**不持久化**：每次打开都回到今日，
+// 用户手动切到别的口径只影响当次会话（与左栏收起状态不同，那是持久化的）。
+const period = ref<PeriodKey>('today')
 const selectedPlatform = ref('all')
 const dataState = ref<LoadState>('loading')
 const dataError = ref('')
@@ -529,7 +533,8 @@ let noticeTimer: number | undefined
 let loadingSnapshots = false
 let stopStoreWatch: (() => void) | null = null
 
-// 设计稿的周期页签顺序：今日 / 昨日 / 近 7 天(默认) / 近 30 天 / 自定义日期
+// 周期页签顺序：今日(默认) / 昨日 / 近 7 天 / 近 30 天 / 自定义日期
+// （设计稿里默认是"近 7 天"，2026-10-02 用户要求改成"今日"）
 const periodOptions: Array<{ key: PeriodKey; label: string }> = [
   { key: 'today', label: '今日' }, { key: 'yesterday', label: '昨日' }, { key: '7d', label: '近 7 天' },
   { key: '30d', label: '近 30 天' }, { key: 'custom', label: '自定义日期' }
@@ -754,8 +759,16 @@ function deltaClass(kpi: KpiRowItem): string {
   return good ? 'up' : 'down'
 }
 
+/**
+ * 趋势图的时间窗。
+ *
+ * 口径=今日时**放宽到 7 天**（2026-10-02 默认口径改成今日后暴露的问题）：采集每天只落一条
+ * （原地更新、跨天才连成线），1 天窗口永远只画得出一个点，趋势图等于没有。
+ * 口径本身不变——只画"今日累计"这一种行，所以这条线表示的是**每天的当日总额**，趋势成立。
+ * 其余口径维持原窗口（昨日 1 天 / 近 7 天 7 天 / 近 30 天与自定义 30 天）。
+ */
 const trendWindowStart = computed(() => {
-  const days = period.value === 'today' || period.value === 'yesterday' ? 1 : period.value === '30d' || period.value === 'custom' ? 30 : 7
+  const days = period.value === 'yesterday' ? 1 : period.value === '30d' || period.value === 'custom' ? 30 : 7
   return Date.now() - days * 86400000
 })
 /**
@@ -916,7 +929,11 @@ const pendingTasks = computed((): PendingTaskItem[] => {
 })
 
 const platformSyncRows = computed(() => {
-  const names = [...new Set([...((window.shopilot.platforms || []).map(platform => platform.name)), ...ws.stores.map(store => store.platform)])]
+  // The renderer can also be opened by Vite for visual review without Electron's
+  // preload bridge. Keep the dashboard mounted in that mode; the desktop path
+  // still receives the configured platform list from preload as before.
+  const configuredPlatforms = ((window as Window & { shopilot?: Window['shopilot'] }).shopilot?.platforms || []) as Array<{ name: string }>
+  const names = [...new Set([...configuredPlatforms.map(platform => platform.name), ...ws.stores.map(store => store.platform)])]
   return names.map(name => {
     const stores = ws.stores.filter(store => store.platform === name)
     // "最近同步"优先取**自动采集**的时间：那才是这个平台真正的同步动作。
@@ -1282,7 +1299,6 @@ async function syncStoreContextOcclusion() {
   await window.shopilot.browser.setViewsObscured(overlap)
 }
 function openAgentSettings() { settingsTab.value = 'agents'; navigateTo('settings') }
-function openImageSettings() { settingsTab.value = 'ai'; navigateTo('settings') }
 /**
  * Agent 的软件级 openPanel 动作走 Main 事件；统一 Dashboard 也必须接住，
  * 否则旧工作台的事件监听会把导航写进隐藏的旧设置弹窗，用户看不到结果。
@@ -1370,6 +1386,13 @@ watch([() => ws.displayedStoreId, () => ws.displaySource], ([storeId, source]) =
 onMounted(async () => {
   window.addEventListener('keydown', onKeydown)
   document.addEventListener('mousedown', onDocumentMouseDown)
+  // Vite 预览页没有 Electron preload；保留纯渲染层页面可见，便于逐页做界面审查。
+  // 桌面应用仍走下面的真实 IPC 初始化路径。
+  if (!window.shopilot) {
+    tickClock()
+    clockTimer = window.setInterval(tickClock, 1000)
+    return
+  }
   window.shopilot.on(EVENT_CHANNELS.AGENT_PANEL_OPEN, handleAgentPanelOpen)
   window.shopilot.on(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished)
   window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress)
@@ -1385,7 +1408,7 @@ onMounted(async () => {
   scheduleCollectedRefresh()
   stopStoreWatch = watch(() => ws.stores.map(store => `${store.id}:${store.status}`).join('|'), () => { void loadSnapshots(); void loadCollectedMetrics() })
 })
-onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); document.removeEventListener('mousedown', onDocumentMouseDown); window.shopilot.off(EVENT_CHANNELS.AGENT_PANEL_OPEN, handleAgentPanelOpen); window.shopilot.off(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished); window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress); stopStoreWatch?.(); if (noticeTimer) window.clearTimeout(noticeTimer); if (collectedTimer) window.clearInterval(collectedTimer); if (clockTimer) window.clearInterval(clockTimer); void window.shopilot.browser.setViewsObscured(false) })
+onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); document.removeEventListener('mousedown', onDocumentMouseDown); if (window.shopilot) { window.shopilot.off(EVENT_CHANNELS.AGENT_PANEL_OPEN, handleAgentPanelOpen); window.shopilot.off(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished); window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress); void window.shopilot.browser.setViewsObscured(false) }; stopStoreWatch?.(); if (noticeTimer) window.clearTimeout(noticeTimer); if (collectedTimer) window.clearInterval(collectedTimer); if (clockTimer) window.clearInterval(clockTimer) })
 </script>
 
 <style scoped>
@@ -1429,6 +1452,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
   font-size: 13px;
 }
 .dashboard-shell.welcome { align-items: stretch; justify-content: flex-start; -webkit-app-region: no-drag; }
+.image-studio-shell .dashboard-toolbar { display: none; }
 .dashboard-shell button, .dashboard-shell input, .dashboard-shell select { font: inherit; }
 /* 兜底文字色用 :where() 压低优先级：否则会把各按钮自己声明的颜色盖掉
    （例如 AI 卡的白底紫字按钮会变成白底白字，实测踩过） */

@@ -1,0 +1,656 @@
+{
+ "startedAt": "2026-10-03T09:19:40.815Z",
+ "store": "store_4eb9b43cffeee0094041894a9f1f93bf",
+ "steps": [
+  {
+   "index": 0,
+   "kind": "executed",
+   "summary": "已执行",
+   "payload": {
+    "action": "loop",
+    "label": "联系人 刘涛｜微信 jiaoe988｜手机 15057937334 · 逐个邀约 · 商品ID 100006879865",
+    "maxRounds": 2,
+    "completedRounds": 2,
+    "stopReason": null,
+    "stopOn": [
+     "TASK_QUOTA_EXCEEDED",
+     "TASK_SELECTION_SHORTFALL"
+    ],
+    "onCode": [
+     "TASK_PAGE_EXHAUSTED",
+     "TASK_DAREN_PAGE_UNOPENABLE",
+     "TASK_DAREN_NOT_INVITABLE",
+     "TASK_DAREN_ALREADY_INVITED"
+    ],
+    "rounds": [
+     {
+      "round": 1,
+      "ok": true,
+      "ms": 34928
+     },
+     {
+      "round": 2,
+      "ok": true,
+      "ms": 34836
+     }
+    ]
+   },
+   "artifactPath": "C:\\Users\\15240\\AppData\\Roaming\\shopilot\\stores\\store_4eb9b43cffeee0094041894a9f1f93bf\\artifacts\\run_0725cd07784221d5c0d8b909_step0.26r2.png"
+  }
+ ],
+ "config": {
+  "contact": "刘涛",
+  "wechat": "jiaoe988",
+  "phone": "15057937334",
+  "scriptMode": "ai",
+  "productIds": [
+   "10000687986563"
+  ],
+  "finderType": "全部带货者",
+  "categories": [
+   "母婴"
+  ],
+  "salesTiers": [
+   "不限"
+  ],
+  "others": [
+   "优质带货者"
+  ]
+ },
+ "taskName": "达人邀约 · 微信小店 · 辅助填单 · 刘涛 · 类目 1 项 · 销售额 1 档 · 其他 1 项 · 最多 10 位 · 连发 2 位验证",
+ "stepTypes": [
+  "loop"
+ ],
+ "roundStepTypes": [
+  "navigate",
+  "waitForPage",
+  "waitForText",
+  "clickByText",
+  "clickByText",
+  "clickByText",
+  "clickByText",
+  "clickByText",
+  "clickByText",
+  "waitForText",
+  "clickByText",
+  "waitForPage",
+  "clickByText",
+  "waitForPage",
+  "requireQuota",
+  "typeText",
+  "typeText",
+  "typeText",
+  "aiGenerate",
+  "readText",
+  "ensureRowsById",
+  "clickByText",
+  "waitForText",
+  "clickByText",
+  "waitForGone",
+  "waitForGone",
+  "screenshot"
+ ],
+ "rounds": 2,
+ "display": {
+  "success": true,
+  "displayedStoreId": "store_4eb9b43cffeee0094041894a9f1f93bf"
+ },
+ "preexistingSquareTab": "tab_b6a795e72eae5779ea32e07abb8b4059",
+ "myInviteTab": "tab_d791b7f788409ae73f82fb86119f3d81",
+ "beforeMyInvite": {
+  "url": "https://store.weixin.qq.com/shop/findersquare/my-invite",
+  "login": false,
+  "rowCount": 11,
+  "firstRows": [
+   "带货者 佣金范围 邀约创建时间 带货者反馈 合作动销量GMV 操作",
+   "踏兔闯天下 50-50% 2026/08/18 15:46 已接受 0 查看联系方式 详情",
+   "祥姐爱美食 50-50% 2026/08/18 15:22 已接受 0 查看联系方式 详情"
+  ],
+  "tabs": [
+   "已接受"
+  ],
+  "counts": [],
+  "quota": null
+ },
+ "taskId": "task_99ff412daac4401b50715e9f",
+ "run": {
+  "id": "run_0725cd07784221d5c0d8b909",
+  "taskId": "task_99ff412daac4401b50715e9f",
+  "storeId": "store_4eb9b43cffeee0094041894a9f1f93bf",
+  "status": "succeeded",
+  "currentStep": 0,
+  "startedAt": 1791019198041,
+  "finishedAt": 1791019267846,
+  "errorCode": null,
+  "errorMessage": null,
+  "statusReason": "全部步骤完成"
+ },
+ "keyEvidence": {
+  "filterSteps": 0,
+  "aiGenerate": null,
+  "goods": null,
+  "quota": null,
+  "screenshot": null
+ },
+ "afterMyInvite": {
+  "url": "https://store.weixin.qq.com/shop/findersquare/my-invite",
+  "login": false,
+  "rowCount": 11,
+  "firstRows": [
+   "带货者 佣金范围 邀约创建时间 带货者反馈 合作动销量GMV 操作",
+   "踏兔闯天下 50-50% 2026/08/18 15:46 已接受 0 查看联系方式 详情",
+   "祥姐爱美食 50-50% 2026/08/18 15:22 已接受 0 查看联系方式 详情"
+  ],
+  "tabs": [
+   "已接受"
+  ],
+  "counts": [],
+  "quota": null
+ },
+ "myInviteScreenshot": "D:\\code\\电商浏览器\\wx-invite-test\\evidence\\my-invite-after-send.png",
+ "tabsAfter": [
+  {
+   "id": "tab_b6a795e72eae5779ea32e07abb8b4059",
+   "url": "https://store.weixin.qq.com/shop/findersquare/find"
+  },
+  {
+   "id": "tab_905eedc1f37d53b016f12c393c8d6ebe",
+   "url": "https://store.weixin.qq.com/shop/home"
+  },
+  {
+   "id": "tab_29fe119f3567ba542d8a9954823f1e30",
+   "url": "https://store.weixin.qq.com/shop/home"
+  },
+  {
+   "id": "tab_de2409e63453b623bac9e8d3d3d470f3",
+   "url": "https://store.weixin.qq.com/shop/bill/home"
+  },
+  {
+   "id": "tab_ceb231a418ef2bd9053b2a64277f6edd",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_93f8571155eca5794f94f95f7e3ff773",
+   "url": "https://store.weixin.qq.com/shop/bill/home"
+  },
+  {
+   "id": "tab_52e663463e8e2fdd8837dee50eb0ab11",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10001528219053&isUpdateAuditFree=0&source=list_edit&continueEditInfo={%22isEditingContinued%22:false,%22lastEditDraftTime%22:0,%22listingTime%22:0}"
+  },
+  {
+   "id": "tab_7c61f68b064af9c47aaf76801ccb7c2a",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10001528219053&isUpdateAuditFree=0&source=list_edit&continueEditInfo={%22isEditingContinued%22:false,%22lastEditDraftTime%22:0,%22listingTime%22:0}"
+  },
+  {
+   "id": "tab_a5aa502d1d4d025f729d6c82ecf2166a",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10001528219053&isUpdateAuditFree=0&source=list_edit&continueEditInfo={%22isEditingContinued%22:false,%22lastEditDraftTime%22:0,%22listingTime%22:0}"
+  },
+  {
+   "id": "tab_2221c2a08bf587332deb42e58ffb87c0",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10001528219053&isUpdateAuditFree=0&source=list_edit&continueEditInfo={%22isEditingContinued%22:false,%22lastEditDraftTime%22:0,%22listingTime%22:0}"
+  },
+  {
+   "id": "tab_731d19cf9f23780571b25eeb2c6d0892",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_37f48cd0503bc9986f94dca951477b7e",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_949731620fa69bed23bf955a9095a972",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_7eb84036e8bfecda76b371b923b8121b",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_20ab7833dadb86e4b0f97be37f839d9e",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_dca5e194d10d1035163cfa7b44bb83aa",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_9e12d138bcaa98dcc1ca7753d42f8726",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_c5891687e22dcb267ff94bb82fe187cd",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_87f97d7526db3f68b3195d324beb7596",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_aacb6da3df00cc5412305ad52f5cbc92",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_e474dcaa510c78135e777d43d2e49e6a",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_25fe8a5dff502f3e7fdb30644265182c",
+   "url": "about:blank"
+  },
+  {
+   "id": "tab_990801b7dc23ec8facf376345024ebce",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_3df142baaea062838824dddbbdd88c70",
+   "url": "https://store.weixin.qq.com/shop/goods/list"
+  },
+  {
+   "id": "tab_5467411547a60f3f37ded5adc88b8e81",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_cbe2eaa6488a5811581d9967af5f10df",
+   "url": "https://store.weixin.qq.com/shop/goods/list"
+  },
+  {
+   "id": "tab_8a326c41c64ae8678217f4494269bb49",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_7984aa1e44d1dd905f2538e4d6181b67",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_6fff68dbe6e7a9b84588d5c030d21ea9",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_f91a1356225224c1d34ef2d7abf19cac",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_7fb572e3e59c1e5f748a61af61edd52f",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_f1ea9bcfe54f90440f31c445c170c6ba",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_31a1dc1fa866e39cbf1917a10243b13c",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_de14d22e5a8fdffe7fcff680698a07db",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_94b86db50d25da6070b4cfffd1ca214b",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_080ee3ec15d6e10414db20dc91d3e3bc",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_b952b57214b65cd516965c6bb3d3fda4",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_b615aed955b03657b7d096e81636fd29",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_ba91ded4851d683ee9a82217e54b07d0",
+   "url": "https://store.weixin.qq.com/shop/home"
+  },
+  {
+   "id": "tab_f6e5825953cffc186d35ed47499194aa",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_b169a2e590c7bd7f929e2a847224cf70",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_e746958f411dfbcd4aca142ae7fade1f",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_701b014b637e75ee5112aa6aa09dc9c3",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_94735d393bca714c9fabaff00f4b6a69",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_62e1e7d220f5c21a06dc58d0eb5378f5",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_c258436fc7c9170313253d77387832d7",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_7c15bac81413b72480a86bc0b9987848",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_98be6fe5a1075f86ae18b2440de9e179",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_131ee8e96b1663b1dca66be46ba35788",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_23c4a9bb878a5179f5f563144555444e",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_ad8d12a609cf10d8d6b41926cbb45453",
+   "url": "about:blank"
+  },
+  {
+   "id": "tab_69c1c565852740e67a6d0c8530811203",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_489a26de91f11e68a9fe6f0dbbb4ae9d",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_d80f37d1c3ff75986b9953bf51c9ed15",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_9ca41b5999b5d0e5636684b060a3c3b8",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_84150658e52f7e72d6420a6d604cb818",
+   "url": "https://store.weixin.qq.com/shop/findersquare/find"
+  },
+  {
+   "id": "tab_74b50ff8da767d3f95b95e80dddaf07d",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_b419185dda9b916767ed110f617dc0a3",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_a6899c2c0747b8f549b9fd23fe6da5a5",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_2007af96c8997a85f99c58c3f40c820b",
+   "url": "about:blank"
+  },
+  {
+   "id": "tab_ef96fdd0d5a3ebce81459847104a0ab8",
+   "url": "about:blank"
+  },
+  {
+   "id": "tab_42b9149cf4215c3f95dee29f1d1c2267",
+   "url": "https://store.weixin.qq.com/shop/goods/list"
+  },
+  {
+   "id": "tab_e6d69957d02715546be557c5865d0b96",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_d035b6e9b433f8d212b738229a9654f3",
+   "url": "https://store.weixin.qq.com/shop/goods/list"
+  },
+  {
+   "id": "tab_a40f246723707bd6e5c5edc5fef4c85f",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_13d9812348a00dbc992fedb4c3f365f2",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_a2e2d94e3c62965f2cc87bb984635562",
+   "url": "https://store.weixin.qq.com/shop/goods/list"
+  },
+  {
+   "id": "tab_534afa59a059d51c8b749a86cb6fd940",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_33fdcb6ce42b117d3cca845551329b69",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_7aec78bb959c864d2a0721862c60cc08",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_5e87ad6d49c75bfa95e5b56f27b875d4",
+   "url": "https://store.weixin.qq.com/shop/goods/list"
+  },
+  {
+   "id": "tab_f9d92337ed257a6941ec042842ec9cbf",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_6627cb38c822ddbb70957befe2f4ec70",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_d3085a5dcc0fbb43dcbe2f757666c1eb",
+   "url": "https://store.weixin.qq.com/shop/goods/list"
+  },
+  {
+   "id": "tab_7971dc9c6ebc161bc130d0ea2325bb8a",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_223351f6907a80180eb173464a65fd5c",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_b98811700380b22a092d84bea176f7a6",
+   "url": "https://store.weixin.qq.com/shop/goods/list"
+  },
+  {
+   "id": "tab_87b4db75261830fd1e74ab6f4d446a73",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_8a3b6c0b9561a884155d813319e39398",
+   "url": "https://store.weixin.qq.com/shop/goods/entry?productId=10000616807249"
+  },
+  {
+   "id": "tab_3d8ab50d6b8245111967b348d57ae123",
+   "url": "https://store.weixin.qq.com/shop/goods/list"
+  },
+  {
+   "id": "tab_8475572423024f8178b4d3891b1c00f2",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_f25572097680f08668ec276a8d6d3bb3",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_4118445dded40e6aa56384e8f32b2491",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_257e4d42dfe28c3d0da3a246f9e76190",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_83ae8065ba6884c8e03bc0b370dd7a24",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_ee086e9992ddc87c6a1dfcc5bae791b1",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_f85ffaf609d5f32cfc39cd07280dff85",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_31482b1979837e7e6ef400f505575929",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_6a02810372f862fa12551e99702afd69",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_e49458fc4f38f57eb93d1996c9c6dae1",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_c9a31627684250bc5921549780858947",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_2178520c8565a5e56a33606667584433",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_8f6e7a35f38f2e468a4416fac3985f48",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_5914c3c1efa2770225011123bb2a586b",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_7d4759952cb15f906e1a3b329078881a",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_9bd13e41380468a17c1a655d502d818c",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_fcf3a7b175ae5e7f9209074f942dad24",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_e536af68aec0fb035375727889ef31cc",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_930510fb890b28b440a5bfadc45e72d0",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_40f4465ec8da433926c3136260901849",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_2b97844dd21318a33a6bc5660aa5481b",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_4c1f3371c8a72b83b29614e77b8c36c0",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_30a6f1b127323bdf9157804916f57029",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_0a650f223314eb467a47f1ccb628053c",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_a43fa4f4195942588cb38068af75cf8d",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_c0f4ba6f35e90a562d4557bf9ee5ebba",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_2e91f6baa630b6c62b486a1b949aab30",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_704e5f6f1f6176fd878d07751a484203",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_b047866d440c2ee0a3cb8a463137cb4a",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_15086809a5f2a4954a38e6769ad04359",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_1dda896fe8faa8f46635bf179c82e10d",
+   "url": "https://store.weixin.qq.com/shop/goods/entry"
+  },
+  {
+   "id": "tab_9d57c5f1addd1dd7b3711ea9b52e979d",
+   "url": "https://store.weixin.qq.com/shop/bill/home"
+  },
+  {
+   "id": "tab_70246b1e96fd3e5edf851090efc04544",
+   "url": "https://store.weixin.qq.com/shop/bill/home"
+  },
+  {
+   "id": "tab_0378b121336aa6773f3a040758c21524",
+   "url": "https://store.weixin.qq.com/shop/findersquare/find"
+  },
+  {
+   "id": "tab_97fe1dbe139e7bd0e9979723727a5c70",
+   "url": "https://store.weixin.qq.com/shop/findersquare/my-invite"
+  },
+  {
+   "id": "tab_efcf8150f1fa46a83825e18048e8457b",
+   "url": "https://store.weixin.qq.com/shop/findersquare/find"
+  },
+  {
+   "id": "tab_eeaefb57c63af02384bf0d5f967ae29c",
+   "url": "https://store.weixin.qq.com/shop/findersquare/my-invite"
+  },
+  {
+   "id": "tab_34717385a137438138a0a5ae1b588cd0",
+   "url": "https://store.weixin.qq.com/shop/findersquare/finder-detail?finderUsername=v2_060000231003b20faec8c6e5811bc6d6ce07e531b07717cfa2fd58553ef00fd171f3a11b6cb6@finder&talentAppid=wx55fa218f7db25cb1"
+  },
+  {
+   "id": "tab_11d17fa31c2fc4ac1213826e522f03b4",
+   "url": "https://store.weixin.qq.com/shop/bill/home"
+  },
+  {
+   "id": "tab_312ab6c44dc05664935dc797c81b2dbd",
+   "url": "https://store.weixin.qq.com/shop/bill/home"
+  },
+  {
+   "id": "tab_f4d6aefbb64ef137287fc3fb1bd1e96c",
+   "url": "https://store.weixin.qq.com/shop/findersquare/finder-detail?finderUsername=v2_060000231003b20faec8c6e7881dc2d7cd0ce434b0770c0061056c64fa8efc83fdc2cb4422dc@finder&talentAppid=wx3c8465abfb64d1fb"
+  },
+  {
+   "id": "tab_89aaca89b16a8695fe6c60126edbaf65",
+   "url": "https://store.weixin.qq.com/shop/findersquare/find"
+  },
+  {
+   "id": "tab_e03fec903d0325e347dc379290b3ee6b",
+   "url": "https://store.weixin.qq.com/shop/findersquare/finder-detail?finderUsername=v2_060000231003b20faec8c7e48010c3d2ce06e432b077b42ad4ac49dbec2abdb804f2218fe381@finder&talentAppid=wx3f6f86310eb2888e"
+  }
+ ],
+ "squareTabsAfter": [
+  "https://store.weixin.qq.com/shop/findersquare/find"
+ ],
+ "squareAfter": {
+  "url": "https://store.weixin.qq.com/shop/findersquare/find",
+  "finderType": null,
+  "others": [],
+  "categories": [],
+  "invitedMarks": 0,
+  "detailLinks": 0
+ }
+}

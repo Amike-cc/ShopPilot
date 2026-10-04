@@ -1,0 +1,13 @@
+{
+ "ok": true,
+ "items": [
+  {
+   "text": "其他筛选",
+   "tag": "DIV",
+   "cls": "text-[var(--minishop-Black-0)]/55",
+   "inLabel": true,
+   "inputType": null
+  }
+ ],
+ "html": "<label class=\"weui-desktop-form__label\" style=\"\"><!--[--><div class=\"text-[var(--minishop-Black-0)]/55\" data-v-8b27f77a=\"\">其他筛选</div><!--]--></label>"
+}

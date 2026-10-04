@@ -1,0 +1,42 @@
+{
+ "metrics": [
+  "带货销售总额",
+  "直播观众数",
+  "直播销售额",
+  "直播GPM",
+  "视频观众数",
+  "视频销售额",
+  "视频GPM",
+  "公众号篇均阅读量",
+  "公众号销售额",
+  "客单价"
+ ],
+ "tabs": [
+  {
+   "t": "全部带货者",
+   "current": true
+  },
+  {
+   "t": "直播带货者",
+   "current": false
+  },
+  {
+   "t": "短视频带货者",
+   "current": false
+  },
+  {
+   "t": "公众号带货者",
+   "current": false
+  }
+ ],
+ "sales": {
+  "present": true,
+  "menuStyle": "display: none;",
+  "checkedVals": [],
+  "checkedText": []
+ },
+ "othersChecked": [
+  "有联系方式"
+ ],
+ "detailLinks": 40
+}

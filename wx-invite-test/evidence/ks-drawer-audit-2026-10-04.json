@@ -1,0 +1,54 @@
+{
+ "at": "2026-10-04T05:42:06.384Z",
+ "report": {
+  "广场-合作信息与专属推荐": {
+   "coopRowText": "合作信息 有联系方式 无坑位费 招商中达人",
+   "coopOwnTexts": [
+    "合作信息",
+    "有联系方式",
+    "无坑位费",
+    "招商中达人"
+   ],
+   "exclusiveAnywhere": 0,
+   "exclusiveInBody": false,
+   "bodyMentions": null
+  },
+  "抽屉内锚点": {
+   "url": "https://cps.kwaixiaodian.com/zone/daren-match/daren-square-pro?__csr=1",
+   "textarea": 0,
+   "scriptPlaceholder": null,
+   "quotaText": null,
+   "quotaPresent": false,
+   "contactPlaceholder": 0,
+   "phonePlaceholder": 0,
+   "wechatPlaceholder": 0,
+   "contactLabel": false,
+   "cooperationTag": false,
+   "benefits": [],
+   "chooseGoods": false,
+   "addGoods": false,
+   "selectedMarker": null,
+   "sendButton": false,
+   "postSendHint": false,
+   "allButtons": [
+    "建联分析",
+    "1",
+    "2",
+    "3",
+    "4",
+    "50"
+   ]
+  },
+  "商品弹窗锚点": {
+   "modalRoot": 0,
+   "modalTbodyCheckbox": 0,
+   "modalTbodyRows": 0,
+   "searchInput": 0,
+   "confirmText": false,
+   "confirmSpacedText": false,
+   "resetText": false,
+   "queryText": false,
+   "firstRows": []
+  }
+ }
+}

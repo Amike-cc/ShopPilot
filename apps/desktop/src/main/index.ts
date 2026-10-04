@@ -11,6 +11,7 @@ import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { initDatabase, closeDatabase, getDatabasePath } from './db/database'
 import { registerStoreHandlers } from './ipc/store-handlers'
 import { registerBrowserHandlers } from './ipc/browser-handlers'
+import { registerInviteHandlers } from './ipc/invite-handlers'
 import { registerBookmarkAndDownloadHandlers } from './ipc/bookmark-download-handlers'
 import { registerProfileAndMiscHandlers } from './ipc/profile-misc-handlers'
 import { registerProxyAndBackupHandlers } from './ipc/proxy-backup-handlers'
@@ -397,6 +398,7 @@ async function initialize(): Promise<void> {
     console.log('Registering IPC handlers...')
     registerStoreHandlers()
     registerBrowserHandlers()
+    registerInviteHandlers()
     registerBookmarkAndDownloadHandlers()
     registerProfileAndMiscHandlers()
     registerProxyAndBackupHandlers()
@@ -516,6 +518,18 @@ async function handleStartupFailure(error: any): Promise<void> {
 /**
  * 应用生命周期
  */
+
+/**
+ * Windows 上的「原生窗口遮挡检测」会让 Chromium 认为窗口不可见 → **不产出帧**。
+ * 自动化跑任务时用户往往把应用切到后台/最小化，于是：
+ *   · `webContents.capturePage()` 直接挂住（真机实测 2026-10-03 11:08 连发：第 1 轮邀约已真实
+ *     发出，末尾的留档截图挂到 20s 超时，把整单判成失败）；
+ *   · 页面里的可见性判据/渲染时序也会变得不稳（间歇性"元素在但不可见"）。
+ * 关掉这个特性后，后台窗口照常渲染。必须在 app ready **之前**设置才生效。
+ */
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+}
 
 // 单实例：两个实例同写一个 SQLite 库会互相干扰（M4 验收发现的结构性风险），
 // 第二次启动直接把已有窗口带到前台后退出。

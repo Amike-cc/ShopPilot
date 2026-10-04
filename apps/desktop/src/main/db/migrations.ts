@@ -1569,6 +1569,38 @@ export const migrations: Migration[] = [
       try { db.exec('ALTER TABLE product_platform_links DROP COLUMN draft_hash') } catch { /* ignore */ }
     }
   }
+  ,{
+    version: 30,
+    name: 'invite_history',
+    up: (db) => {
+      /**
+       * 邀约台账（用户要求：**7 天内邀过的达人不再重复邀约**）。
+       *
+       * 为什么必须自己记账：2026-10-04 真机实测，微信带货者广场的**列表行上没有任何"已邀约"标记**，
+       * 详情链接是 `javascript:void(0)`、也拿不到 finderUsername —— 想"在点「详情」之前就跳过"
+       * 只能靠我们自己的历史记录。平台的"7 天内不可再次邀请"是**兜底**（点进详情页会看到按钮禁用，
+       * 引擎按 TASK_DAREN_ALREADY_INVITED 跳过），但那要先花一次详情页访问。
+       *
+       * 记的是"列表里显示的那个昵称"（nickname）——因为跳过时要拿它跟列表行文本比对；
+       * finder_username 从详情页地址里取，作为稳定标识留档（昵称可能改）。
+       */
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS invite_history (
+          id TEXT PRIMARY KEY,
+          store_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          nickname TEXT NOT NULL,
+          finder_username TEXT,
+          task_id TEXT,
+          run_id TEXT,
+          invited_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_invite_history_store_time ON invite_history(store_id, invited_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_invite_history_nickname ON invite_history(store_id, nickname);
+      `)
+    },
+    down: (db) => db.exec('DROP INDEX IF EXISTS idx_invite_history_nickname; DROP INDEX IF EXISTS idx_invite_history_store_time; DROP TABLE IF EXISTS invite_history;')
+  }
 ]
 
 /**

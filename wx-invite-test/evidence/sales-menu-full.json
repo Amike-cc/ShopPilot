@@ -1,0 +1,183 @@
+{
+ "ok": true,
+ "itemCount": 16,
+ "items": [
+  {
+   "text": "不限",
+   "value": "0",
+   "checked": false,
+   "rect": [
+    312,
+    504,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥1万以下",
+   "value": "1",
+   "checked": false,
+   "rect": [
+    312,
+    540,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥1万-5万",
+   "value": "2",
+   "checked": true,
+   "rect": [
+    312,
+    576,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥5万-10万",
+   "value": "3",
+   "checked": false,
+   "rect": [
+    312,
+    612,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥10万-20万",
+   "value": "4",
+   "checked": false,
+   "rect": [
+    312,
+    648,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥20万-30万",
+   "value": "5",
+   "checked": false,
+   "rect": [
+    312,
+    684,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥30万-40万",
+   "value": "6",
+   "checked": false,
+   "rect": [
+    312,
+    720,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥40万-50万",
+   "value": "7",
+   "checked": false,
+   "rect": [
+    312,
+    756,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥50万-100万",
+   "value": "8",
+   "checked": false,
+   "rect": [
+    312,
+    792,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥100万-200万",
+   "value": "9",
+   "checked": false,
+   "rect": [
+    312,
+    828,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥200万-300万",
+   "value": "10",
+   "checked": false,
+   "rect": [
+    312,
+    864,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥300万-400万",
+   "value": "11",
+   "checked": false,
+   "rect": [
+    312,
+    900,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥400万-500万",
+   "value": "12",
+   "checked": false,
+   "rect": [
+    312,
+    936,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥500万-700万",
+   "value": "13",
+   "checked": false,
+   "rect": [
+    312,
+    972,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥700万-1000万",
+   "value": "14",
+   "checked": false,
+   "rect": [
+    312,
+    1008,
+    146,
+    36
+   ]
+  },
+  {
+   "text": "￥1000万以上",
+   "value": "15",
+   "checked": false,
+   "rect": [
+    312,
+    1044,
+    146,
+    36
+   ]
+  }
+ ],
+ "html": "<div class=\"weui-desktop-dropdown-menu weui-desktop-dropdown-menu_bottom\" style=\"\"><ul class=\"weui-desktop-dropdown__list\" style=\"max-height:auto;\"><!--v-if--><!--[--><!--[--><div class=\"py-[8px]\" data-v-8b27f77a=\"\"><div data-v-8b27f77a=\"\"><!--[--><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"0\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>不限</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"1\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥1万以下</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"2\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥1万-5万</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"3\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥5万-10万</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"4\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥10万-20万</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"5\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥20万-30万</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"6\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥30万-40万</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop-form__check-label\"><input type=\"checkbox\" checking=\"\" class=\"weui-desktop-form__checkbox\" value=\"7\"><i class=\"weui-desktop-icon-checkbox\"></i><span class=\"weui-desktop-form__check-content\"><span>￥40万-50万</span></span></label></div><div data-v-8b27f77a=\"\" class=\"talent-filter-dropdown-item px-[12px] text-[14px] h-[36px] text-[var(--minishop-Black-0)]/90 cursor-pointer flex flex-row items-center\"><label data-v-8b27f77a=\"\" class=\"weui-desktop"
+}

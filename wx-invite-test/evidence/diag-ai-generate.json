@@ -1,0 +1,14 @@
+{
+ "run": {
+  "id": "run_3816a927cfba71901b3e3418",
+  "taskId": "task_16a57b5349488a5125ed4b82",
+  "storeId": "store_4eb9b43cffeee0094041894a9f1f93bf",
+  "status": "succeeded",
+  "currentStep": 3,
+  "startedAt": 1790993022762,
+  "finishedAt": 1790993034849,
+  "errorCode": null,
+  "errorMessage": null,
+  "statusReason": "全部步骤完成"
+ }
+}

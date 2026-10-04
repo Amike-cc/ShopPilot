@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SCOPE_FN } from '../../apps/desktop/src/main/tasks/task-runner'
+import { SCOPE_FN, ENUM_DEEP_FN } from '../../apps/desktop/src/main/tasks/task-runner'
 
 /**
  * 范围限定（`clickByText.within`）跑的是**注入页面的同一份源码**。
@@ -60,9 +60,9 @@ function makeScope(roots: El[]) {
     // 与真实 DOM 一致：'*' 递归取全部元素（含宿主自身），其余选择器只查后代
     querySelectorAll: (sel: string) => sel === '*' ? all() : roots.flatMap(r => r.querySelectorAll(sel))
   }
-  const fn = new Function('document', `${SCOPE_FN}; return { __scopeRoots, __inScope };`)(doc)
+  const fn = new Function('document', `${ENUM_DEEP_FN}\n${SCOPE_FN}; return { __scopeRoots, __inScope };`)(doc)
   return {
-    roots: (w: any) => fn.__scopeRoots(w),
+    roots: (w: any, deep?: boolean) => fn.__scopeRoots(w, deep),
     inScope: (rs: El[] | null, e: El) => fn.__inScope(rs, e)
   }
 }
@@ -119,5 +119,35 @@ describe('clickByText 的 within 范围限定（跑注入页面的同一份源�
   it('不给 within 时返回 null = 不限定范围（全页找）', () => {
     expect(roots(null)).toBeNull()
     expect(inScope(null, makeEl('x'))).toBe(true)
+  })
+
+  /**
+   * deep=true：锚点在 ShadowRoot 里也要能找到（微信小店 micro-app 回归）。
+   *
+   * 实测动机（2026-10-02 真机）：带货者广场整页在 `<micro-app>` 的 ShadowRoot 里，
+   * 类目行的行标签文字也在里面。旧实现只用 `document.querySelectorAll`
+   * 找锚点 → 永远拿不到范围 → 直接报 `SCOPE_NOT_FOUND`，
+   * 于是"把类目点击限定在带货类目那一行"的步骤一次都跑不通。
+   */
+  it('deep=true：锚点在 ShadowRoot 内也能解析出范围（微信微应用回归）', () => {
+    // 结构贴近真实页面：div.text('带货类目') → label → div.weui-desktop-form__control-group（行容器）
+    const textDiv = makeEl('row-label-text', '带货类目')
+    const rowLabel = makeEl('weui-desktop-form__label', '', [textDiv])
+    const chipLabel = makeEl('weui-desktop-form__check-label', '母婴')
+    const controlGroup = makeEl('weui-desktop-form__control-group', '', [rowLabel, chipLabel])
+    const shadowRoot = makeEl('shadow-root', '', [controlGroup])
+    const host = makeEl('micro-app', '')
+    ;(host as any).shadowRoot = shadowRoot
+
+    const scope = makeScope([makeEl('root', '', [host])])
+    // 不穿透时：锚点在 ShadowRoot 里，找不到（这正是修复前的真机表现）
+    expect(scope.roots({ text: '带货类目', climb: 2 })).toBeNull()
+    // 穿透后：锚点找到，上溯 2 层 = 行容器，行内的 chip 落在范围内、行外的不在
+    const r = scope.roots({ text: '带货类目', climb: 2 }, true)
+    expect(r).toHaveLength(1)
+    expect(r![0]).toBe(controlGroup)
+    expect(scope.inScope(r, chipLabel)).toBe(true)
+    const outside = makeEl('daren-card', '母婴')
+    expect(scope.inScope(r, outside)).toBe(false)
   })
 })

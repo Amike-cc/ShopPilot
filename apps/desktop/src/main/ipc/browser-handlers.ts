@@ -184,7 +184,7 @@ export function registerBrowserHandlers(): void {
   
   // browser:prepareInviteSquare — 微信带货者广场筛选应用（用户仍需人工进入达人详情）
   handle(IPC_CHANNELS.BROWSER_PREPARE_INVITE_SQUARE, async (_event: IpcMainInvokeEvent, input: {
-    storeId: string, url: string, finderType?: string, categories?: string[], otherFilters?: string[],
+    storeId: string, url: string, finderType?: string, categories?: string[], salesTiers?: string[], otherFilters?: string[],
     loadCategoryTree?: boolean
   }): Promise<IPCResult> => {
     const requestId = generateRequestId()
@@ -387,12 +387,118 @@ export function registerBrowserHandlers(): void {
         return { ok: false, reason: '点击后未确认选中' }
       }
       const typeRes = input.finderType ? await clickAndVerify(input.finderType) : { ok: true }
+      /**
+       * 复选框型筛选项（带货类目 / 带货销售总额区间 / 其他筛选）：**页内 click + 回读 checked**。
+       *
+       * 为什么不用上面的受信任鼠标（2026-10-02 真机实测后改）：
+       * 类目行**折叠时只显示第一行**，其余 chip 落在行的盒子之外、被下一行盖住——
+       * 受信任鼠标按坐标点会落到别的元素上（实测点「其他」没反应），locatePoint 的
+       * elementFromPoint 也不会命中它（会如实报「被遮挡」）。而**合成 click 在折叠态一样生效**
+       * （实测：折叠下点「其他」「美妆护肤」，复选框状态真的变了），所以这一类型改用页内点击。
+       *
+       * 回读是必须的：平台把"筛选生效没有"只表达在控件勾选态上（这一版页面没有「已筛选」摘要），
+       * 点了没选上就如实报出来，绝不把"点过了"当成"筛上了"。
+       *
+       * scopeLabel/climb：把查找限定在这一行里（类目名/短文案在达人卡片与别的下拉里也有同名项）。
+       * 行锚点取"自有文本最短"的命中元素再上溯 climb 层——与任务引擎 __scopeRoots 同一套规则。
+       */
+      /** 回读某项筛选的勾选态（与 applyCheck 同一套范围规则：行锚点自有文本最短 → 上溯 climb 层） */
+      const executeCheckState = (target: Electron.WebContents, needle: string, scopeLabel: string, climb: number) => target.executeJavaScript(`(() => {
+        const all = []
+        const walk = (root) => { for (const el of root.querySelectorAll('*')) { all.push(el); if (el.shadowRoot) walk(el.shadowRoot) } }
+        walk(document)
+        const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
+        const anchors = all.filter(el => { const o = own(el); return o === ${JSON.stringify(scopeLabel)} || (o.includes(${JSON.stringify(scopeLabel)}) && o.length <= ${JSON.stringify(scopeLabel)}.length + 12) })
+        anchors.sort((a, b) => own(a).length - own(b).length)
+        let root = anchors[0]
+        for (let i = 0; i < ${climb} && root; i++) root = root.parentElement
+        if (!root) return JSON.stringify({ found: false, checked: false })
+        const pool = [root, ...root.querySelectorAll('*')]
+        const cands = pool.filter(el => own(el).includes(${JSON.stringify(needle)}))
+        cands.sort((a, b) => own(a).length - own(b).length)
+        const hit = cands[0]
+        if (!hit) return JSON.stringify({ found: false, checked: false })
+        const label = hit.closest('label')
+        const inp = (label && label.querySelector('input[type=checkbox]')) || hit.querySelector('input[type=checkbox]')
+        return JSON.stringify({ found: true, checked: !!(inp && inp.checked) })
+      })()`)
+
+      const applyCheck = async (needle: string, scopeLabel: string, climb: number): Promise<{ ok: boolean, reason?: string }> => {
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const raw = await wc.executeJavaScript(`(() => {
+            const all = []
+            const walk = (root) => { for (const el of root.querySelectorAll('*')) { all.push(el); if (el.shadowRoot) walk(el.shadowRoot) } }
+            walk(document)
+            const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
+            let root = null
+            const anchors = all.filter(el => { const o = own(el); return o === ${JSON.stringify(scopeLabel)} || (o.includes(${JSON.stringify(scopeLabel)}) && o.length <= ${JSON.stringify(scopeLabel)}.length + 12) })
+            anchors.sort((a, b) => own(a).length - own(b).length)
+            if (!anchors.length) return JSON.stringify({ ok: false, reason: 'SCOPE_NOT_FOUND' })
+            root = anchors[0]
+            for (let i = 0; i < ${climb}; i++) root = root && root.parentElement
+            if (!root) return JSON.stringify({ ok: false, reason: 'SCOPE_NOT_FOUND' })
+            const pool = [root, ...root.querySelectorAll('*')]
+            const cands = pool.filter(el => own(el).includes(${JSON.stringify(needle)}))
+            if (!cands.length) return JSON.stringify({ ok: false, reason: 'NOT_FOUND' })
+            cands.sort((a, b) => own(a).length - own(b).length)
+            const hit = cands[0]
+            const label = hit.closest('label')
+            const inp = (label && label.querySelector('input[type=checkbox]')) || hit.querySelector('input[type=checkbox]')
+            if (!inp) return JSON.stringify({ ok: false, reason: 'NO_CHECKBOX' })
+            if (inp.checked) return JSON.stringify({ ok: true, already: true })
+            ;(hit.closest('label') || hit).click()
+            return JSON.stringify({ ok: true, clicked: true })
+          })()`).catch(() => JSON.stringify({ ok: false, reason: 'EVAL_FAILED' }))
+          const parsed = (() => { try { return JSON.parse(String(raw)) } catch { return { ok: false, reason: 'EVAL_FAILED' } } })() as { ok: boolean, reason?: string, already?: boolean, clicked?: boolean }
+          if (parsed.ok) {
+            await new Promise(r => setTimeout(r, parsed.clicked ? 900 : 0))
+            const state = JSON.parse(await executeCheckState(wc, needle, scopeLabel, climb).catch(() => '{"checked":false}')) as { checked: boolean, found?: boolean }
+            if (state.checked) return { ok: true }
+            if (!state.found) return { ok: false, reason: '选项中找不到该文案（平台可能改版）' }
+            continue
+          }
+          if (parsed.reason === 'SCOPE_NOT_FOUND') {
+            // 筛选区还没渲染出来：多等一会儿再试，别把"没挂载"当成"点不动"
+            await new Promise(r => setTimeout(r, 900))
+            continue
+          }
+          if (parsed.reason === 'NOT_FOUND') {
+            await new Promise(r => setTimeout(r, 700))
+            continue
+          }
+          return { ok: false, reason: parsed.reason === 'NO_CHECKBOX' ? '该筛选项不是复选框（平台改版）' : '页面脚本执行失败' }
+        }
+        return { ok: false, reason: '点击后未确认选中' }
+      }
       const catRes: Array<{ name: string, ok: boolean, reason?: string }> = []
-      for (const c of (input.categories || [])) catRes.push({ name: c, ...(await clickAndVerify(c)) })
+      for (const c of (input.categories || [])) catRes.push({ name: c, ...(await applyCheck(c, '带货类目', 2)) })
+      const salesRes: Array<{ name: string, ok: boolean, reason?: string }> = []
+      for (const t of (input.salesTiers || [])) salesRes.push({ name: t, ...(await applyCheck(t, '带货销售总额', 1)) })
       const otherRes: Array<{ name: string, ok: boolean, reason?: string }> = []
-      for (const f of (input.otherFilters || [])) otherRes.push({ name: f, ...(await clickAndVerify(f)) })
-      const allOk = typeRes.ok && catRes.every(x => x.ok) && otherRes.every(x => x.ok)
-      return success({ tabId, applied: allOk, finderType: { name: input.finderType || '', ...typeRes }, categories: catRes, otherFilters: otherRes }, requestId)
+      for (const f of (input.otherFilters || [])) otherRes.push({ name: f, ...(await applyCheck(f, '其他筛选', 2)) })
+      const allOk = typeRes.ok && catRes.every(x => x.ok) && salesRes.every(x => x.ok) && otherRes.every(x => x.ok)
+      /**
+       * 跑前自检（2026-10-03 加）：顺带回报**列表里可见的「详情」条数**。
+       *
+       * 为什么：这条流程里"点「详情」挑人"是入口，如果列表没渲染出来（微应用没挂载、
+       * 平台改版把「详情」换成别的文案、或登录态刚过期），用户点「开始邀约」后会在
+       * 第 1 轮第 3~5 步才以 TASK_SELECTOR_CHANGED 失败——那时已经在页面上折腾半天了。
+       * 在这里数一次、如实回给面板，就能在开跑前说清"平台可能改版/页面没就绪"。
+       */
+      const detailLinks = await wc.executeJavaScript(`(() => {
+        const out = []
+        const walk = (root) => { for (const el of root.querySelectorAll('*')) { out.push(el); if (el.shadowRoot) walk(el.shadowRoot) } }
+        walk(document)
+        const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()
+        let n = 0
+        for (const el of out) {
+          if (own(el) !== '详情') continue
+          const r = el.getBoundingClientRect()
+          if (r.width > 0 && r.height > 0) n++
+        }
+        return n
+      })()`).catch(() => 0) as number
+      return success({ tabId, applied: allOk, detailLinks, finderType: { name: input.finderType || '', ...typeRes }, categories: catRes, salesTiers: salesRes, otherFilters: otherRes }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }

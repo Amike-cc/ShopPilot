@@ -1,0 +1,127 @@
+{
+ "results": [
+  {
+   "name": "店铺窗口已打开",
+   "ok": true,
+   "detail": "store_4eb9b43cffeee0094041894a9f1f93bf"
+  },
+  {
+   "name": "IPC 返回 applied=true",
+   "ok": true,
+   "detail": "{\"applied\":true,\"finderType\":{\"name\":\"全部带货者\",\"ok\":true},\"categories\":[{\"name\":\"母婴\",\"ok\":true}],\"salesTiers\":[{\"name\":\"￥10万-20万\",\"ok\":true}],\"otherFilters\":[{\"name\":\"有认证\",\"ok\":true}]}"
+  },
+  {
+   "name": "类型已切到「全部带货者」",
+   "ok": true,
+   "detail": "全部带货者"
+  },
+  {
+   "name": "带货类目「母婴」已勾选",
+   "ok": true,
+   "detail": "[\"母婴\"]"
+  },
+  {
+   "name": "带货销售总额「￥10万-20万」已勾选",
+   "ok": true,
+   "detail": "[\"￥10万-20万\"]"
+  },
+  {
+   "name": "其他筛选「有认证」已勾选",
+   "ok": true,
+   "detail": "[\"有认证\"]"
+  },
+  {
+   "name": "真实构造器生成了邀约载荷",
+   "ok": true,
+   "detail": "达人邀约 · 微信小店 · 辅助填单 · 验证联系人 · 类目 1 项 · 销售额 1 档 · 其他 1 项"
+  },
+  {
+   "name": "载荷里的筛选步骤已剔除发送 loop",
+   "ok": true,
+   "detail": "筛选步骤 8 条"
+  },
+  {
+   "name": "筛选验证任务创建成功",
+   "ok": true,
+   "detail": "task_9444e763ab4349fc1a077807"
+  },
+  {
+   "name": "筛选验证任务已启动",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "筛选步骤执行成功（引擎回读勾选态通过）",
+   "ok": true,
+   "detail": "succeeded  "
+  },
+  {
+   "name": "步骤结果记录了 verifiedChecked",
+   "ok": true,
+   "detail": "{\"done\":true,\"stepType\":\"navigate\"} | {\"done\":true,\"stepType\":\"waitForPage\"} | {\"action\":\"clickByText\",\"matched\":\"全部带货者\",\"clickedText\":\"全部带货者\",\"candidates\":1,\"mode\":\"real\",\"transport\":\"trusted-mouse\"} | {\"action\":\"clickByText\",\"matched\":\"母婴\",\"clickedText\":\"母婴\",\"candidates\":1,\"verifiedChecked\":true} "
+  },
+  {
+   "name": "不存在的档位 → 任务如实失败",
+   "ok": true,
+   "detail": "failed TASK_SELECTOR_CHANGED"
+  },
+  {
+   "name": "达人邀约面板已渲染",
+   "ok": true,
+   "detail": "{\"panel\":1,\"typeSelect\":1,\"categories\":16,\"sales\":[\"不限\",\"￥1万以下\",\"￥1万-5万\",\"￥5万-10万\",\"￥10万-20万\",\"￥20万-30万\",\"￥30万-40万\",\"￥40万-50万\",\"￥50万-100万\",\"￥100万-200万\",\"￥200万-300万\",\"￥300万-400万\",\"￥400万-500万\",\"￥500万-700万\",\"￥700万-1000万\",\"￥1000万以上\"],\"others\":7,\"catsToggle\":1}"
+  },
+  {
+   "name": "带货者类型下拉存在",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "带货类目 chips 已渲染（默认展开一屏 16 项）",
+   "ok": true,
+   "detail": "16 项可见"
+  },
+  {
+   "name": "带货销售总额 16 档全部渲染",
+   "ok": true,
+   "detail": "不限/￥1万以下/￥1万-5万/￥5万-10万/￥10万-20万/￥20万-30万/￥30万-40万/￥40万-50万/￥50万-100万/￥100万-200万/￥200万-300万/￥300万-400万/￥400万-500万/￥500万-700万/￥700万-1000万/￥1000万以上"
+  },
+  {
+   "name": "其他筛选 7 项全部渲染",
+   "ok": true,
+   "detail": "7 项"
+  },
+  {
+   "name": "类目展开/收起按钮存在",
+   "ok": true,
+   "detail": ""
+  }
+ ],
+ "finalState": {
+  "error": "CDP 求值超时"
+ },
+ "panel": {
+  "panel": 1,
+  "typeSelect": 1,
+  "categories": 16,
+  "sales": [
+   "不限",
+   "￥1万以下",
+   "￥1万-5万",
+   "￥5万-10万",
+   "￥10万-20万",
+   "￥20万-30万",
+   "￥30万-40万",
+   "￥40万-50万",
+   "￥50万-100万",
+   "￥100万-200万",
+   "￥200万-300万",
+   "￥300万-400万",
+   "￥400万-500万",
+   "￥500万-700万",
+   "￥700万-1000万",
+   "￥1000万以上"
+  ],
+  "others": 7,
+  "catsToggle": 1
+ }
+}

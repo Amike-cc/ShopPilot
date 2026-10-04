@@ -98,13 +98,13 @@ watch(() => props.locked, locked => { if (locked) emit('dragging-change', false)
 // `reason:'agent'` 这条通路主进程早就实现好了，但一直没有调用方（活代码里只有死掉的旧工作台），
 // 等于实现空转（2026-09-28 审查确认）。
 watch(() => agent.ui.drawerOpen, open => {
-  void window.shopilot.browser.setViewsObscured(!!open, 'agent')
+  if (window.shopilot) void window.shopilot.browser.setViewsObscured(!!open, 'agent')
 }, { immediate: true })
 onMounted(() => window.addEventListener('resize', onResize))
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
   emit('dragging-change', false)
-  void window.shopilot.browser.setViewsObscured(false, 'agent')
+  if (window.shopilot) void window.shopilot.browser.setViewsObscured(false, 'agent')
 })
 </script>
 

@@ -84,26 +84,54 @@ describe('步骤重试闸（单一事实来源）', () => {
     expect(canRetryStepInPlace('setInput', 1)).toBe(true)
     expect(canRetryStepInPlace('setInput', 0)).toBe(false)
   })
+
+  /**
+   * 2026-10-04 加：**构造上幂等的复选框筛选**允许重试。
+   * 动机是真机事故：用户连发时第 1 轮死在 `TASK_FILTER_NOT_APPLIED: 「母婴」点了但没有生效`
+   * （页面刚重渲染、旧节点已失效）。这类步骤重跑是安全的——已勾选则 skipIfChecked 不点、
+   * 未勾选才重新定位再点；勾选态就是它的幂等判据。红线不能松：**普通 clickByText 仍然不许重试**。
+   */
+  it('复选框筛选（skipIfChecked+verifyChecked）允许安全重试，普通点击仍然禁止', () => {
+    const checkboxFilter = { skipIfChecked: true, verifyChecked: true }
+    expect(canRetryStepInPlace('clickByText', 2, checkboxFilter)).toBe(true)
+    expect(normalizeStepRetryLimit('clickByText', 2, checkboxFilter)).toBe(2)
+    // 缺任一条件都不放行：只 skipIfChecked（可能重复点）或只 verifyChecked（点了不校验）
+    expect(canRetryStepInPlace('clickByText', 2, { skipIfChecked: true })).toBe(false)
+    expect(canRetryStepInPlace('clickByText', 2, { verifyChecked: true })).toBe(false)
+    // 普通点击（含"发送邀约"这种提交动作）依然禁止
+    expect(canRetryStepInPlace('clickByText', 2, { text: '发送邀约', mode: 'real' })).toBe(false)
+    expect(normalizeStepRetryLimit('clickByText', 2, { text: '发送邀约' })).toBe(0)
+    // 类型不对/输入不是对象也一律 fail-closed
+    expect(canRetryStepInPlace('click', 2, checkboxFilter)).toBe(false)
+    expect(canRetryStepInPlace('clickByText', 2, null)).toBe(false)
+    expect(normalizeStepRetryLimit('clickByText', 3, 'nonsense')).toBe(0)
+  })
 })
 
 describe('邀约档案的重试声明（真机动机不能被我改坏）', () => {
   const source = readFileSync(resolve('packages/shared/src/invite-steps.ts'), 'utf8')
 
-  it('档案里每个 retryLimit 都只出现在幂等步骤上', () => {
+  it('档案里每个 retryLimit 都只出现在幂等步骤或"构造上幂等的复选框筛选"上', () => {
     // 按 push 的对象块切分，逐块取第一个 type
-    const chunks = source.split(/round\.push\(\{/).slice(1)
-    const declared: Array<{ type: string; limit: number }> = []
+    const chunks = source.split(/(?:round|out)\.push\(\{/).slice(1)
+    const declared: Array<{ type: string; limit: number; checkboxFilter: boolean }> = []
     for (const chunk of chunks) {
       const m = /type:\s*'([a-zA-Z0-9]+)'/.exec(chunk)
       const r = /retryLimit:\s*(\d+)/.exec(chunk)
       if (!m || !r) continue
-      declared.push({ type: m[1], limit: Number(r[1]) })
+      declared.push({
+        type: m[1],
+        limit: Number(r[1]),
+        checkboxFilter: /skipIfChecked:\s*true/.test(chunk) && /verifyChecked:\s*true/.test(chunk)
+      })
     }
     expect(declared.length, '档案里应当至少有一条显式重试声明（aiGenerate）').toBeGreaterThan(0)
     for (const d of declared) {
-      expect(isIdempotentStepType(d.type), `档案给非幂等步骤「${d.type}」设了 retryLimit:${d.limit}`).toBe(true)
-      // 而且要能通过主进程归一化（不被归零）——这条就是"第 25 轮模型超时不该打掉整单"的保障
-      expect(normalizeStepRetryLimit(d.type, d.limit)).toBe(d.limit)
+      const allowed = isIdempotentStepType(d.type) || d.checkboxFilter
+      expect(allowed, `档案给「${d.type}」设了 retryLimit:${d.limit}，但它既不是幂等步骤、也不是带 skipIfChecked+verifyChecked 的复选框筛选`).toBe(true)
+      // 而且要能通过主进程归一化（不被归零）
+      const input = d.checkboxFilter ? { skipIfChecked: true, verifyChecked: true } : undefined
+      expect(normalizeStepRetryLimit(d.type, d.limit, input)).toBe(d.limit)
     }
   })
 

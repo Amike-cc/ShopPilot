@@ -5,7 +5,7 @@
  * 为什么必须共用：配置里装的是**店铺自己的**联系人/手机号/微信号，两处各写一遍
  * 必然漂移（真机口径的同类事故：把 A 店的手机号发给 B 店的达人）。
  */
-import { buildInviteSteps, hasRequiredBatchContacts, type AssistInviteOptions, type BatchInviteOptions, type StepDraft } from './invite-steps'
+import { ASSIST_DEFAULT_MAX_INVITES, ASSIST_LOOP_MAX_ROUNDS, buildInviteSteps, hasRequiredBatchContacts, normalizeMaxInvites, type AssistInviteOptions, type BatchInviteOptions, type StepDraft } from './invite-steps'
 import type { InviteProfile } from './constants/invite'
 
 /** 邀约配置快照（面板按店铺存进 app_settings 的那份；字段按流程可选） */
@@ -31,7 +31,13 @@ export interface InviteTaskConfigSnapshot {
   productIds?: string | string[]
   finderType?: string
   finderCategories?: string[]
+  /** 「近30日带货数据 → 带货销售总额」的区间档位（真实文案） */
+  finderSalesTiers?: string[]
   finderOtherFilters?: string[]
+  /** 本次最多邀约几位（额度护栏，见 AssistInviteOptions.maxInvites） */
+  maxInvites?: number
+  /** 近 7 天已邀过的达人昵称（台账）：点「详情」时跳过这些行，不重复邀约 */
+  recentlyInvited?: string[]
 }
 
 export interface InviteTaskPayload {
@@ -78,7 +84,18 @@ export function normalizeInviteTaskConfig(flow: 'batch-list' | 'assist-form', sa
       batchContact: text(record.batchContact, 120),
       batchPhone: text(record.batchPhone, 40),
       batchWechat: text(record.batchWechat, 80),
-      batchProductCount: Number.isFinite(Number(record.batchProductCount)) ? Math.max(0, Math.round(Number(record.batchProductCount))) : 1
+      batchProductCount: Number.isFinite(Number(record.batchProductCount)) ? Math.max(0, Math.round(Number(record.batchProductCount))) : 1,
+      /**
+       * 近 7 天已邀过的达人昵称 → 勾选阶段跳过（批量流也要，2026-10-04 补）。
+       *
+       * ⚠️ 之前这一支**漏了它**：面板照常查台账并传进来，归一化时被丢掉 →
+       * 快手的 skipTexts 恒为空，等于这条防线在批量流上根本没生效（微信流才有）。
+       * 与微信支同一套收口（去空、限长 120、最多 500 条）。
+       */
+      recentlyInvited: (Array.isArray(record.recentlyInvited) ? record.recentlyInvited : [])
+        .filter(item => typeof item === 'string' && item.trim().length > 0)
+        .map(item => String(item).trim().slice(0, 120))
+        .slice(0, 500)
     }
   }
   return {
@@ -90,7 +107,21 @@ export function normalizeInviteTaskConfig(flow: 'batch-list' | 'assist-form', sa
     productIds: parseInviteProductIds(typeof record.productIds === 'string' || Array.isArray(record.productIds) ? record.productIds as string | string[] : undefined),
     finderType: text(record.finderType, 60) || '全部带货者',
     finderCategories: list(record.finderCategories, 60),
-    finderOtherFilters: list(record.finderOtherFilters, 60)
+    finderSalesTiers: list(record.finderSalesTiers, 60),
+    finderOtherFilters: list(record.finderOtherFilters, 60),
+    // 额度护栏：老配置没有这个字段 → 用默认值（10），而不是"不限"。
+    // 这里刻意用 normalizeMaxInvites 而不是原样透传：坏值（0/负数/超大）一律收敛到合法区间。
+    maxInvites: record.maxInvites == null ? ASSIST_DEFAULT_MAX_INVITES : normalizeMaxInvites(record.maxInvites),
+    /**
+     * 近 7 天已邀过的达人昵称（台账，由面板/调用方查好传进来）。
+     * 这里只做**边界收口**（去空、限长 120、最多 500 条）：值本身是"列表里显示过的昵称"，
+     * 不做任何模糊匹配——匹配不上的那些由平台的"7 天内不可再次邀请"兜底。
+     * （不能用 list()：它的第二个参数同时是"条数上限"，会把清单截成 120 条。）
+     */
+    recentlyInvited: (Array.isArray(record.recentlyInvited) ? record.recentlyInvited : [])
+      .filter(item => typeof item === 'string' && item.trim().length > 0)
+      .map(item => String(item).trim().slice(0, 120))
+      .slice(0, 500)
   }
 }
 
@@ -116,6 +147,41 @@ export function inviteTaskIssues(input: { profile: InviteProfile; config: Invite
     if (!String(config.wechat || '').trim()) issues.push('微信号未填写')
     if (!String(config.phone || '').trim()) issues.push('手机号未填写')
     if (parseInviteProductIds(config.productIds).length > 30) issues.push('邀约商品超过 30 个')
+    /**
+     * 广场筛选的**实测清单校验**（2026-10-02 加）。
+     *
+     * 为什么要拦"清单外的值"：档案里的选项是逐个真机实测出来的，平台改版后文案会变
+     * ——实测微信把「汽车电动」改成了「汽摩电动」，按旧文案点只会得到"页面上找不到"，
+     * 用户看到的是"点了没反应"。存的是旧值（旧配置/旧版本遗留）时，在这里明确说是哪一项过期了，
+     * 比在运行时抛 TASK_SELECTOR_CHANGED 好排查得多。
+     */
+    const unknownValues = (label: string, values: string[], allowed: readonly string[]): void => {
+      const bad = values.filter(v => !allowed.includes(v))
+      if (bad.length) issues.push(`${label}「${bad.join('、')}」不在平台实测清单里（平台可能已改名），请重新选择`)
+    }
+    unknownValues('带货类目', config.finderCategories || [], profile.finderCategories)
+    unknownValues('带货销售总额档位', config.finderSalesTiers || [], profile.finderSalesTiers || [])
+    unknownValues('其他筛选', config.finderOtherFilters || [], profile.finderOtherFilters)
+    const finderType = String(config.finderType || '').trim() || '全部带货者'
+    if (!profile.finderTypes.includes(finderType)) issues.push(`带货者类型「${finderType}」不在平台实测清单里，请重新选择`)
+    /**
+     * 「带货销售总额」只在某些类型页签下存在（实测微信：只有「全部带货者」有这一维，
+     * 直播/短视频/公众号各只有本类型的指标）。不拦的话运行时会停在"找不到这个指标"，
+     * 而用户从面板上看不出是类型选错了。
+     */
+    const salesTiers = config.finderSalesTiers || []
+    const salesTypes = profile.finderSalesTypes || []
+    if (salesTiers.length && salesTypes.length && !salesTypes.includes(finderType)) {
+      issues.push(`「${profile.finderSalesMetric || '带货销售总额'}」只在「${salesTypes.join('、')}」下提供，当前类型是「${finderType}」——请改回该类型，或清空这项筛选`)
+    }
+    /**
+     * 额度护栏也要校验：平台不显示剩余次数（实测两版页面都没有），所以"本次最多邀约几位"
+     * 是我们唯一的硬上限。允许 1..50；超范围直接拦下，绝不放行成"不设上限"。
+     */
+    const maxInvites = Number(config.maxInvites)
+    if (!Number.isInteger(maxInvites) || maxInvites < 1 || maxInvites > ASSIST_LOOP_MAX_ROUNDS) {
+      issues.push(`「本次最多邀约」需为 1～${ASSIST_LOOP_MAX_ROUNDS} 的整数（当前 ${config.maxInvites === undefined ? '未设置' : String(config.maxInvites)}）`)
+    }
     return issues
   }
   if (profile.levels.length > 0 && !(config.levels || []).length) issues.push('达人等级未选择')
@@ -163,7 +229,13 @@ export function buildInviteTaskPayload(input: { profile: InviteProfile; storeId:
         : [],
       // 上限用平台档案自己的 maxProducts（快手 10）：这里再夹一次是兜住绕过面板的调用方，
       // 口径必须与面板/档案一致，写死 20 会让超限配置照样进执行器。
-      productCount: Math.max(0, Math.min(profile.maxProducts, Number(config.batchProductCount) || 0))
+      productCount: Math.max(0, Math.min(profile.maxProducts, Number(config.batchProductCount) || 0)),
+      /**
+       * 近 7 天已邀过的昵称 → 勾选阶段跳过（用户要求：7 天内不重复邀约）。
+       * 批量流与微信流同一个台账；平台侧同样会剔除这些人，但那是**静默**的：
+       * 勾中的全被剔除时点「批量邀约」等于没发生（一位都没发出去）。
+       */
+      recentlyInvited: (config.recentlyInvited || []).slice(0, 500)
     }
     const name = `达人邀约 · ${profile.platform} · ${
       config.category
@@ -181,9 +253,30 @@ export function buildInviteTaskPayload(input: { profile: InviteProfile; storeId:
     productCount: 1,
     productIds: parseInviteProductIds(config.productIds),
     finderType: config.finderType || '全部带货者',
-    finderCategories: config.finderCategories || [],
-    finderOtherFilters: config.finderOtherFilters || []
+    /**
+     * 三个筛选维度都**按档案的实测清单收口**：清单外的值（旧配置、平台改名后的遗留值）
+     * 一律不进入步骤——按不存在的文案点击只会得到"页面上找不到"。
+     * 这不是静默丢弃：`inviteTaskIssues` 会把清单外的值逐条报成缺项，用户/智能体先被拦住。
+     */
+    finderCategories: (config.finderCategories || []).filter(c => profile.finderCategories.includes(c)),
+    finderSalesTiers: (config.finderSalesTiers || []).filter(t => (profile.finderSalesTiers || []).includes(t)),
+    finderOtherFilters: (config.finderOtherFilters || []).filter(f => profile.finderOtherFilters.includes(f)),
+    maxInvites: normalizeMaxInvites(config.maxInvites),
+    // 近 7 天已邀过的昵称 → 点「详情」时跳过（用户要求：7 天内不重复邀约）
+    recentlyInvited: (config.recentlyInvited || []).slice(0, 500)
   }
-  const name = `达人邀约 · ${profile.platform} · 辅助填单 · ${assist.contact || '未命名'}`
+  // 任务名带上筛选摘要：实时日志/任务卡片里一眼能看出这一单按什么条件挑人
+  // （任务名 schema 上限 80，所以统一截断——联系人本身允许 120 字）
+  const assistCats = assist.finderCategories || []
+  const assistSales = assist.finderSalesTiers || []
+  const assistOthers = assist.finderOtherFilters || []
+  const filterDesc = [
+    assist.finderType && assist.finderType !== '全部带货者' ? assist.finderType : '',
+    assistCats.length ? `类目 ${assistCats.length} 项` : '',
+    assistSales.length ? `销售额 ${assistSales.length} 档` : '',
+    assistOthers.length ? `其他 ${assistOthers.length} 项` : ''
+  ].filter(Boolean).join(' · ')
+  // 任务名里带上"最多几位"：任务卡片/实时日志一眼能看到这一单的上限（额度护栏可见）
+  const name = `达人邀约 · ${profile.platform} · 辅助填单 · ${assist.contact || '未命名'}${filterDesc ? ' · ' + filterDesc : ''} · 最多 ${assist.maxInvites} 位`.slice(0, 80)
   return { name, storeScope: storeId, steps: buildInviteSteps(profile, { assist }, squareUrl) }
 }
