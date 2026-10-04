@@ -442,3 +442,15 @@ cd D:\code\电商浏览器
   2. 提交后该并行改动**又更新了同一个验收脚本**，于是重跑门槛（`eslint` 0 errors / `node --check` 通过）后作为独立提交 `214868e` 提交，再生成清单（`dirty: false`）——沿用 v0.4.57 的处置方式，**没有**用 `SHOPILOT_ALLOW_DIRTY_RELEASE=1` 绕过。
   3. 打包时 better-sqlite3 原生模块重建报 `EBUSY`（`better_sqlite3.node` 被占用，prebuild 解包失败）。没有当成无关警告放过，而是**直接对打包产物做 smoke**：真库读写全部通过，证明 ABI 正确；否则这一版会带着"装了打不开"的风险发出去。
 - **未闭环（如实声明）**：未做代码签名（Windows 可能显示未知发布者）；更新包只做 SHA-512 校验；安装态「检查更新 → 下载 → 安装」未随本版重跑；对比度巡检覆盖 26 个界面状态，不是每个对话框/每条错误分支（渐变背景节点不判定）；`vue-tsc` 仍有 4 条**模板级**类型错误来自并行改动（`tsc --noEmit` 门槛为 0 错误）；本版提交里含工作区另一处并行改动（Agent 域/记忆/软件计划、商品管理规则与草稿、图标资源迁移），非本次任务范围、未逐行审查。
+
+## v0.4.59 发版记录（2026-10-04）
+
+- **提交**：构建时 `465630494722888cc36c794ff15331731960ad5b`（分支 `main`，构建时工作区干净、清单 `dirty:false`）。本版功能提交为 `2348f1d`；其后的 `4656304` 是本版发布说明 + 一处验收脚本修复，两个提交都在发布前推送，`v0.4.59` tag 指向 `4656304`（已复核）。
+- **产物**：`release/ShopPilot-Setup-0.4.59.exe`（101,271,709 B）+ `.blockmap`（104,514 B）+ `latest.yml`；`dbSchemaVersion=30`（新增 `invite_history` 邀约台账表）；构建标签 `INTERNAL_BUILD`（未做代码签名）。
+- **GitHub Release**：https://github.com/Amike-cc/ShopPilot/releases/tag/v0.4.59 （Latest，`prerelease=false`；三个资产的名称/字节数与本地一致，线上 `latest.yml` 与本地逐字节同值，已复核）。
+- **本版内容**：① **达人邀约**——每轮重进达人广场并重新应用三行筛选（此前切详情页返回后广场重载、从第 2 位起在"未筛选"名单上邀人）、筛选回读勾选态并按平台原话分流"点不动"（新码 `TASK_DRAWER_NOT_OPEN` / `TASK_LOGIN_REQUIRED`）、**7 天内不重复邀约台账**（迁移 v30 + 新 IPC `invite:recentHistory`）、额度护栏（1–50，默认 10）；② **图片工作室重做**——生图模型只认设置中心配置（不再由渲染层传）、结果可落盘与定位（新 IPC `ai:image:save` / `ai:image:reveal`）、参考图上限 2→10；③ **AI 链路**——生图与生图文本超时 30s→120s（实测 25~40 秒正好卡在边界上，用户看到的是"AI 分析卖点不能用"而配置是对的）、多模态读图、推理型模型输出预算 1200→8192；④ **Windows 后台不产帧**——关闭 `CalculateNativeWinOcclusion`（背景窗口 `capturePage` 会挂到超时，把已真实发出的邀约整单判成失败）；⑤ 经营总览默认口径改「今日」。
+- **门槛（在已提交的树上跑）**：typecheck **0 错误** ✓ / lint **0 errors** ✓（1171 warnings 为仓库存量）/ vitest **102 文件 1062 用例** ✓ / 打包产物 smoke **10/10** ✓（隔离 profile 直接跑 `release/win-unpacked/ShopPilot.exe`：CDP、preload 白名单 API、迁移在打包态引导 root-ceo、建店删店真库读写、设置页七页签与 Agent 四面板、技能目录 68 项且不含被禁工具）/ 更新链路 **16/16** ✓（本地 feed：检查 → 发现 9.9.9 → 下载 → SHA-512 校验 → downloaded → pending 落盘 → UI 出现"重启并安装" → 审计留痕 → 已是最新 → stable/beta 双通道隔离 → feed 故障如实报错 → 重启自动检查）。
+- **过程中两件如实记录的事**：
+  1. 打包时**再次**出现 better-sqlite3 预编译包 `EBUSY`（`better_sqlite3.node` 被运行中的开发实例占用，prebuild 解包被跳过）。同样没有当成无关告警放过：直接对打包产物做 smoke，建店/删店真库读写全部通过，证明随包的是正确的 Electron ABI 构建。
+  2. 更新链路首次只跑出 **13/16**：三项 UI 断言全红，而 IPC 链路全绿。定位为**验收脚本自身失效**——`tools/release/update-runner.js` 还在找叫「设置中心」的侧栏项与 `data-test="unified-settings-about"`，而设置页早已改成「设置」+ `data-test="settings-about"`。按当前 DOM 对齐（旧名一并兼容）后 16/16；**产品侧没有问题**，是这道门禁自己瞎了。修好的脚本随本版提交。报告末尾按纪律清理了演练在 `%LOCALAPPDATA%\shopilot-updater\pending` 留下的伪 9.9.9 安装包。
+- **未闭环（如实声明）**：邀约台账只由微信辅助流写入，快手/抖店批量流只读不写——只用批量流的用户台账恒为空，7 天防重复实际仍靠平台详情页兜底；台账按昵称子串匹配行文本，昵称互为子串时可能误跳过；`ai:image:save` 的 `outputPath` 无目录白名单（验收脚本用）；参考图 2→10 的请求体大小未过网关验证；视觉分析降级到主文本 API 的分支无单测；留档截图改"尽力而为"后证据链可能静默缺失；任务 schema 阈值放宽（`loop.steps` 40→80、`onCode.limit` 30→60）后本版任务在 0.4.58 上可能整单校验失败，回退前先备份；未做代码签名，Windows 可能显示"未知发布者"；安装/升级/卸载未随本版重跑（`m4-runner` 未执行）。
