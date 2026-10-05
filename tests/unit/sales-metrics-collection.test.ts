@@ -169,6 +169,8 @@ describe('sales metrics · 迁移与库结构', () => {
 function syncOnce(ledger: SalesMetricsLedger, stores: Array<{ id: string; platform: string }>, now: number, reanchor: boolean) {
   return ledger.syncPlans({
     stores, now, intervalMs: 600_000,
+    // 这一段验证的是"自动采集开着"时的计划行为；关闭时的行为见 tests/unit/auto-collection-off.test.ts
+    autoEnabled: true,
     anchor: reanchor ? anchorNextRun : (previous, interval, current, jitter) => (previous != null ? previous : current + interval + jitter),
     jitterFor: jitterMsForStore,
     supported: platform => !!businessProfileFor(platform)

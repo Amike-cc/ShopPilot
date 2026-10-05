@@ -184,6 +184,11 @@
                     <label class="invite-field"><span>二级类目</span><select v-model="invite.subcategory" data-test="invite-subcategory" :disabled="!invite.category"><option value="">不限</option><option v-for="item in inviteSubcategoryOptions" :key="item" :value="item">{{ item }}</option></select></label>
                     <label v-if="inviteProfile.categoryDepth === 3" class="invite-field"><span>三级类目</span><select v-model="invite.category3" data-test="invite-category3" :disabled="!invite.subcategory || !inviteThirdCategoryOptions.length"><option value="">不限</option><option v-for="item in inviteThirdCategoryOptions" :key="item" :value="item">{{ item }}</option></select></label>
                     <label class="invite-field"><span>每批邀约数量</span><input v-model.number="invite.count" data-test="invite-count" type="number" min="1" :max="inviteProfile.maxBatch" /></label>
+                    <!-- 邀约商品数量：批量流是在平台商品弹窗里勾几个（快手必选商品，0 无意义 → min 1） -->
+                    <label v-if="inviteProfile.goodsModal" class="invite-field">
+                      <span>邀约商品数量<small v-if="inviteProfile.maxProducts"> · 最多 {{ inviteProfile.maxProducts }}</small></span>
+                      <input v-model.number="invite.batchProductCount" data-test="invite-batch-product-count" type="number" :min="1" :max="inviteProfile.maxProducts || 10" />
+                    </label>
                   </div>
                   <div v-if="inviteProfile.levels.length" class="invite-choice-group"><span>达人等级</span><div class="invite-chips"><label v-for="level in inviteProfile.levels" :key="level" class="inv-chip" :class="{ on: invite.levels.includes(level) }"><input v-model="invite.levels" type="checkbox" :value="level" :data-test="`invite-level-${level}`" />{{ level }}</label></div></div>
                   <div v-if="inviteProfile.strengths" class="invite-choice-group"><span>{{ inviteProfile.strengths.label }}</span><div class="invite-chips"><label v-for="strength in inviteProfile.strengths.options" :key="strength" class="inv-chip" :class="{ on: invite.strengths.includes(strength) }"><input v-model="invite.strengths" type="checkbox" :value="strength" :data-test="`invite-strength-${strength}`" />{{ strength }}</label></div></div>
@@ -197,6 +202,18 @@
                 </template>
                 <template v-else>
                   <div class="invite-form-grid"><label class="invite-field"><span>邀约联系人</span><input v-model="invite.contact" data-test="invite-contact" placeholder="联系人" /></label><label class="invite-field"><span>微信号</span><input v-model="invite.wechat" data-test="invite-wechat" placeholder="微信号" /></label><label class="invite-field"><span>手机号</span><input v-model="invite.phone" data-test="invite-phone" placeholder="手机号" /></label></div>
+                  <!--
+                    商品ID（2026-10-04 补：此前**面板没有这个输入框**，只能靠配置文件里已有的值，
+                    新用户根本找不到在哪填）。填了 → 每单按 ID 挂这几个商品（ensureRowsById，顺序无关、
+                    不依赖平台列表顺序）；留空 → 平台自动挑 1 个可邀商品。
+                    ⚠️ 用 **textarea** 而不是 input：商品ID 常是从后台表格里整列复制出来的，
+                    一列一个 ID（换行分隔）。单行 input 会把换行吞掉，粘贴后只剩一串连在一起的数字
+                    （用户实测反馈："商品ID不能换行"）。
+                  -->
+                  <label class="invite-field" style="margin-top:8px">
+                    <span>商品ID<small> · 可留空；一行一个，或用逗号/空格分隔</small></span>
+                    <textarea v-model="invite.productIds" data-test="invite-product-ids" rows="2" spellcheck="false" placeholder="每行一个商品ID，例如：&#10;10000687986563&#10;10000687986564&#10;（留空 = 平台自动挑 1 个）"></textarea>
+                  </label>
                   <!-- 广场筛选（带货者广场上真实存在的三行筛选：带货类目 / 近30日带货数据·带货销售总额 / 其他筛选）。
                        选项全部来自真机逐项实测（见 shared/constants/invite.ts 的微信档案注释）：
                        面板只提供实测过的文案，避免点了页面又找不到（实测平台把「汽车电动」改成了「汽摩电动」）。 -->
@@ -324,7 +341,7 @@ import browserStopIcon from '../../assets/generated/ui-icons/browser-stop-gen.pn
 import browserPauseIcon from '../../assets/generated/ui-icons/browser-pause-gen.png'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { inviteProfileFor, isBatchProfile, type CategoryNode } from '@shared/constants/invite'
-import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig } from '@shared/invite-task'
+import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig, parseInviteProductIds } from '@shared/invite-task'
 import { inviteConfigKey, legacyInviteConfigKey } from '@shared/invite-config'
 import { isInvoiceCollectTask } from '@shared/constants/invoice'
 
@@ -940,6 +957,12 @@ async function loadInviteConfig() {
   }
   if (serial !== inviteConfigLoadSerial || ws.displayedStoreId !== storeId) return
   if (saved) Object.assign(invite, normalizeInviteTaskConfig(profile.flow, saved))
+  /**
+   * 商品ID 统一成"一行一个"的字符串再放进多行框：
+   * `normalizeInviteTaskConfig` 给的是数组（`['a','b']`），直接绑到 textarea 会被拼成 `a,b`——
+   * 能跑但不好核对（用户是按"一列 ID"粘贴进来的，理应一行一个显示）。状态类型也统一为 string。
+   */
+  invite.productIds = parseInviteProductIds(invite.productIds as any).join('\n')
   // 档案实测清单之外的值（旧配置 / 平台改名后的遗留，如「汽车电动」→「汽摩电动」）不进界面：
   // 面板只能提供实测过的选项，否则勾选列表里点不亮，运行到页面又必然找不到。
   // （智能体/其它调用方塞进来的清单外值不受此影响：inviteTaskIssues 会把它们逐条报成缺项。）
@@ -1397,7 +1420,7 @@ onBeforeUnmount(() => {
 .browser-panel-link { width: 100%; margin-top: 12px; padding: 8px 0; border: 0; border-radius: 6px; background: rgba(124, 92, 255, .1); color: #5b3df5; font-size: 10px; cursor: pointer; }
 .browser-panel-link:hover, .browser-panel-link:focus-visible { background: rgba(124, 92, 255, .18); color: #4326d9; outline: none; }
 .task-subtabs { display: flex; gap: 4px; margin: 0 -2px 10px; padding: 3px; border-radius: 7px; background: #f2f4f8; }.task-subtabs button { flex: 1; min-height: 26px; border: 0; border-radius: 5px; background: transparent; color: var(--dash-text-muted); cursor: pointer; font-size: 9px; }.task-subtabs button:hover, .task-subtabs button:focus-visible { color: var(--dash-text); outline: none; }.task-subtabs button.on { background: rgba(117,83,235,.34); color: #4c1d95; }.task-subtabs button.pending { color: #8a5a12; }
-.invite-panel { min-width: 0; }.invite-config-sec { padding-bottom: 12px; }.invite-config-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 9px; }.invite-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }.invite-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: var(--dash-text-muted); font-size: 10px; }.invite-field input,.invite-field select { min-width: 0; height: 29px; padding: 0 7px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); font-size: 10px; }.invite-field input:focus,.invite-field select:focus { border-color: rgba(145,113,255,.78); outline: none; box-shadow: 0 0 0 2px rgba(145,113,255,.14); }.invite-choice-group { margin-top: 9px; color: var(--dash-text-muted); font-size: 10px; }.invite-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }.inv-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0 6px; border: 1px solid rgba(111,137,177,.22); border-radius: 999px; background: #f7f9fd; color: var(--dash-text-muted); cursor: pointer; font-size: 9px; }.inv-chip input { position: absolute; opacity: 0; pointer-events: none; }.inv-chip.on { border-color: rgba(135,102,246,.72); background: rgba(111,77,225,.18); color: #4c1d95; }.invite-missing { margin: 8px 0 0; padding: 7px 8px 7px 21px; border: 1px solid rgba(242,165,87,.2); border-radius: 7px; background: rgba(245,158,11,.12); color: #92400e; font-size: 9px; line-height: 1.5; }.invite-start-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; }.entry-routes-title { margin-left: 6px; }.entry-route { min-height: 42px; padding-left: 4px; }.invite-live-sec { padding: 3px 2px 12px; border-bottom: 0; }.invite-live-empty { min-height: 150px; padding: 12px; line-height: 1.6; }.invite-live-stuck { padding: 8px 9px; border: 1px solid rgba(242,165,87,.24); border-radius: 7px; background: rgba(245,158,11,.12); color: #92400e; font-size: 10px; line-height: 1.45; }.step-row { display: flex; align-items: flex-start; gap: 7px; padding: 7px 0 0 3px; }.s-ico { width: 17px; flex: 0 0 17px; text-align: center; font-size: 11px; }.tc-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }.invite-message { padding: 5px 0 2px; line-height: 1.5; white-space: normal; }.log-box { max-height: 210px; margin-top: 8px; padding: 7px 8px; overflow-y: auto; border: 1px solid var(--dash-border); border-radius: 7px; background: #f7f9fd; }.log-line { color: #4a5568; font-family: Consolas, monospace; font-size: 9px; line-height: 1.6; overflow-wrap: anywhere; }.invite-unavailable { padding: 10px 2px; border-bottom: 0; }.invite-unavailable .mini-btn { margin-top: 8px; }
+.invite-panel { min-width: 0; }.invite-config-sec { padding-bottom: 12px; }.invite-config-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 9px; }.invite-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }.invite-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: var(--dash-text-muted); font-size: 10px; }.invite-field input,.invite-field select,.invite-field textarea { min-width: 0; height: 29px; padding: 0 7px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); font-size: 10px; }.invite-field textarea { height: auto; min-height: 44px; padding: 6px 7px; line-height: 1.5; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }.invite-field input:focus,.invite-field select:focus,.invite-field textarea:focus { border-color: rgba(145,113,255,.78); outline: none; box-shadow: 0 0 0 2px rgba(145,113,255,.14); }.invite-choice-group { margin-top: 9px; color: var(--dash-text-muted); font-size: 10px; }.invite-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }.inv-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0 6px; border: 1px solid rgba(111,137,177,.22); border-radius: 999px; background: #f7f9fd; color: var(--dash-text-muted); cursor: pointer; font-size: 9px; }.inv-chip input { position: absolute; opacity: 0; pointer-events: none; }.inv-chip.on { border-color: rgba(135,102,246,.72); background: rgba(111,77,225,.18); color: #4c1d95; }.invite-missing { margin: 8px 0 0; padding: 7px 8px 7px 21px; border: 1px solid rgba(242,165,87,.2); border-radius: 7px; background: rgba(245,158,11,.12); color: #92400e; font-size: 9px; line-height: 1.5; }.invite-start-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; }.entry-routes-title { margin-left: 6px; }.entry-route { min-height: 42px; padding-left: 4px; }.invite-live-sec { padding: 3px 2px 12px; border-bottom: 0; }.invite-live-empty { min-height: 150px; padding: 12px; line-height: 1.6; }.invite-live-stuck { padding: 8px 9px; border: 1px solid rgba(242,165,87,.24); border-radius: 7px; background: rgba(245,158,11,.12); color: #92400e; font-size: 10px; line-height: 1.45; }.step-row { display: flex; align-items: flex-start; gap: 7px; padding: 7px 0 0 3px; }.s-ico { width: 17px; flex: 0 0 17px; text-align: center; font-size: 11px; }.tc-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }.invite-message { padding: 5px 0 2px; line-height: 1.5; white-space: normal; }.log-box { max-height: 210px; margin-top: 8px; padding: 7px 8px; overflow-y: auto; border: 1px solid var(--dash-border); border-radius: 7px; background: #f7f9fd; }.log-line { color: #4a5568; font-family: Consolas, monospace; font-size: 9px; line-height: 1.6; overflow-wrap: anywhere; }.invite-unavailable { padding: 10px 2px; border-bottom: 0; }.invite-unavailable .mini-btn { margin-top: 8px; }
 @keyframes dashboard-browser-spin { to { transform: rotate(360deg); } }
 @media (max-width: 820px) {
   .dashboard-browser-surface { padding: 12px 14px 16px; }

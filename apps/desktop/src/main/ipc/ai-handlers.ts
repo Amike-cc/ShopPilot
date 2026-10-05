@@ -13,7 +13,7 @@ import { randomUUID } from 'crypto'
 import { existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC_CHANNELS, type IPCResult } from '@shared/contracts/ipc'
-import { AI_IMAGE_SETTING_KEYS, AI_IMAGE_TEXT_SETTING_KEYS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS } from '@shared/constants/ai'
+import { AI_IMAGE_SETTING_KEYS, AI_IMAGE_TEXT_SETTING_KEYS, AI_IMAGE_TIMEOUT_MAX_MS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS } from '@shared/constants/ai'
 import { getDatabase } from '../db/database'
 import * as AiClient from '../services/ai-client'
 import { deleteAiImageKey, deleteAiImageTextKey, deleteAiKey, hasAiImageKey, hasAiImageTextKey, hasAiKey, saveAiImageKey, saveAiImageTextKey, saveAiKey } from '../services/credential-store'
@@ -147,7 +147,7 @@ export function registerAiHandlers(): void {
           writeAudit('ai.imageConfig', 'failure', { requestId: auditRequestId(requestId, 'AI_BAD_INPUT') })
           return failure('AI_BAD_INPUT', '生图超时必须是数字（毫秒）')
         }
-        putSetting(AI_IMAGE_SETTING_KEYS.timeoutMs, Math.min(Math.max(Math.round(t), AI_TIMEOUT_MIN_MS), AI_TIMEOUT_MAX_MS))
+        putSetting(AI_IMAGE_SETTING_KEYS.timeoutMs, Math.min(Math.max(Math.round(t), AI_TIMEOUT_MIN_MS), AI_IMAGE_TIMEOUT_MAX_MS))
         changed.push('timeoutMs')
       }
       if (changed.length) {

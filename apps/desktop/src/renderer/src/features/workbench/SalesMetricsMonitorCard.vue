@@ -2,12 +2,15 @@
   <section class="sales-metrics-card" :data-test="'sales-metrics-monitor'">
     <div class="unified-card-head">
       <div>
-        <h2>经营数据自动采集</h2>
-        <span>
-          每店铺独立计划 · 默认 10 分钟 · 最后计算 {{ health ? formatTime(health.computedAt) : '—' }}
+        <h2>经营数据采集</h2>
+        <span data-test="auto-collection-state">
+          {{ autoCollection ? '自动采集已开启 · 默认 10 分钟' : '已关闭自动采集 · 点「立即采集」才采' }} · 最后计算 {{ health ? formatTime(health.computedAt) : '—' }}
         </span>
       </div>
       <div class="sales-metrics-actions">
+        <label class="sales-metrics-toggle" :title="autoCollection ? '按计划自动采集（每 10 分钟）与定时任务都会自己跑' : '已关闭自动采集：只有点「立即采集」才会采'">
+          <input v-model="autoCollection" type="checkbox" data-test="auto-collection-toggle" @change="onAutoCollectionChange" />自动采集
+        </label>
         <label class="sales-metrics-toggle">
           <input v-model="autoRefresh" type="checkbox" />实时刷新
         </label>
@@ -91,7 +94,7 @@
       </table>
     </div>
     <div v-else class="unified-empty compact">
-      还没有采集计划。新店铺会在 30 秒内自动生成计划；也可以点「刷新」立即同步。
+      还没有采集计划。计划会在同步时生成（自动采集关闭时默认不启用）；也可以点「刷新」立即同步。
     </div>
 
     <div v-if="runsOpen" class="sales-metrics-drawer">
@@ -128,6 +131,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import { AUTO_COLLECTION_SETTING, parseAutoCollectionEnabled } from '@shared/constants/collection'
 import { useWorkspaceStore } from '../../stores/workspace'
 import type {
   SalesMetricsFreshness,
@@ -147,6 +151,8 @@ const errorMessage = ref('')
 const plans = ref<SalesMetricsPlanView[]>([])
 const health = ref<SalesMetricsHealth | null>(null)
 const autoRefresh = ref(true)
+/** 自动采集总开关（默认关）：关着时计划不会自己跑，只有「立即采集」会采 */
+const autoCollection = ref(false)
 const runsOpen = ref(false)
 const runsLoading = ref(false)
 const runs = ref<SalesMetricsRunView[]>([])
@@ -180,11 +186,31 @@ async function load(): Promise<void> {
     if (!result.ok) { errorMessage.value = result.error.message; return }
     plans.value = result.data.items
     health.value = result.data.health
+    await loadAutoCollection()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error)
   } finally {
     loading.value = false
   }
+}
+
+/** 读自动采集总开关（缺省/读失败都按"关"显示，与主进程的 fail-closed 口径一致） */
+async function loadAutoCollection(): Promise<void> {
+  try {
+    const result = await window.shopilot.settings.get(AUTO_COLLECTION_SETTING)
+    autoCollection.value = parseAutoCollectionEnabled(result.ok ? (result.data as { value?: unknown })?.value : undefined)
+  } catch {
+    autoCollection.value = false
+  }
+}
+
+/** 用户在界面上明确打开/关闭自动采集；关闭会立刻停掉所有计划（主进程下一拍同步） */
+async function onAutoCollectionChange(): Promise<void> {
+  const next = autoCollection.value
+  const result = await window.shopilot.settings.set(AUTO_COLLECTION_SETTING, next)
+  if (!result.ok) { notify(`设置失败：${result.error.message}`, 'error'); await loadAutoCollection(); return }
+  notify(next ? '已开启自动采集：计划与定时任务会自己跑' : '已关闭自动采集：只有点「立即采集」才会采', next ? 'info' : 'success')
+  await load()
 }
 
 function notify(message: string, tone: 'success' | 'error' | 'info'): void {

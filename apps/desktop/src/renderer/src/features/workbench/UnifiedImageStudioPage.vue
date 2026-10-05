@@ -3,7 +3,7 @@
     <header class="studio-page-head">
       <div class="studio-brand"><button type="button" class="studio-brand-mark" aria-label="返回首页" @click="emit('go-home')">ϟ</button><strong>店管家</strong></div>
       <nav class="studio-top-nav" data-test="studio-top-nav" aria-label="AI 商品创作导航">
-        <button v-for="item in creativeModes" :key="item.key" type="button" :class="{ active: mode === item.key }" :data-test="`studio-top-nav-${item.key}`" @click="mode = item.key">{{ item.label }}</button>
+        <button v-for="item in creativeModes" :key="item.key" type="button" :class="{ active: mode === item.key }" :data-test="`studio-top-nav-${item.key}`" :disabled="generating || sceneGenerating || confirmOpen || sceneConfirmOpen" @click="mode = item.key">{{ item.label }}</button>
       </nav>
     </header>
 
@@ -32,7 +32,7 @@
             <h3><i>3</i>笔记风格</h3>
             <select v-model="detailNoteStyle" class="detail-select" data-test="detail-note-style"><option value="种草分享">种草分享</option><option value="测评对比">测评对比</option><option value="生活方式">生活方式</option><option value="使用教程">使用教程</option></select>
             <label class="detail-field-label">卡片数量</label>
-            <div class="detail-segmented"><button v-for="count in [4,5,6,7,8]" :key="count" type="button" :class="{ active: detailCardCount === count }" @click="detailCardCount = count">{{ count }}</button><input v-model.number="detailCardCount" type="number" min="1" max="9" aria-label="卡片数量" /></div>
+            <div class="detail-segmented"><button v-for="count in [4,5,6,7,8]" :key="count" type="button" :class="{ active: detailCardCount === count }" @click="detailCardCount = count">{{ count }}</button><input v-model.number="detailCardCount" type="number" min="1" max="9" aria-label="卡片数量" @change="normalizeContentCount('detail')" /></div>
             <label class="detail-field-label">生图模型</label><select :value="usedModel || '未配置'" class="detail-select" data-test="detail-model" disabled :title="usedModel ? '模型来自设置中心，生成时使用此模型' : '请先在设置中心配置生图模型'"><option>{{ usedModel || '未配置' }}</option></select>
             <label class="detail-field-label">发布比例</label><select v-model="detailRatio" class="detail-select" data-test="detail-ratio"><option v-for="ratio in ratioOptions" :key="ratio.key" :value="ratio.key">{{ ratio.label }}</option></select>
             <label class="detail-field-label">字体</label><div class="font-select-control detail-font-control"><select v-model="detailFont" class="detail-select" data-test="detail-font"><option v-for="font in fontOptions" :key="font.key" :value="font.key">{{ font.label }}</option></select><span class="font-info" data-test="detail-font-meta" :title="fontLicenseHint" :aria-label="fontLicenseHint">⚠</span></div>
@@ -56,6 +56,16 @@
               <div class="detail-note-body" :style="{ fontFamily: detailFontOption.cssFamily }"><h2>{{ productName.trim() || '一条丝巾，点亮秋冬基础款穿搭' }}</h2><p>{{ prompt.trim() || '蓝橙撞色，给素色大衣添一点亮点。系在颈间、披在肩上，或点缀包袋，同一条丝巾也能搭出不同心情。' }}</p><div class="detail-note-tags">#秋冬穿搭&nbsp; #丝巾搭配&nbsp; #日常穿搭</div><footer><span class="detail-comment-placeholder">说点什么...</span><span>♡</span><span>☆</span><span>◌</span></footer></div>
             </article>
             <p class="detail-preview-status">✓ 图片与文案，组成一篇完整笔记</p>
+            <section v-if="activeImage || generating || generationError" class="detail-generated-result" data-test="detail-results">
+              <div class="detail-generated-heading"><strong>真实生成结果</strong><span v-if="generatedImages.length">{{ activeImageIndex + 1 }} / {{ generatedImages.length }}</span></div>
+              <div v-if="generating" class="chat-generating"><span class="loader"></span>正在等待供应商返回真实图片…</div>
+              <div v-else-if="generationError && !activeImage" class="chat-error"><p>{{ generationError }}</p><button type="button" class="studio-button ghost" @click="requestGeneration">重试</button></div>
+              <template v-else>
+                <div class="detail-generated-thumbs"><button v-for="(image, index) in generatedImages" :key="`${image.url.slice(-24)}-${index}`" type="button" :class="['result-thumb', { active: activeImageIndex === index }]" @click="activeImageIndex = index"><img :src="image.url" :alt="`详情图 ${index + 1}`" /></button></div>
+                <div v-if="activeImage" class="detail-generated-preview"><img data-test="detail-generated-image" :src="activeImage.url" alt="真实生成的详情图" /><div><span>模型：{{ activeImage.model }}</span><span>耗时：{{ activeImage.elapsedMs }}ms</span><button type="button" class="studio-button primary" :disabled="saving" @click="saveActiveImage">{{ saving ? '保存中…' : '保存图片' }}</button></div></div>
+              </template>
+              <p v-if="generationNotice" class="chat-notice">{{ generationNotice }}</p>
+            </section>
           </div>
         </main>
 
@@ -95,6 +105,7 @@
               <button type="button" class="edit-optimize-button" :disabled="!prompt.trim()" @click="optimizeEditPrompt">✦ 优化提示词</button>
               <span class="edit-prompt-count">{{ prompt.length }} / 2000</span>
             </div>
+            <p v-if="referenceUploadError" class="edit-generation-error">{{ referenceUploadError }}</p>
             <div class="edit-parameter-row">
               <label>生图模型<select :value="usedModel || '未配置'" disabled><option>{{ usedModel || '未配置' }}</option></select></label>
               <label>输出比例<select v-model="selectedRatio"><option v-for="ratio in freeEditRatioOptions" :key="ratio.key" :value="ratio.key">{{ ratio.label }}</option></select></label>
@@ -153,12 +164,12 @@
     <template v-else-if="mode === 'model'">
       <div class="special-workspace model-workspace" data-test="model-workspace">
         <aside class="special-sidebar">
-          <section class="config-card"><h3 class="config-title"><i>1</i>上传你的商品素材图<em>* {{ materials.length }}/2张</em></h3><p class="config-sub">上传商品多角度图片，主体清晰效果更佳</p><div class="dropzone" :class="{ full: materials.length >= 2 }" role="button" tabindex="0" data-test="model-material-dropzone" @click="materialInput?.click()" @keydown.enter.prevent="materialInput?.click()" @dragover.prevent @drop.prevent="onMaterialDrop"><input ref="materialInput" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onMaterialFiles" /><span class="dz-plus">+</span><strong>拖拽或点击上传图片</strong><small>1-2 张，每张不超过 5M，仅支持 JPG/PNG 格式</small></div><ul v-if="materials.length" class="dz-list"><li v-for="(item, index) in materials" :key="`${item.name}-${index}`"><img :src="item.dataUrl" :alt="item.name" /><span>{{ item.name }}</span><button type="button" @click="removeMaterial(index)">×</button></li></ul></section>
-           <section class="config-card"><h3 class="config-title"><i>2</i>模特形象<em>*</em></h3><div class="model-source-tabs" role="tablist" aria-label="模特形象来源"><button v-for="source in modelSourceOptions" :key="source.key" type="button" role="tab" :aria-selected="modelSource === source.key" :class="{ active: modelSource === source.key }" @click="modelSource = source.key">{{ source.label }}</button></div><div v-if="modelSource === 'library'" class="model-library-grid" aria-label="模特库列表"><button v-for="modelItem in modelLibraryOptions" :key="modelItem.key" type="button" :aria-label="modelItem.label" :class="{ active: modelAppearance === modelItem.label }" @click="modelAppearance = modelItem.label"><img class="model-card-art" :src="modelItem.dataUrl" :alt="modelItem.label" /></button></div><div v-else-if="modelSource === 'mine'" class="library-upload-block"><label class="library-upload-button"><input ref="modelLibraryInput" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onModelLibraryFiles" /><span>＋</span>上传模特图</label><div v-if="modelLibraryUploads.length" class="uploaded-library-grid"><button v-for="item in modelLibraryUploads" :key="item.name" type="button" :class="{ active: modelAppearance === item.name }" @click="modelAppearance = item.name"><img :src="item.dataUrl" :alt="item.name" /><small>{{ item.name }}</small></button></div><p v-else class="library-empty">还没有模特形象，点击上方上传</p></div><div v-else><div class="profile-grid"><label>性别<select v-model="modelGender"><option>女</option><option>男</option><option>不限定</option></select></label><label>年龄段<select v-model="modelAge"><option>青年</option><option>少年</option><option>中年</option><option>不限定</option></select></label><label>人种<select v-model="modelEthnicity"><option>中国人</option><option>亚洲人</option><option>不限定</option></select></label><label>体型<select v-model="modelBody"><option>标准</option><option>纤细</option><option>健美</option><option>丰满</option><option>不限定</option></select></label></div><input v-model="modelAppearance" type="text" maxlength="200" placeholder="外貌细节（可选），例：小麦色皮肤、齐刘海、长发" data-test="model-appearance" /><button type="button" class="model-inline-generate-button" :disabled="generating || !configured || !materials.length" @click="requestGeneration">{{ generating ? '生成中…' : 'AI生成模特' }}</button></div></section>
-           <section class="config-card"><h3 class="config-title"><i>3</i>拍摄场景<em>*</em></h3><div class="model-source-tabs" role="tablist" aria-label="拍摄场景来源"><button v-for="source in sceneSourceOptions" :key="source.key" type="button" role="tab" :aria-selected="sceneSource === source.key" :class="{ active: sceneSource === source.key }" @click="sceneSource = source.key">{{ source.label }}</button></div><div v-if="sceneSource === 'library'" class="scene-library-list"><button type="button" class="scene-smart" :aria-label="'智能推荐 生成模特图时智能匹配场景'" :class="{ active: modelScene === '智能推荐' }" @click="modelScene = '智能推荐'"><strong>✦ 智能推荐</strong><small>生成模特图时智能匹配场景</small></button><button v-for="scene in sceneLibraryOptions" :key="scene.key" type="button" :aria-label="scene.label" :class="{ active: modelScene === scene.label }" @click="modelScene = scene.label"><img class="scene-card-art" :src="scene.dataUrl" :alt="scene.label" /></button></div><div v-else-if="sceneSource === 'ai'" class="scene-ai-editor"><label class="model-scene-label">场景描述<input v-model="modelScene" type="text" maxlength="200" placeholder="例如：城市街头、暖光咖啡馆" /></label><div class="scene-reference-actions"><label class="library-upload-button"><input ref="sceneReferenceInput" class="visually-hidden" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onSceneReferenceFile" /><span>＋</span>上传参考图抠图</label><button type="button" class="scene-generate-button" :disabled="sceneGenerating || !configured" @click="requestSceneGeneration">{{ sceneGenerating ? '生成中…' : 'AI生成场景' }}</button></div><small class="scene-reference-hint">仅擦除图中人物，保留背景与商品</small><p v-if="sceneReference" class="scene-reference-selected">已选择：{{ sceneReference.name }}</p><p v-if="sceneGenerationError" class="config-warn error">{{ sceneGenerationError }}</p></div><div v-else class="library-upload-block"><label class="library-upload-button"><input ref="sceneLibraryInput" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onSceneLibraryFiles" /><span>＋</span>上传场景图</label><div v-if="sceneLibraryUploads.length" class="uploaded-library-grid"><button v-for="item in sceneLibraryUploads" :key="item.name" type="button" :class="{ active: modelScene === item.name }" @click="modelScene = item.name"><img :src="item.dataUrl" :alt="item.name" /><small>{{ item.name }}</small></button></div><p v-else class="library-empty">还没有拍摄场景，点击上方上传</p></div></section>
-           <section class="config-card"><h3 class="config-title"><i>4</i>生成参数</h3><label class="inline-field">生图模型<select :value="usedModel || '未配置'" disabled><option>{{ usedModel || '未配置' }}</option></select></label><label class="inline-field">比例大小<select v-model="selectedRatio"><option v-for="ratio in ratioOptions" :key="ratio.key" :value="ratio.key">{{ ratio.label }}</option></select></label><label class="inline-field">字体<span class="font-select-control"><select v-model="selectedFont"><option v-for="font in fontOptions" :key="font.key" :value="font.key">{{ font.label }}</option></select><span class="font-info" :title="fontLicenseHint" :aria-label="fontLicenseHint">⚠</span></span></label><label class="model-scene-label">生成数量 <output>{{ modelCount }} 张</output></label><input v-model.number="modelCount" class="model-count-range" type="range" min="1" max="5" step="1" aria-label="生成数量" /><p v-if="modeNeedsLibraryAsset" class="config-warn">选择“我的模特库”或“我的场景库”后，请先上传并选择图片。</p><p v-if="generationError" class="config-warn error">{{ generationError }}</p></section>
+          <section class="config-card"><h3 class="config-title"><i>1</i>上传你的商品素材图<em>* {{ materials.length }}/2张</em></h3><p class="config-sub">上传商品多角度图片，主体清晰效果更佳</p><div class="dropzone" :class="{ full: materials.length >= 2 }" role="button" tabindex="0" data-test="model-material-dropzone" @click="materialInput?.click()" @keydown.enter.prevent="materialInput?.click()" @dragover.prevent @drop.prevent="onMaterialDrop"><input ref="materialInput" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onMaterialFiles" /><span class="dz-plus">+</span><strong>拖拽或点击上传图片</strong><small>1-2 张，每张不超过 5M，仅支持 JPG/PNG 格式</small></div><ul v-if="materials.length" class="dz-list"><li v-for="(item, index) in materials" :key="`${item.name}-${index}`"><img :src="item.dataUrl" :alt="item.name" /><span>{{ item.name }}</span><button type="button" @click="removeMaterial(index)">×</button></li></ul><p v-if="uploadError" class="config-warn error">{{ uploadError }}</p></section>
+            <section class="config-card"><h3 class="config-title"><i>2</i>模特形象<em>*</em></h3><div class="model-source-tabs" role="tablist" aria-label="模特形象来源"><button v-for="source in modelSourceOptions" :key="source.key" type="button" role="tab" :aria-selected="modelSource === source.key" :class="{ active: modelSource === source.key }" @click="modelSource = source.key">{{ source.label }}</button></div><div v-if="modelSource === 'library'" class="model-library-grid" aria-label="模特库列表"><button v-for="modelItem in modelLibraryOptions" :key="modelItem.key" type="button" :aria-label="modelItem.label" :class="{ active: modelAppearance === modelItem.label }" @click="modelAppearance = modelItem.label"><img class="model-card-art" :src="modelItem.dataUrl" :alt="modelItem.label" /></button></div><div v-else-if="modelSource === 'mine'" class="library-upload-block"><label class="library-upload-button"><input ref="modelLibraryInput" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onModelLibraryFiles" /><span>＋</span>上传模特图</label><p v-if="modelLibraryUploadError" class="config-warn error">{{ modelLibraryUploadError }}</p><div v-if="modelLibraryUploads.length" class="uploaded-library-grid"><button v-for="item in modelLibraryUploads" :key="item.name" type="button" :class="{ active: modelAppearance === item.name }" @click="modelAppearance = item.name"><img :src="item.dataUrl" :alt="item.name" /><small>{{ item.name }}</small></button></div><p v-else-if="!modelLibraryUploadError" class="library-empty">还没有模特形象，点击上方上传</p></div><div v-else><div class="profile-grid"><label>性别<select v-model="modelGender"><option>女</option><option>男</option><option>不限定</option></select></label><label>年龄段<select v-model="modelAge"><option>青年</option><option>少年</option><option>中年</option><option>不限定</option></select></label><label>人种<select v-model="modelEthnicity"><option>中国人</option><option>亚洲人</option><option>不限定</option></select></label><label>体型<select v-model="modelBody"><option>标准</option><option>纤细</option><option>健美</option><option>丰满</option><option>不限定</option></select></label></div><input v-model="modelAppearance" type="text" maxlength="200" placeholder="外貌细节（可选），例：小麦色皮肤、齐刘海、长发" data-test="model-appearance" /><button type="button" class="model-inline-generate-button" :disabled="generating || !configured || !materials.length || modeNeedsLibraryAsset" @click="requestGeneration">{{ generating ? '生成中…' : 'AI生成模特' }}</button></div></section>
+            <section class="config-card"><h3 class="config-title"><i>3</i>拍摄场景<em>*</em></h3><div class="model-source-tabs" role="tablist" aria-label="拍摄场景来源"><button v-for="source in sceneSourceOptions" :key="source.key" type="button" role="tab" :aria-selected="sceneSource === source.key" :class="{ active: sceneSource === source.key }" @click="sceneSource = source.key">{{ source.label }}</button></div><div v-if="sceneSource === 'library'" class="scene-library-list"><button type="button" class="scene-smart" :aria-label="'智能推荐 生成模特图时智能匹配场景'" :class="{ active: modelScene === '智能推荐' }" @click="modelScene = '智能推荐'"><strong>✦ 智能推荐</strong><small>生成模特图时智能匹配场景</small></button><button v-for="scene in sceneLibraryOptions" :key="scene.key" type="button" :aria-label="scene.label" :class="{ active: modelScene === scene.label }" @click="modelScene = scene.label"><img class="scene-card-art" :src="scene.dataUrl" :alt="scene.label" /></button></div><div v-else-if="sceneSource === 'ai'" class="scene-ai-editor"><label class="model-scene-label">场景描述<input v-model="modelScene" type="text" maxlength="200" placeholder="例如：城市街头、暖光咖啡馆" /></label><div class="scene-reference-actions"><label class="library-upload-button"><input ref="sceneReferenceInput" class="visually-hidden" type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onSceneReferenceFile" /><span>＋</span>上传参考图抠图</label><button type="button" class="scene-generate-button" :disabled="sceneGenerating || generating || confirmOpen || sceneConfirmOpen || !configured" @click="requestSceneGeneration">{{ sceneGenerating ? '生成中…' : 'AI生成场景' }}</button></div><small class="scene-reference-hint">仅擦除图中人物，保留背景与商品</small><p v-if="sceneReference" class="scene-reference-selected">已选择：{{ sceneReference.name }}</p><p v-if="sceneGenerationError" class="config-warn error">{{ sceneGenerationError }}</p></div><div v-else class="library-upload-block"><label class="library-upload-button"><input ref="sceneLibraryInput" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onSceneLibraryFiles" /><span>＋</span>上传场景图</label><p v-if="sceneLibraryUploadError" class="config-warn error">{{ sceneLibraryUploadError }}</p><div v-if="sceneLibraryUploads.length" class="uploaded-library-grid"><button v-for="item in sceneLibraryUploads" :key="item.name" type="button" :class="{ active: modelScene === item.name }" @click="modelScene = item.name"><img :src="item.dataUrl" :alt="item.name" /><small>{{ item.name }}</small></button></div><p v-else-if="!sceneLibraryUploadError" class="library-empty">还没有拍摄场景，点击上方上传</p></div></section>
+           <section class="config-card"><h3 class="config-title"><i>4</i>生成参数</h3><label class="inline-field">生图模型<select :value="usedModel || '未配置'" disabled><option>{{ usedModel || '未配置' }}</option></select></label><label class="inline-field">比例大小<select v-model="selectedRatio"><option v-for="ratio in ratioOptions" :key="ratio.key" :value="ratio.key">{{ ratio.label }}</option></select></label><label class="inline-field">字体<span class="font-select-control"><select v-model="selectedFont"><option v-for="font in fontOptions" :key="font.key" :value="font.key">{{ font.label }}</option></select><span class="font-info" :title="fontLicenseHint" :aria-label="fontLicenseHint">⚠</span></span></label><label class="model-scene-label">生成数量 <output>{{ modelCount }} 张</output></label><input v-model.number="modelCount" class="model-count-range" type="range" min="1" max="5" step="1" aria-label="生成数量" /><p v-if="modeNeedsLibraryAsset" class="config-warn">{{ libraryAssetRequirement }}</p><p v-if="generationError" class="config-warn error">{{ generationError }}</p></section>
          </aside>
-        <footer class="special-generate-footer"><p>选择模特与场景后即可生成 {{ modelCount }} 张模特图</p><button type="button" class="generate-button" data-test="model-generate-button" :disabled="generating || !configured || !materials.length || modeNeedsLibraryAsset" @click="requestGeneration">{{ generating ? '生成中…' : 'AI生成模特' }} <span>→</span></button><p v-if="generationError" class="config-warn error">{{ generationError }}</p></footer>
+        <footer class="special-generate-footer"><p>选择模特与场景后即可生成 {{ modelCount }} 张模特图</p><button type="button" class="generate-button" data-test="model-generate-button" :disabled="generating || sceneGenerating || confirmOpen || sceneConfirmOpen || !configured || !materials.length || modeNeedsLibraryAsset" @click="requestGeneration">{{ generating ? '生成中…' : 'AI生成模特' }} <span>→</span></button><p v-if="generationError" class="config-warn error">{{ generationError }}</p></footer>
         <main class="special-main"><section v-if="!generatedImages.length && !generating" class="special-hero"><span class="special-kicker">AI MODEL STUDIO</span><h1>只需三步，轻松生成专业模特图</h1><p>保留商品细节，智能匹配模特与场景，快速获得可用成片</p><div class="special-flow"><figure><img :src="modelProductArt" alt="牛仔马甲商品原图" /><figcaption>商品素材</figcaption></figure><b>→</b><figure><img :src="modelEffectOneArt" alt="AI模特效果图1" /><figcaption>生成结果 1</figcaption></figure><figure><img :src="modelEffectTwoArt" alt="AI模特效果图2" /><figcaption>生成结果 2</figcaption></figure></div><div class="special-steps"><span>01 <b>上传商品素材</b></span><span>02 <b>选择模特与场景</b></span><span>03 <b>一键生成</b></span></div></section><section v-else class="studio-card results-card"><div class="card-heading compact"><div><span class="card-kicker">RESULT</span><h2>模特图结果</h2></div><span class="result-count">{{ generatedImages.length }} 张</span></div><div v-if="generating" class="chat-generating"><span class="loader"></span>正在生成真实结果…</div><div class="result-grid"><button v-for="(image,index) in generatedImages" :key="`${image.url.slice(-24)}-${index}`" type="button" :class="['result-thumb',{active:activeImageIndex===index}]" @click="activeImageIndex=index"><img :src="image.url" :alt="`模特图 ${index+1}`" /></button></div><div v-if="activeImage" class="result-actions"><button type="button" class="studio-button primary" :disabled="saving" @click="saveActiveImage">{{ saving ? '保存中…' : '保存图片' }}</button></div></section></main>
       </div>
     </template>
@@ -166,9 +177,9 @@
     <template v-else-if="mode === 'quantity'">
         <div class="special-workspace quantity-workspace" data-test="quantity-workspace">
         <aside class="special-sidebar">
-          <section class="config-card"><h3 class="config-title"><i>1</i>上传商品素材图<em>* {{ materials.length }}/5张</em></h3><p class="config-sub">上传 1~5 张素材图，每张代表一种变体（如不同颜色），主体清晰效果更佳</p><div class="dropzone" :class="{ full: materials.length >= 5 }" role="button" tabindex="0" data-test="quantity-material-dropzone" @click="materialInput?.click()" @keydown.enter.prevent="materialInput?.click()" @dragover.prevent @drop.prevent="onMaterialDrop"><input ref="materialInput" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onMaterialFiles" /><span class="dz-plus">+</span><strong>拖拽或点击上传图片</strong><small>1-5 张，每张不超过 5M，仅支持 JPG/PNG 格式</small></div><ul v-if="materials.length" class="dz-list"><li v-for="(item,index) in materials" :key="`${item.name}-${index}`"><img :src="item.dataUrl" :alt="item.name" /><span>{{ item.name }}</span><button type="button" @click="removeMaterial(index)">×</button></li></ul></section>
-          <section class="config-card"><h3 class="config-title"><i>2</i>变体数量<em>*</em></h3><p class="config-sub">为每张素材图设置画面中的数量；单张时即生成 N 个同款商品</p><p v-if="!materials.length" class="mode-output-summary">请先上传商品素材图</p><div v-else class="variant-counts"><label v-for="(item,index) in materials" :key="`quantity-${item.name}-${index}`" class="variant-row"><img :src="item.dataUrl" :alt="item.name" /><span>{{ item.name }}</span><input v-model.number="variantCounts[index]" type="number" min="1" max="99" :aria-label="`${item.name}数量`" /><em>件</em></label></div></section>
-          <section class="config-card"><h3 class="config-title"><i>3</i>指定文案</h3><p class="config-sub">不填则画面中不渲染文字</p><input v-model="quantityCopy" type="text" maxlength="20" placeholder="如：8pcs、8 PCS、8个装、8件套" data-test="quantity-copy-input" /><div class="config-count">{{ quantityCopy.length }} / 20</div></section>
+          <section class="config-card"><h3 class="config-title"><i>1</i>上传商品素材图<em>* {{ materials.length }}/5张</em></h3><p class="config-sub">上传 1~5 张素材图，每张代表一种变体（如不同颜色），主体清晰效果更佳</p><div class="dropzone" :class="{ full: materials.length >= 5 }" role="button" tabindex="0" data-test="quantity-material-dropzone" @click="materialInput?.click()" @keydown.enter.prevent="materialInput?.click()" @dragover.prevent @drop.prevent="onMaterialDrop"><input ref="materialInput" class="visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onMaterialFiles" /><span class="dz-plus">+</span><strong>拖拽或点击上传图片</strong><small>1-5 张，每张不超过 5M，仅支持 JPG/PNG 格式</small></div><ul v-if="materials.length" class="dz-list"><li v-for="(item,index) in materials" :key="`${item.name}-${index}`"><img :src="item.dataUrl" :alt="item.name" /><span>{{ item.name }}</span><button type="button" @click="removeMaterial(index)">×</button></li></ul><p v-if="uploadError" class="config-warn error">{{ uploadError }}</p></section>
+          <section class="config-card"><h3 class="config-title"><i>2</i>变体数量<em>*</em></h3><p class="config-sub">为每张素材图设置画面中的数量；单张时即生成 N 个同款商品</p><p v-if="!materials.length" class="mode-output-summary">请先上传商品素材图</p><div v-else class="variant-counts"><label v-for="(item,index) in materials" :key="`quantity-${item.name}-${index}`" class="variant-row"><img :src="item.dataUrl" :alt="item.name" /><span>{{ item.name }}</span><input v-model.number="variantCounts[index]" type="number" min="1" max="99" :aria-label="`${item.name}数量`" @input="normalizeVariantCount(index)" /><em>件</em></label></div></section>
+          <section class="config-card"><h3 class="config-title"><i>3</i>指定文案</h3><p class="config-sub">不填则画面中不渲染文字</p><input :value="quantityCopy" type="text" maxlength="20" placeholder="如：8pcs、8 PCS、8个装、8件套" data-test="quantity-copy-input" @input="updateQuantityCopy" /><div class="config-count">{{ quantityCopy.length }} / 20</div></section>
           <section class="config-card"><h3 class="config-title"><i>4</i>生成参数</h3><label class="inline-field">生图模型<select :value="usedModel || '未配置'" disabled><option>{{ usedModel || '未配置' }}</option></select></label><label class="inline-field">比例大小<select v-model="selectedRatio"><option v-for="ratio in ratioOptions" :key="ratio.key" :value="ratio.key">{{ ratio.label }}</option></select></label><label class="inline-field">字体<span class="font-select-control"><select v-model="selectedFont"><option v-for="font in fontOptions" :key="font.key" :value="font.key">{{ font.label }}</option></select><span class="font-info" :title="fontLicenseHint" :aria-label="fontLicenseHint">⚠</span></span></label><p class="config-note">输出图片会按所选比例进行构图</p><p v-if="generationError" class="config-warn error">{{ generationError }}</p></section>
         </aside>
         <footer class="special-generate-footer"><p>上传 1-5 张商品素材图并设置各变体数量，即可生成白底数量图</p><button type="button" class="generate-button" data-test="quantity-generate-button" :disabled="generating || !configured || !materials.length" @click="requestGeneration">{{ generating ? '生成中…' : '生成数量图' }} <span>→</span></button><p v-if="generationError" class="config-warn error">{{ generationError }}</p></footer>
@@ -255,7 +266,7 @@
               <input type="checkbox" v-model="wantMain" />
               <span>主图</span>
               <button type="button" class="count-step" aria-label="减少主图数量" :disabled="!wantMain || mainCount <= 1" @click.stop="adjustContentCount('main', -1)">−</button>
-               <input type="number" min="1" max="4" v-model.number="mainCount" :disabled="!wantMain" aria-label="主图张数" />
+               <input type="number" min="1" max="4" v-model.number="mainCount" :disabled="!wantMain" aria-label="主图张数" @change="normalizeContentCount('main')" />
               <button type="button" class="count-step" aria-label="增加主图数量" :disabled="!wantMain || mainCount >= 4" @click.stop="adjustContentCount('main', 1)">＋</button>
               <em>张</em>
             </label>
@@ -263,7 +274,7 @@
               <input type="checkbox" v-model="wantSelling" />
               <span>卖点图</span>
               <button type="button" class="count-step" aria-label="减少卖点图数量" :disabled="!wantSelling || sellingCount <= 1" @click.stop="adjustContentCount('selling', -1)">−</button>
-              <input type="number" min="1" max="4" v-model.number="sellingCount" :disabled="!wantSelling" aria-label="卖点图张数" />
+              <input type="number" min="1" max="4" v-model.number="sellingCount" :disabled="!wantSelling" aria-label="卖点图张数" @change="normalizeContentCount('selling')" />
               <button type="button" class="count-step" aria-label="增加卖点图数量" :disabled="!wantSelling || sellingCount >= 4" @click.stop="adjustContentCount('selling', 1)">＋</button>
               <em>张</em>
             </label>
@@ -271,7 +282,7 @@
               <input type="checkbox" v-model="wantWhite" />
               <span>白底图</span>
               <button type="button" class="count-step" aria-label="减少白底图数量" :disabled="!wantWhite || whiteCount <= 1" @click.stop="adjustContentCount('white', -1)">−</button>
-              <input type="number" min="1" max="4" v-model.number="whiteCount" :disabled="!wantWhite" aria-label="白底图张数" />
+              <input type="number" min="1" max="4" v-model.number="whiteCount" :disabled="!wantWhite" aria-label="白底图张数" @change="normalizeContentCount('white')" />
               <button type="button" class="count-step" aria-label="增加白底图数量" :disabled="!wantWhite || whiteCount >= 4" @click.stop="adjustContentCount('white', 1)">＋</button>
               <em>张</em>
             </label>
@@ -279,7 +290,7 @@
               <input type="checkbox" v-model="wantDetail" />
               <span>细节图</span>
               <button type="button" class="count-step" aria-label="减少细节图数量" :disabled="!wantDetail || detailCount <= 1" @click.stop="adjustContentCount('detail', -1)">−</button>
-              <input type="number" min="1" max="2" v-model.number="detailCount" :disabled="!wantDetail" aria-label="详情页张数" />
+              <input type="number" min="1" max="2" v-model.number="detailCount" :disabled="!wantDetail" aria-label="详情页张数" @change="normalizeContentCount('detailShort')" />
               <button type="button" class="count-step" aria-label="增加细节图数量" :disabled="!wantDetail || detailCount >= 2" @click.stop="adjustContentCount('detail', 1)">＋</button>
               <em>张</em>
             </label>
@@ -363,9 +374,16 @@
 
     </template>
 
+    <div v-if="sceneConfirmOpen" class="confirm-backdrop" role="presentation" @click.self="sceneConfirmOpen = false">
+      <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="scene-confirm-title">
+        <div class="confirm-icon"><img :src="recommendIcon" alt="" /></div><h2 id="scene-confirm-title">确认生成场景参考图？</h2><p>请求会发送到已保存的图片接口并可能产生第三方费用，生成结果只在接口返回成功后显示。</p><dl><div><dt>模型</dt><dd>{{ usedModel || '配置中的模型' }}</dd></div><div><dt>功能</dt><dd>AI生成场景</dd></div><div><dt>场景描述</dt><dd>{{ modelScene.trim() || '自然、干净、适合商品展示的生活方式场景' }}</dd></div><div v-if="materials.length"><dt>商品素材</dt><dd>{{ materials.map(item => item.name).join('、') }}</dd></div><div v-if="sceneReference"><dt>场景参考图</dt><dd>{{ sceneReference.name }}</dd></div></dl>
+        <div class="confirm-actions"><button type="button" class="studio-button ghost" @click="sceneConfirmOpen = false"><img class="button-icon" :src="studioCloseIcon" alt="" />取消</button><button type="button" class="studio-button primary" :disabled="sceneGenerating" @click="submitSceneGeneration"><img class="button-icon" :src="studioConfirmIcon" alt="" />确认发送</button></div>
+      </section>
+    </div>
+
     <div v-if="confirmOpen" class="confirm-backdrop" role="presentation" @click.self="confirmOpen = false">
       <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-        <div class="confirm-icon"><img :src="recommendIcon" alt="" /></div><h2 id="confirm-title">确认开始生成？</h2><p>请求会发送到已保存的图片接口，生成结果只在接口返回成功后显示<span v-if="materials.length || referenceMaterial || competitorReferences.length">；已选择的原图和参考图会一并用于图片生成</span>。</p><dl><div><dt>模型</dt><dd>{{ usedModel || '配置中的模型' }}</dd></div><div><dt>创作页签</dt><dd>{{ modeConfig.label }}</dd></div><div><dt>生成内容</dt><dd>{{ planSummary }}</dd></div><div><dt>输出比例</dt><dd>{{ selectedRatio }}</dd></div><div><dt>字体</dt><dd>{{ effectiveFontOption.label }} · {{ effectiveFontOption.license }}</dd></div><div v-if="materials.length"><dt>商品素材</dt><dd>{{ materials.map(item => item.name).join('、') }}</dd></div><div v-if="competitorReferences.length"><dt>竞品参考图</dt><dd>{{ competitorReferences.length }} 张</dd></div><div v-if="referenceMaterial"><dt>编辑参考图</dt><dd>{{ referenceMaterial.name }}</dd></div></dl>
+        <div class="confirm-icon"><img :src="recommendIcon" alt="" /></div><h2 id="confirm-title">确认开始生成？</h2><p>请求会发送到已保存的图片接口，生成结果只在接口返回成功后显示<span v-if="materials.length || referenceMaterial || competitorReferences.length">；已选择的原图和参考图会一并用于图片生成</span>。</p><dl><div><dt>模型</dt><dd>{{ usedModel || '配置中的模型' }}</dd></div><div><dt>创作页签</dt><dd>{{ modeConfig.label }}</dd></div><div><dt>生成内容</dt><dd>{{ planSummary }}</dd></div><div><dt>输出比例</dt><dd>{{ selectedRatio }}</dd></div><div><dt>字体</dt><dd>{{ effectiveFontOption.label }} · {{ effectiveFontOption.license }}</dd></div><div v-if="materials.length"><dt>商品素材</dt><dd>{{ materials.map(item => item.name).join('、') }}</dd></div><div v-if="mode === 'quantity' && materials.length"><dt>变体数量</dt><dd>{{ materials.map((item, index) => `${item.name} × ${Math.min(99, Math.max(1, Math.round(Number(variantCounts[index]) || 1)))} 件`).join('、') }}</dd></div><div v-if="mode === 'quantity'"><dt>指定文案</dt><dd>{{ quantityCopy.trim() || '不强制渲染文字' }}</dd></div><div v-if="competitorReferences.length"><dt>竞品参考图</dt><dd>{{ competitorReferences.length }} 张</dd></div><div v-if="referenceMaterial"><dt>编辑参考图</dt><dd>{{ referenceMaterial.name }}</dd></div></dl>
         <div class="confirm-actions"><button type="button" class="studio-button ghost" @click="confirmOpen = false"><img class="button-icon" :src="studioCloseIcon" alt="" />取消</button><button type="button" class="studio-button primary" :disabled="generating" @click="submitGeneration"><img class="button-icon" :src="studioConfirmIcon" alt="" />确认发送</button></div>
       </section>
     </div>
@@ -574,7 +592,7 @@ function modeLabel(key: CreativeModeKey): string {
   return creativeModes.find(item => item.key === key)?.label || key
 }
 
-const emit = defineEmits<{ (event: 'go-home'): void }>()
+const emit = defineEmits<{ (event: 'go-home'): void; (event: 'busy-change', busy: boolean): void }>()
 const prompt = ref('')
 const productName = ref('')
 const mainSize = ref('1024x1024')
@@ -639,8 +657,10 @@ const modelEthnicity = ref('中国人')
 const modelBody = ref('标准')
 const modelAppearance = ref('')
 const modelLibraryUploads = ref<UploadAsset[]>([])
+const modelLibraryUploadError = ref('')
 const modelScene = ref('智能推荐')
 const sceneLibraryUploads = ref<UploadAsset[]>([])
+const sceneLibraryUploadError = ref('')
 const sceneReference = ref<UploadAsset | null>(null)
 const sceneGenerating = ref(false)
 const sceneGenerationError = ref('')
@@ -678,6 +698,7 @@ const editPresetOptions = [
 function resetEditSession() {
   prompt.value = ''
   referenceMaterial.value = null
+  referenceUploadError.value = ''
   generatedImages.value = []
   generationError.value = ''
   generationNotice.value = ''
@@ -691,9 +712,19 @@ const uploadError = ref('')
 /** 需要"商品本体"的页签（模特图 / 商品复刻 / 自由编辑）：没有图就不该让用户按下生成，浪费一次调用 */
 const modeNeedsSource = computed(() => modeConfig.value.needsSource && (mode.value === 'edit' ? !referenceMaterial.value : !materials.value.length))
 const modeNeedsReference = computed(() => mode.value === 'replicate' ? !competitorReferences.value.length : mode.value === 'edit' && !referenceMaterial.value)
-const selectedModelLibraryAsset = computed(() => modelLibraryUploads.value.find(item => item.name === modelAppearance.value) || modelLibraryUploads.value[0] || null)
-const selectedSceneLibraryAsset = computed(() => sceneLibraryUploads.value.find(item => item.name === modelScene.value) || sceneLibraryUploads.value[0] || null)
-const modeNeedsLibraryAsset = computed(() => mode.value === 'model' && ((modelSource.value === 'mine' && !selectedModelLibraryAsset.value) || (sceneSource.value === 'mine' && !selectedSceneLibraryAsset.value)))
+// “我的”库必须和界面上的 active 卡片保持一致；不能在用户没有选择时
+// 静默回退到第一张图片，否则确认框和实际发给模型的参考图会对不上。
+const selectedModelLibraryAsset = computed(() => modelLibraryUploads.value.find(item => item.name === modelAppearance.value) || null)
+const selectedSceneLibraryAsset = computed(() => sceneLibraryUploads.value.find(item => item.name === modelScene.value) || null)
+const libraryAssetRequirement = computed(() => {
+  if (mode.value !== 'model') return ''
+  const missing: string[] = []
+  if (modelSource.value === 'library' && !selectedSystemModelAsset.value) missing.push('请先从模特库选择一个模特形象')
+  if (modelSource.value === 'mine' && !selectedModelLibraryAsset.value) missing.push('请先上传并选择我的模特库图片')
+  if (sceneSource.value === 'mine' && !selectedSceneLibraryAsset.value) missing.push('请先上传并选择我的场景库图片')
+  return missing.join('；')
+})
+const modeNeedsLibraryAsset = computed(() => Boolean(libraryAssetRequirement.value))
 const selectedSystemModelAsset = computed<UploadAsset | null>(() => {
   if (modelSource.value !== 'library') return null
   const item = modelLibraryOptions.find(option => option.label === modelAppearance.value)
@@ -715,7 +746,10 @@ const generationError = ref('')
 const generationNotice = ref('')
 const generating = ref(false)
 const confirmOpen = ref(false)
+const sceneConfirmOpen = ref(false)
 const generatedImages = ref<GeneratedImage[]>([])
+/** 历史页点击“查看会话”时，允许这一次模式切换带着已恢复的结果进入创作页。 */
+const restoringHistorySession = ref(false)
 const activeImageIndex = ref(0)
 const HISTORY_STORAGE_KEY = 'shopilot.image-studio.history.v1'
 const historyFilter = ref('all')
@@ -763,9 +797,20 @@ const saveNotice = ref('')
 const saveNoticeError = ref(false)
 /** 步骤条：① 输入 → ② 生成中 → ③ 完成（跟着真实状态走，不假装） */
 const step = computed(() => generating.value ? 2 : generatedImages.value.length ? 3 : 1)
+const generationBusy = computed(() => generating.value || sceneGenerating.value)
+watch(generationBusy, busy => emit('busy-change', busy), { immediate: true })
 
 /** 切换创作页签 = 套用预设：不覆盖用户已经写好的描述（那是他的输入），只改生成参数 */
 watch(mode, (next) => {
+  // 离开当前创作模式时清掉上一模式的预览，避免旧图片被误认为新模式的结果。
+  // 只有历史页明确点击“查看会话”时才保留恢复的那组图片；普通导航仍从空状态开始。
+  if (!restoringHistorySession.value) {
+    generatedImages.value = []
+    activeImageIndex.value = 0
+    savedPath.value = ''
+    saveNotice.value = ''
+    saveNoticeError.value = false
+  } else restoringHistorySession.value = false
   const preset = creativeModes.find(item => item.key === next)
   if (!preset || next === 'history') return
   wantMain.value = preset.wantMain
@@ -776,6 +821,14 @@ watch(mode, (next) => {
   selectedRatio.value = next === 'model' ? '2:3' : next === 'detail' ? detailRatio.value : '1:1'
   generationError.value = ''
   generationNotice.value = ''
+  // Each mode owns its upload controls. Do not carry a validation message
+  // from the previous mode into the newly selected page (for example, the
+  // model page's material-limit warning appearing on 商品复刻).
+  uploadError.value = ''
+  referenceUploadError.value = ''
+  modelLibraryUploadError.value = ''
+  sceneLibraryUploadError.value = ''
+  sceneGenerationError.value = ''
 })
 watch(detailRatio, (next) => {
   // 图文详情使用独立的“发布比例”控件；生成请求仍走统一 selectedRatio，
@@ -806,14 +859,24 @@ function restartDetailCase() {
 function loadPersistedHistory() {
   try {
     const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY)
-    if (!raw) return
+    if (!raw) {
+      historyImages.value = []
+      generatedImages.value = []
+      return
+    }
     const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return
+    if (!Array.isArray(parsed)) {
+      historyImages.value = []
+      generatedImages.value = []
+      return
+    }
     historyImages.value = parsed.filter(item => item && typeof item.url === 'string' && typeof item.kind === 'string' && typeof item.mode === 'string').slice(0, 500) as GeneratedImage[]
     // 历史记录独立于当前创作会话；打开软件时不把旧结果误显示为本次生成结果。
     generatedImages.value = []
   } catch {
     // 损坏或不可用的历史数据不应阻塞创作页面。
+    historyImages.value = []
+    generatedImages.value = []
   }
 }
 function persistHistory() {
@@ -827,10 +890,13 @@ function formatHistoryDate(value: number) {
 }
 function openHistorySession(session: { mode: CreativeModeKey; items: GeneratedImage[] }) {
   if (!session.items.length) return
+  const modeChanged = mode.value !== session.mode
   generatedImages.value = session.items
   activeImageIndex.value = 0
   if (session.mode === 'edit') prompt.value = session.items[0].prompt || ''
+  restoringHistorySession.value = modeChanged
   mode.value = session.mode
+  if (!modeChanged) restoringHistorySession.value = false
 }
 function applyEditPreset(key: string) {
   editPreset.value = key
@@ -849,6 +915,13 @@ function adjustContentCount(kind: 'main' | 'selling' | 'white' | 'detail', delta
   const limits = { main: 4, selling: 4, white: 4, detail: 2 }
   const refs = { main: mainCount, selling: sellingCount, white: whiteCount, detail: detailCount }
   refs[kind].value = Math.min(limits[kind], Math.max(1, Number(refs[kind].value) + delta))
+}
+function normalizeContentCount(kind: 'main' | 'selling' | 'white' | 'detail' | 'detailShort') {
+  const refs = { main: mainCount, selling: sellingCount, white: whiteCount, detail: detailCardCount, detailShort: detailCount }
+  const limits = { main: 4, selling: 4, white: 4, detail: 9, detailShort: 2 }
+  const ref = refs[kind]
+  const value = Number(ref.value)
+  ref.value = Number.isFinite(value) ? Math.min(limits[kind], Math.max(1, Math.round(value))) : 1
 }
 const activeImage = computed(() => generatedImages.value[activeImageIndex.value] || null)
 const activeKindLabel = computed(() => activeImage.value ? KIND_LABEL[activeImage.value.kind] : '')
@@ -909,12 +982,22 @@ async function loadAiConfig() {
   }
 }
 
-function readImage(file: File, onDone: (asset: UploadAsset) => void) {
-  if (!['image/png', 'image/jpeg'].includes(file.type.toLowerCase())) { uploadError.value = `${file.name}：只支持 PNG 或 JPEG。`; return }
-  if (file.size > MAX_MATERIAL_BYTES) { uploadError.value = `${file.name}：超过 5MB，请压缩后再上传。`; return }
+function readImage(file: File, onDone: (asset: UploadAsset) => void, onError?: (message: string) => void) {
+  const fail = (message: string) => { if (onError) onError(message); else uploadError.value = message }
+  if (!['image/png', 'image/jpeg'].includes(file.type.toLowerCase())) { fail(`${file.name}：只支持 PNG 或 JPEG。`); return }
+  if (file.size > MAX_MATERIAL_BYTES) { fail(`${file.name}：超过 5MB，请压缩后再上传。`); return }
   const reader = new FileReader()
-  reader.onload = () => { if (typeof reader.result === 'string') onDone({ name: file.name, size: file.size, dataUrl: reader.result }) }
-  reader.onerror = () => { uploadError.value = `${file.name}：图片读取失败，请重试。` }
+  reader.onload = () => {
+    if (typeof reader.result !== 'string') { fail(`${file.name}：图片读取失败，请重试。`); return }
+    // MIME/扩展名可以被伪造；在写入状态前确认浏览器确实能解码出图片。
+    const image = new Image()
+    image.onload = () => image.naturalWidth > 0 && image.naturalHeight > 0
+      ? onDone({ name: file.name, size: file.size, dataUrl: reader.result as string })
+      : fail(`${file.name}：图片内容无效，请选择可正常打开的 PNG 或 JPEG。`)
+    image.onerror = () => fail(`${file.name}：图片内容无效，请选择可正常打开的 PNG 或 JPEG。`)
+    image.src = reader.result
+  }
+  reader.onerror = () => fail(`${file.name}：图片读取失败，请重试。`)
   reader.readAsDataURL(file)
 }
 
@@ -960,29 +1043,47 @@ function onMaterialFiles(event: Event) {
 }
 function onMaterialDrop(event: DragEvent) { addMaterials(event.dataTransfer?.files) }
 function removeMaterial(index: number) { materials.value.splice(index, 1) }
-function addLibraryAssets(files: FileList | File[] | null | undefined, target: { value: UploadAsset[] }, max = 12, onAdded?: (asset: UploadAsset) => void) {
+function normalizeVariantCount(index: number) {
+  const value = Number(variantCounts.value[index])
+  variantCounts.value[index] = Number.isFinite(value) ? Math.min(99, Math.max(1, Math.round(value))) : 1
+}
+function updateQuantityCopy(event: Event) {
+  const input = event.target as HTMLInputElement
+  const value = input.value.slice(0, 20)
+  if (input.value !== value) input.value = value
+  quantityCopy.value = value
+}
+function addLibraryAssets(files: FileList | File[] | null | undefined, target: { value: UploadAsset[] }, max = 12, onAdded?: (asset: UploadAsset) => void, onError?: (message: string) => void) {
   const list = Array.from(files || [])
+  if (list.length > Math.max(0, max - target.value.length)) onError?.(`最多保存 ${max} 张图片，本次只收前 ${Math.max(0, max - target.value.length)} 张。`)
   for (const file of list.slice(0, Math.max(0, max - target.value.length))) {
     if (target.value.some(item => item.name === file.name && item.size === file.size)) continue
-    readImage(file, asset => { if (target.value.length < max) { target.value.push(asset); onAdded?.(asset) } })
+    readImage(file, asset => { if (target.value.length < max) { target.value.push(asset); onAdded?.(asset) } }, onError)
   }
 }
 function onModelLibraryFiles(event: Event) {
-  addLibraryAssets((event.target as HTMLInputElement).files, modelLibraryUploads, 12, asset => { if (!modelAppearance.value) modelAppearance.value = asset.name })
+  modelLibraryUploadError.value = ''
+  addLibraryAssets((event.target as HTMLInputElement).files, modelLibraryUploads, 12, asset => {
+    if (!modelLibraryUploads.value.some(item => item.name === modelAppearance.value)) modelAppearance.value = asset.name
+  }, message => { modelLibraryUploadError.value = message })
   ;(event.target as HTMLInputElement).value = ''
 }
 function onSceneLibraryFiles(event: Event) {
-  addLibraryAssets((event.target as HTMLInputElement).files, sceneLibraryUploads, 12, asset => { if (!modelScene.value || modelScene.value === '智能推荐') modelScene.value = asset.name })
+  sceneLibraryUploadError.value = ''
+  addLibraryAssets((event.target as HTMLInputElement).files, sceneLibraryUploads, 12, asset => {
+    if (!sceneLibraryUploads.value.some(item => item.name === modelScene.value)) modelScene.value = asset.name
+  }, message => { sceneLibraryUploadError.value = message })
   ;(event.target as HTMLInputElement).value = ''
 }
 function onReferenceFile(event: Event) {
   referenceUploadError.value = ''
-  const file = (event.target as HTMLInputElement).files?.[0]
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
   if (!file) return
-  if (!['image/png', 'image/jpeg'].includes(file.type.toLowerCase())) { referenceUploadError.value = '参考图只支持 PNG 或 JPEG。'; return }
-  if (file.size > MAX_MATERIAL_BYTES) { referenceUploadError.value = '参考图不能超过 5MB。'; return }
-  readImage(file, asset => { referenceMaterial.value = asset })
-  ;(event.target as HTMLInputElement).value = ''
+  if (!['image/png', 'image/jpeg'].includes(file.type.toLowerCase())) { referenceUploadError.value = '参考图只支持 PNG 或 JPEG。'; input.value = ''; return }
+  if (file.size > MAX_MATERIAL_BYTES) { referenceUploadError.value = '参考图不能超过 5MB。'; input.value = ''; return }
+  readImage(file, asset => { referenceMaterial.value = asset }, message => { referenceUploadError.value = message })
+  input.value = ''
 }
 function onSceneReferenceFile(event: Event) {
   sceneGenerationError.value = ''
@@ -991,10 +1092,8 @@ function onSceneReferenceFile(event: Event) {
   if (!file) return
   if (!['image/png', 'image/jpeg'].includes(file.type.toLowerCase())) { sceneGenerationError.value = '场景参考图只支持 PNG 或 JPEG。'; input.value = ''; return }
   if (file.size > MAX_MATERIAL_BYTES) { sceneGenerationError.value = '场景参考图不能超过 5MB。'; input.value = ''; return }
-  const reader = new FileReader()
-  reader.onload = () => { if (typeof reader.result === 'string') sceneReference.value = { name: file.name, size: file.size, dataUrl: reader.result } }
-  reader.onerror = () => { sceneGenerationError.value = '场景参考图读取失败，请重试。' }
-  reader.readAsDataURL(file)
+  // 与商品素材走同一套真实图片解码校验，避免 MIME 正确但内容损坏的文件进入生成请求。
+  readImage(file, asset => { sceneReference.value = asset }, message => { sceneGenerationError.value = message })
   input.value = ''
 }
 function addCompetitorReferences(files: FileList | File[] | null | undefined) {
@@ -1008,10 +1107,7 @@ function addCompetitorReferences(files: FileList | File[] | null | undefined) {
     if (!['image/png', 'image/jpeg'].includes(file.type.toLowerCase())) { referenceUploadError.value = `${file.name}：参考图只支持 PNG 或 JPEG。`; continue }
     if (file.size > MAX_MATERIAL_BYTES) { referenceUploadError.value = `${file.name}：参考图不能超过 5MB。`; continue }
     if (competitorReferences.value.some(item => item.name === file.name && item.size === file.size)) continue
-    const reader = new FileReader()
-    reader.onload = () => { if (typeof reader.result === 'string' && competitorReferences.value.length < 9) competitorReferences.value.push({ name: file.name, size: file.size, dataUrl: reader.result }) }
-    reader.onerror = () => { referenceUploadError.value = `${file.name}：图片读取失败，请重试。` }
-    reader.readAsDataURL(file)
+    readImage(file, asset => { if (competitorReferences.value.length < 9) competitorReferences.value.push(asset) }, message => { referenceUploadError.value = message })
   }
 }
 function onCompetitorFiles(event: Event) {
@@ -1027,25 +1123,26 @@ function requestGeneration() {
   if (!configured.value) { generationError.value = '当前没有可用的真实 AI 配置，请先打开设置中心。'; return }
   if (modeNeedsSource.value) { generationError.value = `「${modeConfig.value.label}」需要先上传商品素材图作为原图。`; return }
   if (modeNeedsReference.value) { generationError.value = mode.value === 'edit' ? '自由编辑请先上传参考图，再描述要修改的内容。' : '商品复刻请先上传竞品参考图，便于借鉴构图和风格。'; return }
-  if (modeNeedsLibraryAsset.value) { generationError.value = '选择“我的模特库”或“我的场景库”后，请先上传并选择图片。'; return }
+  if (modeNeedsLibraryAsset.value) { generationError.value = libraryAssetRequirement.value; return }
   if (!plannedJobs.value.length) { generationError.value = '请至少勾选一项要生成的内容（主图 / 详情页）。'; return }
   if (needsPrompt.value) { generationError.value = '请先填写生成描述，或上传商品素材图让模型读取商品。'; return }
   confirmOpen.value = true
 }
 
-function buildPrompt(kind: ImageKind) {
+function buildPrompt(kind: ImageKind, modeKey: CreativeModeKey = mode.value) {
+  const requestMode = creativeModes.find(item => item.key === modeKey) || modeConfig.value
   return [
     prompt.value.trim(),
     productName.value.trim() ? `商品名称：${productName.value.trim()}` : '',
     `生图设置：模型 ${usedModel.value || '设置中心未配置'}，比例 ${selectedRatio.value}，字体 ${effectiveFontOption.value.prompt}`,
-    mode.value === 'create' ? `生成风格：${generationStyle.value}${unifiedStyle.value ? '（统一风格）' : ''}；平台：${platform.value}` : '',
-    mode.value === 'quantity' && materials.value.length ? `商品数量图：${materials.value.map((item, index) => `${item.name} ${Math.max(1, Number(variantCounts.value[index]) || 1)} 件`).join('、')}` : '',
-    mode.value === 'quantity' ? `指定文案：${quantityCopy.value.trim() || '不强制渲染文字，只清晰呈现商品数量'}` : '',
-    mode.value === 'model' ? `模特来源：${modelSourceOptions.find(item => item.key === modelSource.value)?.label || 'AI生成'}；模特参数：${modelGender.value}，${modelAge.value}，${modelEthnicity.value}，${modelBody.value}${modelAppearance.value.trim() ? `；外貌细节：${modelAppearance.value.trim()}` : ''}${modelSource.value === 'mine' && selectedModelLibraryAsset.value ? `；使用我的模特库参考图：${selectedModelLibraryAsset.value.name}` : ''}；场景来源：${sceneSourceOptions.find(item => item.key === sceneSource.value)?.label || '场景库'}；场景偏好：${modelScene.value}${sceneSource.value === 'mine' && selectedSceneLibraryAsset.value ? `；使用我的场景库参考图：${selectedSceneLibraryAsset.value.name}` : ''}；生成数量：${modelCount.value} 张` : '',
-    competitorReferences.value.length ? `竞品参考图：${competitorReferences.value.length} 张；借鉴参考图的构图、光影与风格，但保持商品主体来自商品素材图` : '',
-    referenceMaterial.value ? '编辑参考图：按编辑要求修改这张原图，保持商品主体可辨认' : '',
-    mode.value === 'detail' ? `图文详情配置：${detailNoteStyle.value}，${detailCardCount.value} 张卡片，${detailRatio.value} 比例，字体 ${detailFontOption.value.prompt}；请输出完整的图文详情长图，文字区域保持清晰可读，不要生成虚假品牌标识` : '',
-    modeConfig.value.framing,
+    modeKey === 'create' ? `生成风格：${generationStyle.value}${unifiedStyle.value ? '（统一风格）' : ''}；平台：${platform.value}` : '',
+    modeKey === 'quantity' && materials.value.length ? `商品数量图：${materials.value.map((item, index) => `${item.name} ${Math.min(99, Math.max(1, Math.round(Number(variantCounts.value[index]) || 1)))} 件`).join('、')}` : '',
+    modeKey === 'quantity' ? `指定文案：${quantityCopy.value.trim() || '不强制渲染文字，只清晰呈现商品数量'}` : '',
+    modeKey === 'model' ? `模特来源：${modelSourceOptions.find(item => item.key === modelSource.value)?.label || 'AI生成'}；模特参数：${modelGender.value}，${modelAge.value}，${modelEthnicity.value}，${modelBody.value}${modelAppearance.value.trim() ? `；外貌细节：${modelAppearance.value.trim()}` : ''}${modelSource.value === 'mine' && selectedModelLibraryAsset.value ? `；使用我的模特库参考图：${selectedModelLibraryAsset.value.name}` : ''}；场景来源：${sceneSourceOptions.find(item => item.key === sceneSource.value)?.label || '场景库'}；场景偏好：${modelScene.value}${sceneSource.value === 'mine' && selectedSceneLibraryAsset.value ? `；使用我的场景库参考图：${selectedSceneLibraryAsset.value.name}` : ''}；生成数量：${modelCount.value} 张` : '',
+    modeKey === 'replicate' && competitorReferences.value.length ? `竞品参考图：${competitorReferences.value.length} 张；借鉴参考图的构图、光影与风格，但保持商品主体来自商品素材图` : '',
+    modeKey === 'edit' && referenceMaterial.value ? '编辑参考图：按编辑要求修改这张原图，保持商品主体可辨认' : '',
+    modeKey === 'detail' ? `图文详情配置：${detailNoteStyle.value}，${detailCardCount.value} 张卡片，${detailRatio.value} 比例，字体 ${detailFontOption.value.prompt}；请输出完整的图文详情长图，文字区域保持清晰可读，不要生成虚假品牌标识` : '',
+    requestMode.framing,
     KIND_PROMPT[kind]
   ].filter(Boolean).join('；')
 }
@@ -1081,15 +1178,26 @@ async function requestSceneGeneration() {
   if (!configured.value) { sceneGenerationError.value = '请先在设置中心配置生图模型。'; return }
   if (!window.shopilot) { sceneGenerationError.value = '当前预览环境没有可用的图片生成接口。'; return }
   if (!materials.value.length && !sceneReference.value) { sceneGenerationError.value = '请先上传商品素材图或场景参考图。'; return }
+  sceneConfirmOpen.value = true
+}
+
+async function submitSceneGeneration() {
+  if (sceneGenerating.value) return
   sceneGenerating.value = true
+  sceneConfirmOpen.value = false
   try {
+    // 在任何异步读取开始前固定本次请求的素材、描述和尺寸，避免用户切换来源时
+    // 确认框所见与实际发出的请求不一致。
+    const requestScene = modelScene.value.trim() || '自然、干净、适合商品展示的生活方式场景'
+    const requestSize = imageStudioRequestSize(selectedRatio.value)
     const assets = [...materials.value, ...(sceneReference.value ? [sceneReference.value] : [])]
     const directSources = assets.map(toImageSource)
     const sourceImages = (await Promise.all(assets.map((asset, index) => directSources[index] || toImageSourceAsync(asset))))
       .filter((item): item is { name: string; mimeType: string; b64Json: string } => Boolean(item))
+    if (sourceImages.length !== assets.length) throw new Error('部分素材读取失败，请重新上传后再试。')
     const result = await window.shopilot.ai.generateImage({
-      prompt: `生成一张商品模特图使用的场景参考图。场景描述：${modelScene.value.trim() || '自然、干净、适合商品展示的生活方式场景'}。保留商品素材的色彩和光线关系，不要人物、水印、品牌标识或额外文字。`,
-      size: imageStudioRequestSize(selectedRatio.value),
+      prompt: `生成一张商品模特图使用的场景参考图。场景描述：${requestScene}。保留商品素材的色彩和光线关系，不要人物、水印、品牌标识或额外文字。`,
+      size: requestSize,
       n: 1,
       confirmed: true,
       sourceImages
@@ -1111,47 +1219,85 @@ async function requestSceneGeneration() {
 
 async function submitGeneration() {
   if (generating.value) return
+  // 固定本次请求的创作模式。即使外部脚本或未来新增入口在请求期间改变了
+  // 页面状态，返回结果也必须归属于发起请求的页签，不能串到当前页签。
+  const requestMode = mode.value
+  const requestProductName = productName.value.trim()
+  const requestEditPrompt = prompt.value.trim()
   generating.value = true; confirmOpen.value = false; generationError.value = ''
   generationNotice.value = ''
-  if (modeNeedsLibraryAsset.value) { generating.value = false; generationError.value = '选择“我的模特库”或“我的场景库”后，请先上传并选择图片。'; return }
+  if (modeNeedsLibraryAsset.value) { generating.value = false; generationError.value = libraryAssetRequirement.value; return }
   savedPath.value = ''; saveNotice.value = ''; saveNoticeError.value = false
-  const sourceAssets = mode.value === 'edit'
+  const sourceAssets = requestMode === 'edit'
     ? (referenceMaterial.value ? [referenceMaterial.value] : [])
-    : mode.value === 'replicate'
+    : requestMode === 'replicate'
       ? [...competitorReferences.value, ...materials.value]
-      : mode.value === 'model'
+      : requestMode === 'model'
         ? [...materials.value, ...(selectedSystemModelAsset.value ? [selectedSystemModelAsset.value] : []), ...(selectedModelLibraryAsset.value ? [selectedModelLibraryAsset.value] : []), ...(selectedSystemSceneAsset.value ? [selectedSystemSceneAsset.value] : []), ...(selectedSceneLibraryAsset.value ? [selectedSceneLibraryAsset.value] : []), ...(sceneReference.value ? [sceneReference.value] : [])]
         : materials.value
-  const directSources = sourceAssets.map(toImageSource)
-  const sourceImages = (await Promise.all(sourceAssets.map((asset, index) => directSources[index] || toImageSourceAsync(asset))))
-    .filter((item): item is { name: string; mimeType: string; b64Json: string } => Boolean(item))
-  const jobs = plannedJobs.value
+  // 在任何 FileReader/fetch 异步操作前固定计划与提示词；输入控件仍可被键盘或
+  // 自动化事件触发时，本次请求也必须和确认时的页签参数一致。
+  const jobs = plannedJobs.value.map(job => ({ ...job, prompt: buildPrompt(job.kind, requestMode) }))
+  let sourceImages: Array<{ name: string; mimeType: string; b64Json: string }> = []
+  try {
+    const directSources = sourceAssets.map(toImageSource)
+    sourceImages = (await Promise.all(sourceAssets.map((asset, index) => directSources[index] || toImageSourceAsync(asset))))
+      .filter((item): item is { name: string; mimeType: string; b64Json: string } => Boolean(item))
+  } catch {
+    // 素材转换是生成请求的一部分；即使未来新增的转换器抛出异常，也要释放 busy
+    // 状态并让用户看到可操作的错误，而不是把工作台永久锁在“生成中”。
+    generating.value = false
+    generationError.value = '部分素材读取失败，请重新上传后再试。'
+    return
+  }
+  if (sourceImages.length !== sourceAssets.length) {
+    generating.value = false
+    generationError.value = '部分素材读取失败，请重新上传后再试。'
+    return
+  }
   const collected: GeneratedImage[] = []
   const sessionId = `image-session-${Date.now()}`
   const createdAt = Date.now()
-  const title = mode.value === 'edit' ? prompt.value.trim().slice(0, 40) || '自由编辑' : productName.value.trim() || modeLabel(mode.value)
+  const title = requestMode === 'edit' ? requestEditPrompt.slice(0, 40) || '自由编辑' : requestProductName || modeLabel(requestMode)
   const failures: string[] = []
   const shortfalls: string[] = []
   try {
-    // 依次请求（不并发）：主图与详情页各自成图，并发容易被供应商限流，也会让费用与结果对不上号
+    // 依次请求（不并发）：主图与详情页各自成图，并发容易被供应商限流，也会让费用与结果对不上号。
+    // 有些兼容接口会忽略 n 参数，只返回 1 张。对这种真实返回按缺口补发独立请求，
+    // 让“卡片数量”兑现为页面实际拿到的图片数，而不是只显示一个短缺提示。
     for (const job of jobs) {
-      try {
-        const result = await window.shopilot.ai.generateImage({ prompt: buildPrompt(job.kind), size: job.size, n: job.count, confirmed: true, sourceImages })
-        if (!result.ok) throw new Error(result.error.message)
-        const images = Array.isArray(result.data?.images)
-          ? result.data.images.map((item: any) => item?.b64Json ? `data:${item?.mimeType || 'image/png'};base64,${item.b64Json}` : String(item?.url || '')).filter(Boolean)
-          : []
-        if (!images.length) throw new Error('接口没有返回可预览图片')
-        const model = String(result.data?.model || usedModel.value || '—')
-        const elapsedMs = Number(result.data?.elapsedMs || 0)
-        for (const url of images) collected.push({ kind: job.kind, url, model, elapsedMs, mode: mode.value, sessionId, createdAt, title, ...(mode.value === 'edit' ? { prompt: prompt.value.trim() } : {}) })
-        if (images.length < job.count) shortfalls.push(`${job.label} 只返回 ${images.length} 张（请求 ${job.count} 张）`)
-      } catch (error: any) {
-        failures.push(`${job.label}：${error?.message || '生成失败'}`)
+      let remaining = job.count
+      let returned = 0
+      while (remaining > 0) {
+        try {
+          const requestCount = Math.min(4, remaining)
+          const result = await window.shopilot.ai.generateImage({ prompt: job.prompt, size: job.size, n: requestCount, confirmed: true, sourceImages })
+          if (!result.ok) throw new Error(result.error.message)
+          const images = Array.isArray(result.data?.images)
+            ? result.data.images.map((item: any) => item?.b64Json ? `data:${item?.mimeType || 'image/png'};base64,${item?.b64Json}` : String(item?.url || '')).filter(Boolean).slice(0, remaining)
+            : []
+          if (!images.length) throw new Error('接口没有返回可预览图片')
+          const model = String(result.data?.model || usedModel.value || '—')
+          const elapsedMs = Number(result.data?.elapsedMs || 0)
+          const batch = images.map(url => ({ kind: job.kind, url, model, elapsedMs, mode: requestMode, sessionId, createdAt, title, ...(requestMode === 'edit' ? { prompt: requestEditPrompt } : {}) }))
+          collected.push(...batch)
+          // 每个真实返回批次立即落入历史；组件卸载或窗口异常关闭时也能找回已完成图片。
+          if (batch.length) {
+            historyImages.value = [...batch, ...historyImages.value].slice(0, 500)
+            persistHistory()
+          }
+          returned += images.length
+          remaining -= images.length
+        } catch (error: any) {
+          failures.push(`${job.label}：${error?.message || '生成失败'}`)
+          break
+        }
+      }
+      if (returned < job.count) {
+        shortfalls.push(`${job.label} 已得到 ${returned} 张（目标 ${job.count} 张）`)
       }
     }
     generatedImages.value = collected
-    if (collected.length) historyImages.value = [...collected, ...historyImages.value].slice(0, 500)
     activeImageIndex.value = 0
     const notes = [...shortfalls, ...(failures.length && collected.length ? failures.map(item => `失败 ${item}`) : [])]
     if (notes.length) generationNotice.value = notes.join('；')
@@ -1200,6 +1346,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (caseTimer) clearInterval(caseTimer)
+  emit('busy-change', false)
 })
 </script>
 
@@ -1383,6 +1530,10 @@ onBeforeUnmount(() => {
 .detail-case-controls{margin:0 0 7px}
 .detail-mode .detail-case-controls{top:18px;right:18px;margin:0}
 .detail-preview-status{margin-top:7px}
+.detail-generated-result{width:min(620px,100%);margin:8px auto 0;padding:10px 12px;border:1px solid #dfe4ee;border-radius:10px;background:#fff;box-shadow:0 3px 12px rgba(36,49,78,.05)}
+.detail-generated-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:#26334f;font-size:11px}.detail-generated-heading span{color:#7d89a0;font-size:10px}
+.detail-generated-thumbs{display:flex;gap:6px;overflow-x:auto;padding-bottom:5px}.detail-generated-thumbs .result-thumb{flex:0 0 58px;width:58px;height:58px;border-radius:7px}.detail-generated-thumbs .result-thumb img{width:100%;height:100%;object-fit:cover}
+.detail-generated-preview{display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:10px;align-items:center;margin-top:8px}.detail-generated-preview>img{display:block;width:100%;max-height:260px;object-fit:contain;border:1px solid #edf0f5;border-radius:8px;background:#f7f9fd}.detail-generated-preview>div{display:flex;flex-direction:column;gap:7px;color:#71809a;font-size:9px}.detail-generated-preview .studio-button{width:100%;justify-content:center}
 .detail-composer-footer{z-index:2}
 .edit-workspace{flex:1 1 0;min-height:0;grid-template-columns:minmax(220px,24%) minmax(0,1fr);margin:-14px -28px -12px;border:0;border-radius:0}
 .edit-session-sidebar{overflow-y:auto;padding:14px 12px;background:#fbfcff}

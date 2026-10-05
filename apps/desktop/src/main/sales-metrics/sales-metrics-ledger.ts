@@ -209,11 +209,16 @@ export class SalesMetricsLedger {
    * `anchor` 只在**启动/店铺新增**时使用：停机期间错过的周期不补发（§7.4），
    * 把已经过期的 next_run_at 重开成 now + interval + jitter，避免启动瞬间连发。
    * 已存在且未过期的计划点保持不动——那是用户真正期待的下一次采集时刻。
+   *
+   * `autoEnabled`（2026-10-04）：自动采集总开关。关闭时**不再自动开计划**——
+   * 计划可以存在（界面要能看到这家店），但 enabled=0 且 next_run_at=NULL，
+   * 已经开着的计划会被停掉（原因码 AUTO_COLLECTION_OFF），只有用户点「立即采集」才会采集。
    */
   syncPlans(input: {
     stores: ReadonlyArray<{ id: string; platform: string }>
     now: number
     intervalMs: number
+    autoEnabled: boolean
     anchor: (previousNextRunAt: number | null, intervalMs: number, now: number, jitterMs: number) => number
     jitterFor: (storeId: string) => number
     /**
@@ -227,6 +232,16 @@ export class SalesMetricsLedger {
     let created = 0
     let disabled = 0
     let reanchored = 0
+    // 自动采集关了：先把所有还开着的计划停掉（含平台不受支持的那些，一并统一）
+    if (!input.autoEnabled) {
+      const stopped = this.db.prepare(`
+        UPDATE sales_collection_plans
+        SET enabled = 0, next_run_at = NULL, last_status = 'DISABLED', last_reason_code = 'AUTO_COLLECTION_OFF',
+            last_safe_message = '自动采集已关闭，仅手动采集（点「立即采集」）', backoff_until = NULL, updated_at = ?
+        WHERE enabled = 1
+      `).run(input.now)
+      disabled += Number(stopped.changes || 0)
+    }
     return this.transaction(() => {
       const rows = this.db.prepare('SELECT store_id, next_run_at, enabled FROM sales_collection_plans').all() as Array<{ store_id: string; next_run_at: number | null; enabled: number }>
       const known = new Set(rows.map(row => row.store_id))
@@ -260,13 +275,18 @@ export class SalesMetricsLedger {
       }
       const insert = this.db.prepare(`
         INSERT INTO sales_collection_plans (store_id, platform, enabled, interval_ms, timezone, next_run_at, last_status, updated_at)
-        VALUES (?, ?, 1, ?, 'Asia/Shanghai', ?, 'READY', ?)
+        VALUES (?, ?, ?, ?, 'Asia/Shanghai', ?, ?, ?)
         ON CONFLICT(store_id) DO UPDATE SET platform = excluded.platform
       `)
       for (const store of input.stores) {
         if (known.has(store.id)) continue
         if (!input.supported(store.platform)) continue
-        insert.run(store.id, store.platform, input.intervalMs, input.now + input.intervalMs + input.jitterFor(store.id), input.now)
+        // 自动采集关闭时建"停用"的计划：界面能看到这家店，但不会自己跑
+        if (input.autoEnabled) {
+          insert.run(store.id, store.platform, 1, input.intervalMs, input.now + input.intervalMs + input.jitterFor(store.id), 'READY', input.now)
+        } else {
+          insert.run(store.id, store.platform, 0, input.intervalMs, null, 'DISABLED', input.now)
+        }
         created++
       }
       return { created, disabled, reanchored }
@@ -280,14 +300,24 @@ export class SalesMetricsLedger {
    * 只补建计划、不改变已有计划（幂等）；是否允许为这个平台建计划由调用方判断
    * （平台没有实测档案时建了也只会每次失败，那种情况调用方应当如实拒绝）。
    */
-  ensurePlan(input: { storeId: string; platform: string; now: number; intervalMs: number; jitterMs: number }): boolean {
+  ensurePlan(input: { storeId: string; platform: string; now: number; intervalMs: number; jitterMs: number; autoEnabled: boolean }): boolean {
     const existing = this.getPlan(input.storeId)
     if (existing) return false
+    // 手动采集建的补位计划同样遵守总开关：自动采集关着时不能因为"用户点了一次刷新"
+    // 就把这家店悄悄纳入每 10 分钟的自动采集。
     this.db.prepare(`
       INSERT INTO sales_collection_plans (store_id, platform, enabled, interval_ms, timezone, next_run_at, last_status, updated_at)
-      VALUES (?, ?, 1, ?, 'Asia/Shanghai', ?, 'READY', ?)
+      VALUES (?, ?, ?, ?, 'Asia/Shanghai', ?, ?, ?)
       ON CONFLICT(store_id) DO UPDATE SET platform = excluded.platform
-    `).run(input.storeId, input.platform, input.intervalMs, input.now + input.intervalMs + input.jitterMs, input.now)
+    `).run(
+      input.storeId,
+      input.platform,
+      input.autoEnabled ? 1 : 0,
+      input.intervalMs,
+      input.autoEnabled ? input.now + input.intervalMs + input.jitterMs : null,
+      input.autoEnabled ? 'READY' : 'DISABLED',
+      input.now
+    )
     return true
   }
 

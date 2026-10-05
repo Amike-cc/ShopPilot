@@ -13,7 +13,7 @@ describe('生图模型配置来源', () => {
   })
 
   it('商品图页面不把模型选择器值传给生成 IPC', () => {
-    expect(studio).toContain('window.shopilot.ai.generateImage({ prompt: buildPrompt(job.kind), size: job.size')
+    expect(studio).toContain('window.shopilot.ai.generateImage({ prompt: job.prompt, size: job.size')
     expect(studio).not.toContain('generateImage({ prompt: buildPrompt(job.kind), model:')
     expect(studio).toContain('模型来自设置中心，生成时使用此模型')
   })

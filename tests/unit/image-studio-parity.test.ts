@@ -64,7 +64,7 @@ describe('AI 商品图工作台页签细节', () => {
     expect(studio).toContain('[...competitorReferences.value, ...materials.value]')
     expect(imageHandlers).toContain('input.sourceImages.slice(0, 10)')
     expect(imageClient).toContain('opts.sourceImages.slice(0, 10)')
-    expect(studio).toContain('const sourceAssets = mode.value === \'edit\'')
+    expect(studio).toContain('const sourceAssets = requestMode === \'edit\'')
     expect(studio).toContain('.map(toImageSource)')
   })
 
@@ -102,6 +102,49 @@ describe('AI 商品图工作台页签细节', () => {
     expect(studio).toContain('const fontLicenseHint = \'可能存在版权风险，需要人工审核\'')
     expect(studio).toContain('if (mode.value === \'detail\') selectedRatio.value = next')
     expect(studio).toContain('aria-label="图片编辑要求"')
+  })
+
+  it('模特图的必选来源不会在未选择系统模特时漏发参考图', () => {
+    expect(studio).toContain("modelSource.value === 'library' && !selectedSystemModelAsset.value")
+    expect(studio).toContain('const modeNeedsLibraryAsset = computed(() => Boolean(libraryAssetRequirement.value))')
+    expect(studio).toContain('modeNeedsLibraryAsset" @click="requestGeneration"')
+    expect(studio).toContain('请先从模特库选择一个模特形象')
+  })
+
+  it('我的模特库和场景库必须显式选中，不会静默使用第一张上传图片', () => {
+    expect(studio).toContain('modelLibraryUploads.value.find(item => item.name === modelAppearance.value) || null')
+    expect(studio).toContain('sceneLibraryUploads.value.find(item => item.name === modelScene.value) || null')
+    expect(studio).toContain('if (!modelLibraryUploads.value.some(item => item.name === modelAppearance.value)) modelAppearance.value = asset.name')
+    expect(studio).toContain('if (!sceneLibraryUploads.value.some(item => item.name === modelScene.value)) modelScene.value = asset.name')
+  })
+
+  it('异步生成固定请求快照并拒绝丢失的素材，避免切换页签造成请求串线', () => {
+    expect(studio).toContain('const requestMode = mode.value')
+    expect(studio).toContain('const requestProductName = productName.value.trim()')
+    expect(studio).toContain('let sourceImages: Array<{ name: string; mimeType: string; b64Json: string }> = []')
+    expect(studio).toContain("generationError.value = '部分素材读取失败，请重新上传后再试。'")
+    expect(studio).toContain('if (sourceImages.length !== sourceAssets.length)')
+    expect(studio).toContain('部分素材读取失败，请重新上传后再试。')
+    expect(studio).toContain('modeKey === \'replicate\' && competitorReferences.value.length')
+    expect(studio).toContain('modeKey === \'edit\' && referenceMaterial.value')
+  })
+
+  it('竞品图和场景参考图都会验证真实图片内容，而不是只检查 MIME', () => {
+    expect(studio).toContain('readImage(file, asset => { sceneReference.value = asset }')
+    expect(studio).toContain('readImage(file, asset => { if (competitorReferences.value.length < 9) competitorReferences.value.push(asset) }')
+  })
+
+  it('生成中阻止离开图片工作台，并逐批持久化真实返回结果', () => {
+    expect(studio).toContain("(event: 'busy-change', busy: boolean)")
+    expect(studio).toContain("watch(generationBusy, busy => emit('busy-change', busy), { immediate: true })")
+    expect(studio).toContain('historyImages.value = [...batch, ...historyImages.value].slice(0, 500)')
+    expect(studio).toContain('persistHistory()')
+    expect(dashboard).toContain('@busy-change="imageStudioBusy = $event"')
+    expect(dashboard).toContain('function preventBusyImageStudioExit()')
+    expect(dashboard).toContain("activePage.value !== 'image-studio' || !imageStudioBusy.value")
+    expect(dashboard).toContain('if (page !== \'image-studio\' && preventBusyImageStudioExit()) return')
+    expect(dashboard).toContain('if (preventBusyImageStudioExit()) return')
+    expect(dashboard).toContain('if (preventBusyImageStudioExit()) {\n      // 主进程的原生店铺视图覆盖在渲染层上')
   })
 
   it('不保留已删除的重复导航和遗留计费样式', () => {

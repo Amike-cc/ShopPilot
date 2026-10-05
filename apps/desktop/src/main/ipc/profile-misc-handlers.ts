@@ -65,8 +65,9 @@ const SETTING_VALUE_MAX_BYTES = 64 * 1024
  * - orders.profiles    订单页实测覆盖
  * - invite.*           邀约配置（配置树 / 广场地址 / 按店铺配置）
  * - security.idleMinutes 空闲自动锁定分钟数（应用锁的其它键仍被挡在门外）
+ * - collection.*       采集口径（如 collection.autoEnabled 自动采集总开关，默认关）
  */
-const SETTING_ALLOW_PREFIXES = ['ui.', 'update.', 'platform.homeUrls', 'orders.profiles', 'invite.', 'security.idleMinutes']
+const SETTING_ALLOW_PREFIXES = ['ui.', 'update.', 'platform.homeUrls', 'orders.profiles', 'invite.', 'security.idleMinutes', 'collection.']
 
 /** 前三段属于"非敏感但需要说明"的越权尝试；其余不在白名单里的一律按参数错误返回 */
 const SETTING_SENSITIVE_PREFIXES = ['securi', 'ai_cred', 'ai.', 'proxy_cred', 'agent.']

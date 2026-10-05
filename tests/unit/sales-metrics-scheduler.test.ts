@@ -121,7 +121,10 @@ function harness(stores: Array<{ id: string; platform: string }>): Harness {
       return output
     },
     listStores: () => stores,
-    emit: (channel, payload) => { emits.push({ channel, payload }) }
+    emit: (channel, payload) => { emits.push({ channel, payload }) },
+    // 这套用例验证的是**周期采集**（自动）的行为，所以在harness里显式把总开关打开；
+    // "总开关关闭时不许自动跑"由 tests/unit/auto-collection-off.test.ts 单独覆盖。
+    autoCollectionEnabled: () => true
   }
   return {
     db, ledger, emits, clock, collectCalls, runtime,
@@ -356,7 +359,7 @@ describe('经营采集调度器 · 节拍', () => {
 
   realIt('启动时收敛上次残留的 RUNNING，并把过去的计划点重锚（不补发积压）', () => {
     const h = use(harness([{ id: 'store_a', platform: '拼多多' }]))
-    h.ledger.syncPlans({ stores: [{ id: 'store_a', platform: '拼多多' }], now: NOW - 3_600_000, intervalMs: 600_000, anchor: (previous, interval, now, jitter) => now + interval + jitter, jitterFor: jitterMsForStore, supported: () => true })
+    h.ledger.syncPlans({ stores: [{ id: 'store_a', platform: '拼多多' }], now: NOW - 3_600_000, intervalMs: 600_000, autoEnabled: true, anchor: (previous, interval, now, jitter) => now + interval + jitter, jitterFor: jitterMsForStore, supported: () => true })
     h.db.prepare(`INSERT INTO sales_collection_runs (run_id, store_id, platform, planned_at, started_at, status, created_at) VALUES ('old','store_a','拼多多',?,?, 'RUNNING', ?)`).run(NOW - 1000, NOW - 1000, NOW - 1000)
 
     startSalesMetricsScheduler()

@@ -1651,7 +1651,7 @@
               <input v-model="imageAiDraft.model" data-test="image-ai-model" spellcheck="false" placeholder="例如 gpt-image-1、flux-1" />
             </label>
             <label class="plat-row">生图超时(ms)
-              <input v-model.number="imageAiDraft.timeoutMs" type="number" :min="AI_TIMEOUT_MIN_MS" :max="AI_TIMEOUT_MAX_MS" data-test="image-ai-timeout" class="inv-num" />
+              <input v-model.number="imageAiDraft.timeoutMs" type="number" :min="AI_TIMEOUT_MIN_MS" :max="AI_IMAGE_TIMEOUT_MAX_MS" data-test="image-ai-timeout" class="inv-num" />
             </label>
             <label class="plat-row">生图 API Key
               <input v-model="imageAiKeyDraft" type="password" data-test="image-ai-key" autocomplete="new-password" :placeholder="imageAiConfig.hasImageKey ? '已配置（留空则不改动）' : '粘贴生图 API Key'" />
@@ -1798,8 +1798,8 @@ import { ordersProfileFor } from '@shared/constants/orders'
 import { buildOrdersCollectSteps } from '@shared/orders-steps'
 import { buildBusinessCollectSteps } from '@shared/business-steps'
 import {
-  DEFAULT_AI_ENDPOINT, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
-  AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, INVITE_SQUARE_URLS_SETTING,
+  DEFAULT_AI_ENDPOINT, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL, DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS,
+  AI_IMAGE_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, INVITE_SQUARE_URLS_SETTING,
   AI_PROVIDER_PRESETS, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint
 } from '@shared/constants/ai'
 
@@ -2083,13 +2083,13 @@ const aiConfig = ref<{ endpoint: string; resolvedEndpoint?: string; model: strin
   endpoint: DEFAULT_AI_ENDPOINT, model: DEFAULT_AI_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS, hasKey: false
 })
 const imageAiConfig = ref<{ imageEndpoint: string; resolvedImageEndpoint?: string; imageModel: string; imageTimeoutMs: number; hasImageKey: boolean }>({
-  imageEndpoint: DEFAULT_AI_IMAGE_ENDPOINT, imageModel: DEFAULT_AI_IMAGE_MODEL, imageTimeoutMs: DEFAULT_AI_TIMEOUT_MS, hasImageKey: false
+  imageEndpoint: DEFAULT_AI_IMAGE_ENDPOINT, imageModel: DEFAULT_AI_IMAGE_MODEL, imageTimeoutMs: DEFAULT_AI_IMAGE_TIMEOUT_MS, hasImageKey: false
 })
 const imageTextAiConfig = ref<{ imageTextEndpoint: string; resolvedImageTextEndpoint?: string; imageTextModel: string; imageTextTimeoutMs: number; hasImageTextKey: boolean }>({
   imageTextEndpoint: DEFAULT_AI_IMAGE_TEXT_ENDPOINT, imageTextModel: DEFAULT_AI_IMAGE_TEXT_MODEL, imageTextTimeoutMs: DEFAULT_AI_TIMEOUT_MS, hasImageTextKey: false
 })
 const aiDraft = reactive({ endpoint: '', model: '', timeoutMs: DEFAULT_AI_TIMEOUT_MS })
-const imageAiDraft = reactive({ endpoint: DEFAULT_AI_IMAGE_ENDPOINT, model: DEFAULT_AI_IMAGE_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS })
+const imageAiDraft = reactive({ endpoint: DEFAULT_AI_IMAGE_ENDPOINT, model: DEFAULT_AI_IMAGE_MODEL, timeoutMs: DEFAULT_AI_IMAGE_TIMEOUT_MS })
 const imageTextAiDraft = reactive({ endpoint: DEFAULT_AI_IMAGE_TEXT_ENDPOINT, model: DEFAULT_AI_IMAGE_TEXT_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS })
 const aiKeyDraft = ref('')
 const imageAiKeyDraft = ref('')
@@ -2149,7 +2149,7 @@ async function loadAiConfig() {
   aiDraft.timeoutMs = res.data.timeoutMs
   imageAiDraft.endpoint = res.data.imageEndpoint || DEFAULT_AI_IMAGE_ENDPOINT
   imageAiDraft.model = res.data.imageModel || DEFAULT_AI_IMAGE_MODEL
-  imageAiDraft.timeoutMs = res.data.imageTimeoutMs || DEFAULT_AI_TIMEOUT_MS
+  imageAiDraft.timeoutMs = res.data.imageTimeoutMs || DEFAULT_AI_IMAGE_TIMEOUT_MS
   imageTextAiConfig.value = res.data
   imageTextAiDraft.endpoint = res.data.imageTextEndpoint || DEFAULT_AI_IMAGE_TEXT_ENDPOINT
   imageTextAiDraft.model = res.data.imageTextModel || DEFAULT_AI_IMAGE_TEXT_MODEL
@@ -2181,7 +2181,7 @@ async function saveImageAiConfig(): Promise<boolean> {
   const res = await window.shopilot.ai.imageConfigSet({
     endpoint: imageAiDraft.endpoint.trim(),
     model: imageAiDraft.model.trim(),
-    timeoutMs: Number(imageAiDraft.timeoutMs) || DEFAULT_AI_TIMEOUT_MS
+    timeoutMs: Number(imageAiDraft.timeoutMs) || DEFAULT_AI_IMAGE_TIMEOUT_MS
   })
   if (!res.ok) { ws.toast('保存生图 API 配置失败: ' + res.error.message, 'error'); return false }
   imageAiConfig.value = res.data

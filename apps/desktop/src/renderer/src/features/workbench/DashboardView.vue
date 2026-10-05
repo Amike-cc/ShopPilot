@@ -153,7 +153,7 @@
       <UnifiedDataPage v-else-if="activePage === 'invoices'" mode="invoices" @change-mode="changeDataPage" @open-store="openStoreFromPage" />
       <UnifiedTaskPage v-else-if="activePage === 'tasks'" :auto-create="taskAutoCreate" @open-store="openStoreFromPage" />
       <UnifiedSettingsPage v-else-if="activePage === 'settings'" :initial-tab="settingsTab" @close="closeSettings" />
-      <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" />
+      <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" @busy-change="imageStudioBusy = $event" />
       <UnifiedAppsPage v-else-if="activePage === 'products' || activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-store="openStoreFromPage" @open-assistant="openAssistant" />
       <div v-else-if="activePage === 'overview'" class="overview-page">
         <div v-if="dataState === 'error'" class="dashboard-error" role="alert">
@@ -491,6 +491,8 @@ function tickClock() {
 type DashboardPage = 'overview' | 'browser' | 'products' | 'orders' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'tasks' | 'invoices' | 'image-studio'
 type SettingsTab = 'config' | 'square' | 'ai' | 'agents' | 'skills' | 'plugins' | 'about'
 const activePage = ref<DashboardPage>('overview')
+/** 生图请求仍在运行时保留图片工作台，避免卸载页面丢失返回结果。 */
+const imageStudioBusy = ref(false)
 const settingsReturnPage = ref<DashboardPage>('overview')
 const settingsReturnStoreId = ref<string | null>(null)
 const settingsTab = ref<SettingsTab>('config')
@@ -1103,14 +1105,20 @@ function handleQuickAction(action: any) {
   if (!action.available) showNotice(`${action.label}：${action.description}`)
 }
 function handleNav(item: { label: string }) {
-  activeNav.value = item.label
   const pageByLabel: Record<string, DashboardPage> = {
     '经营总览': 'overview', '商品管理': 'products', '订单管理': 'orders', '店铺管理': 'stores',
     'AI 创作': 'ai', '数据分析': 'analytics', '应用中心': 'apps', '设置中心': 'settings'
   }
   navigateTo(pageByLabel[item.label] || 'overview')
 }
+function preventBusyImageStudioExit() {
+  if (activePage.value !== 'image-studio' || !imageStudioBusy.value) return false
+  activeNav.value = 'AI 创作'
+  showNotice('图片仍在生成，完成后再离开，避免丢失结果。')
+  return true
+}
 function navigateTo(page: DashboardPage) {
+  if (page !== 'image-studio' && preventBusyImageStudioExit()) return
   if (page === 'settings' && activePage.value !== 'settings') {
     settingsReturnPage.value = activePage.value
     settingsReturnStoreId.value = ws.displayedStoreId
@@ -1182,6 +1190,7 @@ async function closeSettings() {
 function setTaskPicking(value: boolean) { taskPicking.value = value }
 function changeDataPage(page: 'analytics' | 'orders' | 'invoices') { navigateTo(page) }
 async function openStoreFromPage(storeId: string) {
+  if (preventBusyImageStudioExit()) return
   taskOverlay.value = false
   taskPicking.value = false
   // 从"设置页进入的店铺"不算设置页业务：把返回目标清掉，否则之后点关闭设置会把用户拽回旧状态
@@ -1376,6 +1385,12 @@ function onTaskProgress(event: any) {
 // 跟随会打断它自己的导航时序（实测会让"点店铺卡片进入"这类流程落空）。
 watch([() => ws.displayedStoreId, () => ws.displaySource], ([storeId, source]) => {
   if (storeId && source === 'main' && activePage.value !== 'browser') {
+    if (preventBusyImageStudioExit()) {
+      // 主进程的原生店铺视图覆盖在渲染层上；生成未结束时收起它，保留图片工作台。
+      ws.displayedStoreId = null
+      void window.shopilot.browser.display(null)
+      return
+    }
     activePage.value = 'browser'
     activeNav.value = '经营总览'
     taskOverlay.value = false

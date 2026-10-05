@@ -22,12 +22,12 @@ import { DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS } from '@
 export {
   DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL,
   DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS,
-  AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint, imageUrlFromChat,
+  AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, normalizeAiImageTimeoutMs, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint, imageUrlFromChat,
   imageEditUrlFromGeneration
 } from '@shared/constants/ai'
 import {
   AI_IMAGE_SETTING_KEYS, AI_IMAGE_TEXT_SETTING_KEYS, DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL,
-  AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint,
+  AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, normalizeAiImageTimeoutMs, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint,
   imageEditUrlFromGeneration
 } from '@shared/constants/ai'
 
@@ -78,10 +78,7 @@ export function getAiConfig(): AiConfig {
     : DEFAULT_AI_TIMEOUT_MS
   const imageEndpoint = String(readSetting(AI_IMAGE_SETTING_KEYS.endpoint) ?? '').trim() || DEFAULT_AI_IMAGE_ENDPOINT
   const imageModel = String(readSetting(AI_IMAGE_SETTING_KEYS.model) ?? '').trim() || DEFAULT_AI_IMAGE_MODEL
-  const rawImageTimeout = Number(readSetting(AI_IMAGE_SETTING_KEYS.timeoutMs) ?? DEFAULT_AI_IMAGE_TIMEOUT_MS)
-  const imageTimeoutMs = Number.isFinite(rawImageTimeout)
-    ? Math.min(Math.max(Math.round(rawImageTimeout), AI_TIMEOUT_MIN_MS), AI_TIMEOUT_MAX_MS)
-    : DEFAULT_AI_IMAGE_TIMEOUT_MS
+  const imageTimeoutMs = normalizeAiImageTimeoutMs(readSetting(AI_IMAGE_SETTING_KEYS.timeoutMs) ?? DEFAULT_AI_IMAGE_TIMEOUT_MS)
   const imageTextEndpoint = String(readSetting(AI_IMAGE_TEXT_SETTING_KEYS.endpoint) ?? '').trim() || DEFAULT_AI_IMAGE_TEXT_ENDPOINT
   const imageTextModel = String(readSetting(AI_IMAGE_TEXT_SETTING_KEYS.model) ?? '').trim() || DEFAULT_AI_IMAGE_TEXT_MODEL
   const rawImageTextTimeout = Number(readSetting(AI_IMAGE_TEXT_SETTING_KEYS.timeoutMs) ?? DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS)
@@ -570,6 +567,30 @@ async function materializeImageUrl(rawUrl: string, timeoutMs: number): Promise<{
   } finally { clearTimeout(timer) }
 }
 
+/** 日志只保留生图端点的 origin/path，不记录查询参数或任何凭据。 */
+function imageEndpointForLog(endpoint: string): string {
+  try {
+    const url = new URL(endpoint)
+    return `${url.origin}${url.pathname}`
+  } catch {
+    return '[invalid-endpoint]'
+  }
+}
+
+/**
+ * Node's fetch intentionally collapses many socket/TLS failures into the
+ * unhelpful message "fetch failed". Keep the user-facing error stable, but
+ * retain the non-sensitive cause and request phase in the local log so a real
+ * generation failure can be diagnosed without ever recording the API key or
+ * prompt contents.
+ */
+function describeNetworkCause(error: any): string {
+  const cause = error?.cause
+  const code = String(cause?.code || error?.code || '').trim()
+  const message = String(cause?.message || '').replace(/\s+/g, ' ').trim().slice(0, 180)
+  return [code ? `causeCode=${code}` : '', message ? `causeMessage=${message}` : ''].filter(Boolean).join(' ')
+}
+
 /**
  * 调用 OpenAI 兼容的图片生成端点。
  * 图片 API 没有在渲染层暴露，Key 仍只存在主进程；此方法也不自动重试，
@@ -608,6 +629,7 @@ export async function generateImage(opts: { prompt: string; size?: string; n?: n
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(), timeoutMs)
   const t0 = Date.now()
+  let phase = 'request'
   try {
     let body: BodyInit
     let headers: HeadersInit
@@ -627,8 +649,14 @@ export async function generateImage(opts: { prompt: string; size?: string; n?: n
       body = JSON.stringify({ model, prompt, size, n, response_format: 'b64_json' })
       headers = buildChatRequestHeaders(key)
     }
+    logMain('info', `[ai:image] generate start mode=${normalizedSources.length ? 'edit' : 'generation'} endpoint=${imageEndpointForLog(endpoint)} model=${model} sources=${normalizedSources.length} n=${n} timeoutMs=${timeoutMs}`)
     const res = await fetch(endpoint, { method: 'POST', headers, body, signal: ac.signal })
+    phase = 'response-body'
+    logMain('info', `[ai:image] response headers status=${res.status} contentType=${String(res.headers.get('content-type') || 'unknown').split(';')[0]} contentLength=${res.headers.get('content-length') || 'unknown'} elapsedMs=${Date.now() - t0}`)
     const bodyText = await res.text()
+    clearTimeout(timer)
+    phase = 'parse-response'
+    logMain('info', `[ai:image] response body bytes=${Buffer.byteLength(bodyText, 'utf8')} elapsedMs=${Date.now() - t0}`)
     if (!res.ok) throw new AiError('AI_REQUEST_FAILED', `HTTP ${res.status} ${bodyText.slice(0, 180)}`)
     let data: any = null
     try {
@@ -636,19 +664,39 @@ export async function generateImage(opts: { prompt: string; size?: string; n?: n
     } catch {
       throw new AiError('AI_REQUEST_FAILED', '图片接口响应不是合法 JSON')
     }
-    const rows = Array.isArray(data?.data) ? data.data : []
+    const rawRows = data?.data ?? data?.images
+    const rows = Array.isArray(rawRows) ? rawRows : rawRows && typeof rawRows === 'object' ? [rawRows] : []
+    logMain('info', `[ai:image] response parsed rows=${rows.length} elapsedMs=${Date.now() - t0}`)
     const images: AiImageResult['images'] = []
-    for (const row of rows) {
-      const url = typeof row?.url === 'string' ? row.url.trim() : ''
-      const b64Json = typeof row?.b64_json === 'string' ? row.b64_json.trim() : ''
-      if (b64Json) images.push({ b64Json, mimeType: String(row?.mime_type || row?.mimeType || 'image/png').split(';')[0].trim() || 'image/png' })
-      else if (url) images.push(await materializeImageUrl(url, timeoutMs))
+    for (const [index, row] of rows.entries()) {
+      const url = typeof row?.url === 'string'
+        ? row.url.trim()
+        : typeof row?.image_url === 'string' ? row.image_url.trim() : ''
+      const b64Json = typeof row?.b64_json === 'string'
+        ? row.b64_json.trim()
+        : typeof row?.b64Json === 'string' ? row.b64Json.trim() : ''
+      const mimeType = String(row?.mime_type || row?.mimeType || row?.content_type || 'image/png').split(';')[0].trim() || 'image/png'
+      if (b64Json) {
+        images.push({ b64Json, mimeType })
+        logMain('info', `[ai:image] image row=${index + 1} format=b64 bytes=${b64Json.length} elapsedMs=${Date.now() - t0}`)
+      } else if (url) {
+        logMain('info', `[ai:image] image row=${index + 1} format=url materialize=start elapsedMs=${Date.now() - t0}`)
+        const materialized = await materializeImageUrl(url, timeoutMs)
+        images.push(materialized)
+        logMain('info', `[ai:image] image row=${index + 1} format=url materialize=done bytes=${materialized.b64Json.length} elapsedMs=${Date.now() - t0}`)
+      }
     }
     if (!images.length) throw new AiError('AI_EMPTY_OUTPUT', '图片接口没有返回可预览的图片')
+    logMain('info', `[ai:image] generate success images=${images.length} elapsedMs=${Date.now() - t0}`)
     return { images, model: String(data?.model || model), elapsedMs: Date.now() - t0 }
   } catch (e: any) {
     if (e instanceof AiError) throw e
-    if (e?.name === 'AbortError') throw new AiError('AI_TIMEOUT', `请求超过 ${timeoutMs}ms 未返回`)
+    if (e?.name === 'AbortError') {
+      logMain('warn', `[ai:image] generate timeout phase=${phase} elapsedMs=${Date.now() - t0} timeoutMs=${timeoutMs}`)
+      throw new AiError('AI_TIMEOUT', `图片生成在${phase === 'request' ? '等待上游响应' : '读取上游响应'}阶段超过 ${timeoutMs}ms 未返回`)
+    }
+    const detail = describeNetworkCause(e)
+    logMain('warn', `[ai:image] generate failed phase=${phase} elapsedMs=${Date.now() - t0}${detail ? ` ${detail}` : ''}`)
     throw new AiError('AI_REQUEST_FAILED', String(e?.message || e).slice(0, 180))
   } finally {
     clearTimeout(timer)

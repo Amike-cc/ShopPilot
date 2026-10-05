@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   AI_TIMEOUT_MAX_MS,
+  AI_IMAGE_TIMEOUT_MAX_MS,
   AI_TIMEOUT_MIN_MS,
   DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS,
   DEFAULT_AI_IMAGE_TIMEOUT_MS,
@@ -26,9 +27,11 @@ describe('AI 超时默认值', () => {
   })
 
   it('两个默认值都在允许区间内，不会被 clamp 悄悄改小', () => {
-    for (const value of [DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS]) {
+    for (const value of [DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS]) {
       expect(value).toBeGreaterThanOrEqual(AI_TIMEOUT_MIN_MS)
       expect(value).toBeLessThanOrEqual(AI_TIMEOUT_MAX_MS)
     }
+    expect(DEFAULT_AI_IMAGE_TIMEOUT_MS).toBeGreaterThanOrEqual(AI_TIMEOUT_MIN_MS)
+    expect(DEFAULT_AI_IMAGE_TIMEOUT_MS).toBeLessThanOrEqual(AI_IMAGE_TIMEOUT_MAX_MS)
   })
 })

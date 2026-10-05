@@ -6,6 +6,7 @@
 
 import * as TaskStore from './task-store'
 import { fireScheduled } from './task-runner'
+import { isAutoCollectionEnabled } from '../services/collection-mode'
 
 let timer: NodeJS.Timeout | null = null
 /** 内存中的下次触发时间；首次见到任务 = now + everyMs（不做停机补偿突发触发） */
@@ -51,6 +52,17 @@ function tick(): void {
     for (const id of nextFireAt.keys()) {
       if (!alive.has(id)) { nextFireAt.delete(id); fireEveryMs.delete(id) }
     }
+  }
+  /**
+   * 自动采集总开关（2026-10-04 用户要求"取消所有自动采集，以后改为手动"）。
+   *
+   * 这个调度器负责的是**周期性采集任务**（本机实测：每 3 小时的发票采集 4 条）。
+   * 开关关着时不自动触发，并把内存里的排期清空——不清的话，等用户哪天打开开关，
+   * 会按"停机期间攒下的旧锚点"瞬时补发一串任务。手动运行（任务中心点"运行"）不受影响。
+   */
+  if (!isAutoCollectionEnabled()) {
+    if (nextFireAt.size) { nextFireAt.clear(); fireEveryMs.clear() }
+    return
   }
   for (const t of tasks) {
     if (t.status !== 'active' || !t.schedule?.everyMs) continue

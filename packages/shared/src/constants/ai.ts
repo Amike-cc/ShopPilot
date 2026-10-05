@@ -17,7 +17,7 @@ export const DEFAULT_AI_TIMEOUT_MS = 30000
  * （如 gpt-6.1-sol）一次卖点分析实测约 25 秒——30 秒默认值正好卡在边界上，
  * 用户看到的是"AI 分析卖点 不能用"（AI_TIMEOUT），但配置其实完全正确。
  */
-export const DEFAULT_AI_IMAGE_TIMEOUT_MS = 120000
+export const DEFAULT_AI_IMAGE_TIMEOUT_MS = 600000
 export const DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS = 120000
 /** 生图接口必须显式配置，避免把文本 API 或文本 Key 当成图片服务使用。 */
 export const DEFAULT_AI_IMAGE_ENDPOINT = ''
@@ -29,6 +29,17 @@ export const DEFAULT_AI_IMAGE_TEXT_MODEL = ''
 /** 超时可配范围（毫秒） */
 export const AI_TIMEOUT_MIN_MS = 3000
 export const AI_TIMEOUT_MAX_MS = 120000
+/** 图片生成可能等待较慢的异步上游，单独允许最多 10 分钟。 */
+export const AI_IMAGE_TIMEOUT_MAX_MS = 600000
+
+/** 兼容旧版本保存的 120 秒默认值，同时保留用户主动设置的更短值。 */
+export function normalizeAiImageTimeoutMs(value: unknown): number {
+  const timeout = Number(value)
+  if (!Number.isFinite(timeout)) return DEFAULT_AI_IMAGE_TIMEOUT_MS
+  const rounded = Math.round(timeout)
+  if (rounded === AI_TIMEOUT_MAX_MS) return AI_IMAGE_TIMEOUT_MAX_MS
+  return Math.min(Math.max(rounded, AI_TIMEOUT_MIN_MS), AI_IMAGE_TIMEOUT_MAX_MS)
+}
 
 /** 设置键（非敏感项走明文 app_settings；key 走 safeStorage 的 ai_cred.key） */
 export const AI_SETTING_KEYS = {

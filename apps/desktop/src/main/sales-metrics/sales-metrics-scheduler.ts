@@ -34,6 +34,7 @@ import * as StoreManager from '../stores/store-manager'
 import { businessProfileFor } from '@shared/constants/business'
 import { emitToRenderer } from '../browser/window-manager'
 import { logMain } from '../services/logger'
+import { isAutoCollectionEnabled } from '../services/collection-mode'
 import { salesMetricsCollectionService } from './sales-metrics-collection-service'
 import { SalesMetricsLedger } from './sales-metrics-ledger'
 
@@ -74,6 +75,11 @@ export interface SalesMetricsSchedulerRuntime {
   collect: (input: { storeId: string; timeoutMs: number }, runContext: { runId: string }) => Promise<SalesMetricsCollectionResult>
   listStores: () => Array<{ id: string; platform: string }>
   emit: (channel: string, payload: unknown) => void
+  /**
+   * 自动采集总开关（2026-10-04）。缺省读 app_settings 的 collection.autoEnabled（默认关）。
+   * 单测里注入，就能在不碰数据库的情况下分别验证"自动"和"手动"两条路。
+   */
+  autoCollectionEnabled?: () => boolean
 }
 
 function defaultRuntime(): SalesMetricsSchedulerRuntime {
@@ -83,8 +89,14 @@ function defaultRuntime(): SalesMetricsSchedulerRuntime {
     ledger: new SalesMetricsLedger(database as Database.Database),
     collect: (input, runContext) => salesMetricsCollectionService.collect(input, runContext),
     listStores: () => StoreManager.listStores().map(store => ({ id: store.id, platform: store.platform })),
-    emit: emitToRenderer
+    emit: emitToRenderer,
+    autoCollectionEnabled: isAutoCollectionEnabled
   }
+}
+
+/** 当前是否允许自动跑周期采集（唯一判断点，避免两处口径不一致） */
+function autoCollectionOn(): boolean {
+  try { return runtime().autoCollectionEnabled?.() ?? isAutoCollectionEnabled() } catch { return false }
 }
 
 let runtimeFactory: () => SalesMetricsSchedulerRuntime = defaultRuntime
@@ -157,6 +169,8 @@ function syncPlans(now: number, reanchor: boolean): { created: number; disabled:
     stores: runtime().listStores(),
     now,
     intervalMs: SALES_METRICS_INTERVAL_MS,
+    // 自动采集总开关（默认关）：关着的时候这里只负责"把计划停掉"，不再自动开计划
+    autoEnabled: autoCollectionOn(),
     anchor: reanchor
       ? anchorNextRun
       : (previous, interval, current, jitter) => (previous != null && Number.isFinite(previous) ? previous : current + interval + jitter),
@@ -344,7 +358,10 @@ export function tickSalesMetricsScheduler(): void {
       void runPlan(plan)
     }
     if (capacity > 0) {
-      for (const plan of runtime().ledger.listDuePlans(now, capacity)) {
+      // 周期采集只在自动采集开着时跑；关着时这里什么都不做——
+      // 手动队列（用户点的「立即采集」）在上面已经处理，不受这个开关影响。
+      const autoEnabled = autoCollectionOn()
+      for (const plan of autoEnabled ? runtime().ledger.listDuePlans(now, capacity) : []) {
         void runPlan({
           storeId: plan.storeId,
           platform: plan.platform,
@@ -439,7 +456,8 @@ export function requestImmediateRun(storeId: string): ManualRunRequest {
     if (!businessProfileFor(store.platform)) return { queued: false, reasonCode: 'PLATFORM_PROFILE_NOT_MEASURED', storeId }
     const created = runtimeValue.ledger.ensurePlan({
       storeId, platform: store.platform, now: runtimeValue.now(),
-      intervalMs: SALES_METRICS_INTERVAL_MS, jitterMs: jitterMsForStore(storeId)
+      intervalMs: SALES_METRICS_INTERVAL_MS, jitterMs: jitterMsForStore(storeId),
+      autoEnabled: autoCollectionOn()
     })
     if (created) logMain('info', `[sales-metrics-scheduler] 手动采集按需建计划 store=${storeId} platform=${store.platform}`)
     plan = runtimeValue.ledger.getPlan(storeId)
