@@ -98,12 +98,45 @@ function countUnitTests() {
   return { files, cases }
 }
 
+/**
+ * When the release run has a Vitest JSON report, use executed totals rather than
+ * counting only one-line `it()` declarations (which undercounts wrapped/multiline tests).
+ */
+function readVitestRun() {
+  const reportPath = process.env.SHOPILOT_VITEST_REPORT
+  if (!reportPath) return null
+  const resolved = path.resolve(root, reportPath)
+  if (!fs.existsSync(resolved)) {
+    console.error(`Vitest 报告不存在：${resolved}`)
+    process.exit(1)
+  }
+  const report = JSON.parse(fs.readFileSync(resolved, 'utf8'))
+  const totals = {
+    files: Number(report.numTotalTestSuites),
+    passedFiles: Number(report.numPassedTestSuites),
+    cases: Number(report.numTotalTests),
+    passedCases: Number(report.numPassedTests),
+    failedCases: Number(report.numFailedTests),
+    pendingCases: Number(report.numPendingTests) + Number(report.numTodoTests)
+  }
+  if (!report.success || totals.failedCases !== 0 || totals.pendingCases !== 0 ||
+      totals.cases !== totals.passedCases || totals.files !== totals.passedFiles) {
+    console.error('Vitest 报告未全部通过，拒绝生成通过态发布清单：', totals)
+    process.exit(1)
+  }
+  return totals
+}
+
 const currentVersionPrefix = `-${pkg.version}`
 const allArtifacts = files
 // 本版本的产物：名字里带版本号的那些（安装包/blockmap），外加两个"描述当前版本"的更新源清单
 // （latest.yml / beta.yml 名字里不带版本，但它们是这次构建的产物，且客户端就是靠它们更新）
 const versionArtifacts = files.filter(f => f.file.includes(currentVersionPrefix) || /^(latest|beta)\.yml$/i.test(f.file))
 const tests = countUnitTests()
+const vitestRun = readVitestRun()
+const testSummary = vitestRun
+  ? `${vitestRun.files} 个测试文件 / ${vitestRun.passedCases} 项通过（来自 Vitest JSON 运行报告）`
+  : `${tests.files} 个测试文件；用例数以 Vitest 运行输出为准（静态声明扫描会漏掉多行用例）`
 
 const manifest = {
   product: 'ShopPilot',
@@ -124,10 +157,10 @@ const manifest = {
     'node tools/acceptance/sec-runner.js（44 项，含弹层遮挡与行内删除按钮守卫）',
     'node tools/acceptance/m4-runner.js（13 阶段检查：解包态 19 项含主进程对话真实点击 / 单实例互斥 / 安装 / 升级 / 卸载）',
     'node tools/release/update-runner.js（更新链路 16 项：本地 feed 覆盖 / 检查 / SHA-512 下载校验 / pending 落盘 / 审计 / stable+beta 双通道 / 故障如实报错 / 重启自动检查）',
-    `pnpm test（${tests.files} 个文件、${tests.cases} 项，数字由本脚本运行时统计）`
+    `pnpm test（${testSummary}）`
   ],
   // 只声明本版本次实际复跑的基础门槛；历史专项验收仍保留在 acceptanceSuites 中，不冒充本版复跑结果。
-  acceptanceSummary: `本版构建复跑通过：pnpm typecheck；pnpm test（${tests.files} 个文件 / ${tests.cases} 个测试）；pnpm lint（0 errors，仓库存量 warnings）；pnpm build；Windows x64 NSIS 安装包构建。`,
+  acceptanceSummary: `本版构建复跑通过：pnpm typecheck；pnpm test（${testSummary}）；pnpm lint（0 errors，仓库存量 warnings）；pnpm build；Windows x64 NSIS 安装包构建。`,
   // 只列**本版本**的产物（此前把 release/ 里全部历史安装包都列进来，125 条，无法作为交付凭据）
   artifacts: versionArtifacts,
   artifactsInReleaseDir: allArtifacts.length,
