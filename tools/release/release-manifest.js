@@ -111,9 +111,12 @@ function readVitestRun() {
     process.exit(1)
   }
   const report = JSON.parse(fs.readFileSync(resolved, 'utf8'))
+  const fileResults = Array.isArray(report.testResults) ? report.testResults : []
+  const passedFileResults = fileResults.filter(result => result && result.status === 'passed')
   const totals = {
-    files: Number(report.numTotalTestSuites),
-    passedFiles: Number(report.numPassedTestSuites),
+    // Jest/Vitest `numTotalTestSuites` counts describe suites, not files.
+    files: fileResults.length,
+    passedFiles: passedFileResults.length,
     cases: Number(report.numTotalTests),
     passedCases: Number(report.numPassedTests),
     failedCases: Number(report.numFailedTests),
