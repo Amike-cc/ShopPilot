@@ -6,7 +6,8 @@
  *   Electron `<webview>` 承载，主进程只保存并操作已注册的 guest WebContents。
  * - 同一时刻仅允许 displayedStoreId 的活动标签页接收交互；切换店铺/标签页由 Renderer
  *   控制 webview 的可见性，不再把原生 View 摘挂到 BrowserWindow.contentView。
- * - 未显示的标签页 guest 继续存活（后台加载、状态保留），标签页元数据持久化 tabs 表。
+ * - 未显示的标签页在温缓存/冷休眠策略内继续存活（后台加载、状态保留）；
+ *   冷休眠只关闭 guest，标签页元数据持久化到 tabs 表，重开后恢复。
  * - WebContents 无 destroy()，销毁用 webContents.close()；Renderer reload 后必须重新注册 guest。
  */
 
@@ -28,6 +29,12 @@ export { assertNavigableUrl } from '@shared/navigation'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { logMain } from '../services/logger'
 import { randomBytes } from 'crypto'
+import {
+  DEFAULT_STORE_COLD_SLEEP_AFTER_MS,
+  DEFAULT_STORE_WARM_CACHE_LIMIT,
+  StoreLifecycleRegistry
+} from './store-lifecycle'
+import { getActiveDownloadStoreIds, isStoreDownloadActive } from './download-manager'
 
 export interface Tab {
   id: string
@@ -78,6 +85,105 @@ const taskAwakeStores = new Set<string>()
 /** 后台采集借用店铺页面的租约账本：采集结束按需关页面（见 page-lease.ts）。 */
 const pageLeases = new StorePageLeases()
 
+/**
+ * 店铺级生命周期：当前店铺保持可交互，最近一次切换的上一家作为温缓存，
+ * 其它店铺空闲达到阈值后冷休眠（关闭 guest/WebContents，Session 与标签页记录保留）。
+ */
+const storeLifecycle = new StoreLifecycleRegistry()
+const storeReapTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/** 店铺级生命周期门禁按 reason 计数；同一原因可被多个并发服务持有。 */
+const storeLifecycleBlocks = new Map<string, Map<StoreLifecycleBlockReason, number>>()
+const STORE_WARM_CACHE_LIMIT = DEFAULT_STORE_WARM_CACHE_LIMIT
+const STORE_COLD_SLEEP_AFTER_MS = DEFAULT_STORE_COLD_SLEEP_AFTER_MS
+const STORE_REAP_BLOCK_RETRY_MS = 15_000
+
+export type StoreLifecycleBlockReason = 'task' | 'confirmation' | 'upload' | 'external'
+
+function clearStoreReapTimer(storeId: string): void {
+  const timer = storeReapTimers.get(storeId)
+  if (!timer) return
+  clearTimeout(timer)
+  storeReapTimers.delete(storeId)
+}
+
+function setStoreLifecycleBlockInternal(storeId: string, reason: StoreLifecycleBlockReason, active: boolean): void {
+  const reasons = storeLifecycleBlocks.get(storeId) || new Map<StoreLifecycleBlockReason, number>()
+  if (active) {
+    reasons.set(reason, (reasons.get(reason) || 0) + 1)
+  } else {
+    const left = (reasons.get(reason) || 0) - 1
+    if (left > 0) reasons.set(reason, left)
+    else reasons.delete(reason)
+  }
+  if (reasons.size > 0) storeLifecycleBlocks.set(storeId, reasons)
+  else storeLifecycleBlocks.delete(storeId)
+}
+
+function storeLifecycleBlockReasons(storeId: string): string[] {
+  const reasons = new Set<string>(storeLifecycleBlocks.get(storeId)?.keys() || [])
+  if (taskAwakeStores.has(storeId)) reasons.add('task')
+  if (pageLeases.isBorrowed(storeId)) reasons.add('page-lease')
+  if (getCollectionTabId(storeId)) reasons.add('collection')
+  if (isStoreDownloadActive(storeId)) reasons.add('download')
+  if (getStandaloneWindowCount(storeId) > 0) reasons.add('standalone-window')
+  return Array.from(reasons).sort()
+}
+
+function isStoreLifecycleBlocked(storeId: string): boolean {
+  return storeLifecycleBlockReasons(storeId).length > 0
+}
+
+function getWarmStoreIdsForReap(): Set<string> {
+  return new Set(storeLifecycle.getWarmStoreIds(displayedStoreId, STORE_WARM_CACHE_LIMIT))
+}
+
+function scheduleStoreReap(storeId: string): void {
+  clearStoreReapTimer(storeId)
+  if (!browserStates.has(storeId) || displayedStoreId === storeId) return
+
+  const record = storeLifecycle.get(storeId)
+  if (!record) return
+  if (getWarmStoreIdsForReap().has(storeId)) return
+  const delay = Math.max(0, record.lastUsedAt + STORE_COLD_SLEEP_AFTER_MS - Date.now())
+  const timer = setTimeout(() => {
+    storeReapTimers.delete(storeId)
+    reapStoreIfEligible(storeId)
+  }, Math.max(1, delay))
+  if (typeof (timer as any).unref === 'function') (timer as any).unref()
+  storeReapTimers.set(storeId, timer)
+}
+
+function scheduleAllStoreReaps(): void {
+  for (const storeId of browserStates.keys()) scheduleStoreReap(storeId)
+}
+
+function reapStoreIfEligible(storeId: string): void {
+  if (!browserStates.has(storeId) || displayedStoreId === storeId) return
+  if (getWarmStoreIdsForReap().has(storeId)) return
+  if (!storeLifecycle.isIdle(storeId, Date.now(), STORE_COLD_SLEEP_AFTER_MS)) {
+    scheduleStoreReap(storeId)
+    return
+  }
+  if (isStoreLifecycleBlocked(storeId)) {
+    // 阻塞解除时 setStoreTaskActivity/setStoreLifecycleBlock/租约归还会重新调度；
+    // 这里保留一个低频兜底，防止第三方生命周期标记没有走解除回调导致永久常驻。
+    const timer = setTimeout(() => {
+      storeReapTimers.delete(storeId)
+      reapStoreIfEligible(storeId)
+    }, STORE_REAP_BLOCK_RETRY_MS)
+    if (typeof (timer as any).unref === 'function') (timer as any).unref()
+    storeReapTimers.set(storeId, timer)
+    return
+  }
+  try {
+    closeStoreBrowser(storeId)
+    logMain('info', `[browser] 店铺冷休眠完成 store=${storeId} idleMs>=${STORE_COLD_SLEEP_AFTER_MS}`)
+  } catch (error) {
+    logMain('warn', `[browser] 店铺冷休眠失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 180)}`)
+    scheduleStoreReap(storeId)
+  }
+}
+
 function applyBackgroundThrottling(tab: Tab): void {
   const wc = tab.webContents
   if (!wc || wc.isDestroyed()) return
@@ -97,7 +203,24 @@ function applyStoreBackgroundThrottling(storeId: string): void {
 export function setStoreTaskActivity(storeId: string, active: boolean): void {
   if (active) taskAwakeStores.add(storeId)
   else taskAwakeStores.delete(storeId)
+  // 任务结束也算一次后台使用：给页面一个完整冷休眠窗口，避免刚写完结果就被回收。
+  if (browserStates.has(storeId)) storeLifecycle.used(storeId, 'background')
   applyStoreBackgroundThrottling(storeId)
+  scheduleAllStoreReaps()
+}
+
+/**
+ * 供需要长时间占用页面的主进程服务使用（例如上传/详情采集）。
+ * 这是显式生命周期门禁，不把页面内部状态或任意 DOM 活动猜成“正在使用”。
+ */
+export function setStoreLifecycleBlock(
+  storeId: string,
+  reason: StoreLifecycleBlockReason,
+  active: boolean
+): void {
+  setStoreLifecycleBlockInternal(storeId, reason, active)
+  if (active && browserStates.has(storeId)) storeLifecycle.used(storeId, 'background')
+  scheduleAllStoreReaps()
 }
 
 // 店铺状态由 Main 统一计算，Renderer 只接收安全的 storeId/status 摘要。
@@ -172,9 +295,11 @@ const inPageSaveAt = new Map<string, number>()
 /** §8.2：注入宿主（主）窗口 */
 export function setBrowserHostWindow(win: BrowserWindow): void {
   hostWindow = win
+  scheduleAllStoreReaps()
   win.on('closed', () => {
     hostWindow = null
     displayedStoreId = null
+    for (const storeId of storeReapTimers.keys()) clearStoreReapTimer(storeId)
     guestTabs.clear()
     guestWaiters.forEach(waiters => waiters.forEach(resolve => resolve(null)))
     guestWaiters.clear()
@@ -247,14 +372,24 @@ export function openStoreBrowser(storeId: string, opts: { display?: boolean; sou
   if (!browserStates.has(storeId)) {
     const state: BrowserState = { tabs: new Map(), activeTabId: null }
     browserStates.set(storeId, state)
-    restoreTabs(storeId)
-    // 打开浏览器只代表 Session 已建立，不能据此推断平台已登录——但**同样不能据此断言未登录**。
-    // 只有平台适配器给出明确证据才会切换为 online / needs_login（见 markBrowserWindowState）。
-    markBrowserWindowState(storeId)
-    // 唤醒等待该店铺的排队任务 run（§4.4：不静默拉起，但已拉起后要放行队列）
-    queueMicrotask(() => storeOpenListeners.forEach(cb => { try { cb(storeId) } catch { /* ignore */ } }))
+    storeLifecycle.opened(storeId)
+    try {
+      restoreTabs(storeId)
+      // 打开浏览器只代表 Session 已建立，不能据此推断平台已登录——但**同样不能据此断言未登录**。
+      // 只有平台适配器给出明确证据才会切换为 online / needs_login（见 markBrowserWindowState）。
+      markBrowserWindowState(storeId)
+      // 唤醒等待该店铺的排队任务 run（§4.4：不静默拉起，但已拉起后要放行队列）
+      queueMicrotask(() => storeOpenListeners.forEach(cb => { try { cb(storeId) } catch { /* ignore */ } }))
+    } catch (error) {
+      // 目标店铺打开失败时回滚半初始化状态，保留调用方当前显示店铺和其 guest。
+      browserStates.delete(storeId)
+      storeLifecycle.forget(storeId)
+      clearStoreReapTimer(storeId)
+      throw error
+    }
   }
   updateStoreLastActive(storeId)
+  storeLifecycle.used(storeId, opts.display === false ? 'background' : 'displayed')
   for (const id of browserStates.keys()) applyStoreBackgroundThrottling(id)
   // 界面自己开的店铺（渲染层入口）＝ 用户在用它：标记成"用户接手"，后台采集结束不得自动关
   if (opts.source === 'renderer') pageLeases.claimByUser(storeId)
@@ -262,7 +397,10 @@ export function openStoreBrowser(storeId: string, opts: { display?: boolean; sou
   // ⚠ 只给"不需要用户看着"的调用方用：渲染层会把它的 webview 留着但隐藏（DOM overlay 只
   // 影响可见性，不再摘除页面），需要真实点击的自动化（采集任务/邀约）应当显示店铺，
   // 否则用户看不到点击落在哪，页面被平台因"不可见"而停摆时也无从判断。
-  if (opts.display === false) return
+  if (opts.display === false) {
+    scheduleStoreReap(storeId)
+    return
+  }
   displayStore(storeId, opts.source === 'renderer' ? 'renderer' : 'main')
 }
 
@@ -274,25 +412,31 @@ export function displayStore(storeId: string | null, source: 'renderer' | 'main'
   if (!hostWindow || hostWindow.isDestroyed()) return
   if (storeId === null) {
     displayedStoreId = null
+    for (const id of browserStates.keys()) applyStoreBackgroundThrottling(id)
     emit(EVENT_CHANNELS.BROWSER_DISPLAY_CHANGED, { storeId: null, source })
+    scheduleAllStoreReaps()
     return
   }
   if (!browserStates.has(storeId)) {
     openStoreBrowser(storeId, { display: true, source })
     return
   }
+  // 先记住旧店铺，再切换目标；目标打开/状态更新失败时，调用方仍保留原来的显示店铺。
   displayedStoreId = storeId
   // 页面被显示出来了（用户切过去/界面打开/主进程为可交互任务打开）：它归用户。
   // 后台采集借用的页面一旦被显示过，采集结束后就不再自动关闭——否则用户正看着的页面会凭空消失。
   pageLeases.claimByUser(storeId)
+  storeLifecycle.used(storeId, 'displayed')
   const state = browserStates.get(storeId)!
   if (!state.activeTabId) {
     const first = Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)[0]
     if (first) state.activeTabId = first.id
   }
   updateStoreLastActive(storeId)
+  for (const id of browserStates.keys()) applyStoreBackgroundThrottling(id)
   emitTabs(storeId)
   emit(EVENT_CHANNELS.BROWSER_DISPLAY_CHANGED, { storeId, source })
+  scheduleAllStoreReaps()
 }
 
 /** 应用锁期间由 Renderer 隐藏 webview，主进程仍禁止任务/Agent 操作。 */
@@ -332,6 +476,9 @@ function effectiveViewport(): ViewportBounds {
  * 关闭店铺浏览器：销毁其全部标签页 view（数据保留在 DB 供恢复）
  */
 export function closeStoreBrowser(storeId: string): void {
+  clearStoreReapTimer(storeId)
+  storeLifecycle.forget(storeId)
+  storeLifecycleBlocks.delete(storeId)
   // 独立窗口不在 browserStates 里，必须显式销毁：否则会出现"店铺已删、独立窗口还放着那家店的页面"，
   // 彻底删除时还会连带清掉这个窗口正在使用的 partition
   for (const win of standaloneWindows.get(storeId) || []) {
@@ -339,6 +486,9 @@ export function closeStoreBrowser(storeId: string): void {
   }
   standaloneWindows.delete(storeId)
 
+  taskAwakeStores.delete(storeId)
+  collectionTabs.delete(storeId)
+  pageLeases.forget(storeId)
   const state = browserStates.get(storeId)
   if (!state) return
 
@@ -351,10 +501,6 @@ export function closeStoreBrowser(storeId: string): void {
     inPageSaveAt.delete(tab.id)
   })
   browserStates.delete(storeId)
-  taskAwakeStores.delete(storeId)
-  collectionTabs.delete(storeId)
-  // 页面已经关了：清掉该店铺的借用/接手账，避免下次借用拿着旧状态做判断
-  pageLeases.forget(storeId)
 
   if (displayedStoreId === storeId) {
     displayedStoreId = null
@@ -371,6 +517,7 @@ export function closeStoreBrowser(storeId: string): void {
   // 关掉窗口不代表登录失效（Cookie 仍在分区里），所以这里不写状态：
   // 关一次窗口就把"已确认登录/需要登录"的结论抹成 offline，界面会显示成"登录没了"。
   emitTabs(storeId)
+  scheduleAllStoreReaps()
 }
 
 /**
@@ -384,7 +531,7 @@ export function closeStoreBrowser(storeId: string): void {
  *   · 归还时：只有"我们开的 + 没有别的借用者 + 用户期间没接手过"才真的关掉。
  *
  * 判据全部在 `page-lease.ts`（纯状态机，单测逐条钉住）。用户自己开着/看过一眼的页面
- * **永远不会**被自动关闭——采集顺手关掉用户正在登录的页面，比多占一点内存糟得多。
+ * 不会被这次采集归还顺手关闭；店铺级冷休眠仍会在独立的空闲策略下回收非当前页面。
  *
  * 用法：`const release = borrowStorePage(storeId); try { ...采集... } finally { release() }`
  */
@@ -392,6 +539,8 @@ export function borrowStorePage(storeId: string): () => void {
   const openedByUs = !browserStates.has(storeId)
   if (openedByUs) openStoreBrowser(storeId, { display: false, source: 'main' })
   pageLeases.borrow(storeId, openedByUs)
+  storeLifecycle.used(storeId, 'background')
+  scheduleAllStoreReaps()
   let released = false
   return () => {
     if (released) return
@@ -400,6 +549,13 @@ export function borrowStorePage(storeId: string): () => void {
     // 正在前台显示 = 用户看着它（正常路径下 displayStore 已经标成用户接手，这里再挡一道时序缝隙）
     if (displayedStoreId === storeId) { pageLeases.claimByUser(storeId); return }
     if (!browserStates.has(storeId)) return
+    // 租约归还本身只说明“这次采集不用页面了”，不能绕过店铺级生命周期门禁。
+    // 例如下载、上传、人工确认或另一个主进程服务仍在使用该店铺时，直接 closeStoreBrowser
+    // 会把正在使用的 guest 一并关掉。门禁解除后由各自的回调重新调度冷休眠。
+    if (isStoreLifecycleBlocked(storeId)) {
+      scheduleAllStoreReaps()
+      return
+    }
     try {
       closeStoreBrowser(storeId)
       logMain('info', `[browser] 后台采集结束，已关闭借用的店铺页面 store=${storeId}`)
@@ -407,6 +563,7 @@ export function borrowStorePage(storeId: string): () => void {
       // 关不掉不是采集的错：如实留日志，不把异常抛回采集流程
       logMain('warn', `[browser] 关闭借用的店铺页面失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
     }
+    scheduleAllStoreReaps()
   }
 }
 
@@ -443,6 +600,7 @@ export function releaseCollectionTab(storeId: string, tabId?: string): void {
   if (tabId && tabId !== current) return
   collectionTabs.delete(storeId)
   try { closeTab(storeId, current) } catch { /* 标签页已经不在了 */ }
+  scheduleAllStoreReaps()
 }
 
 /**
@@ -700,6 +858,12 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
     scheduleLoginDetection(tab.storeId)
   })
   wc.on('render-process-gone', (_e, details) => {
+    // 主动冷回收/关标签页会先从 Tab 上解绑 guest，再调用 wc.close()。
+    // Electron 随后仍可能发出 render-process-gone；这不是页面崩溃，不能让
+    // 已经不在 browserStates 的旧 guest 进入自动 reload，否则会重新拉起孤儿
+    // renderer，表现为店铺已回收但 WebContents/内存不降反升。
+    const currentState = browserStates.get(tab.storeId)
+    if (tab.webContents !== wc || currentState?.tabs.get(tab.id) !== tab) return
     logMain('error', `store tab renderer gone store=${tab.storeId} tab=${tab.id} reason=${details.reason} exitCode=${details.exitCode} url=${String(tab.url).slice(0, 120)}`)
     emit(EVENT_CHANNELS.BROWSER_CRASHED, { storeId: tab.storeId, tabId: tab.id, reason: details.reason })
     if (details.reason === 'clean-exit') return
@@ -774,7 +938,9 @@ export function activateTab(storeId: string, tabId: string): void {
   if (!tab) throw new Error('Tab not found')
 
   state.activeTabId = tabId
+  storeLifecycle.used(storeId, displayedStoreId === storeId ? 'displayed' : 'background')
   applyStoreBackgroundThrottling(storeId)
+  scheduleStoreReap(storeId)
 
   const db = getDatabase()
   db.prepare('UPDATE tabs SET last_active_at = ?, updated_at = ? WHERE id = ?')
@@ -1137,6 +1303,7 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
     const current = standaloneWindows.get(storeId)
     current?.delete(win)
     if (current && current.size === 0) standaloneWindows.delete(storeId)
+    scheduleAllStoreReaps()
   })
 }
 
@@ -1226,9 +1393,18 @@ export async function getMemoryDiagnostics(): Promise<{
   capturedAt: number
   main: NodeJS.MemoryUsage
   appMetrics: Array<{ pid: number; type: string; memory: number; cpu: number }>
-  stores: Array<{ storeId: string; tabs: number; attachedGuests: number; taskAwake: boolean; standaloneWindows: number }>
+  stores: Array<{
+    storeId: string
+    tabs: number
+    attachedGuests: number
+    taskAwake: boolean
+    standaloneWindows: number
+    lifecycle: { idleMs: number; warm: boolean; blockedBy: string[] }
+  }>
   /** 后台采集借用的页面：谁还开着、是借用中还是用户接手 */
   pageLeases: ReturnType<StorePageLeases['snapshot']>
+  /** 仍在下载的店铺，仅用于诊断和回收门禁，不包含文件信息。 */
+  activeDownloads: string[]
   totals: { openStores: number; tabs: number; attachedGuests: number; standaloneWindows: number; webContents: number }
 }> {
   const storeRows = Array.from(browserStates.entries()).map(([storeId, state]) => ({
@@ -1236,7 +1412,15 @@ export async function getMemoryDiagnostics(): Promise<{
     tabs: state.tabs.size,
     attachedGuests: Array.from(state.tabs.values()).filter(tab => !!tab.webContents && !tab.webContents.isDestroyed() && tab.guestAttached).length,
     taskAwake: taskAwakeStores.has(storeId),
-    standaloneWindows: standaloneWindows.get(storeId)?.size || 0
+    standaloneWindows: standaloneWindows.get(storeId)?.size || 0,
+    lifecycle: (() => {
+      const record = storeLifecycle.get(storeId)
+      return {
+        idleMs: record ? Math.max(0, Date.now() - record.lastUsedAt) : 0,
+        warm: storeLifecycle.getWarmStoreIds(displayedStoreId, STORE_WARM_CACHE_LIMIT).includes(storeId),
+        blockedBy: storeLifecycleBlockReasons(storeId)
+      }
+    })()
   }))
   const { app } = await import('electron')
   const metrics = app.getAppMetrics().map(metric => ({
@@ -1255,6 +1439,7 @@ export async function getMemoryDiagnostics(): Promise<{
     stores: storeRows,
     /** 后台采集借用的页面：谁还开着、是借用中还是用户接手（"占用为什么没降下来"看这里） */
     pageLeases: pageLeases.snapshot(),
+    activeDownloads: getActiveDownloadStoreIds(),
     totals: { openStores: storeRows.length, tabs, attachedGuests, standaloneWindows: standaloneCount, webContents: webContents.getAllWebContents().length }
   }
 }

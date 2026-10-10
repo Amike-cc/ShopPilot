@@ -12,6 +12,7 @@ export * from './contracts/pdd-order-observation'
 export * from './contracts/sales-metrics'
 export * from './contracts/platform-product'
 export * from './contracts/agent-software'
+export * from './contracts/customer-service'
 
 // Enums
 export * from './enums/store-status'
@@ -45,6 +46,8 @@ export * from './schemas/shop-session'
 export * from './schemas/order'
 export * from './schemas/sales-metrics'
 export * from './schemas/product'
+export * from './schemas/customer-service'
+export * from './schemas/browser'
 
 // Errors
 export * from './errors/error-codes'

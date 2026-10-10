@@ -31,6 +31,8 @@ const mocks = vi.hoisted(() => {
   const closeStoreSession = vi.fn((storeId: string) => {
     active.delete(storeId)
   })
+  const closeCustomerServiceSession = vi.fn()
+  const cancelCustomerServiceSessionRestore = vi.fn(async () => undefined)
   const getStorePartition = vi.fn((storeId: string) => `persist:store_${storeId}`)
   const getProxyAuthInjection = vi.fn(() => null)
   const clearStoreSessionSnapshot = vi.fn()
@@ -50,6 +52,8 @@ const mocks = vi.hoisted(() => {
     getStoreSession,
     waitForStoreSessionReady,
     closeStoreSession,
+    closeCustomerServiceSession,
+    cancelCustomerServiceSessionRestore,
     getStorePartition,
     getProxyAuthInjection,
     clearStoreSessionSnapshot,
@@ -69,13 +73,15 @@ vi.mock('../../apps/desktop/src/main/browser/session-manager', () => ({
   getStoreSession: mocks.getStoreSession,
   waitForStoreSessionReady: mocks.waitForStoreSessionReady,
   closeStoreSession: mocks.closeStoreSession,
+  closeCustomerServiceSession: mocks.closeCustomerServiceSession,
   getActiveSessions: () => mocks.active,
   getStorePartition: mocks.getStorePartition,
   getProxyAuthInjection: mocks.getProxyAuthInjection
 }))
 
 vi.mock('../../apps/desktop/src/main/services/session-persistence', () => ({
-  clearStoreSessionSnapshot: mocks.clearStoreSessionSnapshot
+  clearStoreSessionSnapshot: mocks.clearStoreSessionSnapshot,
+  cancelCustomerServiceSessionRestore: mocks.cancelCustomerServiceSessionRestore
 }))
 
 import {
@@ -95,6 +101,8 @@ describe('ShopSessionManager', () => {
     mocks.getStoreSession.mockClear()
     mocks.waitForStoreSessionReady.mockClear()
     mocks.closeStoreSession.mockClear()
+    mocks.closeCustomerServiceSession.mockClear()
+    mocks.cancelCustomerServiceSessionRestore.mockClear()
     mocks.getStorePartition.mockClear()
     mocks.getProxyAuthInjection.mockClear()
     mocks.clearStoreSessionSnapshot.mockClear()
@@ -158,8 +166,11 @@ describe('ShopSessionManager', () => {
     await destroyStoreSession('store_a')
 
     expect(mocks.closeStoreSession).toHaveBeenCalledWith('store_a', { persist: false })
+    expect(mocks.closeCustomerServiceSession).toHaveBeenCalledWith('store_a', { persist: false })
     expect(mocks.fromPartition).toHaveBeenCalledWith('persist:store_store_a', { cache: true })
+    expect(mocks.fromPartition).toHaveBeenCalledWith('persist:customer-service_store_a', { cache: true })
     expect(mocks.partitions.get('persist:store_store_a')?.clearStorageData).toHaveBeenCalledTimes(1)
+    expect(mocks.partitions.get('persist:customer-service_store_a')?.clearStorageData).toHaveBeenCalledTimes(1)
     expect(mocks.clearStoreSessionSnapshot).toHaveBeenCalledWith('store_a')
     expect(mocks.active.has('store_a')).toBe(false)
     expect(mocks.active.has('store_b')).toBe(true)

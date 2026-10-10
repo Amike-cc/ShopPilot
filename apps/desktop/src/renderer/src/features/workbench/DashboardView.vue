@@ -1,5 +1,5 @@
 <template>
-  <section :class="['dashboard-shell welcome', { 'picker-mode': taskPicking && activePage === 'browser', 'image-studio-shell': activePage === 'image-studio' }]" data-test="dashboard-home">
+  <section :class="['dashboard-shell welcome', { 'picker-mode': taskPicking && activePage === 'browser', 'image-studio-shell': activePage === 'image-studio', 'workspace-hidden': !props.active }]" data-test="dashboard-home">
     <aside class="dashboard-sidebar sidebar" :class="{ collapsed: leftSidebarCollapsed }" data-test="sidebar" aria-label="ShopPilot 主导航">
       <div v-if="leftSidebarCollapsed" class="sidebar-rail">
         <button type="button" class="rail-btn" data-test="sidebar-expand" title="展开左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(true)"><img :src="forwardIcon" alt="" /></button>
@@ -112,6 +112,37 @@
           <span class="crumb-sep" aria-hidden="true">/</span>
           <span class="crumb-current">{{ pageTitle }}</span>
         </div>
+        <div class="workspace-switcher" role="tablist" aria-label="工作区切换">
+          <button
+            type="button"
+            class="workspace-tab active"
+            data-test="workspace-tab-workbench"
+            role="tab"
+            aria-selected="true"
+            tabindex="0"
+            title="当前工作台"
+            @pointerdown.stop
+            @mousedown.stop
+            @click.stop
+          >
+            <span>工作台</span>
+          </button>
+          <button
+            type="button"
+            class="workspace-tab"
+            data-test="workspace-tab-customer-service"
+            role="tab"
+            aria-selected="false"
+            tabindex="0"
+            title="打开独立电商客服工作区"
+            @pointerdown.stop
+            @mousedown.stop
+            @click.stop="emit('open-customer-service')"
+          >
+            <span class="workspace-product-spark" aria-hidden="true">✦</span>
+            <span>电商客服</span>
+          </button>
+        </div>
         <div class="toolbar-actions">
           <button type="button" class="toolbar-datetime" title="时间取自本机系统时钟" @click="showNotice('时间取自本机系统时钟；采集周期与调用记录都以它为准')">
             <img class="dt-icon" :src="dateIcon" alt="" />{{ nowLabel }}<img class="dt-caret" :src="caretDownIcon" alt="" />
@@ -131,12 +162,14 @@
       <div
         v-if="browserHostMounted"
         :class="['dashboard-browser-host', { active: browserHostActive }]"
+        :aria-hidden="!browserHostActive"
         data-test="dashboard-browser-host"
       >
         <DashboardBrowserSurface
           :picker-mode="taskPicking"
           :active="browserHostActive"
           @open-tasks="openTasks"
+          @open-ai-settings="openInviteAiSettings"
         />
       </div>
       <UnifiedTaskPage
@@ -451,7 +484,9 @@ interface SnapshotRow {
 
 const emit = defineEmits<{
   'open-store': [storeId: string]
+  'open-customer-service': []
 }>()
+const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
 
 const ws = useWorkspaceStore()
 const agent = useAgentStore()
@@ -502,7 +537,7 @@ const taskPicking = ref(false)
 /** 有店铺处于打开状态 → guest 宿主常驻（页面状态不因切页丢失）。 */
 const browserHostMounted = computed(() => ws.openStoreIds.length > 0)
 /** 宿主是否真的显示给用户：在浏览器页且确实显示着某家店铺。 */
-const browserHostActive = computed(() => activePage.value === 'browser' && !!ws.displayedStoreId)
+const browserHostActive = computed(() => props.active && activePage.value === 'browser' && !!ws.displayedStoreId)
 /** 采集数据的定时刷新只在总览页有意义（别的页面不显示这些卡片，白刷就是白耗） */
 const isOnOverview = computed(() => activePage.value === 'overview')
 const storeContext = reactive({ open: false, x: 0, y: 0, store: null as StoreRow | null })
@@ -1165,6 +1200,10 @@ function openTasks(create = false) {
   taskAutoCreate.value = create
   navigateTo('tasks')
 }
+function openInviteAiSettings() {
+  settingsTab.value = 'ai'
+  navigateTo('settings')
+}
 function closeTaskOverlay() {
   taskOverlay.value = false
   taskPicking.value = false
@@ -1313,6 +1352,9 @@ function openAgentSettings() { settingsTab.value = 'agents'; navigateTo('setting
  * 否则旧工作台的事件监听会把导航写进隐藏的旧设置弹窗，用户看不到结果。
  */
 function handleAgentPanelOpen(payload: any) {
+  // 客服工作区打开时，经营工作台仍保持挂载以保留店铺网页状态，
+  // 但不应响应经营工作台的全局面板事件，避免隐藏页面被后台事件改写。
+  if (!props.active) return
   const panel = String(payload?.panel || '')
   if (panel === 'settings') { settingsTab.value = 'config'; navigateTo('settings') }
   else if (panel === 'agentTeam') { settingsTab.value = 'agents'; navigateTo('settings') }
@@ -1340,6 +1382,8 @@ const commandResults = computed(() => {
 })
 function runCommand(result: any) { commandOpen.value = false; result.action() }
 function onKeydown(event: KeyboardEvent) {
+  // 两个工作区共存时，快捷键只归当前可见的经营工作台处理。
+  if (!props.active) return
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommandPalette() }
   if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'e') { event.preventDefault(); setLeftSidebarOpen(leftSidebarCollapsed.value); return }
   if (event.key === 'Escape') {
@@ -1384,6 +1428,8 @@ function onTaskProgress(event: any) {
 // 渲染层自己请求的显示（displaySource==='renderer'）不跟随——它本来就在正确的页上，
 // 跟随会打断它自己的导航时序（实测会让"点店铺卡片进入"这类流程落空）。
 watch([() => ws.displayedStoreId, () => ws.displaySource], ([storeId, source]) => {
+  // 客服工作区显示时，经营工作台虽然保持挂载，但不跟随后台/Agent 的店铺显示事件改页。
+  if (!props.active) return
   if (storeId && source === 'main' && activePage.value !== 'browser') {
     if (preventBusyImageStudioExit()) {
       // 主进程的原生店铺视图覆盖在渲染层上；生成未结束时收起它，保留图片工作台。
@@ -1467,6 +1513,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
   font-size: 13px;
 }
 .dashboard-shell.welcome { align-items: stretch; justify-content: flex-start; -webkit-app-region: no-drag; }
+.dashboard-shell.workspace-hidden { position: absolute; inset: 0; z-index: 0; opacity: 0; pointer-events: none; }
 .image-studio-shell .dashboard-toolbar { display: none; }
 .dashboard-shell button, .dashboard-shell input, .dashboard-shell select { font: inherit; }
 /* 兜底文字色用 :where() 压低优先级：否则会把各按钮自己声明的颜色盖掉
@@ -1569,13 +1616,24 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .dashboard-browser-host { min-width: 0; min-height: 0; flex: 1 1 auto; display: flex; }
 /* 非当前页：脱离布局流并隐藏视觉/命中，但保留真实尺寸 —— guest 自认可见才会继续渲染，
    渲染层重进浏览器页时也就不需要重建页面（重建 = 丢状态 + 重新登录流程）。 */
-.dashboard-browser-host:not(.active) { position: absolute; inset: 0; z-index: 0; opacity: 0; pointer-events: none; }
+.dashboard-browser-host:not(.active) {
+  /* Electron 的 <webview> 是独立合成层；opacity/pointer-events 只影响 DOM 命中，
+     在部分 Windows GPU 路径仍可能留下覆盖层。把宿主移出渲染区域可以可靠释放
+     鼠标命中，同时不销毁 guest、标签页或 persist 分区，所以登录态和页面状态继续长活。 */
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(-200vw, 0, 0);
+  will-change: transform;
+}
 .dashboard-browser-host > :deep(.dashboard-browser-surface) { min-width: 0; min-height: 0; flex: 1 1 auto; }
 /* 顶部栏与右上角原生窗口按钮（WCO，高 38px）共存：
    · 右侧留出 148px：原生按钮是画在页面之上的覆盖层，不留白就会压住头像；
    · 底色固定为 #ffffff，且与 App.vue 的 TOOLBAR_BG 保持同一色值（overlay 是不透明覆盖层）。 */
 .dashboard-toolbar {
-  display: flex; align-items: center; gap: 16px; height: 64px; flex: 0 0 64px;
+  position: relative; z-index: 10; display: flex; align-items: center; gap: 16px; height: 64px; flex: 0 0 64px;
   padding: 0 148px 0 22px; border-bottom: 1px solid var(--dash-border); background: #ffffff;
   -webkit-app-region: drag;
 }
@@ -1586,6 +1644,47 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .crumb-current { color: var(--dash-text); font-weight: 600; }
 /* 分隔符是纯装饰（aria-hidden），但太浅会在浅底上看不见；给到 AA 之上最省事 */
 .crumb-sep { color: #64748b; }
+.workspace-switcher {
+  position: absolute;
+  z-index: 11;
+  top: 50%;
+  left: 50%;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--dash-border);
+  border-radius: 11px;
+  background: #f7f8fc;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .04);
+  -webkit-app-region: no-drag;
+  transform: translate(-50%, -50%);
+}
+.workspace-tab {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dash-text-soft);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background .16s, color .16s, box-shadow .16s;
+}
+.workspace-tab:hover, .workspace-tab:focus-visible {
+  background: #fff;
+  color: var(--dash-text);
+  box-shadow: 0 2px 8px rgba(16, 24, 40, .08);
+}
+.workspace-tab:focus-visible { outline: 2px solid rgba(124, 92, 255, .42); outline-offset: 1px; }
+.workspace-tab.active { background: #fff; color: var(--dash-text); box-shadow: 0 2px 8px rgba(16, 24, 40, .08); }
+.workspace-product-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dash-purple); box-shadow: 0 0 0 3px rgba(124, 92, 255, .14); }
+.workspace-product-spark { color: var(--dash-purple); font-size: 14px; line-height: 1; }
 .toolbar-actions { display: flex; min-width: 0; align-items: center; gap: 10px; margin-left: auto; -webkit-app-region: no-drag; }
 .toolbar-datetime { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border: 1px solid var(--dash-border); border-radius: 11px; background: #fff; color: var(--dash-text-soft); font-size: 12.5px; }
 .dt-icon { width: 18px; height: 18px; object-fit: contain; }

@@ -149,6 +149,11 @@ export const ERROR_CODES = {
     message: '未分类内部错误',
     retryable: false
   },
+  SECURITY_STORAGE_UNAVAILABLE: {
+    code: 'SECURITY_STORAGE_UNAVAILABLE',
+    message: '系统安全存储不可用，拒绝保存主密码',
+    retryable: true
+  },
   AGENT_PERMISSION_DENIED: {
     code: 'AGENT_PERMISSION_DENIED',
     message: '当前 Agent 没有执行该操作的权限',

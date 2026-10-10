@@ -802,7 +802,7 @@ async function handleStoreNow(storeId: string): Promise<void> {
   if (!target) { ws.toast('这家店没有可处理的项', 'error'); return }
   busy.value = true
   try {
-    const result = await window.shopilot.products.publish.open({ itemId: target.id, fill: true })
+    const result = await window.shopilot.products.publish.open({ itemId: target.itemId, fill: true })
     if (!result.ok) { ws.toast('打开发布页失败：' + result.error.message, 'error'); return }
     ws.toast((result.data as { safeMessage?: string } | undefined)?.safeMessage || '已打开发布页', 'success')
   } finally {

@@ -1279,7 +1279,7 @@ async function submitGeneration() {
           if (!images.length) throw new Error('接口没有返回可预览图片')
           const model = String(result.data?.model || usedModel.value || '—')
           const elapsedMs = Number(result.data?.elapsedMs || 0)
-          const batch = images.map(url => ({ kind: job.kind, url, model, elapsedMs, mode: requestMode, sessionId, createdAt, title, ...(requestMode === 'edit' ? { prompt: requestEditPrompt } : {}) }))
+          const batch = images.map((url: string) => ({ kind: job.kind, url, model, elapsedMs, mode: requestMode, sessionId, createdAt, title, ...(requestMode === 'edit' ? { prompt: requestEditPrompt } : {}) }))
           collected.push(...batch)
           // 每个真实返回批次立即落入历史；组件卸载或窗口异常关闭时也能找回已完成图片。
           if (batch.length) {

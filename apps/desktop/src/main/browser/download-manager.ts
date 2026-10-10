@@ -8,6 +8,37 @@ import { BrowserWindow, shell } from 'electron'
 import { existsSync } from 'fs'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 
+/** 店铺级进行中下载计数。数据库状态用于历史展示，内存计数用于生命周期回收门禁。 */
+const activeDownloadsByStore = new Map<string, number>()
+const activeDownloadStoreById = new Map<string, string>()
+
+function addActiveDownload(storeId: string): void {
+  activeDownloadsByStore.set(storeId, (activeDownloadsByStore.get(storeId) || 0) + 1)
+}
+
+function removeActiveDownload(storeId: string): void {
+  const left = (activeDownloadsByStore.get(storeId) || 0) - 1
+  if (left > 0) activeDownloadsByStore.set(storeId, left)
+  else activeDownloadsByStore.delete(storeId)
+}
+
+function finishActiveDownload(downloadId: string): void {
+  const storeId = activeDownloadStoreById.get(downloadId)
+  if (!storeId) return
+  activeDownloadStoreById.delete(downloadId)
+  removeActiveDownload(storeId)
+}
+
+/** 冷休眠前使用：下载记录刚写入但尚未收到 done 事件时，不能销毁页面 guest。 */
+export function isStoreDownloadActive(storeId: string): boolean {
+  return (activeDownloadsByStore.get(storeId) || 0) > 0
+}
+
+/** 诊断与测试使用，不暴露下载内容或文件路径。 */
+export function getActiveDownloadStoreIds(): string[] {
+  return Array.from(activeDownloadsByStore.keys()).sort()
+}
+
 /**
  * 把下载状态推给渲染层。
  *
@@ -109,6 +140,8 @@ export function recordDownload(
     INSERT INTO downloads (id, store_id, page_url, file_name, file_path, size_bytes, state, created_at)
     VALUES (?, ?, ?, ?, ?, NULL, 'in_progress', ?)
   `).run(downloadId, storeId, pageUrl || null, fileName, filePath, now)
+  addActiveDownload(storeId)
+  activeDownloadStoreById.set(downloadId, storeId)
   
   return downloadId
 }
@@ -137,6 +170,9 @@ export function updateDownloadState(
       WHERE id = ?
     `).run(state, sizeBytes || null, downloadId)
   }
+  // Electron 的 updated 事件可能先报 interrupted，随后 done 再报 cancelled；
+  // 计数只允许从正数减到零，重复终态不会造成负数。
+  if (state !== 'progressing' && state !== 'in_progress') finishActiveDownload(downloadId)
 }
 
 /**
@@ -144,6 +180,8 @@ export function updateDownloadState(
  */
 export function deleteDownloadRecord(downloadId: string): boolean {
   const db = getDatabase()
+  const row = db.prepare('SELECT store_id, state FROM downloads WHERE id = ?').get(downloadId) as { store_id?: string; state?: string } | undefined
   const info = db.prepare('DELETE FROM downloads WHERE id = ?').run(downloadId)
+  if (info.changes > 0 && row) finishActiveDownload(downloadId)
   return info.changes > 0
 }

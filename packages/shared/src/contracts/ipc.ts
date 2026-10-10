@@ -169,6 +169,11 @@ export const IPC_CHANNELS = {
   SALES_METRICS_RUNS_LIST: 'salesMetrics:runs:list',
   SALES_METRICS_HEALTH: 'salesMetrics:health',
 
+  // 电商客服消息监控：只返回安全摘要；客服页面与经营工作台完全独立。
+  CUSTOMER_SERVICE_PREPARE: 'customerService:prepare',
+  CUSTOMER_SERVICE_STATUS_LIST: 'customerService:status:list',
+  CUSTOMER_SERVICE_CHECK_NOW: 'customerService:checkNow',
+
   // 环境配置 - §6.6
   PROFILE_GET: 'profile:get',
   PROFILE_UPDATE: 'profile:update',
@@ -366,6 +371,7 @@ export const EVENT_CHANNELS = {
   SALES_METRICS_RUN_STARTED: 'salesMetrics:runStarted',
   SALES_METRICS_RUN_FINISHED: 'salesMetrics:runFinished',
   SALES_METRICS_HEALTH_CHANGED: 'salesMetrics:healthChanged',
+  CUSTOMER_SERVICE_STATUS_CHANGED: 'customerService:statusChanged',
   AGENT_STATUS_CHANGED: 'agent:statusChanged',
   AGENT_PANEL_OPEN: 'agent:panelOpen',
   AGENT_JOB_PROGRESS: 'agent:jobProgress',

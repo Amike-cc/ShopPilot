@@ -303,6 +303,11 @@ export function releaseStoreRuntime(storeId: string, options: { preserveSession?
       preserveLogin: options.preserveSession !== false,
       allowDeleted: true
     })
+    ShopSessionManager.closeCustomerServiceSession(storeId, {
+      // 软删除保留登录快照，彻底删除会在 destroyStoreSession 中再次以 false 收敛。
+      preserveLogin: options.preserveSession !== false,
+      allowDeleted: true
+    })
   } catch (error: any) {
     throw new Error(`PROFILE_IN_USE: 店铺运行环境未能关闭（${String(error?.message || error)}），已中止删除`)
   }
@@ -317,6 +322,10 @@ export function releaseStoreRuntime(storeId: string, options: { preserveSession?
 export function deleteStorePermanent(storeId: string): boolean {
   const db = getDatabase()
 
+  // 该操作是“移入回收站”，已在回收站的店铺不能重复执行并伪造一次删除审计。
+  const existing = db.prepare('SELECT id FROM stores WHERE id = ? AND deleted_at IS NULL').get(storeId)
+  if (!existing) return false
+
   // 先收敛浏览器运行时：店铺被移出列表后用户就没有关闭入口了，留下的视图/会话
   // 会继续跑（任务引擎也会继续往这个店铺派单）
   releaseStoreRuntime(storeId)
@@ -325,7 +334,7 @@ export function deleteStorePermanent(storeId: string): boolean {
   const stmt = db.prepare(`
     UPDATE stores 
     SET deleted_at = ?, updated_at = ?
-    WHERE id = ?
+    WHERE id = ? AND deleted_at IS NULL
   `)
   
   const info = stmt.run(Date.now(), Date.now(), storeId)

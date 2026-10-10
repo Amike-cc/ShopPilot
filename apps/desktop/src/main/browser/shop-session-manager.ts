@@ -15,9 +15,11 @@ import {
   getStorePartition,
   getProxyAuthInjection,
   getStoreSession as getUnderlyingStoreSession,
+  getCustomerServiceSession as getUnderlyingCustomerServiceSession,
+  closeCustomerServiceSession as closeUnderlyingCustomerServiceSession,
   waitForStoreSessionReady
 } from './session-manager'
-import { clearStoreSessionSnapshot } from '../services/session-persistence'
+import { cancelCustomerServiceSessionRestore, clearStoreSessionSnapshot } from '../services/session-persistence'
 import {
   SHOP_SESSION_STATUS_CODES,
   SHOP_SESSION_LOGIN_STATUSES,
@@ -174,6 +176,12 @@ export function getSession(storeId: string): Session {
   }
 }
 
+/** 客服工作区的独立 Session；仅 Main 内部使用，不把 partition 或 Session 暴露给 Renderer。 */
+export function getCustomerServiceSession(storeId: string): Session {
+  const id = assertStoreExists(storeId)
+  return getUnderlyingCustomerServiceSession(id)
+}
+
 /** 创建/配置店铺 Session，并等待现有底层代理和 Profile 配置完成。 */
 export async function ensureSession(storeId: string): Promise<Session> {
   const id = assertStoreExists(storeId)
@@ -297,15 +305,32 @@ export function closeStoreSession(storeId: string, options: CloseStoreSessionOpt
 }
 
 /**
+ * 关闭客服运行时引用，但按选项保留或放弃会话级 Cookie 快照。
+ * 经营工作台关闭不会调用此方法；店铺移入回收站/彻底删除时必须调用，
+ * 否则客服分区和后台监控会在店铺已不可见后继续存活。
+ */
+export function closeCustomerServiceSession(storeId: string, options: CloseStoreSessionOptions = {}): void {
+  const id = assertStoreExists(storeId, options.allowDeleted === true)
+  closeUnderlyingCustomerServiceSession(id, { persist: options.preserveLogin !== false })
+}
+
+/**
  * 彻底清理店铺 Session 数据，仅用于真实删除店铺等场景。
  * 数据库中的 stores/browser_profiles 记录由 StoreManager 按现有级联流程处理。
  */
 export async function destroyStoreSession(storeId: string): Promise<void> {
   const id = assertStoreExists(storeId, true)
+  // 物理清理前等待并使客服快照恢复失效，避免旧 Cookie 在清空分区后又回灌。
+  await cancelCustomerServiceSessionRestore(id)
   // 不再写入会话快照，避免清理后异步快照把旧登录态写回来。
   closeUnderlyingStoreSession(id, { persist: false })
+  // 客服分区也必须先从内存登记和持久化追踪中移除；关闭钩子会同步销毁隐藏监控窗口。
+  closeUnderlyingCustomerServiceSession(id, { persist: false })
   const storeSession = electronSession.fromPartition(getStorePartition(id), { cache: true })
   await storeSession.clearStorageData()
+  // 客服与经营工作台使用不同的 Chromium 分区；彻底删除店铺时两个分区都要清理。
+  const customerServiceSession = electronSession.fromPartition(`persist:customer-service_${id}`, { cache: true })
+  await customerServiceSession.clearStorageData()
   clearStoreSessionSnapshot(id)
   statusByStore.delete(id)
 }

@@ -79,6 +79,8 @@ import settingsCloseIcon from '../../assets/generated/ui-icons/settings-cancel-g
 import settingsTestIcon from '../../assets/generated/ui-icons/settings-test-gen.png'
 import settingsTestImageIcon from '../../assets/generated/ui-icons/settings-test-image-gen.png'
 import settingsKeyClearIcon from '../../assets/generated/ui-icons/settings-key-clear-gen.png'
+import forwardIcon from '../../assets/generated/ui-icons/forward-gen.png'
+import refreshIcon from '../../assets/generated/ui-icons/refresh.png'
 
 const props = defineProps<{ initialTab?: TabKey }>()
 const emit = defineEmits<{ close: [] }>()

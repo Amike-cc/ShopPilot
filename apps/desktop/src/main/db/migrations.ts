@@ -1600,6 +1600,33 @@ export const migrations: Migration[] = [
       `)
     },
     down: (db) => db.exec('DROP INDEX IF EXISTS idx_invite_history_nickname; DROP INDEX IF EXISTS idx_invite_history_store_time; DROP TABLE IF EXISTS invite_history;')
+  },
+  {
+    version: 31,
+    name: 'customer_message_monitor_checks',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS customer_message_checks (
+          id TEXT PRIMARY KEY,
+          store_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          status TEXT NOT NULL,
+          unread_count INTEGER,
+          conversation_count INTEGER,
+          reason_code TEXT NOT NULL,
+          message TEXT NOT NULL,
+          source_url_hash TEXT,
+          evidence_json TEXT,
+          captured_at INTEGER NOT NULL,
+          FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_customer_message_checks_store_time
+          ON customer_message_checks(store_id, captured_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_customer_message_checks_status_time
+          ON customer_message_checks(status, captured_at DESC);
+      `)
+    },
+    down: (db) => db.exec('DROP INDEX IF EXISTS idx_customer_message_checks_status_time; DROP INDEX IF EXISTS idx_customer_message_checks_store_time; DROP TABLE IF EXISTS customer_message_checks;')
   }
 ]
 

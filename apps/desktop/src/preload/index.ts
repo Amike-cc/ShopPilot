@@ -405,6 +405,16 @@ const api = {
   snapshot: {
     list: (storeId: string, limit?: number): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SNAPSHOT_LIST, { storeId, limit })
   },
+
+  // 电商客服：独立的店铺消息监控摘要，不暴露平台页面、正文或会话凭据。
+  customerService: {
+    prepare: (storeId: string): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CUSTOMER_SERVICE_PREPARE, { storeId }),
+    list: (input: { storeId?: string; limit?: number } = {}): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CUSTOMER_SERVICE_STATUS_LIST, input),
+    checkNow: (storeId: string): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CUSTOMER_SERVICE_CHECK_NOW, { storeId })
+  },
   
   // 窗口装饰 - §17（顶部融合标题栏：右上角原生窗口按钮 overlay 底色随 UI 状态切换）
   windowChrome: {

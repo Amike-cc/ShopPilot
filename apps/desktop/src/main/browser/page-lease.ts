@@ -11,7 +11,8 @@
  * 判据只有三条，缺一不可（任何一条不满足就保持开着）：
  *   ① 页面是**我们**为后台采集开的（不是用户自己开着的）；
  *   ② 已经没有任何借用者（引用计数归零，多个采集并发用同一个页面时不会被先结束的那个关掉）；
- *   ③ 期间**用户没有接手**（没有把它显示出来看过）——用户看过的页面归用户，绝不当着他的面关掉。
+ *   ③ 期间**用户没有接手**（没有把它显示出来看过）——用户看过的页面归用户，
+ *      本次采集归还不当着他的面关掉。店铺级冷休眠由 window-manager 独立决定。
  *
  * 这里刻意做成不碰 Electron、不碰 DB 的纯状态机：页面开关的副作用留在 window-manager，
  * 决策留在本模块，这样"什么时候能关"可以被单测逐条钉死。
@@ -19,9 +20,9 @@
 export class StorePageLeases {
   /** storeId → 借用者数量（>0 表示还有后台采集在用这个页面） */
   private readonly borrowed = new Map<string, number>()
-  /** 页面是**我们**为后台采集开的（用户自己开的页面不进这个集合，永远不会被自动关） */
+  /** 页面是**我们**为后台采集开的（用户自己开的页面不进这个集合） */
   private readonly backgroundOpened = new Set<string>()
-  /** 用户接手过的页面（显示过/自己打开过）：租约归零也不关 */
+  /** 用户接手过的页面（显示过/自己打开过）：本次租约归还不关 */
   private readonly userOwned = new Set<string>()
 
   /**
@@ -53,7 +54,7 @@ export class StorePageLeases {
     this.borrowed.delete(storeId)
     if (!this.backgroundOpened.has(storeId)) return false
     if (this.userOwned.has(storeId)) {
-      // 用户接手过：这个页面从此归用户，采集结束不再自动关
+      // 用户接手过：本次采集结束不关
       this.backgroundOpened.delete(storeId)
       return false
     }
@@ -61,7 +62,7 @@ export class StorePageLeases {
     return true
   }
 
-  /** 用户接手（显示店铺 / 从界面打开）：此后这个页面不会被自动关闭。 */
+  /** 用户接手（显示店铺 / 从界面打开）：本次后台租约归还不会关闭它。 */
   claimByUser(storeId: string): void {
     this.userOwned.add(storeId)
   }

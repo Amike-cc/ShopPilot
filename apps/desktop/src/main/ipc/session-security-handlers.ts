@@ -15,7 +15,9 @@ import * as Diagnostics from '../services/diagnostics'
 import * as StoreManager from '../stores/store-manager'
 import * as ShopSessionManager from '../browser/shop-session-manager'
 import { emitToRenderer, setBrowserViewsVisible } from '../browser/window-manager'
+import { getActiveCustomerServiceSession } from '../browser/session-manager'
 import { writeAudit, auditRequestId } from '../services/audit-logger'
+import { customerMessageMonitor } from '../services/customer-message-monitor'
 
 function rid(): string { return randomUUID() }
 function ok<T>(data: T, requestId: string): IPCResult<T> { return { ok: true, data, requestId } }
@@ -27,6 +29,7 @@ function sessionError(e: any, requestId: string): IPCResult {
   if (msg.startsWith('SESSION_PACKAGE_EXPIRED')) return err(ERROR_CODES.SESSION_PACKAGE_EXPIRED.code, '会话包已过期，拒绝导入', requestId)
   if (msg.startsWith('SESSION_IMPORT_INVALID')) return err(ERROR_CODES.SESSION_IMPORT_INVALID.code, msg.replace('SESSION_IMPORT_INVALID: ', '会话包校验失败：'), requestId)
   if (msg.startsWith('APP_LOCKED')) return err(ERROR_CODES.APP_LOCKED.code, msg.replace('APP_LOCKED: ', ''), requestId)
+  if (msg.startsWith('SECURITY_STORAGE_UNAVAILABLE')) return err(ERROR_CODES.SECURITY_STORAGE_UNAVAILABLE.code, msg.replace('SECURITY_STORAGE_UNAVAILABLE: ', ''), requestId)
   if (msg.includes('STORE_NOT_FOUND')) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
   if (msg.includes('INVALID_ARGUMENT')) return err(ERROR_CODES.INVALID_ARGUMENT.code, msg.replace(/^.*INVALID_ARGUMENT:\s*/, ''), requestId)
   return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
@@ -101,6 +104,12 @@ export function registerSessionAndSecurityHandlers(): void {
       if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
       const url = `${input.secure ? 'https' : 'http'}://${input.domain.replace(/^\./, '')}${input.path || '/'}`
       await storeSession(storeId).cookies.remove(url, input.name)
+      // 先使旧快照失效；若 safeStorage 暂不可用，后续重拍会跳过，但旧文件不会
+      // 再把用户刚删除的会话 Cookie 灌回分区。
+      SessionPersistence.clearStoreSessionSnapshot(storeId, 'store')
+      // 会话级 Cookie 不由 Chromium 持久化；删除后必须立刻重拍经营快照，
+      // 否则应用重启时旧快照会把刚删除的登录 Cookie 灌回去。
+      await SessionPersistence.snapshotStoreSession(storeId)
       return ok({ removed: true }, requestId)
     } catch (e: any) { return sessionError(e, requestId) }
   })
@@ -111,9 +120,20 @@ export function registerSessionAndSecurityHandlers(): void {
       const storeId = requireStoreId(input?.storeId)
       if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
       await storeSession(storeId).clearStorageData({ storages: ['cookies'] })
+      await SessionPersistence.cancelCustomerServiceSessionRestore(storeId)
+      // 客服页面使用独立 partition；清空登录 Cookie 时必须同时清理客服分区，
+      // 否则重新打开客服页仍可能沿用旧的登录态。
+      // 客服分区可能从未打开。只操作已登记的运行时 Session，避免清理动作本身
+      // 创建客服 Session、启动后台追踪或触发代理配置；客服快照单独删除即可。
+      const customerServiceSession = getActiveCustomerServiceSession(storeId)
+      if (customerServiceSession) {
+        await customerServiceSession.clearStorageData({ storages: ['cookies'] })
+      }
       // 快照必须同步失效：否则下次启动 restoreStoreSession 会把刚清掉的会话级 Cookie 灌回来，
       // 用户会以为"清空 Cookie 没生效 / 软件偷偷保存了登录态"（2026-09-28 审查确认）。
-      try { SessionPersistence.clearStoreSessionSnapshot(storeId) } catch { /* 快照清理失败不阻塞 */ }
+      try {
+        SessionPersistence.clearStoreSessionSnapshot(storeId)
+      } catch { /* 快照清理失败不阻塞 */ }
       writeAudit('browser.clearData', 'success', { storeId, requestId: auditRequestId(requestId, 'cookies') })
       return ok({ cleared: true }, requestId)
     } catch (e: any) { return sessionError(e, requestId) }
@@ -166,6 +186,7 @@ export function registerSessionAndSecurityHandlers(): void {
         // 移除主密码会同时解除应用锁（见 security-manager）：与 SECURITY_UNLOCK 对齐，
         // 必须恢复视图可见并广播状态，否则渲染层仍停在锁屏上
         setBrowserViewsVisible(true)
+        customerMessageMonitor.resumeAfterAppUnlock()
         emitToRenderer(EVENT_CHANNELS.SECURITY_LOCKED, { locked: false })
       }
       return ok(result, requestId)
@@ -181,10 +202,13 @@ export function registerSessionAndSecurityHandlers(): void {
 
   handle(IPC_CHANNELS.SECURITY_UNLOCK, async (_e: IpcMainInvokeEvent, input: { credential: string }): Promise<IPCResult> => {
     const requestId = rid()
-    const success = Security.unlockApp(String(input?.credential ?? ''))
-    if (!success) return err(ERROR_CODES.APP_LOCKED.code, '主密码不正确', requestId)
-    setBrowserViewsVisible(true)
-    emitToRenderer(EVENT_CHANNELS.SECURITY_LOCKED, { locked: false })
-    return ok({ locked: false }, requestId)
+    try {
+      const success = Security.unlockApp(String(input?.credential ?? ''))
+      if (!success) return err(ERROR_CODES.APP_LOCKED.code, '主密码不正确', requestId)
+      setBrowserViewsVisible(true)
+      customerMessageMonitor.resumeAfterAppUnlock()
+      emitToRenderer(EVENT_CHANNELS.SECURITY_LOCKED, { locked: false })
+      return ok({ locked: false }, requestId)
+    } catch (e: any) { return sessionError(e, requestId) }
   }, { allowWhenLocked: true })
 }

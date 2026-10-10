@@ -26,10 +26,12 @@ import { registerUpdateHandlers } from './ipc/update-handlers'
 import { registerAiHandlers } from './ipc/ai-handlers'
 import { registerAgentHandlers } from './ipc/agent-handlers'
 import { registerAgentDomainHandlers } from './ipc/agent-domain-handlers'
+import { registerCustomerServiceHandlers } from './ipc/customer-service-handlers'
 import { scheduleStartupCheck } from './services/update-manager'
 import { installLockGate, startBackgroundServices } from './services/bg-services'
 import * as Security from './services/security-manager'
 import { setBrowserHostWindow, setBrowserViewsVisible, emitToRenderer } from './browser/window-manager'
+import { customerMessageMonitor } from './services/customer-message-monitor'
 import { clearProxyAuthTracking, applyDefaultSessionPermissions } from './browser/session-manager'
 import { verifyStoreFingerprint } from './browser/fingerprint-injector'
 import { createStore, deleteStorePermanent, getStore, listStores } from './stores/store-manager'
@@ -143,11 +145,20 @@ function resolveAppIcon(): string | undefined {
 }
 
 const STORE_PARTITION_PREFIX = 'persist:store_'
+/** 客服页面使用独立持久分区，不能复用经营工作台的会话。 */
+const CUSTOMER_SERVICE_PARTITION_PREFIX = 'persist:customer-service_'
 
 /** 从 webview partition 中提取店铺 ID；未知格式一律拒绝。 */
 function getWebviewStoreId(partition: unknown): string | null {
   if (typeof partition !== 'string' || !partition.startsWith(STORE_PARTITION_PREFIX)) return null
   const storeId = partition.slice(STORE_PARTITION_PREFIX.length)
+  return storeId.length > 0 ? storeId : null
+}
+
+/** 从客服 webview partition 中提取店铺 ID；未知格式一律拒绝。 */
+function getCustomerServiceStoreId(partition: unknown): string | null {
+  if (typeof partition !== 'string' || !partition.startsWith(CUSTOMER_SERVICE_PARTITION_PREFIX)) return null
+  const storeId = partition.slice(CUSTOMER_SERVICE_PARTITION_PREFIX.length)
   return storeId.length > 0 ? storeId : null
 }
 
@@ -167,7 +178,9 @@ function isAllowedWebviewSource(source: unknown): boolean {
 function describeWebviewValue(value: unknown, kind: 'partition' | 'src'): string {
   if (typeof value !== 'string') return '<missing>'
   if (kind === 'partition') {
-    return value.startsWith(STORE_PARTITION_PREFIX) ? 'persist:store_<redacted>' : '<invalid>'
+    if (value.startsWith(STORE_PARTITION_PREFIX)) return 'persist:store_<redacted>'
+    if (value.startsWith(CUSTOMER_SERVICE_PARTITION_PREFIX)) return 'persist:customer-service_<redacted>'
+    return '<invalid>'
   }
   if (value === 'about:blank') return 'about:blank'
   try {
@@ -216,14 +229,24 @@ function createWindow(): void {
     webPreferences.contextIsolation = true
     webPreferences.sandbox = true
     webPreferences.webviewTag = false
-    // 默认允许 Chromium 对隐藏页面节流；当前活动页/任务页由 window-manager 按场景解除。
-    webPreferences.backgroundThrottling = true
-
     const storeId = getWebviewStoreId(params.partition)
+    const customerServiceStoreId = getCustomerServiceStoreId(params.partition)
+    // 经营页面默认允许 Chromium 对隐藏页面节流；客服页面需要保持实时接待状态，
+    // 即使切回经营工作台也不暂停消息页面的定时器与连接。
+    // 店铺页面默认允许后台节流；客服页面随后显式关闭节流，保证切回经营工作台后仍接收平台消息。
+    webPreferences.backgroundThrottling = true
+    if (customerServiceStoreId) webPreferences.backgroundThrottling = false
     let validPartition = false
     if (storeId && params.partition === `${STORE_PARTITION_PREFIX}${storeId}`) {
       try {
         validPartition = !!getStore(storeId)
+      } catch {
+        validPartition = false
+      }
+    }
+    if (customerServiceStoreId && params.partition === `${CUSTOMER_SERVICE_PARTITION_PREFIX}${customerServiceStoreId}`) {
+      try {
+        validPartition = !!getStore(customerServiceStoreId)
       } catch {
         validPartition = false
       }
@@ -237,6 +260,56 @@ function createWindow(): void {
         'warn',
         `main window: blocked webview attach reason=${reason} partition=${describeWebviewValue(params.partition, 'partition')} src=${describeWebviewValue(params.src, 'src')}`
       )
+    }
+  })
+
+  // 客服页面不是经营标签，不能依赖 window-manager 的 guest 注册钩子。
+  // 它仍然是远程页面，必须在 guest 自己的导航/弹窗边界上收口；否则页面脚本
+  // 可以把客服 webview 导向 file/data/javascript 等非业务协议，或绕过应用内页面
+  // 直接创建未受控的原生窗口。http(s) 的平台内跳转继续允许，弹窗改为当前客服页
+  // 内导航，保留扫码/OAuth 等人工登录流程而不创建额外 BrowserWindow。
+  ;(mainWindow.webContents as any).on('did-attach-webview', (_event: Electron.Event, guestWebContents: Electron.WebContents) => {
+    // Electron 的 did-attach-webview 只传 (event, guestWebContents)。此前把
+    // will-attach 的 webPreferences/params 误当成这里的后续参数，导致 partition
+    // 永远读不到，客服 guest 的导航与弹窗边界实际上没有安装。
+    const partition = String((guestWebContents as any)?.session?.partition || '')
+    const customerServiceStoreId = getCustomerServiceStoreId(partition)
+    if (!customerServiceStoreId) return
+    const destroyGuest = (): void => {
+      try {
+        const candidate = guestWebContents as any
+        if (typeof candidate.destroy === 'function') candidate.destroy()
+        else if (typeof candidate.close === 'function') candidate.close()
+      } catch { /* 页面已销毁 */ }
+    }
+    try {
+      if (!getStore(customerServiceStoreId)) {
+        destroyGuest()
+        return
+      }
+      if (partition !== `${CUSTOMER_SERVICE_PARTITION_PREFIX}${customerServiceStoreId}`) {
+        logMain('warn', 'customer-service guest: blocked unexpected session partition')
+        destroyGuest()
+        return
+      }
+      guestWebContents.setWindowOpenHandler(({ url }: { url: string }) => {
+        if (!isAllowedWebviewSource(url)) {
+          logMain('warn', 'customer-service guest: blocked popup with unsafe URL')
+          return { action: 'deny' }
+        }
+        try { guestWebContents.loadURL(url).catch(() => { /* 页面自行呈现失败 */ }) } catch { /* 页面已销毁 */ }
+        return { action: 'deny' }
+      })
+      const allowCustomerNavigation = (event: Electron.Event, url: string): void => {
+        if (isAllowedWebviewSource(url)) return
+        event.preventDefault()
+        logMain('warn', 'customer-service guest: blocked unsafe navigation')
+      }
+      guestWebContents.on('will-navigate', allowCustomerNavigation)
+      guestWebContents.on('will-redirect', allowCustomerNavigation)
+    } catch (error) {
+      logMain('warn', `customer-service guest security setup failed: ${String((error as Error)?.message || error).slice(0, 160)}`)
+      destroyGuest()
     }
   })
 
@@ -297,6 +370,10 @@ function createWindow(): void {
   })
   mainWindow.on('closed', () => {
     mainWindow = null
+    // 客服后台使用隐藏 BrowserWindow；它们不会触发 window-all-closed，
+    // 否则用户关闭主窗口后应用可能仍驻留后台。先停监控并销毁隐藏窗口，
+    // 再让普通的 window-all-closed/退出流程接管。
+    try { customerMessageMonitor.stop() } catch { /* 关闭时幂等 */ }
   })
   // 窗口被关闭是"应用静默退出"最常见的原因（Windows 上 window-all-closed 即退出）：
   // 记下是谁关的、是否在退出流程中，事后可判
@@ -412,15 +489,18 @@ async function initialize(): Promise<void> {
     registerAiHandlers()
     registerAgentHandlers()
     registerAgentDomainHandlers()
+    registerCustomerServiceHandlers()
     console.log('IPC handlers registered')
 
     // 锁定动作的统一善后（手动锁定与空闲自动锁定同路径）- §189
     Security.setDestroySensitiveHook(() => {
       clearProxyAuthTracking()
+      customerMessageMonitor.pauseForAppLock()
       setBrowserViewsVisible(false)
       emitToRenderer(EVENT_CHANNELS.SECURITY_LOCKED, { locked: true })
     })
     startBackgroundServices()
+    customerMessageMonitor.start()
 
     // 历史遗留的 Agent 记忆目录（%APPDATA%\ShopPilot\agent-memory）搬到 userData 之下：
     // 否则它会落在备份/诊断包/卸载清理的边界之外（2026-09-28 审查实测两个目录同时存在）。
@@ -592,6 +672,7 @@ app.on('before-quit', () => {
   try { stopSalesMetricsScheduler() } catch (e: any) {
     try { logMain('warn', '退出前停止经营采集调度失败: ' + String(e?.message || e)) } catch { /* ignore */ }
   }
+  try { customerMessageMonitor.stop() } catch { /* ignore */ }
   try {
     const active = TaskRunner.listLiveRuns()
     if (active.length) {

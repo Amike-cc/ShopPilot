@@ -38,13 +38,18 @@ function get(key: string): string | null {
 
 function seal(obj: unknown): string {
   const json = JSON.stringify(obj)
-  return safeStorage.isEncryptionAvailable()
-    ? 'enc:' + safeStorage.encryptString(json).toString('base64')
-    : 'plain:' + Buffer.from(json, 'utf8').toString('base64')
+  // 主密码校验值虽然不是密码原文，但它是应用锁的安全根；safeStorage 不可用时
+  // 写入 Base64 只是在伪装明文，且与凭据/记忆服务的 fail-closed 策略不一致。
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('SECURITY_STORAGE_UNAVAILABLE: 系统安全存储不可用，拒绝保存主密码')
+  }
+  return 'enc:' + safeStorage.encryptString(json).toString('base64')
 }
 function unseal(stored: string | null): any {
   if (!stored) return null
   try {
+    // 兼容读取历史 plain: 校验值（其中只有 scrypt 派生值，不是密码原文），
+    // 但新写入永远不会再降级为 plain:；用户更换密码后会自动迁移到 enc:。
     const raw = stored.startsWith('enc:')
       ? (safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(Buffer.from(stored.slice(4), 'base64')) : null)
       : stored.startsWith('plain:') ? Buffer.from(stored.slice(6), 'base64').toString('utf8') : null
@@ -57,7 +62,11 @@ function derive(password: string, salt: Buffer): Buffer {
 }
 
 export function hasMasterPassword(): boolean {
-  return !!unseal(get(MASTER_KEY))
+  const stored = get(MASTER_KEY)
+  // 已有加密记录但系统暂时没有可用的 safeStorage 时，必须仍视为“已启用”。
+  // 否则应用会把安全存储故障误判成“用户未设置主密码”，从而绕过锁定门禁。
+  if (stored?.startsWith('enc:') && !safeStorage.isEncryptionAvailable()) return true
+  return !!unseal(stored)
 }
 
 /** 设置/更换主密码；已设置时需旧密码。
@@ -91,7 +100,11 @@ export function removeMasterPassword(credential?: string | null): { ok: boolean 
 }
 
 export function verifyMaster(password: string): boolean {
-  const rec = unseal(get(MASTER_KEY))
+  const stored = get(MASTER_KEY)
+  if (stored?.startsWith('enc:') && !safeStorage.isEncryptionAvailable()) {
+    throw new Error('SECURITY_STORAGE_UNAVAILABLE: 系统安全存储不可用，无法验证主密码')
+  }
+  const rec = unseal(stored)
   if (!rec?.salt || !rec?.hash) return false
   const expect = Buffer.from(rec.hash, 'base64')
   const got = derive(password, Buffer.from(rec.salt, 'base64'))

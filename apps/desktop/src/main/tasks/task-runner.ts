@@ -30,7 +30,7 @@ import { generateInviteScript } from '../services/ai-client'
 import { recordInvite } from '../services/invite-history'
 import { classifyInviteBlockNotice, matchSessionStall } from '@shared/invite-notices'
 import { isAppLocked } from '../services/security-manager'
-import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, getActiveTabId, closeTab, waitForTabWebContents, borrowStorePage, setStoreTaskActivity } from '../browser/window-manager'
+import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, getActiveTabId, closeTab, waitForTabWebContents, borrowStorePage, setStoreTaskActivity, openStoreBrowser } from '../browser/window-manager'
 import { waitForStoreSessionReady } from '../browser/session-manager'
 import { getDatabase } from '../db/database'
 
@@ -156,6 +156,11 @@ function transition(run: RunHandle, to: string, reason: string): void {
 
   // 跑到终态就归还"定时任务后台开店"借来的页面（2026-10-02 用户要求：采集任务完成后关闭网页）。
   // 只在终态归还：paused / waiting_confirmation 还要接着跑，页面得留着。
+  // 先解除本次运行的 task 门禁，再归还租约；归还函数仍会检查下载、上传、人工确认、
+  // 独立窗口和其它租约等门禁，避免“任务结束”误把别的并发使用者的页面关掉。
+  if (to === 'succeeded' || to === 'failed' || to === 'cancelled') {
+    setStoreTaskActivity(run.storeId, false)
+  }
   if (to === 'succeeded' || to === 'failed' || to === 'cancelled') releaseBorrowedPage(run.runId)
 
   if (to === 'failed') {
@@ -233,6 +238,11 @@ export function resumeRun(runId: string): void {
   const run = live.get(runId)
   if (!run) throw new Error('TASK_BAD_STATE: 该运行属于上一进程会话，无法原地恢复；请重新运行任务')
   if (run.status !== 'paused') throw new Error(`TASK_BAD_STATE: ${run.status} 状态不可恢复`)
+  // 暂停期间店铺可能已进入冷休眠。恢复是用户明确发起的动作，先恢复店铺浏览器
+  // 并显示目标店铺，再入队；否则队列泵会一直等待一个已被生命周期回收的店铺。
+  if (!getOpenStoreIds().includes(run.storeId)) {
+    openStoreBrowser(run.storeId, { display: true, source: 'main' })
+  }
   run.resumeKind = 'continue'
   run.pauseRequested = false
   transition(run, 'queued', '用户恢复执行，排队等待')
@@ -254,6 +264,11 @@ export function retryRunFromFailed(runId: string): void {
   const step = run.steps[failedIdx]
   if (step && NON_RESUMABLE_TYPES.has(step.type)) {
     throw new Error('TASK_BAD_STATE: 失败步骤为副作用步骤（草稿填充/人工确认），按规范不进入可恢复重试范围，请重新运行任务')
+  }
+  // 冷休眠可能已经关闭了该店铺。用户明确点击重试时恢复店铺并显示目标页，
+  // 否则 run 会进入 queued 后一直等待“店铺已打开”。
+  if (!getOpenStoreIds().includes(run.storeId)) {
+    openStoreBrowser(run.storeId, { display: true, source: 'main' })
   }
   run.skipDone = true
   run.resumeKind = 'from-failed'

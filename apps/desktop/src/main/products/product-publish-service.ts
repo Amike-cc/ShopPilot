@@ -20,7 +20,7 @@ import { toBatchItemState } from '@shared/product-status'
 import { compareReadbackFields, completionChecklist, type ReadbackComparison, type ReadbackSuggestion } from '@shared/product-readback-rules'
 import { localProductDraftHash } from '@shared/product-draft'
 import * as StoreManager from '../stores/store-manager'
-import { createTab, getTabWebContents, openStoreBrowser, waitForStoreWebContents } from '../browser/window-manager'
+import { closeTab, createTab, getTabWebContents, openStoreBrowser, setStoreLifecycleBlock, waitForStoreWebContents } from '../browser/window-manager'
 import { getDatabase } from '../db/database'
 import { logMain } from '../services/logger'
 import { ProductRepository } from './product-repository'
@@ -33,11 +33,49 @@ export interface PublishRuntime {
   getStore: (storeId: string) => Store | null
   waitForStoreWebContents: (storeId: string, timeoutMs?: number) => Promise<WebContents | null>
   openStorePage: (storeId: string) => void
+  /** 长时间导航/回读期间阻止店铺冷休眠；注入运行时可省略。 */
+  setStoreLifecycleBlock?: (storeId: string, reason: 'task' | 'confirmation' | 'upload' | 'external', active: boolean) => void
   /** 在店铺里新开一个标签页（发布页必须从新标签页进，见 openForHuman 的说明） */
   createTab: (storeId: string, url: string) => string
   /** 取指定标签页的 webContents（拿不到返回 null，调用方不许硬来） */
   getTabWebContents: (storeId: string, tabId: string) => WebContents | null
+  /** 只读回读使用的临时标签页，完成后必须关闭；发布人工页不走这条路径。 */
+  closeTab?: (storeId: string, tabId: string) => void
   repository: ProductRepository
+}
+
+/**
+ * 一个店铺可能同时有多条发布项处于人工交接点。
+ * 生命周期门禁按 item 计数，不能让确认其中一条就把另一条仍在页面上的店铺收走。
+ */
+const publishHumanHoldsByStore = new Map<string, Set<string>>()
+
+function retainPublishHumanHold(runtime: PublishRuntime, storeId: string, itemId: string): void {
+  const holds = publishHumanHoldsByStore.get(storeId) || new Set<string>()
+  if (holds.has(itemId)) return
+  const wasEmpty = holds.size === 0
+  holds.add(itemId)
+  publishHumanHoldsByStore.set(storeId, holds)
+  if (wasEmpty) runtime.setStoreLifecycleBlock?.(storeId, 'confirmation', true)
+}
+
+function releasePublishHumanHold(runtime: PublishRuntime, storeId: string, itemId: string): void {
+  const holds = publishHumanHoldsByStore.get(storeId)
+  if (!holds || !holds.delete(itemId)) return
+  if (holds.size > 0) return
+  publishHumanHoldsByStore.delete(storeId)
+  runtime.setStoreLifecycleBlock?.(storeId, 'confirmation', false)
+}
+
+/**
+ * 发布项可能在人工交接期间被删除或清理；此时调用方已经拿不到 storeId，
+ * 也不能把 confirmation 门禁永远留在内存里。按 itemId 扫描所有店铺只读账本，
+ * 释放与该发布项对应的那一项，保留同店其它并发发布项的门禁。
+ */
+function releasePublishHumanHoldEverywhere(runtime: PublishRuntime, itemId: string): void {
+  for (const storeId of Array.from(publishHumanHoldsByStore.keys())) {
+    releasePublishHumanHold(runtime, storeId, itemId)
+  }
 }
 
 function createDefaultRuntime(): PublishRuntime {
@@ -45,8 +83,10 @@ function createDefaultRuntime(): PublishRuntime {
     getStore: StoreManager.getStore,
     waitForStoreWebContents,
     openStorePage: storeId => openStoreBrowser(storeId, { display: true, source: 'main' }),
+    setStoreLifecycleBlock,
     createTab: (storeId, url) => createTab(storeId, url),
     getTabWebContents: (storeId, tabId) => getTabWebContents(storeId, tabId),
+    closeTab: (storeId, tabId) => closeTab(storeId, tabId),
     repository: new ProductRepository(getDatabase())
   }
 }
@@ -180,17 +220,24 @@ export class ProductPublishService {
         status: 'awaiting_human', reasonCode: 'PUBLISH_ENTRY_NOT_VERIFIED',
         safeMessage: `${store.platform}尚未实测到发布入口地址，请在店铺后台手动进入「发布商品」页面（应用不猜 URL）`
       })
+      // 虽然应用不知道可验证的入口 URL，人工仍可能在该店铺页面继续操作；
+      // 只要这条发布项还在 awaiting_human，就不能让冷休眠把店铺页面收走。
+      retainPublishHumanHold(runtime, store.id, input.itemId)
       return { ok: true, state: 'awaiting_human', tier, safeMessage: `${store.platform}尚未实测到发布入口，请手动进入发布页`, url: null, fill: [] }
     }
 
-    let wc = await runtime.waitForStoreWebContents(store.id, 5_000).catch(() => null)
-    if (!wc || wc.isDestroyed()) {
-      runtime.openStorePage(store.id)
-      wc = await runtime.waitForStoreWebContents(store.id, 30_000)
-    }
-    if (!wc || wc.isDestroyed()) {
-      return { ok: false, state: 'filling', tier, safeMessage: '店铺页面不可用，请先打开该店铺', url, fill: [] }
-    }
+    // 发布页导航和表单渲染可能跨越多个切店操作；在人工交接点建立前，
+    // 用 external 门禁保护这段异步流程，避免冷休眠中途销毁目标 guest。
+    runtime.setStoreLifecycleBlock?.(store.id, 'external', true)
+    try {
+      let wc = await runtime.waitForStoreWebContents(store.id, 5_000).catch(() => null)
+      if (!wc || wc.isDestroyed()) {
+        runtime.openStorePage(store.id)
+        wc = await runtime.waitForStoreWebContents(store.id, 30_000)
+      }
+      if (!wc || wc.isDestroyed()) {
+        return { ok: false, state: 'filling', tier, safeMessage: '店铺页面不可用，请先打开该店铺', url, fill: [] }
+      }
 
     // **在新标签页里打开发布页**（关键）：
     // 实测（2026-09-30）在旧标签页里导航到 `/shop/goods/entry` 会被平台的"继续编辑"状态
@@ -211,6 +258,7 @@ export class ProductPublishService {
         safeMessage: '打开发布页的新标签页没就绪，请在浏览器里手动进入「发布商品」页；应用不会替你提交',
         evidence: { publishUrl: url, tier, tabId }
       })
+      retainPublishHumanHold(runtime, store.id, input.itemId)
       return { ok: true, state: 'awaiting_human', tier, safeMessage: '新标签页没就绪，请手动进入发布页（应用不会替你提交）', url, fill: [] }
     }
     const page = tabWc
@@ -328,6 +376,8 @@ export class ProductPublishService {
         filledFields: filledOk, fillFailures: filledFail.map(row => ({ field: row.field, reason: row.reason }))
       }
     })
+    // 页面已经交给用户：即使切到其它店铺，也要保留发布页直到用户确认或放弃。
+    retainPublishHumanHold(runtime, store.id, input.itemId)
     logMain('info', `[product-publish] 打开发布页 store=${store.id} tier=${tier} reached=${reached} 代填=${filledOk.length}（未提交任何内容）`)
 
     return {
@@ -339,6 +389,9 @@ export class ProductPublishService {
         ? `已把页面开到发布页（${tier}）。${fillSummary ? fillSummary + '。' : ''}请在页面上核对并自己点提交，提交后回到应用点「我已提交」——应用不会替你点提交`
         : `发布页没能确认打开（${nav.reason || '页面没到位'}）：请检查登录状态、或先在浏览器里手动进入发布页。应用不会替你提交`,
       url
+    }
+    } finally {
+      runtime.setStoreLifecycleBlock?.(store.id, 'external', false)
     }
   }
 
@@ -385,6 +438,8 @@ export class ProductPublishService {
         safeMessage: '已开人工确认门禁：页面上填完并**你自己点提交**之后，回到应用点「我已提交」',
         evidence: { baselinePlatformProductIds, baselineAt: Date.now() }
       })
+      // 人工门禁可过夜；在用户明确确认/放弃前，发布页必须保持可恢复。
+      retainPublishHumanHold(runtime, storeId, input.itemId)
       logMain('info', `[product-publish] 开人工门禁 item=${input.itemId} run=${runId}（任务引擎只负责等人，不带任何副作用步骤）`)
       return { ok: true, runId, safeMessage: '已开人工确认门禁' }
     } catch (error) {
@@ -401,7 +456,10 @@ export class ProductPublishService {
   confirmSubmitted(input: { itemId: string; approved: boolean }): { ok: boolean; state: string; safeMessage: string } {
     const runtime = this.runtimeFactory()
     const item = runtime.repository.listPublishItems({ limit: 200 }).find(row => String(row.id) === input.itemId)
-    if (!item) return { ok: false, state: 'unknown', safeMessage: '找不到这条发布项' }
+    if (!item) {
+      releasePublishHumanHoldEverywhere(runtime, input.itemId)
+      return { ok: false, state: 'unknown', safeMessage: '找不到这条发布项' }
+    }
     const runId = item.task_run_id ? String(item.task_run_id) : null
 
     if (runId) {
@@ -420,6 +478,9 @@ export class ProductPublishService {
         ? '你已确认在平台上提交：接下来只做**只读回读**（回查列表、比对本地），确认前不会改动任何平台数据'
         : '已放弃这次发布：页面留在原处，应用没有、也不会替你提交'
     })
+    // 放弃时人工交接已经结束。确认提交后先保留 confirmation 门禁，
+    // 让紧接着的只读回读不会在两个 IPC 调用之间被冷休眠打断；verifyAfterSubmit 完成后再释放。
+    if (!input.approved) releasePublishHumanHold(runtime, String(item.store_id), input.itemId)
     logMain('info', `[product-publish] 人工答复 item=${input.itemId} approved=${input.approved} → ${state}`)
     return {
       ok: true,
@@ -442,9 +503,17 @@ export class ProductPublishService {
     const item = runtime.repository.listPublishItems({ limit: 200 }).find(row => String(row.id) === input.itemId)
     if (!item) return { ok: false, state: 'unknown', safeMessage: '找不到这条发布项', matched: 0 }
     const storeId = String(item.store_id)
+    // 只有 confirmSubmitted(true) 后的 verifying/后续状态才结束人工交接。
+    // 即使本地商品已被删除，也不能让此前的确认门禁永久残留。
+    const shouldReleaseHumanHold = ['verifying', 'confirmed', 'needs_review'].includes(String(item.status))
     const product = runtime.repository.getProduct(String(item.product_id))
-    if (!product) return { ok: false, state: 'needs_review', safeMessage: '本地商品已被删除，无法比对', matched: 0 }
+    if (!product) {
+      if (shouldReleaseHumanHold) releasePublishHumanHold(runtime, storeId, input.itemId)
+      return { ok: false, state: 'needs_review', safeMessage: '本地商品已被删除，无法比对', matched: 0 }
+    }
 
+    runtime.setStoreLifecycleBlock?.(storeId, 'external', true)
+    try {
     // 先做一次**只读同步**去平台上回查（默认做）：只查本地台账会拿到过时数据，
     // 那样"没找到新增"可能只是"还没同步"，而不是"没发成功"。
     let syncNote = ''
@@ -485,6 +554,12 @@ export class ProductPublishService {
     })
     logMain('info', `[product-publish] 回读 item=${input.itemId} state=${readback.state} 基线=${baseline.length} 新增=${readback.newPlatformProductIds.length} 匹配=${readback.matchedPlatformProductIds.length}`)
     return { ok: true, state: readback.state, safeMessage: readback.safeMessage + syncNote, matched: readback.matchedPlatformProductIds.length }
+    } finally {
+      // 回读完成（成功、失败或异常）后，发布人工交接生命周期结束，
+      // 店铺重新回到正常的当前/温缓存/冷休眠策略。
+      if (shouldReleaseHumanHold) releasePublishHumanHold(runtime, storeId, input.itemId)
+      runtime.setStoreLifecycleBlock?.(storeId, 'external', false)
+    }
   }
 
   /**
@@ -510,6 +585,9 @@ export class ProductPublishService {
     const product = runtime.repository.getProduct(String(item.product_id))
     if (!product) return { ok: false, suggestions: [], counts: null, safeMessage: '本地商品已被删除', readFields: [], missingFields: [] }
 
+    runtime.setStoreLifecycleBlock?.(store.id, 'external', true)
+    let readbackTabId: string | null = null
+    try {
     // 读的是**商品的编辑页**（`?productId=`）：实测编辑页才把短标题/品牌/类目/价格/库存都渲染出来，
     // 新增商品页只有标题。回读的目的正是"看用户到底填了什么"，所以要读字段齐全的那一页。
     // 平台商品 ID 从**本地商品已归并的那条平台商品**取。
@@ -553,11 +631,11 @@ export class ProductPublishService {
       return { ok: false, suggestions: [], counts: null, safeMessage: '店铺页面不可用，请先打开该店铺', readFields: [], missingFields: [] }
     }
 
-    const tabId = runtime.createTab(store.id, url)
+    readbackTabId = runtime.createTab(store.id, url)
     let wc: WebContents | null = null
     // 轮询放宽到 36 秒：实测新标签页的 webContents 有时 12 秒还没就绪（页面在加载微信编辑页）
     for (let i = 0; i < 120 && !wc; i++) {
-      wc = runtime.getTabWebContents(store.id, tabId)
+      wc = runtime.getTabWebContents(store.id, readbackTabId)
       if (!wc) await delay(300)
     }
     if (!wc || wc.isDestroyed()) {
@@ -603,6 +681,12 @@ export class ProductPublishService {
         : '回读完成：页面上填的值与本地一致，无需处理',
       readFields: read.found,
       missingFields: read.missing
+    }
+    } finally {
+      if (readbackTabId) {
+        try { runtime.closeTab?.(store.id, readbackTabId) } catch { /* 页面已被用户关闭 */ }
+      }
+      runtime.setStoreLifecycleBlock?.(store.id, 'external', false)
     }
   }
 

@@ -14,7 +14,7 @@ import type { WebContents } from 'electron'
 import type { Store } from '@shared/schemas/store'
 import { detailUrlFor, productProfileFor } from '@shared/constants/product'
 import * as StoreManager from '../stores/store-manager'
-import { openStoreBrowser, waitForStoreWebContents } from '../browser/window-manager'
+import { openStoreBrowser, waitForStoreWebContents, setStoreLifecycleBlock } from '../browser/window-manager'
 import { getDatabase } from '../db/database'
 import { logMain } from '../services/logger'
 import { readProductDetail } from '../platform-adapters/product-page-reader'
@@ -24,6 +24,7 @@ export interface ProductDetailRuntime {
   getStore: (storeId: string) => Store | null
   waitForStoreWebContents: (storeId: string, timeoutMs?: number) => Promise<WebContents | null>
   openStorePage: (storeId: string) => void
+  setStoreLifecycleBlock?: (storeId: string, reason: 'task' | 'confirmation' | 'upload' | 'external', active: boolean) => void
   repository: ProductRepository
 }
 
@@ -32,6 +33,7 @@ function createDefaultRuntime(): ProductDetailRuntime {
     getStore: StoreManager.getStore,
     waitForStoreWebContents,
     openStorePage: storeId => openStoreBrowser(storeId, { display: false, source: 'main' }),
+    setStoreLifecycleBlock,
     repository: new ProductRepository(getDatabase())
   }
 }
@@ -119,6 +121,10 @@ export class ProductDetailService {
       return { status: 'LINK_NOT_FOUND', reasonCode: 'LINK_NOT_FOUND', safeMessage: '本地没有这条平台商品记录，请先同步一次', imageCount: 0, skuCount: 0, specNames: [], fields: [] }
     }
 
+    // 详情采集可能包含导航和懒加载轮询；明确登记生命周期门禁，
+    // 防止用户切到另一家店后 60 秒冷休眠关闭正在读取的 guest。
+    runtime.setStoreLifecycleBlock?.(input.storeId, 'external', true)
+    try {
     // 先看店铺页是不是已经在：**已经在就不要重开**。
     // 实测（2026-09-30）：无条件 `openStorePage` 会重建视图，随后拿到的 webContents 已失效，
     // 表现为 loadURL 抛错 → NAVIGATION_FAILED（而"店铺已经开着"的场景本来不需要重开）。
@@ -196,6 +202,9 @@ export class ProductDetailService {
       skuCount: written.inserted,
       specNames: detail.specNames,
       fields: detail.fields
+    }
+    } finally {
+      runtime.setStoreLifecycleBlock?.(input.storeId, 'external', false)
     }
   }
 }

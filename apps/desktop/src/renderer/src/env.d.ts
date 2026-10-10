@@ -231,6 +231,11 @@ declare global {
         fireScheduled: (taskId: string) => Promise<IPCResult>
       }
       snapshot: { list: (storeId: string, limit?: number) => Promise<IPCResult> }
+      customerService: {
+        prepare: (storeId: string) => Promise<IPCResult>
+        list: (input?: { storeId?: string; limit?: number }) => Promise<IPCResult>
+        checkNow: (storeId: string) => Promise<IPCResult>
+      }
       /** 窗口装饰 - §17：标题栏 overlay（右上角原生窗口按钮）底色随 UI 状态切换 */
       windowChrome: {
         setTitlebarOverlay: (opts: { color?: string; symbolColor?: string }) => Promise<IPCResult>

@@ -1,7 +1,12 @@
 <template>
   <div class="app-shell">
-    <!-- 所有业务页面统一挂载到新的深色工作台。旧 WorkbenchView 保留在仓库中作为历史兼容代码，运行时不再作为入口。 -->
-    <DashboardView />
+    <!-- 经营工作台与电商客服是两个独立工作区。两者都保持挂载，切换只改变可见工作区；
+         客服监控不会改写经营工作台的店铺、标签或网页状态。 -->
+    <DashboardView :active="!customerServiceOpen" @open-customer-service="customerServiceOpen = true" />
+    <CustomerServiceWorkspace
+      :active="customerServiceOpen"
+      @back-commerce="customerServiceOpen = false"
+    />
     <!-- 应用锁 overlay（§6.5/§189）：WebContentsView 已由主进程摘除，此层覆盖全屏 -->
     <div v-if="ws.appLocked" class="lock-overlay">
       <div class="lock-box">
@@ -28,6 +33,7 @@
 // App Shell - §17.1：单工作台屏幕（内嵌 WebContentsView 需固定视口区域）
 import { ref, watch } from 'vue'
 import DashboardView from '../features/workbench/DashboardView.vue'
+import CustomerServiceWorkspace from '../features/customer-service/CustomerServiceWorkspace.vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import lockIcon from '../assets/generated/ui-icons/lock.png'
 
@@ -35,6 +41,7 @@ const ws = useWorkspaceStore()
 const cred = ref('')
 const unlockErr = ref('')
 const unlocking = ref(false)
+const customerServiceOpen = ref(false)
 
 // §17 顶部融合标题栏：右上角原生窗口按钮（WCO）overlay 是不透明覆盖层，
 // 底色必须与它覆盖的那块 UI **完全一致**，否则右上角会显示成一块多余的色块。

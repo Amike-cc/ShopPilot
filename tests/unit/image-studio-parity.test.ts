@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-const studio = readFileSync('apps/desktop/src/renderer/src/features/workbench/UnifiedImageStudioPage.vue', 'utf8')
-const dashboard = readFileSync('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue', 'utf8')
-const imageClient = readFileSync('apps/desktop/src/main/services/ai-client.ts', 'utf8')
-const imageHandlers = readFileSync('apps/desktop/src/main/ipc/ai-handlers.ts', 'utf8')
+const readSource = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+const studio = readSource('apps/desktop/src/renderer/src/features/workbench/UnifiedImageStudioPage.vue')
+const dashboard = readSource('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue')
+const imageClient = readSource('apps/desktop/src/main/services/ai-client.ts')
+const imageHandlers = readSource('apps/desktop/src/main/ipc/ai-handlers.ts')
 
 describe('AI 商品图工作台页签细节', () => {
   it('保留参考站的模特、场景和自由编辑入口', () => {
