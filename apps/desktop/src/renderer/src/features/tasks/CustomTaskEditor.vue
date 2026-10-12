@@ -550,9 +550,12 @@ function move(i: number, delta: number) {
 .ct-editor {
   display: grid;
   /* 左栏 176：目录条目名最长 9 个汉字（「切到已打开的标签页」），156 会折行 */
-  grid-template-columns: 176px minmax(190px, 1fr) 262px;
+  grid-template-columns: minmax(120px, 176px) minmax(120px, 1fr) minmax(150px, 262px);
   gap: 10px;
   align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   /* 撑满父容器给的剩余高度（对话框是 flex 列，只有这一块伸缩），
      再由各栏自己的 overflow 吸收超出——这样「创建任务」按钮与校验始终留在视野里。 */
   flex: 1 1 auto;
@@ -563,6 +566,8 @@ function move(i: number, delta: number) {
   border: 1px solid var(--color-border); border-radius: var(--radius-sm);
   background: var(--color-bg-tertiary); overflow: hidden;
 }
+.ct-editor > *, .ct-field, .ct-fields, .ct-params-body { min-width: 0; }
+.ct-submit > span, .ct-pick-hint, .ct-desc, .ct-empty, .ct-issue { min-width: 0; overflow-wrap: anywhere; }
 .ct-col-h {
   display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
   padding: 7px 9px; border-bottom: 1px solid var(--color-border);

@@ -106,7 +106,8 @@ async function main() {
   let appLog = ''
   app.stdout.on('data', d => { appLog += d.toString() })
   app.stderr.on('data', d => { appLog += d.toString() })
-  app.on('exit', code => { if (code) console.log('!!! 应用退出 code=' + code + '\n' + appLog.slice(-2500)) })
+  let stopping = false
+  app.on('exit', code => { if (code && !stopping) console.log('!!! 应用提前退出 code=' + code + '\n' + appLog.slice(-2500)) })
 
   let code = 1
   let keepFocus = null
@@ -127,6 +128,7 @@ async function main() {
     console.error('RUNNER_FAIL', e)
   } finally {
     if (keepFocus) clearInterval(keepFocus)
+    stopping = true
     killTree(app)
     await sleep(1000)
   }

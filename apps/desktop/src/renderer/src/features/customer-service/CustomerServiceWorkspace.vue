@@ -34,7 +34,7 @@
           <span>电商客服</span>
         </button>
       </div>
-      <div class="customer-service-toolbar-actions"><span class="customer-service-live"><i aria-hidden="true"></i>页面长活 · 会话独立保存</span><button type="button" class="customer-service-back" data-test="customer-service-back-commerce" @pointerdown.stop @mousedown.stop @click.stop.prevent="backToCommerce">返回经营工作台</button></div>
+      <div class="customer-service-toolbar-actions"><span class="customer-service-live"><i aria-hidden="true"></i>每店独立会话 · 单店显示</span><button type="button" class="customer-service-back" data-test="customer-service-back-commerce" @pointerdown.stop @mousedown.stop @click.stop.prevent="backToCommerce">返回经营工作台</button></div>
     </header>
 
     <div class="customer-service-body">
@@ -44,31 +44,27 @@
         <div v-else-if="!ws.stores.length" class="customer-service-rail-state" data-test="customer-service-empty-state"><span class="rail-empty-icon" aria-hidden="true">＋</span><strong>暂无店铺</strong><span>先在经营工作台添加店铺。</span></div>
         <div v-else class="customer-service-store-list">
           <button v-for="store in ws.stores" :key="store.id" type="button" :class="['customer-service-store', { active: store.id === selectedStoreId }]" :data-store-id="store.id" @click="selectStore(store.id)">
-            <span class="store-avatar" :style="{ background: store.avatarColor || '#8065f5' }" aria-hidden="true">{{ store.name.slice(0, 1) }}</span><span class="store-copy"><strong :title="store.name">{{ store.name }}</strong><small>{{ store.platform }}</small></span><span class="store-state"><i :class="['store-state-dot', statusTone(storeStatus(store.id))]" aria-hidden="true"></i><small>{{ serviceEntry(store) ? (visitedStoreIds.includes(store.id) ? '已打开' : '待打开') : '未配置' }}</small></span>
+            <span class="store-avatar" :style="{ background: store.avatarColor || '#8065f5' }" aria-hidden="true">{{ store.name.slice(0, 1) }}</span><span class="store-copy"><strong :title="store.name">{{ store.name }}</strong><small>{{ store.platform }}</small></span><span class="store-state"><i :class="['store-state-dot', statusTone(storeStatus(store.id))]" aria-hidden="true"></i><small>{{ serviceEntry(store) ? (visitedStoreIds.includes(store.id) ? '已访问' : '待打开') : '未配置' }}</small></span>
           </button>
         </div>
-        <div class="store-rail-footnote"><span class="footnote-icon" aria-hidden="true">i</span><span>客服工作区只保存自己的店铺选择；每家店铺使用独立客服会话。切换工作区不会关闭、重载或切换经营工作台网页。</span></div>
+        <div class="store-rail-footnote"><span class="footnote-icon" aria-hidden="true">i</span><span>每家店铺使用独立客服登录会话；切换店铺时只显示当前店铺页面。切换工作区不会关闭、重载或切换经营工作台网页。</span></div>
       </aside>
 
       <main class="customer-service-main">
         <div v-if="!ws.ready" class="customer-service-state" data-test="customer-service-loading-panel"><div class="customer-service-state-card"><span class="customer-service-state-icon" aria-hidden="true">✦</span><strong>正在准备客服浏览器</strong><span>店铺列表加载完成后，可以直接进入对应平台人工接待。</span></div></div>
         <div v-else-if="!ws.stores.length" class="customer-service-state" data-test="customer-service-empty-panel"><div class="customer-service-state-card"><span class="customer-service-state-icon" aria-hidden="true">＋</span><strong>还没有可接待的店铺</strong><span>请先在经营工作台添加店铺，客服浏览器不会代替你创建店铺。</span><button type="button" class="customer-service-primary" @click="backToCommerce">去添加店铺</button></div></div>
-        <div v-else-if="!activeStore" class="customer-service-state"><div class="customer-service-state-card"><span class="customer-service-state-icon" aria-hidden="true">⌁</span><strong>选择一家店铺开始接待</strong><span>左侧店铺会保留各自的客服页面和登录状态。</span><span class="sr-only">未接入可靠来源、未读取平台会话时，能力未接入；不会展示推测数字。</span></div></div>
+        <div v-else-if="!activeStore" class="customer-service-state"><div class="customer-service-state-card"><span class="customer-service-state-icon" aria-hidden="true">⌁</span><strong>选择一家店铺开始接待</strong><span>左侧店铺使用各自的客服登录会话；页面位置按店铺保存，界面一次只显示所选店铺。</span><span class="sr-only">未接入可靠来源、未读取平台会话时，能力未接入；不会展示推测数字。</span></div></div>
         <section v-else class="customer-service-browser" data-test="customer-service-browser">
-          <div class="browser-heading"><div><span class="section-eyebrow">MANUAL REPLY / EMBEDDED BROWSER</span><h1>{{ activeStore.name }} · {{ activeStore.platform }}客服</h1></div><div class="browser-heading-meta"><span class="page-live-pill"><i aria-hidden="true"></i>客服页面长活</span><span class="message-status" :class="statusTone(selectedStatus)" :title="statusMessage(selectedStatus)"><i aria-hidden="true"></i>{{ statusLabel(selectedStatus) }}</span></div></div>
+          <div class="browser-heading"><div><span class="section-eyebrow">MANUAL REPLY / EMBEDDED BROWSER</span><h1>{{ activeStore.name }} · {{ activeStore.platform }}客服</h1></div><div class="browser-heading-meta"><span class="page-live-pill"><i aria-hidden="true"></i>当前店铺客服页</span><span class="message-status" :class="statusTone(selectedStatus)" :title="statusMessage(selectedStatus)"><i aria-hidden="true"></i>{{ statusLabel(selectedStatus) }}</span></div></div>
           <div class="customer-browser-shell">
-            <div class="customer-browser-tabs" role="tablist" aria-label="客服页面标签">
-              <button v-for="entry in visitedEntries" :key="entry.id" type="button" :class="['customer-browser-tab', { active: entry.id === selectedStoreId }]" role="tab" :aria-selected="entry.id === selectedStoreId" @click="selectStore(entry.id)"><span class="customer-tab-dot" :style="{ background: entry.avatarColor || '#8065f5' }" aria-hidden="true"></span><span>{{ entry.platform }}客服</span><i v-if="browserState(entry.id)?.loading" class="tab-loading" aria-label="加载中"></i></button>
-              <span class="customer-tabs-spacer"></span><span class="customer-browser-session-note"><i aria-hidden="true"></i>独立会话</span>
-            </div>
             <div class="customer-browser-addressbar"><div class="browser-nav-actions" aria-label="客服网页导航"><button type="button" class="browser-nav-button" title="后退" :disabled="!activeState?.canGoBack" data-test="customer-service-browser-back" @click="goBack"><span aria-hidden="true">‹</span></button><button type="button" class="browser-nav-button" title="前进" :disabled="!activeState?.canGoForward" data-test="customer-service-browser-forward" @click="goForward"><span aria-hidden="true">›</span></button><button type="button" class="browser-nav-button" title="刷新客服页面" data-test="customer-service-browser-reload" @click="reloadActive"><span aria-hidden="true">↻</span></button></div><div class="customer-browser-url" aria-label="当前客服页面地址"><span class="url-lock" aria-hidden="true">⌁</span><span class="url-value" :title="activeState?.url || serviceEntry(activeStore) || ''">{{ activeState?.url || serviceEntry(activeStore) || '平台客服地址未配置' }}</span></div><span class="customer-browser-load-state" :class="{ loading: activeState?.loading, failed: !!activeState?.failed }"><i aria-hidden="true"></i>{{ activeState?.loading ? '加载中' : activeState?.failed ? '加载失败' : '可接待' }}</span></div>
             <div class="customer-browser-viewport" data-test="customer-service-browser-viewport">
-              <template v-for="entry in visitedEntries" :key="`view-${entry.id}`"><webview v-if="serviceEntry(entry)" :ref="customerWebviewRefCallback(entry.id)" class="customer-service-webview" :class="{ active: entry.id === selectedStoreId }" :partition="customerPartition(entry.id)" src="about:blank" :data-store-id="entry.id" :aria-label="`${entry.name} · ${entry.platform}客服页面`" allowpopups @did-attach="handleWebviewAttach(entry.id)" @did-start-loading="handleWebviewStart(entry.id)" @did-stop-loading="handleWebviewStop(entry.id)" @did-finish-load="handleWebviewFinish(entry.id)" @did-navigate="handleWebviewNavigate(entry.id, $event)" @did-navigate-in-page="handleWebviewNavigate(entry.id, $event)" @page-title-updated="handleWebviewTitle(entry.id, $event)" @did-fail-load="handleWebviewFailure(entry.id, $event)" @destroyed="handleWebviewDestroyed(entry.id)"></webview></template>
+              <webview v-if="serviceEntry(activeStore)" :key="activeStore.id" :ref="customerWebviewRefCallback(activeStore.id)" class="customer-service-webview" :partition="customerServiceSessionPartition(activeStore.id)" src="about:blank" :data-store-id="activeStore.id" :aria-label="`${activeStore.name} · ${activeStore.platform}客服页面`" allowpopups @did-attach="handleWebviewAttach(activeStore.id)" @did-start-loading="handleWebviewStart(activeStore.id)" @did-stop-loading="handleWebviewStop(activeStore.id)" @did-finish-load="handleWebviewFinish(activeStore.id)" @did-navigate="handleWebviewNavigate(activeStore.id, $event)" @did-navigate-in-page="handleWebviewNavigate(activeStore.id, $event)" @page-title-updated="handleWebviewTitle(activeStore.id, $event)" @did-fail-load="handleWebviewFailure(activeStore.id, $event)" @destroyed="handleWebviewDestroyed(activeStore.id)"></webview>
               <div v-if="!serviceEntry(activeStore)" class="customer-browser-empty" data-test="customer-service-url-unavailable"><span class="customer-browser-empty-icon" aria-hidden="true">◎</span><strong>暂未配置 {{ activeStore.platform }}客服地址</strong><span>请为该店铺选择四个平台之一。</span></div>
               <div v-else-if="activeState?.failed" class="customer-browser-error" data-test="customer-service-browser-error" role="alert"><span class="customer-browser-error-icon" aria-hidden="true">!</span><strong>客服页面暂时无法加载</strong><span>{{ activeState.failed }}</span><button type="button" class="customer-service-primary" @click="retryActive">重新加载</button></div>
               <div v-else-if="activeState?.loading" class="customer-browser-loading" data-test="customer-service-browser-loading"><span class="state-spinner" aria-hidden="true"></span><strong>正在打开 {{ activeStore.platform }}客服</strong><span>首次打开可能需要等待平台登录页返回。</span></div>
             </div>
-            <div class="customer-browser-footer"><span class="footer-primary"><i aria-hidden="true"></i>人工回复</span><span>请直接在上方平台页面接待和发送消息，当前版本不自动生成或代发内容。</span><span class="footer-spacer"></span><span v-if="lastError" class="footer-error" role="alert">{{ lastError }}</span><button type="button" class="footer-refresh" :disabled="checkingStoreId === selectedStoreId" data-test="customer-service-check-now" @click="checkSelected">{{ checkingStoreId === selectedStoreId ? '检查中…' : '刷新消息状态' }}</button></div>
+            <div class="customer-browser-footer"><span class="footer-primary"><i aria-hidden="true"></i>人工回复</span><span>请直接在上方平台页面接待和发送消息，当前版本不自动生成或代发内容。</span><span class="footer-spacer"></span><span v-if="activeError" class="footer-error" role="alert">{{ activeError }}</span><button type="button" class="footer-refresh" :disabled="checkingStoreIds.has(selectedStoreId)" data-test="customer-service-check-now" @click="checkSelected">{{ checkingStoreIds.has(selectedStoreId) ? '检查中…' : '刷新消息状态' }}</button></div>
           </div>
         </section>
       </main>
@@ -80,8 +76,15 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
-import { isCustomerMessageCheckFresh } from '@shared/contracts/customer-service'
+import {
+  CUSTOMER_SERVICE_PLATFORMS,
+  customerServiceSessionPartition,
+  isAllowedCustomerServiceUrl,
+  isCustomerMessageCheckFresh
+} from '@shared/contracts/customer-service'
 import type { CustomerMessageCheck, CustomerMessageStatus } from '@shared/contracts/customer-service'
+import { createStoreScopedCheckController } from './store-scoped-check-controller'
+import { resolveCustomerServiceNavigationUrl } from './customer-service-navigation'
 
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: false })
 const emit = defineEmits<{ 'back-commerce': [] }>()
@@ -89,9 +92,7 @@ const ws = useWorkspaceStore()
 // 客服工作区只保存自己的店铺选择；兼容旧版的 shopilot.customer-service-monitor-store 记忆。
 const CUSTOMER_SERVICE_STORE_KEY = 'shopilot.customer-service-browser-store'
 const LEGACY_CUSTOMER_SERVICE_STORE_KEY = 'shopilot.customer-service-monitor-store'
-const CUSTOMER_SERVICE_PARTITION_PREFIX = 'persist:customer-service_'
-const CUSTOMER_SERVICE_URLS: Record<string, string> = { 抖店: 'https://im.jinritemai.com/pc_seller_v2/main/workspace', 拼多多: 'https://mms.pinduoduo.com/chat-merchant/index.html', 快手小店: 'https://im.kwaixiaodian.com/workbench', 微信小店: 'https://store.weixin.qq.com/shop/kf' }
-interface CustomerBrowserState { serviceUrl: string; url: string; title: string; loading: boolean; attached: boolean; prepared: boolean; navigationStarted: boolean; failed: string; canGoBack: boolean; canGoForward: boolean }
+interface CustomerBrowserState { serviceUrl: string; url: string; title: string; loading: boolean; attached: boolean; prepared: boolean; navigationStarted: boolean; hasNavigated: boolean; failed: string; canGoBack: boolean; canGoForward: boolean }
 const selectedStoreId = ref('')
 const visitedStoreIds = ref<string[]>([])
 const browserStates = reactive<Record<string, CustomerBrowserState>>({})
@@ -101,17 +102,19 @@ const webviewGenerations = new Map<string, number>()
 const preparingStoreIds = new Set<string>()
 let workspaceMounted = false
 const statuses = ref<Record<string, CustomerMessageCheck>>({})
-const checkingStoreId = ref('')
-const lastError = ref('')
+const statusListError = ref('')
+const { checkingStoreIds, errors: storeCheckErrors, check: runStoreCheck } = createStoreScopedCheckController<unknown>(
+  storeId => window.shopilot.customerService.checkNow(storeId),
+  (storeId, data) => { statuses.value = { ...statuses.value, [storeId]: data as CustomerMessageCheck } }
+)
+const activeError = computed(() => storeCheckErrors.get(selectedStoreId.value) || statusListError.value)
 const freshnessNow = ref(Date.now())
 let statusRefreshTimer: ReturnType<typeof setInterval> | null = null
 let freshnessTimer: ReturnType<typeof setInterval> | null = null
 const activeStore = computed(() => ws.stores.find(store => store.id === selectedStoreId.value) || null)
 const activeState = computed(() => selectedStoreId.value ? browserStates[selectedStoreId.value] || null : null)
 const selectedStatus = computed(() => selectedStoreId.value ? statuses.value[selectedStoreId.value] || null : null)
-const visitedEntries = computed(() => ws.stores.filter(store => visitedStoreIds.value.includes(store.id)))
-function customerPartition(storeId: string): string { return `${CUSTOMER_SERVICE_PARTITION_PREFIX}${storeId}` }
-function serviceEntry(store: StoreRow | null): string { return store ? CUSTOMER_SERVICE_URLS[store.platform] || '' : '' }
+function serviceEntry(store: StoreRow | null): string { return store ? CUSTOMER_SERVICE_PLATFORMS[store.platform]?.url || '' : '' }
 function readStoredStoreId(): string { try { return localStorage.getItem(CUSTOMER_SERVICE_STORE_KEY) || localStorage.getItem(LEGACY_CUSTOMER_SERVICE_STORE_KEY) || '' } catch { return '' } }
 function webviewGeneration(storeId: string): number { return webviewGenerations.get(storeId) || 0 }
 function bumpWebviewGeneration(storeId: string): number { const next = webviewGeneration(storeId) + 1; webviewGenerations.set(storeId, next); return next }
@@ -119,7 +122,7 @@ function ensureBrowserState(store: StoreRow): CustomerBrowserState {
   const configuredUrl = serviceEntry(store)
   const existing = browserStates[store.id]
   if (!existing) {
-    browserStates[store.id] = { serviceUrl: configuredUrl, url: configuredUrl, title: `${store.platform}客服`, loading: true, attached: false, prepared: false, navigationStarted: false, failed: '', canGoBack: false, canGoForward: false }
+    browserStates[store.id] = { serviceUrl: configuredUrl, url: configuredUrl, title: `${store.platform}客服`, loading: true, attached: false, prepared: false, navigationStarted: false, hasNavigated: false, failed: '', canGoBack: false, canGoForward: false }
   } else if (existing.serviceUrl !== configuredUrl) {
     // 店铺平台/客服入口可能在经营工作台被修改。旧的异步 prepare 不能再把
     // 原平台 URL 加载进同一个 WebView，先使这一代请求失效，再按新入口重来。
@@ -130,13 +133,13 @@ function ensureBrowserState(store: StoreRow): CustomerBrowserState {
     existing.loading = true
     existing.prepared = false
     existing.navigationStarted = false
+    existing.hasNavigated = false
     existing.failed = ''
     existing.canGoBack = false
     existing.canGoForward = false
   }
   return browserStates[store.id]
 }
-function browserState(storeId: string): CustomerBrowserState | null { return browserStates[storeId] || null }
 function kickPreparation(storeId: string): void {
   const store = ws.stores.find(item => item.id === storeId)
   const state = browserStates[storeId]
@@ -180,6 +183,7 @@ function customerWebviewRefCallback(storeId: string): (element: unknown) => void
   if (existing) return existing
   const callback = (element: unknown): void => {
     const previous = webviewEls.get(storeId)
+    if (previous && !element) syncWebviewState(storeId)
     if (previous !== element) bumpWebviewGeneration(storeId)
     if (element) webviewEls.set(storeId, element)
     else webviewEls.delete(storeId)
@@ -219,8 +223,14 @@ async function prepareCustomerService(storeId: string): Promise<void> {
       return
     }
     state.prepared = true
-    const url = String((result.data as { url?: string } | undefined)?.url || serviceEntry(store))
-    if (!isCurrent() || url !== serviceEntry(ws.stores.find(item => item.id === storeId)!)) return
+    const preparedUrl = String((result.data as { url?: string } | undefined)?.url || serviceEntry(store))
+    const url = resolveCustomerServiceNavigationUrl(store.platform, preparedUrl, state.url, state.hasNavigated)
+    if (!isCurrent()) return
+    if (!isAllowedCustomerServiceUrl(store.platform, url)) {
+      state.loading = false
+      state.failed = '客服页面地址不在该平台允许范围内'
+      return
+    }
     state.url = url
     await nextTick()
     if (!isCurrent()) return
@@ -232,6 +242,7 @@ async function prepareCustomerService(storeId: string): Promise<void> {
       return
     }
     state.navigationStarted = true
+    state.hasNavigated = true
     await element.loadURL(url)
   } catch {
     if (!isCurrent()) return
@@ -265,8 +276,8 @@ function statusTone(status: CustomerMessageStatus | CustomerMessageCheck | null 
 function statusMessage(status: CustomerMessageCheck | null): string { if (status && !isFresh(status)) return '上次检查已超过实时窗口，等待新的平台证据'; return status?.message || '尚未执行客服消息检查' }
 function stopStatusTimers(): void { if (statusRefreshTimer) clearInterval(statusRefreshTimer); if (freshnessTimer) clearInterval(freshnessTimer); statusRefreshTimer = null; freshnessTimer = null }
 function startStatusTimers(): void { if (statusRefreshTimer) return; statusRefreshTimer = setInterval(() => { void refreshStatuses() }, 15_000); freshnessTimer = setInterval(() => { freshnessNow.value = Date.now() }, 15_000) }
-async function refreshStatuses(): Promise<void> { if (!ws.ready || !ws.stores.length) return; try { const result = await window.shopilot.customerService.list({ limit: 200 }); if (!result.ok) { lastError.value = result.error.message; return }; const next: Record<string, CustomerMessageCheck> = {}; for (const item of (result.data?.items || []) as CustomerMessageCheck[]) next[item.storeId] = item; statuses.value = next } catch { lastError.value = '读取客服消息状态失败' } }
-async function checkSelected(): Promise<void> { const storeId = selectedStoreId.value; if (!storeId || checkingStoreId.value) return; checkingStoreId.value = storeId; lastError.value = ''; try { const result = await window.shopilot.customerService.checkNow(storeId); if (!result.ok) { lastError.value = result.error.message; return }; statuses.value = { ...statuses.value, [storeId]: result.data as CustomerMessageCheck } } catch { lastError.value = '客服消息状态检查失败' } finally { checkingStoreId.value = '' } }
+async function refreshStatuses(): Promise<void> { if (!ws.ready || !ws.stores.length) return; try { const result = await window.shopilot.customerService.list({ limit: 200 }); if (!result.ok) { statusListError.value = result.error.message; return }; statusListError.value = ''; const next: Record<string, CustomerMessageCheck> = {}; for (const item of (result.data?.items || []) as CustomerMessageCheck[]) next[item.storeId] = item; statuses.value = next } catch { statusListError.value = '读取客服消息状态失败' } }
+function checkSelected(): void { const storeId = selectedStoreId.value; if (!storeId) return; void runStoreCheck(storeId) }
 function onStatusChanged(payload: unknown): void { const item = payload as CustomerMessageCheck | null; if (!item?.storeId || !item.status) return; statuses.value = { ...statuses.value, [item.storeId]: item } }
 function backToCommerce(): void { emit('back-commerce') }
 watch(() => ws.stores.map(store => `${store.id}:${store.platform}:${serviceEntry(store)}`).join('|'), syncSelectedStore, { immediate: true })
@@ -385,15 +396,6 @@ onBeforeUnmount(() => { workspaceMounted = false; ws.stores.forEach(store => bum
 .message-status.checking { background: #f0edff; color: #5b3df5; }
 .message-status.checking i { background: #8065f5; }
 .customer-browser-shell { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; border: 1px solid #dfe4ee; border-radius: 15px; background: #fff; box-shadow: 0 12px 32px rgba(31, 41, 55, .07); }
-.customer-browser-tabs { display: flex; min-height: 42px; align-items: stretch; gap: 3px; overflow-x: auto; padding: 5px 8px 0; border-bottom: 1px solid #e5e9f1; background: #f8f9fc; scrollbar-width: thin; }
-.customer-browser-tab { display: inline-flex; min-width: 130px; max-width: 190px; align-items: center; gap: 7px; padding: 0 11px; border: 1px solid transparent; border-bottom: 0; border-radius: 9px 9px 0 0; background: transparent; color: #7a8495; cursor: pointer; font-size: 10px; white-space: nowrap; }
-.customer-browser-tab:hover, .customer-browser-tab:focus-visible { background: #fff; color: #4a5568; outline: none; }
-.customer-browser-tab.active { border-color: #dfe4ee; background: #fff; color: #273142; font-weight: 700; }
-.customer-tab-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; }
-.tab-loading { width: 10px; height: 10px; margin-left: auto; border: 1px solid #dcd7ff; border-top-color: #7354ef; border-radius: 50%; animation: customer-service-spin .8s linear infinite; }
-.customer-tabs-spacer { flex: 1; }
-.customer-browser-session-note { display: inline-flex; align-items: center; gap: 6px; padding: 0 9px; color: #8791a1; font-size: 9px; white-space: nowrap; }
-.customer-browser-session-note i { width: 6px; height: 6px; border-radius: 50%; background: #22b77a; }
 .customer-browser-addressbar { display: flex; min-height: 48px; align-items: center; gap: 11px; padding: 7px 11px; border-bottom: 1px solid #e8ebf2; background: #fff; }
 .browser-nav-actions { display: flex; gap: 2px; }
 .browser-nav-button { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 7px; color: #586476; cursor: pointer; font-size: 21px; line-height: 1; }
@@ -408,9 +410,8 @@ onBeforeUnmount(() => { workspaceMounted = false; ws.stores.forEach(store => bum
 .customer-browser-load-state.failed { color: #b43c35; }
 .customer-browser-load-state.failed i { background: #ef6b61; }
 .customer-browser-viewport { position: relative; min-width: 0; min-height: 0; flex: 1; overflow: hidden; background: #f8f9fc; }
-/* Keep each visited platform's webview mounted. Inactive pages are moved out of the hit/render path without unloading their session. */
-.customer-service-webview { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; transform: translate3d(-200vw, 0, 0); will-change: transform, opacity; border: 0; background: #fff; }
-.customer-service-webview.active { opacity: 1; pointer-events: auto; transform: translate3d(0, 0, 0); }
+/* The selected store owns the only mounted customer-service WebView in this viewport. */
+.customer-service-webview { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
 .customer-browser-loading, .customer-browser-error, .customer-browser-empty { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: 9px; padding: 30px; background: #fff; color: #697586; font-size: 11px; text-align: center; }
 .customer-browser-loading strong, .customer-browser-error strong, .customer-browser-empty strong { color: #273142; font-size: 14px; }
 .customer-browser-loading .state-spinner { width: 28px; height: 28px; }

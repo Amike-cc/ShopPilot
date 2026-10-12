@@ -2460,3 +2460,42 @@ chip 才出现）。0.4.5 真机验证时没暴露，是因为当时页面早已
 
 - 保留上一版本安装包即可回退：卸载当前版本 → 安装旧版。数据库迁移为向前兼容（schema 版本仅升不降），回退到更早版本前请先备份 `userData`。
 - 版本与产物校验：以 `release/release.json` 中的 SHA-256 为准核对安装包完整性。
+# ShopPilot 0.4.62 变更说明（客服店铺隔离与工作台回归修复）
+
+> **构建标签：INTERNAL_BUILD** —— 本包未做代码签名，按 DEVELOPMENT_SPEC §21.5 用于内部试用和验收。
+
+## 本次更新
+
+### 1. 电商客服按店铺隔离
+
+- 每家店铺使用独立、持久化的客服 Session 分区；客服工作区同一时间只挂载当前所选店铺的页面，切换后不会把多家店铺的会话并排显示。
+- 未读消息检查的忙碌状态、错误和结果归属到各自店铺；后台页面复用各自登录会话，检查失败后会按需恢复页面，定时检查串行运行，避免慢请求重叠。
+- 可见客服页和后台监控页共用平台级 HTTPS 主机白名单；拦截非平台主框架导航和弹窗，店铺删除时同时清理客服分区。
+
+### 2. 工作台和任务界面回归修复
+
+- 页面截图在 Windows/WebView 合成帧暂不可用时，会等待首帧并依次尝试可见 WebView 和 CDP 截图路径。
+- 自定义任务编辑器和任务创建弹窗在窄窗口下按可用宽度收缩，避免字段和操作按钮溢出。
+- 修正 M1/M3 CDP 验收脚本的执行超时清理、收起面板按钮定位和测试进程收尾判断。
+
+## 本版验证
+
+- `pnpm.cmd typecheck`：通过。
+- `pnpm.cmd lint`：0 errors，1214 条仓库 warning。
+- `pnpm.cmd test`：112 个测试文件、1120 项全部通过。
+- `pnpm.cmd build`：通过。
+- `node tools/acceptance/m1-runner.js`：115/115 通过。
+- `node tools/acceptance/m2-runner.js stage1`：阶段1 30/30、阶段2 指纹检查通过。
+- `node tools/acceptance/m3-runner.js`：114/114 通过。
+- `node tools/acceptance/sec-runner.js`：44/44 通过。
+- Windows x64 NSIS 安装包：`ShopPilot-Setup-0.4.62.exe` 构建通过（未签名）。
+- `pnpm.cmd test:customer-service-switch`：Electron 开发运行态和打包态均通过；两家临时店铺使用各自持久分区，恶意导航被拦截，切回恢复原客服页，返回经营工作台正常。
+- `git diff --check`：通过。
+
+## 已知边界
+
+- 未配置 Windows 代码签名证书，安装包保持 `INTERNAL_BUILD`，Windows 可能显示“未知发布者”。
+- 本版未使用真实店铺登录凭据；不代表已完成真实平台登录、长时间运行或人工逐项安装/升级/卸载验收。
+- 更新包仍依赖 SHA-512 校验；代理不可用不会自动切换或静默降级。
+
+---

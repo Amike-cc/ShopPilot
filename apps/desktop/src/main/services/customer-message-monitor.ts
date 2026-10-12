@@ -6,8 +6,12 @@ import { getStore, listStores } from '../stores/store-manager'
 import { getDatabase } from '../db/database'
 import { emitToRenderer } from '../browser/window-manager'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
-import { isCustomerMessageCheckFresh } from '@shared/contracts/customer-service'
-import { assertNavigableUrl } from '@shared/navigation'
+import {
+  CUSTOMER_SERVICE_PLATFORMS,
+  customerServiceSessionPartition,
+  isAllowedCustomerServiceUrl,
+  isCustomerMessageCheckFresh
+} from '@shared/contracts/customer-service'
 import { isAppLocked } from './security-manager'
 import type {
   CustomerMessageCheck,
@@ -17,21 +21,6 @@ import type {
   CustomerMessageStatusList
 } from '@shared/contracts/customer-service'
 import { logMain } from './logger'
-
-/** 客服入口是后台检查来源，不会被挂到客服工作区的可见 DOM。 */
-export interface CustomerMessagePlatformConfig {
-  platform: string
-  url: string
-  /** 页面改版时用于增加语义信号，不依赖易变的构建 class。 */
-  keywords: string[]
-}
-
-export const CUSTOMER_MESSAGE_PLATFORMS: Record<string, CustomerMessagePlatformConfig> = {
-  抖店: { platform: '抖店', url: 'https://im.jinritemai.com/pc_seller_v2/main/workspace', keywords: ['客服', '会话', '消息', '接待'] },
-  拼多多: { platform: '拼多多', url: 'https://mms.pinduoduo.com/chat-merchant/index.html', keywords: ['客服', '会话', '消息', '聊天'] },
-  快手小店: { platform: '快手小店', url: 'https://im.kwaixiaodian.com/workbench', keywords: ['客服', '会话', '消息', '接待'] },
-  微信小店: { platform: '微信小店', url: 'https://store.weixin.qq.com/shop/kf', keywords: ['客服', '会话', '消息', '接待'] }
-}
 
 export interface CustomerMessageProbeResult {
   documentReady: boolean
@@ -53,7 +42,7 @@ export const CUSTOMER_MESSAGE_PROBE_TIMEOUT_MS = 15_000
  * 采集脚本只回传计数和布尔信号，绝不回传 body.innerText、聊天正文、昵称或完整 DOM。
  * 选择器只使用语义属性/关键词；平台的构建哈希 class 不会写入长期适配规则。
  */
-export function buildCustomerMessageProbeScript(keywords: string[]): string {
+export function buildCustomerMessageProbeScript(keywords: readonly string[]): string {
   return `(() => {
     const normalize = value => String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
     const visible = el => {
@@ -153,19 +142,15 @@ interface MonitorRuntime {
  * 直到监控停止时才销毁，从而保留平台页面的登录与连接状态。
  */
 const customerServiceMonitorWindows = new Map<string, BrowserWindow>()
+const customerServiceMonitorNeedsReload = new Set<string>()
 
 /** 隐藏监控窗同样承载远程页面，不能因为它不可见就放宽导航边界。 */
-function isAllowedCustomerMonitorNavigation(url: unknown): boolean {
-  if (typeof url !== 'string') return false
-  try {
-    const safeUrl = assertNavigableUrl(url)
-    return ['http:', 'https:'].includes(new URL(safeUrl).protocol)
-  } catch {
-    return false
-  }
+function isAllowedCustomerMonitorNavigation(storeId: string, url: unknown): boolean {
+  const store = getStore(storeId)
+  return !!store && isAllowedCustomerServiceUrl(store.platform, url)
 }
 
-function installCustomerMonitorWindowSecurity(monitorWindow: BrowserWindow): void {
+function installCustomerMonitorWindowSecurity(monitorWindow: BrowserWindow, storeId: string): void {
   const wc = monitorWindow.webContents
   try {
     wc.setWindowOpenHandler(({ url }: { url: string }) => {
@@ -176,12 +161,18 @@ function installCustomerMonitorWindowSecurity(monitorWindow: BrowserWindow): voi
     })
   } catch { /* Electron 版本没有该 API 时仍继续安装导航钩子 */ }
   const allowNavigation = (event: Electron.Event, url: string): void => {
-    if (isAllowedCustomerMonitorNavigation(url)) return
+    if (isAllowedCustomerMonitorNavigation(storeId, url)) return
     event.preventDefault()
     logMain('warn', 'customer-service monitor: blocked unsafe navigation')
   }
   try { wc.on('will-navigate', allowNavigation) } catch { /* 页面销毁时幂等 */ }
   try { wc.on('will-redirect', allowNavigation) } catch { /* 页面销毁时幂等 */ }
+  try {
+    wc.on('did-fail-load', (_event: Electron.Event, errorCode: number, _description: string, _url: string, isMainFrame: boolean) => {
+      if (isMainFrame && errorCode !== -3) customerServiceMonitorNeedsReload.add(storeId)
+    })
+    wc.on('did-finish-load', () => customerServiceMonitorNeedsReload.delete(storeId))
+  } catch { /* 页面销毁时幂等 */ }
 }
 
 function getCustomerServiceMonitorWindow(storeId: string): BrowserWindow {
@@ -192,7 +183,7 @@ function getCustomerServiceMonitorWindow(storeId: string): BrowserWindow {
     width: 1280,
     height: 820,
     webPreferences: {
-      partition: `persist:customer-service_${storeId}`,
+      partition: customerServiceSessionPartition(storeId),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -200,7 +191,7 @@ function getCustomerServiceMonitorWindow(storeId: string): BrowserWindow {
     }
   })
   monitorWindow.webContents.setBackgroundThrottling(false)
-  installCustomerMonitorWindowSecurity(monitorWindow)
+  installCustomerMonitorWindowSecurity(monitorWindow, storeId)
   monitorWindow.on('closed', () => {
     if (customerServiceMonitorWindows.get(storeId) === monitorWindow) customerServiceMonitorWindows.delete(storeId)
   })
@@ -257,6 +248,7 @@ function closeCustomerServiceMonitorWindows(): void {
     try { if (!monitorWindow.isDestroyed()) monitorWindow.destroy() } catch { /* 关闭时幂等 */ }
   }
   customerServiceMonitorWindows.clear()
+  customerServiceMonitorNeedsReload.clear()
 }
 
 /** 店铺移入回收站或彻底删除时，只回收该店铺的隐藏监控窗口。 */
@@ -264,6 +256,7 @@ function closeCustomerServiceMonitorWindow(storeId: string): void {
   const monitorWindow = customerServiceMonitorWindows.get(storeId)
   if (!monitorWindow) return
   customerServiceMonitorWindows.delete(storeId)
+  customerServiceMonitorNeedsReload.delete(storeId)
   try { if (!monitorWindow.isDestroyed()) monitorWindow.destroy() } catch { /* 幂等清理 */ }
 }
 
@@ -314,7 +307,6 @@ function mapRow(row: CustomerMessageCheckRow, now: number): CustomerMessageCheck
 export class CustomerMessageMonitor {
   private readonly runtime: MonitorRuntime
   private timer: NodeJS.Timeout | null = null
-  private startupTimer: NodeJS.Timeout | null = null
   private started = false
   /** 锁定时只在原本运行过的实例上恢复，手动 stop 不会被解锁动作偷偷重启。 */
   private pausedForLock = false
@@ -347,7 +339,7 @@ export class CustomerMessageMonitor {
       return checking
     }
     const lifecycleVersion = this.lifecycleVersion
-    const config = CUSTOMER_MESSAGE_PLATFORMS[store.platform]
+    const config = CUSTOMER_SERVICE_PLATFORMS[store.platform]
     if (!config) return this.record(storeId, store.platform, {
       status: 'NOT_VERIFIED', unreadCount: null, conversationCount: null,
       reasonCode: 'PLATFORM_UNSUPPORTED', message: '该平台暂未配置客服消息检查入口', evidence: null
@@ -367,7 +359,17 @@ export class CustomerMessageMonitor {
         if (!wc || wc.isDestroyed()) return await this.record(storeId, store.platform, {
           status: 'ERROR', unreadCount: null, conversationCount: null, reasonCode: 'PAGE_NOT_READY', message: '隐藏客服页面未就绪，请稍后重试', evidence: null
         }, config.url, lifecycleVersion)
-        await this.withTimeout(wc.loadURL(config.url), 25_000)
+        let currentUrl = ''
+        try { currentUrl = wc.getURL() } catch { /* WebContents may be between navigations */ }
+        if (customerServiceMonitorNeedsReload.has(storeId) || !isAllowedCustomerServiceUrl(store.platform, currentUrl)) {
+          try {
+            await this.withTimeout(wc.loadURL(config.url), 25_000)
+            customerServiceMonitorNeedsReload.delete(storeId)
+          } catch (error) {
+            customerServiceMonitorNeedsReload.add(storeId)
+            throw error
+          }
+        }
         if (this.isPaused(lifecycleVersion)) return this.lifecycleResult(storeId, store.platform, lifecycleVersion)
         const probe = await this.waitForProbe(wc, config.keywords, CUSTOMER_MESSAGE_PROBE_TIMEOUT_MS, lifecycleVersion)
         if (this.isPaused(lifecycleVersion)) return this.lifecycleResult(storeId, store.platform, lifecycleVersion)
@@ -387,17 +389,11 @@ export class CustomerMessageMonitor {
     if (this.started || this.isLocked()) return
     this.pausedForLock = false
     this.started = true
-    const tick = () => { void this.checkAll().catch(error => logMain('warn', `[customer-service] 调度失败: ${String((error as Error)?.message || error).slice(0, 160)}`)) }
-    this.startupTimer = setTimeout(tick, 15_000)
-    if (typeof this.startupTimer.unref === 'function') this.startupTimer.unref()
-    this.timer = setInterval(tick, 45_000)
-    if (typeof this.timer.unref === 'function') this.timer.unref()
+    this.scheduleNextCheck(15_000)
   }
 
   stop(): void {
-    if (this.startupTimer) clearTimeout(this.startupTimer)
-    if (this.timer) clearInterval(this.timer)
-    this.startupTimer = null
+    if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.started = false
     this.pausedForLock = false
@@ -410,9 +406,7 @@ export class CustomerMessageMonitor {
     const shouldResume = this.started
     this.pausedForLock = shouldResume
     this.lifecycleVersion += 1
-    if (this.startupTimer) clearTimeout(this.startupTimer)
-    if (this.timer) clearInterval(this.timer)
-    this.startupTimer = null
+    if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.started = false
     try { this.runtime.closeAll?.() } catch { /* 锁定清理必须幂等 */ }
@@ -440,6 +434,27 @@ export class CustomerMessageMonitor {
     }
   }
 
+  /** Schedule from the end of the previous sweep so a slow sweep never overlaps itself. */
+  private scheduleNextCheck(delayMs: number): void {
+    if (!this.started || this.isPaused()) return
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = setTimeout(() => {
+      this.timer = null
+      void this.runScheduledCheck()
+    }, delayMs)
+    if (typeof this.timer.unref === 'function') this.timer.unref()
+  }
+
+  private async runScheduledCheck(): Promise<void> {
+    if (!this.started || this.isPaused()) return
+    try {
+      await this.checkAll()
+    } catch (error) {
+      logMain('warn', `[customer-service] 调度失败: ${String((error as Error)?.message || error).slice(0, 160)}`)
+    }
+    if (this.started && !this.isPaused()) this.scheduleNextCheck(45_000)
+  }
+
   private isPaused(version?: number): boolean {
     return this.isLocked() || this.pausedForLock || (version !== undefined && version !== this.lifecycleVersion)
   }
@@ -462,7 +477,7 @@ export class CustomerMessageMonitor {
     return this.lockedResult(storeId, platform)
   }
 
-  private async waitForProbe(wc: WebContents, keywords: string[], timeoutMs: number, lifecycleVersion?: number): Promise<CustomerMessageProbeResult> {
+  private async waitForProbe(wc: WebContents, keywords: readonly string[], timeoutMs: number, lifecycleVersion?: number): Promise<CustomerMessageProbeResult> {
     const deadline = this.runtime.now() + timeoutMs
     let last: CustomerMessageProbeResult = { documentReady: false, messageContext: false, unreadCount: null, conversationCount: null, unreadSignals: 0, conversationSignals: 0, loginSignals: 0 }
     while (this.runtime.now() < deadline) {

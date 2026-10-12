@@ -8,6 +8,11 @@ import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { writeFileSync, existsSync } from 'fs'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import {
+  CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX,
+  customerServiceSessionPartition,
+  isAllowedCustomerServiceUrl
+} from '@shared/contracts/customer-service'
 import { initDatabase, closeDatabase, getDatabasePath } from './db/database'
 import { registerStoreHandlers } from './ipc/store-handlers'
 import { registerBrowserHandlers } from './ipc/browser-handlers'
@@ -145,9 +150,6 @@ function resolveAppIcon(): string | undefined {
 }
 
 const STORE_PARTITION_PREFIX = 'persist:store_'
-/** 客服页面使用独立持久分区，不能复用经营工作台的会话。 */
-const CUSTOMER_SERVICE_PARTITION_PREFIX = 'persist:customer-service_'
-
 /** 从 webview partition 中提取店铺 ID；未知格式一律拒绝。 */
 function getWebviewStoreId(partition: unknown): string | null {
   if (typeof partition !== 'string' || !partition.startsWith(STORE_PARTITION_PREFIX)) return null
@@ -157,8 +159,8 @@ function getWebviewStoreId(partition: unknown): string | null {
 
 /** 从客服 webview partition 中提取店铺 ID；未知格式一律拒绝。 */
 function getCustomerServiceStoreId(partition: unknown): string | null {
-  if (typeof partition !== 'string' || !partition.startsWith(CUSTOMER_SERVICE_PARTITION_PREFIX)) return null
-  const storeId = partition.slice(CUSTOMER_SERVICE_PARTITION_PREFIX.length)
+  if (typeof partition !== 'string' || !partition.startsWith(CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX)) return null
+  const storeId = partition.slice(CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX.length)
   return storeId.length > 0 ? storeId : null
 }
 
@@ -174,12 +176,19 @@ function isAllowedWebviewSource(source: unknown): boolean {
   }
 }
 
+/** Customer-service guests may stay only on their platform and explicit sign-in/OAuth hosts. */
+function isAllowedCustomerServiceWebviewSource(storeId: string, source: unknown): boolean {
+  if (source === 'about:blank') return true
+  const store = getStore(storeId)
+  return !!store && isAllowedCustomerServiceUrl(store.platform, source)
+}
+
 /** 只记录形状/协议，不把店铺 ID、主机名、路径或查询值写入日志。 */
 function describeWebviewValue(value: unknown, kind: 'partition' | 'src'): string {
   if (typeof value !== 'string') return '<missing>'
   if (kind === 'partition') {
     if (value.startsWith(STORE_PARTITION_PREFIX)) return 'persist:store_<redacted>'
-    if (value.startsWith(CUSTOMER_SERVICE_PARTITION_PREFIX)) return 'persist:customer-service_<redacted>'
+    if (value.startsWith(CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX)) return 'persist:customer-service_<redacted>'
     return '<invalid>'
   }
   if (value === 'about:blank') return 'about:blank'
@@ -244,14 +253,16 @@ function createWindow(): void {
         validPartition = false
       }
     }
-    if (customerServiceStoreId && params.partition === `${CUSTOMER_SERVICE_PARTITION_PREFIX}${customerServiceStoreId}`) {
+    if (customerServiceStoreId && params.partition === customerServiceSessionPartition(customerServiceStoreId)) {
       try {
         validPartition = !!getStore(customerServiceStoreId)
       } catch {
         validPartition = false
       }
     }
-    const validSource = isAllowedWebviewSource(params.src)
+    const validSource = customerServiceStoreId
+      ? isAllowedCustomerServiceWebviewSource(customerServiceStoreId, params.src)
+      : isAllowedWebviewSource(params.src)
 
     if (!validPartition || !validSource) {
       event.preventDefault()
@@ -287,23 +298,25 @@ function createWindow(): void {
         destroyGuest()
         return
       }
-      if (partition !== `${CUSTOMER_SERVICE_PARTITION_PREFIX}${customerServiceStoreId}`) {
+      if (partition !== customerServiceSessionPartition(customerServiceStoreId)) {
         logMain('warn', 'customer-service guest: blocked unexpected session partition')
         destroyGuest()
         return
       }
       guestWebContents.setWindowOpenHandler(({ url }: { url: string }) => {
-        if (!isAllowedWebviewSource(url)) {
-          logMain('warn', 'customer-service guest: blocked popup with unsafe URL')
+        const store = getStore(customerServiceStoreId)
+        if (!store || !isAllowedCustomerServiceUrl(store.platform, url)) {
+          logMain('warn', 'customer-service guest: blocked popup outside platform allowlist')
           return { action: 'deny' }
         }
         try { guestWebContents.loadURL(url).catch(() => { /* 页面自行呈现失败 */ }) } catch { /* 页面已销毁 */ }
         return { action: 'deny' }
       })
       const allowCustomerNavigation = (event: Electron.Event, url: string): void => {
-        if (isAllowedWebviewSource(url)) return
+        const store = getStore(customerServiceStoreId)
+        if (store && isAllowedCustomerServiceUrl(store.platform, url)) return
         event.preventDefault()
-        logMain('warn', 'customer-service guest: blocked unsafe navigation')
+        logMain('warn', 'customer-service guest: blocked navigation outside platform allowlist')
       }
       guestWebContents.on('will-navigate', allowCustomerNavigation)
       guestWebContents.on('will-redirect', allowCustomerNavigation)

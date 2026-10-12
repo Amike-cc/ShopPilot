@@ -27,6 +27,7 @@ import {
   type ShopSessionStatusSummary
 } from '@shared/contracts/shop-session'
 import { PLATFORM_EVIDENCE_TYPES, type PlatformLoginResult } from '@shared/contracts/platform-adapter'
+import { customerServiceSessionPartition } from '@shared/contracts/customer-service'
 
 const statusByStore = new Map<string, ShopSessionStatusSummary>()
 
@@ -329,7 +330,7 @@ export async function destroyStoreSession(storeId: string): Promise<void> {
   const storeSession = electronSession.fromPartition(getStorePartition(id), { cache: true })
   await storeSession.clearStorageData()
   // 客服与经营工作台使用不同的 Chromium 分区；彻底删除店铺时两个分区都要清理。
-  const customerServiceSession = electronSession.fromPartition(`persist:customer-service_${id}`, { cache: true })
+  const customerServiceSession = electronSession.fromPartition(customerServiceSessionPartition(id), { cache: true })
   await customerServiceSession.clearStorageData()
   clearStoreSessionSnapshot(id)
   statusByStore.delete(id)

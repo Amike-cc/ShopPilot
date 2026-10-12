@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX, customerServiceSessionPartition } from '../../packages/shared/src/contracts/customer-service'
 
 const read = (path: string) => readFileSync(resolve(path), 'utf8').replace(/\r\n/g, '\n')
 const APP = read('apps/desktop/src/renderer/src/app/App.vue')
@@ -9,6 +10,8 @@ const MONITOR = read('apps/desktop/src/main/services/customer-message-monitor.ts
 const DASHBOARD = read('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue')
 const SERVICE = read('apps/desktop/src/renderer/src/features/customer-service/CustomerServiceWorkspace.vue')
 const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue')
+const SESSION_MANAGER = read('apps/desktop/src/main/browser/session-manager.ts')
+const SHOP_SESSION_MANAGER = read('apps/desktop/src/main/browser/shop-session-manager.ts')
 
 describe('经营工作台与电商客服工作区边界', () => {
   it('应用壳只切换可见工作区，两个工作区都保持挂载', () => {
@@ -70,7 +73,12 @@ describe('经营工作台与电商客服工作区边界', () => {
     expect(MAIN).toContain("'did-attach-webview'")
     expect(MAIN).toMatch(/did-attach-webview'[\s\S]*?_event[^,]*, guestWebContents/)
     expect(MAIN).toContain('guestWebContents as any)?.session?.partition')
-    expect(MAIN).toContain('customer-service guest: blocked popup with unsafe URL')
+    expect(MAIN).toContain('customer-service guest: blocked popup outside platform allowlist')
+    expect(MAIN).toContain('isAllowedCustomerServiceUrl(store.platform, url)')
+    const SESSION_GUARD = read('apps/desktop/src/main/browser/session-manager.ts')
+    expect(SESSION_GUARD).toContain("sess.webRequest.onBeforeRequest({ urls: ['*://*/*'] }")
+    expect(SESSION_GUARD).toContain("details.resourceType !== 'mainFrame'")
+    expect(SESSION_GUARD).toContain('callback({ cancel: true })')
     expect(MAIN).toContain("guestWebContents.on('will-navigate'")
     expect(MAIN).toContain("guestWebContents.on('will-redirect'")
     expect(MAIN).toContain("return { action: 'deny' }")
@@ -79,6 +87,7 @@ describe('经营工作台与电商客服工作区边界', () => {
   it('隐藏客服监控窗口也收口弹窗和远程协议，不能绕过可见客服页边界', () => {
     expect(MONITOR).toContain('setWindowOpenHandler')
     expect(MONITOR).toContain("customer-service monitor: blocked unsafe navigation")
+    expect(MONITOR).toContain('isAllowedCustomerServiceUrl(store.platform, url)')
   })
 
   it('锁定期间暂停客服监控，解锁只恢复锁定前正在运行的实例', () => {
@@ -88,16 +97,40 @@ describe('经营工作台与电商客服工作区边界', () => {
     expect(SERVICE).toContain('ws.stores.length, ws.appLocked')
   })
 
-  it('客服 WebView 隐藏时保持挂载和渲染，不使用 visibility:hidden', () => {
-    expect(SERVICE).toMatch(/\.customer-service-webview\s*\{[^}]*opacity:\s*0[^}]*pointer-events:\s*none[^}]*transform:\s*translate3d\(-200vw, 0, 0\)/)
-    expect(SERVICE).toContain('.customer-service-webview.active')
-    expect(SERVICE).not.toMatch(/\.customer-service-webview[^{]*\{[^}]*visibility:\s*hidden/)
+  it('客服视口只挂载当前店铺的 WebView，不把已访问店铺的页面并排或叠放', () => {
+    expect([...SERVICE.matchAll(/<webview\b/g)]).toHaveLength(1)
+    expect(SERVICE).toContain('<webview v-if="serviceEntry(activeStore)" :key="activeStore.id"')
+    expect(SERVICE).toContain(':partition="customerServiceSessionPartition(activeStore.id)"')
+    expect(SERVICE).toContain(':data-store-id="activeStore.id"')
+    expect(SERVICE).not.toContain('v-for="entry in visitedEntries"')
+    expect(SERVICE).not.toContain('customer-browser-tabs')
+    expect(SERVICE).not.toContain('.customer-service-webview.active')
+  })
+
+  it('客服 Chromium 分区由共享映射按店铺唯一确定，页面、监控和删除流程使用同一分区', () => {
+    const storeA = customerServiceSessionPartition('store-a')
+    const storeB = customerServiceSessionPartition('store-b')
+    expect(storeA).toBe(`${CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX}store-a`)
+    expect(storeB).toBe(`${CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX}store-b`)
+    expect(storeA).not.toBe(storeB)
+    expect(SESSION_MANAGER).toContain('session.fromPartition(customerServiceSessionPartition(storeId), { cache: true })')
+    expect(SESSION_MANAGER).toContain('CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX')
+    expect(SHOP_SESSION_MANAGER).toContain('electronSession.fromPartition(customerServiceSessionPartition(id), { cache: true })')
+    expect(MONITOR).toContain('partition: customerServiceSessionPartition(storeId)')
+    expect(MAIN).toContain('params.partition === customerServiceSessionPartition(customerServiceStoreId)')
+    expect(MAIN).toContain('partition !== customerServiceSessionPartition(customerServiceStoreId)')
   })
 
   it('客服工作区未打开时不会自动选店或导航到远程客服页面', () => {
     expect(SERVICE).toContain('if (!props.active) {')
     expect(SERVICE).toContain("selectedStoreId.value = ''")
     expect(SERVICE).toContain('watch(() => props.active, active => { if (active) syncSelectedStore() })')
+  })
+
+  it('消息检查中的忙碌和错误状态绑定到对应店铺工作台', () => {
+    expect(SERVICE).toContain('createStoreScopedCheckController')
+    expect(SERVICE).toContain('checkingStoreIds.has(selectedStoreId)')
+    expect(SERVICE).toContain('storeCheckErrors.get(selectedStoreId.value)')
   })
 
   it('两个独立 partition 的 407 去重键不会互相取消挑战', () => {

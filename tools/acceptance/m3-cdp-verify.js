@@ -311,7 +311,7 @@ async function main() {
 
   // 先收起右栏（此时无待确认）→ 任务随后撞上确认门禁 → 应自动临时展开，门禁提示不被藏起来
   const collapsedBeforeRun = await cdp.evaluate(`
-    const btn = document.querySelector('[data-test="panel-collapse"]');
+    const btn = document.querySelector('[data-test="panel-toggle"]') || document.querySelector('[data-test="panel-collapse"]');
     if (!btn) return { error: '未找到收起按钮' };
     btn.click();
     await new Promise(r => setTimeout(r, 700));
@@ -453,7 +453,7 @@ async function main() {
 
   // 门禁不被"收起右栏"藏起来：有待确认时点收起应被拒绝并提示
   const collapseGuard = await cdp.evaluate(`
-    const btn = document.querySelector('[data-test="panel-collapse"]');
+    const btn = document.querySelector('[data-test="panel-toggle"]') || document.querySelector('[data-test="panel-collapse"]');
     if (!btn) return { error: '未找到收起按钮' };
     btn.click();
     await new Promise(r => setTimeout(r, 700));

@@ -58,12 +58,19 @@ class CDPSession {
     await this.ready
     const expression = `(async () => { ${fnBody} })()`
     // 给每次求值加超时：页面若被弹窗/导航卡住，Promise 会永不 settle，验收脚本静默挂死（实测踩过）
-    const r = await Promise.race([
-      this.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }),
-      new Promise((_res, rej) => setTimeout(() => rej(new Error(`页面求值超时（${timeoutMs}ms）：${String(fnBody).replace(/\s+/g, ' ').trim().slice(0, 120)}`)), timeoutMs))
-    ])
-    if (r.exceptionDetails) throw new Error('页面异常: ' + JSON.stringify(r.exceptionDetails.exception?.description || r.exceptionDetails.text))
-    return r.result.value
+    let timer = null
+    try {
+      const r = await Promise.race([
+        this.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }),
+        new Promise((_res, rej) => {
+          timer = setTimeout(() => rej(new Error(`页面求值超时（${timeoutMs}ms）：${String(fnBody).replace(/\s+/g, ' ').trim().slice(0, 120)}`)), timeoutMs)
+        })
+      ])
+      if (r.exceptionDetails) throw new Error('页面异常: ' + JSON.stringify(r.exceptionDetails.exception?.description || r.exceptionDetails.text))
+      return r.result.value
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
   close() { try { this.ws.close() } catch {} }
 }
@@ -627,7 +634,7 @@ async function main() {
   check('展开态：右栏 320px、店铺页宽度=中栏宽度',
     pExpanded.panel === 320 && pExpanded.viewport === viewExpanded.innerWidth,
     JSON.stringify({ panel: pExpanded.panel, viewport: pExpanded.viewport, innerWidth: viewExpanded.innerWidth }))
-  await cdp.evaluate(`document.querySelector('[data-test="panel-collapse"]').click(); return true;`)
+  await cdp.evaluate(`(document.querySelector('[data-test="panel-toggle"]') || document.querySelector('[data-test="panel-collapse"]')).click(); return true;`)
   await sleep(1200)
   const pCollapsed = await panelRect()
   const viewCollapsed = await storeView()

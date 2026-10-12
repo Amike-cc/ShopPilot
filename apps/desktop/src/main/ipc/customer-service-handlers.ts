@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { familyHandle } from './family-handle'
 import { IPC_CHANNELS, type IPCResult } from '@shared/contracts/ipc'
 import { customerServiceCheckNowSchema, customerServicePrepareSchema, customerServiceStatusListSchema } from '@shared/schemas/customer-service'
-import { CUSTOMER_MESSAGE_PLATFORMS, customerMessageMonitor } from '../services/customer-message-monitor'
+import { CUSTOMER_SERVICE_PLATFORMS } from '@shared/contracts/customer-service'
+import { customerMessageMonitor } from '../services/customer-message-monitor'
 import { getStore } from '../stores/store-manager'
 import { waitForCustomerServiceSessionReady } from '../browser/session-manager'
 
@@ -21,7 +22,7 @@ export function registerCustomerServiceHandlers(): void {
     if (!parsed.success) return fail('INVALID_ARGUMENT', '客服店铺参数不合法', requestId)
     const store = getStore(parsed.data.storeId)
     if (!store) return fail('STORE_NOT_FOUND', '店铺不存在或已删除', requestId)
-    const entry = CUSTOMER_MESSAGE_PLATFORMS[store.platform]
+    const entry = CUSTOMER_SERVICE_PLATFORMS[store.platform]
     if (!entry) return fail('PLATFORM_UNSUPPORTED', '该店铺平台暂未配置客服页面', requestId)
     try {
       // 先完成该店铺客服独立分区的 UA、权限与代理配置，再由 Renderer 让 webview 导航。

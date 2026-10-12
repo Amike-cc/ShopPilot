@@ -84,6 +84,32 @@ describe('客服消息监控', () => {
     expect(mocks.emit.mock.calls.map(call => (call[1] as any).status)).toEqual(['CHECKING', 'AVAILABLE'])
   })
 
+  it('页面已在该店铺允许的客服域名时重复检查只探测，不反复重载页面', async () => {
+    mocks.inserted.length = 0
+    mocks.getStore.mockReturnValue({ id: 'store-1', platform: '抖店' })
+    let currentUrl = ''
+    const wc = {
+      isDestroyed: () => false,
+      getURL: () => currentUrl,
+      loadURL: vi.fn(async (url: string) => { currentUrl = url }),
+      executeJavaScript: vi.fn(async () => ({
+        documentReady: true, messageContext: true, unreadCount: 2, conversationCount: 1,
+        unreadSignals: 1, conversationSignals: 1, loginSignals: 0
+      }))
+    } as any
+    const monitor = new CustomerMessageMonitor({
+      now: () => 1_700_000_000_000,
+      borrowPage: () => ({ waitForWebContents: async () => wc, release: vi.fn() }),
+      emit: mocks.emit
+    })
+
+    await monitor.check('store-1')
+    await monitor.check('store-1')
+
+    expect(wc.loadURL).toHaveBeenCalledOnce()
+    expect(wc.executeJavaScript).toHaveBeenCalledTimes(2)
+  })
+
   it('应用锁定时不创建客服页面、不读取店铺列表，也不写入监控台账', async () => {
     mocks.inserted.length = 0
     mocks.emit.mockClear()
@@ -135,6 +161,41 @@ describe('客服消息监控', () => {
     neverStarted.resumeAfterAppUnlock()
     neverStarted.stop()
     expect(closeAll).toHaveBeenCalledTimes(4)
+  })
+
+  it('调度在首轮之后按完成时间等待，慢检查期间不会叠加新一轮', async () => {
+    vi.useFakeTimers()
+    let finishFirst: (() => void) | null = null
+    const firstRun = new Promise<void>(resolve => { finishFirst = resolve })
+    const monitor = new CustomerMessageMonitor({
+      now: () => 1_700_000_000_000,
+      borrowPage: vi.fn() as any,
+      emit: mocks.emit,
+      isLocked: () => false
+    })
+    const checkAll = vi.spyOn(monitor, 'checkAll')
+      .mockImplementationOnce(() => firstRun)
+      .mockResolvedValue(undefined)
+
+    try {
+      monitor.start()
+      await vi.advanceTimersByTimeAsync(14_999)
+      expect(checkAll).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(checkAll).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(90_000)
+      expect(checkAll).toHaveBeenCalledOnce()
+
+      finishFirst?.()
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(44_999)
+      expect(checkAll).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(checkAll).toHaveBeenCalledTimes(2)
+    } finally {
+      monitor.stop()
+      vi.useRealTimers()
+    }
   })
 
   it('监控停止后迟到的页面结果不会写库或广播', async () => {

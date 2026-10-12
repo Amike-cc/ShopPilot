@@ -4,6 +4,11 @@
  */
 
 import { app, session, Session } from 'electron'
+import {
+  CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX,
+  customerServiceSessionPartition,
+  isAllowedCustomerServiceUrl
+} from '@shared/contracts/customer-service'
 import { getDatabase } from '../db/database'
 import { join, parse } from 'path'
 import { mkdirSync, existsSync } from 'fs'
@@ -182,7 +187,7 @@ export function getStoreSession(storeId: string): Session {
   const storeSession = session.fromPartition(partition, { cache: true })
   
   // 配置 session。代理配置是异步的，保存 Promise 供首次导航/重配置等待。
-  const ready = configureSession(storeSession, storeId)
+  const ready = configureSession(storeSession, storeId, false)
   sessionReady.set(storeId, ready)
   // 没有需要等待的调用方时也要标记 rejection 已被消费，避免 Node 未处理拒绝。
   void ready.catch(() => {})
@@ -225,8 +230,8 @@ export function getStoreSession(storeId: string): Session {
 export function getCustomerServiceSession(storeId: string): Session {
   if (customerServiceSessions.has(storeId)) return customerServiceSessions.get(storeId)!
 
-  const customerSession = session.fromPartition(`persist:customer-service_${storeId}`, { cache: true })
-  const ready = configureSession(customerSession, storeId)
+  const customerSession = session.fromPartition(customerServiceSessionPartition(storeId), { cache: true })
+  const ready = configureSession(customerSession, storeId, true)
   customerServiceSessionReady.set(storeId, ready)
   void ready.catch(() => {})
   customerServiceSessions.set(storeId, customerSession)
@@ -289,7 +294,7 @@ export async function waitForStoreSessionReady(storeId: string): Promise<void> {
 /**
  * 配置 session 的基本设置
  */
-function configureSession(sess: Session, storeId: string): Promise<void> {
+function configureSession(sess: Session, storeId: string, isCustomerService = false): Promise<void> {
   // 设置 User-Agent - 从 browser_profiles 读取
   const db = getDatabase()
   const profile = db.prepare(`
@@ -316,6 +321,29 @@ function configureSession(sess: Session, storeId: string): Promise<void> {
   
   // 设置代理（如果有绑定）- §4.3 代理必须在首次导航前设置
   const proxyReady = configureProxy(sess, storeId)
+
+  // will-navigate does not observe renderer/programmatic WebContents.loadURL calls.
+  // The customer-service partition therefore gets a session-level main-frame guard;
+  // it covers both the visible webview and the hidden monitor window while allowing
+  // only the exact platform/login hosts from the shared profile.
+  if (isCustomerService && !(sess as any).__customerServiceNavigationGuard) {
+    ;(sess as any).__customerServiceNavigationGuard = true
+    const platformRow = db.prepare('SELECT platform FROM stores WHERE id = ? AND deleted_at IS NULL').get(storeId) as { platform?: string } | undefined
+    const platform = String(platformRow?.platform || '')
+    try {
+      sess.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, callback) => {
+        if (details.resourceType !== 'mainFrame' || isAllowedCustomerServiceUrl(platform, details.url)) {
+          callback({})
+          return
+        }
+        logMain('warn', 'customer-service session: blocked main-frame navigation outside platform allowlist')
+        callback({ cancel: true })
+      })
+    } catch (error) {
+      // If this guard cannot be installed, fail closed at the visible/main guest hooks.
+      logMain('warn', `customer-service session navigation guard unavailable: ${String((error as Error)?.message || error).slice(0, 160)}`)
+    }
+  }
 
   // 代理 407 认证注入 - §4.3：proxyRules 不内嵌凭据，login 事件运行时注入
   // Electron 30 login details = { url, isMainFrame, firstAuthAttempt, responseHeaders }，无 isProxy；
@@ -491,7 +519,7 @@ function resolveStoreIdFromWebContents(wc: any): string | null {
   // 回退：读 partition 字符串
   const partition = wcSession?.partition || ''
   if (partition.startsWith('persist:store_')) return partition.slice('persist:store_'.length)
-  if (partition.startsWith('persist:customer-service_')) return partition.slice('persist:customer-service_'.length)
+  if (partition.startsWith(CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX)) return partition.slice(CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX.length)
   return null
 }
 

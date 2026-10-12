@@ -19,6 +19,66 @@ export const CUSTOMER_MESSAGE_STATUSES = [
  */
 export const CUSTOMER_MESSAGE_FRESHNESS_WINDOW_MS = 90_000
 
+/** Renderer and Main must derive the same durable, per-store customer-service session partition. */
+export const CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX = 'persist:customer-service_'
+
+/** Renderer, Main navigation guards, and the message monitor share one platform profile. */
+export interface CustomerServicePlatformConfig {
+  platform: string
+  url: string
+  keywords: readonly string[]
+  /** Exact HTTPS hosts needed by the service page and its manual sign-in/OAuth flow. */
+  allowedHosts: readonly string[]
+}
+
+export const CUSTOMER_SERVICE_PLATFORMS: Readonly<Record<string, CustomerServicePlatformConfig>> = {
+  抖店: {
+    platform: '抖店',
+    url: 'https://im.jinritemai.com/pc_seller_v2/main/workspace',
+    keywords: ['客服', '会话', '消息', '接待'],
+    allowedHosts: ['im.jinritemai.com', 'fxg.jinritemai.com', 'login.jinritemai.com', 'passport.jinritemai.com', 'sso.jinritemai.com']
+  },
+  拼多多: {
+    platform: '拼多多',
+    url: 'https://mms.pinduoduo.com/chat-merchant/index.html',
+    keywords: ['客服', '会话', '消息', '聊天'],
+    allowedHosts: ['mms.pinduoduo.com', 'mai.pinduoduo.com', 'passport.pinduoduo.com']
+  },
+  快手小店: {
+    platform: '快手小店',
+    url: 'https://im.kwaixiaodian.com/workbench',
+    keywords: ['客服', '会话', '消息', '接待'],
+    allowedHosts: ['im.kwaixiaodian.com', 's.kwaixiaodian.com', 'passport.kuaishou.com', 'id.kuaishou.com', 'open.kuaishou.com']
+  },
+  微信小店: {
+    platform: '微信小店',
+    url: 'https://store.weixin.qq.com/shop/kf',
+    keywords: ['客服', '会话', '消息', '接待'],
+    allowedHosts: ['store.weixin.qq.com', 'weixin.qq.com', 'open.weixin.qq.com', 'login.weixin.qq.com', 'work.weixin.qq.com']
+  }
+}
+
+/** Exact-host HTTPS allowlist for customer-service pages and known login/OAuth redirects. */
+export function isAllowedCustomerServiceUrl(platform: string, rawUrl: unknown): boolean {
+  if (typeof rawUrl !== 'string') return false
+  const config = CUSTOMER_SERVICE_PLATFORMS[platform]
+  if (!config) return false
+  try {
+    const url = new URL(rawUrl)
+    return url.protocol === 'https:'
+      && (url.port === '' || url.port === '443')
+      && !url.username
+      && !url.password
+      && config.allowedHosts.includes(url.hostname.toLowerCase())
+  } catch {
+    return false
+  }
+}
+
+export function customerServiceSessionPartition(storeId: string): string {
+  return `${CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX}${storeId}`
+}
+
 export const CUSTOMER_MESSAGE_FRESHNESS = ['FRESH', 'STALE'] as const
 export type CustomerMessageFreshness = (typeof CUSTOMER_MESSAGE_FRESHNESS)[number]
 
