@@ -9,8 +9,8 @@ import { pathToFileURL } from 'url'
 import { writeFileSync, existsSync } from 'fs'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import {
-  CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX,
-  customerServiceSessionPartition,
+  LEGACY_CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX,
+  CUSTOMER_SERVICE_WEBVIEW_PLACEHOLDER_SOURCE,
   isAllowedCustomerServiceUrl
 } from '@shared/contracts/customer-service'
 import { initDatabase, closeDatabase, getDatabasePath } from './db/database'
@@ -37,7 +37,7 @@ import { installLockGate, startBackgroundServices } from './services/bg-services
 import * as Security from './services/security-manager'
 import { setBrowserHostWindow, setBrowserViewsVisible, emitToRenderer } from './browser/window-manager'
 import { customerMessageMonitor } from './services/customer-message-monitor'
-import { clearProxyAuthTracking, applyDefaultSessionPermissions } from './browser/session-manager'
+import { clearProxyAuthTracking, applyDefaultSessionPermissions, registerCustomerServiceWebContents } from './browser/session-manager'
 import { verifyStoreFingerprint } from './browser/fingerprint-injector'
 import { createStore, deleteStorePermanent, getStore, listStores } from './stores/store-manager'
 import { updateProfile } from './stores/profile-manager'
@@ -157,14 +157,7 @@ function getWebviewStoreId(partition: unknown): string | null {
   return storeId.length > 0 ? storeId : null
 }
 
-/** 从客服 webview partition 中提取店铺 ID；未知格式一律拒绝。 */
-function getCustomerServiceStoreId(partition: unknown): string | null {
-  if (typeof partition !== 'string' || !partition.startsWith(CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX)) return null
-  const storeId = partition.slice(CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX.length)
-  return storeId.length > 0 ? storeId : null
-}
-
-/** webview 只允许空白页，或由共享导航 helper 放行的 http(s) 地址。 */
+/** 工作台 webview 只允许空白页，或由共享导航 helper 放行的 http(s) 地址。 */
 function isAllowedWebviewSource(source: unknown): boolean {
   if (source === 'about:blank') return true
   if (typeof source !== 'string') return false
@@ -178,7 +171,7 @@ function isAllowedWebviewSource(source: unknown): boolean {
 
 /** Customer-service guests may stay only on their platform and explicit sign-in/OAuth hosts. */
 function isAllowedCustomerServiceWebviewSource(storeId: string, source: unknown): boolean {
-  if (source === 'about:blank') return true
+  if (source === CUSTOMER_SERVICE_WEBVIEW_PLACEHOLDER_SOURCE) return true
   const store = getStore(storeId)
   return !!store && isAllowedCustomerServiceUrl(store.platform, source)
 }
@@ -188,7 +181,7 @@ function describeWebviewValue(value: unknown, kind: 'partition' | 'src'): string
   if (typeof value !== 'string') return '<missing>'
   if (kind === 'partition') {
     if (value.startsWith(STORE_PARTITION_PREFIX)) return 'persist:store_<redacted>'
-    if (value.startsWith(CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX)) return 'persist:customer-service_<redacted>'
+    if (value.startsWith(LEGACY_CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX)) return 'persist:customer-service_<redacted>'
     return '<invalid>'
   }
   if (value === 'about:blank') return 'about:blank'
@@ -228,6 +221,10 @@ function createWindow(): void {
     show: false
   })
 
+  // Electron does not expose a guest's partition string on Session. Keep the
+  // validated attach metadata in order and pair it with did-attach-webview.
+  const pendingWebviewAttachments: Array<{ partition: string; customerServiceStoreId: string | null }> = []
+
   // webview 的初始参数来自 Renderer，必须在主窗口开始加载前收口，避免不受信任的
   // preload、partition 或初始 URL 被 Electron 接受。仅允许真实店铺自己的持久分区。
   mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
@@ -239,7 +236,7 @@ function createWindow(): void {
     webPreferences.sandbox = true
     webPreferences.webviewTag = false
     const storeId = getWebviewStoreId(params.partition)
-    const customerServiceStoreId = getCustomerServiceStoreId(params.partition)
+    const customerServiceStoreId = params.src === CUSTOMER_SERVICE_WEBVIEW_PLACEHOLDER_SOURCE ? storeId : null
     // 经营页面默认允许 Chromium 对隐藏页面节流；客服页面需要保持实时接待状态，
     // 即使切回经营工作台也不暂停消息页面的定时器与连接。
     // 店铺页面默认允许后台节流；客服页面随后显式关闭节流，保证切回经营工作台后仍接收平台消息。
@@ -249,13 +246,6 @@ function createWindow(): void {
     if (storeId && params.partition === `${STORE_PARTITION_PREFIX}${storeId}`) {
       try {
         validPartition = !!getStore(storeId)
-      } catch {
-        validPartition = false
-      }
-    }
-    if (customerServiceStoreId && params.partition === customerServiceSessionPartition(customerServiceStoreId)) {
-      try {
-        validPartition = !!getStore(customerServiceStoreId)
       } catch {
         validPartition = false
       }
@@ -271,21 +261,24 @@ function createWindow(): void {
         'warn',
         `main window: blocked webview attach reason=${reason} partition=${describeWebviewValue(params.partition, 'partition')} src=${describeWebviewValue(params.src, 'src')}`
       )
+      return
     }
+    pendingWebviewAttachments.push({ partition: String(params.partition), customerServiceStoreId })
   })
 
-  // 客服页面不是经营标签，不能依赖 window-manager 的 guest 注册钩子。
-  // 它仍然是远程页面，必须在 guest 自己的导航/弹窗边界上收口；否则页面脚本
+  // 客服和工作台是两个 webview guest，但共用同一店铺 Session。
+  // 只有带客服占位标记的 guest 才应用客服域名边界，不能限制工作台 guest。
+  // 客服 guest 必须在自己的导航/弹窗边界上收口；否则页面脚本
   // 可以把客服 webview 导向 file/data/javascript 等非业务协议，或绕过应用内页面
   // 直接创建未受控的原生窗口。http(s) 的平台内跳转继续允许，弹窗改为当前客服页
   // 内导航，保留扫码/OAuth 等人工登录流程而不创建额外 BrowserWindow。
   ;(mainWindow.webContents as any).on('did-attach-webview', (_event: Electron.Event, guestWebContents: Electron.WebContents) => {
-    // Electron 的 did-attach-webview 只传 (event, guestWebContents)。此前把
-    // will-attach 的 webPreferences/params 误当成这里的后续参数，导致 partition
-    // 永远读不到，客服 guest 的导航与弹窗边界实际上没有安装。
-    const partition = String((guestWebContents as any)?.session?.partition || '')
-    const customerServiceStoreId = getCustomerServiceStoreId(partition)
+    // Session does not expose its partition name as a public Electron property.
+    // did-attach follows will-attach for the same guest, so pair them FIFO.
+    const attachment = pendingWebviewAttachments.shift() || null
+    const customerServiceStoreId = attachment?.customerServiceStoreId || null
     if (!customerServiceStoreId) return
+    const partition = attachment?.partition || ''
     const destroyGuest = (): void => {
       try {
         const candidate = guestWebContents as any
@@ -298,11 +291,12 @@ function createWindow(): void {
         destroyGuest()
         return
       }
-      if (partition !== customerServiceSessionPartition(customerServiceStoreId)) {
+      if (partition !== `${STORE_PARTITION_PREFIX}${customerServiceStoreId}`) {
         logMain('warn', 'customer-service guest: blocked unexpected session partition')
         destroyGuest()
         return
       }
+      registerCustomerServiceWebContents(guestWebContents, customerServiceStoreId)
       guestWebContents.setWindowOpenHandler(({ url }: { url: string }) => {
         const store = getStore(customerServiceStoreId)
         if (!store || !isAllowedCustomerServiceUrl(store.platform, url)) {

@@ -14,13 +14,14 @@
  *
  * 恢复不等于"一定能用"：服务端可能已让它失效——那种情况仍由既有的登录过期检测如实报出来。
  */
-import { app, safeStorage } from 'electron'
+import { app, safeStorage, session as electronSession } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { closeCustomerServiceSession, getActiveCustomerServiceSession, getActiveStoreSession, getCustomerServiceSession, getStoreSession } from '../browser/session-manager'
 import { getDatabase } from '../db/database'
 import { logMain } from './logger'
 import type { SessionCookieEntry } from './session-package'
+import { CUSTOMER_SERVICE_PLATFORMS, LEGACY_CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX } from '@shared/contracts/customer-service'
 
 /** 快照落盘位置：userData/stores/<storeId>/session-cookies.enc */
 function snapshotPath(storeId: string, scope: 'store' | 'customer-service' = 'store'): string {
@@ -132,17 +133,14 @@ function enqueueSnapshot(storeId: string, scope: SnapshotScope, work: (shouldCon
 
 export function snapshotStoreSession(storeId: string, existingSession?: Electron.Session): Promise<number> {
   return enqueueSnapshot(storeId, 'store', async shouldContinue => {
-    const ses = existingSession || getActiveStoreSession(storeId)
+    const ses = existingSession || getActiveStoreSession(storeId) || getActiveCustomerServiceSession(storeId)
     return ses && shouldContinue() ? snapshotSession(storeId, ses, 'store', 'store', shouldContinue) : 0
   })
 }
 
-/** 客服页面使用独立 partition；其会话级 Cookie 也必须独立快照，不能写入经营工作台。 */
+/** Compatibility entry point: customer-service cookies now belong to the shared store snapshot. */
 export function snapshotCustomerServiceSession(storeId: string, existingSession?: Electron.Session): Promise<number> {
-  return enqueueSnapshot(storeId, 'customer-service', async shouldContinue => {
-    const ses = existingSession || getActiveCustomerServiceSession(storeId)
-    return ses && shouldContinue() ? snapshotSession(storeId, ses, 'customer-service', 'customer-service', shouldContinue) : 0
-  })
+  return snapshotStoreSession(storeId, existingSession || getActiveCustomerServiceSession(storeId))
 }
 
 /**
@@ -154,14 +152,15 @@ async function restoreSession(
   ses: Electron.Session,
   scope: 'store' | 'customer-service',
   label: string,
-  shouldContinue: () => boolean = () => true
+  shouldContinue: () => boolean = () => true,
+  cookieFilter: (cookie: SessionCookieEntry) => boolean = () => true
 ): Promise<number> {
   const file = snapshotPath(storeId, scope)
   if (!existsSync(file)) return 0
   if (!safeStorage.isEncryptionAvailable()) return 0
   try {
     const parsed = JSON.parse(safeStorage.decryptString(readFileSync(file)))
-    const cookies: SessionCookieEntry[] = Array.isArray(parsed?.cookies) ? parsed.cookies : []
+    const cookies: SessionCookieEntry[] = Array.isArray(parsed?.cookies) ? parsed.cookies.filter(cookieFilter) : []
     let ok = 0
     for (const c of cookies) {
       if (!shouldContinue()) return 0
@@ -193,7 +192,23 @@ async function restoreSession(
 }
 
 export async function restoreStoreSession(storeId: string): Promise<number> {
-  return restoreSession(storeId, getStoreSession(storeId), 'store', 'store')
+  const exists = getDatabase().prepare('SELECT id FROM stores WHERE id = ? AND deleted_at IS NULL').get(storeId)
+  if (!exists || restoredStoreSessions.has(storeId)) return 0
+  const inFlight = restoringStoreSessions.get(storeId)
+  if (inFlight) return inFlight
+  const generation = storeRestoreGeneration.get(storeId) ?? 0
+  const shouldContinue = () => (storeRestoreGeneration.get(storeId) ?? 0) === generation
+  const restoring = (async (): Promise<number> => {
+    try {
+      const restored = await restoreSession(storeId, getStoreSession(storeId), 'store', 'store', shouldContinue)
+      if (shouldContinue()) restoredStoreSessions.add(storeId)
+      return shouldContinue() ? restored : 0
+    } finally {
+      restoringStoreSessions.delete(storeId)
+    }
+  })()
+  restoringStoreSessions.set(storeId, restoring)
+  return restoring
 }
 
 export async function restoreCustomerServiceSession(storeId: string): Promise<number> {
@@ -203,18 +218,12 @@ export async function restoreCustomerServiceSession(storeId: string): Promise<nu
   if (!storeExists) return 0
   if (restoredCustomerServiceSessions.has(storeId)) return 0
   const file = snapshotPath(storeId, 'customer-service')
-  if (!existsSync(file)) {
-    restoredCustomerServiceSessions.add(storeId)
-    return 0
-  }
-  if (!safeStorage.isEncryptionAvailable()) return 0
-  // 可见客服页与隐藏监控可能在同一时间首次使用同一家店铺。没有这个
-  // in-flight 复用时，两条路径会同时灌入旧快照，后完成的那次还可能覆盖
-  // 用户刚完成的登录 Cookie。只有一次恢复完成后才把店铺标记为已恢复。
+  // 可见客服页与隐藏监控可能同时首次打开同一家店铺；共享 in-flight Promise，
+  // 以免两条路径重复迁移旧版登录 Cookie。
   const inFlight = restoringCustomerServiceSessions.get(storeId)
   if (inFlight) return inFlight
-  const generation = customerServiceRestoreGeneration.get(storeId) || 0
-  const shouldContinue = () => customerServiceRestoreGeneration.get(storeId) === generation
+  const generation = customerServiceRestoreGeneration.get(storeId) ?? 0
+  const shouldContinue = () => (customerServiceRestoreGeneration.get(storeId) ?? 0) === generation
   const restoring = (async (): Promise<number> => {
     try {
       const customerSession = getCustomerServiceSession(storeId)
@@ -225,8 +234,76 @@ export async function restoreCustomerServiceSession(storeId: string): Promise<nu
         closeCustomerServiceSession(storeId, { persist: false })
         return 0
       }
-      const restored = await restoreSession(storeId, customerSession, 'customer-service', 'customer-service', shouldContinue)
+      const store = getDatabase().prepare('SELECT platform FROM stores WHERE id = ? AND deleted_at IS NULL').get(storeId) as { platform?: string } | undefined
+      const profile = CUSTOMER_SERVICE_PLATFORMS[String(store?.platform || '')]
+      if (!profile) {
+        restoredCustomerServiceSessions.add(storeId)
+        return 0
+      }
+      const isServiceCookie = (cookie: { domain?: string }): boolean => {
+        const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase()
+        if (domain.split('.').length < 2) return false
+        return profile.allowedHosts.some(host => {
+          const normalizedHost = host.toLowerCase()
+          return normalizedHost === domain || normalizedHost.endsWith(`.${domain}`) || domain.endsWith(`.${normalizedHost}`)
+        })
+      }
+      const legacySession = electronSession.fromPartition(`${LEGACY_CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX}${storeId}`, { cache: true })
+      const legacyCookies = await legacySession.cookies.get({})
+      const legacyCookieKey = (cookie: { name?: string; domain?: string; path?: string }): string =>
+        `${String(cookie.name || '')}\u0000${String(cookie.domain || '')}\u0000${String(cookie.path || '/')}`
+      // Keep current workbench values authoritative per cookie key while filling
+      // missing platform cookies from the retired customer-service partition.
+      const currentCookies = await customerSession.cookies.get({})
+      const currentCookieKeys = new Set(currentCookies.map(legacyCookieKey))
+      const persistedLegacyKeys = new Set(legacyCookies.map(legacyCookieKey))
+      let restored = 0
+      if (existsSync(file) && safeStorage.isEncryptionAvailable()) {
+        restored = await restoreSession(
+          storeId,
+          customerSession,
+          'customer-service',
+          'customer-service',
+          shouldContinue,
+          cookie => isServiceCookie(cookie) &&
+            !currentCookieKeys.has(legacyCookieKey(cookie)) &&
+            !persistedLegacyKeys.has(legacyCookieKey(cookie))
+        )
+      }
+      const mergedCookieKeys = new Set((await customerSession.cookies.get({})).map(legacyCookieKey))
+      let migrated = 0
+      for (const cookie of legacyCookies) {
+        if (!shouldContinue()) return 0
+        const key = legacyCookieKey(cookie)
+        if (!isServiceCookie(cookie) || mergedCookieKeys.has(key)) continue
+        try {
+          const domain = String(cookie.domain || '').replace(/^\./, '')
+          const url = `${cookie.secure ? 'https' : 'http'}://${domain}${cookie.path || '/'}`
+          const hostOnly = cookie.hostOnly === true || !String(cookie.domain || '').startsWith('.')
+          await customerSession.cookies.set({
+            url,
+            name: cookie.name,
+            value: cookie.value,
+            path: cookie.path || '/',
+            ...(hostOnly ? {} : { domain: cookie.domain }),
+            secure: cookie.secure,
+            httpOnly: cookie.httpOnly,
+            expirationDate: cookie.expirationDate,
+            sameSite: (cookie.sameSite as any) || undefined
+          })
+          migrated++
+          mergedCookieKeys.add(key)
+        } catch { /* continue with other service cookies */ }
+      }
+      restored += migrated
       if (shouldContinue()) restoredCustomerServiceSessions.add(storeId)
+      if (shouldContinue() && (restored > 0 || existsSync(file))) {
+        const saved = await snapshotStoreSession(storeId, customerSession)
+        if (saved >= 0) {
+          try { rmSync(file, { force: true }); rmSync(`${file}.tmp`, { force: true }) } catch { /* leave cleanup for next run */ }
+          try { await legacySession.clearStorageData({ storages: ['cookies'] }) } catch { /* old partition is no longer used */ }
+        }
+      }
       return shouldContinue() ? restored : 0
     } finally {
       restoringCustomerServiceSessions.delete(storeId)
@@ -234,6 +311,13 @@ export async function restoreCustomerServiceSession(storeId: string): Promise<nu
   })()
   restoringCustomerServiceSessions.set(storeId, restoring)
   return restoring
+}
+
+/** Stop and invalidate an in-flight workbench snapshot restore before clearing its cookies. */
+export async function cancelStoreSessionRestore(storeId: string): Promise<void> {
+  storeRestoreGeneration.set(storeId, (storeRestoreGeneration.get(storeId) || 0) + 1)
+  restoredStoreSessions.delete(storeId)
+  await restoringStoreSessions.get(storeId)
 }
 
 /**
@@ -246,6 +330,14 @@ export async function cancelCustomerServiceSessionRestore(storeId: string): Prom
   await restoringCustomerServiceSessions.get(storeId)
 }
 
+/** Remove cookie data from the retired customer-service partition after a user clear/delete. */
+export async function clearLegacyCustomerServiceCookies(storeId: string): Promise<void> {
+  try {
+    const legacySession = electronSession.fromPartition(`${LEGACY_CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX}${storeId}`, { cache: true })
+    await legacySession.clearStorageData({ storages: ['cookies'] })
+  } catch { /* legacy partition cleanup must not block the shared-session operation */ }
+}
+
 /** 同步使恢复失效，供同步 Session 关闭/快照删除路径使用。 */
 function invalidateCustomerServiceSessionRestore(storeId: string): void {
   customerServiceRestoreGeneration.set(storeId, (customerServiceRestoreGeneration.get(storeId) || 0) + 1)
@@ -253,13 +345,14 @@ function invalidateCustomerServiceSessionRestore(storeId: string): void {
 }
 
 /**
- * 删除会话快照。默认清理经营与客服两个独立分区；显式指定 scope 时只影响该分区。
- * 按域清理 Cookie 在无法重新加密快照时必须只删除经营快照，不能误删未请求清理的客服登录态。
+ * 删除会话快照。store 是当前共享分区；customer-service 只保留为旧版独立快照迁移入口。
+ * 清理共享登录时默认同时删除两者，不能让旧快照在重启后重新导入。
  */
 export function clearStoreSessionSnapshot(storeId: string, scope: SnapshotScope | 'all' = 'all'): void {
+  if (scope !== 'customer-service') invalidateStoreSessionRestore(storeId)
   if (scope !== 'store') invalidateCustomerServiceSessionRestore(storeId)
   invalidateSnapshotGeneration(storeId, scope === 'all' ? undefined : scope)
-  // 两个分区彼此独立：一个文件被占用/权限异常时，不能阻止另一个范围清理。
+  // 一个文件被占用/权限异常时，不能阻止另一个兼容快照入口清理。
   const scopes: SnapshotScope[] = scope === 'all' ? ['store', 'customer-service'] : [scope]
   for (const item of scopes) {
     try {
@@ -270,7 +363,7 @@ export function clearStoreSessionSnapshot(storeId: string, scope: SnapshotScope 
   }
 }
 
-/** 清理客服分区快照而不影响经营工作台的会话快照。 */
+/** 清理旧版独立客服快照，不影响当前共享工作台快照。 */
 export function clearCustomerServiceSessionSnapshot(storeId: string): void {
   clearStoreSessionSnapshot(storeId, 'customer-service')
 }
@@ -281,19 +374,28 @@ let snapshotTimer: NodeJS.Timeout | null = null
 let wired = false
 /** 当前需要定期快照的店铺（由 window-manager 在打开/关闭浏览器时登记/注销） */
 const trackedStores = new Set<string>()
-/** 客服页面独立登记；切换到经营工作台时不能注销，否则 Cookie 快照会停止。 */
+/** 客服页面独立登记；工作台窗口关闭后也要继续保存共享 Session。 */
 const trackedCustomerServiceSessions = new Set<string>()
-/** 每个客服分区只恢复一次；重复 prepare 不能把旧快照覆盖到用户刚完成的新登录。 */
+/** Each store's shared partition is restored once, even when both workspaces request it. */
+const restoredStoreSessions = new Set<string>()
+const restoringStoreSessions = new Map<string, Promise<number>>()
+const storeRestoreGeneration = new Map<string, number>()
+/** 旧版客服快照每店只迁移一次，不能覆盖工作台已有的平台登录态。 */
 const restoredCustomerServiceSessions = new Set<string>()
-/** 同一客服分区的并发首次恢复共享 Promise，避免重复灌入旧 Cookie。 */
+/** 同一店铺的并发旧客服快照迁移共享 Promise，避免重复灌入 Cookie。 */
 const restoringCustomerServiceSessions = new Map<string, Promise<number>>()
-/** 清理/删除使正在进行的客服快照恢复失效，防止旧 Cookie 在清理后回灌。 */
+/** 清理/删除使正在进行的旧客服快照迁移失效，防止旧 Cookie 在清理后回灌。 */
 const customerServiceRestoreGeneration = new Map<string, number>()
 
 export function trackStoreSession(storeId: string): void { trackedStores.add(storeId) }
 export function untrackStoreSession(storeId: string): void { trackedStores.delete(storeId) }
 export function trackCustomerServiceSession(storeId: string): void { trackedCustomerServiceSessions.add(storeId) }
 export function untrackCustomerServiceSession(storeId: string): void { trackedCustomerServiceSessions.delete(storeId) }
+
+function invalidateStoreSessionRestore(storeId: string): void {
+  storeRestoreGeneration.set(storeId, (storeRestoreGeneration.get(storeId) || 0) + 1)
+  restoredStoreSessions.delete(storeId)
+}
 
 /**
  * 启动会话持久化：
@@ -307,9 +409,7 @@ export async function startSessionPersistence(storeIds: string[]): Promise<{ res
     trackStoreSession(id)
     const n = await restoreStoreSession(id)
     if (n > 0) restored += n
-    // 客服分区按需恢复：启动时不能为每家店无条件创建客服 Session，
-    // 否则用户从未打开客服页面也会被登记为客服运行时并触发后台追踪。
-    // waitForCustomerServiceSessionReady() 在客服页面/监控真正使用时惰性恢复。
+    // 两个工作区共享该 Session；客服不再有第二份独立 Cookie 快照。
   }
   if (wired) return { restored }
   wired = true
@@ -330,12 +430,8 @@ export async function startSessionPersistence(storeIds: string[]): Promise<{ res
 }
 
 export async function snapshotAll(_why = '手动'): Promise<void> {
-  for (const id of Array.from(trackedStores)) {
-    await snapshotStoreSession(id)
-  }
-  for (const id of Array.from(trackedCustomerServiceSessions)) {
-    await snapshotCustomerServiceSession(id)
-  }
+  const storeIds = new Set([...trackedStores, ...trackedCustomerServiceSessions])
+  for (const id of storeIds) await snapshotStoreSession(id)
 }
 
 export function stopSessionPersistence(): void {

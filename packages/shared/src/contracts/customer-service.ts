@@ -1,3 +1,5 @@
+import { storeSessionPartition } from './shop-session'
+
 /**
  * 电商客服消息监控的安全摘要。
  *
@@ -19,8 +21,12 @@ export const CUSTOMER_MESSAGE_STATUSES = [
  */
 export const CUSTOMER_MESSAGE_FRESHNESS_WINDOW_MS = 90_000
 
-/** Renderer and Main must derive the same durable, per-store customer-service session partition. */
+/** Customer service deliberately shares the shop's durable workbench partition. */
+/** @deprecated Former independent partition prefix; kept only to clean up and migrate old data. */
 export const CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX = 'persist:customer-service_'
+export const LEGACY_CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX = CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX
+/** Main uses this initial URL marker to distinguish the customer-service guest from workbench guests. */
+export const CUSTOMER_SERVICE_WEBVIEW_PLACEHOLDER_SOURCE = 'data:text/html;charset=utf-8,ShopPilot%20customer%20service%20placeholder'
 
 /** Renderer, Main navigation guards, and the message monitor share one platform profile. */
 export interface CustomerServicePlatformConfig {
@@ -76,7 +82,7 @@ export function isAllowedCustomerServiceUrl(platform: string, rawUrl: unknown): 
 }
 
 export function customerServiceSessionPartition(storeId: string): string {
-  return `${CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX}${storeId}`
+  return storeSessionPartition(storeId)
 }
 
 export const CUSTOMER_MESSAGE_FRESHNESS = ['FRESH', 'STALE'] as const

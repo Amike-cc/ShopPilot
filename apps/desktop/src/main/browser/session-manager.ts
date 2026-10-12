@@ -3,12 +3,9 @@
  * 管理每个店铺的独立 Chromium session partition
  */
 
-import { app, session, Session } from 'electron'
-import {
-  CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX,
-  customerServiceSessionPartition,
-  isAllowedCustomerServiceUrl
-} from '@shared/contracts/customer-service'
+import { app, session, Session, WebContents } from 'electron'
+import { isAllowedCustomerServiceUrl } from '@shared/contracts/customer-service'
+import { storeSessionPartition } from '@shared/contracts/shop-session'
 import { getDatabase } from '../db/database'
 import { join, parse } from 'path'
 import { mkdirSync, existsSync } from 'fs'
@@ -19,7 +16,8 @@ import { logMain } from '../services/logger'
 import {
   trackStoreSession, untrackStoreSession, snapshotStoreSession,
   trackCustomerServiceSession, untrackCustomerServiceSession, snapshotCustomerServiceSession,
-  restoreCustomerServiceSession, clearStoreSessionSnapshot, cancelCustomerServiceSessionRestore
+  restoreStoreSession, restoreCustomerServiceSession, clearStoreSessionSnapshot, cancelCustomerServiceSessionRestore,
+  cancelStoreSessionRestore, clearLegacyCustomerServiceCookies
 } from '../services/session-persistence'
 import { parseUaClientHints } from './fingerprint-injector'
 
@@ -140,8 +138,67 @@ export function safeDownloadName(raw: unknown): string {
  * Key: storeId, Value: Session
  */
 const activeSessions = new Map<string, Session>()
-/** Customer-service sessions remain separate from workbench sessions even for the same store. */
+/** Compatibility references to the same per-store Session used by the workbench. */
 const customerServiceSessions = new Map<string, Session>()
+const customerServiceWebContents = new Map<number, { storeId: string; partition: string }>()
+
+/**
+ * Keep the customer-service URL allowlist scoped to its WebContents. The Electron
+ * Session is shared with workbench pages, so a session-wide URL block would break
+ * normal shop navigation.
+ */
+export function registerCustomerServiceWebContents(webContents: WebContents, storeId: string): () => void {
+  const sharedSession = getCustomerServiceSession(storeId)
+  const partition = getStorePartition(storeId)
+  if (webContents.session !== sharedSession) {
+    throw new Error('CUSTOMER_SERVICE_SESSION_MISMATCH')
+  }
+  if (!(sharedSession as any).__customerServiceNavigationGuard) {
+    ;(sharedSession as any).__customerServiceNavigationGuard = true
+    try {
+      sharedSession.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, callback) => {
+        if (details.resourceType !== 'mainFrame' || details.webContentsId == null) {
+          callback({})
+          return
+        }
+        const registration = customerServiceWebContents.get(details.webContentsId)
+        if (!registration || registration.partition !== partition) {
+          callback({})
+          return
+        }
+        try {
+          const store = getDatabase().prepare('SELECT platform FROM stores WHERE id = ? AND deleted_at IS NULL').get(registration.storeId) as { platform?: string } | undefined
+          const allowed = !!store && isAllowedCustomerServiceUrl(String(store.platform || ''), details.url)
+          if (allowed) {
+            callback({})
+            return
+          }
+          logMain('warn', 'customer-service guest: blocked main-frame request outside platform allowlist')
+          callback({ cancel: true })
+        } catch {
+          logMain('warn', 'customer-service guest: blocked main-frame request after policy lookup failed')
+          callback({ cancel: true })
+        }
+      })
+    } catch (error) {
+      ;(sharedSession as any).__customerServiceNavigationGuard = false
+      logMain('warn', `customer-service request guard unavailable: ${String((error as Error)?.message || error).slice(0, 160)}`)
+    }
+  }
+
+  const id = webContents.id
+  const registration = { storeId, partition }
+  customerServiceWebContents.set(id, registration)
+  let released = false
+  const release = (): void => {
+    if (released) return
+    released = true
+    if (customerServiceWebContents.get(id) === registration) customerServiceWebContents.delete(id)
+    try { webContents.removeListener('destroyed', release) } catch { /* already destroyed */ }
+  }
+  webContents.once('destroyed', release)
+  return release
+}
 
 /** 客服 Session 关闭时通知依赖它的后台运行时（例如隐藏监控窗口）同步回收。 */
 const customerServiceSessionClosedListeners = new Set<(storeId: string) => void>()
@@ -170,7 +227,7 @@ export function clearProxyAuthTracking(): void {
  * 格式：persist:store_<storeId>
  */
 export function getStorePartition(storeId: string): string {
-  return `persist:store_${storeId}`
+  return storeSessionPartition(storeId)
 }
 
 /**
@@ -187,7 +244,7 @@ export function getStoreSession(storeId: string): Session {
   const storeSession = session.fromPartition(partition, { cache: true })
   
   // 配置 session。代理配置是异步的，保存 Promise 供首次导航/重配置等待。
-  const ready = configureSession(storeSession, storeId, false)
+  const ready = configureSession(storeSession, storeId)
   sessionReady.set(storeId, ready)
   // 没有需要等待的调用方时也要标记 rejection 已被消费，避免 Node 未处理拒绝。
   void ready.catch(() => {})
@@ -213,7 +270,7 @@ export function getStoreSession(storeId: string): Session {
           // 防抖期间店铺可能已被彻底删除/会话已关闭：绝不能再快照，否则 getStoreSession
           // 会为已删店铺重建分区（重新登记进 activeSessions/trackedStores），已清掉的
           // 登录凭据文件可能被写回磁盘。比较 session 实例身份同时挡住"已关闭"与"已重建"。
-          if (activeSessions.get(storeId) !== storeSession) return
+          if (activeSessions.get(storeId) !== storeSession && customerServiceSessions.get(storeId) !== storeSession) return
           void snapshotStoreSession(storeId).catch(() => {})
         }, 3000)
       })
@@ -223,34 +280,13 @@ export function getStoreSession(storeId: string): Session {
   return storeSession
 }
 
-/**
- * Get the store's separate, persistent customer-service session.
- * It shares the store's configured UA/proxy policy while keeping cookies and web storage isolated.
- */
+/** Customer service and the workbench for one shop intentionally share cookies and web storage. */
 export function getCustomerServiceSession(storeId: string): Session {
   if (customerServiceSessions.has(storeId)) return customerServiceSessions.get(storeId)!
-
-  const customerSession = session.fromPartition(customerServiceSessionPartition(storeId), { cache: true })
-  const ready = configureSession(customerSession, storeId, true)
-  customerServiceSessionReady.set(storeId, ready)
-  void ready.catch(() => {})
+  const customerSession = getStoreSession(storeId)
+  customerServiceSessionReady.set(storeId, sessionReady.get(storeId) || Promise.resolve())
   customerServiceSessions.set(storeId, customerSession)
   trackCustomerServiceSession(storeId)
-
-  try {
-    if (!(customerSession as any).__customerServiceCookieSnapHooked) {
-      ;(customerSession as any).__customerServiceCookieSnapHooked = true
-      let snapTimer: NodeJS.Timeout | null = null
-      customerSession.cookies.on('changed', () => {
-        if (snapTimer) clearTimeout(snapTimer)
-        snapTimer = setTimeout(() => {
-          if (customerServiceSessions.get(storeId) !== customerSession) return
-          void snapshotCustomerServiceSession(storeId).catch(() => {})
-        }, 3000)
-      })
-    }
-  } catch { /* periodic and exit snapshots remain available */ }
-
   return customerSession
 }
 
@@ -265,36 +301,35 @@ export function getActiveCustomerServiceSession(storeId: string): Session | unde
 
 /** Wait until customer-service proxy/session policy is ready before its first navigation. */
 export async function waitForCustomerServiceSessionReady(storeId: string): Promise<void> {
-  // 店铺删除与客服页面首次准备可能并发；在创建独立 partition 之前再查一次，
+  // 店铺删除与客服页面首次准备可能并发；在创建 shared Session 之前再查一次，
   // 避免已删除店铺的迟到监控/渲染请求重新登记 Session 和持久化追踪。
   const exists = getDatabase().prepare('SELECT id FROM stores WHERE id = ? AND deleted_at IS NULL').get(storeId)
   if (!exists) throw new Error('STORE_NOT_FOUND')
   if (!customerServiceSessions.has(storeId) || !customerServiceSessionReady.has(storeId)) getCustomerServiceSession(storeId)
-  await customerServiceSessionReady.get(storeId)
+  await waitForStoreSessionReady(storeId)
   const stillExists = getDatabase().prepare('SELECT id FROM stores WHERE id = ? AND deleted_at IS NULL').get(storeId)
   if (!stillExists) {
-    // 删除可能发生在 configureSession 完成之后；回收刚创建的独立 Session，
-    // 否则它会留在 trackedCustomerServiceSessions 中并在退出时继续快照。
+    // 删除可能发生在 Session 配置完成之后；回收客服运行时引用。
     closeCustomerServiceSession(storeId, { persist: false })
     throw new Error('STORE_NOT_FOUND')
   }
-  // 既有店铺通常在应用启动时已恢复；运行中从回收站恢复的店铺在此处惰性恢复，
-  // 并由持久化层保证同一进程只灌入一次旧快照。
+  // waitForStoreSessionReady 已恢复当前快照；这里仅兼容导入旧版单独保存的客服 Cookie。
   await restoreCustomerServiceSession(storeId)
 }
 
-/** 等待店铺 session 的初始配置（尤其是代理）完成。 */
+/** 等待店铺 Session 的代理配置与会话 Cookie 恢复完成。 */
 export async function waitForStoreSessionReady(storeId: string): Promise<void> {
   // ShopSessionManager 可能已经先取得了同一店铺的 Session；复用现有配置 Promise，
   // 避免 WebContentsView 创建时重复注册 webRequest / download 监听器。
   if (!activeSessions.has(storeId) || !sessionReady.has(storeId)) getStoreSession(storeId)
   await sessionReady.get(storeId)
+  await restoreStoreSession(storeId)
 }
 
 /**
  * 配置 session 的基本设置
  */
-function configureSession(sess: Session, storeId: string, isCustomerService = false): Promise<void> {
+function configureSession(sess: Session, storeId: string): Promise<void> {
   // 设置 User-Agent - 从 browser_profiles 读取
   const db = getDatabase()
   const profile = db.prepare(`
@@ -321,29 +356,6 @@ function configureSession(sess: Session, storeId: string, isCustomerService = fa
   
   // 设置代理（如果有绑定）- §4.3 代理必须在首次导航前设置
   const proxyReady = configureProxy(sess, storeId)
-
-  // will-navigate does not observe renderer/programmatic WebContents.loadURL calls.
-  // The customer-service partition therefore gets a session-level main-frame guard;
-  // it covers both the visible webview and the hidden monitor window while allowing
-  // only the exact platform/login hosts from the shared profile.
-  if (isCustomerService && !(sess as any).__customerServiceNavigationGuard) {
-    ;(sess as any).__customerServiceNavigationGuard = true
-    const platformRow = db.prepare('SELECT platform FROM stores WHERE id = ? AND deleted_at IS NULL').get(storeId) as { platform?: string } | undefined
-    const platform = String(platformRow?.platform || '')
-    try {
-      sess.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, callback) => {
-        if (details.resourceType !== 'mainFrame' || isAllowedCustomerServiceUrl(platform, details.url)) {
-          callback({})
-          return
-        }
-        logMain('warn', 'customer-service session: blocked main-frame navigation outside platform allowlist')
-        callback({ cancel: true })
-      })
-    } catch (error) {
-      // If this guard cannot be installed, fail closed at the visible/main guest hooks.
-      logMain('warn', `customer-service session navigation guard unavailable: ${String((error as Error)?.message || error).slice(0, 160)}`)
-    }
-  }
 
   // 代理 407 认证注入 - §4.3：proxyRules 不内嵌凭据，login 事件运行时注入
   // Electron 30 login details = { url, isMainFrame, firstAuthAttempt, responseHeaders }，无 isProxy；
@@ -438,19 +450,13 @@ interface LoginDetails {
 }
 
 /**
- * 最近已处理的挑战 → 时间戳（session 级 + app 级双通道去重）。
- *
- * 键必须带 storeId：仅按 URL 去重时，**两家店绑同一代理、同时导航同一 URL**
- * （多店并发自动化正是主场景）会让后到的那家被判定"重复"而取消认证 → 该请求 407 失败。
- * 症状是"某店页面偶发打不开、重试就好"，极难排查（2026-09-28 审查确认）。
+ * 最近已处理的挑战 → 时间戳。键包含店铺、Session 和 WebContents：同店工作台与客服
+ * 共用 Session，但每个页面的请求挑战必须分别注入凭据，不同店铺也不能互相取消挑战。
  */
 const recentChallenges = new Map<string, number>()
-function isDuplicateChallenge(storeId: string, sessionKey: string, url: string | undefined): boolean {
+function isDuplicateChallenge(storeId: string, sessionKey: string, webContentsId: string, url: string | undefined): boolean {
   if (!url) return false
-  // 同一家店同时打开经营页和客服页时，两个独立 partition 可能对同一代理 URL
-  // 同时收到 407。去重键必须包含 Session/partition；只按 storeId 会把第二个
-  // 合法挑战误判成重复并取消认证。
-  const key = `${storeId}\u0000${sessionKey}\u0000${url}`
+  const key = `${storeId}\u0000${sessionKey}\u0000${webContentsId}\u0000${url}`
   const now = Date.now()
   const last = recentChallenges.get(key)
   if (last && now - last < 1000) return true
@@ -511,15 +517,14 @@ function resolveStoreIdFromWebContents(wc: any): string | null {
     for (const [id, s] of activeSessions) {
       if (s === wcSession) return id
     }
-    // 客服页面使用独立 partition，但仍由同一家店铺的代理凭据处理认证挑战。
+    // 客服与工作台可能引用同一个 Session；保留店铺身份回退。
     for (const [id, s] of customerServiceSessions) {
       if (s === wcSession) return id
     }
   }
-  // 回退：读 partition 字符串
+  // 回退：读共享的 per-store partition 字符串。
   const partition = wcSession?.partition || ''
   if (partition.startsWith('persist:store_')) return partition.slice('persist:store_'.length)
-  if (partition.startsWith(CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX)) return partition.slice(CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX.length)
   return null
 }
 
@@ -539,7 +544,8 @@ function ensureGlobalLoginHandler(): void {
     logMain('info', `[login] app-level challenge resolved store=${String(storeId || '')} proxy=${looksLikeProxyChallenge(loginDetails)} url=${details.url}`)
     if (!storeId) { callback(); return }
     const sessionKey = String(webContents?.session?.partition || '<unknown-session>')
-    if (isDuplicateChallenge(storeId, sessionKey, details.url)) {
+    const webContentsId = String(webContents?.id ?? '<unknown-webcontents>')
+    if (isDuplicateChallenge(storeId, sessionKey, webContentsId, details.url)) {
       logMain('info', `[login] 1s 内重复挑战，直接取消 store=${storeId}`)
       callback()
       return
@@ -588,10 +594,9 @@ export async function reconfigureProxy(storeId: string): Promise<void> {
     readyMap.set(storeId, next)
     updates.push(next)
   }
-  reconfigure(activeSessions.get(storeId), sessionReady)
-  // 客服工作区使用独立分区，也必须在代理绑定/修改后同步切换；否则切换工作区后
-  // 旧代理仍会继续服务客服页面，表现为客服页加载失败或认证循环。
-  reconfigure(customerServiceSessions.get(storeId), customerServiceSessionReady)
+  const storeSession = activeSessions.get(storeId)
+  const customerServiceSession = customerServiceSessions.get(storeId)
+  reconfigure(storeSession || customerServiceSession, storeSession ? sessionReady : customerServiceSessionReady)
   await Promise.all(updates)
 }
 
@@ -613,8 +618,6 @@ export async function clearStoreData(
   
   // 映射清理类型
   const storages: string[] = []
-  let customerServiceSess: Session | undefined
-  
   if (types.includes('cookies')) {
     storages.push('cookies')
   }
@@ -627,38 +630,25 @@ export async function clearStoreData(
   
   if (storages.length > 0) {
     options.storages = storages
-    if (types.includes('cookies') && !origin) await cancelCustomerServiceSessionRestore(storeId)
+    if (types.includes('cookies')) {
+      if (origin) {
+        // Preserve unrelated legacy customer-service cookies before clearing one origin.
+        await restoreStoreSession(storeId)
+        await restoreCustomerServiceSession(storeId)
+      }
+      await cancelStoreSessionRestore(storeId)
+      await cancelCustomerServiceSessionRestore(storeId)
+    }
     await sess.clearStorageData(options)
-    // 客服页面有自己的持久分区；清理经营数据时同步清理客服分区，
-    // 防止用户以为已清除登录态但客服页仍保留旧 Cookie/localStorage。
-    // 客服分区只清理已经被实际打开/监控使用的 Session。这里不能为了清理动作
-    // 反向创建一个客服 Session，否则“从未打开客服页面却点了清理 Cookie”会登记
-    // 新的持久化追踪、触发代理配置，并在后台留下隐藏客服运行时。
-    customerServiceSess = customerServiceSessions.get(storeId)
-    // origin 是经营工作台的精确域清理范围；客服分区完全独立，不能因为
-    // 两个平台恰好使用同一域名就把客服登录态一起删掉。只有“清理整家店”
-    // （无 origin）才同步清理客服分区。
-    if (customerServiceSess && !origin) await customerServiceSess.clearStorageData(options)
+    if (types.includes('cookies')) await clearLegacyCustomerServiceCookies(storeId)
   }
   // 清了 Cookie 就必须同时丢掉会话快照，否则下次启动会把刚清掉的登录态又灌回来
   // （用户会以为"清数据没生效"）。
   //
-  // 按域清（带 origin）时**不能**一概丢弃：同一个店铺可能有多个域的登录态，按域清只该影响那一个域。
-  // 这里改成"立刻按当前状态重拍快照"——快照要么反映清完后的真实 Cookie（还有别的域），
-  // 要么在会话级 Cookie 全空时被 snapshotStoreSession 自动删除（全量清空的场景）。
-  // 此前 `&& !origin` 的写法让按域清完全不动快照，重启后同名 Cookie 被旧快照覆盖回来。
+  // 按域清理也要重拍整份共享快照，避免已经清掉的域从旧快照或旧版客服快照回灌。
   if (types.includes('cookies')) {
-    if (origin) {
-      // 先使旧经营快照失效，再按当前分区重拍。这样旧的异步读取即使晚返回，
-      // 也不能把按域清理前的 Cookie 写回；安全存储暂不可用时则保持“无快照”，
-      // 避免用户明确删除的 Cookie 在下次启动被恢复。
-      clearStoreSessionSnapshot(storeId, 'store')
-      void snapshotStoreSession(storeId).catch(() => { /* 快照失败不阻塞清理 */ })
-    } else if (!origin) {
-      // 全量清理是用户对整家店铺会话的明确指令；经营与客服两个独立分区的
-      // 旧快照都必须删除，不能因 safeStorage 暂不可用而保留后续回灌入口。
-      clearStoreSessionSnapshot(storeId)
-    }
+    clearStoreSessionSnapshot(storeId)
+    void snapshotStoreSession(storeId).catch(() => { /* 快照失败不阻塞清理 */ })
   }
   
   // 下载记录清理 - §5.9

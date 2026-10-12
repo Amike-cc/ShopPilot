@@ -1,6 +1,6 @@
 <template>
   <div class="app-shell">
-    <!-- 经营工作台与电商客服是两个独立工作区。两者都保持挂载，切换只改变可见工作区；
+    <!-- 经营工作台与电商客服是两个独立工作区，但同店登录状态共用；切换只改变可见工作区，
          客服监控不会改写经营工作台的店铺、标签或网页状态。 -->
     <DashboardView :active="!customerServiceOpen" @open-customer-service="customerServiceOpen = true" />
     <CustomerServiceWorkspace

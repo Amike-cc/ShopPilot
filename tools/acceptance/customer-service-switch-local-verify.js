@@ -1,5 +1,5 @@
 /*
- * Local desktop probe for per-store customer-service sessions and the workbench boundary.
+ * Local desktop probe for shared same-store workbench/customer-service login and cross-store isolation.
  * Uses a temporary profile and two disposable local stores; customer pages use the configured
  * platform URLs and no existing browser profile or account credentials.
  */
@@ -57,6 +57,24 @@ async function json(url) {
   const response = await fetch(url)
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`)
   return response.json()
+}
+
+async function waitForTarget(predicate, timeout = 12000) {
+  const deadline = Date.now() + timeout
+  let targets = []
+  while (Date.now() < deadline) {
+    targets = await json(`http://127.0.0.1:${port}/json`)
+    const target = targets.find(predicate)
+    if (target) return target
+    await sleep(200)
+  }
+  throw new Error(`DevTools target not found: ${JSON.stringify(targets.map(item => ({ type: item.type, url: item.url })))}`)
+}
+
+async function getCookieNames(cdp) {
+  await cdp.send('Network.enable')
+  const result = await cdp.send('Network.getAllCookies')
+  return new Set((result.cookies || []).map(cookie => cookie.name))
 }
 
 async function waitForCdp() {
@@ -122,6 +140,9 @@ async function main() {
   const siteUrl = `http://127.0.0.1:${site.address().port}/`
   let app = null
   let ui = null
+  let workbenchCdp = null
+  let customerServiceCdp = null
+  let storeBCdp = null
   try {
     const args = packaged
       ? ['--no-sandbox', `--remote-debugging-port=${port}`, `--user-data-dir=${userData}`, '--disable-features=CalculateNativeWinOcclusion', '--disable-backgrounding-occluded-windows']
@@ -162,6 +183,31 @@ async function main() {
         topAtButton: button ? (() => { const r = button.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { tag: top?.tagName, test: top?.getAttribute('data-test'), text: top?.textContent?.trim() } })() : null
       };
     `)
+    // Navigate the disposable workbench tab to the local probe origin. Store
+    // creation intentionally chooses the platform adapter's home page, so
+    // adminUrl is not a reliable target selector for this acceptance test.
+    const workbenchTabId = await ui.eval(`return document.querySelector('.dashboard-browser-webview.active')?.getAttribute('data-tab-id') || ''`)
+    if (!workbenchTabId) {
+      const debug = await ui.eval(`
+        const el = document.querySelector('.dashboard-browser-webview.active');
+        return { className: el?.className, attributes: el ? [...el.attributes].map(a => [a.name, a.value]) : [], browserState: await window.shopilot.browser.state() };
+      `)
+      throw new Error(`active workbench WebView did not expose its tab ID: ${JSON.stringify(debug)}`)
+    }
+    const workbenchNavigation = await ui.eval(`return window.shopilot.browser.navigate(${JSON.stringify(storeA)}, ${JSON.stringify(workbenchTabId)}, ${JSON.stringify(siteUrl)})`)
+    if (!workbenchNavigation?.ok) throw new Error(`could not navigate disposable workbench tab to local probe: ${JSON.stringify(workbenchNavigation)}`)
+    const workbenchTarget = await waitForTarget(item => item.type === 'webview' && item.url.startsWith(siteUrl))
+    workbenchCdp = new Cdp(workbenchTarget.webSocketDebuggerUrl)
+    await workbenchCdp.send('Network.enable')
+    const sharedCookieName = `shopilot_shared_session_probe_${Date.now()}`
+    const cookieWrite = await workbenchCdp.send('Network.setCookie', {
+      name: sharedCookieName,
+      value: 'workbench-login-state',
+      url: 'https://im.jinritemai.com/',
+      secure: true,
+      sameSite: 'Lax'
+    })
+    if (!cookieWrite.success) throw new Error('could not write the temporary same-store session probe cookie')
     const customerButtonPoint = await clickAt(ui, '[data-test="workspace-tab-customer-service"]')
     await waitFor(ui, `return document.querySelector('[data-test="customer-service-workspace"]')?.classList.contains('workspace-hidden') === false`, 5000)
     await clickAt(ui, `.customer-service-store[data-store-id="${storeA}"]`)
@@ -218,6 +264,10 @@ async function main() {
       return guestUrl && displayedUrl === guestUrl ? displayedUrl : null;
     `, 8000)
     if (!initialStoreRoute) throw new Error('customer-service route display did not synchronize with its active guest')
+    const customerServiceTarget = await waitForTarget(item => item.type === 'webview' && item.url === initialStoreState.url)
+    customerServiceCdp = new Cdp(customerServiceTarget.webSocketDebuggerUrl)
+    const serviceCookieNames = await getCookieNames(customerServiceCdp)
+    const sameStoreLoginShared = serviceCookieNames.has(sharedCookieName)
     const navigationCheck = await ui.eval(`
       const el = document.querySelector('.customer-service-webview');
       const before = el?.getURL?.() || '';
@@ -234,15 +284,28 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 250));
       return { attempted, before, after: el?.getURL?.() || '', requestSettled };
     `)
+    const workbenchNavigationUrl = `${siteUrl}?after-customer-service-guard=1`
+    await workbenchCdp.send('Page.enable')
+    const workbenchNavigationResult = await workbenchCdp.send('Page.navigate', { url: workbenchNavigationUrl })
+    const workbenchNavigationAllowed = !workbenchNavigationResult.errorText && await waitForTarget(
+      item => item.type === 'webview' && item.url === workbenchNavigationUrl,
+      8000
+    ).then(() => true).catch(() => false)
 
     await clickAt(ui, `.customer-service-store[data-store-id="${storeB}"]`)
     const switchedToB = await waitFor(ui, `
       const views = [...document.querySelectorAll('.customer-service-webview')];
       const active = views[0];
       if (views.length !== 1 || active?.getAttribute('data-store-id') !== ${JSON.stringify(storeB)}) return null;
-      return { storeId: active.getAttribute('data-store-id'), partition: active.getAttribute('partition'), heading: document.querySelector('.browser-heading h1')?.textContent?.trim() };
+      return { storeId: active.getAttribute('data-store-id'), partition: active.getAttribute('partition'), url: active.getURL?.() || '', heading: document.querySelector('.browser-heading h1')?.textContent?.trim() };
     `, 20000)
     if (!switchedToB) throw new Error('switching to the second shop did not mount one isolated customer-service WebView')
+    // The platform may redirect the guest to its login URL before CDP is
+    // queried, so match the actual customer-service WebView by platform host.
+    const storeBTarget = await waitForTarget(item => item.type === 'webview' && item.url.includes('mms.pinduoduo.com'))
+    storeBCdp = new Cdp(storeBTarget.webSocketDebuggerUrl)
+    const storeBCookieNames = await getCookieNames(storeBCdp)
+    const crossStoreLoginIsolated = !storeBCookieNames.has(sharedCookieName)
 
     await clickAt(ui, `.customer-service-store[data-store-id="${storeA}"]`)
     const switchedBackToA = await waitFor(ui, `
@@ -260,21 +323,35 @@ async function main() {
       const webview = document.querySelector('.dashboard-browser-webview.active');
       return { serviceHidden: document.querySelector('[data-test="customer-service-workspace"]')?.classList.contains('workspace-hidden'), host: host?.className, webview: webview?.className, webviewCount: document.querySelectorAll('.dashboard-browser-webview').length };
     `)
-    console.log(JSON.stringify({ siteUrl, created, before, customerButtonPoint, service, initialStoreState, navigationCheck, switchedToB, switchedBackToA, backPoint, after }, null, 2))
+    console.log(JSON.stringify({ siteUrl, created, before, customerButtonPoint, service, initialStoreState, sharedCookieName, cookieWrite, sameStoreLoginShared, crossStoreLoginIsolated, navigationCheck, workbenchNavigationUrl, workbenchNavigationResult, workbenchNavigationAllowed, switchedToB, switchedBackToA, backPoint, after }, null, 2))
     if (service.backHit?.test !== 'customer-service-back-commerce') throw new Error('customer-service back button is not the top hit target')
     if (before.customerWebviewCount !== 0) throw new Error('customer-service webview was created before opening the workspace')
     if (!service.host?.className.includes('dashboard-browser-host') || service.host.className.includes(' active')) throw new Error('browser host remained active while customer service was open')
-    if (service.activeStoreId !== storeA || service.activePartition !== `persist:customer-service_${storeA}` || service.customerWebviewCount !== 1) throw new Error('the first customer-service page did not use exactly its own persistent partition')
-    if (initialStoreState.partition !== `persist:customer-service_${storeA}`) throw new Error('the first customer-service guest partition does not match its shop id')
+    if (service.activeStoreId !== storeA || service.activePartition !== `persist:store_${storeA}` || service.customerWebviewCount !== 1) throw new Error('the first customer-service page did not share exactly its shop partition')
+    if (initialStoreState.partition !== `persist:store_${storeA}`) throw new Error('the first customer-service guest partition does not match its workbench shop partition')
+    if (!sameStoreLoginShared) throw new Error('a cookie written through the workbench session was not visible in its customer-service session')
+    if (!crossStoreLoginIsolated) throw new Error('the first shop cookie leaked into the second shop session')
     if (!navigationCheck.attempted || navigationCheck.before !== navigationCheck.after) throw new Error('the attached customer-service guest navigated outside its platform allowlist')
-    if (switchedToB.storeId !== storeB || switchedToB.partition !== `persist:customer-service_${storeB}` || !switchedToB.heading?.includes('客服切换探针拼多多')) throw new Error('the second customer-service page leaked or reused the first shop state')
-    if (switchedBackToA.storeId !== storeA || switchedBackToA.partition !== `persist:customer-service_${storeA}` || switchedBackToA.url !== initialStoreRoute) throw new Error('switching back did not restore the first shop route and partition')
+    if (!workbenchNavigationAllowed) throw new Error('the customer-service navigation guard blocked normal workbench navigation in the shared session')
+    if (switchedToB.storeId !== storeB || switchedToB.partition !== `persist:store_${storeB}` || !switchedToB.heading?.includes('客服切换探针拼多多')) throw new Error('the second customer-service page leaked or reused the first shop state')
+    if (switchedBackToA.storeId !== storeA || switchedBackToA.partition !== `persist:store_${storeA}` || switchedBackToA.url !== initialStoreRoute) throw new Error('switching back did not restore the first shop route and partition')
     if (!after.serviceHidden || !after.host.includes(' active') || !after.webview?.includes('active')) throw new Error('workbench was not restored after return')
     console.log('CUSTOMER_SERVICE_SWITCH_LOCAL_ALL_PASSED')
   } finally {
     if (ui) ui.close()
+    if (workbenchCdp) workbenchCdp.close()
+    if (customerServiceCdp) customerServiceCdp.close()
+    if (storeBCdp) storeBCdp.close()
     if (app) killTree(app)
     await new Promise(resolve => site.close(() => resolve()))
+    const logsDir = path.join(userData, 'logs')
+    if (fs.existsSync(logsDir)) {
+      const hits = fs.readdirSync(logsDir)
+        .filter(name => /^app-\d{4}-\d{2}-\d{2}\.log(?:\.1)?$/.test(name))
+        .flatMap(name => fs.readFileSync(path.join(logsDir, name), 'utf8').split(/\r?\n/))
+        .filter(line => /customer-service guest: blocked main-frame request outside platform allowlist/.test(line))
+      if (hits.length) console.log('CUSTOMER_SERVICE_NAVIGATION_GUARD_CONFIRMED', hits.slice(-3).join('\n'))
+    }
     try { fs.rmSync(userData, { recursive: true, force: true }) } catch {}
   }
 }

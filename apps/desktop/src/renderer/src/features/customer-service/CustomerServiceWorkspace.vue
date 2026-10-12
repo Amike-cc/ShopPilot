@@ -2,7 +2,7 @@
   <section :class="['customer-service-workspace', { 'workspace-hidden': !props.active }]" data-test="customer-service-workspace" aria-label="电商客服独立工作区">
     <header class="customer-service-toolbar">
       <div class="customer-service-brand"><span class="customer-service-brand-mark" aria-hidden="true">✦</span><div><strong>电商客服</strong><span>人工接待工作区</span></div></div>
-      <div class="customer-service-mode"><span class="mode-dot" aria-hidden="true"></span><strong>独立客服浏览器</strong><span>与经营工作台分离</span></div>
+      <div class="customer-service-mode"><span class="mode-dot" aria-hidden="true"></span><strong>电商客服</strong><span>登录与工作台同步</span></div>
       <div class="workspace-switcher" role="tablist" aria-label="工作区切换">
         <button
           type="button"
@@ -47,7 +47,7 @@
             <span class="store-avatar" :style="{ background: store.avatarColor || '#8065f5' }" aria-hidden="true">{{ store.name.slice(0, 1) }}</span><span class="store-copy"><strong :title="store.name">{{ store.name }}</strong><small>{{ store.platform }}</small></span><span class="store-state"><i :class="['store-state-dot', statusTone(storeStatus(store.id))]" aria-hidden="true"></i><small>{{ serviceEntry(store) ? (visitedStoreIds.includes(store.id) ? '已访问' : '待打开') : '未配置' }}</small></span>
           </button>
         </div>
-        <div class="store-rail-footnote"><span class="footnote-icon" aria-hidden="true">i</span><span>每家店铺使用独立客服登录会话；切换店铺时只显示当前店铺页面。切换工作区不会关闭、重载或切换经营工作台网页。</span></div>
+        <div class="store-rail-footnote"><span class="footnote-icon" aria-hidden="true">i</span><span>每家店铺与工作台共用登录状态，不同店铺相互隔离。切换店铺时只显示当前店铺页面；切换工作区不会关闭或重载经营网页。</span></div>
       </aside>
 
       <main class="customer-service-main">
@@ -59,7 +59,7 @@
           <div class="customer-browser-shell">
             <div class="customer-browser-addressbar"><div class="browser-nav-actions" aria-label="客服网页导航"><button type="button" class="browser-nav-button" title="后退" :disabled="!activeState?.canGoBack" data-test="customer-service-browser-back" @click="goBack"><span aria-hidden="true">‹</span></button><button type="button" class="browser-nav-button" title="前进" :disabled="!activeState?.canGoForward" data-test="customer-service-browser-forward" @click="goForward"><span aria-hidden="true">›</span></button><button type="button" class="browser-nav-button" title="刷新客服页面" data-test="customer-service-browser-reload" @click="reloadActive"><span aria-hidden="true">↻</span></button></div><div class="customer-browser-url" aria-label="当前客服页面地址"><span class="url-lock" aria-hidden="true">⌁</span><span class="url-value" :title="activeState?.url || serviceEntry(activeStore) || ''">{{ activeState?.url || serviceEntry(activeStore) || '平台客服地址未配置' }}</span></div><span class="customer-browser-load-state" :class="{ loading: activeState?.loading, failed: !!activeState?.failed }"><i aria-hidden="true"></i>{{ activeState?.loading ? '加载中' : activeState?.failed ? '加载失败' : '可接待' }}</span></div>
             <div class="customer-browser-viewport" data-test="customer-service-browser-viewport">
-              <webview v-if="serviceEntry(activeStore)" :key="activeStore.id" :ref="customerWebviewRefCallback(activeStore.id)" class="customer-service-webview" :partition="customerServiceSessionPartition(activeStore.id)" src="about:blank" :data-store-id="activeStore.id" :aria-label="`${activeStore.name} · ${activeStore.platform}客服页面`" allowpopups @did-attach="handleWebviewAttach(activeStore.id)" @did-start-loading="handleWebviewStart(activeStore.id)" @did-stop-loading="handleWebviewStop(activeStore.id)" @did-finish-load="handleWebviewFinish(activeStore.id)" @did-navigate="handleWebviewNavigate(activeStore.id, $event)" @did-navigate-in-page="handleWebviewNavigate(activeStore.id, $event)" @page-title-updated="handleWebviewTitle(activeStore.id, $event)" @did-fail-load="handleWebviewFailure(activeStore.id, $event)" @destroyed="handleWebviewDestroyed(activeStore.id)"></webview>
+              <webview v-if="serviceEntry(activeStore)" :key="activeStore.id" :ref="customerWebviewRefCallback(activeStore.id)" class="customer-service-webview" :partition="customerServiceSessionPartition(activeStore.id)" :src="CUSTOMER_SERVICE_WEBVIEW_PLACEHOLDER_SOURCE" :data-store-id="activeStore.id" :aria-label="`${activeStore.name} · ${activeStore.platform}客服页面`" allowpopups @did-attach="handleWebviewAttach(activeStore.id)" @did-start-loading="handleWebviewStart(activeStore.id)" @did-stop-loading="handleWebviewStop(activeStore.id)" @did-finish-load="handleWebviewFinish(activeStore.id)" @did-navigate="handleWebviewNavigate(activeStore.id, $event)" @did-navigate-in-page="handleWebviewNavigate(activeStore.id, $event)" @page-title-updated="handleWebviewTitle(activeStore.id, $event)" @did-fail-load="handleWebviewFailure(activeStore.id, $event)" @destroyed="handleWebviewDestroyed(activeStore.id)"></webview>
               <div v-if="!serviceEntry(activeStore)" class="customer-browser-empty" data-test="customer-service-url-unavailable"><span class="customer-browser-empty-icon" aria-hidden="true">◎</span><strong>暂未配置 {{ activeStore.platform }}客服地址</strong><span>请为该店铺选择四个平台之一。</span></div>
               <div v-else-if="activeState?.failed" class="customer-browser-error" data-test="customer-service-browser-error" role="alert"><span class="customer-browser-error-icon" aria-hidden="true">!</span><strong>客服页面暂时无法加载</strong><span>{{ activeState.failed }}</span><button type="button" class="customer-service-primary" @click="retryActive">重新加载</button></div>
               <div v-else-if="activeState?.loading" class="customer-browser-loading" data-test="customer-service-browser-loading"><span class="state-spinner" aria-hidden="true"></span><strong>正在打开 {{ activeStore.platform }}客服</strong><span>首次打开可能需要等待平台登录页返回。</span></div>
@@ -78,6 +78,7 @@ import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import {
   CUSTOMER_SERVICE_PLATFORMS,
+  CUSTOMER_SERVICE_WEBVIEW_PLACEHOLDER_SOURCE,
   customerServiceSessionPartition,
   isAllowedCustomerServiceUrl,
   isCustomerMessageCheckFresh
@@ -160,7 +161,7 @@ function syncSelectedStore(): void {
   const ids = ws.stores.map(store => store.id)
   ws.stores.forEach(ensureBrowserState)
   // 店铺列表会在应用启动时先于客服工作区可见状态加载完成。隐藏工作区不能
-  // 因为这次同步就自动选中首店，否则模板会创建客服 webview、准备独立
+  // 因为这次同步就自动选中首店，否则模板会创建客服 webview、准备共享
   // Session 并导航到远程客服页面，用户甚至还没打开客服入口。
   visitedStoreIds.value = visitedStoreIds.value.filter(id => ids.includes(id))
   if (!ids.length) {

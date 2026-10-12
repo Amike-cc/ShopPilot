@@ -2,18 +2,20 @@ import { describe, expect, it } from 'vitest'
 import {
   CUSTOMER_SERVICE_PLATFORMS,
   customerServiceSessionPartition,
-  CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX,
   isAllowedCustomerServiceUrl
 } from '../../packages/shared/src/contracts/customer-service'
+import { storeSessionPartition } from '../../packages/shared/src/contracts/shop-session'
 import { resolveCustomerServiceNavigationUrl } from '../../apps/desktop/src/renderer/src/features/customer-service/customer-service-navigation'
 
-describe('店铺客服浏览器会话隔离', () => {
-  it('每个店铺取得独立且持久的 Chromium 分区', () => {
+describe('店铺客服浏览器会话共享与隔离', () => {
+  it('同店客服与工作台共享持久分区，不同店铺仍保持隔离', () => {
     const storeA = customerServiceSessionPartition('store-a')
     const storeB = customerServiceSessionPartition('store-b')
 
-    expect(storeA).toBe(`${CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX}store-a`)
-    expect(storeB).toBe(`${CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX}store-b`)
+    expect(storeA).toBe('persist:store_store-a')
+    expect(storeB).toBe('persist:store_store-b')
+    expect(storeA).toBe(storeSessionPartition('store-a'))
+    expect(storeB).toBe(storeSessionPartition('store-b'))
     expect(storeA).not.toBe(storeB)
     expect(storeA.startsWith('persist:')).toBe(true)
     expect(storeB.startsWith('persist:')).toBe(true)

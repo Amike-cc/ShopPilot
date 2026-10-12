@@ -134,7 +134,7 @@
             role="tab"
             aria-selected="false"
             tabindex="0"
-            title="打开独立电商客服工作区"
+            title="打开电商客服工作区（登录与工作台同步）"
             @pointerdown.stop
             @mousedown.stop
             @click.stop="emit('open-customer-service')"

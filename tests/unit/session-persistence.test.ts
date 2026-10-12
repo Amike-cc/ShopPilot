@@ -11,12 +11,16 @@ const mocks = vi.hoisted(() => ({
   getActiveStoreSession: vi.fn(),
   getCustomerServiceSession: vi.fn(),
   getActiveCustomerServiceSession: vi.fn(),
+  fromPartition: vi.fn(),
+  getDatabase: vi.fn(),
+  closeCustomerServiceSession: vi.fn(),
   encryptString: vi.fn((value: string) => Buffer.from(`enc:${value}`)),
   decryptString: vi.fn()
 }))
 
 vi.mock('electron', () => ({
   app: { getPath: () => 'C:/shopilot-test' },
+  session: { fromPartition: mocks.fromPartition },
   safeStorage: {
     isEncryptionAvailable: () => true,
     encryptString: mocks.encryptString,
@@ -35,12 +39,15 @@ vi.mock('../../apps/desktop/src/main/browser/session-manager', () => ({
   getStoreSession: mocks.getStoreSession,
   getActiveStoreSession: mocks.getActiveStoreSession,
   getCustomerServiceSession: mocks.getCustomerServiceSession,
-  getActiveCustomerServiceSession: mocks.getActiveCustomerServiceSession
+  getActiveCustomerServiceSession: mocks.getActiveCustomerServiceSession,
+  closeCustomerServiceSession: mocks.closeCustomerServiceSession
 }))
+vi.mock('../../apps/desktop/src/main/db/database', () => ({ getDatabase: mocks.getDatabase }))
 vi.mock('../../apps/desktop/src/main/services/logger', () => ({ logMain: vi.fn() }))
 
 import {
   clearStoreSessionSnapshot,
+  restoreCustomerServiceSession,
   snapshotStoreSession
 } from '../../apps/desktop/src/main/services/session-persistence'
 
@@ -85,5 +92,42 @@ describe('会话快照并发收敛', () => {
     release?.()
     await snapshot
     expect(mocks.renameSync.mock.calls.length).toBe(before)
+  })
+
+  it('迁移旧客服 Cookie 时保留工作台同键新值，只补入缺失的平台 Cookie', async () => {
+    const currentCookies = [
+      { name: 'session', domain: 'im.jinritemai.com', path: '/', value: 'workbench-current', secure: true, httpOnly: true, expirationDate: Date.now() / 1000 + 3600 }
+    ]
+    const legacyCookies = [
+      { name: 'session', domain: 'im.jinritemai.com', path: '/', value: 'legacy-stale', secure: true, httpOnly: true, expirationDate: Date.now() / 1000 + 3600 },
+      { name: 'csrf', domain: 'im.jinritemai.com', path: '/', value: 'legacy-missing', secure: true, httpOnly: false, expirationDate: Date.now() / 1000 + 3600 },
+      { name: 'unrelated', domain: '.example.com', path: '/', value: 'unrelated', secure: true, httpOnly: false, expirationDate: Date.now() / 1000 + 3600 }
+    ]
+    const sharedSession = {
+      cookies: {
+        get: vi.fn(async () => [...currentCookies]),
+        set: vi.fn(async (cookie: { name: string; domain?: string; path?: string; value: string; secure?: boolean; httpOnly?: boolean; expirationDate?: number }) => {
+          const key = `${cookie.name}\u0000${cookie.domain || ''}\u0000${cookie.path || '/'}`
+          const existing = currentCookies.find(item => `${item.name}\u0000${item.domain}\u0000${item.path}` === key)
+          if (existing) Object.assign(existing, cookie)
+          else currentCookies.push({ ...cookie, domain: cookie.domain || '.jinritemai.com', path: cookie.path || '/', sameSite: 'unspecified' })
+        })
+      },
+      clearStorageData: vi.fn(async () => {})
+    } as any
+    const legacySession = { cookies: { get: vi.fn(async () => legacyCookies) }, clearStorageData: vi.fn(async () => {}) } as any
+    mocks.existsSync.mockReturnValue(false)
+    mocks.getDatabase.mockReturnValue({ prepare: (sql: string) => ({ get: () => sql.toLowerCase().includes('platform') ? { platform: '抖店' } : { id: 'store-migration' } }) })
+    mocks.getCustomerServiceSession.mockReturnValue(sharedSession)
+    mocks.getActiveStoreSession.mockReturnValue(sharedSession)
+    mocks.fromPartition.mockReturnValue(legacySession)
+
+    const migrated = await restoreCustomerServiceSession('store-migration')
+    expect(migrated).toBe(1)
+    expect(sharedSession.cookies.set).toHaveBeenCalledTimes(1)
+    expect(sharedSession.cookies.set).toHaveBeenCalledWith(expect.objectContaining({ name: 'csrf', value: 'legacy-missing' }))
+    expect(currentCookies.find(cookie => cookie.name === 'session')?.value).toBe('workbench-current')
+    expect(currentCookies.some(cookie => cookie.name === 'unrelated')).toBe(false)
+    expect(legacySession.clearStorageData).toHaveBeenCalledWith({ storages: ['cookies'] })
   })
 })

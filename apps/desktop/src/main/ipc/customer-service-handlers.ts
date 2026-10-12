@@ -25,7 +25,7 @@ export function registerCustomerServiceHandlers(): void {
     const entry = CUSTOMER_SERVICE_PLATFORMS[store.platform]
     if (!entry) return fail('PLATFORM_UNSUPPORTED', '该店铺平台暂未配置客服页面', requestId)
     try {
-      // 先完成该店铺客服独立分区的 UA、权限与代理配置，再由 Renderer 让 webview 导航。
+      // 先等同店共享 Session 的恢复、权限与代理配置完成，再由 Renderer 让 webview 导航。
       await waitForCustomerServiceSessionReady(store.id)
       return ok({ storeId: store.id, platform: store.platform, url: entry.url }, requestId)
     } catch (error) {

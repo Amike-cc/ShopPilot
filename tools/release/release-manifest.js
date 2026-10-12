@@ -156,7 +156,7 @@ const manifest = {
     'node tools/acceptance/invoice-license-local-verify.js（26 项：营业执照归组/筛选/校验/CSV 字段/刷新恢复）',
     'node tools/acceptance/m3-runner.js（114 项：任务引擎、副作用步骤白名单/门禁/恢复、AI 配置与生成、调度、任务列表 UI、重复启动拒绝、结构化抖店邀约抽屉与未支持平台拒绝）',
     'node tools/acceptance/m1-runner.js（115 项，含 DOM <webview> 真实嵌入与重载重注册、跨店分区隔离、设置四页签、地址覆盖驱动邀约任务、左右栏收起、回收站徽标、国内四平台目录与平台入口链路）',
-    'pnpm test:customer-service-switch（两家临时店铺：独立客服分区、单店挂载、切回恢复、恶意导航拦截与返回经营工作台）',
+    'pnpm test:customer-service-switch（两家临时店铺：同店工作台/客服共享分区与 Cookie 同步、跨店隔离、单店挂载、客服恶意导航拦截、工作台导航放行、店铺切换与返回工作台）',
     'node tools/acceptance/m2-runner.js stage1|stage2（阶段1 30 项；阶段2 进程内指纹字段实测）',
     'node tools/acceptance/sec-runner.js（44 项，含弹层遮挡与行内删除按钮守卫）',
     'node tools/acceptance/m4-runner.js（13 阶段检查：解包态 19 项含主进程对话真实点击 / 单实例互斥 / 安装 / 升级 / 卸载）',

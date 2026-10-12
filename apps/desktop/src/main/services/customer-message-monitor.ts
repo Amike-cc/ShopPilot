@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
-import { onCustomerServiceSessionClosed, waitForCustomerServiceSessionReady } from '../browser/session-manager'
+import { onCustomerServiceSessionClosed, registerCustomerServiceWebContents, waitForCustomerServiceSessionReady } from '../browser/session-manager'
 import { getStore, listStores } from '../stores/store-manager'
 import { getDatabase } from '../db/database'
 import { emitToRenderer } from '../browser/window-manager'
@@ -136,9 +136,8 @@ interface MonitorRuntime {
 }
 
 /**
- * 后台客服检查使用隐藏 BrowserWindow + 客服专用 partition。
- * 不能借用经营工作台的 collection tab：即使 tab 不显示，它仍会共享经营 Cookie，
- * 并可能让同一 Session 的代理/页面状态互相污染。窗口按店铺复用，检查结束只释放租约，
+ * 后台客服检查使用隐藏 BrowserWindow + 当前店铺的共享 partition。
+ * 窗口按店铺复用，检查结束只释放租约，
  * 直到监控停止时才销毁，从而保留平台页面的登录与连接状态。
  */
 const customerServiceMonitorWindows = new Map<string, BrowserWindow>()
@@ -152,6 +151,9 @@ function isAllowedCustomerMonitorNavigation(storeId: string, url: unknown): bool
 
 function installCustomerMonitorWindowSecurity(monitorWindow: BrowserWindow, storeId: string): void {
   const wc = monitorWindow.webContents
+  try { registerCustomerServiceWebContents(wc, storeId) } catch {
+    logMain('warn', 'customer-service monitor: shared session guard registration failed')
+  }
   try {
     wc.setWindowOpenHandler(({ url }: { url: string }) => {
       // 监控页面没有用户可操作的弹窗宿主；拒绝所有 window.open，避免远程页

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX, customerServiceSessionPartition } from '../../packages/shared/src/contracts/customer-service'
+import { customerServiceSessionPartition } from '../../packages/shared/src/contracts/customer-service'
 
 const read = (path: string) => readFileSync(resolve(path), 'utf8').replace(/\r\n/g, '\n')
 const APP = read('apps/desktop/src/renderer/src/app/App.vue')
@@ -72,13 +72,18 @@ describe('经营工作台与电商客服工作区边界', () => {
   it('客服 guest 的导航与弹窗由主进程收口，避免远程页面绕过应用窗口边界', () => {
     expect(MAIN).toContain("'did-attach-webview'")
     expect(MAIN).toMatch(/did-attach-webview'[\s\S]*?_event[^,]*, guestWebContents/)
-    expect(MAIN).toContain('guestWebContents as any)?.session?.partition')
+    expect(MAIN).toContain('pendingWebviewAttachments.shift()')
+    expect(MAIN).toContain('pendingWebviewAttachments.push({ partition: String(params.partition), customerServiceStoreId })')
+    expect(MAIN).toContain('params.src === CUSTOMER_SERVICE_WEBVIEW_PLACEHOLDER_SOURCE')
     expect(MAIN).toContain('customer-service guest: blocked popup outside platform allowlist')
     expect(MAIN).toContain('isAllowedCustomerServiceUrl(store.platform, url)')
     const SESSION_GUARD = read('apps/desktop/src/main/browser/session-manager.ts')
-    expect(SESSION_GUARD).toContain("sess.webRequest.onBeforeRequest({ urls: ['*://*/*'] }")
-    expect(SESSION_GUARD).toContain("details.resourceType !== 'mainFrame'")
+    expect(SESSION_GUARD).not.toContain("sess.webRequest.onBeforeRequest({ urls: ['*://*/*'] }")
+    expect(SESSION_GUARD).toContain('registerCustomerServiceWebContents(webContents: WebContents, storeId: string)')
+    expect(SESSION_GUARD).toContain('details.webContentsId')
+    expect(SESSION_GUARD).toContain('if (!registration || registration.partition !== partition)')
     expect(SESSION_GUARD).toContain('callback({ cancel: true })')
+    expect(MAIN).toContain('registerCustomerServiceWebContents(guestWebContents, customerServiceStoreId)')
     expect(MAIN).toContain("guestWebContents.on('will-navigate'")
     expect(MAIN).toContain("guestWebContents.on('will-redirect'")
     expect(MAIN).toContain("return { action: 'deny' }")
@@ -86,6 +91,7 @@ describe('经营工作台与电商客服工作区边界', () => {
 
   it('隐藏客服监控窗口也收口弹窗和远程协议，不能绕过可见客服页边界', () => {
     expect(MONITOR).toContain('setWindowOpenHandler')
+    expect(MONITOR).toContain('registerCustomerServiceWebContents(wc, storeId)')
     expect(MONITOR).toContain("customer-service monitor: blocked unsafe navigation")
     expect(MONITOR).toContain('isAllowedCustomerServiceUrl(store.platform, url)')
   })
@@ -107,18 +113,19 @@ describe('经营工作台与电商客服工作区边界', () => {
     expect(SERVICE).not.toContain('.customer-service-webview.active')
   })
 
-  it('客服 Chromium 分区由共享映射按店铺唯一确定，页面、监控和删除流程使用同一分区', () => {
+  it('客服与工作台共用同一店铺分区，不同店铺、页面、监控和删除范围仍隔离', () => {
     const storeA = customerServiceSessionPartition('store-a')
     const storeB = customerServiceSessionPartition('store-b')
-    expect(storeA).toBe(`${CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX}store-a`)
-    expect(storeB).toBe(`${CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX}store-b`)
+    expect(storeA).toBe('persist:store_store-a')
+    expect(storeB).toBe('persist:store_store-b')
     expect(storeA).not.toBe(storeB)
-    expect(SESSION_MANAGER).toContain('session.fromPartition(customerServiceSessionPartition(storeId), { cache: true })')
-    expect(SESSION_MANAGER).toContain('CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX')
-    expect(SHOP_SESSION_MANAGER).toContain('electronSession.fromPartition(customerServiceSessionPartition(id), { cache: true })')
+    expect(SESSION_MANAGER).toContain('const customerSession = getStoreSession(storeId)')
+    expect(SESSION_MANAGER).not.toContain('session.fromPartition(customerServiceSessionPartition(storeId), { cache: true })')
+    expect(SHOP_SESSION_MANAGER).toContain('electronSession.fromPartition(getStorePartition(id), { cache: true })')
+    expect(SHOP_SESSION_MANAGER).toContain('LEGACY_CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX')
     expect(MONITOR).toContain('partition: customerServiceSessionPartition(storeId)')
-    expect(MAIN).toContain('params.partition === customerServiceSessionPartition(customerServiceStoreId)')
-    expect(MAIN).toContain('partition !== customerServiceSessionPartition(customerServiceStoreId)')
+    expect(MAIN).toContain('params.partition === `${STORE_PARTITION_PREFIX}${storeId}`')
+    expect(MAIN).toContain('partition !== `${STORE_PARTITION_PREFIX}${customerServiceStoreId}`')
   })
 
   it('客服工作区未打开时不会自动选店或导航到远程客服页面', () => {
@@ -133,19 +140,20 @@ describe('经营工作台与电商客服工作区边界', () => {
     expect(SERVICE).toContain('storeCheckErrors.get(selectedStoreId.value)')
   })
 
-  it('两个独立 partition 的 407 去重键不会互相取消挑战', () => {
+  it('共享 Session 的 407 去重按 WebContents 隔离，不会取消另一页面的挑战', () => {
     const SESSION = read('apps/desktop/src/main/browser/session-manager.ts')
-    expect(SESSION).toContain('isDuplicateChallenge(storeId, sessionKey, details.url)')
-    expect(SESSION).toContain('`${storeId}\\u0000${sessionKey}\\u0000${url}`')
+    expect(SESSION).toContain('isDuplicateChallenge(storeId, sessionKey, webContentsId, details.url)')
+    expect(SESSION).toContain('`${storeId}\\u0000${sessionKey}\\u0000${webContentsId}\\u0000${url}`')
   })
 
-  it('Cookie 清理不因客服页面未打开而创建客服 Session，单 Cookie 删除后会重拍快照', () => {
+  it('Cookie 清理只操作共享店铺 Session，单 Cookie 删除后会重拍共享快照', () => {
     const SESSION = read('apps/desktop/src/main/browser/session-manager.ts')
     const SECURITY = read('apps/desktop/src/main/ipc/session-security-handlers.ts')
-    expect(SESSION).toContain('customerServiceSess = customerServiceSessions.get(storeId)')
-    expect(SESSION).toMatch(/if \(customerServiceSess && !origin\) await customerServiceSess\.clearStorageData\(options\)/)
-    expect(SESSION).not.toContain('customerServiceSessions.get(storeId)\n      || session.fromPartition')
-    expect(SESSION).toContain('else if (!origin)')
+    const clearData = SESSION.slice(SESSION.indexOf('export async function clearStoreData'), SESSION.indexOf('export interface CloseStoreSessionOptions'))
+    expect(clearData).not.toContain('getCustomerServiceSession(storeId)')
+    expect(clearData).not.toContain('session.fromPartition(customerServiceSessionPartition')
+    expect(clearData).toContain('clearStoreSessionSnapshot(storeId)')
+    expect(SECURITY).toContain('SessionPersistence.cancelStoreSessionRestore(storeId)')
     expect(SECURITY).toContain('await SessionPersistence.snapshotStoreSession(storeId)')
   })
 })

@@ -18,6 +18,13 @@ export type ShopSessionStatusCode = typeof SHOP_SESSION_STATUS_CODES[number]
 
 import type { PlatformEvidenceType } from './platform-adapter'
 
+/** Durable Chromium session partition shared by every workspace belonging to one store. */
+export const STORE_SESSION_PARTITION_PREFIX = 'persist:store_'
+
+export function storeSessionPartition(storeId: string): string {
+  return `${STORE_SESSION_PARTITION_PREFIX}${storeId}`
+}
+
 /**
  * Session 就绪与平台登录是两条独立状态轴。
  * Session READY 只代表 Electron Session 可用，不代表平台已经登录。

@@ -15,7 +15,6 @@ import * as Diagnostics from '../services/diagnostics'
 import * as StoreManager from '../stores/store-manager'
 import * as ShopSessionManager from '../browser/shop-session-manager'
 import { emitToRenderer, setBrowserViewsVisible } from '../browser/window-manager'
-import { getActiveCustomerServiceSession } from '../browser/session-manager'
 import { writeAudit, auditRequestId } from '../services/audit-logger'
 import { customerMessageMonitor } from '../services/customer-message-monitor'
 
@@ -103,11 +102,15 @@ export function registerSessionAndSecurityHandlers(): void {
       const storeId = requireStoreId(input?.storeId)
       if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
       const url = `${input.secure ? 'https' : 'http'}://${input.domain.replace(/^\./, '')}${input.path || '/'}`
+      await SessionPersistence.restoreStoreSession(storeId)
+      await SessionPersistence.restoreCustomerServiceSession(storeId)
+      await SessionPersistence.cancelStoreSessionRestore(storeId)
+      await SessionPersistence.cancelCustomerServiceSessionRestore(storeId)
       await storeSession(storeId).cookies.remove(url, input.name)
-      // 先使旧快照失效；若 safeStorage 暂不可用，后续重拍会跳过，但旧文件不会
-      // 再把用户刚删除的会话 Cookie 灌回分区。
-      SessionPersistence.clearStoreSessionSnapshot(storeId, 'store')
-      // 会话级 Cookie 不由 Chromium 持久化；删除后必须立刻重拍经营快照，
+      await SessionPersistence.clearLegacyCustomerServiceCookies(storeId)
+      // 清理新旧两种快照入口，避免旧版客服 Cookie 在重启后被迁移回来。
+      SessionPersistence.clearStoreSessionSnapshot(storeId)
+      // 会话级 Cookie 不由 Chromium 持久化；删除后必须立刻重拍共享快照，
       // 否则应用重启时旧快照会把刚删除的登录 Cookie 灌回去。
       await SessionPersistence.snapshotStoreSession(storeId)
       return ok({ removed: true }, requestId)
@@ -119,17 +122,11 @@ export function registerSessionAndSecurityHandlers(): void {
     try {
       const storeId = requireStoreId(input?.storeId)
       if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
-      await storeSession(storeId).clearStorageData({ storages: ['cookies'] })
+      await SessionPersistence.cancelStoreSessionRestore(storeId)
       await SessionPersistence.cancelCustomerServiceSessionRestore(storeId)
-      // 客服页面使用独立 partition；清空登录 Cookie 时必须同时清理客服分区，
-      // 否则重新打开客服页仍可能沿用旧的登录态。
-      // 客服分区可能从未打开。只操作已登记的运行时 Session，避免清理动作本身
-      // 创建客服 Session、启动后台追踪或触发代理配置；客服快照单独删除即可。
-      const customerServiceSession = getActiveCustomerServiceSession(storeId)
-      if (customerServiceSession) {
-        await customerServiceSession.clearStorageData({ storages: ['cookies'] })
-      }
-      // 快照必须同步失效：否则下次启动 restoreStoreSession 会把刚清掉的会话级 Cookie 灌回来，
+      await storeSession(storeId).clearStorageData({ storages: ['cookies'] })
+      await SessionPersistence.clearLegacyCustomerServiceCookies(storeId)
+      // 快照必须同步失效：客服和工作台共享同一分区，旧客服快照也不能回灌，
       // 用户会以为"清空 Cookie 没生效 / 软件偷偷保存了登录态"（2026-09-28 审查确认）。
       try {
         SessionPersistence.clearStoreSessionSnapshot(storeId)

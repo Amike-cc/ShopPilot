@@ -1,3 +1,34 @@
+# ShopPilot 0.4.63 变更说明（工作台与电商客服共享登录）
+
+> **构建标签：INTERNAL_BUILD** —— 未配置 Windows 代码签名证书，本包用于内部试用和验收。
+
+## 本次更新
+
+### 工作台与电商客服共用店铺登录
+
+- 同一家店铺的工作台浏览器与客服页面改用同一个持久化 Session，Cookie 和 Web 存储同步；不同店铺继续使用各自分区。
+- 首次使用客服页面时，将旧版客服独立分区中的平台 Cookie 合并到店铺 Session。工作台现有 Cookie 按同名、域名和路径优先，迁移只补缺失项，并忽略其他平台域名。
+- 修复首次启动时会话快照恢复 generation 判断错误，保证店铺快照和旧客服 Cookie 能正常恢复；清理或删店时仍会使在途恢复失效。
+- 客服导航限制按客服 guest 单独注册，工作台在共享 Session 下仍可正常访问其他工作页面。客服弹窗和平台登录/OAuth 主机继续受白名单约束。
+- 客服占位页使用主进程可识别的安全标记；主进程按 `will-attach` / `did-attach` 顺序配对 guest，避免 Electron 归一化初始 URL 后漏装导航保护。
+
+## 本版验证
+
+- `pnpm.cmd typecheck`：通过。
+- `pnpm.cmd exec vitest run --reporter=dot`：112 个测试文件、1121 项全部通过。
+- `pnpm.cmd lint`：0 errors，1215 条仓库存量 warnings。
+- `pnpm.cmd build`：通过。
+- `pnpm.cmd run test:customer-service-switch`：隔离临时用户目录的 Electron/CDP 实测通过；同店 Cookie 同步、跨店隔离、恶意客服导航拦截、工作台导航放行、店铺切换和返回工作台均通过。
+- `git diff --check`：通过。
+
+## 已知边界
+
+- 本次 Cookie 同步由隔离测试会话中的探针 Cookie 验证；没有使用真实店铺账号登录，也未验证平台服务端的长期登录有效期。
+- 未配置 Windows 代码签名证书，安装包和更新仍标记 `INTERNAL_BUILD`，Windows 可能显示“未知发布者”。
+- 本版需要分别记录后续真实 Windows 安装/升级/卸载验收；CDP 验收不替代人工账号登录和平台副作用验收。
+
+---
+
 # ShopPilot 0.4.61 变更说明（店铺浏览器生命周期与性能优化）
 
 > **构建标签：INTERNAL_BUILD** —— 本包未做代码签名，按 DEVELOPMENT_SPEC §21.5 用于内部试用和验收。

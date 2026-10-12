@@ -169,7 +169,7 @@ export const IPC_CHANNELS = {
   SALES_METRICS_RUNS_LIST: 'salesMetrics:runs:list',
   SALES_METRICS_HEALTH: 'salesMetrics:health',
 
-  // 电商客服消息监控：只返回安全摘要；客服页面与经营工作台完全独立。
+  // 电商客服消息监控：只返回安全摘要；工作区独立，店铺登录 Session 共享。
   CUSTOMER_SERVICE_PREPARE: 'customerService:prepare',
   CUSTOMER_SERVICE_STATUS_LIST: 'customerService:status:list',
   CUSTOMER_SERVICE_CHECK_NOW: 'customerService:checkNow',
