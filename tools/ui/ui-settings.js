@@ -132,7 +132,13 @@ async function main() {
     await cdp.shot(path.join(ARTIFACT_DIR, 'ui-settings-config.png'))
     console.log('配置页:', JSON.stringify(configM))
 
-    // 2) 设置 → 关于软件
+    // 2) 设置 → AI 配置（三张独立卡片）
+    await cdp.evaluate(`document.querySelector('[data-test="settings-tab-ai"]').click(); await new Promise(r=>setTimeout(r,900)); return 1;`)
+    const aiM = await measure()
+    await cdp.shot(path.join(ARTIFACT_DIR, 'ui-settings-ai.png'))
+    console.log('AI 配置页:', JSON.stringify(aiM))
+
+    // 3) 设置 → 关于软件
     await cdp.evaluate(`document.querySelector('[data-test="settings-tab-about"]').click(); await new Promise(r=>setTimeout(r,800)); return 1;`)
     const aboutM = await measure()
     await cdp.shot(path.join(ARTIFACT_DIR, 'ui-settings-about.png'))
@@ -162,10 +168,11 @@ async function main() {
     console.log('达人邀约占位:', JSON.stringify(inviteM))
 
     console.log('\n判定:')
-    console.log('  设置弹窗无横向溢出:', configM.modal && configM.modal.overflowX === false && aboutM.modal && aboutM.modal.overflowX === false)
+    console.log('  设置弹窗无横向溢出:', configM.modal && configM.modal.overflowX === false && aiM.modal && aiM.modal.overflowX === false && aboutM.modal && aboutM.modal.overflowX === false)
+    console.log('  AI 三卡片页无横向滚动:', aiM.docOverflowX === false && aiM.modal?.overflowX === false)
     console.log('  右栏无横向溢出:', inviteM.rightPanel && inviteM.rightPanel.overflowX === false)
     console.log('  页面无横向滚动:', configM.docOverflowX === false && inviteM.docOverflowX === false)
-    console.log('\n截图: artifacts/ui/ui-settings-config.png / artifacts/ui/ui-settings-about.png / artifacts/ui/ui-task-invite.png')
+    console.log('\n截图: artifacts/ui/ui-settings-config.png / artifacts/ui/ui-settings-ai.png / artifacts/ui/ui-settings-about.png / artifacts/ui/ui-task-invite.png')
     cdp.close()
   } catch (e) {
     console.log('UI_SETTINGS_ERROR ' + e.message)

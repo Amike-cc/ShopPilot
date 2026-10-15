@@ -9,6 +9,16 @@ export const TASK_STEP_TYPES = [
   'waitForSelector',
   'readText',
   'readTable',
+  // 读**接口响应**（只读）：页面把数据渲染不出来、但确实请求了它时用（实测微信小店涉税报送页
+  // 是 <micro-app> 微前端，子应用渲染不出表格，数据只在 listQuarterTax 的响应体里）。
+  // 只 attach debugger + Network.enable + 必要时 reload 让页面**自己**重发一次，
+  // 不构造也不重放任何请求；参数固定（urlMarker / rowsPath / 字段映射），同样没有"执行任意代码"的口子。
+  'readApi',
+  // 读**重复卡片列表**（只读）：页面把"一张账单一张卡"渲染成一串 div、**没有 table** 时用
+  // （实测拼多多资金中心「申请发票」：10 张待开票账单卡片，类名带构建哈希不能写死）。
+  // 以**文案**为锚（锚点标签定位每张卡，再在卡内按标签取值），与 readLabelValue 同一套思路，
+  // 但会把**每一张卡**都读成一行 —— readLabelValue 只取最短的那一个匹配，读不了列表。
+  'readCards',
   'screenshot',
   'fillDraft',
   'waitForUserConfirmation',

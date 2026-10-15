@@ -1,306 +1,106 @@
 <template>
-  <section class="agent-drawer" role="dialog" aria-modal="false" aria-label="智能体助手">
+  <section class="agent-drawer" role="dialog" aria-modal="false" aria-label="AI 对话">
     <header class="agent-header">
       <div class="agent-title-mark"><img :src="assistantIcon" alt="" /></div>
-      <div class="agent-title"><strong>root-ceo</strong><span :class="['agent-presence', `tone-${statusTone}`, { working: agent.busy || ['running','waiting_confirmation'].includes(agent.status) }]">{{ presenceLabel }}</span></div>
-      <button class="agent-close" type="button" aria-label="关闭智能体面板" title="关闭智能体" @click="$emit('close')"><img :src="closeIcon" alt="" /></button>
+      <div class="agent-title">
+        <strong>AI 对话</strong>
+        <span :class="['agent-presence', { working: agent.busy, failed: agent.status === 'failed' }]">{{ presenceLabel }}</span>
+      </div>
+      <button class="agent-close" type="button" aria-label="关闭对话面板" title="关闭" @click="emit('close')"><img :src="closeIcon" alt="" /></button>
     </header>
-    <div class="agent-context-strip">
-      <div><span class="context-icon">应</span><span class="context-main">智能体 · {{ storeCountLabel }}</span></div>
-      <div><span class="context-icon">店</span><span class="context-main">当前店铺：{{ storeName || '未选择店铺' }}</span></div>
-      <div><span class="context-icon">页</span><span class="context-main">{{ tabTitle || '无活动标签页' }}</span></div>
-      <div class="drawer-url" :title="displayUrl">{{ displayUrl || '无页面地址' }}</div>
+
+    <div class="agent-mode-note" data-test="agent-chat-only">
+      纯对话模式 · 不会读取或操作店铺、网页和任务
     </div>
-    <nav class="agent-shortcuts" aria-label="智能体快捷操作">
-      <button type="button" :disabled="agent.busy || !storeName" :title="storeName ? '新建任务' : '需要先打开店铺才能做页面任务'" @click="agent.newTask(); focusComposer()"><img :src="taskIcon" alt="" />新建任务</button>
-      <button type="button" :disabled="agent.busy || !storeName" :title="storeName ? '观察页面' : '需要先打开店铺才能观察页面'" @click="agent.observePage()"><img :src="observeIcon" alt="" />观察页面</button>
-      <button type="button" :disabled="agent.busy" @click="agent.refreshSoftwareContext()"><img :src="softwareIcon" alt="" />查看软件</button>
-      <button type="button" @click="$emit('view-tasks')"><img :src="taskIcon" alt="" />查看任务</button>
-    </nav>
-    <section class="agent-session-bar" :class="`tone-${statusTone}`" aria-label="当前会话状态">
-      <span class="session-status-dot"></span>
-      <div><strong>{{ sessionStatusLabel }}</strong><span>{{ sessionStatusDetail }}</span></div>
-      <button v-if="agent.task?.status === 'recovery_required' || agent.task?.status === 'failed'" type="button" @click="$emit('view-tasks')">查看恢复</button>
-    </section>
+
     <div ref="scrollArea" class="agent-scroll-area" @scroll.passive="onScroll">
-      <section v-if="todoItems.length" class="agent-todos" data-test="agent-todos">
-        <div class="todos-head"><strong>待办事件</strong><span>{{ todoItems.length }} 条 · 点击处理</span></div>
-        <button v-for="item in todoItems" :key="item.key" type="button" class="todo-item" :class="item.kind" :data-test="`agent-todo-${item.kind}`" @click="onTodoClick(item)">
-          <span class="todo-icon"><img :src="item.icon" alt="" /></span>
-          <span class="todo-text">{{ item.text }}</span>
-        </button>
-        <!-- Job 与浏览器任务不是同一套 id：点不进去时必须说清去哪儿处理，而不是静默无反应 -->
-        <p v-if="jobHint" class="todo-hint" role="status" data-test="agent-job-hint">{{ jobHint }}</p>
-      </section>
       <AgentMessageList :messages="agent.messages" :busy="agent.busy" :status-label="agent.stateLabel" />
-      <div v-if="agent.error" class="agent-error" role="alert"><strong>{{ agent.error.code }}</strong><span>{{ agent.error.message }}</span></div>
-      <section v-if="agent.softwareContext" class="agent-software-context">
-        <div class="software-context-head"><strong>软件上下文</strong><span>{{ openStoreCount }}/{{ storeCount }} 店铺已打开 · 主 Agent · {{ agent.softwareContext.jobs.length }} Job · {{ agent.softwareContext.skills.length }} 技能 · {{ agent.softwareContext.recentTasks.length }} 个任务</span></div>
-        <div class="software-context-stores">
-          <span v-for="store in agent.softwareContext.stores.slice(0, 6)" :key="store.id" :class="['software-store-chip', { current: store.isDisplayed }]" :title="store.name">{{ store.name }}<i>{{ store.isOpen ? '●' : '○' }}</i></span>
-          <span v-if="agent.softwareContext.stores.length > 6" class="software-store-more">+{{ agent.softwareContext.stores.length - 6 }}</span>
-        </div>
-        <div class="software-context-stores">
-          <span v-for="item in agent.softwareContext.agents.slice(0, 6)" :key="item.id" class="software-store-chip" :title="`${item.name} · ${item.role} · ${item.status}`">{{ item.name }}<i>{{ item.status === 'active' ? '●' : '○' }}</i></span>
-          <span v-if="agent.softwareContext.agents.length > 6" class="software-store-more">+{{ agent.softwareContext.agents.length - 6 }}</span>
-        </div>
-        <div v-if="agent.softwareContext.skills.length" class="software-context-stores">
-          <span v-for="skill in agent.softwareContext.skills.slice(0, 6)" :key="skill.id" class="software-store-chip" :title="`技能：${skill.name} · ${skill.stepCount} 步`">{{ skill.name }}<i>⚙</i></span>
-          <span v-if="agent.softwareContext.skills.length > 6" class="software-store-more">+{{ agent.softwareContext.skills.length - 6 }}</span>
-        </div>
-      </section>
-      <AgentSoftwarePlanCard v-if="agent.softwarePlan" :plan="agent.softwarePlan" :busy="agent.busy" @update:plan="agent.softwarePlan = $event" @execute="agent.executeSoftwarePlan()" @cancel="agent.clearPlan()" />
-      <AgentPlanCard v-if="agent.plan" :plan="agent.plan" :observation="agent.observation" :busy="agent.busy" @update:plan="agent.plan = $event" @create="agent.validateCreate($event)" @cancel="agent.clearPlan()" />
-      <section v-if="agent.task" class="agent-task-card">
-        <header class="task-card-head"><div><strong>{{ agent.task.name }}</strong><span>{{ agent.task.status }}</span></div><button v-if="!agent.task.id.startsWith('ajob_')" type="button" @click="$emit('view-task', agent.task?.id)">查看任务详情</button></header>
-        <div class="task-identifiers">执行 Agent：{{ agent.task.executorName }}<br />Job {{ agent.task.jobId }}<span v-if="!agent.task.id.startsWith('ajob_')"><br />任务 {{ agent.task.id }}</span><br />运行 {{ agent.task.runId || '尚未运行' }}</div>
-        <div class="task-progress-track"><span :style="{ width: `${progressPercent}%` }"></span></div>
-        <div class="task-progress-meta"><span>{{ agent.task.currentStep == null ? '等待步骤' : `步骤 ${agent.task.currentStep + 1} / ${agent.task.totalSteps}` }}</span><span>{{ progressPercent }}%</span></div>
-        <p class="task-message">{{ agent.task.message }}</p>
-        <div v-if="agent.task.confirmation" class="agent-confirm-card">
-          <strong>等待人工确认</strong><p>{{ agent.task.confirmation.message }}</p>
-          <div><button class="approve" :disabled="agent.busy" @click="agent.confirmTask(true)">确认继续</button><button :disabled="agent.busy" @click="agent.confirmTask(false)">拒绝并取消</button></div>
-        </div>
-        <div v-if="agent.task.errorCode || agent.task.errorMessage" class="task-error"><strong>{{ agent.task.errorCode || 'TASK_ERROR' }}</strong><span>{{ agent.task.errorMessage }}</span></div>
-        <div class="task-ops">
-          <button v-if="!['succeeded','failed','cancelled','expired'].includes(agent.task.status)" :disabled="agent.busy" @click="agent.cancelJob()">取消 Job</button>
-          <button v-if="['succeeded','failed','cancelled'].includes(agent.task.status)" :disabled="agent.busy" @click="agent.refreshJob()">刷新结果</button>
-        </div>
-        <div v-if="agent.task.results" class="task-results">
-          <strong>TaskRunner 结果</strong>
-          <div v-for="result in agent.task.results.results" :key="result.id" class="task-result-item">
-            <span class="result-kind">{{ result.kind }}</span>
-            <span v-if="result.kind === 'text'">{{ result.payload?.text ?? result.summary }}</span>
-            <span v-else-if="result.kind === 'table'">表头：{{ (result.payload?.headers || []).join(' · ') || '无' }}；行数：{{ result.payload?.rowCount ?? '未知' }}</span>
-            <span v-else-if="result.kind === 'screenshot'">截图工件：{{ result.artifactPath || result.summary }}</span>
-            <span v-else>{{ result.summary }}</span>
-          </div>
-        </div>
-      </section>
+      <div v-if="agent.error" class="agent-error" role="alert">
+        <strong>{{ agent.error.code }}</strong><span>{{ agent.error.message }}</span>
+      </div>
     </div>
-    <button v-if="showJumpLatest" type="button" class="agent-jump-latest" data-test="agent-jump-latest" @click="jumpToLatest()">有新消息 <img :src="caretDownIcon" alt="" /></button>
-    <AgentComposer ref="composer" :disabled="agent.busy" :scope-label="scopeLabel" @send="agent.generatePlan" />
-    <footer class="agent-footer">AI Key 仅存于主进程 · 主 Agent 负责对话、软件操作和页面任务执行</footer>
+
+    <button v-if="showJumpLatest" type="button" class="agent-jump-latest" data-test="agent-jump-latest" @click="jumpToLatest">有新消息 ↓</button>
+    <AgentComposer :disabled="agent.busy" @send="agent.sendMessage" />
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { sanitizeAgentUrl } from '@shared/agent-privacy'
 import { useAgentStore } from '../../stores/agent'
-import { conversationStatusLabel, conversationStatusTone, recoveryHint } from './conversation-state'
 import AgentComposer from './AgentComposer.vue'
 import AgentMessageList from './AgentMessageList.vue'
-import AgentPlanCard from './AgentPlanCard.vue'
-import AgentSoftwarePlanCard from './AgentSoftwarePlanCard.vue'
 import assistantIcon from '../../assets/generated/ai-assistant-generated.png'
-import taskIcon from '../../assets/icons/browser-tasks.svg'
-import observeIcon from '../../assets/generated/ui-icons/observe.png'
-import softwareIcon from '../../assets/generated/ui-icons/software.png'
-import confirmIcon from '../../assets/generated/ui-icons/confirm.png'
-import waitingIcon from '../../assets/generated/ui-icons/waiting.png'
-import memoryIcon from '../../assets/generated/ui-icons/memory.png'
 import closeIcon from '../../assets/generated/ui-icons/close.png'
-import caretDownIcon from '../../assets/generated/ui-icons/caret-down-gen.png'
 
-const props = defineProps<{ storeName: string; tabTitle: string; currentUrl: string }>()
+const emit = defineEmits<{ close: [] }>()
 const agent = useAgentStore()
 const scrollArea = ref<HTMLElement | null>(null)
-const composer = ref<{ $el: HTMLElement } | null>(null)
-const displayUrl = computed(() => sanitizeAgentUrl(props.currentUrl))
-const storeCount = computed(() => agent.softwareContext?.stores.length || 0)
-const openStoreCount = computed(() => agent.softwareContext?.stores.filter(store => store.isOpen).length || 0)
-const storeCountLabel = computed(() => storeCount.value ? `${storeCount.value} 家店铺可操作` : '等待店铺上下文')
-const presenceLabel = computed(() => agent.busy ? agent.stateLabel : agent.aiConfigured === false ? 'AI 未配置' : agent.aiConfigured ? agent.stateLabel : '就绪')
-const statusTone = computed(() => conversationStatusTone(agent.status))
-const scopeLabel = computed(() => props.storeName ? `${props.storeName}${props.tabTitle ? ` · ${props.tabTitle}` : ''}` : '未选择店铺 · 软件级会话')
-const sessionStatusLabel = computed(() => conversationStatusLabel(agent.task?.status || agent.status))
-const sessionStatusDetail = computed(() => {
-  if (agent.task?.status === 'recovery_required') return recoveryHint('recovery_required')
-  if (agent.task?.status === 'failed') return recoveryHint('failed', agent.task.errorMessage)
-  if (agent.task?.status === 'waiting_confirmation' || agent.task?.confirmation) return '高风险动作暂停，确认后才会继续。'
-  if (agent.busy) return '当前请求正在由 root-ceo 处理。'
-  return '消息、计划、任务和证据会按时间线显示。'
+const stickToBottom = ref(true)
+const hasNewWhileAway = ref(false)
+const presenceLabel = computed(() => agent.busy ? '正在回复' : agent.status === 'failed' ? '暂不可用' : agent.aiConfigured === false ? '待配置 AI' : '在线')
+const showJumpLatest = computed(() => !stickToBottom.value && hasNewWhileAway.value)
+const scrollSignature = computed(() => {
+  const last = agent.messages[agent.messages.length - 1]
+  return `${agent.messages.length}|${last?.id || ''}|${agent.busy ? 1 : 0}|${agent.error?.code || ''}`
 })
-const progressPercent = computed(() => {
-  if (!agent.task?.totalSteps || agent.task.currentStep == null) return agent.task?.status === 'succeeded' ? 100 : 0
-  return Math.min(100, Math.round(((agent.task.currentStep + (agent.task.status === 'succeeded' ? 1 : 0)) / agent.task.totalSteps) * 100))
-})
-function focusComposer() { void nextTick(() => composer.value?.$el?.querySelector('textarea')?.focus()) }
-const emit = defineEmits<{ close: []; 'view-tasks': []; 'view-task': [taskId?: string]; 'view-agents': [] }>()
 
-/**
- * 待办事件（消息通知）：需要用户处理的事情集中在这里——待确认计划、等待人工确认的 Job、
- * 未完成/被阻塞的 Job、待审核结果、待审核记忆。数据全部来自软件上下文与本地状态，不编造。
- */
-type TodoItem = { key: string; kind: 'confirm' | 'waiting' | 'failed' | 'review' | 'memory'; icon: string; text: string; jobId?: string; panel?: 'agents' }
-const todoItems = computed<TodoItem[]>(() => {
-  const items: TodoItem[] = []
-  if (agent.softwarePlan) items.push({ key: 'plan-software', kind: 'confirm', icon: confirmIcon, text: `软件操作计划待确认：${agent.softwarePlan.name}` })
-  if (agent.plan) items.push({ key: 'plan-page', kind: 'confirm', icon: confirmIcon, text: `页面任务计划待派发：${agent.plan.name}` })
-  for (const job of agent.softwareContext?.jobs || []) {
-    if (job.status === 'waiting_confirmation') {
-      items.push({ key: `job-wait-${job.id}`, kind: 'waiting', icon: waitingIcon, text: `Job 等待人工确认：${job.goal}`, jobId: job.id })
-    } else if (['failed', 'recovery_required', 'blocked_budget', 'blocked_permission'].includes(job.status)) {
-      items.push({ key: `job-bad-${job.id}`, kind: 'failed', icon: confirmIcon, text: `Job 未完成（${job.status}）：${job.goal}`, jobId: job.id })
-    } else if (Number(job.unapprovedCount || 0) > 0) {
-      items.push({ key: `job-review-${job.id}`, kind: 'review', icon: observeIcon, text: `结果待审核：${job.goal}（${job.unapprovedCount} 条证据）`, jobId: job.id })
-    }
-  }
-  const memoryCount = Number(agent.softwareContext?.pendingMemoryReview || 0)
-  if (memoryCount > 0) items.push({ key: 'memory-review', kind: 'memory', icon: memoryIcon, text: `记忆待审核：${memoryCount} 条`, panel: 'agents' })
-  return items.slice(0, 8)
-})
-/** Job 待办的处理指引：Job id 不能当任务 id 用，点不进去时要把去哪儿处理写清楚 */
-const jobHint = ref('')
-
-/**
- * Job 待办点击。
- *
- * 父组件（WorkbenchView.viewAgentTask）只把传入的 id 当**任务 id**去 `ws.tasks` 里查，
- * 而待办里的是 `ajob_…`（Job id），直接 emit 必然查不到、点了没有任何反应。
- * 软件上下文里的 Job 摘要也不带浏览器任务 id（agentSoftwareJobSchema 无该字段），
- * 所以这里先向 Main 要一次完整 Job：
- *  - 有 browserTaskId（浏览器 Job）→ 它才是 `ws.tasks` 里的任务 id，沿用现有 view-task 事件即可定位；
- *  - 没有（纯模型 Job / 记录已清理）→ 不冒充任务：打开 Agent 设置（Job 看板所在处）并给出 id 指引。
- */
-async function openJobTodo(jobId: string) {
-  let browserTaskId = ''
-  let failure = ''
-  try {
-    const res = await window.shopilot.agentDomain.jobGet(jobId)
-    if (res.ok) browserTaskId = String((res.data as any)?.browserTaskId || '')
-    else failure = `${res.error.code}：${res.error.message}`
-  } catch (e: any) { failure = String(e?.message || e) }
-  if (browserTaskId) {
-    jobHint.value = ''
-    emit('view-task', browserTaskId)
-    return
-  }
-  jobHint.value = failure
-    ? `读取 Job ${jobId} 失败（${failure}）；可在「设置 → Agent 设置 → Job 看板」按此 id 查看`
-    : `Job ${jobId} 没有对应的浏览器任务（模型 Job）；请在「设置 → Agent 设置 → Job 看板」查看和处理`
-  emit('view-agents')
+function scrollToLatest() {
+  void nextTick(() => {
+    const area = scrollArea.value
+    if (!area) return
+    area.scrollTop = area.scrollHeight
+    requestAnimationFrame(() => {
+      if (scrollArea.value && stickToBottom.value) scrollArea.value.scrollTop = scrollArea.value.scrollHeight
+    })
+  })
 }
 
-function onTodoClick(item: TodoItem) {
-  if (item.jobId) { void openJobTodo(item.jobId); return }
-  jobHint.value = ''
-  if (item.panel === 'agents') emit('view-agents')
-  else scrollToLatest() // 待确认计划：卡片就在消息列表下方，滚到底即可看到
+function onScroll() {
+  const area = scrollArea.value
+  if (!area) return
+  stickToBottom.value = area.scrollHeight - area.scrollTop - area.clientHeight < 40
+  if (stickToBottom.value) hasNewWhileAway.value = false
 }
-/**
- * Esc 只在自己是最上层时才关抽屉。
- * 工作台有一条统一的浮层阶梯（设置/回收站/发票中心/任务对话框…），它关掉一层会 preventDefault；
- * 抽屉若不认这个标记，一次 Esc 会把弹层和抽屉一起关掉，用户敲了一半的消息跟着丢失。
- */
+
+function jumpToLatest() {
+  stickToBottom.value = true
+  hasNewWhileAway.value = false
+  scrollToLatest()
+}
+
 function onEscape(event: KeyboardEvent) {
   if (event.key !== 'Escape' || event.defaultPrevented) return
   event.preventDefault()
   emit('close')
 }
 
-/**
- * 自动滚动到最新消息。
- *
- * 不能只看 `messages.length`：消息列表有 **64 条上限**（stores/agent.ts 的统一历史上限），
- * 满了之后是「shift + push」——长度恒定，watcher 不再触发，对话就不会跟着滚（用户实测报告）。
- * 所以用「最后一条的 id/文本 + 思考中 + 计划卡/任务卡/软件上下文」拼出签名：
- * 任何会在底部新增内容的变化都会改变签名，从而滚到底。
- * 软件上下文的计数也必须进签名：Job/待办/Agent/未审核数变化时底部会多出待办区与上下文条目，
- * 只盯最后一条消息的话这些新增既不滚动、也不会亮出「有新消息」。
- */
-const scrollSignature = computed(() => {
-  const last = agent.messages[agent.messages.length - 1]
-  const jobs = agent.softwareContext?.jobs || []
-  return [
-    agent.messages.length,
-    last?.id || '',
-    last?.text?.length || 0,
-    agent.busy ? 1 : 0,
-    agent.error?.code || '',
-    agent.plan?.id || '',
-    agent.softwarePlan?.id || '',
-    agent.task?.id || '',
-    agent.task?.status || '',
-    agent.task?.currentStep ?? '',
-    agent.softwareContext?.displayedStoreId || '',
-    jobs.length,
-    jobs.reduce((n, job) => n + Number(job.unapprovedCount || 0), 0),
-    agent.softwareContext?.agents.length || 0,
-    agent.softwareContext?.recentTasks.length || 0,
-    todoItems.value.length,
-    Number(agent.softwareContext?.pendingMemoryReview || 0)
-  ].join('|')
-})
-/** 直接贴底 + 下一帧再补一次（smooth 动画/晚到的布局都可能在第一次滚动后才撑高内容）。 */
-function scrollToLatest() {
-  void nextTick(() => {
-    const area = scrollArea.value
-    if (!area) return
-    area.scrollTop = area.scrollHeight
-    // 补滚只在仍"跟随最新"时执行：用户手动上翻后不再被拉回底部（不打断阅读）。
-    requestAnimationFrame(() => { if (scrollArea.value && stickToBottom.value) scrollArea.value.scrollTop = scrollArea.value.scrollHeight })
-  })
-}
-
-/**
- * 上翻阅读时不打断：用户主动往上翻（离开底部）后，新内容不再强拉到底，
- * 只显示「有新消息 ↓」按钮；自己发消息仍然直接跟到底（那是用户刚做的动作）。
- */
-const stickToBottom = ref(true)
-const hasNewWhileAway = ref(false)
-const showJumpLatest = computed(() => !stickToBottom.value && hasNewWhileAway.value)
-function onScroll() {
-  const area = scrollArea.value
-  if (!area) return
-  const nearBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 40
-  stickToBottom.value = nearBottom
-  if (nearBottom) hasNewWhileAway.value = false
-}
-function jumpToLatest() {
-  stickToBottom.value = true
-  hasNewWhileAway.value = false
-  scrollToLatest()
-}
 watch(scrollSignature, () => {
   const last = agent.messages[agent.messages.length - 1]
-  const userJustActed = last?.role === 'user'
-  if (stickToBottom.value || userJustActed) {
+  if (stickToBottom.value || last?.role === 'user') {
     stickToBottom.value = true
     hasNewWhileAway.value = false
     scrollToLatest()
-  } else {
-    hasNewWhileAway.value = true
-  }
+  } else hasNewWhileAway.value = true
 }, { flush: 'post' })
-onMounted(() => { window.addEventListener('keydown', onEscape); stickToBottom.value = true; scrollToLatest() })
+
+onMounted(() => {
+  window.addEventListener('keydown', onEscape)
+  stickToBottom.value = true
+  scrollToLatest()
+})
 onBeforeUnmount(() => window.removeEventListener('keydown', onEscape))
 </script>
 
 <style scoped>
-.agent-drawer { position:relative;display:flex;flex-direction:column;min-width:0;width:100%;height:100%;overflow:hidden;color:var(--color-text-primary);background:var(--color-bg-secondary);
-  /* 抽屉底是白（--color-bg-secondary=#ffffff），但这一族组件沿用深色主题的浅色值。
-     2026-10-02 全应用巡检：就地换掉 muted 灰，抽屉内所有次要文字一起回到 AA 之上。 */
-  --color-text-muted: #5b6472; }
-.agent-jump-latest img { width:13px;height:13px;object-fit:contain;vertical-align:-2px; }.agent-jump-latest { position:absolute;left:50%;bottom:104px;z-index:6;transform:translateX(-50%);border:1px solid rgba(126,110,226,.65);border-radius:99px;padding:5px 12px;background:rgba(58,48,120,.92);color:#efeaff;font-size:10px;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.35); }
-.agent-jump-latest:hover { background:rgba(74,62,150,.96); }
-.agent-header { display:flex;align-items:center;gap:9px;flex:0 0 auto;padding:9px 12px;border-bottom:1px solid var(--color-border); }.agent-title-mark { display:grid;place-items:center;width:30px;height:30px;overflow:hidden;border-radius:10px;background:linear-gradient(145deg,#2e86e9,#8150d9); }.agent-title-mark img { width:32px;height:32px;object-fit:contain; }.agent-title { display:flex;flex-direction:column;gap:2px; }.agent-title strong { font-size:13px; }.agent-presence { color:#067647;font-size:9px; }.agent-presence.working { color:#b54708; }.agent-close { display:grid;place-items:center;margin-left:auto;width:26px;height:26px;border:0;border-radius:7px;background:transparent;color:var(--color-text-secondary);cursor:pointer; }.agent-close img { width:16px;height:16px;object-fit:contain; }
-.agent-context-strip { flex:0 0 auto;padding:8px 12px;border-bottom:1px solid var(--color-border); }.agent-context-strip>div { display:flex;align-items:center;gap:7px;margin:3px 0;font-size:10px; }.context-icon { display:grid;place-items:center;flex:0 0 18px;height:18px;border-radius:5px;background:rgba(121,102,222,.15);color:#4c1d95;font-size:9px; }.context-main { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-text-primary); }.drawer-url { margin:5px 0 0 25px;color:var(--color-text-muted);font-size:9px;overflow-wrap:anywhere;line-height:1.4; }
-.agent-shortcuts { flex:0 0 auto;display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--color-border); }.agent-shortcuts button,.task-card-head button { display:inline-flex;align-items:center;gap:4px;border:1px solid var(--color-border);border-radius:7px;padding:5px 7px;background:rgba(255,255,255,.035);color:var(--color-text-secondary);font-size:10px;white-space:nowrap;cursor:pointer; }.agent-shortcuts button img { width:16px;height:16px;object-fit:contain; }.agent-shortcuts button:disabled { opacity:.45;cursor:default; }
-.agent-session-bar { display:flex;align-items:center;gap:8px;margin:8px 10px 0;padding:8px 9px;border:1px solid rgba(130,119,201,.25);border-radius:9px;background:rgba(126,110,226,.06); }.agent-session-bar.tone-success { border-color:rgba(91,195,149,.3);background:rgba(91,195,149,.06); }.agent-session-bar.tone-danger { border-color:rgba(224,116,116,.35);background:rgba(164,65,65,.08); }.agent-session-bar.tone-pending { border-color:rgba(224,184,88,.35);background:rgba(171,129,40,.08); }.session-status-dot { flex:0 0 7px;width:7px;height:7px;border-radius:50%;background:#9688ff; }.tone-success .session-status-dot { background:#70c9a7; }.tone-danger .session-status-dot { background:#e27d7d; }.tone-pending .session-status-dot { background:#e0b858; }.agent-session-bar div { min-width:0;display:flex;flex-direction:column;gap:2px; }.agent-session-bar strong { color:var(--color-text-primary);font-size:10px; }.agent-session-bar div span { color:var(--color-text-muted);font-size:9px;line-height:1.4; }.agent-session-bar button { margin-left:auto;flex:0 0 auto;border:1px solid var(--color-border);border-radius:6px;padding:4px 6px;background:#f2f4f8;color:var(--color-text-secondary);font-size:9px;cursor:pointer; }
-.agent-software-context { margin:6px 10px 8px;padding:8px;border:1px solid rgba(101,119,190,.3);border-radius:9px;background:rgba(80,96,171,.08); }.software-context-head { display:flex;justify-content:space-between;gap:8px;align-items:baseline; }.software-context-head strong { font-size:10px; }.software-context-head span { color:var(--color-text-muted);font-size:9px; }.software-context-stores { display:flex;flex-wrap:wrap;gap:5px;margin-top:7px; }.software-store-chip,.software-store-more { max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 6px;border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-muted);font-size:9px; }.software-store-chip.current { border-color:rgba(123,109,225,.8);color:var(--color-text-primary); }.software-store-chip i { margin-left:4px;color:#067647;font-style:normal;font-size:8px; }.software-store-more { color:#5b3df5; }
-.agent-todos { margin:8px 10px 2px;padding:8px;border:1px solid rgba(226,178,74,.45);border-radius:9px;background:rgba(214,161,41,.08); }
-.agent-scroll-area { flex:1 1 auto;min-height:80px;overflow:auto;padding-bottom:68px;scroll-behavior:smooth; }
-.todos-head { display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin-bottom:5px; }
-.todos-head strong { font-size:11px;color:#b54708; }.todos-head span { color:var(--color-text-muted);font-size:9px; }
-.todo-item { display:flex;align-items:flex-start;gap:6px;width:100%;margin:3px 0;padding:5px 6px;border:1px solid var(--color-border);border-radius:6px;background:rgba(255,255,255,.03);color:var(--color-text-primary);font-size:10px;line-height:1.45;text-align:left;cursor:pointer; }
-.todo-item:hover { background:rgba(255,255,255,.07); }
-.todo-icon { display:grid;place-items:center;flex:0 0 22px;width:22px;height:22px;overflow:hidden;border-radius:6px; }.todo-icon img { width:22px;height:22px;object-fit:contain; }.todo-text { min-width:0;overflow-wrap:anywhere; }
-.todo-hint { margin:5px 0 1px;color:#f4cf78;font-size:9px;line-height:1.5;overflow-wrap:anywhere; }
-.todo-item.confirm .todo-icon,.todo-item.waiting .todo-icon { color:#f4cf78; }.todo-item.failed .todo-icon { color:#ffaaa4; }.todo-item.review .todo-icon,.todo-item.memory .todo-icon { color:#9fd2ff; }.agent-error,.task-error { display:flex;flex-direction:column;gap:4px;margin:4px 10px 8px;padding:9px;border:1px solid rgba(225,92,92,.34);border-radius:8px;background:rgba(150,43,43,.11);color:#ffb7b0;font-size:10px;overflow-wrap:anywhere; }.agent-error strong,.task-error strong { font-size:10px; }
-.agent-task-card { margin:4px 10px 10px;padding:10px;border:1px solid var(--color-border);border-radius:10px;background:#f7f9fd; }.task-card-head { display:flex;justify-content:space-between;align-items:center;gap:8px; }.task-card-head>div { min-width:0;display:flex;flex-direction:column;gap:3px; }.task-card-head strong { font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }.task-card-head span,.task-identifiers { color:var(--color-text-muted);font-size:9px; }.task-identifiers { margin-top:7px;line-height:1.5;overflow-wrap:anywhere; }.task-progress-track { height:5px;margin-top:8px;border-radius:5px;background:#e9edf5;overflow:hidden; }.task-progress-track span { display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,#3697ec,#9a65e7);transition:width .2s; }.task-progress-meta { display:flex;justify-content:space-between;margin-top:4px;color:var(--color-text-muted);font-size:9px; }.task-message { margin:6px 0;color:var(--color-text-secondary);font-size:10px;line-height:1.5; }
-.agent-confirm-card { margin-top:8px;padding:9px;border:1px solid rgba(239,189,78,.5);border-radius:8px;background:rgba(214,161,41,.1); }.agent-confirm-card strong { color:#f4cf78;font-size:11px; }.agent-confirm-card p { max-height:75px;overflow:auto;color:var(--color-text-primary);font-size:10px;line-height:1.5; }.agent-confirm-card>div { display:flex;gap:6px; }.agent-confirm-card button,.task-ops button { border:1px solid var(--color-border);border-radius:6px;padding:6px 8px;background:rgba(255,255,255,.06);color:var(--color-text-primary);font-size:10px;cursor:pointer; }.agent-confirm-card .approve { border:0;background:#39896e; }.task-ops { display:flex;gap:6px;flex-wrap:wrap;margin-top:7px; }.task-ops button:disabled,.agent-confirm-card button:disabled { opacity:.5; }
-.task-results { display:flex;flex-direction:column;gap:6px;margin-top:9px;padding-top:8px;border-top:1px solid var(--color-border); }.task-results>strong { font-size:10px; }.task-result-item { display:flex;align-items:flex-start;gap:6px;color:var(--color-text-secondary);font-size:9px;line-height:1.5;overflow-wrap:anywhere; }.result-kind { flex:0 0 48px;color:#aaa1f2; }
-.agent-composer { flex:0 0 auto;margin:5px 10px 0; }.agent-footer { flex:0 0 auto;padding:5px 12px 8px;color:var(--color-text-muted);font-size:9px;text-align:center; }
+.agent-drawer { position:relative;display:flex;flex-direction:column;min-width:0;width:100%;height:100%;overflow:hidden;color:var(--color-text-primary);background:var(--color-bg-secondary);--color-text-muted:#5b6472; }
+.agent-header { display:flex;align-items:center;gap:9px;flex:0 0 auto;padding:9px 12px;border-bottom:1px solid var(--color-border); }
+.agent-title-mark { display:grid;place-items:center;width:30px;height:30px;overflow:hidden;border-radius:10px;background:linear-gradient(145deg,#2e86e9,#8150d9); }
+.agent-title-mark img { width:32px;height:32px;object-fit:contain; }
+.agent-title { display:flex;flex-direction:column;gap:2px; }.agent-title strong { font-size:13px; }.agent-presence { color:#067647;font-size:9px; }.agent-presence.working { color:#b54708; }.agent-presence.failed { color:#b42318; }
+.agent-close { display:grid;place-items:center;margin-left:auto;width:26px;height:26px;border:0;border-radius:7px;background:transparent;color:var(--color-text-secondary);cursor:pointer; }.agent-close img { width:16px;height:16px;object-fit:contain; }
+.agent-mode-note { flex:0 0 auto;padding:8px 12px;border-bottom:1px solid var(--color-border);color:var(--color-text-muted);font-size:10px;line-height:1.5; }
+.agent-scroll-area { flex:1 1 auto;min-height:80px;overflow:auto;padding-bottom:8px;scroll-behavior:smooth; }
+.agent-error { display:flex;flex-direction:column;gap:3px;margin:4px 14px 12px;padding:8px 10px;border:1px solid rgba(224,116,116,.42);border-radius:8px;background:rgba(164,65,65,.08);color:var(--color-text-primary);font-size:10px; }.agent-error strong { color:#b42318; }.agent-error span { line-height:1.45; }
+.agent-jump-latest { position:absolute;left:50%;bottom:105px;z-index:6;transform:translateX(-50%);border:1px solid rgba(126,110,226,.65);border-radius:99px;padding:5px 12px;background:rgba(58,48,120,.92);color:#efeaff;font-size:10px;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.2); }
 </style>

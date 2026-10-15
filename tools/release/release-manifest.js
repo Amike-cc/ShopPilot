@@ -153,7 +153,8 @@ const manifest = {
   acceptanceSuites: [
     'node tools/acceptance/store-drag-local-verify.js（10 项：店铺拖动状态、插入线、数据库顺序、刷新后持久化）',
     'node tools/acceptance/douyin-invite-local-verify.js（36 项：抖店结构化抽屉字段、类目/联系方式/核心优势配置、任务创建与本地仿真发布）',
-    'node tools/acceptance/invoice-license-local-verify.js（26 项：营业执照归组/筛选/校验/CSV 字段/刷新恢复）',
+    'node tools/acceptance/invoice-license-local-verify.js（37 项：营业执照归组/筛选/校验/CSV 字段/刷新恢复，加开票主体行显示、获取主体营业执照逐店结果、导出跟随主体筛选并由主进程按 key 复核。⚠ 需应用以 --remote-debugging-port=9263 启动）',
+    'node tools/acceptance/tax-report-real-verify.mjs（21 项：涉税信息报送分区、平台用途限制同屏展示、真机采集后报送期落屏（快手 readTable / 抖店 readTable / 微信小店 **readApi**）、三段收入拆成金额、**按主体统计**与按店铺两种视图。⚠ 需登录态的三家店铺，非隔离环境，故不计入本版复跑门槛）',
     'node tools/acceptance/m3-runner.js（114 项：任务引擎、副作用步骤白名单/门禁/恢复、AI 配置与生成、调度、任务列表 UI、重复启动拒绝、结构化抖店邀约抽屉与未支持平台拒绝）',
     'node tools/acceptance/m1-runner.js（115 项，含 DOM <webview> 真实嵌入与重载重注册、跨店分区隔离、设置四页签、地址覆盖驱动邀约任务、左右栏收起、回收站徽标、国内四平台目录与平台入口链路）',
     'pnpm test:customer-service-switch（两家临时店铺：同店工作台/客服共享分区与 Cookie 同步、跨店隔离、单店挂载、客服恶意导航拦截、工作台导航放行、店铺切换与返回工作台）',

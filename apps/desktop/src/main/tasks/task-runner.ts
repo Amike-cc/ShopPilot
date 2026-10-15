@@ -15,8 +15,9 @@ import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { redactAgentText } from '@shared/agent-privacy'
-import { canRetryStepInPlace } from '@shared/agent-step-effects'
+import { canRetryStepInPlace, shouldUseInternalRunTab } from '@shared/agent-step-effects'
 import { TABLE_ROW_CLEAN_FN } from '@shared/constants/invoice'
+import { readApiResponse, readScalarValues } from './api-reader'
 import type {
   TaskStepDef, TaskProgressEvent, TaskProgressPhase,
   StepResultKind, TaskConfirmationEvent, TaskScheduledFiredEvent
@@ -30,7 +31,7 @@ import { generateInviteScript } from '../services/ai-client'
 import { recordInvite } from '../services/invite-history'
 import { classifyInviteBlockNotice, matchSessionStall } from '@shared/invite-notices'
 import { isAppLocked } from '../services/security-manager'
-import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, getActiveTabId, closeTab, waitForTabWebContents, borrowStorePage, setStoreTaskActivity, openStoreBrowser } from '../browser/window-manager'
+import { createTab, getTabWebContents, emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, getStoreTabs, activateTab, getActiveTabId, closeTab, waitForTabWebContents, borrowStorePage, setStoreTaskActivity, openStoreBrowser, acquireCollectionTab } from '../browser/window-manager'
 import { waitForStoreSessionReady } from '../browser/session-manager'
 import { getDatabase } from '../db/database'
 
@@ -474,6 +475,18 @@ async function detectSessionStall(wc: Electron.WebContents): Promise<string | nu
  */
 async function ensureRunTabForeground(run: RunHandle, why: string): Promise<void> {
   if (!run.tabId) return
+  /**
+   * **采集专用页（internal）不切前台**（2026-10-15 用户要求「采集数据的时候不要影响浏览器使用」）。
+   *
+   * 渲染层对 internal 标签页是**隐藏挂载**（`opacity:0` 但保留布局盒），所以 guest 照样注册、
+   * `getBoundingClientRect()` 照样有真实尺寸——页面内所有可见性判据都成立，而用户的当前页
+   * 一点不动。产品同步、经营数据采集从 2026-10-02 起就是这么跑的（见
+   * window-manager.createTab 的 opts.internal 与 DashboardBrowserSurface 的隐藏挂载）。
+   *
+   * 为什么要专门挡一下：任务式采集（发票 / 涉税 / 主体）以前建的是**普通标签页**，
+   * 于是每步开头这一步都会把用户正在看的页面切走——用户看到的现象就是"一采集，视图自己跳"。
+   */
+  if (isInternalRunTab(run)) return
   const active = getActiveTabId(run.storeId)
   if (active === run.tabId && getTabWebContents(run.storeId, run.tabId)) return
   try { activateTab(run.storeId, run.tabId) } catch { /* 标签页已消失：下面的等待会如实报错 */ }
@@ -488,6 +501,20 @@ async function ensureRunTabForeground(run: RunHandle, why: string): Promise<void
     throw new Error(`TASK_TAB_NOT_FOREGROUND: 运行标签页未能切到前台（${why}）——当前前台是 ${now || '无'}；页面不可见时所有"可见性"判据都会失败，继续跑只会白等超时`)
   }
   logMain('info', `[task] 运行标签页已切回前台 run=${run.runId} tab=${run.tabId}（${why}）`)
+}
+
+/**
+ * 这次的运行标签页是不是**采集专用页**（internal）。
+ *
+ * internal 页由渲染层隐藏挂载：不进标签栏、不占活动位，但 guest 照常注册、页面照常有真实布局盒。
+ * 采集走它就不会动用户正在看的页面（见 ensureRunTabForeground 的说明）。
+ * 「什么样的任务才允许隐藏跑」的规则在 shared 的 shouldUseInternalRunTab（纯函数、有单测）。
+ */
+function isInternalRunTab(run: RunHandle): boolean {
+  if (!run.tabId) return false
+  try {
+    return getStoreTabs(run.storeId).some(t => t.id === run.tabId && t.internal === true)
+  } catch { return false }
 }
 
 async function execute(run: RunHandle): Promise<void> {
@@ -515,15 +542,31 @@ async function execute(run: RunHandle): Promise<void> {
       transition(run, 'failed', message)
       return
     }
+    // 这次的运行标签页形态：纯采集走**采集专用页**（隐藏、不抢活动位、用户完全无感）；
+    // 含"用户要看着页面"的步骤（确认/镜像核对）则用普通页并切前台。
+    const internalRun = shouldUseInternalRunTab(run.steps)
     if (requestedTabId) {
       // Agent 计划显式绑定生成计划时的标签页；不新建 about:blank 再切换，避免误读其他页面。
       run.tabId = requestedTabId
+    } else if (internalRun) {
+      /**
+       * **采集专用页**（2026-10-15 用户要求「采集数据的时候不要影响浏览器使用」）。
+       *
+       * 用 window-manager 的 `acquireCollectionTab`——这条 API 从 2026-10-02 起就存在
+       * （经营数据每 10 分钟一轮用的就是它），只是**任务式采集一直没迁移过来**：
+       * 以前这里建的是普通标签页，于是采集一开始就把用户正在看的页面切走、标签栏还多一个页。
+       * 它按店铺缓存、只建一个、不激活、不落库、不进标签栏；渲染层挂隐藏 webview 给它。
+       *
+       * **刻意不走 `runTabByStore`**：那张表可能存着旧版本建的普通页，复用它等于把抢视图的行为带回来。
+       */
+      run.tabId = acquireCollectionTab(run.storeId)
     } else if (!tabExists(run.tabId)) {
       const reusedId = runTabByStore.get(run.storeId)
       if (reusedId && tabExists(reusedId)) {
         run.tabId = reusedId
       } else {
         const firstNavigate = run.steps.find(s => s.type === 'navigate')
+        // 含"用户要看着页面"的步骤（确认 / 镜像核对）→ 必须可见、必须切前台
         run.tabId = createTab(run.storeId, (firstNavigate?.input as any)?.url || 'about:blank')
         runTabByStore.set(run.storeId, run.tabId)
       }
@@ -540,8 +583,12 @@ async function execute(run: RunHandle): Promise<void> {
      * `BROWSER_NOT_READY: 店铺标签页 guest 在 45000ms 内未注册`（2026-10-03 真机实测：上一轮
      * 因为 AI 报错中断、遗留的运行标签页不在前台，紧接着的复跑就撞上这一条）。
      * 新建标签页那条路径本来就由 createTab 激活，所以此前没暴露。
+     *
+     * 2026-10-15 补充：**采集专用页（internal）不需要也不该切前台**——渲染层对它是隐藏挂载
+     * （opacity:0 + 保留布局盒），guest 照常注册，页面内判据照常成立。硬切会把用户正在看的
+     * 页面顶掉（「采集数据的时候不要影响浏览器使用」）。产品同步/经营采集走的就是这条路。
      */
-    try { activateTab(run.storeId, run.tabId!) } catch { /* 标签页已消失等情况不阻塞流程 */ }
+    try { if (!isInternalRunTab(run)) activateTab(run.storeId, run.tabId!) } catch { /* 标签页已消失等情况不阻塞流程 */ }
     try {
       await waitForTabWebContents(run.storeId, run.tabId!, 45_000)
     } catch (e: any) {
@@ -803,6 +850,52 @@ export const PICK_SORT_FN = `
    */
   const __narrow = (s) => String(s == null ? '' : s).replace(/\\s+/g, '');
 `
+
+/**
+ * 重试专用的 **JS 兜底点击**（不经过坐标）。
+ *
+ * 为什么需要（2026-10-14 真机定位）：受信任鼠标点击是"先算坐标 → 再发事件"，而两次之间页面还会
+ * 继续排版——实测快手发票页的页签横条会随上方内容加载上下跳约 123px，于是**重试真点击可能次次落空**
+ * （当天实测：连点 3 次仍失败）。JS 点击直接在页面里对元素派发 click，不经过坐标，天然免疫这种竞态。
+ *
+ * 为什么只当兜底、不当主路：合成 click 对某些"框架托管、只认真实输入"的控件不生效（实测微信邀约表单），
+ * 所以第一次仍用受信任鼠标；只有"点了但页签没变成选中态"时，才用它与真实鼠标交替重试。
+ * 成败仍由 `verifyActive` 判定，绝不用"点了就算成功"糊过去。
+ *
+ * @returns 兜底结果（供错误信息里如实说明用了哪条路、有没有找到元素）
+ */
+async function jsClickByTextFallback(
+  wc: Electron.WebContents, needle: string, deep: boolean, within?: { selector?: string }
+): Promise<string> {
+  const src = `(() => {
+    ${deep ? ENUM_DEEP_FN : ''}
+    const want = ${JSON.stringify(needle)};
+    const sel = ${JSON.stringify(within?.selector ? String(within.selector) : null)};
+    const pool = ${deep ? '__enumDeep()' : 'Array.from(document.querySelectorAll("*"))'};
+    let roots = null;
+    if (sel) {
+      roots = pool.filter(el => { try { return el.matches(sel) } catch { return false } });
+      if (!roots.length) return JSON.stringify({ ok: false, reason: 'SCOPE_NOT_FOUND' });
+    }
+    const own = (el) => String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+    const inScope = (el) => !roots || roots.some(root => root === el || root.contains(el));
+    const hit = pool.find(el => own(el) === want && inScope(el) && el.getBoundingClientRect().width > 0);
+    if (!hit) return JSON.stringify({ ok: false, reason: 'NOT_FOUND' });
+    // 与"视图未挂载"分支同样的做法：点它自己与最多 3 层祖先（平台常把 handler 挂在父节点上）
+    const chain = [];
+    let n = hit;
+    for (let i = 0; i < 4 && n; i++, n = n.parentElement) { try { n.click(); chain.push(n.tagName) } catch { chain.push('err') } }
+    return JSON.stringify({ ok: true, chain: chain.join('>') });
+  })()`
+  try {
+    const raw = await wc.executeJavaScript(src)
+    const parsed = (() => { try { return JSON.parse(String(raw)) } catch { return null } })()
+    if (!parsed) return 'JS 兜底：结果不可解析'
+    return parsed.ok ? `JS 兜底：已点击（${parsed.chain}）` : `JS 兜底：${parsed.reason}`
+  } catch (e) {
+    return `JS 兜底：执行异常 ${String((e as Error)?.message || e).slice(0, 60)}`
+  }
+}
 
 /**
  * 查找范围限定（clickByText / waitForText 的 within）。
@@ -1493,6 +1586,52 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
     }
     case 'readTable': {
       const wc = wcOrThrow(run)
+      /**
+       * unthrottle：读表期间**挂调试器 + 强制焦点模拟**，把渲染从"后台节流"里拉出来。
+       *
+       * 为什么需要（2026-10-14 实测抖店发票页）：那页是独立微前端，采集时**渲染被节流饿死**——
+       * 挂上 CDP 调试器的场景 45 秒就出表（1 张表 / 160 行），不挂调试器的采集任务
+       * 等满 90 秒仍然 0 个 `<table>`（整轮 106 秒后报 `TASK_SELECTOR_CHANGED: 超时未出现元素 table`）。
+       * 应用自己的 `setBackgroundThrottling(false)`（taskAwakeStores 那条路）对普通表格够用，
+       * 对这个微前端不够——它比静态表格更依赖渲染/定时器走完初始化。
+       *
+       * 注意：这会**让外部 CDP 探针暂时连不上**这个 webview（一个 target 只能挂一个调试器），
+       * 所以读完就摘掉。调试器纪律与 api-reader / network-observer 一致：
+       * 别人先挂的会话**绝不 detach**；焦点模拟是我们加的副作用，读完必须关掉
+       * （复用别人的常驻会话时 detach 清不掉它，要显式 disable，2026-10-15 审查发现）。
+       */
+      const unthrottle = input.unthrottle === true
+      let releaseUnthrottle: (() => void) | null = null
+      if (unthrottle) {
+        try {
+          const dbg = wc.debugger as unknown as {
+            isAttached(): boolean
+            attach(v?: string): void
+            detach(): void
+            sendCommand(m: string, p?: Record<string, unknown>): Promise<unknown>
+          }
+          const attachedByUs = !dbg.isAttached()
+          if (attachedByUs) dbg.attach('1.3')
+          // 让页面以为自己是聚焦的：被判定为后台/失焦时 Chromium 会暂停渲染与定时器
+          await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined)
+          releaseUnthrottle = () => {
+            try {
+              if (attachedByUs) {
+                // 自己挂的会话：detach 即清掉本会话的全部覆盖（含焦点模拟）
+                if (dbg.isAttached()) dbg.detach()
+              } else {
+                // 复用别人的会话：detach 轮不到我们；但焦点模拟是我们开的，必须显式关掉，
+                // 否则这个页面在应用生命周期内永远以为自己有焦点（后台节流被整个关死）
+                void dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined)
+              }
+            } catch { /* 窗口可能已关 */ }
+          }
+        } catch (error) {
+          // 挂不上不该让采集失败：退化成原来的行为，由超时如实报错
+          logMain('warn', `readTable unthrottle 失败（继续按原样读）：${String((error as Error)?.message || error).slice(0, 160)}`)
+        }
+      }
+      try {
       const deepTable = !!input.deep
       const emptyOkEarly = input.emptyOk === true
       if (emptyOkEarly) {
@@ -1535,10 +1674,35 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       // 没有它就会把一个正常的空方向报成 TASK_SELECTOR_CHANGED，让整轮采集失败。
       // 给了它就落一条空快照（如实 0 条），界面显示"0 条"而不是"采集失败"。
       const emptyOk = input.emptyOk === true
-      const emptyResult = (why: string) => {
+      /**
+       * @param why 为什么这次是空的（给界面看的原因）
+       * @param expected 这次空是不是**预期内**的。**必须显式传**，不设默认值——
+       *   以前默认 true，"页签没切成功读到了邻居的表"这类可疑空也被静默掉，界面说谎。
+       *
+       * `emptyOk` 有两种来源，语义完全不同，以前共用一条标记导致界面说谎：
+       *   · **预期内**：档案声明该方向本来就没有数据表（`measuredRows === 0`，
+       *     实测微信「给买家开票」整页无表、抖店「达人给我开票」无表）→ 不是异常；
+       *   · **这次没读到**：页签没切成功 / 页面结构对不上 → 要如实报警"下面是上次的数据"。
+       * 读取侧（shared/invoice-snapshot.ts）按 `expected` 分开处理：
+       * 预期内的空不进 `emptyNote`，也就不会渲染成「本次没读到」、不会让店铺落进「有问题」筛选。
+       */
+      const emptyResult = (why: string, expected: boolean) => {
         if (input.metric) {
-          // 空方向也要落快照：否则界面上这个方向没有采集时间，看起来像"从没抓过"
-          TaskStore.insertSnapshot(run.storeId, String(input.metric), input.keepRows ? [] : 0, run.runId)
+          /**
+           * 空方向要**留痕**（否则界面上这个方向没有采集时间，看起来像"从没抓过"），
+           * 但绝不能写成权威空结果。
+           *
+           * 为什么（2026-10-14 审查 A2）：以前这里写 `[]`，而读取侧是"每店每指标取最新一条"——
+           * 页签没切成功 / 读到别的方向的表 时，这条 `[]` 就把上一次真采到的行**无声盖掉**了：
+           * 界面归零、采集时间却是最新的、这一轮还报 succeeded，看不出任何异常。
+           * 现在写一条带原因的标记：读取侧（shared/invoice-snapshot.ts）见到标记就继续用上一份
+           * 数组快照，并把"这次没读到 + 原因 + 时刻"如实显示出来。
+           */
+          TaskStore.insertSnapshot(
+            run.storeId, String(input.metric),
+            { empty: true, why, at: Date.now(), expected },
+            run.runId
+          )
         }
         return { kind: 'table' as const, payload: { rows: [], rowCount: 0, metric: input.metric || null, empty: why } }
       }
@@ -1568,6 +1732,13 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         }
         const grab = (t) => Array.from(t.querySelectorAll('tr')).map(tr =>
           Array.from(tr.children).map(c => String(c.innerText || '').trim().slice(0, 500)));
+        // 表头词表：**<thead> 里每一行**的表头文案都要收进来。合并表头（colspan）的表有两行表头
+        // （实测抖店涉税信息报送页：第一行「销售货物取得的收入」跨 3 列，第二行才是
+        // 「收入总额/退款总额/收入净额」）——只拿第一行当词表，tbody 里那行重复表头
+        // 11 格只命中 5 个（45%），过不了 60% 阈值，会被当成一条真实数据。
+        const headerVocabulary = (t) => t ? Array.from(t.querySelectorAll('thead tr'))
+          .flatMap(tr => Array.from(tr.children).map(c => String(c.innerText || '').trim()))
+          .filter(Boolean) : [];
         const out = grab(target);
         // 表头校验：在表头行（前 3 行里挑）中找期望列名
         const EXPECT = ${JSON.stringify(expectHeaders)};
@@ -1584,25 +1755,31 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         if (body) out.push(...grab(body));
         // 清洗"不是数据的数据行"（重复表头行 / 「暂无数据」占位行）——实现见
         // shared/constants/invoice.ts 的 TABLE_ROW_CLEAN_FN（与单测共用同一份源码）。
-        const cleaned = __cleanRows(out);
+        // 词表用 thead 的全部表头行（合并表头的表有两行）；mergeHeaderTable 时把数据表的也并上。
+        const vocabulary = headerVocabulary(target).concat(body ? headerVocabulary(body) : []);
+        const cleaned = __cleanRows(out, vocabulary);
         return cleaned.map(r => r.map(c => String(c).slice(0, 500))).slice(0, 2000);
       })()`)
       if (typeof rows === 'string' && rows.startsWith('FOREIGN_TABLE:')) {
-        // 读到的是别的方向的表：本方向没有数据（不是"改版"）——只有当步骤允许空时才这么判，
-        // 否则就是真出问题了（说明页面结构和档案不一致），如实失败更安全。
-        if (emptyOk) return emptyResult(`页面上是另一方向（含「${rows.slice('FOREIGN_TABLE:'.length)}」列）的表，本方向没有自己的数据`)
+        // 读到的是别的方向的表：**更可能是页内切页签没生效**（本方向真无表时通常走 PICK_MISS/!rows，
+        // 页面上还留着别的方向的表）。emptyOk 只让它不整轮失败，但必须按"本次没读到"报警
+        // （expected=false）——静默会把上一次的数据当成本次结果，那正是 2026-10-14 修掉的旧毛病。
+        if (emptyOk) return emptyResult(`页面上是另一方向（含「${rows.slice('FOREIGN_TABLE:'.length)}」列）的表，本方向没有自己的数据`, false)
         throw new Error(`TASK_SELECTOR_CHANGED: 读到的表格属于别的开票方向（含「${rows.slice('FOREIGN_TABLE:'.length)}」列）——页内切页签没生效`)
       }
       if (rows === 'PICK_MISS') {
-        if (emptyOk) return emptyResult(`页面上没有表头含「${pick}」的表格`)
+        // 预期内：档案声明该方向本来就可能没有表（实测微信「给买家开票」整页无表）
+        if (emptyOk) return emptyResult(`页面上没有表头含「${pick}」的表格`, true)
         throw new Error(`TASK_SELECTOR_CHANGED: 页面上没有表头含「${pick}」的表格（发票页可能改版或未加载完）`)
       }
       if (typeof rows === 'string' && rows.startsWith('HEAD_MISS:')) {
-        if (emptyOk) return emptyResult(`表头缺少期望列「${rows.slice('HEAD_MISS:'.length)}」`)
+        // "表头缺列"= 页内切页签可能没生效、或平台改版——属于**可疑空**，必须报警，不能静默
+        if (emptyOk) return emptyResult(`表头缺少期望列「${rows.slice('HEAD_MISS:'.length)}」`, false)
         throw new Error(`TASK_SELECTOR_CHANGED: 表格表头缺少期望列「${rows.slice('HEAD_MISS:'.length)}」——页内切页签可能没生效，或平台改版`)
       }
       if (!rows) {
-        if (emptyOk) return emptyResult('页面上没有该选择器的表格')
+        // 预期内：档案声明该方向本来就可能没有表
+        if (emptyOk) return emptyResult('页面上没有该选择器的表格', true)
         throw new Error(`TASK_SELECTOR_CHANGED: 未找到表格 ${String(input.selector)}`)
       }
       if (input.headersOnly === true && rows.__agentSummary === true) {
@@ -1610,6 +1787,26 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         const headers = Array.isArray(rows.headers) ? rows.headers.map((x: unknown) => redactAgentText(x, 100)) : []
         if (input.metric) TaskStore.insertSnapshot(run.storeId, String(input.metric), rowCount, run.runId)
         return { kind: 'table', payload: { headers, rowCount, metric: input.metric || null, summaryOnly: true } }
+      }
+      // expectColumnCount：**按列序映射**（columns）的方向必须校验数据行宽度。
+      // 表头文案校验（expectHeaders）只查"列名还在不在"，平台**插一列/删一列**时它照样通过，
+      // 而按列序映射会整体错位——错位后 requireFields 可能把全部行当空 → 静默 0 条。
+      // 所以档案给了列序映射就把"每行几格"钉死（2026-10-15 审查 M6）。
+      // 只查 rows[1..]（第 0 行是表头，合并表头下它本来就可能比数据行窄）；
+      // **过半不符才判失败**——允许个别宽度不同的行（实测抖店季度行下面挂着"结算明细…"
+      // 展开行，它不是报送期记录，读取侧会按 requireFields 挡掉）；平台插列/删列会让
+      // 所有数据行一起错位，必然过半 → 如实失败。
+      if (Number.isFinite(Number(input.expectColumnCount)) && Number(input.expectColumnCount) > 0 && Array.isArray(rows)) {
+        const expectedCount = Number(input.expectColumnCount)
+        const tableDataRows = (rows as unknown[][]).slice(1)
+        const bad = tableDataRows.filter(r => !Array.isArray(r) || r.length !== expectedCount)
+        if (tableDataRows.length > 0 && bad.length * 2 > tableDataRows.length) {
+          throw new Error(
+            `TASK_SELECTOR_CHANGED: ${bad.length}/${tableDataRows.length} 行宽度与档案不符（期望 ${expectedCount} 格，实测 ` +
+            `${Array.isArray(bad[0]) ? (bad[0] as unknown[]).length : '非数组'} 格）——平台可能加了/删了列，` +
+            `按列序映射会整体错位，已中止以免把错位的数据当上报`
+          )
+        }
       }
       if (input.metric) {
         // keepRows：把整表行数组落快照（发票中心要展示"待开票信息"的内容，不只是一个行数）；
@@ -1621,6 +1818,229 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         )
       }
       return { kind: 'table', payload: { rows, rowCount: rows.length, metric: input.metric || null } }
+      } finally {
+        // 读完就摘掉调试器：一个 target 只能挂一个，留着会让外部探针连不上
+        releaseUnthrottle?.()
+      }
+    }
+    /**
+     * 读**接口响应**（实现与理由见 main/tasks/api-reader.ts 的文件头）。
+     *
+     * 只在页面渲染不出表格、数据只存在于响应体时用（实测微信小店涉税账单：
+     * micro-app 微前端只渲染出外壳、0 个 `<table>`，而 listQuarterTax 是有数据的）。
+     *
+     * 返回的行结构与 readTable **完全同构**（row[0] = 字段 key 当表头，rows[1..] = 数据），
+     * 所以主进程的映射 / 快照 / 界面 / 按主体统计一行都不用改。
+     *
+     * 三条"如实"边界：
+     *  · **抓不到 ≠ 没有数据**：登录过期、功能未开通、页面没发请求都会超时——
+     *    一律如实失败，绝不当成"这家这季度是 0 元"（那是最危险的静默错误）。
+     *  · 抓到了但**行数为 0**：档案以 `emptyOk` 声明"本来就可能没有"（实测微信小店该季度
+     *    还没生成）时是**预期内空**，落 expected 标记、读取侧继续用上一份数据；
+     *    没声明 emptyOk 时按"本次没读到"记（读取侧如实提示），绝不当成"0 条就是没有数据"。
+     *  · 抓到了行、但关键列**全被 requireFields 挡掉**：要么字段映射失效（接口改名）、
+     *    要么这条记录本来就没有这些信息——不能当成功，也不能当成"没有数据"（见下面的报错）。
+     */
+    case 'readApi': {
+      const wc = wcOrThrow(run)
+      const input = step.input as {
+        urlMarker?: unknown
+        rowsPath?: unknown
+        fields?: unknown
+        metric?: unknown
+        reload?: unknown
+        maxBytes?: unknown
+        requireFields?: unknown
+        scalars?: unknown
+        emptyOk?: unknown
+      }
+      const rawFields = Array.isArray(input.fields) ? input.fields : []
+      const fields = rawFields
+        .filter((f): f is { key: string; path: string; as?: string } =>
+          !!f && typeof f === 'object' && typeof (f as { key?: unknown }).key === 'string' &&
+          typeof (f as { path?: unknown }).path === 'string')
+        .map(f => ({
+          key: f.key,
+          path: f.path,
+          as: (f.as === 'cents' || f.as === 'epochQuarter' ? f.as : 'text') as 'text' | 'cents' | 'epochQuarter'
+        }))
+      if (!input.urlMarker || !fields.length) {
+        throw new Error('TASK_SELECTOR_CHANGED: readApi 缺少 urlMarker 或字段映射，无法读接口响应')
+      }
+      const metric = input.metric ? String(input.metric) : null
+      const budget = Math.max(2000, Math.min(step.timeoutMs || 30_000, 60_000))
+      const requireFields = Array.isArray(input.requireFields) ? input.requireFields.map(String) : []
+      // emptyOk：档案声明"这个方向本来就可能没有记录"（实测微信小店涉税账单，该季度还没生成
+      // 是正常空）。以前这个输入**没有任何人消费**——空标记不带 expected，读取侧把正常空当
+      // "本次没读到"报警，与档案声明相悖（2026-10-15 审查发现）。
+      const emptyOk = input.emptyOk === true
+      const result = await readApiResponse(wc, {
+        urlMarker: String(input.urlMarker),
+        rowsPath: String(input.rowsPath ?? ''),
+        fields,
+        timeoutMs: budget,
+        reload: input.reload !== false,
+        // 一次加载里同一接口可能被请求多次、且不是每次都带全字段 → 让它挑关键列有值的那次
+        requireFields,
+        maxBytes: Math.max(
+          16 * 1024,
+          Math.min(typeof input.maxBytes === 'number' && input.maxBytes > 0 ? input.maxBytes : 512 * 1024, 2 * 1024 * 1024)
+        )
+      })
+      if (!result.ok) {
+        throw new Error(`TASK_SELECTOR_CHANGED: ${result.why || '读接口响应失败'}`)
+      }
+      const header = Array.isArray(result.rows[0]) ? result.rows[0] : fields.map(f => f.key)
+      const keyIndex = new Map(header.map((k, i) => [k, i]))
+      const dataRows = result.rows.slice(1)
+      const kept = requireFields.length
+        ? dataRows.filter(row => requireFields.every(k => {
+            const i = keyIndex.get(k)
+            return i != null && String(row[i] ?? '').trim() !== ''
+          }))
+        : dataRows
+      const emptyResult = (why: string) => {
+        if (metric) TaskStore.insertSnapshot(run.storeId, metric, { empty: true, why, at: Date.now(), expected: emptyOk }, run.runId)
+        return { kind: 'table' as const, payload: { rows: [], rowCount: 0, metric, empty: why } }
+      }
+      if (!dataRows.length) {
+        return emptyResult(`接口有响应但没有任何记录（${result.requestUrl || String(input.urlMarker)}）`)
+      }
+      if (!kept.length) {
+        // 把每次抓到的响应的体检结果一起报出来：字段映射"看着对、跑起来全空"时，
+        // 光看报错分不清是"路径写错了"还是"抓到的是另一次响应"，有这份清单一眼就能看出来。
+        // 两种可能都要说清（2026-10-15 审查 M7）：接口字段改名，**或**这条记录本来就没有
+        // 这些信息（如个人店铺没有营业执照）——不能当成功，也不能当成"这家没有数据"。
+        const candidateSummary = (result.candidates || [])
+          .map(c => `${c.bytes}B[${c.satisfied ? '✓' : '✗'}] ${c.topKeys.slice(0, 8).join(',')}`)
+          .join(' | ')
+        throw new Error(
+          `TASK_SELECTOR_CHANGED: 接口返回了 ${dataRows.length} 条记录，但关键列「${requireFields.join('、')}」全为空——` +
+          `要么字段映射已失效（接口字段改名/结构变了，按体检结果核对映射路径），` +
+          `要么这条记录本来就没有这些信息（如个人店铺没有营业执照）。不能当成"这家没有数据"（${String(input.urlMarker)}）` +
+          (candidateSummary ? `。抓到的响应：${candidateSummary}` : '')
+        )
+      }
+      const rows = [header, ...kept]
+      if (metric) TaskStore.insertSnapshot(run.storeId, metric, rows, run.runId)
+      /**
+       * scalars：把响应里的**单值**写成标量快照（`metricKey → 取值路径`）。
+       * 用途：主体信息（`entity.name` / `entity.no`）这类"一条对象就是全部内容"的接口——
+       * 直接接上既有的主体信息通路，不用为它改一套新的读取/写回逻辑。
+       * 取不到就**不写**（宁可让下游看到"没有新快照"，也不写一个空串把上次的值盖掉）。
+       */
+      if (input.scalars && typeof input.scalars === 'object') {
+        const spec = Object.fromEntries(
+          Object.entries(input.scalars as Record<string, unknown>)
+            .filter(([, v]) => typeof v === 'string' && v)
+            .map(([k, v]) => [k, String(v)])
+        )
+        if (Object.keys(spec).length) {
+          const values = readScalarValues(result.rawRows || [], spec)
+          for (const [key, value] of Object.entries(values)) {
+            if (value) TaskStore.insertSnapshot(run.storeId, key, value, run.runId)
+          }
+        }
+      }
+      return { kind: 'table', payload: { rows, rowCount: kept.length, metric } }
+    }
+    /**
+     * 读**重复卡片列表**（只读）。
+     *
+     * 什么时候用：页面把"一张账单一张卡"渲染成一串 div、**没有 `<table>`**，
+     * 而卡片类名普遍带构建哈希（实测拼多多 `BusItem_topTitle__3bA_R`）→ 不能写死选择器。
+     *
+     * 与 readLabelValue 的区别：那个只取**最短的那一个**匹配（`cands[0]`），读不了列表；
+     * 这个以 anchor 标签定位**每一张卡**，再在卡内按标签取值，每张卡读成一行。
+     *
+     * 返回结构与 readTable / readApi **完全同构**（row[0] = 字段 key 当表头），
+     * 所以主进程的映射 / 快照 / 界面都不用改。
+     */
+    case 'readCards': {
+      const wc = wcOrThrow(run)
+      const anchor = String(input.anchor || '')
+      const rawFields = (Array.isArray(input.fields) ? input.fields : []) as Array<{ key?: unknown; label?: unknown }>
+      const fields = rawFields
+        .filter((f): f is { key: string; label: string } =>
+          !!f && typeof f === 'object' &&
+          typeof f.key === 'string' &&
+          typeof f.label === 'string')
+        .map(f => ({ key: f.key, label: f.label }))
+      if (!anchor || !fields.length) {
+        throw new Error('TASK_SELECTOR_CHANGED: readCards 缺少 anchor 或字段定义')
+      }
+      const metric = input.metric ? String(input.metric) : null
+      const maxLen = input.maxValueLen == null ? 60 : Number(input.maxValueLen)
+      const maxCards = Math.max(1, Math.min(Number(input.maxCards) || 200, 500))
+      const deep = input.deep === true
+      const emptyOk = input.emptyOk === true
+      const emptyResult = (why: string) => {
+        // expected: true —— 两处空路径都由 emptyOk 把关（档案已声明该方向可能没有卡片），
+        // 属于"预期内的空"；读取侧据此不渲染成「本次没读到」。见 readTable 的同名说明。
+        if (metric) TaskStore.insertSnapshot(run.storeId, metric, { empty: true, why, at: Date.now(), expected: true }, run.runId)
+        return { kind: 'table' as const, payload: { rows: [], rowCount: 0, metric, empty: why } }
+      }
+      const rows = await wc.executeJavaScript(`(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${VISIBLE_JS}
+        const ANCHOR = ${JSON.stringify(anchor)};
+        const FIELDS = ${JSON.stringify(fields)};
+        const MAX = ${maxLen};
+        const MAXCARDS = ${maxCards};
+        const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+        const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+        // 1) 卡片锚点：自有文本恰好等于 anchor 的**可见**元素（一张卡一个）
+        const anchors = [];
+        for (const el of scope) { if (own(el) === ANCHOR && __visible(el)) anchors.push(el); }
+        // 2) 卡内取值：与 readLabelValue 同一套算法，但**限定在这张卡的子树里**
+        const valueIn = (card, label) => {
+          const cands = [];
+          for (const el of card.querySelectorAll('*')) {
+            if (!own(el).includes(label)) continue;
+            if (!__visible(el)) continue;
+            cands.push({ el, len: own(el).length });
+          }
+          if (!cands.length) return '';
+          cands.sort((a, b) => a.len - b.len);
+          let node = cands[0].el;
+          for (let i = 0; i < 6 && node && node !== card; i++) {
+            const txt = String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (txt.length > label.length) {
+              const v = txt.replace(label, '').trim();
+              if (v && v.length <= MAX) return v;
+              return '';   // 过长 = 爬到容器层级了，宁可留空也不塞一坨文本进去
+            }
+            node = node.parentElement;
+          }
+          return '';
+        };
+        const out = [FIELDS.map(f => f.key)];
+        for (const a of anchors.slice(0, MAXCARDS)) {
+          // 向上找**同时含有全部字段标签**的最近祖先 = 这张卡的本体
+          let card = a;
+          for (let i = 0; i < 8 && card && card !== document.body; i++) {
+            const txt = String(card.innerText || card.textContent || '');
+            if (FIELDS.every(f => txt.includes(f.label))) break;
+            card = card.parentElement;
+          }
+          if (!card || card === document.body) continue;
+          out.push(FIELDS.map(f => valueIn(card, f.label)));
+        }
+        return out;
+      })()`)
+      if (!Array.isArray(rows) || !rows.length) {
+        if (emptyOk) return emptyResult('页面上没有找到卡片锚点')
+        throw new Error(`TASK_SELECTOR_CHANGED: 找不到卡片锚点「${anchor}」——页面可能改版或还没加载完`)
+      }
+      const header = rows[0] as string[]
+      const dataRows = (rows.slice(1) as string[][])
+      if (!dataRows.length) {
+        if (emptyOk) return emptyResult(`页面上有「${anchor}」标签但没有可读的卡片`)
+        throw new Error(`TASK_SELECTOR_CHANGED: 找到「${anchor}」标签但读不出卡片内容`)
+      }
+      const out = [header, ...dataRows]
+      if (metric) TaskStore.insertSnapshot(run.storeId, metric, input.keepRows ? out : dataRows.length, run.runId)
+      return { kind: 'table', payload: { rows: out, rowCount: dataRows.length, metric } }
     }
     case 'screenshot': {
       const wc = wcOrThrow(run)
@@ -2229,35 +2649,75 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
         // 读回来的是**上一个页签**的数据——表头校验（expectHeaders）对这种情况完全无能为力，
         // 于是「处理中」会显示成「处理记录」的 3 条，而且看不出来。
         // 有了它，切不动就如实失败，绝不把邻居的数据当成本页签的。
-        const verifyActive = input.verifyActive as { selector: string; classIncludes: string; text?: string } | undefined
+        const verifyActive = input.verifyActive as { selector: string; classIncludes: string; text?: string; deep?: boolean } | undefined
         if (verifyActive) {
           const wantText = verifyActive.text ? String(verifyActive.text) : needle
-          const until = Date.now() + Math.max(5000, Math.min(step.timeoutMs, 20000))
+          /**
+           * 校验不过就**重新定位再点一次**（最多 3 次）。
+           *
+           * 为什么（2026-10-14 真机定位）：坐标是"点击那一刻的排版"下算出来的，而坐标算完到事件发出
+           * 之间页面还会继续排版——实测快手发票页的页签横条会因为上方内容加载整体上移 ~123px，
+           * 于是点击落在页签下方 123px 处，什么也没点到。表现为**同一个任务、同一份步骤**
+           * 时好时坏（当天 3 次失败 / 2 次成功）。
+           *
+           * 为什么重试是安全的：带 verifyActive 的点击目标是**选择类控件**（页签、筛选 chip），
+           * 重复点同一个是幂等的（不会重复提交任何东西）；真正会提交的动作走的是 waitUrl 那条路，
+           * 那里默认 attempts=1、必须显式声明才重发。这里也保留"三次都不行就如实失败"，
+           * 不把"点不动"糊成成功。
+           */
+          const verifyAttempts = 3
+          const perAttemptMs = Math.min(Math.max(Math.floor(step.timeoutMs / verifyAttempts), 4000), 8000)
           let active = false
           let lastSeen = ''
-          for (;;) {
-            guardSignals(run)
-            const st = await wcOrThrow(run).executeJavaScript(`(() => {
-              const sel = ${JSON.stringify(String(verifyActive.selector))};
-              const want = ${JSON.stringify(wantText)};
-              const cls = ${JSON.stringify(String(verifyActive.classIncludes))};
-              const seen = [];
-              for (const el of document.querySelectorAll(sel)) {
-                const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
-                const has = String(el.className || '').includes(cls);
-                seen.push(t.slice(0, 20) + (has ? '(选中)' : ''));
-                if (t === want && has) return JSON.stringify({ ok: true, seen });
+          let lastRetry = ''
+          for (let att = 1; att <= verifyAttempts && !active; att++) {
+            if (att > 1) {
+              /**
+               * 重新定位再点。第 2 次仍用受信任鼠标（重新取坐标），第 3 次改用 JS 兜底：
+               * 页面在这几秒里可能一直在排版（实测快手页签横条跳 ~123px），只重试真点击会次次落空。
+               * 两条路都只对**选择类控件**幂等重放，且成败仍由 verifyActive 判定。
+               */
+              guardSignals(run)
+              if (att === 2) {
+                const again = await findTextTarget(
+                  wcOrThrow(run), run, needle, deep, step.timeoutMs, 'clickByText verifyActive 重试',
+                  within, pick, allowJsWhenDetached, undefined, !!input.exact, input.skipIfChecked === true
+                ).catch(() => ({ ok: false } as { ok: boolean; skipped?: string }))
+                if (again.ok && again.skipped !== 'checked') performHitClick(wcOrThrow(run), again as Parameters<typeof performHitClick>[1])
+                else lastRetry = '重试定位失败'
+              } else {
+                lastRetry = await jsClickByTextFallback(wcOrThrow(run), needle, deep, within)
               }
-              return JSON.stringify({ ok: false, seen });
-            })()`).catch(() => JSON.stringify({ ok: false, seen: [] }))
-            const parsed = (() => { try { return JSON.parse(String(st)) } catch { return { ok: false, seen: [] } } })()
-            lastSeen = (parsed.seen || []).join(' / ')
-            if (parsed.ok) { active = true; break }
-            if (Date.now() >= until) break
-            await new Promise(r => setTimeout(r, 300))
+              await new Promise(r => setTimeout(r, 500))
+            }
+            const until = Date.now() + perAttemptMs
+            for (;;) {
+              guardSignals(run)
+              const st = await wcOrThrow(run).executeJavaScript(`(() => {
+                ${verifyActive.deep ? ENUM_DEEP_FN : ''}
+                const sel = ${JSON.stringify(String(verifyActive.selector))};
+                const want = ${JSON.stringify(wantText)};
+                const cls = ${JSON.stringify(String(verifyActive.classIncludes))};
+                // deep：微信小店的页签在 micro-app 的 ShadowRoot 里（document 级查不到）
+                const pool = ${verifyActive.deep ? '__enumDeep().filter(el => { try { return el.matches(sel) } catch { return false } })' : 'document.querySelectorAll(sel)'};
+                const seen = [];
+                for (const el of pool) {
+                  const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+                  const has = String(el.className || '').includes(cls);
+                  seen.push(t.slice(0, 20) + (has ? '(选中)' : ''));
+                  if (t === want && has) return JSON.stringify({ ok: true, seen });
+                }
+                return JSON.stringify({ ok: false, seen });
+              })()`).catch(() => JSON.stringify({ ok: false, seen: [] }))
+              const parsed = (() => { try { return JSON.parse(String(st)) } catch { return { ok: false, seen: [] } } })()
+              lastSeen = (parsed.seen || []).join(' / ')
+              if (parsed.ok) { active = true; break }
+              if (Date.now() >= until) break
+              await new Promise(r => setTimeout(r, 300))
+            }
           }
           if (!active) {
-            throw new Error(`TASK_TAB_NOT_ACTIVE: 点了「${wantText}」但它没有变成选中态（${verifyActive.selector} 上未见 ${verifyActive.classIncludes}）——页签可能没切成功，已中止以免把上一个页签的数据当成本页签的。当前页签：${lastSeen}`)
+            throw new Error(`TASK_TAB_NOT_ACTIVE: 点了「${wantText}」（含重试共 ${verifyAttempts} 次${lastRetry ? `，${lastRetry}` : ''}）但它没有变成选中态（${verifyActive.selector} 上未见 ${verifyActive.classIncludes}）——页签可能没切成功，已中止以免把上一个页签的数据当成本页签的。当前页签：${lastSeen}`)
           }
         }
         // verifyChecked：点完（或本来就勾着而跳过）校验它**真的处于勾选态**——
@@ -3036,7 +3496,8 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
       }, run, step.timeoutMs, 'mirrorTabUrl')
       await pollUntil(run, () => !wcOrThrow(run).isLoading(), Math.max(step.timeoutMs, 5000), 'mirrorTabUrl 加载完成')
       // 运行标签页带到前台：门禁阶段用户核对的就是这一页
-      try { activateTab(run.storeId, run.tabId!) } catch { /* 标签页已消失等情况不阻塞流程 */ }
+      // （采集专用页除外：它不需要用户核对，切前台只会把用户正在看的页顶掉）
+      try { if (!isInternalRunTab(run)) activateTab(run.storeId, run.tabId!) } catch { /* 标签页已消失等情况不阻塞流程 */ }
       // §4.5：payload 只存 origin+path——query 里有 finderUsername 等 token，不落库
       let originPath = target
       try { const u = new URL(target); originPath = u.origin + u.pathname } catch { /* 保底原样 */ }

@@ -20,6 +20,7 @@ import { logMain } from '../services/logger'
 import {
   overviewStatsSummary,
   overviewInvoiceCenter,
+  overviewTaxReport,
   applyEntityToStores,
   overviewDatacenterSummary,
   // 发票导出与发票中心共用同一份待开票取数（2026-09-26 审计 P2：helper 已搬进 services，
@@ -27,7 +28,8 @@ import {
   collectInvoiceRows
 } from '../services/overview-service'
 import { INVOICE_COLUMNS } from '@shared/constants/invoice'
-import { buildInvoiceCsv, invoiceCsvRows } from '@shared/invoice-csv'
+import { buildInvoiceCsv, ensureCsvExtension, invoiceCsvRows } from '@shared/invoice-csv'
+import { filterRowsByLicenseKey, licenseScopeLabel } from '@shared/store-license'
 import { ordersProfileFor } from '@shared/constants/orders'
 import { mapOrdersRows, orderColumnLabel } from '@shared/orders-steps'
 import { randomUUID } from 'crypto'
@@ -279,34 +281,77 @@ export function registerProfileAndMiscHandlers(): void {
     }
   })
 
+  // overview:taxReport - 涉税信息报送（只读；计算在 services/overview-service.ts）
+  // 返回体里带平台自己的用途限制（不得作为税务申报依据），界面与数据同屏显示
+  handle(IPC_CHANNELS.OVERVIEW_TAX_REPORT, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      return success(overviewTaxReport(), requestId)
+    } catch (err: any) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+    }
+  })
+
   /**
    * overview:invoiceExport - 把当前待开票清单导出为 **CSV**（弹保存框；只落本地文件，不上传）。
    *
    * 为什么用 CSV 而不是 xlsx：不引依赖、Excel/WPS 都能直接打开、用户可自己再加工。
    * 带 UTF-8 BOM——否则 Excel 打开中文会乱码（实测过）。
+   *
+   * `licenseKey`：**导出跟随屏上的营业执照筛选**（2026-10-14 加）。导出的表是给代账按主体分账用的，
+   * 用户在发票中心点了某个主体再导出，拿到的就必须只有那个主体的行——否则 A 公司的清单里
+   * 会混进别家的单号/金额/税号（文件自带营业执照/信用代码两列，混了就是交叉泄露）。
+   * 归属规则与屏上同源：shared/store-license 的 groupStoresByLicense（"没填代码但同名"的店要并进有代码的主体）。
    */
-  handle(IPC_CHANNELS.OVERVIEW_INVOICE_EXPORT, async (): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.OVERVIEW_INVOICE_EXPORT, async (_e: IpcMainInvokeEvent, input: { licenseKey?: unknown }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     try {
-      const rows = collectInvoiceRows()
+      const rawKey = input?.licenseKey
+      if (rawKey !== undefined && rawKey !== null && typeof rawKey !== 'string') {
+        return error(ERROR_CODES.INVALID_ARGUMENT.code, '导出范围不合法（licenseKey 必须是字符串）', requestId)
+      }
+      const licenseKey = typeof rawKey === 'string' ? rawKey.trim().slice(0, 200) : ''
+      const rows = filterRowsByLicenseKey(collectInvoiceRows(), licenseKey)
       // 行组装与转义都在 shared/invoice-csv.ts（纯函数、有单测）：导出的表是拿去报税/给代账的，
       // 必须带「营业执照 / 统一社会信用代码」两列——代账按主体分账，光有店铺名他们得再问一遍。
       const dataRows = invoiceCsvRows(rows, INVOICE_COLUMNS)
       if (!dataRows.length) {
-        return error(ERROR_CODES.INVALID_ARGUMENT.code, '当前没有可导出的待开票数据（先点「抓取待开票信息」）', requestId)
+        return error(ERROR_CODES.INVALID_ARGUMENT.code, licenseKey
+          ? '当前主体下没有可导出的待开票数据（换个主体，或先点「采集发票数据」）'
+          : '当前没有可导出的待开票数据（先点「采集发票数据」）', requestId)
       }
+      // 文件名带上主体：一个主体一份文件，代账不会拿错；主体名里的路径非法字符要洗掉。
+      // 标签算法在 shared（含"只填了信用代码的主体"这种情况），纯函数、有单测。
+      const scopeLabel = licenseScopeLabel(rows, licenseKey)
+      const fileTag = String(scopeLabel).replace(/[\\/:*?"<>|\s]+/g, '').slice(0, 40)
       const csv = buildInvoiceCsv(dataRows)
       const stamp = new Date().toISOString().slice(0, 10)
       const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
       const res = await dialog.showSaveDialog(win, {
-        title: '导出发票中心待开票清单',
-        defaultPath: join(app.getPath('documents'), `待开票清单-${stamp}.csv`),
+        title: scopeLabel ? `导出发票中心待开票清单（${scopeLabel}）` : '导出发票中心待开票清单',
+        defaultPath: join(app.getPath('documents'), `待开票清单-${fileTag ? `${fileTag}-` : ''}${stamp}.csv`),
         filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
       })
       if (res.canceled || !res.filePath) return success({ canceled: true }, requestId)
-      writeFileSync(res.filePath, csv, 'utf8')
-      writeAudit('invoice.export', 'success', { requestId: JSON.stringify({ rows: dataRows.length }) })
-      return success({ path: res.filePath, rows: dataRows.length }, requestId)
+      // C6（2026-10-15 审查）：保存框不强制扩展名——用户可能得到 `报表` 或 `报表.txt` 里装着 CSV。
+      // 统一补成 `.csv`（已有 .csv 后缀不动），写盘与返回都用补过名的路径。
+      const filePath = ensureCsvExtension(res.filePath)
+      try {
+        writeFileSync(filePath, csv, 'utf8')
+      } catch (writeErr: any) {
+        // 写盘失败以前只回错误、不留审计——失败的导出尝试同样要可查（C6）
+        writeAudit('invoice.export', 'failure', {
+          requestId: JSON.stringify({ rows: dataRows.length, scope: licenseKey || 'all', stage: 'write', error: String(writeErr?.message || writeErr).slice(0, 200) })
+        })
+        return error(ERROR_CODES.INTERNAL_ERROR.code, `写入文件失败：${String(writeErr?.message || writeErr)}`, requestId)
+      }
+      // B2：把"待开票 / 无需操作"两个数都写进审计与提示——文件名与界面合计都叫"待开票"，
+      // 而 CSV 里同时含已提交的流水（pending:false），只说总数会让人对不上账。
+      const pendingRows = dataRows.filter(row => row['是否待办'] === '待开票').length
+      writeAudit('invoice.export', 'success', {
+        requestId: JSON.stringify({ rows: dataRows.length, pendingRows, scope: licenseKey || 'all', scopeLabel: scopeLabel || null })
+      })
+      return success({ path: filePath, rows: dataRows.length, pendingRows, scope: licenseKey || null, scopeLabel: scopeLabel || '全部主体' }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }

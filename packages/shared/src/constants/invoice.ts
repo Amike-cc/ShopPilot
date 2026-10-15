@@ -58,7 +58,7 @@ export interface InvoiceSection {
    * 「处理记录」列名一致）。切页签静默失败时读回的是上一个页签的数据，而按表头做的
    * `expectHeaders`/`rejectHeaders` 对这种情况完全看不出来——校验选中态才拦得住。
    */
-  tabVerify?: { selector: string; classIncludes: string }
+  tabVerify?: { selector: string; classIncludes: string; deep?: boolean }
   /**
    * 该方向的页**不在**平台的默认发票页上，而在另一个地址（实测拼多多：
    * 「给平台开票」在资金中心 cashier.pinduoduo.com/main/invoice，而「给买家开票」在
@@ -71,6 +71,20 @@ export interface InvoiceSection {
    * 账单日期 2026年05/06/07/08月）。给了它就逐个标签读值，拼成该方向的**一行**。
    */
   labels?: { label: string; key: InvoiceColumnKey }[]
+  /**
+   * **重复卡片列表**方向：一张账单一张卡、页面**没有 `<table>`**（实测拼多多资金中心
+   * 「申请发票」：10 张待开票账单卡片，含 5657.37 / 287.81 等金额，开票主体是平台自己的公司）。
+   *
+   * 与 `labels` 的区别：`labels` 是**单张卡**读成一行（`readLabelValue` 只取最短的那一个匹配）；
+   * `cards` 会把**每一张卡**读成一行。类名带构建哈希（`BusItem_topTitle__3bA_R`）→ 以文案为锚。
+   */
+  cards?: {
+    /** 卡片锚点标签：**每张卡各出现一次**的那个标签（实测「账单日期」） */
+    anchor: string
+    /** 卡内字段：key = 统一列 key，label = 卡上的标签文案（必须原样，含全角括号） */
+    fields: { key: InvoiceColumnKey; label: string }[]
+    maxValueLen?: number
+  }
   /** 该方向数据表的表头特征（表内须含该文案），用于多张表中挑对一张。labels 模式不需要 */
   pickByHeader?: string
   /** 表头与数据分属两个 <table>（实测拼多多：table[0] 只有表头行）→ 读表时把下一张一并合并 */
@@ -124,6 +138,39 @@ export interface InvoiceProfile {
   deep?: boolean
   /** 读表前额外等待（页面异步取数） */
   settleMs?: number
+  /**
+   * **预热刷新**：该平台的页面第一次加载渲染不出来，reload 一次才正常。
+   *
+   * 实测抖店发票页（`/ffa/m-invoice/merchant-invoice`，2026-10-14）：首次加载内容区**永久停在
+   * 「加载中...」**——等 45 秒仍然 0 个 `<table>`，而它的接口全是 `0000` 成功
+   * （`merchant/scenes` 38KB、`subject/list` 拿到主体、`shop/status`、`record/statusMap`）。
+   * 刷新一次**立刻出表**（1 张表 / 160 行）。
+   *
+   * 为什么：那页是独立的发票微前端（`invoice_merchant`），它初始化时要订阅抖店外壳的 userInfo，
+   * 首次加载拿不到那个流就不 resolve（实测 `window._yylx_user` / `_yylx_workbench` 都是 undefined）。
+   * 不刷新的话采集必然卡在 readTable 超时——实测报 `TASK_SELECTOR_CHANGED: 超时未出现元素 table`，
+   * 四个方向全变 0 条。
+   */
+  warmReload?: boolean
+  /**
+   * 读表步骤的等待上限（毫秒，默认 30000）。
+   *
+   * 为什么可配：有的页面**渲染得极慢**。实测抖店发票页（2026-10-14 逐秒采样）：
+   * 视口正常（1054×757、visible）、接口全 `0000` 成功，但表格要到**约 45 秒**才出现
+   * （40 秒时还是 0 个 table + 「加载中」，45 秒时 1 张表）。默认 30 秒的 readTable
+   * 加上前置等待约 41 秒，**刚好差一点**——于是整轮采集报
+   * `TASK_SELECTOR_CHANGED: 超时未出现元素 table`，四个方向全变 0 条。
+   */
+  readTimeoutMs?: number
+  /**
+   * 读表期间**挂调试器 + 强制焦点模拟**（unthrottle），把渲染从后台节流里拉出来。
+   *
+   * 实测（2026-10-14 抖店发票页）：该页是独立微前端，采集时渲染被节流饿死——
+   * 挂上 CDP 调试器的场景 45 秒就出表（1 张表 / 160 行），不挂的采集任务等满 90 秒
+   * 仍然 0 个 `<table>`。应用自己的 `setBackgroundThrottling(false)` 对普通表格够用，
+   * 对这个微前端不够。只对确实需要的平台打开（挂调试器期间外部探针连不上该 webview）。
+   */
+  unthrottle?: boolean
   /** 切方向后额外等待（页内重渲染 + 重新取数） */
   tabSettleMs?: number
   /** 实测日期 */
@@ -159,6 +206,15 @@ const WEIXIN: InvoiceProfile = {
     {
       name: '给平台开票',
       tabText: '给平台开票',
+      // 2026-10-14 实测（真机 CDP 读到页签 DOM）：三个页签是同一个父容器里的 span，
+      // 父容器 class 含 `h-[56px]` + `mt-[32px]`；**选中态的 span 带 `text-[#0AB8A6]`**（未选中的是 `cursor-pointer ml-[40px]`）。
+      // 为什么必须校验选中态：本方向的表头与「申请平台开票」几乎一样，切不动就会张冠李戴地读到上一个方向的数据。
+      // deep: true —— 实测切到这个方向后，页签与表格一起进了 micro-app 的 ShadowRoot，
+      // document 级选择器一个都看不到（照旧写法会把"切成功了"误报成"没切成功"）。
+      // **不加 tabWithin**：实测（2026-10-14 真机）给这个页签加限定范围后点击不再生效
+      // （校验如实报「申请平台开票(选中)…」，即真的没切过去），而不限定范围时「给平台开票」在整页
+      // 只有 1 个候选、trusted-mouse 点击有效——限定范围在这里只会帮倒忙。
+      tabVerify: { selector: '[class*="h-[56px]"][class*="mt-[32px]"] span', classIncludes: 'text-[#0AB8A6]', deep: true },
       pickByHeader: '账单号',
       // 该方向多出「处理状态」「操作」两列（实测），状态映射到 status
       headerMap: { 账单号: 'id', 账单日期: 'period', 账单类型: 'type', 可开金额: 'amount', 处理状态: 'status' },
@@ -168,6 +224,7 @@ const WEIXIN: InvoiceProfile = {
     {
       name: '给买家开票',
       tabText: '给买家开票',
+      tabVerify: { selector: '[class*="h-[56px]"][class*="mt-[32px]"] span', classIncludes: 'text-[#0AB8A6]', deep: true },
       pickByHeader: '账单号',
       headerMap: { 账单号: 'id', 账单日期: 'period', 账单类型: 'type', 可开金额: 'amount' },
       metricKey: 'invoice.toBuyer',
@@ -179,7 +236,7 @@ const WEIXIN: InvoiceProfile = {
       rejectHeaders: ['处理状态']
     }
   ],
-  note: '三个方向各自独立取数（实测「申请平台开票」与「给平台开票」数据不同）：申请平台开票 / 给平台开票 / 给买家开票。'
+  note: '三个方向各自独立取数（实测「申请平台开票」与「给平台开票」数据不同）：申请平台开票 / 给平台开票 / 给买家开票。另：2026-10-14 起「给平台开票 / 给买家开票」两个页签带选中态校验（实测选中类名 text-[#0AB8A6]）——以前切页签失败会静默读到上一个方向的数据。**2026-10-14 更正**：该页其实是**四个**方向，不是三个——第四个是「**收佣金发票**」（实测四个页签都带 `cursor-pointer`，选中的那个带 `text-[#0AB8A6]`）。它的内容是**配置表单**（发票抬头 / 开票地址 / 期望发票类型 / 期望发票税率 + 《收佣金发票协议》），**没有账单列表**，所以没有可采集的数据行；本方向的「平台给商家开票」数据在 **「申请平台开票」** 里（已采到）。上一版这里写"该页只有三个方向、没有平台给我开票"是**看漏了第 4 个页签**，已更正。'
 }
 
 const PINDUODUO: InvoiceProfile = {
@@ -226,9 +283,75 @@ const PINDUODUO: InvoiceProfile = {
       headerMap: {},
       metricKey: 'invoice.toPlatform',
       measuredRows: 1
+    },
+    {
+      /**
+       * 拼多多的「**平台给商家开票**」待办金额（2026-10-14 实测）。
+       *
+       * 这是资金中心「发票管理」的**默认页签**，内容是**一串 div 卡片**（不是表格）：
+       * 实测 10 张，例如
+       *   `账单日期 2026年01/04/05/06月 | 待开票金额（元） 5657.37 | 开票主体 上海寻梦信息技术有限公司`
+       *   `账单日期 2026年09月          | 待开票金额（元） 287.81  | 开票主体 上海禹璨信息技术有限公司`
+       * 「开票主体」是**平台自己的公司**——所以这就是"平台给商家开票"的待办金额。
+       *
+       * 用 cards 模式读（类名带构建哈希 `BusItem_topTitle__3bA_R`，不能写死选择器；
+       * 而 readLabelValue 只取最短的那一个匹配、读不了列表 —— 见 InvoiceSection.cards）。
+       */
+      name: '申请发票（平台给商家开票）',
+      pageUrl: 'https://mms.pinduoduo.com/cashier/finance/invoice',
+      tabText: '申请发票',
+      headerMap: {},
+      cards: {
+        // 锚点：每张卡各出现一次的那个标签
+        anchor: '账单日期',
+        fields: [
+          { key: 'period', label: '账单日期' },
+          // 全角括号必须原样写，否则匹配不上
+          { key: 'amount', label: '待开票金额（元）' },
+          { key: 'title', label: '开票主体' }
+        ],
+        // 账单日期那一格可能很长（实测有一张横跨 2021–2026 十几个月份）
+        maxValueLen: 160
+      },
+      metricKey: 'invoice.platformToMePending',
+      measuredRows: 10
+    },
+    {
+      /**
+       * 拼多多的「**平台给商家开票**」这一向（**2026-10-14 更正**：上一版这里写"该店没有这一向"是错的）。
+       *
+       * 实测同页（资金中心「发票管理」）四个页签：申请发票 / 申请记录 / 提交发票 / 提交记录。
+       *  - 「申请记录」是一张**标准表格**（表头实测：发票金额（元）/ 账单日期·订单号 / 申请时间 /
+       *    发票抬头 / 发票类型 / 状态 / 操作），就是"商家申请平台给开票"的记录 → 本方向。
+       *    实测时 0 条（还没申请过），但表头与结构都在，能采。
+       *  - 「申请发票」是**待开票账单卡片**（实测多张：待开票金额 5657.37 / 287.81 / 0.02 / -1045.57…，
+       *    开票主体是平台自己的公司「上海寻梦信息技术有限公司」「上海禹璨信息技术有限公司」）——
+       *    那才是待办金额，但它是 **div 卡片列表、不是表格**，类名还带构建哈希
+       *    （`BusItem_topTitle__3bA_R`），按项目红线不能写死；引擎现有的 readLabelValue 只取
+       *    **最短的那一个**匹配（`cands[0]`），读不了这种重复卡片列表。→ 卡片数据**暂未采集**，
+       *    要等一个"重复卡片列表"的读取能力。
+       */
+      name: '申请记录（平台给商家开票）',
+      // 与上一个方向同页（资金中心发票管理），只是切页签
+      pageUrl: 'https://mms.pinduoduo.com/cashier/finance/invoice',
+      tabText: '申请记录',
+      pickByHeader: '发票金额（元）',
+      headerMap: {
+        '发票金额（元）': 'amount',
+        '账单日期/订单号': 'id',
+        申请时间: 'period',
+        发票抬头: 'title',
+        发票类型: 'type',
+        状态: 'status'
+      },
+      metricKey: 'invoice.platformToMe',
+      // 记录类，不是待办（商家无需再操作）
+      pending: false,
+      notPendingNote: '已提交的开票申请记录，商家无需再操作；待办金额看同页「申请发票」',
+      measuredRows: 0
     }
   ],
-  note: '「订单开票」即买家向商家发起的开票申请（给买家开票）：订单号 / 申请时间 / 发票金额 / 发票抬头 / 企业税号 / 订单状态 / 承诺开票时间（含逾期天数）。「给平台开票」在资金中心（另一个站点），页面上是卡片不是表格，取的是账单日期 / 待开票金额 / 收票主体。'
+  note: '「订单开票」即买家向商家发起的开票申请（给买家开票）：订单号 / 申请时间 / 发票金额 / 发票抬头 / 企业税号 / 订单状态 / 承诺开票时间（含逾期天数）。「给平台开票」在资金中心（另一个站点），页面上是卡片不是表格，取的是账单日期 / 待开票金额 / 收票主体。**2026-10-14 更正**：该店**有**「平台给商家开票」这一向，叫「**申请发票 / 申请记录**」（已登记「申请记录」为表格方向）；上一版写"没有这一向"是看漏了页签语义——资金中心发票管理四个页签里，申请发票（商家申请平台开票，卡片）/ 申请记录（申请记录，表格）就是平台给商家开票，提交发票 / 提交记录才是商家给平台开票。'
 }
 
 const DOUDIAN: InvoiceProfile = {
@@ -236,9 +359,17 @@ const DOUDIAN: InvoiceProfile = {
   pageUrl: 'https://fxg.jinritemai.com/ffa/m-invoice/merchant-invoice',
   urlMarker: 'merchant-invoice',
   tableSelector: 'table',
+  // 2026-10-14：该页首次加载渲染不出来（内容区永久「加载中...」，接口却全成功），
+  // 必须预热刷新一次才出表 —— 见 InvoiceProfile.warmReload 的实测记录。
+  warmReload: true,
+  // 逐秒采样实测：刷新后要 **约 45 秒** 表格才出现（40 秒时仍 0 个 table）。
+  // 默认 30 秒刚好差一点 → 四个方向全 0 条。给到 90 秒留足余量。
+  readTimeoutMs: 90000,
+  // 渲染被节流饿死：不挂调试器时等满 90 秒也不出表，挂了 45 秒就出（实测 2026-10-14）
+  unthrottle: true,
   settleMs: 8000,
   tabSettleMs: 10000,
-  measuredAt: '2026-09-14',
+  measuredAt: '2026-10-14',
   // 实测（2026-09-14 真机）：该页有**四个**方向，不是两个——
   //   我给平台开票（默认，1 条）/ 给消费者开票 / 平台给我开票（38 行）/ 达人给我开票（无表）
   // 前两个回应"给平台开票 / 给买家开票"的诉求；后两个是页面本来就有的方向，一并如实采集。
@@ -325,8 +456,12 @@ const KUAISHOU: InvoiceProfile = {
         '账单月份': 'period',
         '账单类型': 'type',
         '账单金额（元）': 'amount',
-        '开票主体名称': 'title',
-        '阈值生效时间': 'deadline'
+        '开票主体名称': 'title'
+        // **不要把「阈值生效时间」映射成 deadline**（2026-10-15 审查 BUG 修复）。
+        // 实测它的值是 `2026-06-10(预计)` / `2026-05-10(预计)` —— 那是**账单/阈值的预计生效日期**，
+        // 不是"承诺开票时间"。以前映射成 deadline，界面按"过去的日期 = 已逾期"判，
+        // 于是一批正常账单被算成**假的已逾期**（实测 5 条），KPI 上写着「5 条已逾期」，
+        // 会把商家推去催一批根本没到期的单子。现在它落进「其他信息」照常展示，不参与逾期判定。
       },
       metricKey: 'invoice.toPlatform',
       measuredRows: 5
@@ -369,9 +504,37 @@ const KUAISHOU: InvoiceProfile = {
       // 实测里面是「审核通过」的流水（已办完）→ 展示但不计入待开票
       pending: false,
       notPendingNote: '已提交并通过审核的记录，商家无需再操作'
+    },
+    {
+      /**
+       * **达人给我开票**（2026-10-14 实测）。
+       *
+       * 为什么会有这一条：查「快手有没有平台给我开票」时，从前端包的路由表里挖出
+       * `kwaishop-seller-fund-tax-bill-pc` 的全部子路由，发现**整个包里只有一条**
+       * 含「给我开票」的路由 —— 就是这条（`/seller-issue-invoice`，菜单文案
+       * 「达人/MCN给我开票」）；**没有**「平台给我开票」。既然这条是真实存在的收票方向，
+       * 就如实登记（与抖店的「达人给我开票」同类）。
+       *
+       * 表头实测：账单ID / 账单月份 / 账单类型 / 收票方主体 / 收票方二级商户号 /
+       * 开票方 / 开票方主体 / 账单金额（元）/ 冻结金额（元）/ 操作 —— 前三列之外都是"其他信息"。
+       */
+      name: '达人给我开票（未开票账单）',
+      // 这是**另一个页面**，不在 /subsidy 上
+      pageUrl: 'https://s.kwaixiaodian.com/zone/fund/tax-bill/seller-issue-invoice',
+      pickByHeader: '账单ID',
+      headerMap: {
+        账单ID: 'id',
+        账单月份: 'period',
+        账单类型: 'type',
+        收票方主体: 'title',
+        '账单金额（元）': 'amount'
+      },
+      metricKey: 'invoice.talentToMe',
+      // 实测当前这家店 0 条（表格在、暂无数据）
+      measuredRows: 0
     }
   ],
-  note: '取「给平台开票」三个页签：未开票账单（账单编号 / 账单月份 / 账单类型 / 账单金额（元）/ 开票主体名称 / 阈值生效时间，阈值金额与收票主体名称进「其他信息」）/ 处理中 / 处理记录（后两者是提交后的核销流水：流水单号 / 账单编号 / 账单月份 / 账单金额 / 发票类型 / 提交时间 / 状态，违约金三项与核销方式进「其他信息」）。'
+  note: '取「给平台开票」三个页签：未开票账单（账单编号 / 账单月份 / 账单类型 / 账单金额（元）/ 开票主体名称 / 阈值生效时间，阈值金额与收票主体名称进「其他信息」）/ 处理中 / 处理记录（后两者是提交后的核销流水：流水单号 / 账单编号 / 账单月份 / 账单金额 / 发票类型 / 提交时间 / 状态，违约金三项与核销方式进「其他信息」）。**另有一个独立页面「达人给我开票」**（/zone/fund/tax-bill/seller-issue-invoice，已登记为第 4 个方向）。**快手没有「平台给我开票」**：把该模块前端包（`kwaishop-seller-fund-tax-bill-pc`）的路由表全量挖出来后，含「给我开票」的路由**只有** `/seller-issue-invoice`（达人/MCN给我开票）这一条，其余是 `/subsidy` 平台补贴开票页、`/talent-subsidy` 达人补贴开票页、`/self-operated-subsidy` 给自营店开票、`/self-consumer-subsidy` 向消费者开票、`/distributor/invoice-manage` 快手快分销-发票管理、`/pay-later-subsidy` 国补明细管理 —— 全是"商家开出去"，没有平台开给商家的那一向。'
 }
 
 export const INVOICE_PROFILES: Readonly<Record<string, InvoiceProfile>> = {
@@ -431,13 +594,36 @@ export function normalizeCellText(v: unknown): string {
   const compact = s.replace(/ /g, '')
   if (compact.length >= 4 && compact.length % 2 === 0) {
     const half = compact.slice(0, compact.length / 2)
-    if (half === compact.slice(compact.length / 2)) return half
+    if (half === compact.slice(compact.length / 2)) {
+      // P2-12：从**带空格的原文**回填那前半段，而不是返回 compact——
+      // 直接返回 compact 会把「订单号 2000000038930468 订单号 2000000038930468」压成
+      // 「订单号2000000038930468」（空格没了），与页面上看到的文案不一致，导出的单元格也跟着变样。
+      let seen = 0
+      let cut = 0
+      for (let i = 0; i < s.length && seen < half.length; i++) {
+        if (s[i] !== ' ') seen++
+        cut = i + 1
+      }
+      return s.slice(0, cut).trim()
+    }
   }
   return s
 }
 
 /** 已实测可抓取待开票信息的平台（供界面如实展示） */
 export const INVOICE_SUPPORTED_PLATFORMS: readonly string[] = Object.keys(INVOICE_PROFILES)
+
+/**
+ * 该方向算不算"商家待办"（界面合计、导出列、主进程统计、单测都用这一份）。
+ *
+ * 规则：**pending 缺省为 true**——老数据与未标注的方向按待办算，只有显式 `false` 才排除。
+ * 为什么抽出来：这条规则以前在渲染层、主进程、CSV、单测里各写了一遍（`pending === false`
+ * / `pending !== false`），改一处就会与其它几处漂移——而它直接决定"待开票条数与金额合计"，
+ * 漂移的表现是数字悄悄不对（2026-10-14 审查 P2-7）。
+ */
+export function isPendingSection(sec: { pending?: boolean } | null | undefined): boolean {
+  return sec?.pending !== false
+}
 
 /**
  * 表格行清洗（注入到页面脚本里执行的**源码字符串**，见 task-runner 的 readTable）。
@@ -449,20 +635,37 @@ export const INVOICE_SUPPORTED_PLATFORMS: readonly string[] = Object.keys(INVOIC
  *     被统计成 1 条待开票记录）。
  *
  * 判据只看文案、不看类名：整行都是空态词 → 丢；非首行且 ≥60% 单元格与表头文案相同 → 丢。
+ *
+ * **第二个参数 `theadLabels`（2026-10-14 加）**：表头文案的**完整词表**，由调用方把
+ * `<thead>` 里**每一行**的表头都拼进来。为什么要它——合并表头（colspan）的表有**两行**表头，
+ * 第二行是子列名（实测抖店涉税信息报送页：第一行「销售货物取得的收入」跨 3 列，
+ * 第二行才是「收入总额 / 退款总额 / 收入净额」）。只拿第一行当词表时，tbody 里那行重复表头
+ * 11 个格子只命中 5 个（45%），过不了 60% 阈值 → **被当成一条真实数据**，
+ * 界面上会多出一行"金额"全是表头文案的假记录。
+ * 不给这个参数就退回"只看第一行"的老行为（没有 thead 的表仍按第一行当表头）。
+ *
  * 写成字符串常量是为了能注入页面脚本，同时也让单测能对着**同一份实现**验证。
  */
 export const TABLE_ROW_CLEAN_FN = `
-  const __cleanRows = (out) => {
+  const __cleanRows = (out, theadLabels) => {
     const EMPTY_WORDS = /^(暂无数据|暂无信息|暂无记录|暂无|没有数据|无数据|no ?data|-|—|--)$/i;
-    const headerLabels = new Set(out[0].map(x => String(x).trim()).filter(Boolean));
+    // P2-11：空表/首行不是数组时不要崩——注入脚本抛异常会让整步报一个看不懂的错，
+    // 而"表是空的"本来是正常情况（未开票、页面还没渲染完）。
+    if (!Array.isArray(out) || !out.length) return [];
+    const given = Array.isArray(theadLabels) ? theadLabels : [];
+    const source = given.length ? given : (Array.isArray(out[0]) ? out[0] : []);
+    const headerLabels = new Set(source.map(x => String(x).trim()).filter(Boolean));
+    const looksLikeHeader = (vals) =>
+      headerLabels.size > 0 && vals.length > 0 &&
+      vals.filter(v => headerLabels.has(v)).length / vals.length >= 0.6;
     return out.filter((row, idx) => {
+      if (!Array.isArray(row)) return false;
       const vals = row.map(x => String(x).trim()).filter(Boolean);
       if (!vals.length) return false;
       if (vals.every(v => EMPTY_WORDS.test(v))) return false;
-      if (idx > 0 && headerLabels.size) {
-        const hit = vals.filter(v => headerLabels.has(v)).length;
-        if (hit / vals.length >= 0.6) return false;
-      }
+      // 第 0 行是表头本身（读取侧要靠它取列名）→ 永远保留；
+      // 其余行只要通篇是表头文案，就是重复表头行（含合并表头的第二行）
+      if (idx > 0 && looksLikeHeader(vals)) return false;
       return true;
     });
   };

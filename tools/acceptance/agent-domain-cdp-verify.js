@@ -1,16 +1,13 @@
-/* Root-ceo-only Agent domain acceptance.
- * Uses a throwaway Electron profile and a local read-only page. The script
- * deliberately proves the new architecture instead of provisioning children.
- */
+/* Packaged-style boundary acceptance: the renderer gets chat and model settings,
+ * while Agent Job/skill/memory execution APIs remain outside the preload bridge. */
 const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
-const http = require('http')
 
 const ROOT = path.resolve(__dirname, '../..')
 const APP = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
-const PORT = Number(process.env.SHOPPILOT_AGENT_DOMAIN_PORT || 9238)
+const PORT = Number(process.env.SHOPILOT_AGENT_DOMAIN_PORT || 9238)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const reportPath = path.join(ROOT, 'artifacts', 'agent', 'cdp-report.json')
 
@@ -58,21 +55,16 @@ async function main() {
     report.checks.push({ name, passed: !!passed, detail: String(detail).slice(0, 300) })
     console.log(`${passed ? 'PASS' : 'FAIL'} - ${name}${detail ? ` :: ${detail}` : ''}`)
   }
-  const userData = path.join(os.tmpdir(), `shopilot-agent-domain-single-${Date.now()}`)
-  let appProcess, cdp, server, storeId
+  const userData = path.join(os.tmpdir(), `shopilot-agent-chat-boundary-${Date.now()}`)
+  let appProcess, cdp
   try {
-    server = http.createServer((_req, res) => {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      res.end('<!doctype html><title>Single Agent Evidence</title><main>只读页面证据</main>')
-    })
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-    const pageUrl = `http://127.0.0.1:${server.address().port}/evidence`
-    fs.mkdirSync(userData, { recursive: true })
-    const fixtureAppData = path.join(userData, 'appdata')
+    const occupied = await fetch(`http://127.0.0.1:${PORT}/json/version`).then(response => response.ok).catch(() => false)
+    if (occupied) throw new Error(`CDP 端口 ${PORT} 已被占用`)
+    fs.mkdirSync(path.join(userData, 'appdata'), { recursive: true })
     appProcess = spawn(APP, [ROOT, '--no-sandbox', `--remote-debugging-port=${PORT}`, `--user-data-dir=${userData}`, '--disable-features=CalculateNativeWinOcclusion'], {
       cwd: ROOT,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, APPDATA: fixtureAppData, LOCALAPPDATA: fixtureAppData, NODE_ENV: 'production', SHOPILOT_TEST_AUTOCONFIRM: '1', SHOPILOT_DISABLE_CDP_FP: '1' }
+      env: { ...process.env, APPDATA: path.join(userData, 'appdata'), LOCALAPPDATA: path.join(userData, 'appdata'), NODE_ENV: 'production', SHOPILOT_DISABLE_CDP_FP: '1' }
     })
     const ready = await waitFor(async () => fetch(`http://127.0.0.1:${PORT}/json/version`).then(response => response.ok).catch(() => false))
     check('Electron Main 启动并暴露 CDP', ready)
@@ -81,64 +73,39 @@ async function main() {
     const target = targets.find(item => item.type === 'page' && (item.url.includes('index.html') || item.url.startsWith('file:')))
     if (!target) throw new Error('ShopPilot renderer target missing')
     cdp = new CDP(target.webSocketDebuggerUrl)
-    check('Preload 暴露 Agent API', await cdp.eval('return !!window.shopilot?.agentDomain'))
 
-    const org = await cdp.eval('return await window.shopilot.agentDomain.orgList({limit:200})')
-    const items = org.ok ? (org.data.items || []) : []
-    const root = items.find(item => item.id === 'root-ceo')
-    check('迁移后只存在 active root-ceo', org.ok && items.length === 1 && root?.status === 'active' && root.parentId === null, JSON.stringify(items.map(item => ({ id: item.id, status: item.status }))))
-    check('root-ceo 禁止创建 Agent', root?.toolPolicy?.canCreateAgent === false, JSON.stringify(root?.toolPolicy || {}))
+    const bridge = await cdp.eval(`return {agent:Object.keys(window.shopilot?.agent||{}).sort(),settings:Object.keys(window.shopilot?.agentSettings||{}).sort(),domain:typeof window.shopilot?.agentDomain,task:{create:typeof window.shopilot?.task?.create,run:typeof window.shopilot?.task?.run}}`)
+    check('Agent bridge 只包含文本聊天与抽屉状态', bridge.agent.join(',') === 'chat,uiGet,uiSet' && bridge.domain === 'undefined', JSON.stringify(bridge))
+    check('手动工作台任务仍由原 task API 独立提供', bridge.task.create === 'function' && bridge.task.run === 'function', JSON.stringify(bridge.task))
+    check('Agent 只暴露用户配置模型所需的 API', bridge.settings.join(',') === 'modelDelete,modelList,modelSet,modelTest', JSON.stringify(bridge.settings))
 
-    const context = await cdp.eval('return await window.shopilot.agent.softwareContext()')
-    check('软件上下文只返回 root-ceo', context.ok && (context.data.agents || []).length === 1 && context.data.agents[0]?.id === 'root-ceo', JSON.stringify(context.data?.agents || []))
+    const orbReady = await waitFor(() => cdp.eval('return !!document.querySelector(".agent-orb")').catch(() => false))
+    if (!orbReady) throw new Error('Agent chat launcher did not render')
+    const drawer = await cdp.eval(`document.querySelector('.agent-orb')?.click(); await new Promise(r=>setTimeout(r,250)); return {open:!!document.querySelector('[data-test="agent-floating-drawer"]'),note:document.querySelector('[data-test="agent-chat-only"]')?.textContent?.trim()||'',shortcuts:document.querySelectorAll('.agent-shortcuts button').length,plans:document.querySelectorAll('.agent-plan-card,.agent-software-plan-card').length,placeholder:document.querySelector('.agent-composer textarea')?.placeholder||''}`)
+    check('Agent 面板只显示普通对话', drawer.open && drawer.note.includes('纯对话模式') && drawer.shortcuts === 0 && drawer.plans === 0 && drawer.placeholder.includes('想聊'), JSON.stringify(drawer))
 
-    const childDelegate = await cdp.eval(`return await window.shopilot.agentDomain.jobDelegate({assignedAgentId:'legacy-child',goal:'不得创建子 Agent',storeId:'legacy-store',run:false,browserTask:{name:'兼容拒绝',steps:[{type:'readText',input:{selector:'title'}}]}})`)
-    check('派单到历史子 Agent 返回 AGENT_SINGLETON_ONLY', childDelegate?.ok === false && childDelegate.error?.code === 'AGENT_SINGLETON_ONLY', childDelegate?.error?.code || '')
+    const settings = await cdp.eval(`const nav=[...document.querySelectorAll('.dashboard-nav-item')].find(node=>node.textContent?.includes('设置')); nav?.click(); await new Promise(r=>setTimeout(r,250)); const tabs=[...document.querySelectorAll('.settings-nav button')].map(node=>node.textContent?.trim()); const agentTab=[...document.querySelectorAll('.settings-nav button')].find(node=>node.textContent?.includes('Agent 模型')); agentTab?.click(); await new Promise(r=>setTimeout(r,200)); return {tabs,modelPanel:!!document.querySelector('[data-agent-panel="models"]'),otherPanels:document.querySelectorAll('[data-test="agent-job-panel"],[data-test="agent-memory-panel"],[data-test="agent-org-panel"]').length}`)
+    check('设置只保留人工管理的 Agent 模型配置', settings.tabs.includes('Agent 模型') && !settings.tabs.includes('技能') && !settings.tabs.includes('插件') && settings.modelPanel && settings.otherPanels === 0, JSON.stringify(settings))
 
-    const store = await cdp.eval(`return await window.shopilot.store.create({name:'单 Agent 临时店',platform:'测试平台',adminUrl:${JSON.stringify(pageUrl)}})`)
-    storeId = store.ok ? store.data.id : null
-    check('创建临时店铺供 root-ceo Job 使用', !!storeId, store.error?.code || '')
-    const delegated = storeId ? await cdp.eval(`return await window.shopilot.agentDomain.jobDelegate({goal:'root-ceo 直接执行只读页面 Job',storeId:${JSON.stringify(storeId)},run:true,browserTask:{name:'root-ceo 读取页面标题',storeScope:${JSON.stringify(storeId)},steps:[{type:'navigate',input:{url:${JSON.stringify(pageUrl)}}},{type:'readText',input:{selector:'title',privacyRedact:true}}]}})`) : null
-    check('root-ceo 创建并启动 Job 且自身为执行者', delegated?.ok && delegated.data.executor.id === 'root-ceo' && delegated.data.job.createdByAgentId === 'root-ceo' && delegated.data.job.assignedAgentId === 'root-ceo' && ['running', 'succeeded'].includes(delegated.data.job.status), JSON.stringify(delegated?.data || delegated?.error || {}))
-    if (delegated?.ok) {
-      const jobId = delegated.data.job.id
-      const job = await waitFor(async () => {
-        const current = await cdp.eval(`return await window.shopilot.agentDomain.jobGet(${JSON.stringify(jobId)})`)
-        return current?.ok && ['succeeded', 'failed', 'cancelled', 'blocked_permission', 'recovery_required'].includes(current.data.status) ? current : null
-      }, 30000)
-      check('Job 快照的 actor/assignedAgentId 均为 root-ceo', job?.ok && job.data.createdByAgentId === 'root-ceo' && job.data.assignedAgentId === 'root-ceo' && job.data.permissionSnapshot?.assignedAgentId === 'root-ceo' && job.data.permissionSnapshot?.actorId === 'root-ceo', JSON.stringify(job?.data?.permissionSnapshot || {}))
-      check('root-ceo Job 通过 TaskRunner 完成并落库步骤证据', job?.ok && job.data.status === 'succeeded' && !!job.data.browserRunId && (job.data.results || []).length >= 2 && (job.data.results || []).every(result => result.taskRunId === job.data.browserRunId), JSON.stringify({ status: job?.data?.status, browserRunId: job?.data?.browserRunId, results: job?.data?.results?.length || 0 }))
-    }
-    const childCreate = await cdp.eval(`return await window.shopilot.agentDomain.jobCreate({createdByAgentId:'root-ceo',assignedAgentId:'legacy-child',storeId:null,goal:'拒绝旧执行者',inputSummary:{},priority:40,requiresConfirmation:false,idempotencyKey:'single-child-${Date.now()}',browserTask:null})`)
-    check('直接创建到旧 assignedAgentId 返回 AGENT_SINGLETON_ONLY', childCreate?.ok === false && childCreate.error?.code === 'AGENT_SINGLETON_ONLY', childCreate?.error?.code || '')
-
-    const models = await cdp.eval('return await window.shopilot.agentDomain.modelList({limit:200})')
-    check('模型 Profile 仍由主 Agent 统一管理', models.ok && (models.data.items || []).some(item => item.id === 'model_default-main'), JSON.stringify(models.data?.items?.map(item => item.id) || []))
-    const memory = await cdp.eval(`return await window.shopilot.agentDomain.memoryWrite({agentId:'root-ceo',storeId:null,scope:'shared',type:'semantic',title:'单 Agent 验收记忆',content:'root-ceo 统一治理 Job 和记忆。',confidence:0.9,sensitivity:'low'})`)
-    const reviewed = memory?.ok ? await cdp.eval(`return await window.shopilot.agentDomain.memoryReview({memoryId:${JSON.stringify(memory.data.id)},status:'approved',reviewerAgentId:'root-ceo'})`) : null
-    check('记忆写入与审核仍归属 root-ceo', memory?.ok && reviewed?.ok && reviewed.data.agentId === 'root-ceo', reviewed?.error?.code || '')
-
-    if (storeId) {
-      await cdp.eval(`return await window.shopilot.browser.close(${JSON.stringify(storeId)})`).catch(() => null)
-      await cdp.eval(`return await window.shopilot.store.deletePermanent(${JSON.stringify(storeId)})`).catch(() => null)
-    }
     report.status = report.checks.every(item => item.passed) ? 'passed' : 'failed'
   } catch (error) {
     report.status = 'failed'
     report.error = String(error?.stack || error)
-    console.error('AGENT_DOMAIN_CDP_FAIL', report.error)
+    console.error('AGENT_CHAT_BOUNDARY_CDP_FAIL', report.error)
   } finally {
     report.finishedAt = new Date().toISOString()
     fs.mkdirSync(path.dirname(reportPath), { recursive: true })
-    fs.writeFileSync(reportPath, JSON.stringify({ ...report, note: 'root-ceo-only local fixture; no real store or paid model call' }, null, 2))
+    fs.writeFileSync(reportPath, JSON.stringify({ ...report, note: 'isolated Electron profile; chat and settings bridge boundary only' }, null, 2))
     cdp?.close()
-    if (server) await new Promise(resolve => server.close(resolve))
     if (appProcess && appProcess.exitCode == null) { try { execSync(`taskkill /PID ${appProcess.pid} /T /F`, { stdio: 'ignore' }) } catch {} }
     await sleep(500)
-    try { fs.rmSync(userData, { recursive: true, force: true }) } catch {}
+    const tempRoot = path.resolve(os.tmpdir())
+    if (path.resolve(userData).startsWith(tempRoot + path.sep) && path.basename(userData).startsWith('shopilot-agent-chat-boundary-')) {
+      try { fs.rmSync(userData, { recursive: true, force: true }) } catch {}
+    }
   }
   const failed = report.checks.filter(item => !item.passed)
-  console.log(`Agent domain CDP: ${report.status}; ${report.checks.length - failed.length}/${report.checks.length}`)
+  console.log(`Agent chat boundary CDP: ${report.status}; ${report.checks.length - failed.length}/${report.checks.length}`)
   process.exitCode = report.status === 'passed' ? 0 : 1
 }
 

@@ -1571,31 +1571,8 @@ export function markRecoverableJobsOnStartup(): number {
 let agentLeaseTimer: NodeJS.Timeout | null = null
 let lastMemoryMaintenanceAt = 0
 
-/**
- * 自治调度：按顺序补跑由智能体派单、因并发上限留在队列里的 Job。
- * 只处理 source=ceo-chat 的排队 Job，不触碰任务面板/手工创建的排队项。
- */
-function drainDelegatedQueue(): void {
-  const db = getDatabase()
-  const rows = db.prepare(`SELECT id, assigned_agent_id, created_by_agent_id FROM agent_jobs
-    WHERE created_by_agent_id=? AND assigned_agent_id=? AND status='queued' AND json_extract(input_summary_json, '$.source')='ceo-chat'
-    ORDER BY created_at ASC LIMIT 10`).all(ROOT_AGENT_ID, ROOT_AGENT_ID) as any[]
-  for (const row of rows) {
-    try {
-      assertSingletonJobRow(row, '队列 Job')
-      const assigned = requireAgent(row.assigned_agent_id)
-      if (assigned.status !== 'active') continue
-      const running = Number((db.prepare("SELECT COUNT(*) AS c FROM agent_jobs WHERE assigned_agent_id=? AND status='running'").get(assigned.id) as any)?.c || 0)
-      if (running >= assigned.maxConcurrency) continue
-      const jobRow = db.prepare('SELECT * FROM agent_jobs WHERE id=?').get(row.id) as any
-      if (!jobRow) continue
-      assertSingletonJobRow(jobRow, '队列 Job 执行')
-      const dependencies = dependencyState(jobRow)
-      if (dependencies.waiting.length || dependencies.failed.length || dependencies.missing.length) continue
-      void runAgentJob(row.id, ROOT_AGENT_ID).catch(() => undefined)
-    } catch { /* 调度失败不影响其他排队 Job */ }
-  }
-}
+/** Chat-only mode: queued Agent Jobs are never started by a background scheduler. */
+function drainDelegatedQueue(): void {}
 
 function sweepAgentJobs(): void {
   const db = getDatabase()
@@ -1671,6 +1648,13 @@ function sweepAgentJobs(): void {
   drainDelegatedQueue()
 }
 
+/**
+ * chat-only 模式（2026-10-14 起）下**没有任何调用方**：Agent Job 的租约扫描与队列补跑
+ * 已随旧操作面一起下线（agent-domain-handlers 不再启动它）。保留导出供未来恢复。
+ *
+ * ⚠ 恢复前必须先处理存量数据：应用重启也不再跑 markRecoverableJobsOnStartup，
+ * 旧版本留下的 running / recovery_required / waiting_confirmation Job 会一直停在原状态。
+ */
 export function startAgentRuntimeLeaseSweeper(): void {
   if (agentLeaseTimer) return
   const interval = getSettingNumber('agent.jobs.heartbeatMs', 10000, 1000, 60000)

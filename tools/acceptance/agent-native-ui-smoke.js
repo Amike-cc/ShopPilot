@@ -6,7 +6,8 @@ const os = require('os')
 const path = require('path')
 
 const ROOT = path.resolve(__dirname, '../..')
-const APP = path.join(ROOT, 'release', 'win-unpacked', 'ShopPilot.exe')
+const APP = process.env.SHOPILOT_PACKAGED_APP ? path.resolve(process.env.SHOPILOT_PACKAGED_APP) : path.join(ROOT, 'release', 'win-unpacked', 'ShopPilot.exe')
+const APP_LABEL = path.relative(ROOT, APP)
 const INPUT_HELPER = path.join(ROOT, 'tools', 'acceptance', 'win-input.ps1')
 const PORT = Number(process.env.SHOPPILOT_NATIVE_UI_PORT || 9251)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -60,10 +61,6 @@ function nativeBatch(pid, steps) {
 
 async function rectFor(cdp, selector) {
   return cdp.eval(`const e=document.querySelector(${JSON.stringify(selector)}); if(!e) return null; const r=e.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height}`)
-}
-
-async function tabRectFor(cdp, label) {
-  return cdp.eval(`const e=Array.from(document.querySelectorAll('[data-test="agent-admin-panel"] button.admin-tab')).find(node=>node.textContent.trim()===${JSON.stringify(label)}); if(!e) return null; const r=e.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height}`)
 }
 
 async function clickRect(pid, rect, scale = 1) {
@@ -128,22 +125,15 @@ async function main() {
 
     const agentSettingsRect = await waitFor(() => rectFor(cdp, '[data-test="settings-tab-agents"]'))
     await clickRect(child.pid, agentSettingsRect, scale)
-    const team = await waitFor(() => cdp.eval('return {root:!!document.querySelector("[data-test=\\"agent-admin-panel\\"]"),org:!!document.querySelector("[data-test=\\"agent-org-panel\\"]")}').catch(() => null))
-    check('native click opens Agent 设置 page', team?.root === true && team.org === true, JSON.stringify(team))
-
-    for (const [label, selector] of [['Agent 设置', 'agent-org-panel'], ['模型 Profile', 'agent-model-panel'], ['本地记忆', 'agent-memory-panel'], ['Job 看板', 'agent-job-panel']]) {
-      const rect = await waitFor(() => tabRectFor(cdp, label))
-      await clickRect(child.pid, rect, scale)
-      const visible = await waitFor(() => cdp.eval(`return !!document.querySelector('[data-test="${selector}"]')`).catch(() => false))
-      check(`native click switches Agent subpage: ${label}`, visible === true)
-    }
+    const team = await waitFor(() => cdp.eval('return {root:!!document.querySelector("[data-test=\\"agent-admin-panel\\"]"),model:!!document.querySelector("[data-agent-panel=\\"models\\"]"),org:!!document.querySelector("[data-test=\\"agent-org-panel\\"]"),job:!!document.querySelector("[data-test=\\"agent-job-panel\\"]")}').catch(() => null))
+    check('native click opens Agent model settings only', team?.root === true && team.model === true && team.org === false && team.job === false, JSON.stringify(team))
     report.status = report.checks.every(item => item.passed) ? 'passed' : 'failed'
   } catch (error) {
     report.error = String(error?.stack || error)
     console.error('NATIVE_UI_SMOKE_FAIL', report.error)
   } finally {
     report.finishedAt = new Date().toISOString()
-    report.package = fs.existsSync(APP) ? { path: 'release/win-unpacked/ShopPilot.exe', bytes: fs.statSync(APP).size, sha256: crypto.createHash('sha256').update(fs.readFileSync(APP)).digest('hex') } : null
+    report.package = fs.existsSync(APP) ? { path: APP_LABEL, bytes: fs.statSync(APP).size, sha256: crypto.createHash('sha256').update(fs.readFileSync(APP)).digest('hex') } : null
     fs.mkdirSync(path.join(ROOT, 'artifacts', 'agent'), { recursive: true })
     fs.writeFileSync(path.join(ROOT, 'artifacts', 'agent', 'native-ui-report.json'), JSON.stringify(report, null, 2))
     cdp?.close()

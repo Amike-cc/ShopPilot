@@ -1,0 +1,1103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ShopPilot · 发票中心（高保真原型 v1）</title>
+<style>
+/* ==========================================================================
+   设计令牌：与 apps/desktop/src/renderer/src/app/App.vue 的 :root 完全一致
+   ========================================================================== */
+:root{
+  --bg-primary:#f5f7fb; --bg-secondary:#fff; --bg-tertiary:#f2f4f8;
+  --border:#e9edf5; --border-strong:#dbe2ee;
+  --text-primary:#0f1729; --text-secondary:#4a5568; --text-muted:#5b6472;
+  --primary:#7c5cff; --primary-strong:#5b3df5;
+  --success:#12b76a; --warning:#f79009; --error:#f04438;
+  --blue:#2e90fa; --cyan:#06aed4;
+  --radius:16px; --radius-sm:10px;
+  --brand-gradient:linear-gradient(135deg,#8b5cff 0%,#6a3cf0 100%);
+  --brand-soft:rgba(124,92,255,.1);
+  --shadow-card:0 1px 2px rgba(16,24,40,.04),0 10px 28px rgba(16,24,40,.06);
+  --shadow-pop:0 12px 32px rgba(16,24,40,.12);
+  --side-bg:#0b1120; --side-text:#e8edf7; --side-text-soft:#b6c0d4; --side-text-muted:#7c8aa3;
+  --pdd:#E22E24; --wx:#07C160; --ks:#FF6A00; --dy:#FE2C55;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--bg-primary); color:var(--text-primary); font-size:14px; line-height:1.5;
+  -webkit-font-smoothing:antialiased; overflow:hidden;
+}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,select{font-family:inherit}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:#d7dEEA;border-radius:8px}
+::-webkit-scrollbar-thumb:hover{background:#c3cddd}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ==========================================================================
+   应用外壳
+   ========================================================================== */
+.app{display:flex;height:100vh;min-width:1400px;overflow:hidden}
+
+/* ---------- 左侧全局导航（深色） ---------- */
+.nav{width:216px;flex:none;background:var(--side-bg);color:var(--side-text);display:flex;flex-direction:column;padding:16px 12px 10px}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 8px 18px}
+.brand-mark{width:30px;height:30px;border-radius:9px;background:var(--brand-gradient);display:grid;place-items:center;box-shadow:0 6px 16px rgba(124,92,255,.45)}
+.brand-name{font-size:16px;font-weight:700;letter-spacing:.2px}
+.nav-group-label{font-size:11px;color:var(--side-text-muted);padding:12px 10px 6px;letter-spacing:.4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;color:var(--side-text-soft);font-size:13px;margin-bottom:2px}
+.nav-item svg{flex:none;opacity:.85}
+.nav-item.on{background:var(--brand-gradient);color:#fff;box-shadow:0 8px 20px rgba(106,60,240,.35)}
+.nav-item.on svg{opacity:1}
+.nav-item:not(.on):hover{background:rgba(255,255,255,.06);color:#fff}
+.nav-badge{margin-left:auto;font-size:11px;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,.12);color:var(--side-text-soft)}
+.nav-store{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:9px;font-size:12.5px;color:var(--side-text-soft)}
+.nav-store:hover{background:rgba(255,255,255,.06)}
+.plat-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.nav-store .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-store .st{margin-left:auto;font-size:11px;color:var(--side-text-muted);flex:none}
+.nav-foot{margin-top:auto;border-top:1px solid rgba(255,255,255,.08);padding-top:8px}
+
+/* ---------- 主体分账栏 ---------- */
+.entities{width:252px;flex:none;background:var(--bg-secondary);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.ent-head{padding:18px 16px 12px}
+.ent-head h2{font-size:14px;font-weight:700}
+.ent-head p{font-size:11.5px;color:var(--text-muted);margin-top:3px;line-height:1.45}
+.ent-list{flex:1;overflow-y:auto;padding:0 10px 10px}
+.ent-item{width:100%;text-align:left;display:block;padding:10px 11px;border-radius:12px;border:1px solid transparent;margin-bottom:4px;transition:background .15s,border-color .15s}
+.ent-item:hover{background:var(--bg-tertiary)}
+.ent-item.on{background:var(--brand-soft);border-color:rgba(124,92,255,.32)}
+.ent-item.none{background:#fff8ee;border-color:#fde3c0}
+.ent-item.none.on{background:#fff2e0;border-color:#f7c98b}
+.ent-name{font-size:13px;font-weight:600;color:var(--text-primary);line-height:1.35;display:flex;gap:6px;align-items:flex-start}
+.ent-name .t{flex:1;min-width:0}
+.ent-no{font-size:11px;color:var(--text-muted);margin-top:2px;letter-spacing:.2px}
+.ent-metrics{display:flex;align-items:baseline;gap:8px;margin-top:7px;font-size:11.5px;color:var(--text-secondary)}
+.ent-metrics b{font-size:13.5px;color:var(--text-primary);font-weight:700}
+.ent-item.on .ent-metrics b{color:var(--primary-strong)}
+.ent-metrics .amt{margin-left:auto;font-weight:600;color:var(--text-primary)}
+.ent-flag{font-size:10.5px;padding:1px 6px;border-radius:999px;background:#fdeccd;color:#b54708;font-weight:600;flex:none;white-space:nowrap}
+.ent-bar{height:3px;border-radius:3px;background:#eef1f7;margin-top:8px;overflow:hidden}
+.ent-bar i{display:block;height:100%;border-radius:3px;background:var(--brand-gradient)}
+.ent-item.none .ent-bar i{background:#f7b955}
+.ent-foot{padding:10px 12px 14px;border-top:1px solid var(--border)}
+.ent-tip{font-size:11px;color:var(--text-muted);line-height:1.5;margin-top:7px}
+
+/* ---------- 主区 ---------- */
+.main{flex:1;min-width:0;overflow-y:auto;padding:20px 24px 28px}
+.page-head{display:flex;align-items:flex-start;gap:14px}
+.page-head h1{font-size:21px;font-weight:700;letter-spacing:.2px}
+.page-head .sub{font-size:12.5px;color:var(--text-secondary);margin-top:4px}
+.page-head .sub b{color:var(--primary-strong);font-weight:600}
+.head-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+
+.btn{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 13px;border-radius:10px;font-size:13px;font-weight:500;border:1px solid var(--border-strong);background:#fff;color:var(--text-secondary);transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:#c8d2e4;color:var(--text-primary)}
+.btn.primary{background:var(--brand-gradient);color:#fff;border-color:transparent;box-shadow:0 6px 16px rgba(106,60,240,.28)}
+.btn.primary:hover{filter:brightness(1.05)}
+.btn.ghost{background:transparent}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.btn.sm{height:28px;padding:0 10px;font-size:12px;border-radius:8px}
+
+/* 采集状态条 */
+.status-strip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;padding:9px 13px;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-card)}
+.status-strip .lead{font-size:12.5px;color:var(--text-secondary)}
+.status-strip .lead b{color:var(--text-primary);font-weight:600}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:3px 9px;border-radius:999px;background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border)}
+.chip.ok{background:#e9f9f0;color:#067647;border-color:#b7ebcd}
+.chip.warn{background:#fff6e5;color:#b54708;border-color:#fbdda8}
+.chip.err{background:#fef3f2;color:#b42318;border-color:#fecdca}
+.chip.info{background:#eef4ff;color:#175cd3;border-color:#c7d7fe}
+.chip.btn-chip{cursor:pointer}
+.chip.btn-chip:hover{filter:brightness(.97)}
+.dot-live{width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 0 3px rgba(18,183,106,.16)}
+
+/* KPI */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:12px}
+.kpi{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow-card);position:relative;overflow:hidden}
+.kpi::after{content:"";position:absolute;right:-26px;top:-26px;width:78px;height:78px;border-radius:50%;background:var(--brand-soft)}
+.kpi.risk::after{background:rgba(240,68,56,.09)}
+.kpi .lbl{font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px}
+.kpi .val{font-size:27px;font-weight:700;letter-spacing:-.4px;margin-top:7px;line-height:1.15;position:relative}
+.kpi .note{font-size:11.5px;color:var(--text-muted);margin-top:6px;position:relative}
+.kpi .note b{color:var(--text-secondary)}
+.kpi.risk .val{color:var(--error)}
+.kpi .cur{font-size:17px;font-weight:600;vertical-align:2px;margin-right:1px;color:var(--text-secondary)}
+
+/* 工具条 */
+.toolbar{display:flex;align-items:center;gap:9px;margin-top:14px;flex-wrap:wrap}
+.search{position:relative;flex:1;min-width:230px;max-width:380px}
+.search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text-muted)}
+.search input{width:100%;height:34px;padding:0 12px 0 32px;border-radius:10px;border:1px solid var(--border-strong);background:#fff;font-size:13px;color:var(--text-primary);outline:none}
+.search input::placeholder{color:#a9b2c3}
+.search input:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--brand-soft)}
+.toggle{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 12px;border-radius:10px;border:1px solid var(--border-strong);background:#fff;font-size:12.5px;color:var(--text-secondary)}
+.toggle.on{border-color:var(--primary);background:var(--brand-soft);color:var(--primary-strong);font-weight:600}
+.box{width:15px;height:15px;border-radius:5px;border:1.5px solid #c8d2e4;display:grid;place-items:center;flex:none}
+.toggle.on .box{background:var(--primary);border-color:var(--primary)}
+select.sel{height:34px;padding:0 28px 0 12px;border-radius:10px;border:1px solid var(--border-strong);background:#fff url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235b6472' stroke-width='2.4'><path d='M6 9l6 6 6-6'/></svg>") no-repeat right 10px center;font-size:12.5px;color:var(--text-secondary);outline:none;appearance:none;cursor:pointer}
+.seg{display:inline-flex;padding:3px;background:var(--bg-tertiary);border-radius:10px;border:1px solid var(--border)}
+.seg button{height:26px;padding:0 11px;border-radius:7px;font-size:12.5px;color:var(--text-secondary)}
+.seg button.on{background:#fff;color:var(--primary-strong);font-weight:600;box-shadow:0 1px 3px rgba(16,24,40,.1)}
+
+/* 说明条 */
+.note-bar{display:flex;gap:9px;align-items:flex-start;margin-top:12px;padding:10px 13px;border-radius:12px;background:#eff4ff;border:1px solid #d1e0ff;font-size:12.5px;color:#363f72;line-height:1.55}
+.note-bar.warn{background:#fffaeb;border-color:#fedf89;color:#7a2e0e}
+.note-bar .ic{flex:none;margin-top:1px}
+.note-bar b{font-weight:600}
+
+/* 店铺卡 */
+.stream{margin-top:12px}
+.store-card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-card);margin-bottom:12px;overflow:hidden}
+.store-card.alert{border-color:#fecdca}
+.sc-head{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.plat{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:3px 8px;border-radius:7px;background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border)}
+.plat i{width:7px;height:7px;border-radius:50%;display:block}
+.sc-name{font-size:15px;font-weight:700}
+.lic-tag{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:3px 9px;border-radius:999px;background:#f4f0ff;border:1px solid #dcd2ff;color:var(--primary-strong);font-weight:500}
+.lic-tag:hover{border-color:var(--primary)}
+.lic-tag em{font-style:normal;color:#7a6da8;font-size:11px}
+.lic-tag.none{background:#fff6e5;border-color:#fbdda8;color:#b54708}
+.sc-meta{font-size:11.5px;color:var(--text-muted)}
+.sc-count{margin-left:auto;font-size:12.5px;color:var(--text-secondary);display:flex;align-items:center;gap:9px}
+.sc-count b{color:var(--text-primary);font-weight:700}
+.sc-count .hist{color:var(--text-muted)}
+.sc-body{padding:0 16px 14px}
+.entity-line{margin:11px 0 0;padding:9px 11px;border-radius:10px;background:#f8fafd;border:1px solid var(--border);font-size:12px;color:var(--text-secondary);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.entity-line .k{color:var(--text-muted)}
+.entity-line b{color:var(--text-primary);font-weight:600}
+.entity-line .v-ok{color:#067647;font-weight:600}
+.entity-line .v-warn{color:#b54708;font-weight:600}
+.entity-line .v-err{color:#b42318;font-weight:600}
+.entity-line.off{background:#fbfbfd;color:var(--text-muted)}
+
+/* 方向卡 */
+.dirs{display:grid;grid-template-columns:repeat(auto-fit,minmax(186px,1fr));gap:10px;margin-top:11px}
+.dir{border:1px solid var(--border);border-radius:12px;padding:11px 12px;background:#fff;transition:border-color .15s,box-shadow .15s}
+.dir:hover{border-color:#cfc4ff;box-shadow:0 4px 14px rgba(124,92,255,.1)}
+.dir.pending{background:linear-gradient(180deg,#fff 0%,#fdfcff 100%)}
+.dir.idle{background:#fafbfd;border-color:#eef1f7}
+.dir-top{display:flex;align-items:center;gap:6px}
+.dir-name{font-size:12.5px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{font-size:10px;padding:1px 6px;border-radius:999px;font-weight:600;flex:none;white-space:nowrap}
+.badge.todo{background:#fdeccd;color:#b54708}
+.badge.skip{background:#eef1f7;color:#5b6472}
+.badge.warn{background:#fef3f2;color:#b42318}
+.dir-num{font-size:20px;font-weight:700;margin-top:9px;line-height:1.1;letter-spacing:-.3px}
+.dir-num small{font-size:11.5px;font-weight:500;color:var(--text-muted);margin-left:3px}
+.dir-amt{font-size:14px;font-weight:700;color:var(--primary-strong);margin-top:3px}
+.dir-amt.muted{color:var(--text-muted);font-weight:500;font-size:12px}
+.dir-foot{display:flex;align-items:center;gap:6px;margin-top:9px;padding-top:8px;border-top:1px dashed var(--border)}
+.dir-foot .lnk{font-size:11.5px;color:var(--primary-strong);font-weight:600;display:inline-flex;align-items:center;gap:3px}
+.dir-foot .lnk:hover{text-decoration:underline}
+.dir-foot .flag{font-size:10.5px;color:var(--text-muted);margin-left:auto}
+.dir-foot .flag.warn{color:#b54708}
+
+/* 明细表 */
+.detail{margin-top:11px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff}
+.detail-head{display:flex;align-items:center;gap:9px;padding:9px 12px;background:#f8fafd;border-bottom:1px solid var(--border);font-size:12.5px}
+.detail-head b{font-weight:700}
+.detail-head .meta{color:var(--text-muted);font-size:11.5px}
+.detail-head .sp{margin-left:auto}
+.tbl-wrap{max-height:250px;overflow:auto}
+table.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+table.tbl th{position:sticky;top:0;background:#fbfcfe;text-align:left;font-weight:600;color:var(--text-muted);font-size:11.5px;padding:8px 12px;border-bottom:1px solid var(--border);white-space:nowrap;z-index:1}
+table.tbl td{padding:9px 12px;border-bottom:1px solid #f4f6fa;color:var(--text-primary);white-space:nowrap}
+table.tbl tr:last-child td{border-bottom:none}
+table.tbl tbody tr:hover{background:#fafbff}
+table.tbl td.r,table.tbl th.r{text-align:right}
+table.tbl td.amt{font-weight:600;font-variant-numeric:tabular-nums}
+table.tbl td.dim{color:var(--text-muted)}
+.detail-foot{padding:8px 12px;background:#fbfcfe;border-top:1px solid var(--border);font-size:11.5px;color:var(--text-muted)}
+.pill{display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:999px;font-weight:600}
+.pill.todo{background:#fdeccd;color:#b54708}
+.pill.done{background:#e9f9f0;color:#067647}
+.pill.late{background:#fef3f2;color:#b42318}
+.pill.wait{background:#eef4ff;color:#175cd3}
+
+/* 行内告警 */
+.row-alert{display:flex;align-items:center;gap:9px;margin-top:11px;padding:10px 12px;border-radius:10px;font-size:12.5px;line-height:1.5}
+.row-alert.err{background:#fef3f2;border:1px solid #fecdca;color:#b42318}
+.row-alert.warn{background:#fffaeb;border:1px solid #fedf89;color:#7a2e0e}
+.row-alert .sp{margin-left:auto}
+
+/* 主体对照结果面板 */
+.report{margin-top:12px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-card);overflow:hidden}
+.report-head{display:flex;align-items:center;gap:9px;padding:12px 15px;border-bottom:1px solid var(--border)}
+.report-head b{font-size:14px}
+.report-head .meta{font-size:11.5px;color:var(--text-muted)}
+.report-head .sp{margin-left:auto}
+.report-row{display:flex;align-items:center;gap:11px;padding:10px 15px;border-bottom:1px solid #f4f6fa;font-size:12.5px}
+.report-row:last-child{border-bottom:none}
+.report-row .nm{font-weight:600;min-width:150px}
+.report-row .pl{font-size:11.5px;color:var(--text-muted);min-width:68px}
+.report-row .res{color:var(--text-secondary)}
+.report-row .res.ok{color:#067647}
+.report-row .res.bad{color:#b42318}
+.report-row .res.warn{color:#b54708}
+
+/* 汇总表 */
+.sum-card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-card);overflow:hidden;margin-top:12px}
+.sum-head{padding:13px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px}
+.sum-head b{font-size:14px}
+.sum-head .meta{font-size:11.5px;color:var(--text-muted);margin-left:auto}
+table.sum{width:100%;border-collapse:collapse;font-size:12.5px}
+table.sum th{text-align:left;font-size:11.5px;color:var(--text-muted);font-weight:600;padding:10px 16px;background:#fbfcfe;border-bottom:1px solid var(--border)}
+table.sum td{padding:12px 16px;border-bottom:1px solid #f4f6fa;vertical-align:middle}
+table.sum tr:last-child td{border-bottom:none}
+table.sum tr.tot td{background:#fafbff;font-weight:700}
+.cell-ent{display:flex;flex-direction:column;gap:2px}
+.cell-ent .n{font-weight:600}
+.cell-ent .c{font-size:11px;color:var(--text-muted)}
+.mini-bar{height:6px;border-radius:4px;background:#eef1f7;overflow:hidden;width:92px}
+.mini-bar i{display:block;height:100%;background:var(--brand-gradient)}
+.ent-chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:2px 8px;border-radius:999px;background:#f4f0ff;border:1px solid #dcd2ff;color:var(--primary-strong);margin-right:5px;margin-bottom:4px}
+
+/* 覆盖与口径 */
+.cover{margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-card);overflow:hidden}
+.cover-head{padding:13px 16px;border-bottom:1px solid var(--border)}
+.cover-head b{font-size:14px}
+.cover-head p{font-size:11.5px;color:var(--text-muted);margin-top:3px}
+.cover-body{padding:14px 16px;display:grid;grid-template-columns:1.05fr 1fr;gap:22px}
+.cov-plats{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.cov-plat{border:1px solid var(--border);border-radius:11px;padding:10px 11px;background:#fcfdff}
+.cov-plat .t{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600}
+.cov-plat .d{font-size:11px;color:var(--text-muted);margin-top:5px;line-height:1.5}
+.cov-list{font-size:12px;color:var(--text-secondary);line-height:1.75}
+.cov-list .li{display:flex;gap:8px;margin-bottom:7px}
+.cov-list .li i{flex:none;width:5px;height:5px;border-radius:50%;background:var(--primary);margin-top:8px}
+.cov-list b{color:var(--text-primary);font-weight:600}
+
+.empty{padding:34px 16px;text-align:center;color:var(--text-muted);font-size:13px;background:#fff;border:1px dashed var(--border-strong);border-radius:var(--radius)}
+
+/* 浮动：导出确认 */
+.mask{position:fixed;inset:0;background:rgba(16,18,24,.42);backdrop-filter:blur(2px);display:grid;place-items:center;z-index:60}
+.sheet{width:452px;background:#fff;border-radius:18px;box-shadow:var(--shadow-pop);overflow:hidden}
+.sheet-head{padding:18px 20px 12px}
+.sheet-head h3{font-size:16px;font-weight:700}
+.sheet-head p{font-size:12px;color:var(--text-muted);margin-top:4px}
+.sheet-body{padding:0 20px 4px}
+.sheet-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--border);font-size:12.5px}
+.sheet-row .k{color:var(--text-muted);width:78px;flex:none}
+.sheet-row .v{color:var(--text-primary);font-weight:600}
+.sheet-row .v.big{font-size:15px}
+.sheet-foot{display:flex;gap:9px;justify-content:flex-end;padding:14px 20px 18px;background:#fbfcfe;border-top:1px solid var(--border);margin-top:12px}
+
+/* 提示 toast */
+.toasts{position:fixed;right:24px;bottom:24px;display:flex;flex-direction:column;gap:9px;z-index:80}
+.toast{background:#101828;color:#fff;font-size:12.5px;padding:11px 15px;border-radius:11px;box-shadow:var(--shadow-pop);display:flex;align-items:center;gap:9px;max-width:400px;animation:pop .22s ease}
+.toast .tick{color:#34d399;flex:none}
+@keyframes pop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.spin{animation:sp 1s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ================= 全局导航 ================= -->
+  <aside class="nav">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/><path d="M3 17l9 4 9-4"/></svg>
+      </div>
+      <div class="brand-name">ShopPilot</div>
+    </div>
+
+    <button class="nav-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/></svg>经营总览</button>
+    <button class="nav-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18 15 15 0 010-18z"/></svg>浏览器</button>
+    <button class="nav-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>商品管理</button>
+    <button class="nav-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3z"/><path d="M9 8h6M9 12h6"/></svg>订单管理</button>
+    <button class="nav-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 9l1.5-5h15L21 9"/><path d="M4 9v11h16V9"/><path d="M9 20v-6h6v6"/></svg>店铺管理</button>
+    <button class="nav-item on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>数据分析</button>
+    <button class="nav-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>AI 创作工具</button>
+    <button class="nav-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 12.5l2.6 2.6L16 9.5"/></svg>任务中心<span class="nav-badge">3</span></button>
+    <button class="nav-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-2.9 1.2 2 2 0 11-4 0 1.7 1.7 0 00-2.9-1.2l-.1.1a2 2 0 11-2.8-2.8l.1-.1A1.7 1.7 0 003 15a2 2 0 110-4 1.7 1.7 0 001.2-2.9l-.1-.1a2 2 0 112.8-2.8l.1.1A1.7 1.7 0 0010 4.1a2 2 0 114 0 1.7 1.7 0 002.9 1.2l.1-.1a2 2 0 112.8 2.8l-.1.1A1.7 1.7 0 0021 11a2 2 0 110 4z"/></svg>设置中心</button>
+
+    <div class="nav-group-label">店铺列表</div>
+    <div class="nav-store"><span class="plat-dot" style="background:var(--wx)"></span><span class="nm">云锦服饰旗舰店</span><span class="st">已打开</span></div>
+    <div class="nav-store"><span class="plat-dot" style="background:var(--dy)"></span><span class="nm">云锦美妆旗舰店</span><span class="st">已关闭</span></div>
+    <div class="nav-store"><span class="plat-dot" style="background:var(--pdd)"></span><span class="nm">云栖家居旗舰店</span><span class="st">已打开</span></div>
+    <div class="nav-store"><span class="plat-dot" style="background:var(--wx)"></span><span class="nm">云栖严选店</span><span class="st" style="color:#f79009">待登录</span></div>
+    <div class="nav-store"><span class="plat-dot" style="background:var(--ks)"></span><span class="nm">云栖生活馆</span><span class="st">已关闭</span></div>
+
+    <div class="nav-foot">
+      <button class="nav-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>回收站</button>
+    </div>
+  </aside>
+
+  <!-- ================= 主体分账 ================= -->
+  <aside class="entities">
+    <div class="ent-head">
+      <h2>开票主体</h2>
+      <p>发票按<b>营业执照</b>分账，不按平台账号分。同一执照下的多家店合并计算。</p>
+    </div>
+    <div class="ent-list" id="entList"></div>
+    <div class="ent-foot">
+      <button class="btn ghost sm" style="width:100%;justify-content:center" id="btnEntity">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
+        获取主体营业执照
+      </button>
+      <div class="ent-tip">去平台后台读回主体：只填空缺、不覆盖你已填的值；不一致时只报告。</div>
+    </div>
+  </aside>
+
+  <!-- ================= 主区 ================= -->
+  <main class="main" id="main">
+    <div class="page-head">
+      <div>
+        <h1>发票中心</h1>
+        <div class="sub">只读采集各平台发票页；<b>开票动作仍在你自己的店铺浏览器里完成</b>（本应用不代提交）。</div>
+      </div>
+      <div class="head-actions">
+        <button class="btn" id="btnRefresh">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M20 11A8 8 0 006 6.3L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0014 4.7l2-1.7"/><path d="M20 20v-4h-4"/></svg>
+          刷新
+        </button>
+        <button class="btn" id="btnExport">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
+          导出 CSV
+        </button>
+        <button class="btn primary" id="btnCollect">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+          采集发票数据
+        </button>
+      </div>
+    </div>
+
+    <div class="status-strip" id="statusStrip"></div>
+    <div class="kpis" id="kpis"></div>
+
+    <div class="toolbar">
+      <div class="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.2-3.2"/></svg>
+        <input id="q" type="text" placeholder="搜索：店铺 / 单号 / 类型 / 抬头 / 税号…" />
+      </div>
+      <button class="toggle" id="onlyData"><span class="box"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4"><path d="M5 12.5l4.5 4.5L19 7"/></svg></span>只看有数据的</button>
+      <select class="sel" id="sort">
+        <option value="amountDesc">金额从高到低</option>
+        <option value="amountAsc">金额从低到高</option>
+        <option value="none">按平台顺序</option>
+      </select>
+      <div class="seg" id="viewSeg">
+        <button data-v="stores" class="on">按店铺</button>
+        <button data-v="summary">按主体汇总</button>
+      </div>
+      <span class="sc-meta" id="resultMeta" style="margin-left:auto"></span>
+    </div>
+
+    <div id="banners"></div>
+    <div id="stream" class="stream"></div>
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+/* ==========================================================================
+   1. 数据：与 packages/shared/src/constants/invoice.ts 的实测档案对齐
+   ========================================================================== */
+const PLATFORM = {
+  '微信小店':{ c:'var(--wx)', short:'微信小店' },
+  '拼多多'  :{ c:'var(--pdd)', short:'拼多多' },
+  '抖店'    :{ c:'var(--dy)',  short:'抖店' },
+  '快手小店':{ c:'var(--ks)',  short:'快手小店' },
+}
+const NO_LICENSE = '__none__'
+
+/* 合并后的统一列（INVOICE_COLUMNS） */
+const COLS = [
+  { k:'id',      l:'单号/账单号' },
+  { k:'period',  l:'期间/申请时间' },
+  { k:'type',    l:'类型' },
+  { k:'amount',  l:'可开金额', r:true },
+  { k:'title',   l:'发票抬头/收票方' },
+  { k:'taxNo',   l:'税号' },
+  { k:'status',  l:'状态' },
+  { k:'deadline',l:'承诺/到期' },
+]
+
+const row = (id, period, type, amount, title, taxNo, status, deadline) =>
+  ({ id, period, type, amount, title, taxNo, status, deadline })
+
+/* 抖店「平台给我开票」实测 37 条 —— 平台开给商家的票，商家无需操作 */
+const ddFromPlatform = Array.from({ length: 37 }, (_, i) => {
+  const m = String((i % 6) + 1).padStart(2, '0')
+  const types = ['佣金', '技术服务费', '推广费', '运费险']
+  return row(
+    'DD2026' + m + String(30100 + i),
+    '2026年' + m + '月',
+    types[i % 4],
+    '¥' + (120 + i * 37.25).toFixed(2),
+    '北京抖音信息服务有限公司',
+    '91110108MA01QXXX4C',
+    '已开票',
+    '—'
+  )
+})
+
+const STORES = [
+  {
+    id:'s1', name:'云锦服饰旗舰店', platform:'微信小店', entityKey:'91310115MA1H8N2X3B',
+    capturedAt:'今天 17:12', measuredAt:'2026-09-14', profile:'微信小店 · bill/home',
+    entitySupported:false,
+    sections:[
+      { key:'s1:applyPlatform', name:'申请平台开票', pending:true, measuredRows:5,
+        items:[
+          row('B202609010001','2026-09-01','技术服务费','¥14.89','—','—','待开票','—'),
+          row('B202609010002','2026-09-01','技术服务费','¥9.49','—','—','待开票','—'),
+          row('B202609080003','2026-09-08','技术服务费','¥7.12','—','—','待开票','—'),
+          row('B202609150004','2026-09-15','技术服务费','¥6.00','—','—','待开票','—'),
+          row('B202609220005','2026-09-22','技术服务费','¥4.00','—','—','待开票','—'),
+        ] },
+      { key:'s1:toPlatform', name:'给平台开票', pending:true, measuredRows:2,
+        items:[
+          row('B202608010011','2026-08-01','用户补贴','¥80.00','上海寻梦信息技术有限公司','91310115MA1H8N2X3B','待处理','—'),
+          row('B202608010012','2026-08-01','用户补贴','¥40.00','上海寻梦信息技术有限公司','91310115MA1H8N2X3B','待处理','—'),
+        ] },
+      { key:'s1:toBuyer', name:'给买家开票', pending:true, measuredRows:0, items:[] },
+    ]
+  },
+  {
+    id:'s2', name:'云锦美妆旗舰店', platform:'抖店', entityKey:'91310115MA1H8N2X3B',
+    capturedAt:'今天 17:12', measuredAt:'2026-09-14', profile:'抖店 · merchant-invoice',
+    entitySupported:false,
+    sections:[
+      { key:'s2:toPlatform', name:'我给平台开票', pending:true, measuredRows:1,
+        items:[ row('2026年08月账单','2026年08月','佣金','¥680.60','上海云锦服饰有限公司','91310115MA1H8N2X3B','待开票','—') ] },
+      { key:'s2:toBuyer', name:'给消费者开票', pending:true, measuredRows:0, items:[] },
+      { key:'s2:fromPlatform', name:'平台给我开票', pending:false, measuredRows:37, items:ddFromPlatform,
+        notPendingNote:'平台开给商家的票，商家无需再操作' },
+      { key:'s2:fromDaren', name:'达人给我开票', pending:true, measuredRows:0, items:[] },
+    ]
+  },
+  {
+    id:'s3', name:'云栖家居旗舰店', platform:'拼多多', entityKey:'91330100MA2XXXXX1A',
+    capturedAt:'今天 17:11', measuredAt:'2026-09-14', profile:'拼多多 · invoice/center + 资金中心',
+    entitySupported:false,
+    sections:[
+      { key:'s3:toBuyer', name:'给买家开票（订单开票）', pending:true, measuredRows:3,
+        items:[
+          row('240828-123456789012345','2026-08-28 14:22','增值税普通发票','¥128.00','杭州明远科技有限公司','91330106MA2XXXXX9K','待开票','2026-09-04'),
+          row('240905-223456789012346','2026-09-05 09:10','增值税专用发票','¥216.30','杭州明远科技有限公司','91330106MA2XXXXX9K','待开票','2026-10-16'),
+          row('240912-323456789012347','2026-09-12 20:41','增值税普通发票','¥42.00','个人','—','待开票','2026-10-25'),
+        ] },
+      { key:'s3:toPlatform', name:'给平台开票（资金中心）', pending:true, measuredRows:1,
+        emptyNote:'本次采集切页签后没读到该方向的表——下面显示的是上一次成功采集的数据，不是本次结果',
+        items:[ row('2026年05/06/07/08月账单','2026年05/06/07/08月','账单（非表格页，标签读取）','¥421.40','上海寻梦信息技术有限公司','—','待提交','—') ] },
+    ]
+  },
+  {
+    id:'s4', name:'云栖严选店', platform:'微信小店', entityKey:'91330100MA2XXXXX1A',
+    capturedAt:null, measuredAt:'2026-09-14', profile:'微信小店 · bill/home',
+    loginRequired:true, entitySupported:false,
+    sections:[]
+  },
+  {
+    id:'s5', name:'云栖生活馆', platform:'快手小店', entityKey:NO_LICENSE,
+    capturedAt:'今天 17:13', measuredAt:'2026-09-14', profile:'快手小店 · tax-bill/subsidy',
+    entitySupported:true,
+    entity:{ name:'杭州云栖贸易有限公司', no:'91330100MA2XXXXX1A', at:'今天 17:13' },
+    verdict:{ tone:'warn', text:'店铺还没填主体（平台读到了名称和信用代码，可在左下角点「获取主体营业执照」填入）' },
+    sections:[
+      { key:'s5:toPlatform', name:'给平台开票（未开票账单）', pending:true, measuredRows:5,
+        items:[
+          row('202608001','2026年08月','服务费','¥96.20','云栖生活馆','—','待开票','2026-10-17'),
+          row('202608002','2026年08月','服务费','¥88.40','云栖生活馆','—','待开票','2026-10-17'),
+          row('202609001','2026年09月','服务费','¥120.00','云栖生活馆','—','待开票','2026-11-16'),
+          row('202609002','2026年09月','服务费','¥72.00','云栖生活馆','—','待开票','2026-11-16'),
+          row('202609003','2026年09月','违约金','—','云栖生活馆','—','待开票','2026-11-16'),
+        ] },
+      { key:'s5:processing', name:'开票处理中', pending:false, measuredRows:0, items:[],
+        notPendingNote:'已提交、等平台审核的流水，商家无需再操作' },
+      { key:'s5:records', name:'开票处理记录', pending:false, measuredRows:3,
+        notPendingNote:'已提交并通过审核的记录，商家无需再操作',
+        items:[
+          row('LS2026070001','2026年07月','服务费','¥58.00','云栖生活馆','—','审核通过','—'),
+          row('LS2026070002','2026年07月','服务费','¥64.50','云栖生活馆','—','审核通过','—'),
+          row('LS2026060003','2026年06月','服务费','¥31.20','云栖生活馆','—','审核通过','—'),
+        ] },
+    ]
+  },
+]
+
+/* 主体分组（groupStoresByLicense 的界面口径） */
+const ENTITIES = [
+  { key:'ALL',        label:'全部主体', no:'',                    type:'all'  },
+  { key:'91310115MA1H8N2X3B', label:'上海云锦服饰有限公司', no:'91310115MA1H8N2X3B', type:'real' },
+  { key:'91330100MA2XXXXX1A', label:'杭州云栖贸易有限公司', no:'91330100MA2XXXXX1A', type:'real' },
+  { key:NO_LICENSE,   label:'未填写营业执照', no:'',              type:'none' },
+]
+
+/* 实体补录候选（其他店已填过的主体名，可直接选，避免同名拆成两个主体） */
+const LICENSE_NAME_OPTIONS = ['上海云锦服饰有限公司', '杭州云栖贸易有限公司']
+
+/* ==========================================================================
+   2. 纯函数：金额解析/格式化（与 packages/shared/src/invoice-amount.ts 同规则）
+   ========================================================================== */
+function parseAmount(v){
+  let s = String(v ?? '').replace(/[￥¥$€\s]/g,'').replace(/^(?:金额|合计|可开金额|可开票金额|待开票金额|账单金额|发票金额)/,'')
+  if(!s || s==='—' || s==='-' || s==='--') return null
+  const m = /^(-?[\d,]+(?:\.\d+)?)(?:元)?$/.exec(s)
+  if(!m) return null
+  const raw = m[1]
+  if(raw.includes(',') && !/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(raw)) return null
+  const n = Number(raw.replace(/,/g,''))
+  return Number.isFinite(n) ? n : null
+}
+const fmt = n => n.toLocaleString('zh-CN',{ minimumFractionDigits:2, maximumFractionDigits:2 })
+const amountText = (t, has) => has ? '¥' + fmt(t) : '—'
+
+/* 逾期判断：以 2026-10-14 为“今天”（与设计稿数据一致） */
+const TODAY = new Date('2026-10-14T00:00:00')
+function deadlineState(text){
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(text||'').trim())
+  if(!m) return null
+  const d = new Date(+m[1], +m[2]-1, +m[3])
+  const days = Math.round((d - TODAY) / 86400000)
+  if(days < 0) return { kind:'late', days:-days }
+  if(days <= 3) return { kind:'soon', days }
+  return null
+}
+
+/* ==========================================================================
+   3. 派生数据
+   ========================================================================== */
+const STATE = {
+  entity:'ALL', query:'', onlyWithData:false, sort:'amountDesc',
+  view:'stores', open:new Set(), editing:null, report:false, exportSheet:false,
+  collecting:false, lastCollect:'今天 17:12:04', toastSeq:0,
+}
+
+function buildRow(store){
+  const secs = store.sections.map(s => {
+    let amount = 0, unparsed = 0, late = 0, soon = 0
+    for(const it of s.items){
+      const a = parseAmount(it.amount)
+      if(a == null) unparsed++; else amount += a
+      const ds = deadlineState(it.deadline)
+      if(ds && ds.kind === 'late') late++
+      if(ds && ds.kind === 'soon') soon++
+    }
+    return { ...s, amount, unparsed, late, soon, count:s.items.length }
+  })
+  const pending = secs.filter(s => s.pending)
+  const idle    = secs.filter(s => !s.pending)
+  const sum = arr => arr.reduce((a,b) => a + b, 0)
+  return {
+    ...store, sections:secs,
+    pendingCount: sum(pending.map(s => s.count)),
+    pendingAmount: sum(pending.map(s => s.amount)),
+    pendingUnparsed: sum(pending.map(s => s.unparsed)),
+    hasPendingAmount: pending.some(s => s.count > 0 && s.amount > 0),
+    historyCount: sum(idle.map(s => s.count)),
+    lateCount: sum(pending.map(s => s.late)),
+    soonCount: sum(pending.map(s => s.soon)),
+  }
+}
+
+let ROWS = []
+function recompute(){
+  ROWS = STORES.map(buildRow)
+}
+recompute()
+
+function entityStats(){
+  const out = new Map()
+  for(const e of ENTITIES){
+    const rows = e.key === 'ALL' ? ROWS : ROWS.filter(r => r.entityKey === e.key)
+    const count = rows.reduce((a,r) => a + r.pendingCount, 0)
+    const amount = rows.reduce((a,r) => a + r.pendingAmount, 0)
+    const unparsed = rows.reduce((a,r) => a + r.pendingUnparsed, 0)
+    const history = rows.reduce((a,r) => a + r.historyCount, 0)
+    const late = rows.reduce((a,r) => a + r.lateCount, 0)
+    const soon = rows.reduce((a,r) => a + r.soonCount, 0)
+    const stores = rows.length
+    const activeStores = rows.filter(r => r.pendingCount > 0).length
+    out.set(e.key, { count, amount, unparsed, history, late, soon, stores, activeStores,
+                     hasAmount: rows.some(r => r.hasPendingAmount), rows })
+  }
+  return out
+}
+
+function visibleRows(){
+  const st = entityStats()
+  let rows = entityStats().get(STATE.entity)?.rows || []
+  const q = STATE.query.trim().toLowerCase()
+  if(q){
+    rows = rows.filter(r => {
+      const hay = [r.name, r.platform, ...r.sections.flatMap(s => [s.name, ...s.items.flatMap(i => [i.id,i.type,i.title,i.taxNo,i.status])])]
+        .join(' ').toLowerCase()
+      return hay.includes(q)
+    })
+  }
+  if(STATE.onlyWithData) rows = rows.filter(r => r.pendingCount > 0 || r.capturedAt)
+  const key = r => (r.hasPendingAmount ? r.pendingAmount : -1)
+  if(STATE.sort === 'amountDesc') rows = [...rows].sort((a,b) => key(b) - key(a))
+  if(STATE.sort === 'amountAsc')  rows = [...rows].sort((a,b) => key(a) - key(b))
+  return rows
+}
+
+/* ==========================================================================
+   4. 渲染
+   ========================================================================== */
+const $ = s => document.querySelector(s)
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+
+function renderEntities(){
+  const st = entityStats()
+  const total = st.get('ALL').count || 1
+  $('#entList').innerHTML = ENTITIES.map(e => {
+    const s = st.get(e.key)
+    const on = STATE.entity === e.key
+    /* 进度条 = 该主体在「待开票条数」里的占比（申报时一眼看出票都在哪个公司名下） */
+    const pct = Math.round(s.count / total * 100)
+    return `<button class="ent-item ${e.type==='none'?'none':''} ${on?'on':''}" data-ent="${esc(e.key)}">
+      <div class="ent-name"><span class="t">${esc(e.label)}</span>
+        ${e.type==='none' && s.count ? '<span class="ent-flag">待补录</span>' : ''}</div>
+      ${e.no ? `<div class="ent-no">${esc(e.no)}</div>` : (e.type==='all' ? '<div class="ent-no">跨平台 · 按营业执照归并</div>' : '')}
+      <div class="ent-metrics"><span><b>${s.stores}</b> 家店</span><span><b>${s.count}</b> 条</span>
+        <span class="amt">${amountText(s.amount, s.hasAmount)}</span></div>
+      <div class="ent-bar" title="占全部待开票条数的 ${pct}%"><i style="width:${pct}%"></i></div>
+    </button>`
+  }).join('')
+  document.querySelectorAll('.ent-item').forEach(el => el.onclick = () => {
+    STATE.entity = el.dataset.ent; STATE.editing = null; render()
+  })
+}
+
+function renderStatus(){
+  const st = entityStats()
+  const all = st.get('ALL')
+  const failed = ROWS.filter(r => r.loginRequired).length
+  const unsupported = ROWS.filter(r => r.unsupportedReason).length
+  const missing = st.get(NO_LICENSE)
+  $('#statusStrip').innerHTML = `
+    <span class="dot-live"></span>
+    <span class="lead">最近采集 <b>${STATE.lastCollect}</b> · 覆盖 <b>${ROWS.length - failed}/${ROWS.length}</b> 家店</span>
+    <span class="chip info">每 3 小时自动更新 · 下次 20:12</span>
+    ${failed ? `<span class="chip err btn-chip" data-act="login">${failed} 家登录态失效 → 去登录</span>` : ''}
+    ${missing.stores ? `<span class="chip warn btn-chip" data-act="none">${missing.stores} 家店未填营业执照 → 去补录</span>` : ''}
+    ${unsupported ? `<span class="chip warn">${unsupported} 家平台未实测</span>` : ''}
+    ${all.unparsed ? `<span class="chip warn">${all.unparsed} 条金额无法解析，未计入合计</span>` : ''}
+    ${all.history ? `<span class="chip">${all.history} 条无需操作（不计入待开票）</span>` : ''}
+  `
+  $('#statusStrip').querySelectorAll('[data-act="login"]').forEach(b => b.onclick = () =>
+    toast('已打开「云栖严选店」的店铺浏览器，登录后回到本页点「采集发票数据」'))
+  $('#statusStrip').querySelectorAll('[data-act="none"]').forEach(b => b.onclick = () => {
+    STATE.entity = NO_LICENSE; STATE.editing = 's5'; render()
+  })
+}
+
+function renderKpis(){
+  /* KPI 跟随左侧选中的开票主体：「点一个公司就看这个公司的数」，而不是永远显示全局——
+     否则点了「未填写」还看到 17 条，会以为筛选没生效。全局数用卡片 1 的注释做交叉印证。 */
+  const st = entityStats()
+  const scoped = st.get(STATE.entity)
+  const all = st.get('ALL')
+  const isAll = STATE.entity === 'ALL'
+  const risk = scoped.late || scoped.soon
+  $('#kpis').innerHTML = `
+    <div class="kpi">
+      <div class="lbl">待开票条数</div>
+      <div class="val num">${scoped.count}</div>
+      <div class="note">覆盖 <b>${scoped.activeStores}</b> 家店 · 另 <b>${scoped.history}</b> 条无需操作${isAll ? '' : ` · 全部主体共 <b>${all.count}</b> 条`}</div>
+    </div>
+    <div class="kpi">
+      <div class="lbl">可开金额合计</div>
+      <div class="val num"><span class="cur">¥</span>${fmt(scoped.amount)}</div>
+      <div class="note">${scoped.unparsed ? `<b>${scoped.unparsed}</b> 条金额未解析，未计入` : '全部金额均已计入'}</div>
+    </div>
+    <div class="kpi">
+      <div class="lbl">有票待开的店铺</div>
+      <div class="val num">${scoped.activeStores}<span style="font-size:15px;color:var(--text-muted);font-weight:500"> / ${scoped.stores}</span></div>
+      <div class="note">其余店铺无待办或登录态失效</div>
+    </div>
+    <div class="kpi ${risk?'risk':''}">
+      <div class="lbl">时间风险</div>
+      <div class="val num" style="font-size:22px">${scoped.late?`${scoped.late} 条已逾期`:'无逾期'}</div>
+      <div class="note">${scoped.soon?`<b>${scoped.soon}</b> 条 3 日内到期`:'暂无临期'}</div>
+    </div>
+  `
+}
+
+function deadlineCell(text){
+  const ds = deadlineState(text)
+  if(!ds) return esc(text || '—')
+  if(ds.kind === 'late') return `<span class="pill late">${esc(text)}（逾期 ${ds.days} 天）</span>`
+  return `<span class="pill wait">${esc(text)}（${ds.days} 天后）</span>`
+}
+function statusPill(v){
+  const s = String(v || '')
+  if(/逾期|超时/.test(s)) return `<span class="pill late">${esc(s)}</span>`
+  if(/待开票|待提交|待处理/.test(s)) return `<span class="pill todo">${esc(s)}</span>`
+  if(/已开票|审核通过|已完成/.test(s)) return `<span class="pill done">${esc(s)}</span>`
+  return esc(s || '—')
+}
+
+function renderSection(store, s){
+  const open = STATE.open.has(s.key)
+  const idle = !s.pending
+  const flags = []
+  /* 无需操作的方向：条数照常展示，但必须说明它不进合计——否则用户会以为金额漏算了 */
+  if(idle) flags.push(`<span class="flag" title="${esc(s.notPendingNote||'商家无需再操作')}">不计入待开票合计</span>`)
+  if(s.emptyNote) flags.push(`<span class="flag" title="${esc(s.emptyNote)}">本次没读到</span>`)
+  if(s.measuredRows && s.count < s.measuredRows) flags.push(`<span class="flag warn" title="档案里这个方向实测到 ${s.measuredRows} 条，本次读到 ${s.count} 条——可能抓漏了（平台改版或页面没加载完），可再采集一次对照">比实测少（${s.measuredRows}）</span>`)
+  if(s.unparsed) flags.push(`<span class="flag warn" title="这些单元格在平台上不是可解析的数字（实测会出现「—」这类占位）——未计入金额合计，也不写成 0">${s.unparsed} 条金额未解析</span>`)
+  const badge = idle
+    ? `<span class="badge skip" title="${esc(s.notPendingNote||'')}">无需操作</span>`
+    : (s.count ? `<span class="badge todo">待开票</span>` : `<span class="badge skip">无记录</span>`)
+  return `
+  <div class="dir ${idle?'idle':'pending'}" data-sec="${esc(s.key)}" title="${idle?esc(s.notPendingNote||''):''}">
+    <div class="dir-top"><span class="dir-name">${esc(s.name)}</span>${badge}</div>
+    <div class="dir-num num">${s.count}<small>条</small></div>
+    <div class="dir-amt ${(!idle && s.count && s.amount) ? '' : 'muted'}">${s.count ? amountText(s.amount, s.amount>0) : '暂无数据'}</div>
+    <div class="dir-foot">
+      ${s.count ? `<button class="lnk" data-detail="${esc(s.key)}">${open?'收起明细':'查看明细'}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" style="transform:rotate(${open?180:0}deg);transition:transform .15s"><path d="M6 9l6 6 6-6"/></svg></button>`
+        : `<span class="lnk" style="color:var(--text-muted);font-weight:500">无记录</span>`}
+      ${flags.join('')}
+    </div>
+  </div>`
+}
+
+function renderDetail(s){
+  if(!STATE.open.has(s.key) || !s.items.length) return ''
+  const cols = COLS.filter(c => c.k !== 'deadline' || s.items.some(i => i.deadline && i.deadline !== '—'))
+  return `<div class="detail">
+    <div class="detail-head"><b>${esc(s.name)}</b>
+      <span class="meta">${s.items.length} 条 · 采集于 ${STATE.lastCollect}</span>
+      <span class="sp"></span>
+      ${s.pending ? '' : `<span class="chip">无需操作，导出清单不含这些行</span>`}
+    </div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr>${cols.map(c => `<th class="${c.r?'r':''}">${esc(c.l)}</th>`).join('')}</tr></thead>
+      <tbody>${s.items.map(i => `<tr>${cols.map(c => {
+        if(c.k === 'amount') return `<td class="r amt">${esc(i.amount || '—')}</td>`
+        if(c.k === 'deadline') return `<td>${deadlineCell(i.deadline)}</td>`
+        if(c.k === 'status') return `<td>${statusPill(i.status)}</td>`
+        const raw = i[c.k]
+        const dim = !raw || raw === '—'
+        return `<td class="${dim?'dim':''}">${esc(raw || '—')}</td>`
+      }).join('')}</tr>`).join('')}</tbody>
+    </table></div>
+    <div class="detail-foot">共 ${s.items.length} 条${s.items.length > 200 ? '，页面只显示前 200 条' : ''}；完整待开票清单用右上角「导出 CSV」。</div>
+  </div>`
+}
+
+function renderStoreCard(r){
+  const editing = STATE.editing === r.id
+  const licName = r.entityKey === NO_LICENSE ? '' : (ENTITIES.find(e => e.key === r.entityKey)?.label || '')
+  const licNo = r.entityKey === NO_LICENSE ? '' : (ENTITIES.find(e => e.key === r.entityKey)?.no || '')
+  const openSecs = r.sections.filter(s => STATE.open.has(s.key))
+
+  return `<article class="store-card ${r.loginRequired?'alert':''}" data-store="${esc(r.id)}">
+    <div class="sc-head">
+      <span class="plat"><i style="background:${PLATFORM[r.platform].c}"></i>${esc(r.platform)}</span>
+      <span class="sc-name">${esc(r.name)}</span>
+      <button class="lic-tag ${licName?'':'none'}" data-lic="${esc(r.id)}"
+        title="${licNo?'统一社会信用代码：'+esc(licNo)+'（点击修改）':'点这里补录营业执照——发票按主体分账，导出给代账要按主体分开'}">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16"/><path d="M6 16l10-10 2 2L8 18H6v-2z"/></svg>
+        ${licName ? esc(licName) + (licNo?`<em> · ${esc(licNo)}</em>`:'') : '未填写营业执照'}
+      </button>
+      <span class="sc-meta">${r.capturedAt ? `采集于 ${r.capturedAt}` : '本次未采集到数据'} · ${esc(r.profile)}</span>
+      <span class="sc-count">
+        ${r.loginRequired ? '<span class="chip err">登录态失效</span>' : ''}
+        <span>待开票 <b>${r.pendingCount}</b> 条</span>
+        ${r.historyCount ? `<span class="hist">· 无需操作 ${r.historyCount} 条</span>` : ''}
+        <button class="btn sm" data-open="${esc(r.id)}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/></svg>
+          打开发票页
+        </button>
+      </span>
+    </div>
+    <div class="sc-body">
+      <div class="entity-line">
+        <span><span class="k">开票主体：</span>${licName ? `<b>${esc(licName)}</b>${licNo?` · ${esc(licNo)}`:''}` : `<span class="v-warn">未填写</span> <span class="k">（导出 CSV 的「营业执照」列会写「未填写」，申报按主体分不开）</span>`}</span>
+        ${r.entitySupported
+          ? (r.entity
+              ? `<span>· <span class="k">平台读到：</span><b>${esc(r.entity.name||'（没读到名称）')}</b>${r.entity.no?` · ${esc(r.entity.no)}`:''}
+                 <span class="${r.verdict.tone==='ok'?'v-ok':r.verdict.tone==='bad'?'v-err':'v-warn'}">—— ${esc(r.verdict.text)}</span></span>`
+              : `<span class="k">· 平台主体：还没有读到值（个人店铺本来就没有这两行）</span>`)
+          : `<span class="k">· 平台主体：该平台暂未实测到可读的主体信息页——不猜、不填，避免把假主体写进申报表</span>`}
+      </div>
+
+      ${editing ? `<div class="entity-line" style="background:#fbfaff;border-color:#dcd2ff;gap:8px">
+        <span class="k" style="width:64px">主体名称</span>
+        <input list="lic-names" value="${esc(licName)}" data-edit="name" placeholder="营业执照主体名称（如：上海云锦服饰有限公司）"
+          style="flex:1;min-width:210px;height:30px;border:1px solid var(--border-strong);border-radius:8px;padding:0 10px;font-size:12.5px" />
+        <span class="k" style="width:64px">信用代码</span>
+        <input value="${esc(licNo)}" data-edit="no" placeholder="统一社会信用代码（选填，18 位）"
+          style="flex:1;min-width:210px;height:30px;border:1px solid var(--border-strong);border-radius:8px;padding:0 10px;font-size:12.5px" />
+        <button class="btn primary sm" data-save="${esc(r.id)}">保存</button>
+        <button class="btn ghost sm" data-cancel="1">取消</button>
+      </div>` : ''}
+
+      ${r.loginRequired ? `<div class="row-alert err">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+        该店登录态已失效，本次没读到发票数据 —— 这不等于「没有发票」。
+        <button class="btn sm sp" data-login="${esc(r.id)}">去登录</button>
+      </div>` : ''}
+
+      ${r.sections.length ? `<div class="dirs">${r.sections.map(s => renderSection(r, s)).join('')}</div>` : ''}
+      ${openSecs.map(s => renderDetail(s)).join('')}
+      ${!r.sections.length && !r.loginRequired ? `<div class="row-alert warn" style="margin-top:11px">该平台尚未实测到可读取的发票页 —— 界面如实说明，而不是拿猜的选择器去试。</div>` : ''}
+    </div>
+  </article>`
+}
+
+function renderSummary(){
+  const st = entityStats()
+  const list = ENTITIES.filter(e => e.type !== 'all')
+  const all = st.get('ALL')
+  const maxAmt = Math.max(...list.map(e => st.get(e.key).amount), 1)
+  const body = list.map(e => {
+    const s = st.get(e.key)
+    const label = e.type === 'none' ? '未填写营业执照' : e.label
+    const stores = ROWS.filter(r => r.entityKey === e.key)
+    return `<tr>
+      <td><div class="cell-ent"><span class="n">${esc(label)}</span>
+        <span class="c">${e.no ? esc(e.no) : '待补录主体信息'}</span></div></td>
+      <td>${stores.map(r => `<span class="ent-chip">${esc(r.name)} · ${esc(r.platform)}</span>`).join('') || '—'}</td>
+      <td class="num" style="font-weight:700">${s.count} 条</td>
+      <td class="num" style="font-weight:700;color:var(--primary-strong)">${amountText(s.amount, s.hasAmount)}</td>
+      <td style="width:120px"><div class="mini-bar"><i style="width:${Math.round(s.amount / maxAmt * 100)}%"></i></div></td>
+      <td class="num" style="color:var(--text-muted)">${s.history ? s.history + ' 条' : '—'}</td>
+      <td class="num" style="color:${s.unparsed?'#b54708':'var(--text-muted)'}">${s.unparsed ? s.unparsed + ' 条' : '—'}</td>
+      <td><button class="btn sm" data-exp="${esc(e.key)}">导出该主体</button></td>
+    </tr>`
+  }).join('')
+  return `<div class="sum-card">
+    <div class="sum-head"><b>按开票主体汇总</b>
+      <span class="meta">申报与交代账直接看这张表 · 合计 ${all.count} 条 ${amountText(all.amount, all.hasAmount)}</span></div>
+    <table class="sum">
+      <thead><tr><th>开票主体</th><th>包含店铺</th><th>待开票</th><th>可开金额</th><th>金额占比</th><th>无需操作</th><th>金额未解析</th><th></th></tr></thead>
+      <tbody>${body}</tbody>
+      <tr class="tot"><td>合计</td><td>${all.stores} 家店</td><td class="num">${all.count} 条</td>
+        <td class="num" style="color:var(--primary-strong)">${amountText(all.amount, all.hasAmount)}</td><td>—</td>
+        <td class="num">${all.history} 条</td><td class="num">${all.unparsed} 条</td><td></td></tr>
+    </table>
+  </div>`
+}
+
+function renderBanners(){
+  const st = entityStats()
+  const cur = st.get(STATE.entity)
+  const banners = []
+  if(cur && cur.unparsed){
+    banners.push(`<div class="note-bar warn">
+      <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+      <span>有 <b>${cur.unparsed} 条</b>金额在平台上不是可解析的数字（实测会出现「—」这类占位）——
+      <b>未计入</b>上方合计。宁可少算，也不把解析失败当 0 加进去。</span></div>`)
+  }
+  if(STATE.entity === NO_LICENSE){
+    banners.push(`<div class="note-bar warn">
+      <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+      <span>这些店铺还没填营业执照。发票按主体开，导出给代账时会写「未填写」而分不开账 ——
+      点店铺行上的主体标签补录，或点左下角「获取主体营业执照」让软件去平台后台读回来。</span></div>`)
+  }
+  if(STATE.report){
+    banners.push(`<div class="report">
+      <div class="report-head"><b>获取主体营业执照 · 结果</b>
+        <span class="meta">5 家店 · 1 家平台已实测可读 · 只填空缺、不覆盖已填；掩码值与「无」这类占位文案一律不写入</span>
+        <span class="sp"></span><button class="btn ghost sm" data-report-close="1">关闭</button></div>
+      <div class="report-row"><span class="nm">云栖生活馆</span><span class="pl">快手小店</span>
+        <span class="res ok">读到主体「杭州云栖贸易有限公司」· 91330100MA2XXXXX1A，已填入原本空着的营业执照</span></div>
+      <div class="report-row"><span class="nm">云锦服饰旗舰店</span><span class="pl">微信小店</span>
+        <span class="res">该平台暂未实测到可读的主体信息页，本次没有发起读取（不猜、不填）</span></div>
+      <div class="report-row"><span class="nm">云锦美妆旗舰店</span><span class="pl">抖店</span>
+        <span class="res">该平台暂未实测到可读的主体信息页，本次没有发起读取</span></div>
+      <div class="report-row"><span class="nm">云栖家居旗舰店</span><span class="pl">拼多多</span>
+        <span class="res">该平台暂未实测到可读的主体信息页，本次没有发起读取</span></div>
+      <div class="report-row"><span class="nm">云栖严选店</span><span class="pl">微信小店</span>
+        <span class="res bad">登录态已失效，本次没读到——先去登录再获取；这四种结果分开说，不合并成一句「完成」</span></div>
+    </div>`)
+  }
+  $('#banners').innerHTML = banners.join('')
+  const rc = document.querySelector('[data-report-close]')
+  if(rc) rc.onclick = () => { STATE.report = false; render() }
+}
+
+function render(){
+  renderEntities(); renderStatus(); renderKpis(); renderBanners()
+
+  const rows = visibleRows()
+  const st = entityStats().get(STATE.entity)
+  const scopeDef = ENTITIES.find(e => e.key === STATE.entity)
+  const scopeLabel = STATE.entity === 'ALL' ? '全部主体' : (scopeDef.type === 'none' ? '未填写营业执照' : scopeDef.label)
+  /* 口径必须写在屏上：KPI 已按主体收窄，这里同时给出「筛掉了几家」 */
+  $('#resultMeta').innerHTML = STATE.view === 'stores'
+    ? `口径：<b>${esc(scopeLabel)}</b> · 显示 <b>${rows.length}</b> / ${st.stores} 家店`
+    : `口径：<b>${esc(scopeLabel)}</b> · 合计 <b>${st.count}</b> 条`
+
+  if(STATE.view === 'summary'){
+    $('#stream').innerHTML = renderSummary()
+  } else if(!rows.length){
+    $('#stream').innerHTML = `<div class="empty">没有符合当前筛选/搜索条件的店铺</div>`
+  } else {
+    $('#stream').innerHTML = rows.map(renderStoreCard).join('') + renderCover()
+  }
+  bind()
+}
+
+function renderCover(){
+  const plats = [
+    { n:'微信小店', d:'/shop/bill/home · 3 个方向（申请平台开票 / 给平台开票 / 给买家开票）；表在 micro-app 的 ShadowRoot 内', ok:true },
+    { n:'拼多多', d:'/invoice/center（订单开票）+ 资金中心「提交发票」；后者是标签卡片不是表格', ok:true },
+    { n:'抖店', d:'/ffa/m-invoice/merchant-invoice · 4 个方向；页签带选中态校验，防止读到上一个方向', ok:true },
+    { n:'快手小店', d:'/zone/fund/tax-bill/subsidy · 3 个页签；「处理中 / 处理记录」表头完全相同', ok:true },
+  ]
+  return `<section class="cover">
+    <div class="cover-head"><b>平台覆盖与金额口径</b>
+      <p>所有锚点都来自真机实测并登记实测日期；平台改版时如实报错，而不是显示错数据。</p></div>
+    <div class="cover-body">
+      <div class="cov-plats">
+        ${plats.map(p => `<div class="cov-plat">
+          <div class="t"><span class="plat-dot" style="background:${PLATFORM[p.n].c}"></span>${p.n}<span class="chip ok" style="margin-left:auto">已实测</span></div>
+          <div class="d">${p.d}</div></div>`).join('')}
+      </div>
+      <div class="cov-list">
+        <div class="li"><i></i><span><b>待开票 ≠ 全部记录。</b>各平台把「已提交 / 已审核通过」的流水放在同一个发票页，它们照常展示，但<b>不计入</b>待开票条数与可开金额。</span></div>
+        <div class="li"><i></i><span><b>金额口径按平台各自页面为准。</b>含税 / 不含税、阈值金额与账单金额各不相同，界面不做跨平台换算。</span></div>
+        <div class="li"><i></i><span><b>解析不出就不计入。</b>合计只累加整串就是金额的单元格，并单独标出未解析条数。</span></div>
+        <div class="li"><i></i><span><b>只读。</b>软件只打开平台的发票页把清单读回来；开发票、上传发票仍由你在平台页面上完成。</span></div>
+      </div>
+    </div>
+  </section>`
+}
+
+/* ==========================================================================
+   5. 交互
+   ========================================================================== */
+function toast(msg, tone){
+  const id = 't' + (++STATE.toastSeq)
+  const el = document.createElement('div')
+  el.className = 'toast'; el.id = id
+  el.innerHTML = `<svg class="tick" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg><span>${esc(msg)}</span>`
+  $('#toasts').appendChild(el)
+  setTimeout(() => el.remove(), 3600)
+}
+
+function bind(){
+  document.querySelectorAll('.ent-item').forEach(el => el.onclick = () => {
+    STATE.entity = el.dataset.ent; STATE.editing = null; render()
+  })
+  document.querySelectorAll('[data-detail]').forEach(el => el.onclick = e => {
+    e.stopPropagation()
+    const k = el.dataset.detail
+    STATE.open.has(k) ? STATE.open.delete(k) : STATE.open.add(k)
+    render()
+  })
+  document.querySelectorAll('[data-lic]').forEach(el => el.onclick = () => {
+    STATE.editing = STATE.editing === el.dataset.lic ? null : el.dataset.lic
+    render()
+  })
+  document.querySelectorAll('[data-cancel]').forEach(el => el.onclick = () => { STATE.editing = null; render() })
+  document.querySelectorAll('[data-save]').forEach(el => el.onclick = () => {
+    const name = document.querySelector('[data-edit="name"]')?.value.trim() || ''
+    STATE.editing = null; render()
+    toast(name ? `已保存「${name}」——该店已归入此主体分账` : '已清空营业执照：该店回到「未填写」分账')
+  })
+  document.querySelectorAll('[data-open]').forEach(el => el.onclick = () => {
+    const r = ROWS.find(x => x.id === el.dataset.open)
+    toast(`已打开「${r.name}」的${r.platform}发票页（实测登记的那一页），开票动作在该页面完成`)
+  })
+  document.querySelectorAll('[data-login]').forEach(el => el.onclick = () => toast('已打开该店店铺浏览器，登录后回到本页点「采集发票数据」'))
+  document.querySelectorAll('[data-exp]').forEach(el => el.onclick = () => {
+    const e = ENTITIES.find(x => x.key === el.dataset.exp)
+    const s = entityStats().get(el.dataset.exp)
+    STATE.exportSheet = true; renderSheet({ label:e.type==='none'?'未填写营业执照':e.label, count:s.count, amount:s.amount, hasAmount:s.hasAmount, unparsed:s.unparsed })
+  })
+}
+
+/* 导出确认浮层 */
+let exportScope = null
+function renderSheet(scope){
+  exportScope = scope
+  const all = entityStats().get('ALL')
+  const s = scope || { label:'全部主体', count:all.count, amount:all.amount, hasAmount:all.hasAmount, unparsed:all.unparsed }
+  const old = $('#mask'); if(old) old.remove()
+  const div = document.createElement('div')
+  div.className = 'mask'; div.id = 'mask'
+  div.innerHTML = `<div class="sheet">
+    <div class="sheet-head"><h3>导出待开票清单</h3>
+      <p>只导出「待开票」的行；无需操作的历史流水不会进这份表。文件只落在本机，不上传。</p></div>
+    <div class="sheet-body">
+      <div class="sheet-row"><span class="k">导出范围</span><span class="v">${esc(s.label)}</span></div>
+      <div class="sheet-row"><span class="k">行数</span><span class="v big num">${s.count} 条</span></div>
+      <div class="sheet-row"><span class="k">金额合计</span><span class="v big num" style="color:var(--primary-strong)">${amountText(s.amount, s.hasAmount)}</span></div>
+      <div class="sheet-row"><span class="k">列</span><span class="v" style="font-weight:500;color:var(--text-secondary)">单号/账单号 · 期间 · 类型 · 可开金额 · 发票抬头 · 税号 · 状态 · 承诺到期 · 店铺 · 营业执照</span></div>
+      ${s.unparsed ? `<div class="sheet-row"><span class="k">提醒</span><span class="v" style="color:#b54708;font-weight:500">${s.unparsed} 条金额无法解析，CSV 里保留原始文本、不写成 0</span></div>` : ''}
+    </div>
+    <div class="sheet-foot">
+      <button class="btn ghost" data-close="1">取消</button>
+      <button class="btn primary" data-do-export="1">导出 CSV</button>
+    </div>
+  </div>`
+  document.body.appendChild(div)
+  div.onclick = e => { if(e.target === div) closeSheet() }
+  div.querySelector('[data-close]').onclick = closeSheet
+  div.querySelector('[data-do-export]').onclick = () => {
+    closeSheet()
+    toast(`已导出「${s.label}」待开票清单 ${s.count} 行（CSV 保存在你选择的位置）`)
+  }
+}
+function closeSheet(){ const m = $('#mask'); if(m) m.remove() }
+
+/* 工具栏 */
+$('#q').oninput = e => { STATE.query = e.target.value; render() }
+$('#onlyData').onclick = () => { STATE.onlyWithData = !STATE.onlyWithData; $('#onlyData').classList.toggle('on', STATE.onlyWithData); render() }
+$('#sort').onchange = e => { STATE.sort = e.target.value; render() }
+document.querySelectorAll('#viewSeg button').forEach(b => b.onclick = () => {
+  STATE.view = b.dataset.v
+  document.querySelectorAll('#viewSeg button').forEach(x => x.classList.toggle('on', x === b))
+  render()
+})
+$('#btnExport').onclick = () => {
+  const s = entityStats().get(STATE.entity === 'ALL' ? 'ALL' : STATE.entity)
+  const e = ENTITIES.find(x => x.key === STATE.entity)
+  renderSheet({ label: STATE.entity === 'ALL' ? '全部主体' : (e.type === 'none' ? '未填写营业执照' : e.label),
+                count:s.count, amount:s.amount, hasAmount:s.hasAmount, unparsed:s.unparsed })
+}
+$('#btnRefresh').onclick = () => { toast('已刷新：数据来自本机快照，不会重新访问平台'); }
+$('#btnCollect').onclick = () => {
+  if(STATE.collecting) return
+  STATE.collecting = true
+  const b = $('#btnCollect')
+  b.disabled = true
+  b.innerHTML = `<svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M21 12a9 9 0 11-3.2-6.9"/></svg> 创建任务中…`
+  setTimeout(() => {
+    STATE.collecting = false
+    b.disabled = false
+    b.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 7h16M4 12h16M4 17h10"/></svg> 采集发票数据`
+    STATE.lastCollect = '刚刚 17:52:31'
+    render()
+    toast('已派发只读发票采集任务：本机任务会在各店隔离浏览器里读取发票页，不会代提交')
+  }, 1100)
+}
+$('#btnEntity').onclick = () => { STATE.report = true; render(); toast('已派发「获取主体营业执照」采集：只填空缺、不覆盖已填') }
+
+/* 供截图脚本设置初始状态 */
+window.__ds = patch => {
+  Object.assign(STATE, patch)
+  if(patch.open) STATE.open = new Set(patch.open)
+  if(patch.entity !== undefined) $('#q').value = patch.query ?? STATE.query
+  $('#sort').value = STATE.sort
+  $('#onlyData').classList.toggle('on', STATE.onlyWithData)
+  document.querySelectorAll('#viewSeg button').forEach(x => x.classList.toggle('on', x.dataset.v === STATE.view))
+  render()
+  if(STATE.exportSheet){
+    const s = entityStats().get('ALL')
+    renderSheet({ label:'全部主体', count:s.count, amount:s.amount, hasAmount:s.hasAmount, unparsed:s.unparsed })
+  }
+  return true
+}
+
+render()
+window.__ready = true
+</script>
+</body>
+</html>

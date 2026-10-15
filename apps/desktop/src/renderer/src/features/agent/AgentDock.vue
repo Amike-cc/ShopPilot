@@ -1,7 +1,7 @@
 <template>
   <div v-if="!props.locked" class="agent-dock" data-test="agent-dock">
     <AgentOrb
-      :needs-confirmation="props.needsConfirmation || agent.needsConfirmation"
+      :needs-confirmation="false"
       :expanded="agent.ui.drawerOpen"
       @toggle="toggleDrawer"
       @drag-start="$emit('dragging-change', true)"
@@ -15,13 +15,7 @@
       :style="drawerStyle"
     >
       <AgentDrawer
-        :store-name="props.storeName"
-        :tab-title="props.tabTitle"
-        :current-url="props.currentUrl"
         @close="closeDrawer"
-        @view-tasks="viewTasks"
-        @view-task="viewTask"
-        @view-agents="$emit('view-agents')"
       />
     </div>
   </div>
@@ -33,19 +27,8 @@ import { useAgentStore } from '../../stores/agent'
 import AgentDrawer from './AgentDrawer.vue'
 import AgentOrb from './AgentOrb.vue'
 
-const props = defineProps<{
-  storeName: string
-  tabTitle: string
-  currentUrl: string
-  needsConfirmation?: boolean
-  locked?: boolean
-}>()
-const emit = defineEmits<{
-  'view-tasks': []
-  'view-task': [taskId?: string]
-  'view-agents': []
-  'dragging-change': [dragging: boolean]
-}>()
+const props = defineProps<{ locked?: boolean }>()
+const emit = defineEmits<{ 'dragging-change': [dragging: boolean] }>()
 const agent = useAgentStore()
 const viewport = reactive({ width: window.innerWidth, height: window.innerHeight })
 const orbPosition = ref({ x: 0, y: 0 })
@@ -77,20 +60,9 @@ async function toggleDrawer() {
     return
   }
   try { await agent.initialize() } catch { /* Drawer presents the real agent error state if initialization is unavailable. */ }
-  // Agent 是软件级的；每次展开都从 Main 重新读取店铺、标签页和任务摘要，
-  // 不把上一次打开时的店铺上下文当成会话绑定。
-  await agent.refreshSoftwareContext()
   agent.setDrawerOpen(true)
 }
 function closeDrawer() { agent.setDrawerOpen(false) }
-function viewTasks() {
-  closeDrawer()
-  emit('view-tasks')
-}
-function viewTask(taskId?: string) {
-  closeDrawer()
-  emit('view-task', taskId)
-}
 
 watch(() => props.locked, locked => { if (locked) emit('dragging-change', false) })
 // Agent 抽屉是 HTML 浮层，而店铺页是原生 WebContentsView（永远画在 HTML 之上）：

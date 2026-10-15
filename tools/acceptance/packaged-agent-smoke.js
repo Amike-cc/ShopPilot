@@ -6,7 +6,8 @@ const os = require('os')
 const crypto = require('crypto')
 
 const ROOT = path.resolve(__dirname, '../..')
-const APP = path.join(ROOT, 'release', 'win-unpacked', 'ShopPilot.exe')
+const APP = process.env.SHOPILOT_PACKAGED_APP ? path.resolve(process.env.SHOPILOT_PACKAGED_APP) : path.join(ROOT, 'release', 'win-unpacked', 'ShopPilot.exe')
+const APP_LABEL = path.relative(ROOT, APP)
 const PORT = Number(process.env.SHOPPILOT_PACKAGED_PORT || 9240)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function waitFor(fn, timeout = 30000) { const end = Date.now() + timeout; while (Date.now() < end) { const value = await fn(); if (value) return value; await sleep(250) } return null }
@@ -32,23 +33,16 @@ async function main() {
     check('packaged renderer target is available', !!target)
     if (!target) throw new Error('packaged renderer target missing')
     cdp = new CDP(target.webSocketDebuggerUrl)
-    const api = await cdp.eval('return !!window.shopilot && !!window.shopilot.agentDomain')
-    check('packaged preload exposes only the whitelisted Agent API', api)
-    const org = await cdp.eval('return await window.shopilot.agentDomain.orgList()')
-    const orgItems = org.ok ? (org.data.items || []) : []
-    check('packaged migration bootstraps exactly one active root-ceo', org.ok && orgItems.length === 1 && orgItems[0]?.id === 'root-ceo' && orgItems[0]?.status === 'active', org.ok ? JSON.stringify(orgItems.map(item => ({ id: item.id, status: item.status }))) : org.error?.code || '')
+    const api = await cdp.eval('return {agent:Object.keys(window.shopilot?.agent||{}).sort(),settings:Object.keys(window.shopilot?.agentSettings||{}).sort(),domain:typeof window.shopilot?.agentDomain}')
+    check('packaged Agent bridge exposes chat and UI state only', api.agent.join(',') === 'chat,uiGet,uiSet' && api.domain === 'undefined', JSON.stringify(api))
+    check('packaged Agent settings bridge exposes model configuration only', api.settings.join(',') === 'modelDelete,modelList,modelSet,modelTest', JSON.stringify(api.settings))
     const setup = await cdp.eval(`const store=await window.shopilot.store.create({name:'packaged-smoke',platform:'测试平台',adminUrl:'http://127.0.0.1:1/'}); if(store.ok) await window.shopilot.browser.open(store.data.id); await new Promise(r=>setTimeout(r,500)); const home=document.querySelector('.home-return'); if(home) home.click(); await new Promise(r=>setTimeout(r,300)); return {ok:store.ok,id:store.ok?store.data.id:null}`)
     const settings = await cdp.eval(`const button=[...document.querySelectorAll('.dashboard-nav-item')].find(node=>node.textContent?.includes('设置')); if(button) button.click(); await new Promise(r=>setTimeout(r,300)); return {open:!!document.querySelector('[data-test="unified-settings-page"]'),tabs:Array.from(document.querySelectorAll('.settings-nav button')).map(node=>node.textContent?.trim())}`)
-    const agentPanels = await cdp.eval(`const settingsTab=[...document.querySelectorAll('.settings-nav button')].find(node=>node.textContent?.includes('Agent')); if(settingsTab) settingsTab.click(); await new Promise(r=>setTimeout(r,200)); const root=document.querySelector('[data-test="agent-admin-panel"]'); const cards=document.querySelectorAll('[data-test^="agent-card-"]').length; const tabs=Array.from(root?.querySelectorAll('button.admin-tab') || []); const labels=tabs.map(node=>node.textContent?.trim()); const panels={}; for(const [label,key,selector] of [['Agent 设置','team','agent-org-panel'],['模型 Profile','models','agent-model-panel'],['本地记忆','memory','agent-memory-panel'],['Job 看板','jobs','agent-job-panel']]){const button=tabs.find(node=>node.textContent?.trim()===label); if(button) button.click(); await new Promise(r=>setTimeout(r,80)); panels[key]=!!document.querySelector('[data-test="'+selector+'"]');} return {labels,cards,...panels}`)
-    const skillTab = await cdp.eval(`const settingsTab=[...document.querySelectorAll('.settings-nav button')].find(node=>node.textContent?.includes('技能')); if(settingsTab) settingsTab.click(); await new Promise(r=>setTimeout(r,400)); const root=document.querySelector('[data-test="unified-settings-skills"]'); return {clicked:!!settingsTab,pane:!!root,panel:!!document.querySelector('[data-test="agent-skill-panel"]'),form:!!document.querySelector('[data-test="agent-skill-new-submit"]'),toolOptions:[...document.querySelectorAll('[data-test="agent-skill-new-step-type"] option')].map(node=>node.value).filter(Boolean),pluginCards:document.querySelectorAll('[data-test^="agent-plugin-card-"]').length,nestedTabs:Array.from(root?.querySelectorAll('button.admin-tab') || []).map(node=>node.textContent?.trim())}`)
-    const pluginTab = await cdp.eval(`const settingsTab=[...document.querySelectorAll('.settings-nav button')].find(node=>node.textContent?.includes('插件')); if(settingsTab) settingsTab.click(); await new Promise(r=>setTimeout(r,250)); const root=document.querySelector('[data-test="unified-settings-plugins"]'); return {clicked:!!settingsTab,pane:!!root,panel:!!document.querySelector('[data-test="agent-plugin-panel"]'),skillPanel:!!document.querySelector('[data-test="agent-skill-panel"]'),nestedTabs:Array.from(root?.querySelectorAll('button.admin-tab') || []).map(node=>node.textContent?.trim())}`)
+    const agentPanels = await cdp.eval(`const settingsTab=[...document.querySelectorAll('.settings-nav button')].find(node=>node.textContent?.includes('Agent 模型')); if(settingsTab) settingsTab.click(); await new Promise(r=>setTimeout(r,200)); const root=document.querySelector('[data-test="agent-admin-panel"]'); return {model:!!document.querySelector('[data-agent-panel="models"]'),tabs:Array.from(root?.querySelectorAll('button.admin-tab') || []).map(node=>node.textContent?.trim()),job:!!document.querySelector('[data-test="agent-job-panel"]'),memory:!!document.querySelector('[data-test="agent-memory-panel"]')}`)
     await cdp.eval(`return await window.shopilot.store.deletePermanent(${JSON.stringify(setup.id)})`).catch(() => null)
-    check('packaged settings renders Agent 设置 tab', settings.open && settings.tabs.some(label => label.includes('Agent 设置')), JSON.stringify(settings))
-    check('packaged Agent settings renders root-ceo, model, memory and Job panels', agentPanels.labels.includes('Agent 设置') && agentPanels.labels.includes('模型 Profile') && agentPanels.labels.includes('本地记忆') && agentPanels.labels.includes('Job 看板') && agentPanels.cards === 1 && agentPanels.team && agentPanels.models && agentPanels.memory && agentPanels.jobs, JSON.stringify(agentPanels))
-    check('packaged settings exposes 技能 and 插件 as separate top-level tabs', settings.open && settings.tabs.some(label => label.includes('技能')) && settings.tabs.some(label => label.includes('插件')) && !settings.tabs.some(label => label.includes('和') && label.includes('插件')), JSON.stringify(settings.tabs))
-    check('packaged 技能 pane renders the skill panel only', skillTab.clicked && skillTab.pane && skillTab.panel && skillTab.pluginCards === 0 && skillTab.nestedTabs.length === 0, JSON.stringify(skillTab))
-    check('packaged 技能 pane exposes the create form fed by the Main tool catalog', skillTab.form && skillTab.toolOptions.length > 1 && !skillTab.toolOptions.some(type => ['createSkill', 'createTask', 'closeTab', 'closeStore', 'runInvite'].includes(type)), JSON.stringify({ form: skillTab.form, tools: skillTab.toolOptions.length }))
-    check('packaged 插件 pane renders the plugin panel only', pluginTab.clicked && pluginTab.pane && pluginTab.panel && pluginTab.skillPanel === false && pluginTab.nestedTabs.length === 0, JSON.stringify(pluginTab))
+    check('packaged settings renders Agent 模型 tab and hides operation setup', settings.open && settings.tabs.some(label => label.includes('Agent 模型')) && !settings.tabs.some(label => label.includes('技能') || label.includes('插件')), JSON.stringify(settings))
+    check('packaged Agent settings only renders model configuration', agentPanels.model && agentPanels.tabs.length === 0 && !agentPanels.job && !agentPanels.memory, JSON.stringify(agentPanels))
+    check('packaged Agent Job and memory methods are not exposed', api.domain === 'undefined' && !api.settings.some(key => /job|memory|skill|plugin/i.test(key)), JSON.stringify({ domain: api.domain, settings: api.settings }))
     report.status = report.checks.every(item => item.passed) ? 'passed' : 'failed'
   } catch (error) { report.status = 'failed'; report.error = String(error?.stack || error); console.error('PACKAGED_AGENT_SMOKE_FAIL', report.error) }
   finally {
@@ -56,14 +50,18 @@ async function main() {
     if (fs.existsSync(APP)) {
       const asar = path.join(path.dirname(APP), 'resources', 'app.asar')
       report.artifacts = {
-        executable: { path: 'release/win-unpacked/ShopPilot.exe', bytes: fs.statSync(APP).size, sha256: crypto.createHash('sha256').update(fs.readFileSync(APP)).digest('hex') },
-        appAsar: fs.existsSync(asar) ? { path: 'release/win-unpacked/resources/app.asar', bytes: fs.statSync(asar).size, sha256: crypto.createHash('sha256').update(fs.readFileSync(asar)).digest('hex') } : null
+        executable: { path: APP_LABEL, bytes: fs.statSync(APP).size, sha256: crypto.createHash('sha256').update(fs.readFileSync(APP)).digest('hex') },
+        appAsar: fs.existsSync(asar) ? { path: path.relative(ROOT, asar), bytes: fs.statSync(asar).size, sha256: crypto.createHash('sha256').update(fs.readFileSync(asar)).digest('hex') } : null
       }
     }
     fs.mkdirSync(path.join(ROOT, 'artifacts', 'agent'), { recursive: true })
     fs.writeFileSync(path.join(ROOT, 'artifacts', 'agent', 'packaged-report.json'), JSON.stringify({ ...report, note: 'packaged win-unpacked smoke; no real store or paid model call' }, null, 2))
     cdp?.close()
     if (appProcess && appProcess.exitCode === null) { try { execSync(`taskkill /PID ${appProcess.pid} /T /F`, { stdio: 'ignore' }) } catch {} }
+    const tempRoot = path.resolve(os.tmpdir())
+    if (path.resolve(userData).startsWith(tempRoot + path.sep) && path.basename(userData).startsWith('shopilot-packaged-agent-')) {
+      try { fs.rmSync(userData, { recursive: true, force: true }) } catch (error) { console.warn('temporary package smoke data cleanup failed:', String(error).slice(0, 120)) }
+    }
   }
   if (report.status !== 'passed') process.exitCode = 1
 }

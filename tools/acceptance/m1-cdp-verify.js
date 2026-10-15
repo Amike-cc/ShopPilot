@@ -292,9 +292,16 @@ async function main() {
   const disp = await cdp.evaluate(`return await window.shopilot.browser.display(${JSON.stringify(storeA)});`)
   check('browser:display 切回店铺A', disp.ok && disp.data.displayedStoreId === storeA)
 
-  const targets = await listTargets()
-  const tA = targets.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/json/version') && t.webSocketDebuggerUrl)
-  const tB = targets.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/json/list') && t.webSocketDebuggerUrl)
+  // guest 的 target 注册有毫秒级时延（2026-10-15 验收实录：切回 A 后立刻 listTargets
+  // 偶发少一个，复跑即过）→ 有界重试再判定，别让时序偶发把整条验收打红
+  let tA = null
+  let tB = null
+  for (let attempt = 0; attempt < 6 && !(tA && tB); attempt++) {
+    await sleep(1200)
+    const targets = await listTargets()
+    tA = targets.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/json/version') && t.webSocketDebuggerUrl)
+    tB = targets.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/json/list') && t.webSocketDebuggerUrl)
+  }
   check('两个店铺的页面 target 均存活', !!tA && !!tB)
 
   // ---------- 店铺右键菜单（§4.3 / §6.6 复制配置）：原为 window.confirm 占位，用户实报"显示不正常" ----------
@@ -1047,8 +1054,8 @@ async function main() {
     out.keyCleared = clr.ok && clr.data.hasKey === false;
     return out;
   `)
-  check('设置弹窗核心页签名称正确（配置 / 达人广场 / AI 配置 / Agent 设置 / 关于软件）',
-    settingsTabs.tabs.join(',') === '配置,达人广场,AI 配置,Agent 设置,关于软件', JSON.stringify(settingsTabs.tabs))
+  check('设置弹窗核心页签名称正确（配置 / 达人广场 / AI 配置 / Agent 模型 / 关于软件）',
+    settingsTabs.tabs.join(',') === '配置,达人广场,AI 配置,Agent 模型,关于软件', JSON.stringify(settingsTabs.tabs))
   check('「达人广场」是独立页签：只列已支持平台、占位符=内置实测地址、无横向溢出',
     settingsTabs.square?.pane === true && settingsTabs.square.configUnmounted === true &&
     settingsTabs.square.aboutUnmounted === true && settingsTabs.square.rows === 3 &&

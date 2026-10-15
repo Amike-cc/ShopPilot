@@ -1,14 +1,24 @@
 # ShopPilot Agent 实施进度
 
-> **架构迁移记录（2026-09-30）**：已从多 Agent 编排切换为单一 `root-ceo` 运行时。主 Agent 直接执行软件操作和 Job；历史 Agent、HR、执行助手和按 Agent 模型绑定数据在启动时迁移到 root-ceo 后清理，旧 IPC/schema 仅保留兼容并统一返回 `AGENT_SINGLETON_ONLY`。因此本文件早期的子 Agent 验收结果属于历史快照，不代表当前能力；当前验收必须断言只有一个 active root-ceo。
+> **当前产品形态（2026-10-13）**：Agent 只提供普通文字聊天，不具备软件、店铺、网页、任务、Job、文件或设置操作能力。Main 拒绝旧 Agent 操作 IPC；聊天模型不接收工具目录或软件上下文。工作台手动任务不属于 Agent，保持独立可用。下方 A-M0～A-M6、Job、记忆与电商操作记录均是旧架构实施历史，不代表当前能力。
 
-更新时间：2026-10-01
+更新时间：2026-10-13
 
-## 当前级别
+## 旧操作模式验收记录（历史）
 
-`PACKAGED / PARTIAL`（本地 Electron、目录包、NSIS 安装/升级/卸载、隔离降级回滚和 CDP 夹具通过；当前唯一运行时 Agent 为 `root-ceo`。真实文本接口连接、单轮 Agent 对话和一个只读纯模型 Job 已于 2026-10-01 通过实测；真实 fallback、费用对账、真实店铺副作用、完整人工桌面逐项验收和 OS 级破坏性夹具仍为 partial/untested）。
+`PACKAGED / LOCAL BOUNDARY VERIFIED`（纯聊天模式已通过当前全量单测、类型检查、Electron/CDP、隔离 Windows 目录包和真实 Windows 点击验收。真实第三方模型服务未调用；当前状态不代表代码签名、公开发布或真实平台业务验收。）
 
-> **当前能力口径（2026-09-30）**：运行时只保留 `root-ceo`。它直接负责对话、规划、软件/浏览器操作、Job 执行、审核和记忆治理；Job 仍复用 `TaskRunner` 并保留 evidence、模型 Profile/fallback、预算、技能、插件、确认和恢复机制。历史 Agent、HR、执行助手和按 Agent 模型绑定数据会在启动迁移到 `root-ceo`，旧接口统一返回 `AGENT_SINGLETON_ONLY`。下方 A-M0–A-M6 阶段表、旧多 Agent 验收数字和设计冲突记录保留作迁移历史，不代表当前可创建或调度子 Agent。
+> **旧能力记录说明**：本文件余下章节保留此前规划和实现 Agent 操作能力时的历史状态、证据与风险。它们不应被解释为当前 Agent 可以执行这些操作。
+
+## 纯聊天模式实现与验收（2026-10-13）
+
+- Agent 只接受文字消息与脱敏对话历史；模型请求不含工具目录、页面/店铺/任务上下文或操作字段。直接要求软件操作时由 Main 返回能力说明，不调用模型。
+- Agent Preload 只暴露对话和抽屉状态；`agentSettings` 只保留人工模型配置。Main 对旧 Job、记忆、技能、插件、组织、电商台账和软件操作 IPC 统一返回 `AGENT_OPERATION_NOT_ALLOWED`，且不启动 Agent Job 恢复器或队列扫描器。
+- 工作台原有 `task` API 保持独立，Agent Drawer 不显示任务、软件、页面、计划或执行入口。
+- 本轮验证：`pnpm.cmd typecheck`、`pnpm.cmd exec vue-tsc --noEmit` 通过；全量 Vitest 115 文件 / 1130 用例通过；`pnpm.cmd build` 通过。
+- Electron/CDP：Agent 主链路 10/10、旧域接口/UI 6/6、记忆边界 2/2。聊天模型用本地 fixture；操作请求确认不会转发。
+- Windows 目录包：隔离包 Smoke 7/7；Windows SendInput 设置页点击 3/3。测试数据使用临时用户目录，没有调用真实店铺或第三方模型。
+- 已用验证目录包重启当前桌面进程；手动工作台任务列表仍能读取。公开 Release 与 `release/release.json` 未改动，构建标签仍按内部验证包处理。
 
 ## 电商运营能力设计基线（2026-10-01）
 

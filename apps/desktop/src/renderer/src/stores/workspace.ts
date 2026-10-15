@@ -11,7 +11,8 @@ import type { TabInfo } from '../env'
 
 /**
  * 「其他」平台筛选项的哨兵值：内置平台目录之外的自定义平台聚合成一个 chip
- * （同名值必须与 WorkbenchView 的 availablePlatforms 一致，否则筛选条件永远匹配不到店铺）。
+ * （判别只能用 `BUILTIN_PLATFORM_NAMES.has(s.platform)`——哨兵值不等于任何真实平台名，
+ * 直接拿它跟 `s.platform` 比相等永远匹配不到店铺；见下面 filteredStores 的实现）。
  */
 export const OTHER_PLATFORM_FILTER = '__other__'
 

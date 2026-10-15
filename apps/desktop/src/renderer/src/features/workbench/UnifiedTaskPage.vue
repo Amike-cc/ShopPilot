@@ -15,7 +15,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import CustomTaskEditor from '../tasks/CustomTaskEditor.vue'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { hasBlockingIssues, toEngineSteps, validateCustomSteps, type CustomStepDraft, type CustomStepIssue } from '@shared/custom-task'
-import { isInvoiceCollectTask } from '@shared/constants/invoice'
+import { isBackgroundCollectTask } from '@shared/constants/collection'
 import type { PickMode, ElementPickResult } from '@shared/element-pick'
 import searchIcon from '../../assets/generated/ui-icons/search.png'
 import taskEmptyIcon from '../../assets/generated/ui-icons/task-empty-gen.png'
@@ -47,13 +47,15 @@ const draftSteps = ref<CustomStepDraft[]>([])
 const selectedStep = ref(0)
 const draftIssues = computed<CustomStepIssue[]>(() => validateCustomSteps(draftSteps.value))
 /**
- * 任务中心看到的任务 = 全部任务**减去发票自动采集任务**（用户口径：发票采集不计入任务）。
+ * 任务中心看到的任务 = 全部任务**减去后台自动采集任务**（用户口径：后台刷新不计入任务——
+ * 发票采集「每 3 小时」与涉税报送采集「按季度」都算）。
  *
  * 为什么按名字排除而不是把它从 `ws.tasks` 里剔掉：`ws.tasks` 是全局任务列表，
- * 发票中心自己的「每 3 小时自动更新」开关要靠它在里面找到那个任务改周期、
+ * 发票/涉税中心自己的「自动更新」开关要靠它在里面找到那个任务改周期、
  * 采集前也要靠它复用同一个任务。所以在**展示与统计**这一层过滤，不动数据源。
+ * 判定用 shared 的 isBackgroundCollectTask（两个前缀的单一事实来源）。
  */
-const visibleTasks = computed(() => ws.tasks.filter((task: any) => !isInvoiceCollectTask(task)))
+const visibleTasks = computed(() => ws.tasks.filter((task: any) => !isBackgroundCollectTask(task)))
 const filteredTasks = computed(() => visibleTasks.value.filter((task: any) => { const status = effectiveStatus(task); return (!query.value.trim() || String(task.name || '').toLowerCase().includes(query.value.trim().toLowerCase())) && (!storeFilter.value || task.storeScope === storeFilter.value) && (!statusFilter.value || status === statusFilter.value) }))
 const activeTasks = computed(() => visibleTasks.value.filter((task: any) => isActive(task)).length)
 const waitingTasks = computed(() => visibleTasks.value.filter((task: any) => effectiveStatus(task) === 'waiting_confirmation').length)

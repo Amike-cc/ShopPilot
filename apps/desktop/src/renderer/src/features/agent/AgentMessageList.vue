@@ -2,8 +2,8 @@
   <div class="agent-message-list" aria-live="polite">
     <div v-if="!messages.length" class="agent-empty">
       <span class="agent-empty-mark"><img :src="assistantIcon" alt="" /></span>
-      <strong>和 root-ceo 直接对话</strong>
-      <p>可以询问店铺、商品、任务和当前页面。执行动作会在时间线中显示状态、证据与人工确认门禁。</p>
+      <strong>开始一段对话</strong>
+      <p>可以提问、讨论想法或请我解释内容。我只提供文字回复，不会读取或操作软件。</p>
     </div>
     <template v-for="(item, index) in timeline" :key="'thoughtGroup' in item ? `thought-${index}` : item.id">
       <section v-if="'thoughtGroup' in item" class="thought-group">
@@ -19,7 +19,7 @@
         <div class="message-card"><div class="message-head"><strong>{{ messageRoleLabel(item) }}</strong><time>{{ formatTime(item.at || 0) }}</time></div><div class="message-text">{{ item.text }}</div><div v-if="item.meta" class="message-meta">{{ item.meta }}</div></div>
       </article>
     </template>
-    <div v-if="busy" class="running-card" role="status"><span class="running-icon"><i></i><i></i><i></i></span><span><strong>{{ statusLabel }}</strong><small>root-ceo 正在处理当前会话</small></span></div>
+    <div v-if="busy" class="running-card" role="status"><span class="running-icon"><i></i><i></i><i></i></span><span><strong>{{ statusLabel }}</strong><small>正在生成文字回复</small></span></div>
   </div>
 </template>
 

@@ -13,6 +13,12 @@ out
 # 本地 agent/IDE 状态（如规划模式的 plan-*.md），不属于项目源码
 .zcode/
 
+# WorkBuddy 本地会话记忆与工具状态（工作区数据，不属于产品源码）
+.workbuddy/
+
+# 本地研究资料：scrapling（第三方抓取库）源码快照与虚拟环境，不属于产品源码
+.scrapling-research/
+
 # Electron
 apps/desktop/dist
 apps/desktop/out

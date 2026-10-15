@@ -16,6 +16,9 @@ export type AuditAction =
   | 'task.create' | 'task.update' | 'task.delete' | 'task.run' | 'task.pause' | 'task.resume'
   | 'task.retry' | 'task.cancel' | 'task.confirm'
   | 'agent.observe' | 'agent.plan' | 'agent.plan.validate' | 'agent.ui.update'
+  // chat 与"旧操作接口被拒"也要留痕（2026-10-15 审查）：chat 只记 requestId 不记内容；
+  // 被拒记录用于排查"谁还在调已下线的旧 Agent 接口"（只记通道名，不记参数）。
+  | 'agent.chat' | 'agent.operation.rejected'
   | 'agent.software.context' | 'agent.software.validate' | 'agent.software.execute'
   | 'agent.bootstrap' | 'agent.org.create' | 'agent.org.update' | 'agent.org.activate'
   | 'agent.org.pause' | 'agent.org.resume' | 'agent.org.retire' | 'agent.hr.preview' | 'agent.org.autoprovision'

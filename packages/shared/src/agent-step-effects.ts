@@ -16,6 +16,31 @@
  * 现在三处都从这里取值，禁止再各写一份（`tests/unit/agent-step-effects.test.ts` 用集合同一性锁死）。
  */
 
+/**
+ * 需要**用户盯着页面看**的步骤类型：这类步骤存在时，运行标签页必须对用户可见。
+ *
+ *   · `waitForUserConfirmation`：用户要在页面上核对完再点确认；
+ *   · `mirrorTabUrl`：门禁阶段就是把页面镜像给用户核对。
+ */
+export const USER_FACING_STEP_TYPES: ReadonlySet<string> = new Set<string>([
+  'waitForUserConfirmation', 'mirrorTabUrl'
+])
+
+/**
+ * 这次任务的运行标签页能不能建成**采集专用页**（隐藏挂载、不进标签栏、不抢活动位）。
+ *
+ * 2026-10-15 用户要求「采集数据的时候不要影响浏览器使用」：纯采集任务
+ * （navigate / readTable / readApi / readCards / readLabelValue …）用户全程不需要看那一页，
+ * 用隐藏的采集专用页跑就完全无感；但含 `USER_FACING_STEP_TYPES` 的任务**绝不能隐藏**——
+ * 否则用户要对着一个看不见的页面点确认。
+ *
+ * 放在 shared 而不是 task-runner 里，是为了能单测：这条规则一旦被改坏，
+ * 表现是"用户对着看不见的页面点确认"或"采集又把页面抢走"，两种都很难从界面看出来。
+ */
+export function shouldUseInternalRunTab(steps: ReadonlyArray<{ type?: unknown }>): boolean {
+  return !steps.some(s => typeof s?.type === 'string' && USER_FACING_STEP_TYPES.has(s.type))
+}
+
 /** 会对页面产生副作用的步骤类型（点了/写了就是真发出去了）。 */
 export const AGENT_SIDE_EFFECT_STEP_TYPES: ReadonlySet<string> = new Set<string>([
   // 点击类
@@ -65,6 +90,11 @@ export const STEP_IDEMPOTENT_TYPES: ReadonlySet<string> = new Set<string>([
   // 导航/等待/只读类：重跑无副作用
   'navigate', 'waitForPage', 'waitForSelector', 'waitForText', 'waitMs', 'waitForGone',
   'readText', 'readLabelValue', 'readTable', 'screenshot', 'hover', 'pressKey',
+  // 读接口响应：只 attach debugger 读一次响应，必要时 reload 让页面自己重发——
+  // 不构造、不重放、不写页面，重跑最多是多刷一次页面
+  'readApi',
+  // 读重复卡片列表：纯读，重跑最多是再读一遍
+  'readCards',
   'mirrorTabUrl', 'requireQuota', 'requireEnabled', 'requireTextAbsent',
   // 覆盖式写入：重跑只是把同一个值再写一遍
   'setInput', 'typeText', 'fillDraft', 'ensureRows', 'ensureRowsById',

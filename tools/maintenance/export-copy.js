@@ -79,7 +79,7 @@ const KEY = [
   'package.json',
   'apps/desktop/src/main/index.ts',
   'apps/desktop/src/preload/index.ts',
-  'apps/desktop/src/renderer/src/features/workbench/WorkbenchView.vue',
+  'apps/desktop/src/renderer/src/features/workbench/DashboardView.vue',
   'packages/shared/src/index.ts',
   'packages/shared/src/constants/platforms.ts',
   'electron-builder.yml'

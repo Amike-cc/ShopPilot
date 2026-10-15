@@ -270,6 +270,18 @@ async function main() {
     check('从「数据分析 → 发票中心」能打开发票中心', !!opened)
 
     await until(ui, `return document.querySelectorAll('[data-test="invoice-row"]').length === 5`)
+    // 没填主体的那家（第 7 步补录之前）：行的主体行必须如实写「未填写」，并说明导出会写「未填写」
+    const emptyLine = await ui.eval(`
+      const row = [...document.querySelectorAll('[data-test="invoice-row"]')]
+        .find(el => (el.querySelector('.inv-row-head > b')?.textContent || '').trim() === '未填-N1')
+      return (row?.querySelector('[data-test^="invoice-entity-"]')?.textContent || '').replace(/\\s+/g, ' ').trim()
+    `)
+    check('没填主体的行如实写「未填写」并说明导出会写「未填写」（不静默留空）',
+      emptyLine.includes('未填写') && emptyLine.includes('导出 CSV'), emptyLine)
+    // 2026-10-14 更新：抖店现在**有**主体档案了（读 /center/qualification/subject/info），
+    // 所以这里不再是"该平台暂不能自动获取"，而是"还没有读到值"。两种都必须**不假装已获取**。
+    check('没填主体的行不假装已获取（要么"暂不能自动获取"、要么"还没有读到值"）',
+      emptyLine.includes('暂不能自动获取') || emptyLine.includes('还没有读到值'), emptyLine)
     const chips = await ui.eval(`
       return [...document.querySelectorAll('[data-test="invoice-license-bar"] .inv-lic-chip')].map(el => el.textContent.replace(/\\s+/g, ' ').trim())
     `)
@@ -401,6 +413,74 @@ async function main() {
     check('刷新页面后仍是 3 个主体（A 3 家 / B 2 家 / 无未填写）',
       chipsReload.length === 3 && chipsReload[1].includes('3 家') && chipsReload[2].includes('2 家'),
       JSON.stringify(chipsReload))
+
+    // ---- 11. 开票主体显示（申报要用的那一列，2026-10-14 加） ----
+    const entityLines = await ui.eval(`
+      return [...document.querySelectorAll('[data-test="invoice-row"]')].map(row => ({
+        store: (row.querySelector('.inv-row-head > b')?.textContent || '').trim(),
+        line: (row.querySelector('[data-test^="invoice-entity-"]')?.textContent || '').replace(/\\s+/g, ' ').trim()
+      }))
+    `)
+    const a1Line = entityLines.find(item => item.store === '验达-A1')?.line || ''
+    check('每行显示开票主体，A1 显示已填的主体名称与统一社会信用代码（申报按主体分账靠它）',
+      a1Line.includes('开票主体：') && a1Line.includes(LIC_A.name) && a1Line.includes(LIC_A.no),
+      a1Line)
+    check('补录后的三家店都在行上带出了主体（"未填写"的如实提示见第 4 步）',
+      entityLines.length === 5 && entityLines.every(item => item.line.includes('开票主体：')),
+      JSON.stringify(entityLines.map(item => item.store)))
+
+    // ---- 12. 「获取主体营业执照」：种入的店都是抖店（未实测主体页）→ 必须逐店如实说明原因 ----
+    check('发票中心有「获取主体营业执照」入口',
+      (await ui.eval(`return !!document.querySelector('[data-test="invoice-entity-collect"]')`)) === true)
+    await ui.eval(`document.querySelector('[data-test="invoice-entity-collect"]').click(); return true`)
+    // 2026-10-14 更新：抖店有了主体档案 → 点这个按钮会**真的去采集**（种入的 5 家是虚构店，
+    // 平台上不存在），所以结果面板要等更久才出；并且结论不再是统一的"暂不能自动获取"。
+    const reportReady = await until(ui, `return document.querySelectorAll('[data-test="invoice-entity-report"] .inv-entity-report-row').length === 5`, 120000)
+    const report = await ui.eval(`
+      return [...document.querySelectorAll('[data-test="invoice-entity-report"] .inv-entity-report-row')]
+        .map(el => el.textContent.replace(/\\s+/g, ' ').trim())
+    `)
+    check('「获取主体营业执照」逐店给结果（5 家全列出，不合并成一句"完成"）',
+      !!reportReady && report.length === 5, JSON.stringify(report).slice(0, 300))
+    // 核心不变量：虚构店在平台上根本不存在 → **绝不能**报"已填入"
+    check('虚构店不会被写进主体（没读到就不写，不许假装成功）',
+      report.length === 5 && report.every(text => text.length > 0 && !text.includes('已填入')), JSON.stringify(report).slice(0, 300))
+    const licAfterEntity = await ui.eval(`
+      const res = await window.shopilot.store.list()
+      const row = (res.data || []).find(s => s.name === '验达-A1')
+      return { licenseName: row?.licenseName || null, licenseNo: row?.licenseNo || null }
+    `)
+    check('取主体这一步没有动已填的营业执照（没采到快照就不写）',
+      licAfterEntity.licenseName === LIC_A.name && licAfterEntity.licenseNo === LIC_A.no,
+      JSON.stringify(licAfterEntity))
+
+    // ---- 13. 导出跟随当前主体筛选（真正的落盘在主进程按同一个 key 再筛一遍） ----
+    await ui.eval(`
+      [...document.querySelectorAll('[data-test="invoice-license-bar"] .inv-lic-chip')]
+        .find(el => el.textContent.includes(${JSON.stringify(LIC_A.name)})).click()
+      return true
+    `)
+    await sleep(300)
+    const exportScoped = await ui.eval(`
+      const btn = document.querySelector('[data-test="invoice-export"]')
+      return { text: btn.textContent.replace(/\\s+/g, ' ').trim(), title: btn.getAttribute('title') || '' }
+    `)
+    check('按主体筛选后，导出按钮写明"只导该主体"（不是悄悄导全部）',
+      exportScoped.text.includes('该主体') && exportScoped.title.includes(LIC_A.name),
+      JSON.stringify(exportScoped))
+    await ui.eval(`document.querySelector('[data-test="invoice-license-all"]').click(); return true`)
+    await sleep(300)
+    const exportAll = await ui.eval(`return document.querySelector('[data-test="invoice-export"]').textContent.replace(/\\s+/g, ' ').trim()`)
+    check('点回「全部」后导出按钮回到全部主体口径', exportAll.includes('导出待开票 CSV'), exportAll)
+    // 主进程侧确实按 key 筛了：给一个不存在的 key，必须在弹保存框**之前**就回"当前主体下没有可导出的数据"
+    // （正路会弹系统保存框，脚本点不了；这条能把"筛选真的发生在主进程"钉住）
+    const scopedEmpty = await ui.eval(`
+      const res = await window.shopilot.overview.invoiceExport({ licenseKey: '__no_such_subject__' })
+      return { ok: res.ok, message: res.error?.message || '' }
+    `)
+    check('主进程按主体 key 筛选（不存在的 key → 如实报"当前主体下没有可导出的数据"，不静默导全部）',
+      scopedEmpty.ok === false && scopedEmpty.message.includes('当前主体下没有可导出的待开票数据'),
+      JSON.stringify(scopedEmpty))
   } finally {
     ui?.close()
     killTree(app)

@@ -1,14 +1,14 @@
 # ShopPilot Agent 开发文档
 
-> **当前有效架构（2026-09-30）**：ShopPilot 采用单一 Agent 运行时。唯一运行时身份是 `root-ceo`，它直接负责对话、规划、软件操作、浏览器任务、模型 Job、结果审核、反馈和记忆治理。系统不创建、不调度、不暂停、不恢复、不退休任何子 Agent，也不按 Agent 配置模型。旧多 Agent 数据、字段、IPC 和 UI 只保留用于迁移、读取兼容和审计；旧组织写操作统一返回 `AGENT_SINGLETON_ONLY`。
+> **当前产品边界（2026-10-13）**：Agent 仅提供普通文字聊天，没有查看或操作店铺、网页、浏览器、工作台任务、Job、文件或系统设置的能力。聊天请求只携带脱敏后的对话，不带工具目录或软件上下文；旧 Agent 操作 IPC 在 Main 中拒绝。用户仍可单独管理聊天模型。工作台手动任务保持独立。
 >
-> 本文前半部分是**当前单 Agent 规范**，优先级高于本文其他内容、旧客户端和历史设计。文末“附录 A”保留 v1.1 多 Agent 文档章节，仅用于解释旧数据库、兼容字段、迁移和回滚；附录中的 CEO/HR/子 Agent/执行助手规则不适用于当前运行时。
+> **本文状态：历史架构设计，已被上方纯聊天产品边界取代。** 下文有关 Agent 规划、软件/浏览器操作、Job 执行、记忆治理、电商领域工具和验收目标仅供追溯旧设计，不代表当前产品能力，不得作为当前实现或发布验收声明。
 
-**文档状态：** 单 Agent 实施基线 v2.0（运行时代码已切换；真实桌面和真实外部服务验收仍分开记录）
-**适用范围：** Electron Main、Preload、Renderer、SQLite、TaskRunner、模型路由、本地记忆和 Agent UI
-**电商运营能力扩展：** 领域动作、商品/订单/库存/售后/增长能力和阶段验收见 [`ECOMMERCE_AGENT_CAPABILITY_SPEC.md`](ECOMMERCE_AGENT_CAPABILITY_SPEC.md)。该文档定义当前 Agent 需要补齐的电商闭环，优先级高于历史多 Agent 附录。
+**文档状态：** 历史单 Agent 实施设计 v2.0；当前运行时以纯聊天边界为准。
+**适用范围：** 仅作旧代码、数据迁移与设计决策的历史参考。
+**电商运营能力扩展：** [`ECOMMERCE_AGENT_CAPABILITY_SPEC.md`](ECOMMERCE_AGENT_CAPABILITY_SPEC.md) 为旧 Agent 操作能力设计，同样不代表当前运行时可用能力。
 **实现位置：** `apps/desktop/src/main/services/agent-runtime.ts`、`agent-memory.ts`、`agent-singleton-migration.ts`、`apps/desktop/src/main/ipc/agent-domain-handlers.ts` 及共享 schema
-**规则优先级：** 当前规范 → Main/Preload 实际权限校验 → 测试与验收证据 → 附录历史说明。没有代码和证据的设计不能写成已实现。
+**历史记录说明：** 下文规则优先用于追溯旧设计；当前能力以当前 Main/Preload 代码和纯聊天回归证据为准。没有代码和证据的设计不能写成已实现。
 
 ## 当前规范 1：产品目标和边界
 

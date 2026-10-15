@@ -51,6 +51,16 @@ export function buildInvoiceCollectSteps(p: InvoiceProfile): InvoiceStepDraft[] 
     { type: 'navigate', input: { url: p.pageUrl }, timeoutMs: 45000 },
     { type: 'waitForPage', input: { urlIncludes: p.urlMarker }, timeoutMs: 45000 }
   ]
+  /**
+   * 预热刷新（见 InvoiceProfile.warmReload 的说明）：**再导航一次同一个地址**当作 reload。
+   * 没有单独的 reload 步骤类型，`navigate` 到同一 URL 就是一次完整加载。
+   * 放在首次 waitMs 之前：首次加载注定渲染不出来，没必要先白等一轮。
+   */
+  if (p.warmReload) {
+    steps.push({ type: 'waitMs', input: { ms: 3000 } })
+    steps.push({ type: 'navigate', input: { url: p.pageUrl }, timeoutMs: 45000 })
+    steps.push({ type: 'waitForPage', input: { urlIncludes: p.urlMarker }, timeoutMs: 45000 })
+  }
   // 首次读表前的等待（页面异步取数）
   steps.push({ type: 'waitMs', input: { ms: p.settleMs || 6000 } })
 
@@ -79,11 +89,41 @@ export function buildInvoiceCollectSteps(p: InvoiceProfile): InvoiceStepDraft[] 
             // 这些值不是数字（公司名 / "2026年05/06月"）→ 原样取文本，别做数值抽取
             allowText: true,
             maxValueLen: 120,
+            // P2-9（2026-10-14）：**某一行不存在不算失败**。这类卡片的字段随账号/主体类型而变
+            // （实测微信「收票主体」在部分账号下没有这一行），以前缺一行就让整轮采集判失败，
+            // 而其它标签其实都读到了 → 界面反而什么都看不到。缺的那列留空，其余照常展示。
+            absentOk: true,
             ...(p.deep ? { deep: true } : {})
           },
           timeoutMs: 20000
         })
       }
+      return
+    }
+    /**
+     * cards 模式：**重复卡片列表**（一张账单一张卡、页面没有 table）→ 每张卡读成一行。
+     * 见 InvoiceSection.cards 的说明（实测拼多多资金中心「申请发票」）。
+     */
+    if (sec.cards?.fields.length) {
+      steps.push({
+        type: 'readCards',
+        input: {
+          anchor: sec.cards.anchor,
+          fields: sec.cards.fields.map(f => ({ key: f.key, label: f.label })),
+          metric: sec.metricKey,
+          keepRows: true,
+          ...(sec.cards.maxValueLen ? { maxValueLen: sec.cards.maxValueLen } : {}),
+          ...(p.deep ? { deep: true } : {}),
+          /**
+           * 卡片方向一律 emptyOk（2026-10-15 审查 M1）：卡片列表是**队列**（待开票账单被处理完
+           * 就会清零），锚点随最后一张卡一起消失。以前只在 measuredRows === 0 时给 emptyOk——
+           * 那是"实测那一天的快照"，待办清零后每轮采集都会报 TASK_SELECTOR_CHANGED（找不到卡片锚点），
+           * 定时采集持续假失败。表方向不用这么做：表还在（表头在）只是行变 0，天然不会失败。
+           */
+          emptyOk: true
+        },
+        timeoutMs: p.readTimeoutMs || 30000
+      })
       return
     }
     // 实测条数为 0 的方向 = **它本来就没有数据表**（不是"抓失败"）：
@@ -103,9 +143,12 @@ export function buildInvoiceCollectSteps(p: InvoiceProfile): InvoiceStepDraft[] 
         ...(sec.rejectHeaders ? { rejectHeaders: sec.rejectHeaders } : {}),
         ...(verifiedEmpty ? { emptyOk: true } : {}),
         ...(sec.mergeHeaderTable ? { mergeHeaderTable: true } : {}),
-        ...(p.deep ? { deep: true } : {})
+        ...(p.deep ? { deep: true } : {}),
+        // 慢渲染的微前端要靠它把渲染从后台节流里拉出来（见 InvoiceProfile.unthrottle）
+        ...(p.unthrottle ? { unthrottle: true } : {})
       },
-      timeoutMs: 30000
+      // 慢页面（实测抖店发票页要 ~45 秒才出表）用档案里的上限，默认 30 秒
+      timeoutMs: p.readTimeoutMs || 30000
     })
     // 方向之间留一次小等待（同一页连续读，给渲染留余量）
     if (i < p.sections.length - 1 && !p.sections[i + 1].tabText && !p.sections[i + 1].pageUrl) {

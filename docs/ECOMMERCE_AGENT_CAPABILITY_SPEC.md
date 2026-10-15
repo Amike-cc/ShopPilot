@@ -1,5 +1,7 @@
 # ShopPilot 单 Agent 电商运营能力开发文档
 
+> **当前产品边界（2026-10-13）**：本文是 Agent 操作能力的历史设计记录。当前 Agent 仅提供普通文字聊天，不读取或操作店铺、浏览器、商品、订单、任务或 Job；本文中的能力矩阵、工具契约和里程碑不代表当前运行时能力。工作台现有手动任务和店铺浏览器保持独立。
+>
 > 版本：v1.0（2026-10-01）  
 > 状态：`M1 IMPLEMENTED / PARTIAL`；`M2 INVENTORY/SKU IMPLEMENTED / PARTIAL`；`M3 ORDER/LIFECYCLE IMPLEMENTED / PARTIAL`；`M4 LOCAL INSIGHT IMPLEMENTED / PARTIAL`；`M5 LOCAL CONTENT/GROWTH IMPLEMENTED / PARTIAL`；代码实现按本文档的 M1 → M6 顺序推进
 > 运行时：唯一执行主体 `root-ceo`  

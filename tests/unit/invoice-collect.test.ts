@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   INVOICE_COLUMNS, INVOICE_PROFILES, INVOICE_SUPPORTED_PLATFORMS,
-  invoiceProfileFor, INVOICE_UNSUPPORTED_NOTE, TABLE_ROW_CLEAN_FN, normalizeCellText
+  invoiceProfileFor, INVOICE_UNSUPPORTED_NOTE, TABLE_ROW_CLEAN_FN, normalizeCellText, isPendingSection
 } from '../../packages/shared/src/constants/invoice'
 import { buildInvoiceCollectSteps } from '../../packages/shared/src/invoice-steps'
 import { stepInputSchemas } from '../../apps/desktop/src/main/tasks/task-step-schemas'
@@ -32,9 +32,19 @@ describe('发票档案（抓取待开票信息用）', () => {
         expect(sec.measuredRows, `${name}/${sec.name}`).toBeGreaterThanOrEqual(0)
         const isTable = !!sec.pickByHeader
         const isCard = !!sec.labels?.length
-        expect(isTable || isCard, `${name}/${sec.name} 既没有表头特征也没有标签列表，抓不到东西`).toBe(true)
+        // 2026-10-14 新增第三种：重复卡片列表（拼多多「申请发票」的待开票账单卡片）
+        const isCardList = !!sec.cards?.fields.length
+        expect(isTable || isCard || isCardList, `${name}/${sec.name} 三种读取方式一个都没声明，抓不到东西`).toBe(true)
         if (isTable) {
           expect(Object.keys(sec.headerMap).length, `${name}/${sec.name}`).toBeGreaterThan(0)
+        }
+        if (isCardList) {
+          // 卡片模式的锚点与字段必须齐全，否则 readCards 直接判参数不合法
+          expect(sec.cards!.anchor.length, `${name}/${sec.name}`).toBeGreaterThan(0)
+          for (const f of sec.cards!.fields) {
+            expect(f.key.length, `${name}/${sec.name}`).toBeGreaterThan(0)
+            expect(f.label.length, `${name}/${sec.name}`).toBeGreaterThan(0)
+          }
         }
         // 方向之间的指标名不能重复，否则快照互相覆盖
         expect(metrics.has(sec.metricKey), `${name} 指标名重复 ${sec.metricKey}`).toBe(false)
@@ -121,30 +131,48 @@ describe('发票档案（抓取待开票信息用）', () => {
     )
   })
 
-  it('快手已实测到发票页（资金 → 给平台开票），三个页签都登记了', () => {
+  it('快手：给平台开票三个页签 + 独立页面上的「达人给我开票」', () => {
     const ks = invoiceProfileFor('快手小店')!
     expect(ks).toBeTruthy()
     expect(ks.urlMarker).toBe('tax-bill/subsidy')
     expect(ks.sections[0].pickByHeader).toBe('账单编号')
     // 实测表头（含单位后缀，必须按原样写才匹配得上）
     expect(Object.keys(ks.sections[0].headerMap)).toEqual(
-      expect.arrayContaining(['账单编号', '账单月份', '账单类型', '账单金额（元）', '开票主体名称', '阈值生效时间'])
+      expect.arrayContaining(['账单编号', '账单月份', '账单类型', '账单金额（元）', '开票主体名称'])
     )
+    /**
+     * 2026-10-15 审查 BUG 防回归：「阈值生效时间」**绝不能**再映射成 deadline。
+     * 实测它的值是 `2026-06-10(预计)`（预计生效日期，不是承诺期），映射成 deadline 后
+     * 界面按"过去的日期 = 已逾期"判，凭空多出 5 条假逾期（KPI 写着「5 条已逾期」，
+     * 会把商家推去催一批根本没到期的单子）。它应当落进「其他信息」。
+     */
+    expect(Object.keys(ks.sections[0].headerMap)).not.toContain('阈值生效时间')
+    expect(Object.values(ks.sections[0].headerMap)).not.toContain('deadline')
     expect(INVOICE_UNSUPPORTED_NOTE['快手小店']).toBeUndefined()
-    // 三个页签：未开票账单（默认）+ 处理中 + 处理记录
-    expect(ks.sections.map(s => s.name)).toEqual(['给平台开票（未开票账单）', '开票处理中', '开票处理记录'])
+    // 前三个页签：未开票账单（默认）+ 处理中 + 处理记录
+    expect(ks.sections.map(s => s.name)).toEqual([
+      '给平台开票（未开票账单）', '开票处理中', '开票处理记录',
+      // 2026-10-14 新增：另一个页面上的收票方向（路由表挖出来的，实测有表）
+      '达人给我开票（未开票账单）'
+    ])
     expect(ks.sections[0].tabText).toBeUndefined()          // 默认页签，不用点
-    expect(ks.sections.slice(1).map(s => s.tabText)).toEqual(['处理中', '处理记录'])
-    expect(new Set(ks.sections.map(s => s.metricKey)).size).toBe(3)
+    expect(ks.sections.slice(1, 3).map(s => s.tabText)).toEqual(['处理中', '处理记录'])
+    expect(new Set(ks.sections.map(s => s.metricKey)).size).toBe(4)
+    // 第 4 个方向在**另一个页面**（不是 /subsidy）→ 必须带 pageUrl
+    expect(ks.sections[3].pageUrl).toBe('https://s.kwaixiaodian.com/zone/fund/tax-bill/seller-issue-invoice')
+    expect(ks.sections[3].pickByHeader).toBe('账单ID')
+    expect(Object.keys(ks.sections[3].headerMap)).toEqual(
+      expect.arrayContaining(['账单ID', '账单月份', '账单类型', '收票方主体', '账单金额（元）'])
+    )
   })
 
   it('快手的「处理中 / 处理记录」表头完全相同 → 必须靠 tabVerify 校验选中态', () => {
     const ks = invoiceProfileFor('快手小店')!
-    const [processing, records] = ks.sections.slice(1)
+    const [processing, records] = ks.sections.slice(1, 3)
     // 两页签列名一致，按表头做的 expectHeaders/rejectHeaders 分辨不出谁是谁
     expect(Object.keys(processing.headerMap).sort()).toEqual(Object.keys(records.headerMap).sort())
     // 所以每个要点的页签都得带选中态校验
-    for (const sec of ks.sections.slice(1)) {
+    for (const sec of ks.sections.slice(1, 3)) {
       expect(sec.tabVerify).toEqual({ selector: '.ant-tabs-tab', classIncludes: 'ant-tabs-tab-active' })
       // 页签文案在页面上有同名副本（教程标题），限定到页签容器里点
       expect(sec.tabWithin).toEqual({ selector: '.ant-tabs-tab-btn' })
@@ -161,25 +189,55 @@ describe('发票档案（抓取待开票信息用）', () => {
     expect(ks.sections[0].tabVerify).toBeUndefined()
   })
 
+  // 2026-10-14：微信的两个页签补上选中态校验（实测选中类名 text-[#0AB8A6]）。
+  // 此前微信没有任何 tabVerify —— 而「给买家开票」的表头与「给平台开票」几乎相同（只靠 rejectHeaders 挡一刀），
+  // 切页签失败就会把上一个方向的数据当成它的上报。这条测试钉住"两个要点的页签都必须校验"。
+  it('微信小店「给平台开票 / 给买家开票」也要靠 tabVerify 校验选中态（实测 text-[#0AB8A6]）', () => {
+    const wx = invoiceProfileFor('微信小店')!
+    expect(wx.sections.map(s => s.tabText)).toEqual([undefined, '给平台开票', '给买家开票'])
+    for (const sec of wx.sections.slice(1)) {
+      expect(sec.tabVerify, sec.name).toEqual({ selector: '[class*="h-[56px]"][class*="mt-[32px]"] span', classIncludes: 'text-[#0AB8A6]', deep: true })
+      // **不要**给微信页签加 tabWithin：实测（2026-10-14 真机）一旦限定范围，点击就不再生效
+      // （tabVerify 如实报出「申请平台开票(选中)」= 确实没切过去）；不限定范围时该文案在整页只有 1 个候选。
+      expect(sec.tabWithin, sec.name).toBeUndefined()
+    }
+    expect(wx.sections[0].tabVerify).toBeUndefined()   // 默认方向不用点，也不该校验
+    const clicks = buildInvoiceCollectSteps(wx).filter(s => s.type === 'clickByText')
+    expect(clicks.length).toBe(2)
+    for (const c of clicks) {
+      expect(c.input.verifyActive).toBeTruthy()
+      // 步骤参数要过引擎白名单（verifyActive 里的选择器含方括号，序列化后不能被判成未知字段）
+      expect(stepInputSchemas.clickByText.safeParse(c.input).success, JSON.stringify(c.input)).toBe(true)
+    }
+  })
+
   it('快手「处理中 / 处理记录」是**已提交、商家无需操作** → pending:false，不计入待开票合计', () => {
     const ks = invoiceProfileFor('快手小店')!
-    // 只有「未开票账单」是待办；另两个是已提交/已通过、无需商家再操作的流水
-    expect(ks.sections.map(s => s.pending)).toEqual([undefined, false, false])
+    // 只有「未开票账单」和「达人给我开票」是待办；中间两个是已提交/已通过、无需商家再操作的流水
+    expect(ks.sections.map(s => s.pending)).toEqual([undefined, false, false, undefined])
     // pending:false 的方向必须写清原因（界面 tooltip 直接用，不能是空话）
-    for (const sec of ks.sections.slice(1)) {
+    for (const sec of ks.sections.slice(1, 3)) {
       expect(sec.notPendingNote, sec.name).toBeTruthy()
       expect(sec.notPendingNote!.length).toBeGreaterThan(4)
     }
-    // 待办与否在渲染层用 `pending !== false` 判定 → 默认方向（undefined）算待办
-    const isPending = (s: any) => s.pending !== false
+    // 待办与否用 shared 的 isPendingSection（渲染层/主进程/CSV/这里同一份规则，P2-7 统一）
+    const isPending = isPendingSection
     expect(isPending(ks.sections[0])).toBe(true)
     expect(isPending(ks.sections[1])).toBe(false)
     expect(isPending(ks.sections[2])).toBe(false)
-    // 其它平台的方向都还是待办语义（没有新增历史方向，别误标）
-    for (const name of ['微信小店', '拼多多', '抖店']) {
+    // 2026-10-14：拼多多的「申请记录（平台给商家开票）」也是**记录类**（商家无需再操作），
+    // 与快手的「处理中/处理记录」同一语义 → 同样 pending:false。
+    for (const name of ['微信小店', '抖店']) {
       for (const sec of invoiceProfileFor(name)!.sections) {
         expect(sec.pending, `${name}/${sec.name}`).not.toBe(false)
       }
+    }
+    const pdd = invoiceProfileFor('拼多多')!
+    expect(pdd.sections.filter(s => s.pending === false).map(s => s.name))
+      .toEqual(['申请记录（平台给商家开票）'])
+    // 记录类方向必须带"为什么无需操作"的说明，否则界面上会显示成一句空的灰字
+    for (const sec of pdd.sections.filter(s => s.pending === false)) {
+      expect(sec.notPendingNote?.length || 0, sec.name).toBeGreaterThan(4)
     }
   })
 })
@@ -280,19 +338,30 @@ describe('发票采集步骤（多开票方向）', () => {
     expect(reads.find(r => r.input.metric === 'invoice.applyPlatform')!.input.rejectHeaders).toBeUndefined()
   })
 
-  it('拼多多两个方向在不同站点：买家方向读表、平台方向换页 + 读卡片标签', () => {
+  it('拼多多四个方向：买家方向读表、给平台开票读卡片标签、平台给商家开票读卡片列表 + 申请记录读表', () => {
     const pdd = invoiceProfileFor('拼多多')!
     expect(pdd.sections[0].mergeHeaderTable).toBe(true)
     const steps = buildInvoiceCollectSteps(pdd)
     const reads = steps.filter(s => s.type === 'readTable')
-    expect(reads.length).toBe(1)                       // 只有买家方向是表格
+    // 买家方向（本页）+ 申请记录（资金中心，表格）
+    expect(reads.length).toBe(2)
     expect(reads[0].input.mergeHeaderTable).toBe(true)
     expect(reads[0].input.metric).toBe('invoice.toBuyer')
-    // 「给平台开票」在资金中心（另一站点）→ 先 navigate 到该方向地址，再切到「提交发票」页签，再读标签
+    expect(reads[1].input.metric).toBe('invoice.platformToMe')
+    expect(reads[1].input.pickByHeader).toBe('发票金额（元）')
+    // 2026-10-14 新增：待开票账单是**重复卡片列表** → readCards（readLabelValue 读不了列表）
+    const cardReads = steps.filter(s => s.type === 'readCards')
+    expect(cardReads.length).toBe(1)
+    expect(cardReads[0].input.metric).toBe('invoice.platformToMePending')
+    expect(cardReads[0].input.anchor).toBe('账单日期')
+    expect((cardReads[0].input.fields as Array<{ key: string }>).map(f => f.key))
+      .toEqual(['period', 'amount', 'title'])
+    // 「给平台开票」在资金中心（另一站点）→ 先 navigate 到该方向地址，再切页签，再读标签
     const sec = pdd.sections[1]
     expect(sec.pageUrl).toBeTruthy()
     expect(steps.some(s => s.type === 'navigate' && String(s.input.url) === sec.pageUrl)).toBe(true)
-    expect(steps.filter(s => s.type === 'clickByText').map(s => s.input.text)).toEqual(['提交发票'])
+    // 三个页签切换：提交发票（给平台开票）、申请发票（平台给商家开票待办）、申请记录（记录）
+    expect(steps.filter(s => s.type === 'clickByText').map(s => s.input.text)).toEqual(['提交发票', '申请发票', '申请记录'])
     const labels = steps.filter(s => s.type === 'readLabelValue')
     expect(labels.map(s => s.input.label)).toEqual(['账单日期', '待开票金额（元）', '收票主体'])
     // 一个标签一条独立快照（metric = `<方向指标>.<统一列key>`），collect 侧据此拼成一行
@@ -306,6 +375,40 @@ describe('发票采集步骤（多开票方向）', () => {
     expect(steps.filter(s => s.type === 'readTable').length).toBe(4)
     expect(steps.filter(s => s.type === 'clickByText').map(s => s.input.text))
       .toEqual(['给消费者开票', '平台给我开票', '达人给我开票'])
+  })
+
+  /**
+   * 抖店发票页是独立微前端，2026-10-14 实测：**不挂调试器时渲染被节流饿死**——
+   * 等满 90 秒仍然 0 个 `<table>`（整轮 106 秒后报 TASK_SELECTOR_CHANGED），
+   * 挂上调试器 45 秒就出表（1 张表 / 160 行）。三件事缺一不可：
+   * 预热刷新（首次加载永久「加载中」）+ 读表期间 unthrottle + 更长的读表超时。
+   */
+  it('抖店发票：warmReload + unthrottle + 更长读表超时，三件事缺一不可', () => {
+    const p = invoiceProfileFor('抖店')!
+    expect(p.warmReload, '首次加载渲染不出来，必须预热刷新').toBe(true)
+    expect(p.unthrottle, '渲染被节流饿死，必须挂调试器 + 强制焦点').toBe(true)
+    expect(p.readTimeoutMs || 0, '实测要 ~45 秒才出表，默认 30 秒不够').toBeGreaterThan(30000)
+
+    const steps = buildInvoiceCollectSteps(p)
+    // 预热刷新 = 开头两次 navigate 到同一地址
+    expect(steps.filter(s => s.type === 'navigate').length).toBeGreaterThanOrEqual(2)
+    const reads = steps.filter(s => s.type === 'readTable')
+    expect(reads.length).toBe(4)
+    for (const r of reads) {
+      expect(r.input.unthrottle, '每个方向都要 unthrottle').toBe(true)
+      expect(r.timeoutMs || 0).toBeGreaterThan(30000)
+    }
+  })
+
+  it('unthrottle 只对确实需要的平台打开（挂调试器期间外部探针连不上该 webview）', () => {
+    for (const name of ['快手小店', '拼多多', '微信小店']) {
+      expect(invoiceProfileFor(name)!.unthrottle, name).toBeFalsy()
+    }
+  })
+
+  it('unthrottle 是 readTable 的合法入参（schema 认它，否则建任务就被拒）', () => {
+    const schema = stepInputSchemas.readTable
+    expect(schema.safeParse({ selector: 'table', unthrottle: true }).success).toBe(true)
   })
 
   it('readLabelValue 的 metric 过白名单（写全向量的 metric 里带点号）', () => {
@@ -413,6 +516,18 @@ describe('表格行清洗（跑的是注入页面的同一份源码）', () => {
     expect(out[0][0]).toBe('订单信息')
   })
 
+  // P2-11（2026-10-14）：空表/首行不是数组时不能抛——注入脚本一抛，整步就报一个看不懂的错，
+  // 而"表是空的"（还没渲染完 / 该方向本来没有数据）是正常情况。
+  it('空表与畸形输入不抛异常（返回空数组）', () => {
+    expect(clean([])).toEqual([])
+    expect(clean([[]])).toEqual([])
+    // 首行不是数组（页面结构异常）时不崩，且不会把后面的行当成表头判据
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(() => clean([undefined as any, ['a', 'b']])).not.toThrow()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(clean([null as any, ['a', 'b']])).toEqual([['a', 'b']])
+  })
+
   it('正常数据行原样保留，空行与纯破折号行也要丢', () => {
     const out = clean([
       ['账单号', '可开金额'],
@@ -422,5 +537,19 @@ describe('表格行清洗（跑的是注入页面的同一份源码）', () => {
     ])
     expect(out.length).toBe(2)
     expect(out[1]).toEqual(['B2000000019095846', '¥13.91'])
+  })
+})
+
+describe('重复卡片方向（cards）的空语义（2026-10-15 审查 M1 修复）', () => {
+  it('卡片方向一律 emptyOk：待开票账单是队列，清零不能变成采集失败', () => {
+    const pdd = invoiceProfileFor('拼多多')!
+    const cardsSection = pdd.sections.find(s => !!s.cards?.fields.length)
+    expect(cardsSection, '拼多多「申请发票」是卡片方向').toBeTruthy()
+    // measuredRows 是"实测那一天的快照"，不决定"这个方向能不能空"——以前只在它为 0 时才允许空
+    expect(cardsSection!.measuredRows).toBeGreaterThan(0)
+    const steps = buildInvoiceCollectSteps(pdd)
+    const cardStep = steps.find(s => s.type === 'readCards' && s.input.metric === cardsSection!.metricKey)
+    expect(cardStep, '卡片方向应产出 readCards 步骤').toBeTruthy()
+    expect(cardStep!.input.emptyOk).toBe(true)
   })
 })

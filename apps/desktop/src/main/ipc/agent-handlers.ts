@@ -2,31 +2,23 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import { IPC_CHANNELS, type IPCResult } from '@shared/contracts/ipc'
-import {
-  agentPlanSchema,
-  agentPlanGenerateInputSchema,
-  agentSoftwareExecuteInputSchema,
-  agentSoftwarePlanSchema,
-  agentUiStateSchema
-} from '@shared/schemas/agent'
+import { agentChatInputSchema, agentUiStateSchema } from '@shared/schemas/agent'
 import { redactAgentText } from '@shared/agent-privacy'
 import { writeAudit, auditRequestId } from '../services/audit-logger'
-import { AgentObservationError, observeCurrentPage } from '../services/agent-observer'
-import { AgentPlanningError } from '../services/agent-planner'
-import {
-  AgentSoftwareError,
-  executeAgentSoftwarePlan,
-  followUpAgentJob,
-  generateAgentPlan,
-  getAgentSoftwareContext,
-  getAgentUiState,
-  setAgentUiState,
-  validateAgentPlanForCurrentPage,
-  validateAgentSoftwarePlan
-} from '../services/agent-service'
+import { generateAgentChat } from '../services/agent-chat-service'
+import { getAgentUiState, setAgentUiState } from '../services/agent-service'
 import { assertTrustedRenderer as assertTrustedIpc } from '../services/renderer-trust'
 
 const noArgumentsSchema = z.tuple([])
+const DISABLED_AGENT_OPERATION_CHANNELS = [
+  IPC_CHANNELS.AGENT_PAGE_OBSERVE,
+  IPC_CHANNELS.AGENT_PLAN_GENERATE,
+  IPC_CHANNELS.AGENT_JOB_FOLLOW_UP,
+  IPC_CHANNELS.AGENT_PLAN_VALIDATE,
+  IPC_CHANNELS.AGENT_SOFTWARE_CONTEXT,
+  IPC_CHANNELS.AGENT_SOFTWARE_VALIDATE,
+  IPC_CHANNELS.AGENT_SOFTWARE_EXECUTE
+] as const
 
 function success<T>(data: T, requestId: string): IPCResult<T> {
   return { ok: true, data, requestId }
@@ -37,27 +29,37 @@ function failure(code: string, message: string, requestId: string): IPCResult {
 }
 
 function assertTrustedRenderer(event: IpcMainInvokeEvent): void {
-  // 实现收敛到 services/renderer-trust.ts（原本与 agent-domain-handlers 各写一份，措辞/错误码不一致）。
   assertTrustedIpc(event, { forbiddenCode: 'AGENT_FORBIDDEN', feature: 'Agent' })
 }
 
-function errorResponse(error: unknown, requestId: string, auditAction?: 'agent.observe' | 'agent.plan' | 'agent.plan.validate' | 'agent.ui.update' | 'agent.software.context' | 'agent.software.validate' | 'agent.software.execute', storeId?: string): IPCResult {
+function errorResponse(error: unknown, requestId: string, auditAction?: 'agent.ui.update' | 'agent.chat' | 'agent.operation.rejected'): IPCResult {
   let code = 'AGENT_INTERNAL_ERROR'
-  let message = 'Agent 操作失败'
-  if (error instanceof AgentObservationError || error instanceof AgentPlanningError || error instanceof AgentSoftwareError) {
-    code = error.code
-    message = error.message
-  } else if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') {
+  let message = 'Agent 对话失败'
+  if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') {
     code = error.code
     message = String((error as { message?: string }).message || code).replace(/^[A-Z0-9_]+:\s*/, '')
   } else if ((error as any)?.name === 'ZodError') {
     code = 'AGENT_INVALID_INPUT'
-    message = String((error as Error).message || '参数校验失败')
+    message = '参数校验失败'
   } else if (error instanceof Error) {
     message = error.message || message
   }
-  if (auditAction) writeAudit(auditAction, 'failure', { storeId, requestId: auditRequestId(requestId, code) })
+  if (auditAction) writeAudit(auditAction, 'failure', { requestId: auditRequestId(requestId, code) })
   return failure(code, message, requestId)
+}
+
+function rejectAgentOperation(event: IpcMainInvokeEvent, channel: string): IPCResult {
+  const requestId = randomUUID()
+  try {
+    assertTrustedRenderer(event)
+    // 谁还在调已下线的旧 Agent 接口，事后要能查到（2026-10-15 审查）。
+    // 通道名放进 request_id 的 # 后缀（与 software.execute 记动作摘要同一槽位），
+    // 前缀匹配可查全部被拒记录、带通道可精确匹配；不记参数。
+    writeAudit('agent.operation.rejected', 'failure', { requestId: auditRequestId(requestId, `AGENT_OPERATION_NOT_ALLOWED:${channel}`) })
+    return failure('AGENT_OPERATION_NOT_ALLOWED', `Agent 当前仅支持普通文本对话；已拒绝旧操作接口 ${channel}`, requestId)
+  } catch (error) {
+    return errorResponse(error, requestId)
+  }
 }
 
 export function registerAgentHandlers(): void {
@@ -74,110 +76,27 @@ export function registerAgentHandlers(): void {
     const requestId = randomUUID()
     try {
       assertTrustedRenderer(event)
-      const input = agentUiStateSchema.parse(raw)
-      const state = setAgentUiState(input)
+      const state = setAgentUiState(agentUiStateSchema.parse(raw))
       writeAudit('agent.ui.update', 'success', { requestId })
       return success(state, requestId)
     } catch (error) { return errorResponse(error, requestId, 'agent.ui.update') }
   })
 
-  ipcMain.handle(IPC_CHANNELS.AGENT_PAGE_OBSERVE, async (event: IpcMainInvokeEvent, ...args: unknown[]): Promise<IPCResult> => {
+  ipcMain.handle(IPC_CHANNELS.AGENT_CHAT, async (event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
     const requestId = randomUUID()
-    let storeId: string | undefined
     try {
       assertTrustedRenderer(event)
-      noArgumentsSchema.parse(args)
-      const observation = await observeCurrentPage()
-      storeId = observation.storeId
-      writeAudit('agent.observe', 'success', { storeId, requestId })
-      return success(observation, requestId)
-    } catch (error) { return errorResponse(error, requestId, 'agent.observe', storeId) }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.AGENT_PLAN_GENERATE, async (event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
-    const requestId = randomUUID()
-    let storeId: string | undefined
-    try {
-      assertTrustedRenderer(event)
-      const input = agentPlanGenerateInputSchema.parse(raw)
-      const result = await generateAgentPlan(input)
-      storeId = result.kind === 'task' ? result.plan.storeId
-        : result.kind === 'software' ? (result.context.displayedStoreId || undefined)
-        : undefined
-      writeAudit('agent.plan', 'success', { storeId, requestId })
+      const input = agentChatInputSchema.parse(raw)
+      const result = await generateAgentChat(input)
+      // 只记"发生过一次对话"（requestId），**不记内容**——审计要能查到，内容不能进日志
+      writeAudit('agent.chat', 'success', { requestId })
       return success(result, requestId)
-    } catch (error) { return errorResponse(error, requestId, 'agent.plan', storeId) }
+    } catch (error) { return errorResponse(error, requestId, 'agent.chat') }
   })
 
-  ipcMain.handle(IPC_CHANNELS.AGENT_JOB_FOLLOW_UP, async (event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
-    const requestId = randomUUID()
-    let storeId: string | undefined
-    try {
-      assertTrustedRenderer(event)
-      const result = await followUpAgentJob(raw)
-      storeId = result.kind === 'software' ? (result.context.displayedStoreId || undefined) : undefined
-      writeAudit('agent.plan', 'success', { storeId, requestId })
-      return success(result, requestId)
-    } catch (error) { return errorResponse(error, requestId, 'agent.plan', storeId) }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.AGENT_PLAN_VALIDATE, async (event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
-    const requestId = randomUUID()
-    let storeId: string | undefined
-    try {
-      assertTrustedRenderer(event)
-      const planInput = agentPlanSchema.parse(raw)
-      storeId = planInput.storeId
-      const result = await validateAgentPlanForCurrentPage(planInput)
-      if (result.plan.storeId !== storeId) {
-        const error = new Error('计划所属店铺已变化，请重新观察当前页面')
-        ;(error as any).code = 'AGENT_CONTEXT_CHANGED'
-        throw error
-      }
-      writeAudit('agent.plan.validate', 'success', { storeId, requestId })
-      return success(result, requestId)
-    } catch (error) { return errorResponse(error, requestId, 'agent.plan.validate', storeId) }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.AGENT_SOFTWARE_CONTEXT, (event: IpcMainInvokeEvent, ...args: unknown[]): IPCResult => {
-    const requestId = randomUUID()
-    try {
-      assertTrustedRenderer(event)
-      noArgumentsSchema.parse(args)
-      const context = getAgentSoftwareContext()
-      writeAudit('agent.software.context', 'success', { requestId })
-      return success(context, requestId)
-    } catch (error) { return errorResponse(error, requestId, 'agent.software.context') }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.AGENT_SOFTWARE_VALIDATE, (event: IpcMainInvokeEvent, raw: unknown): IPCResult => {
-    const requestId = randomUUID()
-    let storeId: string | undefined
-    try {
-      assertTrustedRenderer(event)
-      const plan = agentSoftwarePlanSchema.parse(raw)
-      const firstAction = plan.steps[0]?.action as any
-      storeId = firstAction?.storeId
-      const result = validateAgentSoftwarePlan(plan)
-      writeAudit('agent.software.validate', 'success', { storeId, requestId })
-      return success(result, requestId)
-    } catch (error) { return errorResponse(error, requestId, 'agent.software.validate', storeId) }
-  })
-
-  ipcMain.handle(IPC_CHANNELS.AGENT_SOFTWARE_EXECUTE, async (event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
-    const requestId = randomUUID()
-    let storeId: string | undefined
-    try {
-      assertTrustedRenderer(event)
-      const input = agentSoftwareExecuteInputSchema.parse(raw)
-      const firstAction = input.plan.steps[0]?.action as any
-      storeId = firstAction?.storeId
-      const result = await executeAgentSoftwarePlan(input)
-      writeAudit('agent.software.execute', 'success', {
-        storeId,
-        requestId: auditRequestId(requestId, input.plan.steps.map(step => step.action.type).join('+'))
-      })
-      return success(result, requestId)
-    } catch (error) { return errorResponse(error, requestId, 'agent.software.execute', storeId) }
-  })
+  // Compatibility handlers intentionally reject older renderers. Hiding their
+  // buttons is insufficient: Main remains the authority for Agent capability.
+  for (const channel of DISABLED_AGENT_OPERATION_CHANNELS) {
+    ipcMain.handle(channel, (event: IpcMainInvokeEvent): IPCResult => rejectAgentOperation(event, channel))
+  }
 }

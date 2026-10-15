@@ -32,19 +32,52 @@ export function buildEntityCollectSteps(p: EntityProfile): EntityStepDraft[] {
     { type: 'waitMs', input: { ms: p.settleMs }, timeoutMs: p.settleMs + 10000 }
   ]
 
-  // 统一社会信用代码：同样允许"这一行不存在"（个人店铺/未登记执照），
-  // 但**不允许**读到过长的容器文本——那是页面结构变了，必须如实失败
-  steps.push({
-    type: 'readLabelValue',
-    input: {
-      label: p.noAnchor,
-      metric: ENTITY_METRIC_NO,
-      allowText: true,
-      absentOk: true,
-      maxValueLen: maxLen
-    },
-    timeoutMs: 20000
-  })
+  /**
+   * 页面上读不到主体（隐藏浮层 / 打码）→ 走 readApi 读接口，再把两个值写成
+   * `entity.name` / `entity.no` **标量快照**——与 readLabelValue 落的是同一个指标名，
+   * 所以下游的读取与写回（overview.entityApply）一行都不用改。
+   */
+  if (p.api) {
+    steps.push({
+      type: 'readApi',
+      input: {
+        urlMarker: p.api.urlMarker,
+        // 主体信息是一条对象（不是列表）：api-reader 会把单个对象当成一行
+        rowsPath: '',
+        // 用一条"合成字段"占位，保证 readApi 的 requireFields 能挡住"字段改名了"
+        fields: [
+          { key: 'entity.name', path: p.api.namePath, as: 'text' },
+          { key: 'entity.no', path: p.api.noPath, as: 'text' }
+        ],
+        requireFields: ['entity.name', 'entity.no'],
+        reload: true,
+        scalars: {
+          [ENTITY_METRIC_NAME]: p.api.namePath,
+          [ENTITY_METRIC_NO]: p.api.noPath
+        }
+      },
+      timeoutMs: p.api.timeoutMs || 30000
+    })
+    return steps
+  }
+
+  // 统一社会信用代码（含候选文案）：同样允许"这一行不存在"（个人店铺/未登记执照），
+  // 但**不允许**读到过长的容器文本——那是页面结构变了，必须如实失败。
+  // 多个候选写同一个指标：缺席的行不写快照，所以只有真在页面上那一行会落库。
+  const noLabels = [p.noAnchor, ...(p.noAnchors || [])].filter((v, i, arr) => v && arr.indexOf(v) === i)
+  for (const label of noLabels) {
+    steps.push({
+      type: 'readLabelValue',
+      input: {
+        label,
+        metric: ENTITY_METRIC_NO,
+        allowText: true,
+        absentOk: true,
+        maxValueLen: maxLen
+      },
+      timeoutMs: 20000
+    })
+  }
 
   for (const label of p.nameAnchors) {
     steps.push({

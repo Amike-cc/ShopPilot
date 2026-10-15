@@ -730,6 +730,12 @@ export const agentPlanGenerateInputSchema = z.object({
   history: z.array(agentConversationTurnSchema).max(AGENT_CONVERSATION_HISTORY_MAX).default([])
 }).strict()
 
+/** 纯文本对话请求；不接受页面、软件、任务或工具等额外上下文。 */
+export const agentChatInputSchema = z.object({
+  message: z.string().trim().min(1).max(AGENT_MAX_GOAL_CHARS),
+  history: z.array(agentConversationTurnSchema).max(AGENT_CONVERSATION_HISTORY_MAX).default([])
+}).strict()
+
 export type AgentPlanStatus = (typeof AGENT_PLAN_STATUSES)[number]
 export type AgentRisk = (typeof AGENT_RISK_LEVELS)[number]
 export type AgentStepType = (typeof AGENT_STEP_TYPES)[number]

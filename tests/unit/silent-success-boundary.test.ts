@@ -116,3 +116,23 @@ describe('下载文件名净化（平台的 Content-Disposition 不可信）', (
     expect(safe('a\u0000b\u001fc.txt')).toBe('abc.txt')
   })
 })
+
+describe('"空"语义：预期内空与"本次没读到"必须分开（2026-10-15 审查 H2 修复）', () => {
+  const runner = readFileSync(resolve('apps/desktop/src/main/tasks/task-runner.ts'), 'utf8')
+
+  it('readApi 必须消费档案的 emptyOk（以前这个输入没有任何人用）', () => {
+    expect(runner).toMatch(/const emptyOk = input\.emptyOk === true/)
+    // 空标记带 expected：档案声明"本来就可能没有"（如微信小店该季度未生成）→ 预期内空
+    expect(runner).toContain('expected: emptyOk')
+  })
+
+  it('"可疑空"必须报警：读到别的方向的表 / 表头缺列 = 本次没读到（expected=false）', () => {
+    // 以前这两处吃默认 expected=true → 静默，把上一次的数据当本次结果
+    expect(runner).toMatch(/emptyResult\(`页面上是另一方向[^`]*`, false\)/)
+    expect(runner).toMatch(/emptyResult\(`表头缺少期望列[^`]*`, false\)/)
+  })
+
+  it('"档案声明的空"仍是预期内（expected=true），不得渲染成"本次没读到"', () => {
+    expect(runner).toMatch(/emptyResult\('页面上没有该选择器的表格', true\)/)
+  })
+})

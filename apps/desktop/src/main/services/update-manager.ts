@@ -41,12 +41,14 @@ let configured = false
 let phase: 'check' | 'download' | null = null
 
 function errorMessage(error: unknown): string {
-  return String((error as any)?.message || error || '更新检查失败')
+  if (error instanceof Error) return error.message || '更新检查失败'
+  if (error && typeof error === 'object' && 'message' in error) return String(error.message || '更新检查失败')
+  return String(error || '更新检查失败')
 }
 
 function readSetting<T>(key: string, fallback: T): T {
   try {
-    const row = getDatabase().prepare('SELECT value_json FROM app_settings WHERE key = ?').get(key) as any
+    const row = getDatabase().prepare('SELECT value_json FROM app_settings WHERE key = ?').get(key) as { value_json: string } | undefined
     return row ? (JSON.parse(row.value_json) as T) : fallback
   } catch {
     return fallback
@@ -94,7 +96,7 @@ function configure(): void {
     phase = null
     publish({
       state: 'available', version: info.version, releaseDate: info.releaseDate,
-      releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : undefined, percent: 0
+      releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : undefined, percent: 0, error: undefined
     })
     audit('update.check', 'success', { found: true, version: info.version, channel: getUpdateChannel() })
   })
@@ -104,7 +106,7 @@ function configure(): void {
     audit('update.check', 'success', { found: false, channel: getUpdateChannel() })
   })
   autoUpdater.on('download-progress', (progress) => {
-    const next = publish({ state: 'downloading', percent: progress.percent, transferred: progress.transferred, total: progress.total })
+    const next = publish({ state: 'downloading', percent: progress.percent, transferred: progress.transferred, total: progress.total, error: undefined })
     emitToRenderer(EVENT_CHANNELS.UPDATE_PROGRESS, next)
   })
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {

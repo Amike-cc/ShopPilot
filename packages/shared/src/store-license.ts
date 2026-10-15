@@ -130,10 +130,148 @@ export interface LicenseGrouping {
   return { groups: ordered, keyByStore, hasMissing: ordered.some(g => g.key === NO_LICENSE_KEY) }
 }
 
+/**
+ * 按开票主体把**行**筛一道（发票中心屏上的筛选与「导出待开票 CSV」共用这一份规则）。
+ *
+ * 为什么导出也要走它：导出的表是拿去报税/交代账的，代账按主体分账——用户在屏上点了某个主体
+ * 再导出，拿到的就该是那个主体的行；否则 A 公司的清单里会混进别家公司的单号/金额/税号。
+ *
+ * 为什么必须复用 `groupStoresByLicense`：一家店属于哪个主体**要看整份列表**才能定
+ * （没填代码但和有代码的那家同名的店，要并进那个主体），各店各算一遍会出现
+ * "胶囊写 2 家、筛出来只有 1 家"（见文件头）。
+ *
+ * @param rows 每店一行、带 storeId 与营业执照字段（发票中心的行就是这个形状）
+ * @param licenseKey 分组 key（代码 / 小写名称 / NO_LICENSE_KEY）；**空 = 不筛选（全部）**
+ */
+export function filterRowsByLicenseKey<T extends { storeId: string } & StoreLicenseFields>(
+  rows: readonly T[],
+  licenseKey: string | null | undefined
+): T[] {
+  const key = String(licenseKey ?? '').trim()
+  if (!key) return [...rows]
+  const { keyByStore } = groupStoresByLicense(rows.map(r => ({
+    id: r.storeId,
+    licenseName: r.licenseName ?? null,
+    licenseNo: r.licenseNo ?? null
+  })))
+  return rows.filter(r => keyByStore.get(r.storeId) === key)
+}
+
 /** 从平台读回来的主体信息（形状与 store_snapshots 的 entity.* 指标对齐） */
 export interface FetchedEntity {
   name?: string | null
   no?: string | null
+}
+
+/**
+ * 导出范围标签（保存框标题 / 默认文件名 / 成功提示共用）。
+ *
+ * 为什么不直接用 key：**只填了统一社会信用代码的主体**（名称留空）在界面上就是拿代码当标签
+ * （见 licenseLabelOf），这里若只看名称就会得到空串 —— 用户"选中某个主体导出"，却被告知导的是
+ * "全部主体"，文件名也退化成不带主体的 `待开票清单-日期.csv`（两个主体连导还会撞同名）。
+ * 取不到名称就退到代码，再退到 key 本身。
+ */
+export function licenseScopeLabel(rows: readonly StoreLicenseFields[], licenseKey: string | null | undefined): string {
+  const key = String(licenseKey ?? '').trim()
+  if (!key) return ''
+  if (key === NO_LICENSE_KEY) return '未填写营业执照'
+  const name = rows.map(r => normalizeLicenseName(r.licenseName)).find(Boolean)
+  if (name) return name
+  const no = rows.map(r => normalizeLicenseNo(r.licenseNo)).find(Boolean)
+  if (no) return no
+  return key
+}
+
+/**
+ * 单个字段的对照结论。
+ *   - `platform-empty`：平台**没读到**这个字段 → 未比对（既不是一致，也不是不一致）
+ *   - `platform-placeholder`：平台这一行写的是「无」这类**占位文案**（实测拼多多个人店铺）
+ *     → 不是可用的主体信息，也不该被说成"读到了"
+ *   - `store-empty`：平台读到了真值、店里还空着 → 待补录（不是冲突；decideLicenseWrite 会直接填上）
+ *   - `match` / `mismatch`：两边都有值时的比对结果
+ */
+export type EntityFieldVerdict = 'platform-empty' | 'platform-placeholder' | 'store-empty' | 'match' | 'mismatch'
+
+export interface StoreEntityComparison {
+  name: EntityFieldVerdict
+  no: EntityFieldVerdict
+}
+
+/** 这一行的值是不是"没有值"的占位文案（与写回判定同一份规则，界面显示也用） */
+export function isPlaceholderLicenseValue(v: unknown): boolean {
+  const s = String(v ?? '').trim()
+  return !!s && (PLACEHOLDER_RE.test(s) || PLACEHOLDER_RE.test(s.replace(/[\s-]/g, '')))
+}
+
+/**
+ * 把「平台读到的主体」逐字段与「店铺已填」比一遍（界面展示与核对用；写不写由 decideLicenseWrite 定）。
+ *
+ * 为什么必须逐字段、且把"平台没读到"和"店里空着"分开说：这两件事最容易被糊成一句
+ * "一致/不一致"——把"店里还没填代码"说成冲突会让人去改一个本来没错的主体；把"平台只读到名称"
+ * 说成"主体一致"则是拿没比对过的字段打包票（税号恰恰是最不能想当然的那个）。
+ * 比的是归一化后的值（大小写、空白、连字符都归一），与 decideLicenseWrite 同一套口径。
+ */
+export function compareStoreEntity(
+  store: StoreLicenseFields | null | undefined,
+  fetched: FetchedEntity | null | undefined
+): StoreEntityComparison {
+  const cmp = (platformValue: unknown, storeValue: unknown, norm: (v: unknown) => string): EntityFieldVerdict => {
+    const p = norm(platformValue)
+    if (!p) return 'platform-empty'
+    // 占位文案（实测「无」）不是主体信息——显示与写回都按"没有可用值"处理
+    if (isPlaceholderLicenseValue(platformValue)) return 'platform-placeholder'
+    const s = norm(storeValue)
+    if (!s) return 'store-empty'
+    return p === s ? 'match' : 'mismatch'
+  }
+  return {
+    // 名称比对按小写（与 decideLicenseWrite 的 existing.toLowerCase() === next.toLowerCase() 一致）
+    name: cmp(fetched?.name, store?.licenseName, v => normalizeLicenseName(v).toLowerCase()),
+    no: cmp(fetched?.no, store?.licenseNo, v => normalizeLicenseNo(v))
+  }
+}
+
+/**
+ * 界面上那一句「平台读到的主体 vs 已填」的结论（发票中心行内用）。
+ * 说得比数据少不行（用户没法核对），说得比数据多也不行（"一致"三个字只留给**比过的**字段）。
+ */
+export function entityVerdictText(
+  store: StoreLicenseFields | null | undefined,
+  fetched: FetchedEntity | null | undefined
+): string {
+  const cmp = compareStoreEntity(store, fetched)
+  const fieldName = (field: 'name' | 'no') => (field === 'name' ? '名称' : '信用代码')
+  const readFields = (['name', 'no'] as const)
+    .filter(f => cmp[f] === 'match' || cmp[f] === 'mismatch' || cmp[f] === 'store-empty')
+    .map(fieldName)
+  const placeholderFields = (['name', 'no'] as const).filter(f => cmp[f] === 'platform-placeholder').map(fieldName)
+  const placeholderNote = placeholderFields.length
+    ? `平台${placeholderFields.join('、')}这一行写的是「无」这类占位文案（没有可用的主体信息）`
+    : ''
+
+  if (!normalizeLicenseName(store?.licenseName) && !normalizeLicenseNo(store?.licenseNo)) {
+    if (readFields.length) {
+      return `店铺还没填主体（平台读到了${readFields.join('和')}，可在上方点「获取主体营业执照」填入）` + (placeholderNote ? `；${placeholderNote}` : '')
+    }
+    return placeholderNote ? `店铺还没填主体；${placeholderNote}，不会写入店铺` : '店铺还没填主体，可在上方点「获取主体营业执照」填入'
+  }
+
+  const mismatches = (['name', 'no'] as const)
+    .filter(f => cmp[f] === 'mismatch')
+    .map(f => f === 'name'
+      ? `名称（已填「${store?.licenseName}」／平台「${fetched?.name}」）`
+      : `信用代码（已填「${store?.licenseNo}」／平台「${fetched?.no}」）`)
+  if (mismatches.length) return `与已填的不一致：${mismatches.join('；')}——核对清楚再改，自动写入不会覆盖你的填写`
+
+  const parts: string[] = []
+  const matched = (['name', 'no'] as const).filter(f => cmp[f] === 'match').map(fieldName)
+  const canFill = (['name', 'no'] as const).filter(f => cmp[f] === 'store-empty').map(fieldName)
+  const notRead = (['name', 'no'] as const).filter(f => cmp[f] === 'platform-empty').map(fieldName)
+  if (matched.length) parts.push(`${matched.join('、')}与已填一致`)
+  if (canFill.length) parts.push(`${canFill.join('、')}平台读到了、店里还空着（可补录）`)
+  if (placeholderNote) parts.push(`${placeholderNote}（未比对）`)
+  if (notRead.length) parts.push(`${notRead.join('、')}平台没读到（未比对）`)
+  return parts.join('；')
 }
 
 export interface LicenseWriteDecision {
@@ -151,6 +289,14 @@ export interface LicenseWriteDecision {
 
 /** 平台把证件号打码了（实测微信「注册号/统一社会信用代码」= 9233**********D310） */
 const MASK_RE = /[*＊·•]{2,}/
+
+/**
+ * "这一行没有值"的占位文案（实测拼多多个人店铺的「营业执照信息」四行都写「无」）。
+ *
+ * 为什么必须单独挡：这类文案既不是掩码、长度也合法，会一路通过校验被写成"主体名称=无"——
+ * 那比不填更糟（申报表上会赫然出现一个假主体）。宁可少填，不可填错。
+ */
+const PLACEHOLDER_RE = /^(无|没有|暂无|暂无信息|暂无数据|未填写|未登记|未认证|未查询到|不适用|不涉及|保密|未知|待完善|空|null|nil|n\/a|na|none|-{1,2}|—{1,2}|\/|\.)$/i
 
 /**
  * 决定「平台读到的主体」要不要写进店铺营业执照。规则（宁可少填，不可填错）：
@@ -172,12 +318,14 @@ export function decideLicenseWrite(
 
   const checkName = (): string | null => {
     if (!rawName) return null
+    if (PLACEHOLDER_RE.test(rawName)) { rejected.push({ field: 'licenseName', raw: rawName, why: '平台这一行写的是「' + rawName + '」——是占位文案，不是真的主体名称' }); return null }
     if (MASK_RE.test(rawName)) { rejected.push({ field: 'licenseName', raw: rawName, why: '平台对主体名称打了码' }); return null }
     if (rawName.length > 120) { rejected.push({ field: 'licenseName', raw: rawName.slice(0, 40) + '…', why: '名称过长，疑似读到整块容器文本' }); return null }
     return rawName
   }
   const checkNo = (): string | null => {
     if (!rawNo) return null
+    if (PLACEHOLDER_RE.test(rawNo)) { rejected.push({ field: 'licenseNo', raw: rawNo, why: '平台这一行写的是「' + rawNo + '」——是占位文案，不是真的证件号' }); return null }
     if (MASK_RE.test(rawNo)) { rejected.push({ field: 'licenseNo', raw: rawNo, why: '平台对统一社会信用代码打了码（只显示头尾）' }); return null }
     if (!/^(?:[0-9A-Z]{18}|[0-9]{15})$/.test(rawNo)) { rejected.push({ field: 'licenseNo', raw: rawNo, why: '不是 18 位（或旧税号 15 位）的字母数字' }); return null }
     return rawNo

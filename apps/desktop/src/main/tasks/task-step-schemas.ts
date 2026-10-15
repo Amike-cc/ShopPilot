@@ -82,11 +82,84 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * 给了它：挑不到表/表头不符不报错，改落一条**空快照**（如实 0 条），
      * 界面显示"0 条"而不是"采集失败"。
      */
-    emptyOk: z.boolean().optional()
+    emptyOk: z.boolean().optional(),
+    /**
+     * 读表期间挂调试器 + 强制焦点模拟，把渲染从后台节流里拉出来。
+     * 实测用途：抖店发票页是独立微前端，不这么做时采集等满 90 秒也渲染不出表格
+     * （挂调试器的场景 45 秒就出表）。见 task-runner 里 readTable 的说明。
+     */
+    unthrottle: z.boolean().optional(),
+    /**
+     * 数据行宽度校验（**按列序映射**的方向必须给）：过半数据行不是这个宽度就如实失败。
+     * 为什么必须有它——表头文案校验（expectHeaders）只查"列名还在不在"，
+     * 平台**插一列/删一列**时它照样通过，而按列序映射会整体错位；错位后 requireFields
+     * 可能把全部行当空 → 静默 0 条（2026-10-15 审查 M6）。
+     * 用"过半"而不是"每一行"：允许个别宽度不同的行（实测抖店季度行下面挂的"结算明细…"
+     * 展开行），平台的插列/删列会让所有数据行一起错位，必然过半。
+     */
+    expectColumnCount: z.number().int().positive().max(64).optional()
   }).strict().refine(v => !(v.headersOnly && v.keepRows), {
     message: 'headersOnly 与 keepRows 不能同时启用'
   }),
   screenshot: z.object({}).strict(),
+  /**
+   * 读**重复卡片列表**（只读）：页面把"一张账单一张卡"渲染成一串 div、没有 `<table>` 时用。
+   * 实测用途：拼多多资金中心「申请发票」的待开票账单卡片（10 张，含 5657.37 等待开票金额）。
+   * 以**文案**为锚（类名带构建哈希，写死会随改版失效），每张卡读成一行，
+   * 返回结构与 readTable 同构（row[0] = 字段 key 当表头）。
+   */
+  readCards: z.object({
+    /** 卡片锚点标签：页面上**每张卡各出现一次**的那个标签（如「账单日期」） */
+    anchor: z.string().min(1).max(60),
+    /** 卡内要取的字段：key = 统一列 key，label = 卡上的标签文案 */
+    fields: z.array(z.object({
+      key: z.string().min(1).max(60),
+      label: z.string().min(1).max(60)
+    }).strict()).min(1).max(20),
+    metric: z.string().min(1).max(60).optional(),
+    keepRows: z.boolean().optional(),
+    /** 单值长度上限（超过视为爬到容器层级 → 该格留空），默认 60 */
+    maxValueLen: z.number().int().positive().max(500).optional(),
+    maxCards: z.number().int().positive().max(500).optional(),
+    deep: z.boolean().optional(),
+    /** 页面上**本来就可能没有卡片**（该方向没有待开票账单）→ 落 0 条而不是判失败 */
+    emptyOk: z.boolean().optional()
+  }).strict(),
+  /**
+   * 读**接口响应**（只读）：页面渲染不出表格、数据只存在于响应体里时用。
+   *
+   * 实测（2026-10-14 微信小店涉税账单）：页面是 <micro-app> 微前端，子应用只渲染出外壳
+   * （0 个 `<table>`），而它自己请求的 listQuarterTax 是有数据的 → 只能读响应。
+   *
+   * 与 readTable 的区别在于**参数固定、没有选择器也没有代码入口**：
+   * 只 attach debugger + Network.enable，必要时 reload 一次让页面**自己**重发请求；
+   * 不构造、不重放任何请求。字段映射是白名单化的（key/path/取值方式三样）。
+   */
+  readApi: z.object({
+    /** 响应 URL 必须包含它（够窄，避免抓到同名的别的接口） */
+    urlMarker: z.string().min(1).max(200),
+    /** 行数组在响应 JSON 里的路径（如 dataList） */
+    rowsPath: z.string().max(200).optional(),
+    fields: z.array(z.object({
+      key: z.string().min(1).max(60),
+      path: z.string().min(1).max(120),
+      as: z.enum(['text', 'cents', 'epochQuarter']).optional()
+    }).strict()).min(1).max(30),
+    metric: z.string().min(1).max(60).optional(),
+    reload: z.boolean().optional(),
+    maxBytes: z.number().int().positive().optional(),
+    /**
+     * 关键列必须有值：接口没有表头文案兜底，字段改名时只能靠它把
+     * "读到了但关键列全空"挡成失败，而不是显示成"这家没有数据"。
+     */
+    requireFields: z.array(z.string().min(1).max(60)).max(20).optional(),
+    /**
+     * 把响应里的**单值**写成标量快照（`metricKey → 取值路径`）。
+     * 用于主体信息这类"一条对象就是全部内容"的接口（entity.name / entity.no）。
+     */
+    scalars: z.record(z.string().min(1).max(60), z.string().min(1).max(160)).optional(),
+    emptyOk: z.boolean().optional()
+  }).strict(),
   fillDraft: z.object({ selector, text: z.string().max(20000) }).strict(),
   waitForUserConfirmation: z.object({ message: z.string().min(1).max(500) }).strict(),
   // 副作用步骤（点击/写入）：参数仍然只有选择器与文本，无任何代码入口
@@ -203,18 +276,23 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      */
     allowJsWhenDetached: z.boolean().optional(),
     /**
-     * 点完校验它**真的选中了**：`{ selector, classIncludes, text? }` ——
+     * 点完校验它**真的选中了**：`{ selector, classIncludes, text?, deep? }` ——
      * 在 selector 匹配的元素里找一个 innerText === text（默认 = 本次点的文案）且 className
      * 含 classIncludes 的，超时没有就报 TASK_TAB_NOT_ACTIVE。
      *
      * 用途：平台常有一批**表头完全相同**的页签（实测快手发票页「处理中」与「处理记录」），
      * 切页签静默失败时读回来的是上一个页签的数据，而表头校验对此无能为力——
      * 有了它切不动就如实失败，不会张冠李戴。
+     *
+     * `deep: true`：选择器要能穿透开放 ShadowRoot 再匹配（微信小店的页面在 micro-app 的
+     * ShadowRoot 里，实测 2026-10-14：切到「给平台开票」后页签与表格一起进了 ShadowRoot，
+     * document 级 querySelectorAll 从此一个都看不到 → 照旧写法会误报"页签没切成功"）。
      */
     verifyActive: z.object({
       selector,
       classIncludes: z.string().min(1).max(60),
-      text: z.string().min(1).max(200).optional()
+      text: z.string().min(1).max(200).optional(),
+      deep: z.boolean().optional()
     }).strict().optional(),
     /**
      * 点完校验它**真的处于勾选态**（读回目标自己或所属 label 里的 checkbox.checked）。

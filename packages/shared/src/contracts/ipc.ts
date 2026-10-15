@@ -189,6 +189,9 @@ export const IPC_CHANNELS = {
   OVERVIEW_INVOICE_CENTER: 'overview:invoiceCenter',
   // 发票中心：把当前待开票清单导出为 CSV（弹保存框；只写文件，不上传）
   OVERVIEW_INVOICE_EXPORT: 'overview:invoiceExport',
+  // 涉税信息报送：汇总各店铺平台侧报送的经营数据（来自涉税报送页 readTable 快照）；
+  // 随数据一起返回平台自己的用途限制（该数据不得作为税务申报依据）
+  OVERVIEW_TAX_REPORT: 'overview:taxReport',
   // 店铺主体：把已采到的 entity.* 快照写进店铺营业执照（空则填；与已填不一致**不覆盖**，如实回报）
   OVERVIEW_ENTITY_APPLY: 'overview:entityApply',
   // 手动录入经营指标（平台用反抓取字体渲染数字时，由用户看页面自行录入，来源如实标记为"手动"）
@@ -210,9 +213,11 @@ export const IPC_CHANNELS = {
   TASK_UPDATE: 'task:update',
   SNAPSHOT_LIST: 'snapshot:list',
 
-  // 内置 Agent（观察/规划在 Main 执行；任务仍通过现有 task:* 通道管理）
+  // 内置 Agent：普通文本对话与抽屉 UI 状态；不提供页面/软件操作能力。
   AGENT_UI_GET: 'agent:ui:get',
   AGENT_UI_SET: 'agent:ui:set',
+  AGENT_CHAT: 'agent:chat',
+  /** 旧版 Agent 操作通道保留用于返回明确的禁用错误，不再执行任何操作。 */
   AGENT_PAGE_OBSERVE: 'agent:page:observe',
   AGENT_PLAN_GENERATE: 'agent:plan:generate',
   AGENT_PLAN_VALIDATE: 'agent:plan:validate',

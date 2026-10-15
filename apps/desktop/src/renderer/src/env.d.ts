@@ -12,15 +12,8 @@ import type {
   SalesMetricsPlanView,
   SalesMetricsRunListResult
 } from '@shared/contracts/sales-metrics'
-import type {
-  AgentPlan,
-  AgentPageObservation,
-  AgentSoftwareContext,
-  AgentSoftwarePlan,
-  AgentUiState
-} from '@shared/schemas/agent'
-import type { AgentJobCreate, AgentJobFeedback, AgentJobResultReview, AgentMemoryReview, AgentMemoryWrite, AgentTaskDelegate, ModelProfileInput } from '@shared/schemas/agent-domain'
-import type { AgentContextUsage } from '@shared/agent-context'
+import type { AgentUiState } from '@shared/schemas/agent'
+import type { ModelProfile, ModelProfileInput } from '@shared/schemas/agent-domain'
 
 export interface TabInfo {
   id: string
@@ -110,7 +103,9 @@ declare global {
         datacenter: () => Promise<IPCResult>
         orders: () => Promise<IPCResult>
         invoiceCenter: () => Promise<IPCResult>
-        invoiceExport: () => Promise<IPCResult>
+        invoiceExport: (input?: { licenseKey?: string }) => Promise<IPCResult>
+        /** 涉税信息报送：各店铺的平台侧报送数据；返回体带 disclaimer（不得作为税务申报依据） */
+        taxReport: () => Promise<IPCResult>
         /** 店铺主体：把已采到的 entity.* 快照写进店铺营业执照（空则填；不一致不覆盖） */
         entityApply: () => Promise<IPCResult>
         manualMetric: (storeId: string, metric: string, value: number) => Promise<IPCResult>
@@ -275,63 +270,13 @@ declare global {
       agent: {
         uiGet: () => Promise<IPCResult<AgentUiState>>
         uiSet: (state: AgentUiState) => Promise<IPCResult<AgentUiState>>
-        observe: () => Promise<IPCResult<AgentPageObservation>>
-        generatePlan: (goal: string, history?: Array<{ role: 'user' | 'assistant'; text: string }>) => Promise<IPCResult<
-          | { kind: 'task'; plan: AgentPlan; observation: AgentPageObservation; model: string; elapsedMs: number; requiresApproval: boolean }
-          | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; pendingGoal?: string; thought?: string; requiresApproval: boolean }
-          | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; jobIds?: string[]; executed?: string[]; usage?: AgentContextUsage }
-        >>
-        /** Job 结束后自动续办：把用户目标与 Job 结果交给智能体回合判断下一步。 */
-        jobFollowUp: (goal: string, jobIds: string[], history?: Array<{ role: 'user' | 'assistant'; text: string }>) => Promise<IPCResult<
-          | { kind: 'software'; plan: AgentSoftwarePlan; context: AgentSoftwareContext; model: string; elapsedMs: number; thought?: string; requiresApproval: boolean }
-          | { kind: 'chat'; text: string; model: string; elapsedMs: number; thoughts?: string[]; jobIds?: string[]; executed?: string[]; usage?: AgentContextUsage }
-        >>
-        validatePlan: (plan: AgentPlan) => Promise<IPCResult>
-        softwareContext: () => Promise<IPCResult<AgentSoftwareContext>>
-        validateSoftwarePlan: (plan: AgentSoftwarePlan) => Promise<IPCResult>
-        executeSoftwarePlan: (plan: AgentSoftwarePlan, confirmed?: boolean) => Promise<IPCResult>
+        chat: (message: string, history?: Array<{ role: 'user' | 'assistant'; text: string }>) => Promise<IPCResult<{ text: string; model: string; elapsedMs: number }>>
       }
-      agentDomain: {
-        orgList: (query?: Record<string, unknown>) => Promise<IPCResult>
-        orgGet: (agentId: string) => Promise<IPCResult>
-        modelList: (query?: Record<string, unknown>) => Promise<IPCResult>
+      agentSettings: {
+        modelList: (query?: Record<string, unknown>) => Promise<IPCResult<{ items: ModelProfile[] }>>
         modelSet: (profile: ModelProfileInput) => Promise<IPCResult>
         modelDelete: (profileId: string) => Promise<IPCResult>
         modelTest: (profileId: string) => Promise<IPCResult>
-        jobCreate: (input: AgentJobCreate) => Promise<IPCResult>
-        jobDelegate: (input: AgentTaskDelegate) => Promise<IPCResult>
-        jobList: (query?: Record<string, unknown>) => Promise<IPCResult>
-        jobGet: (jobId: string) => Promise<IPCResult>
-        jobRun: (jobId: string) => Promise<IPCResult>
-        jobCancel: (jobId: string) => Promise<IPCResult>
-        jobApprove: (jobId: string, approved: boolean, confirmationId?: string) => Promise<IPCResult>
-        jobResultReview: (input: AgentJobResultReview) => Promise<IPCResult>
-        jobFeedback: (input: AgentJobFeedback) => Promise<IPCResult>
-        jobResume: (jobId: string) => Promise<IPCResult>
-        memoryList: (query: Record<string, unknown>) => Promise<IPCResult>
-        memorySearch: (query: Record<string, unknown>) => Promise<IPCResult>
-        memoryWrite: (input: AgentMemoryWrite) => Promise<IPCResult>
-        memoryReview: (input: AgentMemoryReview) => Promise<IPCResult>
-        memoryRebuild: () => Promise<IPCResult>
-        memorySnapshot: () => Promise<IPCResult>
-        memorySnapshotInspect: (path: string) => Promise<IPCResult>
-        memorySnapshotRestore: (path: string, confirmedOrExpectedSha256?: boolean | string, expectedSha256?: string) => Promise<IPCResult>
-        memoryLearningSettings: (input?: { autoLearn: boolean; retentionDays: number }) => Promise<IPCResult>
-        memoryMaintenance: () => Promise<IPCResult>
-        qualityMetrics: () => Promise<IPCResult>
-        qualityReview: () => Promise<IPCResult>
-        commerceLedgerList: (query?: { storeId?: string; status?: string; limit?: number }) => Promise<IPCResult>
-        /** 技能/插件库：面板直接创建技能时走与模型同一套校验，工具下拉来自 Main 的可用目录。 */
-        skillList: () => Promise<IPCResult>
-        skillCreate: (input: Record<string, unknown>) => Promise<IPCResult>
-        skillTools: () => Promise<IPCResult>
-        skillUpdate: (input: Record<string, unknown>) => Promise<IPCResult>
-        skillDelete: (skillId: string) => Promise<IPCResult>
-        /** 插件的改/删（只改声明式分组；删插件保留成员技能）。 */
-        pluginUpdate: (input: Record<string, unknown>) => Promise<IPCResult>
-        pluginDelete: (input: Record<string, unknown>) => Promise<IPCResult>
-        packExport: (input?: Record<string, unknown>) => Promise<IPCResult>
-        packImport: (json: string, confirmed?: boolean) => Promise<IPCResult>
       }
       on: (channel: string, callback: (...args: any[]) => void) => void
       off: (channel: string, callback: (...args: any[]) => void) => void

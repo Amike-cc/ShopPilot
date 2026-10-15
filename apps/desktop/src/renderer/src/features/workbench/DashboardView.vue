@@ -402,13 +402,7 @@
 
     <AgentDock
       v-if="hasNativeBridge"
-      :store-name="''"
-      :tab-title="'首页 Dashboard'"
-      :current-url="''"
       :locked="ws.appLocked"
-      @view-tasks="navigateTo('tasks')"
-      @view-task="navigateTo('tasks')"
-      @view-agents="openAgentSettings"
     />
   </section>
 </template>
@@ -466,7 +460,7 @@ import emptyTasksArt from '../../assets/ui/dashboard/empty-tasks.png'
 import emptyAnalyticsArt from '../../assets/ui/dashboard/empty-analytics.png'
 import type { SalesMetrics, SalesMetricsPlanView } from '@shared/contracts/sales-metrics'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
-import { isInvoiceCollectTask } from '@shared/constants/invoice'
+import { isBackgroundCollectTask } from '@shared/constants/collection'
 
 type LoadState = 'loading' | 'ready' | 'empty' | 'error'
 type PeriodKey = 'today' | 'yesterday' | '7d' | '30d' | 'custom'
@@ -524,7 +518,7 @@ function tickClock() {
   nowLabel.value = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 type DashboardPage = 'overview' | 'browser' | 'products' | 'orders' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'tasks' | 'invoices' | 'image-studio'
-type SettingsTab = 'config' | 'square' | 'ai' | 'agents' | 'skills' | 'plugins' | 'about'
+type SettingsTab = 'config' | 'square' | 'ai' | 'agents' | 'about'
 const activePage = ref<DashboardPage>('overview')
 /** 生图请求仍在运行时保留图片工作台，避免卸载页面丢失返回结果。 */
 const imageStudioBusy = ref(false)
@@ -584,8 +578,8 @@ const quickActions = [
 ]
 
 const platformOptions = computed(() => [...new Set(snapshots.value.map(item => item.platform))].sort((a, b) => a.localeCompare(b, 'zh-CN')))
-/** 工具栏任务红点：发票采集是后台刷新、不计入任务，所以也不点亮红点 */
-const activeTaskCount = computed(() => ws.tasks.filter((task: any) => task.latestRun && isTaskActive(task) && !isInvoiceCollectTask(task)).length)
+/** 工具栏任务红点：后台采集任务（发票/涉税）是后台刷新、不计入任务，所以也不点亮红点 */
+const activeTaskCount = computed(() => ws.tasks.filter((task: any) => task.latestRun && isTaskActive(task) && !isBackgroundCollectTask(task)).length)
 const otherStoreOptions = computed(() => ws.stores.filter(store => store.id !== storeContext.store?.id))
 const canOpenStandalone = computed(() => !!storeContext.store && ws.displayedStoreId === storeContext.store.id && !!ws.activeTab)
 
@@ -935,13 +929,13 @@ const platformOnlineSummary = computed(() => {
 /**
  * 待办任务（设计稿右栏第三张卡）：只列**需要人工处理**的任务，以及发票中心已采到
  * 待开票记录的店铺。排队中/进行中的自动任务不会占用待办名额。
- * **发票自动采集任务不算待办**（用户口径：发票采集不计入任务）——它是每 3 小时一次的后台刷新，
- * 采集失败时该去发票中心看，不该在这里显示成「较紧急」。
+ * **后台自动采集任务不算待办**（用户口径：后台刷新不计入任务）——发票采集是每 3 小时、
+ * 涉税报送采集是按季度的后台刷新，采集失败时该去发票中心/涉税分区看，不该在这里显示成「较紧急」。
  */
 type PendingTaskItem = { id: string; name: string; badge: string; tone: string; kind: 'task' | 'invoice' }
 const pendingTasks = computed((): PendingTaskItem[] => {
   const taskItems: PendingTaskItem[] = ws.tasks
-    .filter((task: any) => !isInvoiceCollectTask(task))
+    .filter((task: any) => !isBackgroundCollectTask(task))
     .map((task: any) => {
       const run = task.latestRun
       const status = run?.id ? (ws.runLive[run.id]?.status || run.status) : run?.status
@@ -1154,6 +1148,9 @@ function preventBusyImageStudioExit() {
 }
 function navigateTo(page: DashboardPage) {
   if (page !== 'image-studio' && preventBusyImageStudioExit()) return
+  // B4：回到经营总览时补一次发票待办——「待开发票」那几行只在挂载与"停在总览页时的任务终态事件"
+  // 里刷新；从发票中心采集完再回来，数字会停在这一轮之前（看起来像"采集没生效"）。
+  if (page === 'overview' && activePage.value !== 'overview') void loadInvoiceTodo()
   if (page === 'settings' && activePage.value !== 'settings') {
     settingsReturnPage.value = activePage.value
     settingsReturnStoreId.value = ws.displayedStoreId
@@ -1346,26 +1343,8 @@ async function syncStoreContextOcclusion() {
   const overlap = !(m.right <= v.left || m.left >= v.right || m.bottom <= v.top || m.top >= v.bottom)
   await window.shopilot.browser.setViewsObscured(overlap)
 }
-function openAgentSettings() { settingsTab.value = 'agents'; navigateTo('settings') }
-/**
- * Agent 的软件级 openPanel 动作走 Main 事件；统一 Dashboard 也必须接住，
- * 否则旧工作台的事件监听会把导航写进隐藏的旧设置弹窗，用户看不到结果。
- */
-function handleAgentPanelOpen(payload: any) {
-  // 客服工作区打开时，经营工作台仍保持挂载以保留店铺网页状态，
-  // 但不应响应经营工作台的全局面板事件，避免隐藏页面被后台事件改写。
-  if (!props.active) return
-  const panel = String(payload?.panel || '')
-  if (panel === 'settings') { settingsTab.value = 'config'; navigateTo('settings') }
-  else if (panel === 'agentTeam') { settingsTab.value = 'agents'; navigateTo('settings') }
-  else if (panel === 'aiConfig') { settingsTab.value = 'ai'; navigateTo('settings') }
-  else if (panel === 'tasks') navigateTo('tasks')
-  else if (panel === 'invoiceCenter') navigateTo('invoices')
-  else if (panel === 'dataCenter') navigateTo('analytics')
-  if (panel) agent.setDrawerOpen(false)
-}
 async function openAssistant() {
-  try { await agent.initialize(); await agent.refreshSoftwareContext(); agent.setDrawerOpen(true) } catch { showNotice('AI 助手暂时不可用，请检查模型配置') }
+  try { await agent.initialize(); agent.setDrawerOpen(true) } catch { showNotice('AI 助手暂时不可用，请检查模型配置') }
 }
 function openCommandPalette() { commandOpen.value = true; nextTick(() => commandInput.value?.focus()) }
 const commandResults = computed(() => {
@@ -1454,7 +1433,6 @@ onMounted(async () => {
     clockTimer = window.setInterval(tickClock, 1000)
     return
   }
-  window.shopilot.on(EVENT_CHANNELS.AGENT_PANEL_OPEN, handleAgentPanelOpen)
   window.shopilot.on(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished)
   window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress)
   tickClock()
@@ -1469,7 +1447,7 @@ onMounted(async () => {
   scheduleCollectedRefresh()
   stopStoreWatch = watch(() => ws.stores.map(store => `${store.id}:${store.status}`).join('|'), () => { void loadSnapshots(); void loadCollectedMetrics() })
 })
-onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); document.removeEventListener('mousedown', onDocumentMouseDown); if (window.shopilot) { window.shopilot.off(EVENT_CHANNELS.AGENT_PANEL_OPEN, handleAgentPanelOpen); window.shopilot.off(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished); window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress); void window.shopilot.browser.setViewsObscured(false) }; stopStoreWatch?.(); if (noticeTimer) window.clearTimeout(noticeTimer); if (collectedTimer) window.clearInterval(collectedTimer); if (clockTimer) window.clearInterval(clockTimer) })
+onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); document.removeEventListener('mousedown', onDocumentMouseDown); if (window.shopilot) { window.shopilot.off(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished); window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress); void window.shopilot.browser.setViewsObscured(false) }; stopStoreWatch?.(); if (noticeTimer) window.clearTimeout(noticeTimer); if (collectedTimer) window.clearInterval(collectedTimer); if (clockTimer) window.clearInterval(clockTimer) })
 </script>
 
 <style scoped>

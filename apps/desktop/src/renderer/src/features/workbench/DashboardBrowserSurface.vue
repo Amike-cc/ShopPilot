@@ -343,7 +343,7 @@ import { useWorkspaceStore } from '../../stores/workspace'
 import { inviteProfileFor, isBatchProfile, type CategoryNode } from '@shared/constants/invite'
 import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig, parseInviteProductIds } from '@shared/invite-task'
 import { inviteConfigKey, legacyInviteConfigKey } from '@shared/invite-config'
-import { isInvoiceCollectTask } from '@shared/constants/invoice'
+import { isBackgroundCollectTask } from '@shared/constants/collection'
 
 const emit = defineEmits<{
   // 头部栏（含「返回经营总览」）已按用户要求整条移除；回经营总览走左栏导航，这里不再有该事件。
@@ -537,9 +537,9 @@ function handleWebviewDestroyed(item: OpenWebviewEntry): void {
   webviewEls.delete(item.key)
 }
 
-// 右侧「任务中心 → 任务列表」：发票自动采集任务不列（用户口径：发票采集不计入任务）。
-// 这里只取 6 条，不排除的话每 3 小时自动建的采集任务会把真正的任务挤出面板。
-const taskRows = computed(() => ws.tasks.filter((task: any) => !isInvoiceCollectTask(task) && (!task.storeScope || task.storeScope === ws.displayedStoreId)).slice(0, 6))
+// 右侧「任务中心 → 任务列表」：后台自动采集任务不列（发票采集 + 涉税报送采集，用户口径：
+// 后台刷新不计入任务）。这里只取 6 条，不排除的话每 3 小时自动建的采集任务会把真正的任务挤出面板。
+const taskRows = computed(() => ws.tasks.filter((task: any) => !isBackgroundCollectTask(task) && (!task.storeScope || task.storeScope === ws.displayedStoreId)).slice(0, 6))
 const taskSubTab = ref<'tasks' | 'invite' | 'todo'>('tasks')
 const inviteLiveLogEl = ref<HTMLElement | null>(null)
 const squareUrls = ref<Record<string, string>>({})

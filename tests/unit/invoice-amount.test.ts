@@ -28,6 +28,29 @@ describe('发票金额解析与展示', () => {
     expect(parseInvoiceAmount('￥-0.01')).toBe(-0.01)
   })
 
+  // P2-10（2026-10-14）：只认"整串就是一个金额"。以前从任意位置抠数字，
+  // 「2 笔订单」会被当成 2.00、「订单号 …」会变成天文数字——金额列串列时合计静默变错。
+  it('不是金额的单元格一律 null（绝不从长文本里抠数字）', () => {
+    expect(parseInvoiceAmount('2 笔订单')).toBeNull()
+    expect(parseInvoiceAmount('订单号 2000000038930468')).toBeNull()
+    expect(parseInvoiceAmount('2026/09/01-2026/09/30')).toBeNull()
+    expect(parseInvoiceAmount('待处理')).toBeNull()
+    expect(parseInvoiceAmount('用户补贴')).toBeNull()
+    expect(parseInvoiceAmount('¥1.00（2 笔订单）')).toBeNull()
+  })
+
+  it('已知的金额前缀词与末尾「元」照常解析（且不因此放宽成"任意前缀"）', () => {
+    expect(parseInvoiceAmount('金额 128.00 元')).toBe(128)
+    expect(parseInvoiceAmount('合计￥1,234.50')).toBe(1234.5)
+    expect(parseInvoiceAmount('可开票金额 42.50')).toBe(42.5)
+    expect(parseInvoiceAmount('约 128 元')).toBeNull()      // 「约」不是已知前缀 → 未解析（如实标出，不猜）
+  })
+
+  it('逗号必须是正常千分位（1,2,3 这类脏值判未解析）', () => {
+    expect(parseInvoiceAmount('1,2,3')).toBeNull()
+    expect(parseInvoiceAmount('1,234,567.89')).toBe(1234567.89)
+  })
+
   it('合计文案：有值才带货币符号，一条都没解析出来时给「—」而不是「¥0.00」', () => {
     expect(invoiceAmountText(120.5, true)).toBe('¥120.50')
     expect(invoiceAmountText(0, false)).toBe('—')

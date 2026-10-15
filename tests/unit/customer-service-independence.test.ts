@@ -38,8 +38,8 @@ describe('经营工作台与电商客服工作区边界', () => {
     expect(DASHBOARD).toContain('data-test="workspace-tab-customer-service"')
   })
 
-  it('客服工作区打开时，经营工作台不响应全局快捷键和面板事件', () => {
-    expect(DASHBOARD).toContain('if (!props.active) return\n  const panel = String(payload?.panel || \'\')')
+  it('客服工作区打开时，经营工作台不响应全局快捷键且不订阅旧 Agent 面板操作事件', () => {
+    expect(DASHBOARD).not.toContain('EVENT_CHANNELS.AGENT_PANEL_OPEN')
     expect(DASHBOARD).toContain('if (!props.active) return\n  if ((event.ctrlKey || event.metaKey)')
     expect(DASHBOARD).toContain('if (!props.active) return\n  if (storeId && source === \'main\'')
   })

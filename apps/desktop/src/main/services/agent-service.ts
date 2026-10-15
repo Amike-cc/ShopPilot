@@ -44,7 +44,7 @@ import { AGENT_SYSTEM_PROMPT, parseAgentPlanProposal, validateAgentPlan } from '
 import { listStores, listTrashStores, getStore, createStore, updateStore, restoreStore, deleteStorePermanent, purgeStore } from '../stores/store-manager'
 import * as BackupManager from './backup-manager'
 import { buildInvoiceCollectSteps } from '@shared/invoice-steps'
-import { invoiceProfileFor } from '@shared/constants/invoice'
+import { invoiceProfileFor, isPendingSection } from '@shared/constants/invoice'
 import { buildBusinessCollectSteps } from '@shared/business-steps'
 import { businessProfileFor } from '@shared/constants/business'
 import { INVITE_SUPPORTED_PLATFORMS, inviteProfileFor } from '@shared/constants/invite'
@@ -2590,9 +2590,13 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
         const center = overviewInvoiceCenter()
         const rows = Array.isArray(center.rows) ? center.rows : []
         const head = rows.slice(0, 5).map(formatOverviewRow)
+        // P2-6（2026-10-14）：以前把"店铺行数"说成"N 条"——单位错了（rows 是**店铺**，
+        // 一条待开票记录才叫"条"）。这里按界面同一口径（pending !== false 的方向）数出真实条数。
+        const pendingCount = rows.reduce((n: number, row: any) => n + (row.sections || [])
+          .reduce((m: number, sec: any) => m + (isPendingSection(sec) ? (sec.items?.length || 0) : 0), 0), 0)
         messages.push(rows.length
-          ? `待开票清单共 ${rows.length} 条${rows.length > head.length ? `（只读前 ${head.length} 条）` : ''}：\n${head.join('\n')}`
-          : '待开票清单为空：还没有在发票页跑过「抓取待开票信息」')
+          ? `待开票清单：${rows.length} 家店铺、共 ${pendingCount} 条待办${rows.length > head.length ? `（只读前 ${head.length} 家）` : ''}：\n${head.join('\n')}`
+          : '待开票清单为空：还没有在发票页跑过「采集发票数据」')
         break
       }
       case 'applyEntity': {

@@ -13,15 +13,29 @@ function stripCurrency(v: unknown): string {
 }
 
 /**
+ * 已知的"金额前缀词"：单元格里常写成「金额 128.00 元」。
+ * 只剥这几个**已知**的词，不做通用的"取第一段数字"——那正是 P2-10 要挡的形态。
+ */
+const AMOUNT_PREFIX_RE = /^(?:金额|合计|可开金额|可开票金额|待开票金额|账单金额|发票金额)/
+
+/**
  * 解析金额。解析不出（空 / `—` / `-` / 非数字）返回 **null**，由调用方决定不计入并计数。
  * 允许千分位逗号与负号（退款/冲正类账单实测会出现负数）。
+ *
+ * P2-10（2026-10-14）：以前是"从任意位置抠出第一段数字"（`/-?[\d,]+(\.\d+)?/.exec`），
+ * 于是「2 笔订单」会被解析成 **2.00**、「订单号 2000000038930468」会变成一个天文数字——
+ * 金额列一旦改版/串列，合计就会静默变错。现在只认"**整串就是一个金额**"
+ * （允许货币符号、已知金额前缀词、千分位、末尾「元」），别的形态一律 null（由界面如实标"未解析"）。
  */
 export function parseInvoiceAmount(v: unknown): number | null {
-  const s = stripCurrency(v)
-  if (!s || s === '—' || s === '-') return null
-  const matched = /-?[\d,]+(?:\.\d+)?/.exec(s)
+  const s = stripCurrency(v).replace(AMOUNT_PREFIX_RE, '')
+  if (!s || s === '—' || s === '-' || s === '--') return null
+  const matched = /^(-?[\d,]+(?:\.\d+)?)(?:元)?$/.exec(s)
   if (!matched) return null
-  const n = Number(matched[0].replace(/,/g, ''))
+  const raw = matched[1]
+  // 逗号必须是正常千分位（123,456.78）；"1,2,3" 这类脏值直接判未解析，别让 Number 悄悄吃掉
+  if (raw.includes(',') && !/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(raw)) return null
+  const n = Number(raw.replace(/,/g, ''))
   return Number.isFinite(n) ? n : null
 }
 
