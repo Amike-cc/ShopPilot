@@ -2,7 +2,12 @@ packages:
   - 'apps/*'
   - 'packages/*'
 allowBuilds:
-  better-sqlite3: true
+  # better-sqlite3 v13 自带 prebuildify 预编译（prebuilds/win32-x64.node 等，N-API，Node/Electron 共用），
+  # lib/binding.js 运行时优先加载 prebuilds；binding.gyp 也内建「有 prebuilds 即跳过编译」。
+  # 允许 pnpm 跑隐式 node-gyp rebuild 只会逼每台机器先通过 VS 探测——CI 与无 VS 的机器直接 install 失败
+  # （2026-10-15 CI 实测：runner 上 find VS 崩溃导致两个 job 全挂），且编译产物根本不会被加载。
+  # 显式 false = 已知并豁免，与 electron-winstaller 同一处置。
+  better-sqlite3: false
   electron: true
   # electron-winstaller 是 electron-builder 的 Squirrel.Windows 目标依赖；本项目只出 NSIS
   # 安装包，不需要它的 install 脚本（挑选 7z 架构）。显式 false = 已知并豁免，

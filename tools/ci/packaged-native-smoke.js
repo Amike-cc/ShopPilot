@@ -28,7 +28,10 @@ if (!target) {
 
 let Database
 try {
-  Database = require(target)
+  // 必须 resolve 成绝对路径再 require：argv 传进来的是相对路径（release\win-unpacked），
+  // 而不以 ./ 开头的字符串会被 require 当**模块名**去 node_modules 里找——
+  // 报 "Cannot find module 'release\win-unpacked\...'"，与文件是否存在无关（2026-10-15 实测）。
+  Database = require(path.resolve(target))
 } catch (error) {
   console.error(`[native-smoke] better-sqlite3 装载失败（ABI 或依赖收集问题）：${error.message}`)
   process.exit(1)
