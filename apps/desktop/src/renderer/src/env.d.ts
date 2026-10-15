@@ -173,6 +173,7 @@ declare global {
           exportCsv: (input: { mode: 'selected' | 'filtered'; productIds?: string[]; query?: Record<string, unknown> }) => Promise<IPCResult>
           importPreview: (csvText: string) => Promise<IPCResult>
           importExecute: (csvText: string) => Promise<IPCResult>
+          importTemplate: () => Promise<IPCResult>
           localizeMedia: (productId: string) => Promise<IPCResult>
           // v4 R2 编辑器媒体分区：添加本地图片（主进程校验后落盘）；getPathForFile 供 <input type=file> 取绝对路径
           importLocalImages: (input: { productId: string; paths: string[]; role: 'cover' | 'gallery' | 'detail' }) => Promise<IPCResult>

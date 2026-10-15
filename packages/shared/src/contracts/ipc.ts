@@ -143,6 +143,7 @@ export const IPC_CHANNELS = {
   PRODUCT_LIBRARY_EXPORT_CSV: 'products:library:exportCsv',
   PRODUCT_LIBRARY_IMPORT_PREVIEW: 'products:library:importPreview',
   PRODUCT_LIBRARY_IMPORT_EXECUTE: 'products:library:importExecute',
+  PRODUCT_LIBRARY_IMPORT_TEMPLATE: 'products:library:importTemplate',
   // 详情页采集（商品图 + 规格）：只导航并读 DOM，不填写不提交
   PRODUCT_DETAIL_COLLECT: 'products:detail:collect',
   // 发布（M3）：**只到人工确认门禁为止** —— 预检与打开发布页，没有任何提交动作

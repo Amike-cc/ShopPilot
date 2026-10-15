@@ -26,7 +26,7 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'saved'): void; (e: 'unarchiv
 const ws = useWorkspaceStore()
 
 interface DraftIssue { level: 'blocker' | 'warning' | 'info'; field: string; message: string; fixHint?: string }
-interface EditorVariant { specText: string; priceYuan: string; stockText: string; skuCode: string }
+interface EditorVariant { specText: string; priceYuan: string; stockText: string; skuCode: string; barcodeText: string }
 interface EditorMedia extends ProductDraftMedia {}
 
 const loading = ref(true)
@@ -78,8 +78,9 @@ function buildDraft(description: string | null, passthroughVariants: Array<Recor
         priceMinor: yuanToMinor(variant.priceYuan),
         stock: variant.stockText.trim() ? Number(variant.stockText) : null,
         skuCode: variant.skuCode.trim() ? variant.skuCode : null,
-        // 表列有 barcode 而 draft schema 暂无此键：get-modify-save 原样带回，由 zod 剥离
-        ...(passthrough?.barcode != null ? { barcode: passthrough.barcode } : {})
+        barcode: variant.barcodeText.trim() ? variant.barcodeText : null,
+        // 表列里的 barcode 与编辑值合并（schema 已支持；导入进来的条码不被编辑器清掉）
+        ...(passthrough?.barcode != null && !variant.barcodeText.trim() ? { barcode: passthrough.barcode } : {})
       }
     }),
     media: mediaItems.value.map(item => ({ ...item }))
@@ -120,7 +121,8 @@ async function reload(): Promise<void> {
     specText: specToText(variant.spec ?? []),
     priceYuan: minorToYuan(variant.priceMinor),
     stockText: variant.stock == null ? '' : String(variant.stock),
-    skuCode: variant.skuCode ?? ''
+    skuCode: variant.skuCode ?? '',
+    barcodeText: variant.barcode ?? ''
   }))
   passthrough.value = {
     description: data.draft.description ?? null,
@@ -340,6 +342,9 @@ async function save(): Promise<void> {
             <label class="product-field"><span>SKU 码</span>
               <input v-model="variant.skuCode" type="text" :data-test="'editor-sku-' + index" :disabled="archived" />
             </label>
+            <label class="product-field"><span>条码</span>
+              <input v-model="variant.barcodeText" type="text" :data-test="'editor-barcode-' + index" :disabled="archived" />
+            </label>
           </div>
         </div>
       </div>
@@ -378,7 +383,7 @@ async function save(): Promise<void> {
 .product-field input:disabled{background:#f7f8fa;color:var(--dash-text-muted)}
 .product-field-row{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:8px}
 .product-field-row.two{grid-template-columns:1fr 1fr}
-.product-field-row.three{grid-template-columns:1fr 1fr 1fr}
+.product-field-row.three{grid-template-columns:1fr 1fr 1fr 1fr}
 .product-field-row .grow{flex:1}
 .variant-block{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px dashed var(--dash-border);border-radius:10px}
 .variant-row{display:flex;align-items:flex-end;gap:8px}

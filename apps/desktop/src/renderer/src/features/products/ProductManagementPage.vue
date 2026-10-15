@@ -520,6 +520,18 @@ async function exportCsv(mode: 'selected' | 'filtered'): Promise<void> {
 
 const importPlan = ref<ImportPlanData | null>(null)
 let importCsvText = ''
+/** 下载导入模板（§4.6：模板下载 → 解析 → 预览 diff）。 */
+async function downloadImportTemplate(): Promise<void> {
+  busy.value = true
+  try {
+    const result = await window.shopilot.products.library.importTemplate()
+    if (!result.ok) { ws.toast('模板下载失败：' + result.error.message, 'error'); return }
+    const data = result.data as { canceled?: boolean; filePath?: string }
+    if (data.canceled) return
+    ws.toast(`模板已保存到 ${data.filePath}`, 'success')
+  } finally { busy.value = false }
+}
+
 async function onImportFile(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -1018,6 +1030,7 @@ onMounted(() => { void loadLinks(); void loadLocal() })
           <button type="button" class="unified-button ghost" data-test="batch-export-filtered" :disabled="busy || !localTotal" @click="exportCsv('filtered')">导出 CSV（当前筛选）</button>
           <label class="unified-button ghost import-label" :class="{ disabled: busy }">
             <input type="file" accept=".csv,text/csv" data-test="import-csv" :disabled="busy" @change="onImportFile" />导入 CSV</label>
+          <button type="button" class="unified-button ghost" data-test="import-template" :disabled="busy" @click="downloadImportTemplate">导入模板</button>
           <button type="button" class="unified-button ghost" data-test="local-refresh" @click="loadLocal"><img class="button-icon" :src="syncIcon" alt="" />刷新</button>
           <span class="product-toolbar-hint" data-test="local-count">共 {{ localTotal }} 条</span>
         </div>

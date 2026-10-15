@@ -34,20 +34,37 @@ export function registerProductMediaScheme(): void {
   ])
 }
 
+/**
+ * 三层校验的**纯函数**（协议 handler 的核心；单独导出以便单测钉死——
+ * 穿越防护是安全边界，规则改动必须有测试盯着，测试清单 §9.2 `product-media-protocol.test.ts`）。
+ * 校验不过返回 null（调用方一律回 404）。
+ */
+export function resolveMediaFilePath(requestUrl: string, mediaRoot: string): string | null {
+  let url: URL
+  try {
+    url = new URL(requestUrl)
+  } catch {
+    return null
+  }
+  if (url.hostname !== 'local') return null
+  const rel = decodeURIComponent(url.pathname).replace(/^[/\\]+/, '')
+  const rootWithSep = mediaRoot.endsWith(sep) ? mediaRoot : mediaRoot + sep
+  const absolute = resolve(mediaRoot, rel)
+  if (absolute !== mediaRoot && !absolute.startsWith(rootWithSep)) return null
+  const ext = extname(absolute).toLowerCase()
+  if (!ALLOWED_EXT.has(ext)) return null
+  return absolute
+}
+
 /** app ready 之后调用：挂上真正的 handler。 */
 export function registerProductMediaProtocol(): void {
   const mediaRoot = join(app.getPath('userData'), 'product-media')
-  const rootWithSep = mediaRoot.endsWith(sep) ? mediaRoot : mediaRoot + sep
 
   protocol.handle(PRODUCT_MEDIA_SCHEME, async (request) => {
     try {
-      const url = new URL(request.url)
-      if (url.hostname !== 'local') return new Response('not found', { status: 404 })
-      const rel = decodeURIComponent(url.pathname).replace(/^[/\\]+/, '')
-      const absolute = resolve(mediaRoot, rel)
-      if (absolute !== mediaRoot && !absolute.startsWith(rootWithSep)) return new Response('not found', { status: 404 })
+      const absolute = resolveMediaFilePath(request.url, mediaRoot)
+      if (!absolute) return new Response('not found', { status: 404 })
       const ext = extname(absolute).toLowerCase()
-      if (!ALLOWED_EXT.has(ext)) return new Response('not found', { status: 404 })
       const data = await readFile(absolute)
       return new Response(new Uint8Array(data), {
         status: 200,

@@ -217,6 +217,8 @@ const api = {
         ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_PREVIEW, { csvText }),
       importExecute: (csvText: string): Promise<IPCResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_EXECUTE, { csvText }),
+      importTemplate: (): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_TEMPLATE),
       get: (productId: string): Promise<IPCResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_GET, { productId }),
       save: (input: { productId: string; platform?: string; draft: unknown }): Promise<IPCResult> =>

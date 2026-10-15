@@ -291,6 +291,27 @@ export function registerProductHandlers(): void {
     try { return ok(batch().importPreview(parsed.data.csvText), rid) } catch (error) { return serviceError(error, rid) }
   })
 
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_TEMPLATE, async (_event: IpcMainInvokeEvent): Promise<IPCResult> => {
+    const rid = requestId()
+    try {
+      const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+      const res = await dialog.showSaveDialog(win, {
+        title: '下载商品导入模板（CSV）',
+        defaultPath: join(app.getPath('documents'), '商品导入模板.csv'),
+        filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
+      })
+      if (res.canceled || !res.filePath) return ok({ canceled: true }, rid)
+      const filePath = ensureCsvExtension(res.filePath)
+      // 模板 = 表头 + 一行示例（示例行可整行删除后填入真实数据）
+      const template = buildProductCsv([
+        ['示例商品（本行可删除）', '副标题示例', '品牌示例', '本地分类示例', '标签一|标签二', 'draft', '颜色:红;尺码:L', '129.00', '10', 'SKU-001', '6901234567890', '', '']
+      ])
+      writeFileSync(filePath, template, 'utf8')
+      logMain('info', '[product-csv] 导入模板下载')
+      return ok({ canceled: false, filePath }, rid)
+    } catch (error) { return serviceError(error, rid) }
+  })
+
   handle(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_EXECUTE, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
     const rid = requestId()
     const parsed = productImportCsvInputSchema.safeParse(raw)
