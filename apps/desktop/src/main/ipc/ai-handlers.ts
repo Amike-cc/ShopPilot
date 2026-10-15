@@ -21,6 +21,7 @@ import { writeAudit, auditRequestId } from '../services/audit-logger'
 import { logMain } from '../services/logger'
 import { syncMainAgentProfileFromAiConfig } from '../services/agent-runtime'
 import { assertTrustedRenderer } from '../services/renderer-trust'
+import { assertSafeImageSavePath } from '../services/safe-image-save'
 
 const success = <T>(data: T): IPCResult<T> => ({ ok: true, data, requestId: randomUUID() })
 const failure = (code: string, message: string): IPCResult => ({ ok: false, error: { code, message }, requestId: randomUUID() })
@@ -438,8 +439,14 @@ export function registerAiHandlers(): void {
       assertTrusted(event)
       const b64 = String(input?.b64Json || '')
       if (!b64) return failure('AI_BAD_INPUT', '没有可保存的图片数据')
+      // B5（2026-10-15 审查）：先严格校验 base64 字符集——`Buffer.from(x,'base64')` 是**宽松解码**，
+      // 非法输入不抛错，以前会把乱码静默存成"图片"。长度 %4==1 不可能是合法 base64（容忍无填充）。
+      const cleaned = b64.replace(/\s+/g, '')
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(cleaned) || cleaned.length % 4 === 1) {
+        return failure('AI_BAD_INPUT', '图片数据不是合法 base64')
+      }
       let buffer: Buffer
-      try { buffer = Buffer.from(b64, 'base64') } catch { return failure('AI_BAD_INPUT', '图片数据不是合法 base64') }
+      try { buffer = Buffer.from(cleaned, 'base64') } catch { return failure('AI_BAD_INPUT', '图片数据不是合法 base64') }
       if (!buffer.length) return failure('AI_BAD_INPUT', '图片数据为空')
       if (buffer.length > 24 * 1024 * 1024) return failure('AI_BAD_INPUT', '图片超过 24MB，已拒绝保存')
       const mimeType = String(input?.mimeType || 'image/png').split(';')[0].trim().toLowerCase()
@@ -460,8 +467,13 @@ export function registerAiHandlers(): void {
         if (res.canceled || !res.filePath) return success({ canceled: true })
         targetPath = res.filePath
       } else {
-        // 脚本直传路径时补上扩展名，避免存出没有后缀的文件
-        if (!new RegExp(`\\.${ext}$`, 'i').test(targetPath)) targetPath = `${targetPath}.${ext}`
+        /**
+         * B5（2026-10-15 审查）：渲染层直传的 outputPath 必须过边界校验——与诊断导出同一套规则
+         * （用户目录 / 系统临时目录；非打包态额外放行应用目录，设计留档脚本写仓库用）。
+         * 校验同时负责补扩展名（脚本直传时避免存出没有后缀的文件）并做路径归一化。
+         * 对话框返回的路径是用户亲手选的，不额外设限（与发票导出等其它落盘通道一致）。
+         */
+        targetPath = assertSafeImageSavePath(targetPath, ext)
       }
       writeFileSync(targetPath, buffer)
       writeAudit('ai.imageSave', 'success', { requestId: auditRequestId(requestId, `${Math.round(buffer.length / 1024)}KB`) })
@@ -470,8 +482,13 @@ export function registerAiHandlers(): void {
     } catch (e: any) {
       const denied = deniedResult(e)
       if (denied) return denied
+      const message = String(e?.message || e)
+      // B5：路径/数据类校验错误如实回 AI_BAD_INPUT，不要把参数问题伪装成"保存失败"
+      if (message.startsWith('AI_BAD_INPUT')) {
+        return failure('AI_BAD_INPUT', message.replace(/^AI_BAD_INPUT:\s*/, ''))
+      }
       writeAudit('ai.imageSave', 'failure', { requestId: auditRequestId(requestId, String(e?.code || 'AI_IMAGE_SAVE_FAILED')) })
-      return failure('AI_IMAGE_SAVE_FAILED', String(e?.message || e))
+      return failure('AI_IMAGE_SAVE_FAILED', message)
     }
   })
 

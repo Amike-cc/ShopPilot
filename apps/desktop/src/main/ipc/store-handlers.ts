@@ -16,6 +16,8 @@ import {
 } from '@shared/schemas/store'
 import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as StoreManager from '../stores/store-manager'
+import * as TaskStore from '../tasks/task-store'
+import * as Runner from '../tasks/task-runner'
 import { randomUUID } from 'crypto'
 
 /**
@@ -213,7 +215,25 @@ export function registerStoreHandlers(): void {
     try {
       const parsed = storeIdInputSchema.safeParse(input)
       if (!parsed.success) return invalidInput(requestId, parsed.error.issues)
-      const ok = await StoreManager.purgeStore(parsed.data.storeId)
+      const storeId = parsed.data.storeId
+      /**
+       * B1（2026-10-15 审查）：彻底删除不可撤销 → 必须同时收敛该店的任务。
+       * 以前只删店铺行，任务成孤儿（tasks.store_scope 无外键、不会级联）：此后每次调度触发
+       * 都在 createRun 撞 `FOREIGN KEY constraint failed`（task_runs.store_id 引用已删店铺），
+       * 手动运行也把这条库报错原样丢给用户。
+       * 顺序：先确认在回收站（不合格不动任何任务）→ 取消内存中的运行 → 删该店全部任务（级联 runs）→ 删店铺。
+       * 软删（移入回收站）刻意不走这里：恢复店铺后任务要继续可用。
+       */
+      if (!StoreManager.isStoreInTrash(storeId)) {
+        return error(ERROR_CODES.STORE_NOT_FOUND.code, '回收站中未找到该店铺', requestId)
+      }
+      for (const run of Runner.listLiveRuns().filter(r => r.storeId === storeId)) {
+        try { Runner.cancelRun(run.runId, '店铺被彻底删除') } catch { /* 已结束/状态瞬态无妨 */ }
+      }
+      for (const task of TaskStore.listTasks().filter(t => t.storeScope === storeId)) {
+        try { TaskStore.deleteTask(task.id) } catch { /* 单条清理失败不阻塞删除主流程 */ }
+      }
+      const ok = await StoreManager.purgeStore(storeId)
       if (!ok) {
         return error(ERROR_CODES.STORE_NOT_FOUND.code, '回收站中未找到该店铺', requestId)
       }

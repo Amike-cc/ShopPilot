@@ -29,6 +29,7 @@
 | `11-implemented-detail.png` | **实现实拍** · 明细表展开 |
 | `12-live-verify.png` | **重启后真实数据实拍** · 用户本机实例（4 家店 / 24 条待开票 / 15 条已逾期），含真实的「本次没读到」标记 |
 | `13-tax-report-live.png` | **涉税信息报送实拍** · 真机采集快手小店 10 个报送期后的界面（平台用途限制同屏显示） |
+| `14-subject-groups-live.png` | **「按主体」分组视图实拍** · 真机数据（3 个开票主体：2+1 家真实主体 + 未填写固定最后）；主体块下方列出其店铺，店铺行可点击进入店铺详情（2026-10-15 重制） |
 | `invoice-center-concept-v1.png` | AI 概念视觉稿（氛围参考，非实现依据）。提示词：*A clean modern desktop SaaS application UI concept board for an e-commerce merchant invoice center, light theme, off-white #f5f7fb background, white rounded cards, violet-purple #7c5cff accent with gradient buttons, slim dark navy left nav rail #0b1120, white secondary sidebar listing billing entities with progress bars, four KPI stat cards, filter toolbar, stacked data-table cards with orange/green status pills, flat vector Figma-style high-fidelity dashboard mockup, all text as grey blurred placeholder bars* |
 | `render.mjs` | 重新出设计图：`node render.mjs` |
 | `datacheck.mjs` | 原型数据自检：`node datacheck.mjs`（28 项断言） |

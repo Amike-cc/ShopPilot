@@ -161,11 +161,13 @@ function pruneByAge(table: string, timeColumn: string, days: number, batchLimit:
 }
 
 /**
- * 孤儿 Chromium 分区目录清理（**只在启动时调**）。
+ * 孤儿 Chromium 分区目录清理。
  *
  * 实测：删掉店铺后 `Partitions/store_store_<id>` 不会被删（`clearStorageData` 不清 HTTP 磁盘缓存），
- * 本机已经积了 5 个孤儿目录。启动时库里没有任何店铺的分区目录即为孤儿——此时还没创建任何
- * session，不会有文件句柄占用，删得掉。
+ * 本机已经积了 5 个孤儿目录。判定只看库里的店铺表：没有被任何店铺引用的分区目录即为孤儿。
+ * 调度：随维护循环执行（启动后 ~90s 首拍 + 每 6 小时一次；B8，2026-10-15 审查修正——
+ * 旧注释声称"仅启动时执行一次"，与实际调度不符）。删不掉（文件被占用）就跳过，下次再试；
+ * 这是"删自己产出的东西"，任何时刻判定都成立。
  */
 export function pruneOrphanStorePartitions(): number {
   try {

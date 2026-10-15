@@ -164,7 +164,7 @@
         <!-- 工具栏：采集/导出已上移到页头，这里只放"看哪一份数据"的控件。
              此前 invoiceQuery / invoiceStatusFilter / invoicePlatformFilter / invoicePeriodFilter
              逻辑齐备却**没有任何渲染控件**（恒为默认值，等于死筛选）——本页补上，
-             并加一个「按主体汇总」视图（申报/交代账直接看那张表）。
+             并加一个「按主体」分组视图（申报/交代账直接看它；组下店铺行可点击进入店铺详情）。
              契约：data-test="invoice-export" 在页头，别删。 -->
         <div class="inv-toolbar" data-test="invoice-toolbar">
           <input v-model="invoiceQuery" type="text" class="inv-search" data-test="invoice-search" placeholder="搜索：店铺 / 单号 / 类型 / 抬头 / 税号…" />
@@ -191,11 +191,11 @@
           </select>
           <div class="inv-seg" data-test="invoice-view-switch" role="tablist" aria-label="视图切换">
             <button type="button" :class="{ on: invoiceView === 'stores' }" data-test="invoice-view-stores" @click="invoiceView = 'stores'">按店铺</button>
-            <button type="button" :class="{ on: invoiceView === 'summary' }" data-test="invoice-view-summary" @click="invoiceView = 'summary'">按主体汇总</button>
+            <button type="button" :class="{ on: invoiceView === 'summary' }" data-test="invoice-view-summary" @click="invoiceView = 'summary'">按主体</button>
           </div>
           <span class="inv-toolbar-meta" data-test="invoice-scope-meta">
             口径：<b>{{ invoiceScopeLabel }}</b>
-            <template v-if="invoiceView === 'summary'"> · 共 <b>{{ invoiceSummaryRows.length }}</b> 个开票主体</template>
+            <template v-if="invoiceView === 'summary'"> · 共 <b>{{ invoiceSubjectGroups.length }}</b> 个开票主体</template>
             <template v-else> · 显示 <b>{{ visibleInvoiceRows.length }}</b> / {{ subjectInvoiceRows.length }} 家店</template>
           </span>
         </div>
@@ -203,9 +203,9 @@
         <section class="unified-card">
           <div class="unified-card-head">
             <div>
-              <h2>{{ invoiceView === 'summary' ? '按开票主体汇总' : '待开票清单' }}</h2>
+              <h2>{{ invoiceView === 'summary' ? '按开票主体' : '待开票清单' }}</h2>
               <span>{{ invoiceView === 'summary'
-                ? '申报与交代账直接看这张表：一行一个主体，金额占比一眼看出票压在哪个公司名下（无需操作的行不计入）'
+                ? '申报与交代账直接看它：一个主体一块，组下方列出该主体的全部店铺；点店铺行进入店铺详情（金额占比一眼看出票压在哪个公司名下，无需操作的记录不计入）'
                 : '只展示平台页面采集到的待办和历史记录（本应用只读，不代提交）' }}</span>
             </div>
           </div>
@@ -222,28 +222,79 @@
           </div>
           <div v-if="!invoiceData" class="unified-empty" data-test="invoice-load-failed">发票数据没读出来（原因见上方红条）——这不等于"没有发票"，点「刷新数据」重试。</div>
           <div v-else-if="!invoiceRows.length" class="unified-empty">暂无发票记录。采集结果会由本机任务写入数据库。</div>
-          <!-- 按主体汇总：一行一个开票主体（含「未填写」那一档）。申报/交代账直接看它，
+          <!-- 按主体分组：一个主体一块（含「未填写」那一档，固定排最后）。申报/交代账直接看它；
+               组下方列出该主体的**全部**店铺，店铺行可点击进入该店「店铺详情」（工作台浏览器视图）。
                金额占比条用来一眼看出票压在哪个公司名下。口径与 KPI 一致（跟随左侧选中的主体）。 -->
           <div v-else-if="invoiceView === 'summary'" class="inv-summary" data-test="invoice-summary">
-            <div v-if="!invoiceSummaryRows.length" class="unified-empty compact">当前口径下没有可汇总的开票主体。</div>
-            <table v-else class="inv-summary-table">
-              <thead><tr>
-                <th>开票主体</th><th>包含店铺</th><th class="num">待开票</th><th class="num">可开金额</th>
-                <th>金额占比</th><th class="num">无需操作</th><th class="num">金额未解析</th><th></th>
-              </tr></thead>
-              <tbody>
-                <tr v-for="item in invoiceSummaryRows" :key="item.key" :data-test="'invoice-summary-' + item.key">
-                  <td><b>{{ item.label }}</b><em v-if="item.no">{{ item.no }}</em></td>
-                  <td><span v-for="name in item.storeNames" :key="name" class="inv-sum-store">{{ name }}</span></td>
-                  <td class="num"><b>{{ item.pendingCount }}</b> 条</td>
-                  <td class="num inv-sum-amount">{{ item.amountText }}</td>
-                  <td><span class="inv-sum-bar" role="img" :aria-label="item.shareTitle" :title="item.shareTitle"><i :style="{ width: item.share }"></i></span></td>
-                  <td class="num">{{ item.historyCount || '—' }}</td>
-                  <td class="num">{{ item.unparsed || '—' }}</td>
-                  <td><button type="button" class="unified-button ghost inv-mini" :data-test="'invoice-summary-export-' + item.key" @click="exportSubject(item.key)">导出该主体</button></td>
-                </tr>
-              </tbody>
-            </table>
+            <div v-if="!invoiceSubjectGroups.length" class="unified-empty compact">当前口径下没有可汇总的开票主体。</div>
+            <section
+              v-for="group in invoiceSubjectGroups" :key="group.key"
+              class="inv-subject" :class="{ none: group.key === NO_LICENSE_KEY }"
+              :data-test="'invoice-subject-group-' + group.key"
+            >
+              <div class="inv-subject-head">
+                <span class="inv-subject-bar" aria-hidden="true"></span>
+                <div class="inv-subject-id">
+                  <div class="inv-subject-name">
+                    <b>{{ group.label }}</b><em v-if="group.no">{{ group.no }}</em>
+                    <span v-if="group.key === NO_LICENSE_KEY" class="inv-chip warn" data-test="'invoice-subject-needs-license-' + group.key">需补录</span>
+                  </div>
+                  <div class="inv-subject-figs">
+                    <span>{{ group.storeCount }} 家店 · 待开票 <b>{{ group.pendingCount }}</b> 条 · 可开 <b class="inv-sum-amount">{{ group.amountText }}</b><template v-if="group.historyCount"> · 无需操作 {{ group.historyCount }} 条</template><template v-if="group.unparsed"> · {{ group.unparsed }} 条未解析</template></span>
+                    <span class="inv-sum-bar" role="img" :aria-label="group.shareTitle" :title="group.shareTitle"><i :style="{ width: group.share }"></i></span>
+                    <em class="inv-subject-share">{{ group.shareText }}</em>
+                  </div>
+                </div>
+                <div class="inv-subject-actions">
+                  <button v-if="group.key === NO_LICENSE_KEY && group.stores.length" type="button" class="unified-button ghost inv-mini" data-test="'invoice-subject-fill-' + group.key" @click="startFillLicense(group)">去补录</button>
+                  <button type="button" class="unified-button ghost inv-mini" :data-test="'invoice-summary-export-' + group.key" @click="exportSubject(group.key)">导出该主体</button>
+                  <button type="button" class="unified-button ghost inv-mini" :data-test="'invoice-subject-toggle-' + group.key" @click="toggleSubjectGroup(group.key)">{{ isSubjectCollapsed(group.key) ? `展开店铺（${group.storeCount}）` : '收起' }}</button>
+                </div>
+              </div>
+              <div class="inv-subject-label">
+                下属店铺 · {{ group.storeCount }} 家<template v-if="group.key === NO_LICENSE_KEY"> · 补录后自动归入对应主体，不会并入任何真实主体</template>
+              </div>
+              <div v-show="!isSubjectCollapsed(group.key)" class="inv-subject-stores">
+                <div
+                  v-for="row in group.stores" :key="row.storeId"
+                  class="inv-subject-store" :data-test="'invoice-subject-store-' + row.storeId"
+                  role="button" tabindex="0"
+                  :title="`进入「${row.storeName}」的店铺详情`"
+                  @click="openStoreDetail(row)"
+                  @keydown.enter.prevent="openStoreDetail(row)"
+                  @keydown.space.prevent="openStoreDetail(row)"
+                >
+                  <span class="inv-platform-dot" :style="{ background: platformColor(row.platform) }" aria-hidden="true"></span>
+                  <div class="inv-subject-store-main">
+                    <div class="inv-subject-store-name"><b>{{ row.storeName }}</b><span class="inv-row-sub"> · {{ row.platform }}</span></div>
+                    <div class="inv-subject-store-sub">
+                      <template v-if="row.capturedAt">采集于 {{ formatTime(row.capturedAt) }} · </template>待办 {{ row.count }} 条 · 可开 {{ row.amountText }}
+                    </div>
+                  </div>
+                  <span v-if="row.loginRequired" class="inv-chip err" data-test="'invoice-subject-store-flag-login-' + row.storeId">登录失效</span>
+                  <span v-else-if="row.lastFailed" class="inv-chip err" :title="row.failTitle" data-test="'invoice-subject-store-flag-fail-' + row.storeId">最近采集失败</span>
+                  <span v-else-if="!row.supported" class="inv-chip" :title="row.unsupportedReason || '该平台尚未实测到可读取的发票页'">未实测</span>
+                  <span v-else-if="row.emptyNote" class="inv-chip warn" :title="row.emptyNote">本次没读到</span>
+                  <button
+                    v-if="row.needsLicense" type="button" class="inv-chip warn" data-test="'invoice-subject-store-fill-' + row.storeId"
+                    title="点这里补录营业执照（发票按主体分账、导出给代账按主体分开）"
+                    @click.stop="openLicenseEditor(row)"
+                  >未填执照</button>
+                  <span class="inv-subject-enter" aria-hidden="true">进入店铺 →</span>
+                </div>
+                <div
+                  v-if="licenseEditingId && licenseEditingGroupKey === group.key"
+                  class="inv-lic-edit inv-subject-editor" :data-test="'invoice-subject-license-edit-' + licenseEditingId"
+                >
+                  <span class="inv-subject-editor-for">补录 / 修改「{{ storeNameOf(licenseEditingId) }}」的营业执照</span>
+                  <input v-model="licenseDraft.name" list="store-license-names" data-test="invoice-license-name" placeholder="营业执照主体名称（如：上海某某贸易有限公司）" />
+                  <input v-model="licenseDraft.no" data-test="invoice-license-no" placeholder="统一社会信用代码（选填，18 位；旧税号 15 位）" />
+                  <button type="button" class="unified-button" data-test="invoice-license-save" :disabled="licenseSaving" @click="saveLicenseInGroup()">{{ licenseSaving ? '保存中…' : '保存' }}</button>
+                  <button type="button" class="unified-button ghost" data-test="invoice-license-cancel" @click="licenseEditingId = ''">取消</button>
+                  <span v-if="licenseEditError" class="inv-lic-err" data-test="invoice-license-error">{{ licenseEditError }}</span>
+                </div>
+              </div>
+            </section>
           </div>
           <div v-else-if="!visibleInvoiceRows.length" class="unified-empty">没有符合当前筛选的记录。</div>
           <div v-else class="invoice-list">
@@ -741,8 +792,23 @@ const licenseEditingId = ref('')
 const licenseDraft = reactive({ name: '', no: '' })
 const licenseSaving = ref(false)
 const licenseEditError = ref('')
-/** 视图：按店铺列表 / 按主体汇总（申报与交代账看后者） */
+/** 视图：按店铺列表 / 按主体分组（申报与交代账看后者；组下店铺行可点击进入店铺详情） */
 const invoiceView = ref<'stores' | 'summary'>('stores')
+/**
+ * 「按主体」视图里**被收起**的主体组（默认全部展开）。
+ *
+ * 为什么默认展开：这个视图的第一眼就该回答"谁手下有哪些店"——如果默认收起来，
+ * 用户看到的还是一行行主体，跟旧平表没区别，"层级关系"要再点一次才出现。
+ * 家数多的组也不怕：最多一家店一行，屏上就那几行。
+ */
+const collapsedSubjects = ref<Set<string>>(new Set())
+function isSubjectCollapsed(key: string): boolean { return collapsedSubjects.value.has(key) }
+function toggleSubjectGroup(key: string): void {
+  const next = new Set(collapsedSubjects.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsedSubjects.value = next
+}
 /** 行内排序：默认「按平台顺序」——与主进程给的顺序一致，不擅自重排 */
 const invoiceSort = ref<'none' | 'amountDesc' | 'amountAsc'>('none')
 /** 导出确认浮层：先把"导哪一户、几行、多少钱"写在屏上，再去调主进程（见 openExportConfirm） */
@@ -1016,56 +1082,80 @@ function sectionAmount(section: any): { text: string; parsed: boolean } {
 }
 
 /**
- * 「按主体汇总」的行：一行一个开票主体，含「未填写营业执照」那一档。
+ * 「按主体」分组的行模型：一个主体一组，组下挂该主体的**全部店铺**（店铺行可点击进入店铺详情）。
+ *
+ * 三条纪律：
+ *   · 归属用 licenseGroups.keyByStore 这**一张**归属表（见 shared/store-license.ts 文件头——
+ *     不能各店各算一遍 licenseKeyOf，否则"胶囊写 2 家、组里只有 1 家"）；同一执照下的多家店
+ *     自动并到一块，没填执照的单独一组固定排最后（排序规则在 shared 的 groupStoresByLicense 里）。
+ *   · **不许静默丢行**：行对应的店铺若暂时不在 ws.stores（刷新时序），兜底归入「未填写」组里显示，
+ *     而不是像旧实现那样 `|| ''` + continue 无声吞掉（那会让"店里有票、屏上没店"变成无痕迹的假象）。
+ *   · 数字口径与 KPI / 胶囊 / 导出完全一致（待开票条数与金额来自 licenseSummary）。
+ *     「金额占比」的分母必须是**金额**，不是条数（2026-10-15 审查 BUG，实测按条数会把结论看反）；
+ *     总额 ≤ 0（整批退款冲正、或全是 0 元）时不给比例：分母没有意义，条只能画最小宽度。
+ *
  * 口径跟随左侧选中的主体（选了 A 就只汇总 A）——与 KPI 一致，避免两处数字对不上。
  */
-const invoiceSummaryRows = computed(() => {
+const invoiceSubjectGroups = computed(() => {
   const groups = licenseSummary.value.items
-  /**
-   * 「金额占比」的**分母必须是金额**，不是条数（2026-10-15 审查 BUG）。
-   *
-   * 列名、以及页面自己的说明（"金额占比一眼看出票压在哪个公司名下"）都写着**金额**，
-   * 而旧实现算的是 `pendingCount / 总条数`。两个指标会给出相反的结论，实测本机数据：
-   *   164 条 / ¥108,619.10 → 按条数 84%、按金额 **95.0%**
-   *     8 条 / ¥95.97      → 按条数  4%、按金额 **0.08%**（差 50 倍）
-   * 也就是说"多张小票的主体"会被画成大头，"一张大票的主体"反而不显眼——正好看反。
-   *
-   * 金额口径与「可开金额」列、KPI 合计完全一致（都来自 licenseSummary 的 amount）。
-   * 总额 ≤ 0（整批退款冲正、或全是 0 元）时不给比例：分母没有意义，条只能画最小宽度。
-   */
   const totalAmount = groups.reduce((sum, group) => sum + group.amount, 0)
   const shareOf = (amount: number): { width: string; pct: number | null } => {
     if (!Number.isFinite(totalAmount) || totalAmount <= 0) return { width: '2%', pct: null }
     const pct = amount / totalAmount * 100
     return { width: `${Math.max(2, Math.min(100, Math.round(pct)))}%`, pct }
   }
-  const extra = new Map<string, { history: number; storeNames: string[] }>()
-  for (const row of subjectInvoiceRows.value) {
-    const key = licenseGroups.value.keyByStore.get(row.storeId) || ''
-    if (!key) continue
-    const hit = extra.get(key) || { history: 0, storeNames: [] }
-    hit.history += Number(row.historyCount || 0)
-    hit.storeNames.push(String(row.storeName || row.storeId))
-    extra.set(key, hit)
+  // 行 → 组：每行必须落到一个组里（兜底 NO_LICENSE_KEY，见上方说明），组内保持载荷顺序（不擅自重排）
+  const rowsByKey = new Map<string, any[]>()
+  for (const row of invoiceAllRows.value) {
+    const key = licenseGroups.value.keyByStore.get(row.storeId) || NO_LICENSE_KEY
+    const list = rowsByKey.get(key) || []
+    list.push(row)
+    rowsByKey.set(key, list)
   }
   return groups
     .filter(group => !activeLicense.value || group.key === activeLicense.value)
     .map(group => {
       const share = shareOf(group.amount)
+      const label = group.label || '未填写营业执照'
+      const groupRows = rowsByKey.get(group.key) || []
+      const stores = groupRows.map((row: any) => ({
+        storeId: String(row.storeId),
+        storeName: String(row.storeName || row.storeId),
+        platform: String(row.platform || ''),
+        count: Number(row.count || 0),
+        amountText: invoiceRowAmountText(row),
+        capturedAt: Number(row.capturedAt) || null,
+        loginRequired: !!row.loginRequired,
+        lastFailed: !!row.lastFail,
+        failTitle: row.lastFail
+          ? `最近一次采集失败${row.lastFail.at ? `（${formatTime(Number(row.lastFail.at))}）` : ''}：${row.lastFail.message || row.lastFail.code || '未知原因'}`
+          : '',
+        supported: row.supported !== false,
+        unsupportedReason: String(row.unsupportedReason || ''),
+        // 「本次没读到」如实上屏（与按店铺视图同一条规矩：不能把上一次的数据静默当成本次结果）
+        emptyNote: (row.sections || [])
+          .filter((sec: any) => !!sec.emptyNote)
+          .map((sec: any) => `「${sec.name}」${sec.emptyNote}`)
+          .join('；'),
+        needsLicense: !row.licenseName && !row.licenseNo
+      }))
       return {
         key: group.key,
-        label: group.label || '未填写营业执照',
+        label,
         no: group.no || '',
-        storeNames: extra.get(group.key)?.storeNames || [],
+        // 家数以**列出来的店铺行**为准：屏上"N 家"与下面实际有几行必须对得上
+        storeCount: stores.length,
         pendingCount: group.pendingCount,
         amountText: group.amountText,
         unparsed: group.unparsed,
-        historyCount: extra.get(group.key)?.history || 0,
+        historyCount: groupRows.reduce((sum: number, row: any) => sum + Number(row.historyCount || 0), 0),
         share: share.width,
+        shareText: share.pct == null ? '占比 —' : `占比 ${share.pct >= 10 ? Math.round(share.pct) : share.pct.toFixed(1)}%`,
         // 条上没有数字，把确切比例挂到 title 上——否则用户只能看个大概长短
         shareTitle: share.pct == null
-          ? `${group.label || '未填写营业执照'}：本口径下可开金额合计不大于 0，算不出占比`
-          : `${group.label || '未填写营业执照'}：可开金额 ${group.amountText}，占本口径 ${share.pct.toFixed(1)}%（按金额，不是按条数）`
+          ? `${label}：本口径下可开金额合计不大于 0，算不出占比`
+          : `${label}：可开金额 ${group.amountText}，占本口径 ${share.pct.toFixed(1)}%（按金额，不是按条数）`,
+        stores
       }
     })
 })
@@ -1258,6 +1348,28 @@ async function saveLicense(row: any) {
   ws.toast('营业执照已保存', 'success')
 }
 
+/**
+ * 「按主体」分组视图里正在编辑的店铺属于哪个组（编辑器挂在那一组下面）。
+ * 兜底 NO_LICENSE_KEY 与行分桶同口径——绝不出现"编辑框开了、但不在任何组里"。
+ */
+const licenseEditingGroupKey = computed(() => (
+  licenseEditingId.value ? (licenseGroups.value.keyByStore.get(licenseEditingId.value) || NO_LICENSE_KEY) : ''
+))
+
+/** 分组视图的「保存」：没有行对象，按正在编辑的 storeId 找回那一行，走同一套 saveLicense 纪律 */
+async function saveLicenseInGroup(): Promise<void> {
+  const row = invoiceAllRows.value.find(item => item.storeId === licenseEditingId.value)
+  if (!row) return
+  await saveLicense(row)
+}
+
+/** 未填写组的「去补录」：先展开该组（收起来了就看不见编辑器），再打开第一家未填执照店铺的行内编辑器 */
+function startFillLicense(group: any): void {
+  if (isSubjectCollapsed(group.key)) toggleSubjectGroup(group.key)
+  const first = (group.stores || []).find((row: any) => row.needsLicense) || group.stores?.[0]
+  if (first) openLicenseEditor(first)
+}
+
 /** 店铺名（结果面板里按 storeId 反查；取不到就退回主进程给的名字） */
 function storeNameOf(storeId: string): string {
   return ws.stores.find(store => store.id === storeId)?.name || storeId
@@ -1371,6 +1483,19 @@ async function openStoreAdmin(row: any) {
   emit('open-store', row.storeId)
   await ws.newTab(url)
   ws.toast(`已打开「${row.storeName}」的后台，登录后回发票中心点「采集发票数据」`, 'success')
+}
+
+/**
+ * 点击「按主体」分组里的店铺行 → 进入该店的**店铺详情**（工作台里的该店浏览器视图）。
+ *
+ * 与「打开开票页 / 去登录」同一套纪律：先自己把店铺开起来（await 得到结果），再 emit 让父组件
+ * 切页——emit 不返回 Promise，不能反过来依赖它。已打开且正在显示的店不重复打开（openStore 幂等）。
+ */
+async function openStoreDetail(row: any) {
+  if (!ws.openStoreIds.includes(row.storeId) || ws.displayedStoreId !== row.storeId) {
+    await ws.openStore(row.storeId)
+  }
+  emit('open-store', row.storeId)
 }
 
 /**
@@ -1976,15 +2101,33 @@ button.inv-chip:hover{border-color:rgba(151,120,255,.7);color:var(--dash-text)}
 .inv-sec-none{color:var(--dash-text-muted);font-size:10px}
 .invoice-section .inv-sec-flag{margin:0 0 0 auto;padding:0;background:transparent;color:var(--dash-text-muted);font-size:9.5px;font-style:normal}
 
-/* 按主体汇总表 */
-.inv-summary{min-width:0;overflow-x:auto}
-.inv-summary-table{width:100%;border-collapse:collapse;font-size:11.5px}
-.inv-summary-table th{padding:8px 10px;border-bottom:1px solid var(--dash-border);background:#fbfcfe;color:var(--dash-text-soft);font-weight:600;text-align:left;white-space:nowrap}
-.inv-summary-table td{padding:11px 10px;border-bottom:1px solid #f4f6fa;color:var(--dash-text-soft);vertical-align:middle}
-.inv-summary-table tr:last-child td{border-bottom:none}
-.inv-summary-table td.num,.inv-summary-table th.num{text-align:right;font-variant-numeric:tabular-nums}
-.inv-summary-table td b{color:var(--dash-text)}
-.inv-summary-table td em{display:block;margin-top:2px;color:var(--dash-text-muted);font-size:10px;font-style:normal}
+/* 按主体分组：一个主体一块，组下方列出其店铺（点店铺行进入店铺详情） */
+.inv-summary{min-width:0;display:grid;gap:12px}
+.inv-subject{border:1px solid var(--dash-border);border-radius:13px;background:#ffffff;overflow:hidden}
+.inv-subject.none{border-style:dashed}
+.inv-subject-head{display:flex;align-items:flex-start;gap:10px;padding:13px 14px 7px}
+.inv-subject-bar{width:4px;min-height:38px;align-self:stretch;border-radius:2px;background:linear-gradient(180deg,#8b5cff,#6a3cf0)}
+.inv-subject.none .inv-subject-bar{background:#c9cdd6}
+.inv-subject-id{flex:1;min-width:0}
+.inv-subject-name{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.inv-subject-name b{font-size:13px;color:var(--dash-text)}
+.inv-subject-name em{color:var(--dash-text-muted);font-size:10.5px;font-style:normal}
+.inv-subject-figs{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:5px;color:var(--dash-text-soft);font-size:11px}
+.inv-subject-figs b{color:var(--dash-text)}
+.inv-subject-share{color:var(--dash-text-muted);font-size:10px;font-style:normal}
+.inv-subject-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.inv-subject-label{padding:2px 14px 7px 30px;color:var(--dash-text-muted);font-size:10.5px}
+.inv-subject-stores{display:grid}
+.inv-subject-store{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid #f4f6fa;cursor:pointer}
+.inv-subject-store:hover{background:#fafbfe}
+.inv-subject-store:focus-visible{outline:2px solid rgba(139,92,255,.45);outline-offset:-2px}
+.inv-subject-store-main{flex:1;min-width:0}
+.inv-subject-store-name{display:flex;align-items:baseline;gap:4px;flex-wrap:wrap}
+.inv-subject-store-name b{font-size:12.5px;color:var(--dash-text)}
+.inv-subject-store-sub{margin-top:2px;color:var(--dash-text-muted);font-size:10.5px}
+.inv-subject-enter{color:#5b3df5;font-size:10.5px;white-space:nowrap;flex:0 0 auto}
+.inv-subject-editor{margin:0 14px 12px 44px}
+.inv-subject-editor-for{color:var(--dash-text-soft);font-size:11px}
 .inv-sum-amount{color:#5b3df5 !important;font-weight:700}
 .inv-sum-store{display:inline-block;margin:0 4px 4px 0;padding:1px 7px;border:1px solid var(--dash-border);border-radius:999px;background:#f7f9fd;color:var(--dash-text-soft);font-size:10px}
 .inv-sum-bar{display:block;width:86px;height:6px;border-radius:4px;background:#eef1f7;overflow:hidden}

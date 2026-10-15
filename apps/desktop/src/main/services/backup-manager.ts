@@ -217,17 +217,25 @@ export function pruneBackups(keep = 7): number {
   const stale = db.prepare(
     'SELECT id, file_path FROM backups ORDER BY created_at DESC LIMIT -1 OFFSET ?'
   ).all(keep) as any[]
+  let cleaned = 0
   for (const row of stale) {
+    let filesRemoved = true
     try {
       if (existsSync(row.file_path)) rmSync(row.file_path, { force: true })
       // 历史备份可能残留 -wal/-shm 兄弟（旧版本写的），一并收口
       for (const ext of ['-wal', '-shm']) {
         if (existsSync(row.file_path + ext)) rmSync(row.file_path + ext, { force: true })
       }
-    } catch { /* ignore */ }
+    } catch {
+      // B7（2026-10-15 审查）：文件删不掉（被占用等）时**保留元数据行**，下一轮再试——
+      // 以前无论删不删得掉都删行，残留的 .db 从此失去回收依据，永远留在备份目录里。
+      filesRemoved = false
+    }
+    if (!filesRemoved) continue
     db.prepare('DELETE FROM backups WHERE id = ?').run(row.id)
+    cleaned++
   }
-  return stale.length
+  return cleaned
 }
 
 // ---------- 自动备份 ----------

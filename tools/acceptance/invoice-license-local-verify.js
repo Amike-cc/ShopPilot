@@ -481,6 +481,67 @@ async function main() {
     check('主进程按主体 key 筛选（不存在的 key → 如实报"当前主体下没有可导出的数据"，不静默导全部）',
       scopedEmpty.ok === false && scopedEmpty.message.includes('当前主体下没有可导出的待开票数据'),
       JSON.stringify(scopedEmpty))
+
+    // ---- 14. 「按主体」分组视图：主体 → 下属店铺 的层级；点店铺行进入该店「店铺详情」 ----
+    // （2026-10-15：汇总平表升级为分组视图——一个主体一块，组下方列出其全部店铺）
+    await ui.eval(`document.querySelector('[data-test="invoice-view-summary"]').click(); return true`)
+    await until(ui, `return document.querySelectorAll('[data-test^="invoice-subject-group-"]').length === 2`)
+    const scopeMeta = await ui.eval(`return (document.querySelector('[data-test="invoice-scope-meta"]')?.textContent || '').replace(/\\s+/g, ' ').trim()`)
+    check('工具栏口径提示跟随分组视图（共 N 个开票主体）', scopeMeta.includes('2 个开票主体'), scopeMeta)
+    const groupsView = await ui.eval(`
+      return [...document.querySelectorAll('[data-test^="invoice-subject-group-"]')].map(g => ({
+        text: (g.querySelector('.inv-subject-name')?.textContent || '').replace(/\\s+/g, ' ').trim(),
+        label: (g.querySelector('.inv-subject-label')?.textContent || '').replace(/\\s+/g, ' ').trim(),
+        stores: [...g.querySelectorAll('[data-test^="invoice-subject-store-"]')].map(s => ({
+          name: (s.querySelector('.inv-subject-store-name b')?.textContent || '').trim(),
+          enter: (s.querySelector('.inv-subject-enter')?.textContent || '').trim()
+        }))
+      }))
+    `)
+    check('「按主体」视图按主体分组渲染（一个主体一块，不再是平表）',
+      groupsView.length === 2 && groupsView[0].text.includes(LIC_A.name) && groupsView[1].text.includes(LIC_B.name),
+      JSON.stringify(groupsView.map(g => g.text)))
+    check('主体与店铺的层级：组头"N 家店"与组内店铺行数一致、各店归在正确主体块内',
+      groupsView[0].label.includes('下属店铺 · 3 家') &&
+      groupsView[0].stores.map(s => s.name).sort().join(',') === ['验达-A1', '验达-A2', '验达-A3'].sort().join(',') &&
+      groupsView[1].label.includes('下属店铺 · 2 家') &&
+      groupsView[1].stores.map(s => s.name).sort().join(',') === ['验己-B1', '未填-N1'].sort().join(','),
+      JSON.stringify(groupsView.map(g => g.label)))
+    check('每个店铺条目都带"进入店铺 →"跳转入口',
+      groupsView.length === 2 && groupsView.every(g => g.stores.length > 0 && g.stores.every(s => s.enter.includes('进入店铺'))),
+      JSON.stringify(groupsView.map(g => g.stores.map(s => s.enter))))
+
+    // 收起/展开：只折叠显示，不改层级与数字（DOM 保留、行数不变）
+    await ui.eval(`document.querySelector('[data-test^="invoice-subject-group-"] [data-test^="invoice-subject-toggle-"]').click(); return true`)
+    await sleep(300)
+    const collapsedState = await ui.eval(`
+      const g = document.querySelector('[data-test^="invoice-subject-group-"]')
+      return {
+        hidden: getComputedStyle(g.querySelector('.inv-subject-stores')).display === 'none',
+        rows: g.querySelectorAll('[data-test^="invoice-subject-store-"]').length,
+        label: (g.querySelector('.inv-subject-label')?.textContent || '').replace(/\\s+/g, ' ').trim()
+      }
+    `)
+    check('收起只折叠店铺列表（行数与层级信息仍在）',
+      collapsedState.hidden && collapsedState.rows === 3 && collapsedState.label.includes('3 家'),
+      JSON.stringify(collapsedState))
+    await ui.eval(`document.querySelector('[data-test^="invoice-subject-group-"] [data-test^="invoice-subject-toggle-"]').click(); return true`)
+    await sleep(300)
+
+    // 点 A1 的店铺行 → 进入该店「店铺详情」（工作台浏览器视图），显示的正是这家店
+    await ui.eval(`document.querySelector('[data-test="invoice-subject-store-${created['验达-A1']}"]').click(); return true`)
+    const enteredStoreId = await until(ui, `
+      const res = await window.shopilot.browser.state()
+      const displayed = res.ok ? res.data.displayedStoreId : null
+      return !!document.querySelector('[data-test="dashboard-browser-surface"]') && displayed ? displayed : null
+    `, 15000)
+    check('点店铺行进入店铺详情：工作台切到浏览器视图且显示该店（displayedStoreId 命中）',
+      enteredStoreId === created['验达-A1'], `displayed=${enteredStoreId}`)
+    const highlighted = await ui.eval(`
+      const row = document.querySelector('[data-test="store-card"][data-store-id="${created['验达-A1']}"]')
+      return !!row && String(row.className).includes('displayed')
+    `)
+    check('左栏该店被标为"显示中"（跳转落点与全应用点店铺一致）', highlighted)
   } finally {
     ui?.close()
     killTree(app)

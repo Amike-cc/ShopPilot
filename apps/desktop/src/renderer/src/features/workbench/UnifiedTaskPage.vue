@@ -107,7 +107,17 @@ async function pauseTask(task: any) { const id = task.latestRun?.id; if (!id) re
 async function resumeTask(task: any) { const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.resume(id); if (!result.ok) ws.toast('继续失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
 async function cancelTask(task: any) { const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.cancel(id); if (!result.ok) ws.toast('取消失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
 async function confirmTask(task: any, approved: boolean) { const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.confirm(id, approved); if (!result.ok) ws.toast('确认失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
-async function deleteTask(task: any) { if (!window.confirm(`确认删除任务「${task.name}」？`)) return; const result = await window.shopilot.task.delete(task.id); if (!result.ok) ws.toast('删除失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
+async function deleteTask(task: any) {
+  // B2（2026-10-15 审查）：运行中的任务删除会先协作取消并**等它真正停下**（主进程有界等待），
+  // 确认框要把这个行为说清楚，避免用户以为"删除=立刻消失"而实际还要等几秒。
+  const text = isActive(task)
+    ? `任务「${task.name}」正在运行：删除会先停止运行（最多等几秒），然后删除任务。确认继续？`
+    : `确认删除任务「${task.name}」？`
+  if (!window.confirm(text)) return
+  const result = await window.shopilot.task.delete(task.id)
+  if (!result.ok) ws.toast('删除失败：' + result.error.message, 'error')
+  else await ws.refreshTasks()
+}
 function openStoreForTask(task: any) { if (task.storeScope) emit('open-store', task.storeScope); else ws.toast('这是全局任务，没有绑定店铺', 'info') }
 function openCreate() { draftStore.value = ws.displayedStoreId || ws.stores[0]?.id || ''; draftName.value = ''; draftEveryMin.value = null; draftSteps.value = []; selectedStep.value = 0; createOpen.value = true }
 function setPicking(value: boolean) {

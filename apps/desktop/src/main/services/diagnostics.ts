@@ -15,6 +15,7 @@ import * as ProxyManager from '../browser/proxy-manager'
 import { queryAudit } from './audit-logger'
 import { readLogTail } from './logger'
 import { writeAudit } from './audit-logger'
+import { LEGACY_MASTER_PASSWORD_SETTING_KEY, MASTER_PASSWORD_SETTING_KEY } from './security-manager'
 
 // ---------- 最小 ZIP（STORE，无压缩） ----------
 
@@ -142,7 +143,13 @@ export function zipList(buf: Buffer): Array<{ name: string; size: number }> {
 // ---------- 诊断包 ----------
 
 const SETTING_WHITELIST_PREFIX = ['ui.', 'proxy.', 'task.', 'security.idleMinutes', 'app.']
-const SETTING_DENY = ['security.master', 'proxy_cred.', 'ai_cred.']
+/**
+ * 排除名单。主密码键从 security-manager 引入（**单一事实来源**）——
+ * B3（2026-10-15 审查）修复：以前这里硬编码了一个拼错的安全键名（与实际键的 U+2026
+ * 写法对不上），条目从未匹配上任何键（"排除主密码"形同虚设，靠下面的白名单兜底才没有泄漏）。
+ * 旧键一并列入，覆盖尚未完成迁移的库。
+ */
+const SETTING_DENY = [MASTER_PASSWORD_SETTING_KEY, LEGACY_MASTER_PASSWORD_SETTING_KEY, 'proxy_cred.', 'ai_cred.']
 
 /** 渲染层可指定路径的导出类型：扩展名与实现实际产出的文件类型对齐（诊断包 ZIP / 审计 JSONL） */
 export const DIAGNOSTICS_EXTS = ['.zip', '.json']

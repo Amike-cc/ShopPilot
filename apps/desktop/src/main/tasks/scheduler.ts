@@ -67,6 +67,17 @@ function tick(): void {
   for (const t of tasks) {
     if (t.status !== 'active' || !t.schedule?.everyMs) continue
     if (!t.storeScope) continue // 未绑定店铺的任务不自动触发
+    /**
+     * B1（2026-10-15 审查）：店铺已被删除时不再触发。
+     * · 彻底删除 → 任务成孤儿（tasks.store_scope 无外键），触发只会在 createRun 撞外键报错；
+     * · 在回收站 → 浏览器打不开，触发只会排一条永远 queued 的队。
+     * 两种情况都清掉内存锚点，店铺恢复后按新锚点重排（不补发停机期间的积压）。
+     */
+    if (!t.storeAlive) {
+      nextFireAt.delete(t.id)
+      fireEveryMs.delete(t.id)
+      continue
+    }
     if (t.latestRunStatus && ['queued', 'running', 'waiting_confirmation', 'paused'].includes(t.latestRunStatus)) {
       nextFireAt.set(t.id, now + t.schedule.everyMs)
       fireEveryMs.set(t.id, t.schedule.everyMs)

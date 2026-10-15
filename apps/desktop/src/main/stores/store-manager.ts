@@ -319,6 +319,22 @@ export function releaseStoreRuntime(storeId: string, options: { preserveSession?
 /**
  * 移入回收站（软删除）- §6.1 store:deletePermanent
  */
+/**
+ * 该店是否在回收站（deleted_at 非空）。
+ * B1（2026-10-15 审查）：`store:purge` 的"任务清理 + 删店铺"组合动作必须先过这道校验——
+ * 对活动店铺误执行不可撤销的清理是不可接受的；purgeStore 内部仍有同样判据兜底。
+ */
+export function isStoreInTrash(storeId: string): boolean {
+  return !!getDatabase().prepare('SELECT 1 FROM stores WHERE id = ? AND deleted_at IS NOT NULL').get(storeId)
+}
+
+/**
+ * 移入回收站（软删除）。
+ *
+ * 注意命名是历史遗留：早年语义为"从活动列表永久移除"，真正不可撤销的彻底删除是
+ * `purgeStore`（B8，2026-10-15 审查保留函数名以避免无谓 churn，加此说明防误读）。
+ * 软删**刻意不清理任务**——回收站恢复后任务要继续可用；任务清理发生在彻底删除时（B1）。
+ */
 export function deleteStorePermanent(storeId: string): boolean {
   const db = getDatabase()
 

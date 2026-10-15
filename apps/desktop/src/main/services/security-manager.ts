@@ -11,8 +11,46 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
 import { getDatabase } from '../db/database'
 import { writeAudit } from './audit-logger'
 import { askPassword } from './password-dialog'
+import { logMain } from './logger'
 
-const MASTER_KEY = 'securi…ster'
+/**
+ * 主密码记录在 app_settings 里的键。
+ *
+ * B3/B4（2026-10-15 审查）：历史字面量是 `'securi…ster'`（中间是 U+2026 省略号，疑似
+ * 占位符未还原），与诊断包排除名单里的 `'security.master'` 对不上——"排除主密码"的防呆
+ * 条目从未生效（靠导出白名单兜底才没有泄漏）。现在统一为 `'security.master'`：
+ * 写入只用新键；读取兼容旧键并**就地迁移**（见 resolveMasterStoredKey / readMasterStored）。
+ */
+export const MASTER_PASSWORD_SETTING_KEY = 'security.master'
+/** 历史键（含 U+2026），只为读取迁移而保留；新写入永不再用。 */
+export const LEGACY_MASTER_PASSWORD_SETTING_KEY = 'securi…ster'
+
+/**
+ * 从两个候选键解析主密码记录（纯函数，单测钉住优先级）：
+ * 新键优先；只有旧键时返回旧键并标记 legacyKey（调用方负责迁移）；都没有返回 null。
+ */
+export function resolveMasterStoredKey(read: (key: string) => string | null): { stored: string | null; legacyKey: string | null } {
+  const fresh = read(MASTER_PASSWORD_SETTING_KEY)
+  if (fresh) {
+    return { stored: fresh, legacyKey: read(LEGACY_MASTER_PASSWORD_SETTING_KEY) ? LEGACY_MASTER_PASSWORD_SETTING_KEY : null }
+  }
+  const legacy = read(LEGACY_MASTER_PASSWORD_SETTING_KEY)
+  return legacy ? { stored: legacy, legacyKey: LEGACY_MASTER_PASSWORD_SETTING_KEY } : { stored: null, legacyKey: null }
+}
+
+/** 读取主密码记录；从旧键读到时就地迁移到新键（失败不影响本次读取，下次再试）。 */
+function readMasterStored(): string | null {
+  const resolved = resolveMasterStoredKey(get)
+  if (resolved.legacyKey && resolved.stored) {
+    try {
+      put(MASTER_PASSWORD_SETTING_KEY, resolved.stored)
+      getDatabase().prepare('DELETE FROM app_settings WHERE key = ?').run(LEGACY_MASTER_PASSWORD_SETTING_KEY)
+      logMain('info', '[security] 主密码记录已从历史键迁移到 security.master')
+    } catch { /* 迁移失败不影响读取；旧键仍在，下次再试 */ }
+  }
+  return resolved.stored
+}
+
 const IDLE_KEY = 'security.idleMinutes' // 与 settings:set 同键（UI 可直接维护）
 const SALT = Buffer.from('shopilot-applock') // 固定域分离盐，配合随机盐双层
 const SCRYPT = { N: 16384, r: 8, p: 1, keyLen: 32 }
@@ -62,7 +100,7 @@ function derive(password: string, salt: Buffer): Buffer {
 }
 
 export function hasMasterPassword(): boolean {
-  const stored = get(MASTER_KEY)
+  const stored = readMasterStored()
   // 已有加密记录但系统暂时没有可用的 safeStorage 时，必须仍视为“已启用”。
   // 否则应用会把安全存储故障误判成“用户未设置主密码”，从而绕过锁定门禁。
   if (stored?.startsWith('enc:') && !safeStorage.isEncryptionAvailable()) return true
@@ -84,7 +122,9 @@ export async function setMasterPassword(input: { password?: string; oldPassword?
   if (next.length < 8) throw new Error('APP_LOCKED: 主密码至少 8 位')
   const salt = randomBytes(16)
   const hash = derive(next, salt).toString('base64')
-  put(MASTER_KEY, seal({ salt: salt.toString('base64'), hash }))
+  put(MASTER_PASSWORD_SETTING_KEY, seal({ salt: salt.toString('base64'), hash }))
+  // 换/设密码时旧键若还有残留（历史半迁移状态），一并清掉，避免两键并存
+  try { getDatabase().prepare('DELETE FROM app_settings WHERE key = ?').run(LEGACY_MASTER_PASSWORD_SETTING_KEY) } catch { /* 清理失败不影响新密码已生效 */ }
   writeAudit('security.setPassword', 'success')
   return { ok: true }
 }
@@ -93,14 +133,16 @@ export function removeMasterPassword(credential?: string | null): { ok: boolean 
   if (!hasMasterPassword()) return { ok: true }
   const given = credential ?? ''
   if (!verifyMaster(given)) throw new Error('APP_LOCKED: 主密码不正确，无法移除')
-  getDatabase().prepare('DELETE FROM app_settings WHERE key = ?').run(MASTER_KEY)
+  getDatabase().prepare('DELETE FROM app_settings WHERE key = ?').run(MASTER_PASSWORD_SETTING_KEY)
+  // 旧键一并清（未迁移完的库里两键可能并存）
+  getDatabase().prepare('DELETE FROM app_settings WHERE key = ?').run(LEGACY_MASTER_PASSWORD_SETTING_KEY)
   if (locked) locked = false
   writeAudit('security.removePassword', 'success')
   return { ok: true }
 }
 
 export function verifyMaster(password: string): boolean {
-  const stored = get(MASTER_KEY)
+  const stored = readMasterStored()
   if (stored?.startsWith('enc:') && !safeStorage.isEncryptionAvailable()) {
     throw new Error('SECURITY_STORAGE_UNAVAILABLE: 系统安全存储不可用，无法验证主密码')
   }

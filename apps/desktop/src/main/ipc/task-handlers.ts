@@ -107,9 +107,28 @@ export function registerTaskHandlers(): void {
     try {
       const task = TaskStore.getTask(input.taskId)
       if (!task) return err(ERROR_CODES.TASK_NOT_FOUND.code, '任务不存在', requestId)
+      const activeRunId = task.latestRun && ['queued', 'running', 'waiting_confirmation', 'paused'].includes(task.latestRun.status)
+        ? task.latestRun.id
+        : null
       // 运行中的先取消再删（级联删除 runs / step results）
-      if (task.latestRun && ['queued', 'running', 'waiting_confirmation', 'paused'].includes(task.latestRun.status)) {
-        try { Runner.cancelRun(task.latestRun.id, '任务被删除') } catch { /* ignore */ }
+      if (activeRunId) {
+        try { Runner.cancelRun(activeRunId, '任务被删除') } catch { /* ignore */ }
+      }
+      /**
+       * B2（2026-10-15 审查）：取消是**协作式**的——running / waiting_confirmation 只置标志，
+       * 靠执行循环在下一个检查点感知。以前这里 cancel 后立即 deleteTask 级联删行，在途 run
+       * 的下一次写库（insertStepResult）会撞 run_id 外键，把"已执行成功的步骤"误判成失败。
+       * 现在：**有界等待运行真正到达终态**（最多 8 秒）再删；等不到就如实拒绝本次删除，
+       * 不制造"删了但其实还在跑"的假象（界面会提示稍后重试）。
+       */
+      if (activeRunId && Runner.listLiveRuns().some(r => r.runId === activeRunId)) {
+        const deadline = Date.now() + 8000
+        while (Date.now() < deadline && Runner.listLiveRuns().some(r => r.runId === activeRunId)) {
+          await new Promise(resolve => setTimeout(resolve, 250))
+        }
+        if (Runner.listLiveRuns().some(r => r.runId === activeRunId)) {
+          return err(ERROR_CODES.TASK_BAD_STATE.code, '运行仍在停止中（可能正停在长等待步骤），请稍等几秒后重试删除', requestId)
+        }
       }
       TaskStore.deleteTask(input.taskId)
       return ok({ success: true }, requestId)

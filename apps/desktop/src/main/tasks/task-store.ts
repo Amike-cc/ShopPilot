@@ -8,6 +8,7 @@
 import { randomBytes } from 'crypto'
 import { getDatabase } from '../db/database'
 import { writeAudit } from '../services/audit-logger'
+import { logMain } from '../services/logger'
 import type {
   TaskCreateInput, TaskStepDef, TaskView, TaskRunView,
   TaskStepResultView, TaskResults, StepResultKind
@@ -19,6 +20,17 @@ import { stepInputSchemas, taskCreateSchema, DEFAULT_STEP_TIMEOUT, normalizeStep
 import { ACTIVE_RUN_STATUSES, assertStepsEditable, buildTaskUpdateSet } from './task-update-rules'
 
 function newId(prefix: string): string { return `${prefix}_${randomBytes(12).toString('hex')}` }
+
+/**
+ * B6（2026-10-15 审查）：以下列都是应用自己写的 JSON，但一旦损坏（磁盘、半写、手改），
+ * 裸 `JSON.parse` 会把整表读取（任务列表 / 快照列表）连坐拖垮。展示/元数据类字段统一
+ * 降级解析：坏了一个字段不整页报错。**步骤输入（input_json）刻意不降级**——它是执行参数，
+ * 宁可 fail-closed 报错也不能静默换成 `{}`。
+ */
+function safeJson<T>(raw: string | null | undefined, fallback: T): T {
+  if (raw == null) return fallback
+  try { return JSON.parse(raw) as T } catch { return fallback }
+}
 
 // ---------- 行映射 ----------
 
@@ -41,7 +53,7 @@ export function mapRunRow(r: any): TaskRunView {
 }
 
 function mapResultRow(r: any): TaskStepResultView {
-  const payload = r.payload_json ? JSON.parse(r.payload_json) : null
+  const payload = safeJson(r.payload_json, null)
   return {
     id: r.id, runId: r.run_id, stepIndex: r.step_index, kind: r.kind,
     summary: summarizeResult(r.kind, payload, { path: r.artifact_path, sha256: r.artifact_sha256 }),
@@ -219,7 +231,7 @@ export function getTask(taskId: string): TaskView | null {
   const latest = db.prepare('SELECT * FROM task_runs WHERE task_id = ? ORDER BY rowid DESC LIMIT 1').get(taskId) as any
   return {
     id: row.id, name: row.name, storeScope: row.store_scope, status: row.status,
-    schedule: row.schedule_json ? JSON.parse(row.schedule_json) : null,
+    schedule: safeJson(row.schedule_json, null),
     lastFiredAt: row.last_fired_at ?? null,
     createdAt: row.created_at, updatedAt: row.updated_at,
     steps, latestRun: latest ? mapRunRow(latest) : null
@@ -239,6 +251,12 @@ export interface ScheduleCandidate {
   schedule: { everyMs?: number } | null
   lastFiredAt: number | null
   latestRunStatus: string | null
+  /**
+   * B1（2026-10-15 审查）：店铺是否仍然"可运行"（存在且未进回收站）。
+   * false 的任务不参与自动触发——触发只会在 createRun 撞外键（已彻底删除）
+   * 或排一条永远打不开的队（在回收站）。恢复店铺后自动续上。
+   */
+  storeAlive: boolean
 }
 
 /**
@@ -251,7 +269,8 @@ export function listScheduleCandidates(): ScheduleCandidate[] {
   const rows = getDatabase().prepare(`
     SELECT t.id AS id, t.status AS status, t.store_scope AS store_scope, t.schedule_json AS schedule_json,
            t.last_fired_at AS last_fired_at,
-           (SELECT r.status FROM task_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS latest_status
+           (SELECT r.status FROM task_runs r WHERE r.task_id = t.id ORDER BY r.rowid DESC LIMIT 1) AS latest_status,
+           (SELECT 1 FROM stores s WHERE s.id = t.store_scope AND s.deleted_at IS NULL) AS store_alive
     FROM tasks t
     ORDER BY t.created_at DESC
   `).all() as any[]
@@ -261,7 +280,9 @@ export function listScheduleCandidates(): ScheduleCandidate[] {
     storeScope: r.store_scope ?? null,
     schedule: r.schedule_json ? (() => { try { return JSON.parse(r.schedule_json) } catch { return null } })() : null,
     lastFiredAt: r.last_fired_at ?? null,
-    latestRunStatus: r.latest_status ?? null
+    latestRunStatus: r.latest_status ?? null,
+    // 未绑定店铺（NULL）视为"可运行"（tick 里有单独的 storeScope 判空分支）
+    storeAlive: r.store_alive === 1 || r.store_scope == null
   }))
 }
 
@@ -289,9 +310,23 @@ export function deleteTask(taskId: string): void {
 export function createRun(taskId: string, storeId: string, reason: string): TaskRunView {
   const db = getDatabase()
   const id = newId('run')
-  db.prepare(
-    'INSERT INTO task_runs (id, task_id, store_id, status, current_step, started_at, finished_at, error_code, error_message, status_reason) VALUES (?,?,?,?,?,?,?,?,?,?)'
-  ).run(id, taskId, storeId, 'queued', null, null, null, null, null, reason)
+  try {
+    db.prepare(
+      'INSERT INTO task_runs (id, task_id, store_id, status, current_step, started_at, finished_at, error_code, error_message, status_reason) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).run(id, taskId, storeId, 'queued', null, null, null, null, null, reason)
+  } catch (error: any) {
+    /**
+     * B1（2026-10-15 审查）：`task_runs.store_id` 有外键（REFERENCES stores ON DELETE CASCADE）。
+     * 店铺被"彻底删除"后遗留的任务成了孤儿，插入运行直接命中库级 `FOREIGN KEY constraint failed`——
+     * 调度器只会把它当"触发失败"刷日志、手动运行则把这个库报错原样丢给用户。
+     * 这里换成可处置的错误码（调度日志与界面都能读懂）；
+     * 配套修复：purgeStore 现在会清理该店的任务（store-handlers 承担），本句是兜底。
+     */
+    if (String(error?.message || '').includes('FOREIGN KEY')) {
+      throw new Error('STORE_NOT_FOUND: 店铺不存在或已被彻底删除，无法创建运行（请删除该任务或重建店铺）')
+    }
+    throw error
+  }
   return getRun(id)!
 }
 
@@ -319,10 +354,23 @@ export function updateRun(runId: string, fields: Partial<{ status: string; curre
 export function insertStepResult(runId: string, stepIndex: number, kind: StepResultKind | 'confirm' | 'executed', payload: unknown, artifact?: { path: string; sha256: string }): string {
   const db = getDatabase()
   const id = newId('tres')
-  db.prepare(
-    'INSERT INTO task_step_results (id, run_id, step_index, kind, payload_json, artifact_path, artifact_sha256, created_at) VALUES (?,?,?,?,?,?,?,?)'
-  ).run(id, runId, stepIndex, kind, payload ? JSON.stringify(payload) : null,
-    artifact?.path ?? null, artifact?.sha256 ?? null, Date.now())
+  try {
+    db.prepare(
+      'INSERT INTO task_step_results (id, run_id, step_index, kind, payload_json, artifact_path, artifact_sha256, created_at) VALUES (?,?,?,?,?,?,?,?)'
+    ).run(id, runId, stepIndex, kind, payload ? JSON.stringify(payload) : null,
+      artifact?.path ?? null, artifact?.sha256 ?? null, Date.now())
+  } catch (error: any) {
+    /**
+     * B2（2026-10-15 审查）：运行记录已被删除（任务在运行中被删）时，run_id 外键必然失败。
+     * 这不是"步骤失败"——该步骤的物理动作可能已经完成；以前异常会一路抛进步骤循环被归类成
+     * 失败，把排查方向带偏。这里如实记一条日志、不再抛（任务已删，无行可写属预期）。
+     */
+    if (String(error?.message || '').includes('FOREIGN KEY')) {
+      logMain('warn', `[task] 步骤结果未落库：运行记录已不存在 run=${runId} step=${stepIndex}（任务可能已被删除）`)
+      return ''
+    }
+    throw error
+  }
   return id
 }
 
@@ -356,7 +404,7 @@ export function listSnapshots(storeId: string, limit = 20): Array<{ id: string; 
   return (db.prepare(
     'SELECT * FROM store_snapshots WHERE store_id = ? ORDER BY captured_at DESC LIMIT ?'
   ).all(storeId, limit) as any[]).map(r => ({
-    id: r.id, metric: r.metric, value: JSON.parse(r.value_json),
+    id: r.id, metric: r.metric, value: safeJson(r.value_json, null),
     sourceRunId: r.source_run_id, capturedAt: r.captured_at
   }))
 }

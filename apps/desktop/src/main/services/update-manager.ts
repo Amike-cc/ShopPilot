@@ -146,9 +146,12 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
     await autoUpdater.checkForUpdates()
     return status
   } catch (error) {
+    // B8（2026-10-15 审查）：失败通常已经先经 autoUpdater 'error' 事件到过（那里已写审计并把
+    // phase 置空）。这里只在事件没到达时补审计，避免同一失败写两条 update.check 审计。
+    const wasCheck = phase === 'check'
     phase = null
     const message = errorMessage(error)
-    audit('update.check', 'failure', { message, channel: getUpdateChannel() })
+    if (wasCheck) audit('update.check', 'failure', { message, channel: getUpdateChannel() })
     return publish({ state: 'error', error: message })
   }
 }
@@ -162,9 +165,11 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
     await autoUpdater.downloadUpdate()
     return status
   } catch (error) {
+    // B8：同上，避免与 'error' 事件重复写 update.download 审计
+    const wasDownload = phase === 'download'
     phase = null
     const message = errorMessage(error)
-    audit('update.download', 'failure', { message, channel: getUpdateChannel() })
+    if (wasDownload) audit('update.download', 'failure', { message, channel: getUpdateChannel() })
     return publish({ state: 'error', error: message })
   }
 }
