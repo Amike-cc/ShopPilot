@@ -16,12 +16,9 @@ import { randomUUID } from 'crypto'
 import { familyHandle } from './family-handle'
 import { INVITE_REPEAT_WINDOW_DAYS, listInvites, recentInvitedNicknames } from '../services/invite-history'
 import { logMain } from '../services/logger'
+import { ipcFail as error } from './envelope'
 
 const handle = familyHandle('达人邀约')
-
-function error(code: string, message: string, requestId: string, details?: unknown): IPCResult {
-  return { ok: false, error: { code, message, details }, requestId }
-}
 
 export function registerInviteHandlers(): void {
   handle(IPC_CHANNELS.INVITE_RECENT_HISTORY, (_event: IpcMainInvokeEvent, input: { storeId?: string; days?: number; limit?: number } = {}): IPCResult => {

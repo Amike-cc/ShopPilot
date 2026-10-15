@@ -13,6 +13,28 @@ export enum StoreStatus {
 }
 
 /**
+ * 状态的界面文案（唯一来源，2026-10-15 审查 P2-2 收敛）
+ *
+ * 此前 UnifiedAppsPage / UnifiedStorePage / DashboardView 各写了一份映射，
+ * 且 DashboardView 那份缺 `proxy_error` / `archived` 分支——「代理异常」在总览页
+ * 显示成「离线」，同一店铺在不同页文案互相矛盾。改文案只改这一处。
+ */
+export const STORE_STATUS_LABEL: Readonly<Record<string, string>> = {
+  [StoreStatus.ONLINE]: '在线',
+  [StoreStatus.LAUNCHING]: '启动中',
+  [StoreStatus.NEEDS_LOGIN]: '登录失效',
+  [StoreStatus.PROXY_ERROR]: '代理异常',
+  [StoreStatus.OFFLINE]: '离线',
+  [StoreStatus.INCOMPLETE]: '离线',
+  [StoreStatus.ARCHIVED]: '已归档'
+}
+
+/** 未知状态回「未知状态」——与三处旧实现的兜底一致 */
+export function storeStatusLabel(status: string): string {
+  return STORE_STATUS_LABEL[status] || '未知状态'
+}
+
+/**
  * 任务状态枚举 - §9.2
  */
 export enum TaskStatus {

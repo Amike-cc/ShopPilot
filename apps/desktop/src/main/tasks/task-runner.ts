@@ -19,11 +19,12 @@ import { canRetryStepInPlace, shouldUseInternalRunTab } from '@shared/agent-step
 import { TABLE_ROW_CLEAN_FN } from '@shared/constants/invoice'
 import { readApiResponse, readScalarValues } from './api-reader'
 import type {
-  TaskStepDef, TaskProgressEvent, TaskProgressPhase,
+  TaskStepDef, TaskProgressEvent,
   StepResultKind, TaskConfirmationEvent, TaskScheduledFiredEvent
 } from '@shared/schemas/task'
 import * as TaskStore from './task-store'
 import { NON_RESUMABLE_TYPES, DEFAULT_STEP_TIMEOUT } from './task-store'
+import { assertRunTransition, isActiveRunStatus, isTerminalRunStatus, progressPhaseForStatus } from './run-state'
 import { classifyTaskError } from './error-classifier'
 import { writeAudit } from '../services/audit-logger'
 import { logMain } from '../services/logger'
@@ -88,23 +89,14 @@ export function findActiveRunForTask(
   taskId: string
 ): { taskId: string; status: string } | null {
   for (const run of runs) {
-    if (run.taskId === taskId && ['queued', 'running', 'waiting_confirmation', 'paused'].includes(run.status)) {
+    if (run.taskId === taskId && isActiveRunStatus(run.status)) {
       return run
     }
   }
   return null
 }
 
-/** §9.2 任务状态机（含 A1 修订的失败恢复迁移） */
-const TRANSITIONS: Record<string, string[]> = {
-  queued: ['running', 'cancelled'],
-  running: ['waiting_confirmation', 'paused', 'succeeded', 'failed', 'cancelled'],
-  waiting_confirmation: ['running', 'cancelled'],
-  paused: ['queued', 'running', 'cancelled'],
-  failed: ['queued', 'running'],
-  succeeded: [],
-  cancelled: []
-}
+/** §9.2 任务状态机（含 A1 修订的失败恢复迁移）：迁移表与断言已抽到 run-state.ts（P1-1，可单测） */
 
 const cancelSig = () => Object.assign(new Error('运行已取消'), { name: 'CancelSignal' })
 const pauseSig = () => Object.assign(new Error('运行已暂停'), { name: 'PauseSignal' })
@@ -128,12 +120,17 @@ function forgetRun(runId: string): void {
 }
 
 function transition(run: RunHandle, to: string, reason: string): void {
-  const allowed = TRANSITIONS[run.status] || []
-  if (!allowed.includes(to)) {
-    throw new Error(`TASK_BAD_STATE: ${run.status} -> ${to} (${reason})`)
-  }
+  assertRunTransition(run.status, to, reason)
   const from = run.status
+  const fields: Parameters<typeof TaskStore.updateRun>[1] = { status: to, statusReason: reason }
+  if (to === 'running' && !run.startedOnce) fields.startedAt = Date.now()
+  if (isTerminalRunStatus(to)) fields.finishedAt = Date.now()
+  // P2-7（2026-10-15 审查）：**先落库、成功后再提交内存状态**。此前顺序相反——
+  // updateRun 抛异常（库忙/关库）会留下"内存已迁移、库里没有"的分歧，
+  // findActiveRunForTask / 恢复逻辑随之失真。落库失败时内存保持原状态，异常照常上抛。
+  TaskStore.updateRun(run.runId, fields)
   run.status = to
+  if (fields.startedAt) run.startedOnce = true
   // 状态机是所有 run 生命周期的唯一漏斗：起止/失败/取消都在这里落一行文件日志。
   // 此前引擎 3000 行只有 1 处 logMain，7×24 无人值守时"凌晨 3 点第 25 轮为什么失败"
   // 在日志里查不到（2026-09-28 审查确认的可观测性缺口）。
@@ -141,28 +138,17 @@ function transition(run: RunHandle, to: string, reason: string): void {
     logMain(to === 'failed' ? 'error' : 'info',
       `[task] run=${run.runId} task=${run.taskId} store=${run.storeId} ${from}→${to}（${reason}）`)
   } catch { /* 日志失败不能影响状态机 */ }
-  const fields: Parameters<typeof TaskStore.updateRun>[1] = { status: to, statusReason: reason }
-  if (to === 'running' && !run.startedOnce) { fields.startedAt = Date.now(); run.startedOnce = true }
-  if (to === 'succeeded' || to === 'failed' || to === 'cancelled') fields.finishedAt = Date.now()
-  TaskStore.updateRun(run.runId, fields)
 
-  const phase: TaskProgressPhase =
-    to === 'running' ? 'started' :
-    to === 'succeeded' ? 'finished' :
-    to === 'failed' ? 'failed' :
-    to === 'cancelled' ? 'finished' :
-    to === 'paused' ? 'paused' :
-    to === 'queued' ? 'queued' : 'started'
-  emitProgress(run, { phase, status: to, message: reason })
+  emitProgress(run, { phase: progressPhaseForStatus(to), status: to, message: reason })
 
   // 跑到终态就归还"定时任务后台开店"借来的页面（2026-10-02 用户要求：采集任务完成后关闭网页）。
   // 只在终态归还：paused / waiting_confirmation 还要接着跑，页面得留着。
   // 先解除本次运行的 task 门禁，再归还租约；归还函数仍会检查下载、上传、人工确认、
   // 独立窗口和其它租约等门禁，避免“任务结束”误把别的并发使用者的页面关掉。
-  if (to === 'succeeded' || to === 'failed' || to === 'cancelled') {
+  if (isTerminalRunStatus(to)) {
     setStoreTaskActivity(run.storeId, false)
+    releaseBorrowedPage(run.runId)
   }
-  if (to === 'succeeded' || to === 'failed' || to === 'cancelled') releaseBorrowedPage(run.runId)
 
   if (to === 'failed') {
     // 重复失败（failed -> queued 重试后再 failed）会二次进入：先去重再入队
@@ -376,7 +362,8 @@ function pump(): void {
   if (run.cancelRequested) { transition(run, 'cancelled', '用户取消'); schedulePump(); return }
   current = run
   execute(run).catch(e => {
-    console.error('[task-runner] execute 未捕获异常:', e)
+    // 走 logMain（脱敏 + 落盘）：console.error 的原文可能带 token/cookie 的 URL（P1-3）
+    logMain('error', `[task] execute 未捕获异常 run=${run.runId}：${String((e as any)?.stack || (e as any)?.message || e).slice(0, 500)}`)
   }).finally(() => {
     current = null
     schedulePump()
@@ -676,7 +663,6 @@ async function execute(run: RunHandle): Promise<void> {
 
     transition(run, 'succeeded', '全部步骤完成')
   } catch (e: any) {
-    console.error('[task-runner] run 执行异常', run.runId, e)
     try {
       logMain('error', `[task] 引擎异常 run=${run.runId} task=${run.taskId} store=${run.storeId}：${String(e?.stack || e?.message || e).slice(0, 500)}`)
     } catch { /* 日志失败不能影响落库 */ }
@@ -2117,13 +2103,23 @@ async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}
 
       const answer = await new Promise<'approve' | 'deny' | 'cancel' | 'timeout'>((resolve) => {
         let done = false
-        const finish = (a: 'approve' | 'deny' | 'cancel' | 'timeout') => { if (!done) { done = true; resolve(a) } }
+        let timeoutTimer: NodeJS.Timeout | null = null
+        let sigTimer: NodeJS.Timeout | null = null
+        const finish = (a: 'approve' | 'deny' | 'cancel' | 'timeout') => {
+          if (done) return
+          done = true
+          // 先到先得：无论是用户回答还是超时，立刻清掉另一个定时器。
+          // 不清理会让"提前确认"的运行一直挂着一个最长 step.timeoutMs 的定时器，
+          // 闭包持有整个运行句柄直到超时（P1-10，2026-10-15 审查）。
+          if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null }
+          if (sigTimer) { clearInterval(sigTimer); sigTimer = null }
+          resolve(a)
+        }
         run.pendingConfirm = finish
-        setTimeout(() => finish('timeout'), step.timeoutMs)
-        const sig = setInterval(() => {
-          if (done) { clearInterval(sig); return }
+        timeoutTimer = setTimeout(() => finish('timeout'), step.timeoutMs)
+        sigTimer = setInterval(() => {
           // 暂停不打断门禁：确认/拒绝是用户必须做出的决定，仅响应取消
-          if (run.cancelRequested) { finish('cancel'); clearInterval(sig) }
+          if (run.cancelRequested) finish('cancel')
         }, 250)
       })
       run.pendingConfirm = null

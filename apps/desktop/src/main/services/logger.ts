@@ -107,22 +107,84 @@ function redact(msg: string): string {
   return '[REDACTED-SENSITIVE-LINE] ' + masked.slice(0, 40).replace(/[^\x20-\x7e]/g, '?') + '…'
 }
 
-export function logMain(level: 'info' | 'warn' | 'error', msg: string): void {
-  const line = `${new Date().toISOString()} [${level}] ${redact(msg)}\n`
+/**
+ * 日志写入策略（2026-10-15 审查 P1-4）：
+ *
+ * 老实现每行 `appendFileSync + statSync`——任务引擎在每步/每次重试/每轮 loop 都打日志，
+ * 7×24 无人值守采集下同步 IO 反复阻塞主进程事件循环（表现为界面卡顿）。
+ *
+ * 新实现：内存攒批 + 定时落盘。
+ *   · error 级（崩溃/审计/诊断价值最高）立即同步落盘，绝不因攒批丢失；
+ *   · 其余每 300ms 或攒满 64KB 落一批（一次 appendFileSync 写入多行）；
+ *   · 体积检查（statSync）从"每行"降为"每 5 秒最多一次"，轮转逻辑不变；
+ *   · 进程 exit 时兜底 flushPending（同步，可在 exit 事件里执行）。
+ * 崩溃瞬时丢日志的窗口：最多 300ms 的非 error 行——与它换来的主线程减负相比是可接受的取舍。
+ */
+const FLUSH_INTERVAL_MS = 300
+const MAX_BUFFER_BYTES = 64 * 1024
+const SIZE_CHECK_INTERVAL_MS = 5 * 1000
+
+let pendingLines: string[] = []
+let pendingBytes = 0
+let flushTimer: NodeJS.Timeout | null = null
+let lastSizeCheckAt = 0
+
+function rotateIfOversized(): void {
   try {
-    appendFileSync(logFile(), line, 'utf8')
     const st = statSync(logFile())
-    if (st.size > MAX_BYTES) {
-      const tail = readFileSync(logFile(), 'utf8').slice(-MAX_BYTES / 2)
-      renameSync(logFile(), logFile() + '.1')
-      writeFileSync(logFile(), tail, 'utf8')
+    if (st.size <= MAX_BYTES) return
+    const tail = readFileSync(logFile(), 'utf8').slice(-MAX_BYTES / 2)
+    renameSync(logFile(), logFile() + '.1')
+    writeFileSync(logFile(), tail, 'utf8')
+  } catch { /* 轮转失败不影响主流程 */ }
+}
+
+/** 把缓冲的行一次性写入磁盘（同步；供定时器与退出路径共用） */
+function flushPending(): void {
+  if (!pendingLines.length) return
+  const chunk = pendingLines.join('')
+  pendingLines = []
+  pendingBytes = 0
+  try {
+    appendFileSync(logFile(), chunk, 'utf8')
+    const now = Date.now()
+    if (now - lastSizeCheckAt >= SIZE_CHECK_INTERVAL_MS) {
+      lastSizeCheckAt = now
+      rotateIfOversized()
     }
   } catch { /* 日志失败不影响主流程 */ }
+}
+
+function scheduleFlush(): void {
+  if (flushTimer) return
+  flushTimer = setTimeout(() => {
+    flushTimer = null
+    flushPending()
+  }, FLUSH_INTERVAL_MS)
+  // 常驻定时器不阻止进程退出（退出路径由 exit 兜底 flush）
+  if (typeof flushTimer.unref === 'function') flushTimer.unref()
+}
+
+// 进程退出前兜底落盘：'exit' 里只能做同步操作，flushPending 恰好是同步的
+process.on('exit', () => {
+  try { flushPending() } catch { /* 退出路径不抛 */ }
+})
+
+export function logMain(level: 'info' | 'warn' | 'error', msg: string): void {
+  const line = `${new Date().toISOString()} [${level}] ${redact(msg)}\n`
+  pendingLines.push(line)
+  pendingBytes += Buffer.byteLength(line)
+  if (level === 'error' || pendingBytes >= MAX_BUFFER_BYTES) {
+    flushPending()
+  } else {
+    scheduleFlush()
+  }
   mirrorToConsole(level, line.trim())
 }
 
 /** 诊断包用：读取最近日志文件尾部（已脱敏写入，再过滤一次兜底） */
 export function readLogTail(bytes = 200 * 1024): string {
+  flushPending() // 把攒批中的最新日志先落盘，诊断读取才拿得到全量
   try {
     const candidates = readdirSync(logDir())
       .filter(f => /^app-\d{4}-\d{2}-\d{2}\.log(\.1)?$/.test(f))

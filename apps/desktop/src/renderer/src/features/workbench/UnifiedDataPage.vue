@@ -2,7 +2,7 @@
   <section :class="['unified-page unified-data-page', { 'invoice-center-page': mode === 'invoices' }]" :data-test="`unified-${mode}-page`">
     <header class="unified-page-head">
       <div><span class="dashboard-eyebrow">WORKSPACE / DATA</span><h1>{{ title }}</h1><p>{{ subtitle }}</p></div>
-      <div class="unified-page-actions"><button type="button" class="unified-button ghost" :disabled="loading" @click="load"><img class="button-icon" :src="dataSyncSheetIcon" alt="" />{{ loading ? '读取中…' : '刷新数据' }}</button><template v-if="mode === 'invoices'">
+      <div class="unified-page-actions"><button v-if="mode !== 'invoices'" type="button" class="unified-button ghost" :disabled="loading" @click="load"><img class="button-icon" :src="dataSyncSheetIcon" alt="" />{{ loading ? '读取中…' : '刷新数据' }}</button><template v-if="mode === 'invoices'">
           <!-- ⚠ 验收脚本按 data-test="invoice-export" 定位导出按钮（invoice-license-local-verify.js 第 13 步），
                改这段工具栏必须保留它。
                顺带改正一处 bug：原来的 v-if 写反了（mode !== 'invoices'），于是「数据分析」页上挂着一个
@@ -76,90 +76,58 @@
           </aside>
 
           <div class="inv-main">
-        <!-- 采集状态条：一行说清"这批数字是什么时候的、覆盖了几家、哪几家没读到"。
-             采集失败与"确实没有发票"在屏上必须分得开——这是这类工具最危险的静默错误。 -->
-        <div class="inv-status" data-test="invoice-status">
-          <span class="inv-status-dot" :class="{ on: invoiceCoverage.ok > 0 }" aria-hidden="true"></span>
-          <span class="inv-status-lead">
-            最近采集 <b>{{ invoiceCoverage.lastAt ? formatTime(invoiceCoverage.lastAt) : '—' }}</b>
-            · 覆盖 <b>{{ invoiceCoverage.ok }}/{{ invoiceCoverage.total }}</b> 家店
-          </span>
-          <button v-if="invoiceCoverage.loginRequired" type="button" class="inv-chip err" data-test="invoice-status-login" @click="openStoreAdmin(invoiceRows.find(r => r.loginRequired))">
-            {{ invoiceCoverage.loginRequired }} 家登录态失效 → 去登录
-          </button>
-          <button v-if="unlicensedPending.stores" type="button" class="inv-chip warn" data-test="invoice-status-license" @click="invoiceLicense = NO_LICENSE_KEY">
-            {{ unlicensedPending.stores }} 家店未填营业执照 → 去补录
-          </button>
-          <span v-if="invoiceCoverage.notCollected" class="inv-chip warn">{{ invoiceCoverage.notCollected }} 家本次没采到</span>
-          <span v-if="invoiceTotal.unparsed" class="inv-chip warn">{{ invoiceTotal.unparsed }} 条金额无法解析，未计入合计</span>
-          <span v-if="invoiceTotal.historical" class="inv-chip">{{ invoiceTotal.historical }} 条无需操作（不计入待开票）</span>
+        <!-- 概览一行（2026-10-15 精简）：原「采集状态条 + 4 张 KPI 卡 + 自动更新行 + 两条说明段落」
+             合并为一条——屏上只留数字与必要警告，完整解释收进各 chip 的 title。
+             红线不变：采集失败与"确实没有发票"必须分得开（登录失效/本次没采到/未解析都在这里如实出现）。
+             契约（发票中心验收第 4/5 步）：本条内 .dc-num 必须**恰好 3 个**、依次是
+             「待开票条数 / 可开金额合计 / 有票待开的店铺数」——脚本按这三个数验证主体筛选联动。 -->
+        <div class="inv-brief" data-test="invoice-totals">
+          <div class="inv-brief-nums">
+            <span>待开票 <b class="dc-num">{{ invoiceTotal.count }}</b> 条</span>
+            <span>可开 <b class="dc-num">{{ invoiceTotal.amountText }}</b></span>
+            <span>有票待开 <b class="dc-num">{{ invoiceTotal.stores }}</b> 家</span>
+            <em class="inv-brief-scope">本口径内共 {{ subjectInvoiceRows.length }} 家店<template v-if="activeLicense"> · 全部主体共 {{ invoiceGrandTotal.count }} 条</template></em>
+          </div>
+          <div class="inv-brief-status" data-test="invoice-status">
+            <span class="inv-status-dot" :class="{ on: invoiceCoverage.ok > 0 }" aria-hidden="true"></span>
+            <span>最近采集 <b>{{ invoiceCoverage.lastAt ? formatTime(invoiceCoverage.lastAt) : '—' }}</b> · 覆盖 <b>{{ invoiceCoverage.ok }}/{{ invoiceCoverage.total }}</b> 家店</span>
+            <button v-if="invoiceCoverage.loginRequired" type="button" class="inv-chip err" data-test="invoice-status-login" @click="openStoreAdmin(invoiceRows.find(r => r.loginRequired))">
+              {{ invoiceCoverage.loginRequired }} 家登录态失效 → 去登录
+            </button>
+            <button v-if="unlicensedPending.stores" type="button" class="inv-chip warn" data-test="invoice-status-license" @click="invoiceLicense = NO_LICENSE_KEY">
+              {{ unlicensedPending.stores }} 家店未填营业执照 → 去补录
+            </button>
+            <span v-if="invoiceCoverage.notCollected" class="inv-chip warn">{{ invoiceCoverage.notCollected }} 家本次没采到</span>
+            <span v-if="invoiceTotal.unparsed" class="inv-chip warn" :title="`有 ${invoiceTotal.unparsed} 条金额无法解析为数字（页面写的是「—」或空）——它们未计入可开金额合计，条数照常计。`">{{ invoiceTotal.unparsed }} 条金额未解析</span>
+            <span v-if="invoiceTotal.historical" class="inv-chip" :title="`另有 ${invoiceTotal.historical} 条属「已提交 / 已通过」的方向（各平台的「处理中 / 处理记录」这类）——商家在那边没有待办，不计入待开票条数与金额合计；记录照常列在各店铺下方并标「无需操作」。`">{{ invoiceTotal.historical }} 条无需操作</span>
+            <span v-if="invoiceRisk.late" class="inv-chip err" :title="invoiceRisk.soon ? `另有 ${invoiceRisk.soon} 条 3 日内到期` : '暂无临期'">{{ invoiceRisk.late }} 条已逾期</span>
+            <span v-else-if="invoiceRisk.soon" class="inv-chip warn" :title="`${invoiceRisk.soon} 条 3 日内到期`">{{ invoiceRisk.soon }} 条临期</span>
+          </div>
+          <div class="inv-brief-side">
+            <!-- 自动更新内联开关：**必须同时看两件事**——任务上挂没挂周期、自动采集总开关有没有打开。
+                 只看任务周期会把"挂着但永远不会触发"显示成"已启用"（2026-10-15 审查确认的假状态）。 -->
+            <span class="inv-brief-schedule" data-test="invoice-schedule" :data-active="invoiceSchedule.active ? '1' : '0'">
+              <button
+                type="button" class="inv-chip"
+                :class="{ on: invoiceSchedule.active, warn: !invoiceSchedule.active && invoiceSchedule.enabled > 0 && !invoiceSchedule.autoEnabled }"
+                data-test="invoice-schedule-toggle" :disabled="collecting"
+                :title="invoiceSchedule.active
+                  ? `每 3 小时自动更新已启用（${invoiceSchedule.enabled}/${invoiceSchedule.total} 家挂着周期）——点这里关闭`
+                  : (invoiceSchedule.enabled > 0 && !invoiceSchedule.autoEnabled
+                    ? '已挂周期但不会自动跑——自动采集总开关是关的；点这里一并打开'
+                    : '点这里开启每 3 小时自动更新（会连同自动采集总开关一并打开）')"
+                @click="toggleInvoiceSchedule(!invoiceSchedule.active)"
+              >
+                <img class="button-icon" :src="dataInvoiceScheduleSheetIcon" alt="" />自动更新 · {{ invoiceSchedule.active ? '开' : (invoiceSchedule.enabled > 0 && !invoiceSchedule.autoEnabled ? '不自动跑' : '关') }}
+              </button>
+            </span>
+            <button type="button" class="inv-brief-refresh" data-test="invoice-refresh" :disabled="loading" @click="load">{{ loading ? '读取中…' : '刷新' }}</button>
+          </div>
         </div>
 
-        <!-- KPI 跟随左侧选中的开票主体：「点一个公司就看这个公司的数」，
-             否则点了「未填写」还看到全局条数，会以为筛选没生效。全局数放在第 1 张卡的注释里交叉印证。
-             契约：前三张卡的 .dc-num 必须依次是 待开票条数 / 金额合计 / 有待办店铺 数。 -->
-        <div class="dc-cards inv-kpis" data-test="invoice-totals">
-          <div class="dc-card">
-            <div class="dc-label">待开票条数</div>
-            <div class="dc-num">{{ invoiceTotal.count }}</div>
-            <div class="inv-kpi-note">覆盖 <b>{{ invoiceTotal.stores }}</b> 家店 · 另 <b>{{ invoiceTotal.historical }}</b> 条无需操作<template v-if="activeLicense"> · 全部主体共 <b>{{ invoiceGrandTotal.count }}</b> 条</template></div>
-          </div>
-          <div class="dc-card">
-            <div class="dc-label">可开金额合计</div>
-            <div class="dc-num">{{ invoiceTotal.amountText }}</div>
-            <div class="inv-kpi-note">{{ invoiceTotal.unparsed ? `${invoiceTotal.unparsed} 条金额未解析，未计入` : '全部金额均已计入' }}</div>
-          </div>
-          <div class="dc-card">
-            <div class="dc-label">有票待开的店铺</div>
-            <div class="dc-num">{{ invoiceTotal.stores }}</div>
-            <div class="inv-kpi-note">本口径内共 {{ subjectInvoiceRows.length }} 家店</div>
-          </div>
-          <div class="dc-card" :class="{ risk: invoiceRisk.late > 0 }">
-            <div class="dc-label">时间风险</div>
-            <div class="dc-num inv-kpi-risk">{{ invoiceRisk.late ? `${invoiceRisk.late} 条已逾期` : '无逾期' }}</div>
-            <div class="inv-kpi-note">{{ invoiceRisk.soon ? `${invoiceRisk.soon} 条 3 日内到期` : '暂无临期' }}</div>
-          </div>
-        </div>
-        <!-- 自动更新：每 3 小时一次。**必须同时看两件事**——任务上挂没挂周期、以及自动采集总开关
-             有没有打开。只看任务周期会把"挂着但永远不会触发"显示成"已启用"（2026-10-15 审查
-             确认的假状态：总开关 false + 4 家全挂周期 → 界面写着「已启用 4/4 家」，实际一次不跑）。 -->
-        <div class="inv-schedule" data-test="invoice-schedule" :data-active="invoiceSchedule.active ? '1' : '0'">
-          <span class="inv-schedule-dot" :class="{ on: invoiceSchedule.active }" aria-hidden="true"></span>
-          <span>
-            自动更新：<b>每 3 小时一次</b>
-            <template v-if="invoiceSchedule.enabled > 0 && !invoiceSchedule.autoEnabled">
-              · <b class="inv-schedule-warn">已挂周期但不会自动跑</b>——自动采集总开关是关的（{{ invoiceSchedule.enabled }}/{{ invoiceSchedule.total }} 家挂着，需要点右边按钮一并打开）
-            </template>
-            <template v-else-if="invoiceSchedule.active">
-              · 已启用 {{ invoiceSchedule.enabled }}/{{ invoiceSchedule.total }} 家<template v-if="invoiceSchedule.lastFiredAt"> · 上次触发 {{ formatTime(invoiceSchedule.lastFiredAt) }}</template>
-            </template>
-            <template v-else> · 尚未启用（点「采集发票数据」会自动挂上）</template>
-          </span>
-          <button
-            v-if="!invoiceSchedule.active"
-            type="button" class="unified-button" data-test="invoice-schedule-toggle"
-            :disabled="collecting"
-            @click="toggleInvoiceSchedule(true)"
-          ><img class="button-icon" :src="dataInvoiceScheduleSheetIcon" alt="" />开启每 3 小时自动更新</button>
-          <button
-            v-else
-            type="button" class="unified-button" data-test="invoice-schedule-toggle"
-            :disabled="collecting"
-            @click="toggleInvoiceSchedule(false)"
-          ><img class="button-icon" :src="dataInvoiceScheduleSheetIcon" alt="" />关闭自动更新</button>
-        </div>
-        <!-- 只说清"哪些条数没计入合计"：各平台把「处理中/处理记录」这类已提交流水也放在同一页，
-             它们商家这边没有待办，计入合计会让数字虚高。 -->
-        <p v-if="invoiceTotal.historical" class="inv-note" data-test="invoice-pending-note">
-          另有 <b>{{ invoiceTotal.historical }} 条</b>属「已提交 / 已通过」的方向（各平台的「处理中 / 处理记录」这类）——
-          商家在那边没有待办，因此<b>不计入</b>上方待开票条数与金额合计；记录照常列在各店铺下方并标了「无需操作」。
-        </p>
-        <!-- P1-3：金额解析不出的条数**单独一条**说明。此前它嵌在上面那段 `v-if="historical"` 里，
-             而只有快手有 pending:false 的方向 → 微信/拼多多/抖店永远看不到这句提示，
-             合计偏小却没有任何解释（与 invoice-amount 的模块红线相悖）。 -->
-        <p v-if="invoiceTotal.unparsed" class="inv-note" data-test="invoice-unparsed-note">
-          有 <b>{{ invoiceTotal.unparsed }} 条</b>金额无法解析为数字（页面写的是「—」或空）——它们<b>未计入</b>可开金额合计，条数照常计。
-        </p>
+        <!-- （2026-10-15 精简）：KPI 卡、自动更新行与两条说明段落已并入上方「概览一行」——
+             金额未解析 / 无需操作 / 逾期的完整解释收进了各自 chip 的 title，屏上只留摘要。
+             数字口径与筛选联动不变（原契约「.dc-num 依次是 条数/金额/店铺数」已迁到 .inv-brief）。 -->
 
         <!-- 工具栏：采集/导出已上移到页头，这里只放"看哪一份数据"的控件。
              此前 invoiceQuery / invoiceStatusFilter / invoicePlatformFilter / invoicePeriodFilter
@@ -168,27 +136,32 @@
              契约：data-test="invoice-export" 在页头，别删。 -->
         <div class="inv-toolbar" data-test="invoice-toolbar">
           <input v-model="invoiceQuery" type="text" class="inv-search" data-test="invoice-search" placeholder="搜索：店铺 / 单号 / 类型 / 抬头 / 税号…" />
-          <select v-model="invoiceStatusFilter" class="inv-select" data-test="invoice-filter-status" aria-label="状态筛选">
-            <option value="all">全部状态</option>
-            <option value="pending">有待开票</option>
-            <option value="processed">有无需操作</option>
-            <option value="error">有异常</option>
-          </select>
-          <select v-model="invoicePlatformFilter" class="inv-select" data-test="invoice-filter-platform" aria-label="平台筛选">
-            <option value="">全部平台</option>
-            <option v-for="name in invoicePlatformOptions" :key="name" :value="name">{{ name }}</option>
-          </select>
-          <select v-model="invoicePeriodFilter" class="inv-select" data-test="invoice-filter-period" aria-label="采集时间筛选">
-            <option value="all">不限采集时间</option>
-            <option value="1">最近 1 天采集</option>
-            <option value="7">最近 7 天采集</option>
-            <option value="30">最近 30 天采集</option>
-          </select>
-          <select v-model="invoiceSort" class="inv-select" data-test="invoice-sort" aria-label="排序">
-            <option value="none">按平台顺序</option>
-            <option value="amountDesc">金额从高到低</option>
-            <option value="amountAsc">金额从低到高</option>
-          </select>
+          <!-- 四个下拉折叠进「筛选」面板（2026-10-15 精简）：常态只占一个按钮的宽度；
+               控件本体与 data-test 原样保留，筛选/排序逻辑与联动不变。 -->
+          <button type="button" class="unified-button ghost inv-mini" data-test="invoice-filter-toggle" :aria-expanded="filtersOpen" @click="filtersOpen = !filtersOpen">筛选<template v-if="activeFilterCount"> · {{ activeFilterCount }}</template></button>
+          <div v-show="filtersOpen" class="inv-filter-panel" data-test="invoice-filter-panel">
+            <select v-model="invoiceStatusFilter" class="inv-select" data-test="invoice-filter-status" aria-label="状态筛选">
+              <option value="all">全部状态</option>
+              <option value="pending">有待开票</option>
+              <option value="processed">有无需操作</option>
+              <option value="error">有异常</option>
+            </select>
+            <select v-model="invoicePlatformFilter" class="inv-select" data-test="invoice-filter-platform" aria-label="平台筛选">
+              <option value="">全部平台</option>
+              <option v-for="name in invoicePlatformOptions" :key="name" :value="name">{{ name }}</option>
+            </select>
+            <select v-model="invoicePeriodFilter" class="inv-select" data-test="invoice-filter-period" aria-label="采集时间筛选">
+              <option value="all">不限采集时间</option>
+              <option value="1">最近 1 天采集</option>
+              <option value="7">最近 7 天采集</option>
+              <option value="30">最近 30 天采集</option>
+            </select>
+            <select v-model="invoiceSort" class="inv-select" data-test="invoice-sort" aria-label="排序">
+              <option value="none">按平台顺序</option>
+              <option value="amountDesc">金额从高到低</option>
+              <option value="amountAsc">金额从低到高</option>
+            </select>
+          </div>
           <div class="inv-seg" data-test="invoice-view-switch" role="tablist" aria-label="视图切换">
             <button type="button" :class="{ on: invoiceView === 'stores' }" data-test="invoice-view-stores" @click="invoiceView = 'stores'">按店铺</button>
             <button type="button" :class="{ on: invoiceView === 'summary' }" data-test="invoice-view-summary" @click="invoiceView = 'summary'">按主体</button>
@@ -362,7 +335,14 @@
                 {{ row.unsupportedReason || '该平台尚未实测到可读取的发票页' }}
               </div>
 
-              <div v-if="row.sections?.length" class="invoice-sections">
+              <!-- 方向明细默认收起（2026-10-15 精简）：首屏只留店铺级信息，点开才渲染明细表
+                   （v-if 而非 v-show——收起时连 DOM 都不建，行多时渲染成本也跟着降）。 -->
+              <div v-if="row.sections?.length" class="inv-dir-bar">
+                <button type="button" class="inv-dir-toggle" :data-test="'invoice-dir-toggle-' + row.storeId" @click="toggleStoreDirs(row.storeId)">
+                  {{ isStoreDirsOpen(row.storeId) ? '收起方向明细' : `展开方向明细（${row.sections.length} 个开票方向）` }}
+                </button>
+              </div>
+              <div v-if="isStoreDirsOpen(row.storeId)" class="invoice-sections">
                 <div
                   v-for="section in row.sections" :key="section.metricKey || section.name"
                   class="invoice-section" :class="{ idle: !isPendingSection(section), blank: !(section.items?.length) }"
@@ -688,6 +668,12 @@
         </datalist>
           </div><!-- /inv-main -->
         </div><!-- /inv-shell -->
+        <!-- 移动端（<768）常驻操作条：桌面隐藏，窄屏固定在滚动容器底部——采集/导出是最高频动作，
+             滚动中也够得着；按钮热区 ≥ 40px（视觉）+ 容器 padding 补足 44px 触控面。 -->
+        <div class="inv-mobile-actions">
+          <button type="button" class="unified-button primary" :disabled="collecting || entityCollecting" @click="collectInvoices">{{ collecting ? '创建任务中…' : '采集发票数据' }}</button>
+          <button type="button" class="unified-button" :disabled="!invoiceRows.length" :title="exportScopeTitle" @click="openExportConfirm">导出</button>
+        </div>
       </template>
 
       <section v-if="mode === 'analytics'" class="unified-card manual-card"><div class="unified-card-head"><div><h2>手动录入指标</h2><span>仅用于平台反抓取导致无法自动读取的数字，来源会标注为手动</span></div></div><div class="manual-form"><select v-model="manual.storeId" aria-label="店铺"><option value="">选择店铺</option><option v-for="store in ws.stores" :key="store.id" :value="store.id">{{ store.name }}</option></select><select v-model="manual.metric" aria-label="指标"><option v-for="metric in bizMetrics" :key="metric.key" :value="metric.key">{{ metric.label }}</option></select><input v-model.number="manual.value" type="number" min="0" placeholder="数值" /><button type="button" class="unified-button ghost" :disabled="!manualReady" @click="saveManual"> <img class="button-icon" :src="dataManualEntrySheetIcon" alt="" />录入</button></div></section>
@@ -792,8 +778,13 @@ const licenseEditingId = ref('')
 const licenseDraft = reactive({ name: '', no: '' })
 const licenseSaving = ref(false)
 const licenseEditError = ref('')
-/** 视图：按店铺列表 / 按主体分组（申报与交代账看后者；组下店铺行可点击进入店铺详情） */
-const invoiceView = ref<'stores' | 'summary'>('stores')
+/**
+ * 视图：按主体分组（**默认**，申报与交代账看它；组下店铺行可点击进入店铺详情）
+ * / 按店铺列表（排查视图；每个店铺的「方向明细」点开才渲染）。
+ *
+ * 2026-10-15 精简：默认从「按店铺」改为「按主体」——打开先看"票压在哪个主体"，店铺列表是二级视角。
+ */
+const invoiceView = ref<'stores' | 'summary'>('summary')
 /**
  * 「按主体」视图里**被收起**的主体组（默认全部展开）。
  *
@@ -809,8 +800,30 @@ function toggleSubjectGroup(key: string): void {
   else next.add(key)
   collapsedSubjects.value = next
 }
+/** 「按店铺」视图里展开了「方向明细」的店铺（默认收起——明细点开才渲染，不占首屏） */
+const expandedStoreDirs = ref<Set<string>>(new Set())
+function isStoreDirsOpen(storeId: string): boolean { return expandedStoreDirs.value.has(storeId) }
+function toggleStoreDirs(storeId: string): void {
+  const next = new Set(expandedStoreDirs.value)
+  if (next.has(storeId)) next.delete(storeId)
+  else next.add(storeId)
+  expandedStoreDirs.value = next
+}
 /** 行内排序：默认「按平台顺序」——与主进程给的顺序一致，不擅自重排 */
 const invoiceSort = ref<'none' | 'amountDesc' | 'amountAsc'>('none')
+/**
+ * 工具栏「筛选」面板开合（2026-10-15 精简）：常态只显示搜索与「筛选 · N」，
+ * 点开才展开 状态 / 平台 / 采集时间 / 排序 四个下拉；生效中的筛选项数量标在按钮上。
+ */
+const filtersOpen = ref(false)
+const activeFilterCount = computed(() => {
+  let count = 0
+  if (invoiceStatusFilter.value !== 'all') count++
+  if (invoicePlatformFilter.value) count++
+  if (invoicePeriodFilter.value !== 'all') count++
+  if (invoiceSort.value !== 'none') count++
+  return count
+})
 /** 导出确认浮层：先把"导哪一户、几行、多少钱"写在屏上，再去调主进程（见 openExportConfirm） */
 const exporting = ref(false)
 const exportConfirm = reactive({ open: false, scopeLabel: '全部主体', pendingRows: 0, amountText: '—', unparsed: 0 })
@@ -1557,6 +1570,11 @@ function displayValue(value: unknown) { return value == null || value === '' ? '
 function formatTime(value: number) { return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
 function formatValue(value: unknown, key: string) { const number = typeof value === 'number' ? value : Number(value); if (!Number.isFinite(number)) return '—'; return key.includes('gmv') || key.includes('Amount') ? `¥ ${number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}` : number.toLocaleString('zh-CN') }
 async function load() {
+  // P1-7（2026-10-15 审查）：无 preload（纯渲染调试模式）时给出降级提示，而不是 TypeError 白屏
+  if (!window.shopilot) {
+    errorMessage.value = '原生桥接不可用（纯渲染模式）：数据中心无法加载'
+    return
+  }
   loading.value = true
   errorMessage.value = ''
   try {
@@ -1983,7 +2001,7 @@ onBeforeUnmount(() => { window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTask
 </script>
 
 <style scoped>
-.unified-page{min-width:0;min-height:0;height:100%;overflow:auto;padding:22px 24px 32px;color:var(--dash-text)}.unified-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:16px}.unified-page-head h1{margin:5px 0 7px;font-size:25px}.unified-page-head p{margin:0;color:var(--dash-text-muted);font-size:12px}.unified-page-actions{display:flex;gap:8px}.button-icon{width:15px;height:15px;object-fit:contain;vertical-align:-3px;margin-right:5px}.unified-button{min-height:32px;padding:0 13px;border:1px solid var(--dash-border);border-radius:9px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer}.unified-button:hover,.unified-button:focus-visible{border-color:rgba(151,120,255,.7);color:var(--dash-text);outline:none}.unified-button.primary{border-color:#5b3df5;background:#6d4aff;color:#ffffff}.unified-button:disabled{opacity:.55;cursor:not-allowed}.unified-route-tabs{display:flex;gap:5px;margin-bottom:15px;padding:4px;border:1px solid var(--dash-border);border-radius:10px;background:#ecedee}.unified-route-tabs button{height:30px;padding:0 14px;border:0;border-radius:7px;background:transparent;color:var(--dash-text-muted);cursor:pointer}.unified-route-tabs button.active{background:rgba(113,78,231,.36);color:#4c1d95}.unified-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.unified-stat-card{display:flex;flex-direction:column;gap:6px;padding:14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.unified-stat-card span,.unified-stat-card small{color:var(--dash-text-muted);font-size:11px}.unified-stat-card strong{font-size:25px}.unified-data-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr);gap:12px}.unified-card{min-width:0;padding:16px;border:1px solid var(--dash-border);border-radius:13px;background:#ffffff}.unified-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.unified-card-head h2{margin:0 0 5px;font-size:16px}.unified-card-head span{color:var(--dash-text-muted);font-size:11px}.unified-table-wrap{overflow:auto}.unified-table{width:100%;border-collapse:collapse;font-size:11px}.unified-table th,.unified-table td{padding:10px 9px;border-bottom:1px solid rgba(111,137,177,.12);text-align:left;white-space:nowrap}.unified-table th{color:var(--dash-text-muted);font-weight:500}.unified-table td{color:var(--dash-text-soft)}.unified-table em{display:inline-block;margin-left:4px;padding:2px 4px;border-radius:4px;background:rgba(242,165,87,.15);color:#b54708;font-size:9px;font-style:normal}.unified-empty,.unified-state{display:flex;min-height:180px;align-items:center;justify-content:center;gap:10px;flex-direction:column;color:var(--dash-text-muted);border:1px dashed var(--dash-border);border-radius:11px}.unified-empty.compact{min-height:90px}.unified-alert{padding:10px 12px;margin-bottom:12px;border-radius:9px;font-size:12px}.unified-alert.error{border:1px solid rgba(239,99,119,.35);background:rgba(117,37,58,.2);color:#b42318}.unified-alert button{margin-left:8px;border:0;background:transparent;color:#fff;text-decoration:underline;cursor:pointer}.snapshot-list{display:flex;flex-direction:column;gap:8px}.snapshot-row{display:flex;justify-content:space-between;gap:10px;padding:10px;border-radius:8px;background:#f7f9fd}.snapshot-row strong,.snapshot-row small{display:block}.snapshot-row small{margin-top:4px;color:var(--dash-text-muted);font-size:10px}.snapshot-row>span{color:#5b3df5;font-size:12px}.dc-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.dc-card{padding:13px 14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.dc-num{color:var(--dash-text);font-size:24px;font-weight:700;letter-spacing:-.02em}.dc-label{margin-top:4px;color:var(--dash-text-muted);font-size:11px}.inv-note{margin:0 0 12px;padding:9px 11px;border:1px solid var(--dash-border);border-radius:10px;background:#f7f9fd;color:var(--dash-text-soft);font-size:11.5px;line-height:1.6}.inv-lic-bar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:12px}.inv-lic-title{color:var(--dash-text-muted);font-size:11.5px}.inv-lic-chip{display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:0 11px;border:1px solid var(--dash-border);border-radius:999px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer;font-size:11.5px}.inv-lic-chip i{color:var(--dash-text-muted);font-style:normal}.inv-lic-chip.on{border-color:rgba(124,92,255,.6);background:rgba(124,92,255,.12);color:#5b3df5}.inv-lic-chip.on i{color:#5b3df5}.inv-lic-chip.none{border-style:dashed}.inv-row-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.inv-row-head b{color:var(--dash-text);font-size:13px}.inv-row-sub{color:var(--dash-text-muted);font-size:10.5px}.inv-count{margin-left:auto;color:var(--dash-text-soft);font-size:11.5px}.inv-lic-tag{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 9px;border:1px solid rgba(124,92,255,.35);border-radius:999px;background:rgba(124,92,255,.1);color:#5b3df5;cursor:pointer;font-size:10.5px}.inv-lic-tag em{color:var(--dash-text-muted);font-style:normal}.inv-lic-tag.none{border-style:dashed;border-color:var(--dash-border);background:transparent;color:var(--dash-text-muted)}.inv-open-page{min-height:24px;padding:0 10px;font-size:10.5px;white-space:nowrap}.inv-lic-edit{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px;padding:9px;border:1px dashed var(--dash-border);border-radius:10px}.inv-lic-edit input{height:32px;min-width:200px;flex:1 1 220px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.inv-lic-err{color:#b42318;font-size:11px}.inv-schedule{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin:0 0 12px;padding:9px 11px;border:1px solid var(--dash-border);border-radius:10px;background:#f7f9fd;color:var(--dash-text-soft);font-size:11.5px}.inv-schedule b{color:var(--dash-text)}.inv-schedule-dot{width:7px;height:7px;border-radius:50%;background:#98a2b3}.inv-schedule-dot.on{background:#12b76a}.inv-schedule .unified-button{margin-left:auto}.invoice-section em{margin-left:4px;padding:1px 5px;border-radius:6px;background:#fff4e5;color:#b54708;font-size:9.5px;font-style:normal}.order-store-list,.invoice-list{display:flex;flex-direction:column;gap:12px}.order-store-block,.invoice-row{padding:13px;border:1px solid var(--dash-border);border-radius:10px;background:rgba(8,16,31,.45)}.order-store-head,.invoice-row-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.order-store-head strong,.invoice-row-head strong{display:block}.order-store-head span,.invoice-row-head span{display:block;margin-top:4px;color:var(--dash-text-muted);font-size:10px}.invoice-sections{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}.invoice-section{display:flex;flex-direction:column;gap:5px;padding:10px;border-radius:8px;background:#ededef}.invoice-section span{color:var(--dash-text-muted);font-size:10px}.manual-card{margin-top:12px}.manual-form{display:flex;flex-wrap:wrap;gap:8px}.manual-form select,.manual-form input{height:34px;min-width:160px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.loader{width:18px;height:18px;border:2px solid rgba(163,143,255,.2);border-top-color:#7c5cff;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.unified-page{min-width:0;min-height:0;height:100%;overflow:auto;padding:22px 24px 32px;color:var(--dash-text)}.unified-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:16px}.unified-page-head h1{margin:5px 0 7px;font-size:25px}.unified-page-head p{margin:0;color:var(--dash-text-muted);font-size:12px}.unified-page-actions{display:flex;gap:8px}.button-icon{width:15px;height:15px;object-fit:contain;vertical-align:-3px;margin-right:5px}.unified-button{min-height:32px;padding:0 13px;border:1px solid var(--dash-border);border-radius:9px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer}.unified-button:hover,.unified-button:focus-visible{border-color:rgba(151,120,255,.7);color:var(--dash-text);outline:none}.unified-button.primary{border-color:#5b3df5;background:#6d4aff;color:#ffffff}.unified-button:disabled{opacity:.55;cursor:not-allowed}.unified-route-tabs{display:flex;gap:5px;margin-bottom:15px;padding:4px;border:1px solid var(--dash-border);border-radius:10px;background:#ecedee}.unified-route-tabs button{height:30px;padding:0 14px;border:0;border-radius:7px;background:transparent;color:var(--dash-text-muted);cursor:pointer}.unified-route-tabs button.active{background:rgba(113,78,231,.36);color:#4c1d95}.unified-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.unified-stat-card{display:flex;flex-direction:column;gap:6px;padding:14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.unified-stat-card span,.unified-stat-card small{color:var(--dash-text-muted);font-size:11px}.unified-stat-card strong{font-size:25px}.unified-data-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr);gap:12px}.unified-card{min-width:0;padding:16px;border:1px solid var(--dash-border);border-radius:13px;background:#ffffff}.unified-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.unified-card-head h2{margin:0 0 5px;font-size:16px}.unified-card-head span{color:var(--dash-text-muted);font-size:11px}.unified-table-wrap{overflow:auto}.unified-table{width:100%;border-collapse:collapse;font-size:11px}.unified-table th,.unified-table td{padding:10px 9px;border-bottom:1px solid rgba(111,137,177,.12);text-align:left;white-space:nowrap}.unified-table th{color:var(--dash-text-muted);font-weight:500}.unified-table td{color:var(--dash-text-soft)}.unified-table em{display:inline-block;margin-left:4px;padding:2px 4px;border-radius:4px;background:rgba(242,165,87,.15);color:#b54708;font-size:9px;font-style:normal}.unified-empty,.unified-state{display:flex;min-height:180px;align-items:center;justify-content:center;gap:10px;flex-direction:column;color:var(--dash-text-muted);border:1px dashed var(--dash-border);border-radius:11px}.unified-empty.compact{min-height:90px}.unified-alert{padding:10px 12px;margin-bottom:12px;border-radius:9px;font-size:12px}.unified-alert.error{border:1px solid rgba(239,99,119,.35);background:rgba(117,37,58,.2);color:#b42318}.unified-alert button{margin-left:8px;border:0;background:transparent;color:#fff;text-decoration:underline;cursor:pointer}.snapshot-list{display:flex;flex-direction:column;gap:8px}.snapshot-row{display:flex;justify-content:space-between;gap:10px;padding:10px;border-radius:8px;background:#f7f9fd}.snapshot-row strong,.snapshot-row small{display:block}.snapshot-row small{margin-top:4px;color:var(--dash-text-muted);font-size:10px}.snapshot-row>span{color:#5b3df5;font-size:12px}.dc-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.dc-card{padding:13px 14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.dc-num{color:var(--dash-text);font-size:24px;font-weight:700;letter-spacing:-.02em}.dc-label{margin-top:4px;color:var(--dash-text-muted);font-size:11px}.inv-lic-bar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:12px}.inv-lic-title{color:var(--dash-text-muted);font-size:11.5px}.inv-lic-chip{display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:0 11px;border:1px solid var(--dash-border);border-radius:999px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer;font-size:11.5px}.inv-lic-chip i{color:var(--dash-text-muted);font-style:normal}.inv-lic-chip.on{border-color:rgba(124,92,255,.6);background:rgba(124,92,255,.12);color:#5b3df5}.inv-lic-chip.on i{color:#5b3df5}.inv-lic-chip.none{border-style:dashed}.inv-row-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.inv-row-head b{color:var(--dash-text);font-size:13px}.inv-row-sub{color:var(--dash-text-muted);font-size:10.5px}.inv-count{margin-left:auto;color:var(--dash-text-soft);font-size:11.5px}.inv-lic-tag{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 9px;border:1px solid rgba(124,92,255,.35);border-radius:999px;background:rgba(124,92,255,.1);color:#5b3df5;cursor:pointer;font-size:10.5px}.inv-lic-tag em{color:var(--dash-text-muted);font-style:normal}.inv-lic-tag.none{border-style:dashed;border-color:var(--dash-border);background:transparent;color:var(--dash-text-muted)}.inv-open-page{min-height:24px;padding:0 10px;font-size:10.5px;white-space:nowrap}.inv-lic-edit{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px;padding:9px;border:1px dashed var(--dash-border);border-radius:10px}.inv-lic-edit input{height:32px;min-width:200px;flex:1 1 220px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.inv-lic-err{color:#b42318;font-size:11px}.inv-schedule-dot{width:7px;height:7px;border-radius:50%;background:#98a2b3}.inv-schedule-dot.on{background:#12b76a}.invoice-section em{margin-left:4px;padding:1px 5px;border-radius:6px;background:#fff4e5;color:#b54708;font-size:9.5px;font-style:normal}.order-store-list,.invoice-list{display:flex;flex-direction:column;gap:12px}.order-store-block,.invoice-row{padding:13px;border:1px solid var(--dash-border);border-radius:10px;background:rgba(8,16,31,.45)}.order-store-head,.invoice-row-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.order-store-head strong,.invoice-row-head strong{display:block}.order-store-head span,.invoice-row-head span{display:block;margin-top:4px;color:var(--dash-text-muted);font-size:10px}.invoice-sections{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}.invoice-section{display:flex;flex-direction:column;gap:5px;padding:10px;border-radius:8px;background:#ededef}.invoice-section span{color:var(--dash-text-muted);font-size:10px}.manual-card{margin-top:12px}.manual-form{display:flex;flex-wrap:wrap;gap:8px}.manual-form select,.manual-form input{height:34px;min-width:160px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.loader{width:18px;height:18px;border:2px solid rgba(163,143,255,.2);border-top-color:#7c5cff;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:980px){.unified-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.unified-data-grid{grid-template-columns:1fr}}
 /* 发票中心：主体（申报要用的那一列）与「获取主体营业执照」结果 */
 .inv-head-actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -2027,7 +2045,7 @@ onBeforeUnmount(() => { window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTask
 @media(max-width:1200px){.inv-shell{grid-template-columns:1fr}.inv-rail{position:static}}
 
 /* 主体分账栏 */
-.inv-rail{position:sticky;top:0;display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid var(--dash-border);border-radius:13px;background:#ffffff}
+.inv-rail{position:sticky;top:0;display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid var(--dash-border);border-radius:13px;background:#ffffff;min-width:0}
 .inv-rail-head b{display:block;font-size:13px;color:var(--dash-text)}
 .inv-rail-head span{display:block;margin-top:4px;color:var(--dash-text-muted);font-size:11px;line-height:1.5}
 .inv-rail .inv-lic-bar{display:flex;flex-direction:column;gap:6px;margin:0}
@@ -2045,25 +2063,28 @@ onBeforeUnmount(() => { window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTask
 .inv-rail-btn{width:100%;justify-content:center}
 .inv-rail-tip{margin:0;color:var(--dash-text-muted);font-size:10.5px;line-height:1.5}
 
-/* 采集状态条 */
-.inv-status{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:9px 12px;border:1px solid var(--dash-border);border-radius:11px;background:#ffffff;font-size:11.5px;color:var(--dash-text-soft)}
+/* 概览一行（2026-10-15 精简：状态条 + 4 张 KPI 卡 + 自动更新行 + 说明段落合并为一条） */
+.inv-brief{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin-bottom:12px;padding:9px 12px;border:1px solid var(--dash-border);border-radius:11px;background:#ffffff;font-size:11.5px;color:var(--dash-text-soft)}
+.inv-brief-nums{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px}
+.inv-brief-nums .dc-num{font-size:15px;font-weight:700;letter-spacing:-.01em;color:var(--dash-text)}
+.inv-brief-scope{color:var(--dash-text-muted);font-size:10.5px;font-style:normal}
+.inv-brief-status{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.inv-brief-status b{color:var(--dash-text)}
+.inv-brief-side{margin-left:auto;display:flex;align-items:center;gap:4px}
+.inv-brief-refresh{border:0;background:transparent;color:#5b3df5;font-size:11.5px;cursor:pointer;padding:3px 6px;border-radius:7px}
+.inv-brief-refresh:hover{background:#f4f2ff}
+.inv-brief-refresh:disabled{color:var(--dash-text-muted);cursor:default}
+button.inv-chip.on{border-color:rgba(18,183,106,.5);color:#067647}
 .inv-status-dot{width:7px;height:7px;border-radius:50%;background:#98a2b3;flex:none}
 .inv-status-dot.on{background:#12b76a;box-shadow:0 0 0 3px rgba(18,183,106,.16)}
-.inv-status-lead b{color:var(--dash-text)}
 .inv-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:1px solid var(--dash-border);border-radius:999px;background:#f7f9fd;color:var(--dash-text-soft);font-size:10.5px}
 button.inv-chip{cursor:pointer}
 button.inv-chip:hover{border-color:rgba(151,120,255,.7);color:var(--dash-text)}
 .inv-chip.warn{border-color:#fbdda8;background:#fffaf1;color:#b54708}
 .inv-chip.err{border-color:#fecdca;background:#fef3f2;color:#b42318}
 
-/* KPI：4 张卡。前三张的 .dc-num 依次是 待开票条数 / 可开金额 / 有待办店铺——
-   验收脚本按这个顺序取值（invoice-license-local-verify.js 第 4/5 步），调序前先看那里。 */
-.inv-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
-.inv-kpi-note{margin-top:6px;color:var(--dash-text-muted);font-size:10.5px;line-height:1.45}
-.inv-kpi-note b{color:var(--dash-text-soft)}
-.dc-card.risk .dc-num{color:#f04438}
-.inv-kpi-risk{font-size:20px !important}
-@media(max-width:980px){.inv-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* 筛选面板（2026-10-15 精简：状态/平台/采集时间/排序四个下拉默认折叠在「筛选 · N」按钮后） */
+.inv-filter-panel{display:flex;flex-wrap:wrap;align-items:center;gap:7px;width:100%;padding:8px;border:1px dashed var(--dash-border);border-radius:10px;background:#fafbff}
 
 /* 工具条 */
 .inv-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:7px}
@@ -2197,4 +2218,40 @@ button.inv-chip:hover{border-color:rgba(151,120,255,.7);color:var(--dash-text)}
 .tax-verdict.ok{background:#e9f9f0;color:#067647}
 .tax-verdict.warn{background:#fff6e5;color:#b54708}
 .tax-verdict.err{background:#fef3f2;color:#b42318;font-weight:600}
+
+/* 「按店铺」视图：方向明细折叠条（2026-10-15 精简——点开才渲染明细表，不占首屏） */
+.inv-dir-bar{margin-top:10px}
+.inv-dir-toggle{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border:1px dashed var(--dash-border);border-radius:999px;background:transparent;color:var(--dash-text-soft);font-size:10.5px;cursor:pointer}
+.inv-dir-toggle:hover{border-color:rgba(151,120,255,.7);color:var(--dash-text)}
+.inv-dir-bar + .invoice-sections{margin-top:10px}
+
+/* 移动端（<768）：单列重排 + 底部常驻操作条（2026-10-15 精简）。
+   桌面不受影响（.inv-mobile-actions 默认 display:none）。 */
+.inv-mobile-actions{display:none}
+@media(max-width:768px){
+  .unified-page{padding:14px 12px 18px}
+  .unified-page-head{flex-direction:column;align-items:stretch;gap:10px;margin-bottom:12px}
+  .unified-page-head h1{font-size:20px;margin:2px 0 4px}
+  .unified-page-head p{font-size:11px}
+  .unified-page-actions{flex-wrap:wrap}
+  .unified-page-head .unified-page-actions .unified-button{flex:1 1 auto;justify-content:center}
+  .inv-rail{display:block;padding:8px}
+  .inv-rail .inv-rail-head{display:none}
+  .inv-rail .inv-lic-bar{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}
+  .inv-rail .inv-lic-chip{width:auto;min-width:168px;flex:0 0 auto}
+  .inv-rail-btn{width:auto;margin-top:4px}
+  .inv-rail-tip{display:none}
+  .inv-brief{flex-direction:column;align-items:stretch;gap:8px}
+  .inv-brief-side{margin-left:0;justify-content:space-between}
+  .inv-brief-nums{gap:4px 10px}
+  .inv-toolbar .inv-search{flex:1 1 100%;max-width:none}
+  .inv-toolbar-meta{margin-left:0;flex:1 1 100%}
+  .inv-subject-head{flex-wrap:wrap}
+  .inv-subject-actions{width:100%;justify-content:flex-start;margin-top:2px}
+  .inv-subject-label{padding-left:14px}
+  .inv-subject-store{flex-wrap:wrap;row-gap:6px}
+  .inv-subject-enter{margin-left:auto}
+  .inv-mobile-actions{display:flex;gap:8px;position:sticky;bottom:0;z-index:6;margin-top:10px;padding:8px 0 10px;border-top:1px solid var(--dash-border);background:#ffffff}
+  .inv-mobile-actions .unified-button{flex:1;justify-content:center;min-height:40px}
+}
 </style>

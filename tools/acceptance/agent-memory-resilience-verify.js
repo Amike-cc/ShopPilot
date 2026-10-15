@@ -69,7 +69,7 @@ async function main() {
     cdp = new CDP(target.webSocketDebuggerUrl)
     const api = await cdp.eval(`return {agent:Object.keys(window.shopilot?.agent||{}).sort(),settings:Object.keys(window.shopilot?.agentSettings||{}).sort(),domain:typeof window.shopilot?.agentDomain}`)
     check('Agent 无可调用的记忆写入、审核、快照恢复 API', api.agent.join(',') === 'chat,uiGet,uiSet' && api.domain === 'undefined', JSON.stringify(api))
-    check('Agent 管理桥只允许人工模型配置', api.settings.join(',') === 'modelDelete,modelList,modelSet,modelTest', JSON.stringify(api.settings))
+    check('Agent 管理桥已全部关闭（模型配置随设置页签一起下线）', api.settings.join(',') === '', JSON.stringify(api.settings))
     console.log(`Agent memory boundary: ${results.every(Boolean) ? 'PASS' : 'FAIL'} (${results.filter(Boolean).length}/${results.length})`)
     process.exitCode = results.every(Boolean) ? 0 : 1
   } finally {

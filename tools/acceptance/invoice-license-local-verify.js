@@ -151,6 +151,10 @@ async function openInvoiceCenter(ui) {
     return true
   `)
   await until(ui, `return !!document.querySelector('[data-test="invoice-license-bar"]')`)
+  // 2026-10-15 精简后默认视图是「按主体」；本脚本主体部分按「按店铺」视图断言（第 15 节另验默认值），
+  // 所以每次打开统一先切到「按店铺」。
+  await ui.eval(`const b = document.querySelector('[data-test="invoice-view-stores"]'); if (b) b.click(); return true`)
+  await sleep(200)
 }
 
 const LIC_A = { name: '上海验达贸易有限公司', no: '91310000MA1FL1234X' }
@@ -542,6 +546,53 @@ async function main() {
       return !!row && String(row.className).includes('displayed')
     `)
     check('左栏该店被标为"显示中"（跳转落点与全应用点店铺一致）', highlighted)
+
+    // ---- 15. 精简版 UI（2026-10-15）：默认按主体、概览一行、筛选折叠、方向明细收起 ----
+    // 全新打开一次（不用 openInvoiceCenter——它会把视图切到「按店铺」，就验不到默认值了）
+    await ui.eval('location.reload(); return true;')
+    await sleep(2800)
+    await ui.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(item => (item.textContent || '').includes('数据分析'))
+      if (nav) nav.click()
+      return true
+    `)
+    await until(ui, `return !!document.querySelector('.unified-route-tabs')`)
+    await ui.eval(`
+      const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(item => (item.textContent || '').includes('发票中心'))
+      if (tab) tab.click()
+      return true
+    `)
+    const defaultGroups = await until(ui, `return document.querySelectorAll('[data-test^="invoice-subject-group-"]').length`, 10000)
+    check('默认视图=「按主体」：打开发票中心直接看到主体分组', !!defaultGroups && defaultGroups > 0, `groups=${defaultGroups}`)
+    const brief = await ui.eval(`
+      const strip = document.querySelector('[data-test="invoice-totals"]')
+      const nums = strip ? [...strip.querySelectorAll('.dc-num')].map(x => (x.textContent || '').trim()) : []
+      const panel = document.querySelector('[data-test="invoice-filter-panel"]')
+      return {
+        nums,
+        kpiNotes: strip ? strip.querySelectorAll('.inv-kpi-note').length : -1,
+        panelHidden: panel ? getComputedStyle(panel).display === 'none' : false,
+        refresh: !!document.querySelector('[data-test="invoice-refresh"]'),
+        notes: document.querySelectorAll('[data-test="invoice-pending-note"], [data-test="invoice-unparsed-note"]').length
+      }
+    `)
+    check('概览合并为一行：恰 3 个数字（待开票 / 金额 / 店铺，顺序固定）',
+      brief.nums.length === 3 && brief.nums.every(n => n.length > 0), JSON.stringify(brief.nums))
+    check('旧式 KPI 卡与两条说明段落已退场（说明收进 chip title）',
+      brief.kpiNotes === 0 && brief.notes === 0, JSON.stringify({ kpiNotes: brief.kpiNotes, notes: brief.notes }))
+    check('筛选默认收起（点「筛选」才展开四个下拉）', brief.panelHidden === true, JSON.stringify(brief))
+    check('概览行提供「刷新」入口', brief.refresh === true)
+    await ui.eval(`document.querySelector('[data-test="invoice-filter-toggle"]').click(); return true`)
+    const panelOpen = await until(ui, `return getComputedStyle(document.querySelector('[data-test="invoice-filter-panel"]')).display !== 'none'`)
+    const selectCount = await ui.eval(`return document.querySelectorAll('[data-test="invoice-filter-panel"] select').length`)
+    check('点「筛选」展开 状态/平台/采集时间/排序 四个下拉', !!panelOpen && selectCount === 4, `open=${!!panelOpen} selects=${selectCount}`)
+    // 方向明细收起：切到按店铺，默认不渲染明细，点开关才出现
+    await ui.eval(`document.querySelector('[data-test="invoice-view-stores"]').click(); return true`)
+    await sleep(400)
+    const dirBefore = await ui.eval(`return document.querySelectorAll('[data-test="invoice-section"]').length`)
+    await ui.eval(`const t = document.querySelector('[data-test^="invoice-dir-toggle-"]'); if (t) t.click(); return true`)
+    const sectionsAfter = await until(ui, `return document.querySelectorAll('[data-test="invoice-section"]').length > 0 ? document.querySelectorAll('[data-test="invoice-section"]').length : 0`, 5000)
+    check('方向明细默认收起、点开才渲染（首屏更干净）', dirBefore === 0 && sectionsAfter > 0, `before=${dirBefore} after=${sectionsAfter}`)
   } finally {
     ui?.close()
     killTree(app)

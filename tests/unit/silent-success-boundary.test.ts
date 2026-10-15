@@ -3,6 +3,17 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { classifyTaskError, KNOWN_ERROR_CODES } from '../../apps/desktop/src/main/tasks/error-classifier'
 
+// 下载文件名净化用例需要真实加载 session-manager（其 electron 依赖走此 mock）。
+// vitest 5 起嵌套 vi.mock 直接判错（vitest 本就把它 hoist 到顶层执行），这里如实上移。
+vi.mock('electron', async () => {
+  const os = await import('node:os')
+  return {
+    app: { getPath: () => os.tmpdir() },
+    session: { fromPartition: () => ({}) },
+    Session: class {}
+  }
+})
+
 /**
  * 「静默假成功」边界的回归测试（2026-09-28 审查确认的 P0）。
  *
@@ -85,14 +96,6 @@ describe('额度/禁用语义边界', () => {
 })
 
 describe('下载文件名净化（平台的 Content-Disposition 不可信）', () => {
-  vi.mock('electron', async () => {
-    const os = await import('node:os')
-    return {
-      app: { getPath: () => os.tmpdir() },
-      session: { fromPartition: () => ({}) },
-      Session: class {}
-    }
-  })
   const load = async () => (await import('../../apps/desktop/src/main/browser/session-manager')).safeDownloadName
 
   it('剥掉目录穿越片段，只留文件名', async () => {

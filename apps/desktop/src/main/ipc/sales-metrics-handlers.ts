@@ -28,16 +28,18 @@ import {
   syncPlansNow,
   updatePlanSettings
 } from '../sales-metrics/sales-metrics-scheduler'
+import { logMain } from '../services/logger'
+import { ipcOk as ok, ipcFail as fail } from './envelope'
 
 function requestId(): string { return randomUUID() }
-function ok<T>(data: T, requestIdValue: string): IPCResult<T> { return { ok: true, data, requestId: requestIdValue } }
-function fail(code: string, message: string, requestIdValue: string): IPCResult { return { ok: false, error: { code, message: message.slice(0, 300) }, requestId: requestIdValue } }
 function inputError(id: string): IPCResult { return fail('INVALID_ARGUMENT', '经营数据请求参数不合法', id) }
 function serviceError(error: unknown, id: string): IPCResult {
   const code = error instanceof Error ? error.message : String(error)
   if (code === 'STORE_NOT_FOUND') return fail('STORE_NOT_FOUND', '店铺不存在或已删除', id)
   if (code === 'APP_LOCKED') return fail('APP_LOCKED', '应用已锁定', id)
   if (code === 'INVALID_ARGUMENT') return fail('INVALID_ARGUMENT', '经营数据请求参数不合法', id)
+  // 兜底不能静默丢原因（2026-10-15 审查同 product-handlers 的教训）：真实异常进日志
+  logMain('warn', `[sales-metrics-ipc] 服务异常 requestId=${id}：${String(code).slice(0, 300)}`)
   return fail('INTERNAL_ERROR', '经营数据操作失败', id)
 }
 

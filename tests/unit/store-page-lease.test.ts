@@ -95,7 +95,10 @@ describe('借用/归还的调用链', () => {
 
   it('定时任务后台开店：借页面而不是"开完就不管"，并在 run 终态归还', () => {
     expect(TASK_RUNNER).toContain('borrowedPageReleases.set(runId, borrowStorePage(storeId))')
-    expect(TASK_RUNNER).toContain("if (to === 'succeeded' || to === 'failed' || to === 'cancelled') releaseBorrowedPage(run.runId)")
+    // P2-7（2026-10-15 审查）：终态判定收敛为 run-state.ts 的 isTerminalRunStatus（含单测）；
+    // 归还仍只在终态执行（paused / waiting_confirmation 要接着跑，页面留着）
+    expect(TASK_RUNNER).toContain('if (isTerminalRunStatus(to)) {')
+    expect(TASK_RUNNER).toContain('releaseBorrowedPage(run.runId)')
     // 不能再退回"直接开店、从不归还"的写法
     expect(TASK_RUNNER).not.toContain('openStoreBrowser(storeId, { display: false, source: \'main\' })')
   })

@@ -1,87 +1,77 @@
 # ShopPilot - 依赖安装说明
 
-由于遇到了 npm 权限问题，请按以下步骤手动安装依赖：
+## 环境要求
 
-## 方法 1：使用管理员权限运行
+- Windows x64（本项目以 Windows 为发布目标）
+- Node.js 22（CI 固定 22；本机 22.x 即可）
+- **pnpm 10.34.7**：根 package.json 已用 `packageManager` 字段锁定，corepack 会自动使用该版本。
+  若 corepack 未生效：`corepack prepare pnpm@10.34.7 --activate`。
+  （2026-10-15 审查实测：本机曾装的 pnpm 12.3.4 在此环境存在"install 报告成功但不创建顶层
+  symlink"的系统级问题，故与 CI 统一锁到 pnpm 10。）
+- Visual Studio 2022 Build Tools，含「使用 C++ 的桌面开发」工作负载（better-sqlite3 需本地编译）
 
-1. 以管理员身份打开命令提示符（cmd）
-2. 切换到项目目录：
-   ```cmd
-   cd D:\code\电商浏览器
-   ```
-3. 运行安装命令：
-   ```cmd
-   npm install
-   ```
+## 安装
 
-## 方法 2：清理 npm 缓存后重试
+```cmd
+pnpm install
+```
 
-1. 打开命令提示符
-2. 清理 npm 缓存：
-   ```cmd
-   npm cache clean --force
-   ```
-3. 删除可能存在的 node_modules 和 package-lock.json：
-   ```cmd
-   rmdir /s /q node_modules
-   del package-lock.json
-   ```
-4. 重新安装：
-   ```cmd
-   npm install
-   ```
+安装会自动完成三件事（见 `tools/maintenance/postinstall-native.mjs`）：
 
-## 方法 3：使用 Yarn 替代 npm
+1. 依赖链接（pnpm 10 隔离布局）；
+2. 依赖包构建脚本（better-sqlite3 本地编译，需要 VS 工具链）；
+3. postinstall：补齐 **electron 运行时二进制**（electron ≥ 44 起不再自带下载脚本）+
+   按 Electron ABI 重建原生模块（electron-builder 的 install-app-deps）。
 
-如果 npm 持续失败，可以尝试使用 yarn：
+## 网络受限时的加速
 
-1. 全局安装 yarn（以管理员身份）：
-   ```cmd
-   npm install -g yarn
-   ```
-2. 使用 yarn 安装依赖：
-   ```cmd
-   yarn install
-   ```
+- **Electron 二进制**：默认从 GitHub Releases 下载（国内可能极慢）。设置镜像后重跑安装：
+  ```cmd
+  set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+  pnpm install
+  ```
+- electron 与 node-gyp 的缓存分别在 `%LOCALAPPDATA%\electron\Cache`、`%LOCALAPPDATA%\node-gyp\Cache`；
+  删除对应缓存可强制重新下载。
+
+## 原生模块与 ABI（常见故障）
+
+- better-sqlite3 13.x 为跨平台预编译（N-API）：同一份二进制在 Node 与 Electron 下都可用，
+  不需要手工对齐 ABI；打包时 electron-builder 仍会按 electron 版本重建。
+- 若编译报 `Could not find any Visual Studio installation` 或
+  `could not use PowerShell to find Visual Studio`（node-gyp 在部分环境探测失败）：
+  改用「VS 2022 开发人员命令提示符」执行，或在普通终端先设置下列变量（等价于开发人员命令提示符）：
+  ```cmd
+  set VCINSTALLDIR=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC
+  set VSCMD_VER=17.14.37628.2
+  set WindowsSDKVersion=10.0.26100.0
+  pnpm install
+  ```
 
 ## 安装完成后
 
-依赖安装成功后，你可以运行以下命令：
+| 用途 | 命令 |
+| --- | --- |
+| 开发模式 | `pnpm dev` |
+| 构建 | `pnpm build` |
+| 单测 | `pnpm test` |
+| 打包（NSIS 安装包） | `pnpm run dist` |
+| 仅打包目录（快） | `pnpm run dist:dir` |
+| 重建原生模块 | `pnpm run rebuild:native` |
 
-### 开发模式
-```cmd
-npm run dev
-```
+## 技术栈版本（2026-10-15 安全升级后）
 
-### 构建生产版本
-```cmd
-npm run build
-```
+| 依赖 | 版本 |
+| --- | --- |
+| Electron | **44.7.2** |
+| electron-builder | **26.15.3** |
+| electron-vite | **6.0.0** |
+| Vite | **7.3.7** |
+| Vitest | **5.0.4** |
+| Vue / vue-router / Pinia | 3.4.21 / 4.3.0 / 2.1.7 |
+| TypeScript | 5.3.3 |
+| better-sqlite3 | **13.0.3** |
+| pnpm | 10.34.7（packageManager 锁定） |
 
-### 运行测试
-```cmd
-npm test
-```
-
-## 注意事项
-
-1. 本项目使用 Electron 30.5.1（对应 ABI 123 / Node 20.16）
-2. better-sqlite3 是原生模块，已锁定 Electron 30.5.1 的预编译版本（11.10.0）
-3. 若原生模块报 ABI 版本不匹配，用 prebuild-install 拉取 Electron 目标版本预编译即可，
-   **无需** 本机 Visual Studio：
-   ```cmd
-   node_modules\.bin\prebuild-install --runtime=electron --target=30.5.1 --arch=x64
-   ```
-
-## 技术栈版本锁定
-
-项目已锁定以下关键依赖版本（§2.1 技术选型），并通过 M0 技术验证：
-- Electron: 30.5.1（ABI 123）
-- Vue: 3.4.21
-- TypeScript: 5.3.3
-- better-sqlite3: 11.10.0
-
-> 升级历史：初版为 Electron 28.2.3 + better-sqlite3 9.4.3，M0 验证发现
-> Electron 28 的 `BrowserWindow.contentView` 与 `WebContentsView` API 尚不稳定
-> （`contentView.children` getter 缺失），多标签页方案无法工作；因此升级到
-> Electron 30.5.1，并同步升级到带 ABI 123 预编译的 better-sqlite3 11.10.0。
+> 升级历史：初版 Electron 28.2.3（`contentView`/`WebContentsView` 不稳定）→ 30.5.1；
+> 2026-10-15 安全审查（Electron 30 已 EOL 两年、全仓 86 条依赖漏洞）升级到 Electron 44.7.2
+> + electron-builder 26 + Vite 7 + Vitest 5，并引入 postinstall 的运行时/原生模块自愈。

@@ -13,7 +13,6 @@ import type {
   SalesMetricsRunListResult
 } from '@shared/contracts/sales-metrics'
 import type { AgentUiState } from '@shared/schemas/agent'
-import type { ModelProfile, ModelProfileInput } from '@shared/schemas/agent-domain'
 
 export interface TabInfo {
   id: string
@@ -271,12 +270,6 @@ declare global {
         uiGet: () => Promise<IPCResult<AgentUiState>>
         uiSet: (state: AgentUiState) => Promise<IPCResult<AgentUiState>>
         chat: (message: string, history?: Array<{ role: 'user' | 'assistant'; text: string }>) => Promise<IPCResult<{ text: string; model: string; elapsedMs: number }>>
-      }
-      agentSettings: {
-        modelList: (query?: Record<string, unknown>) => Promise<IPCResult<{ items: ModelProfile[] }>>
-        modelSet: (profile: ModelProfileInput) => Promise<IPCResult>
-        modelDelete: (profileId: string) => Promise<IPCResult>
-        modelTest: (profileId: string) => Promise<IPCResult>
       }
       on: (channel: string, callback: (...args: any[]) => void) => void
       off: (channel: string, callback: (...args: any[]) => void) => void

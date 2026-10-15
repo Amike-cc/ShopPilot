@@ -13,10 +13,9 @@ import * as TaskStore from '../tasks/task-store'
 import * as Runner from '../tasks/task-runner'
 import * as Scheduler from '../tasks/scheduler'
 import { getOpenStoreIds } from '../browser/window-manager'
+import { ipcOk as ok, ipcFail as err, ipcErrFromUnknown } from './envelope'
 
 function rid(): string { return randomUUID() }
-function ok<T>(data: T, requestId: string): IPCResult<T> { return { ok: true, data, requestId } }
-function err(code: string, message: string, requestId: string): IPCResult { return { ok: false, error: { code, message }, requestId } }
 
 function taskError(e: any, requestId: string): IPCResult {
   const msg = String(e?.message || e)
@@ -35,7 +34,9 @@ function taskError(e: any, requestId: string): IPCResult {
       : (m || '当前任务状态不允许该操作')
     return err(ERROR_CODES.TASK_BAD_STATE.code, friendly, requestId)
   }
-  return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+  // 兜底走共享脱敏（P1-2）：干净的业务文案原样透出，含路径/错误码/栈帧的内部细节
+  // 替换为通用文案，原文只进日志。
+  return ipcErrFromUnknown(e, requestId, { fallback: '任务操作失败' })
 }
 
 const handle = familyHandle('任务')

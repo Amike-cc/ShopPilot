@@ -5,6 +5,7 @@
 
 import { getDatabase } from '../db/database'
 import { randomBytes } from 'crypto'
+import { logMain } from './logger'
 
 export type AuditAction =
   | 'store.create' | 'store.archive' | 'store.restore' | 'store.deletePermanent' | 'store.purge'
@@ -85,7 +86,13 @@ export function writeAudit(
       now
     )
   } catch (err) {
-    console.error('writeAudit failed:', err)
+    // 审计写入失败不能只进 console（P1-3，2026-10-15 审查）：主日志在 stdout 断开时会
+    // 熔断 console 镜像，而这里正是安全审计在 DB 忙/关库时静默丢失的路径。
+    // 落一条 error 级主日志，让"审计丢了"这件事本身可追溯。
+    logMain(
+      'error',
+      `[audit] 写入审计失败 action=${action} result=${result}：${String((err as any)?.message || err).slice(0, 300)}`
+    )
   }
 }
 

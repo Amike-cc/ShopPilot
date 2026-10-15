@@ -13,6 +13,7 @@ import * as WindowManager from '../browser/window-manager'
 import * as StoreManager from '../stores/store-manager'
 import { clearStoreData } from '../browser/session-manager'
 import { randomUUID } from 'crypto'
+import { ipcOk as success, ipcFail as error, ipcErrFromUnknown } from './envelope'
 import { mkdirSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { join } from 'path'
@@ -40,18 +41,6 @@ function generateRequestId(): string {
   return randomUUID()
 }
 
-function success<T>(data: T, requestId: string): IPCResult<T> {
-  return { ok: true, data, requestId }
-}
-
-function error(code: string, message: string, requestId: string, details?: any): IPCResult {
-  return {
-    ok: false,
-    error: { code, message, details },
-    requestId
-  }
-}
-
 /**
  * 浏览器层错误映射：window-manager 抛的是人话 Error，
  * 这里按关键字归到契约错误码，别一律 INTERNAL_ERROR。
@@ -73,7 +62,8 @@ function browserError(err: any, requestId: string): IPCResult {
   if (msg.includes('Browser not open') || msg.includes('Host window not available')) {
     return error(ERROR_CODES.BROWSER_CLOSED.code, '店铺浏览器未打开', requestId)
   }
-  return error(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+  // 兜底走共享脱敏（P1-2）：窗口/webContents 异常常带内部路径与 Electron 错误串
+  return ipcErrFromUnknown(err, requestId, { fallback: '浏览器操作失败' })
 }
 
 /**

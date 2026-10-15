@@ -8,6 +8,7 @@ import { writeAudit, auditRequestId } from '../services/audit-logger'
 import { generateAgentChat } from '../services/agent-chat-service'
 import { getAgentUiState, setAgentUiState } from '../services/agent-service'
 import { assertTrustedRenderer as assertTrustedIpc } from '../services/renderer-trust'
+import { ipcOk, ipcFail } from './envelope'
 
 const noArgumentsSchema = z.tuple([])
 const DISABLED_AGENT_OPERATION_CHANNELS = [
@@ -20,12 +21,11 @@ const DISABLED_AGENT_OPERATION_CHANNELS = [
   IPC_CHANNELS.AGENT_SOFTWARE_EXECUTE
 ] as const
 
-function success<T>(data: T, requestId: string): IPCResult<T> {
-  return { ok: true, data, requestId }
-}
+const success = ipcOk
 
 function failure(code: string, message: string, requestId: string): IPCResult {
-  return { ok: false, error: { code, message: redactAgentText(message, 300) }, requestId }
+  // 先过 Agent 文本脱敏（隐私字段），再走共享信封（内部路径/错误码脱敏，P1-2）
+  return ipcFail(code, redactAgentText(message, 300), requestId)
 }
 
 function assertTrustedRenderer(event: IpcMainInvokeEvent): void {

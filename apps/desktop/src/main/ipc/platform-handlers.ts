@@ -8,12 +8,9 @@ import { shopSessionStatusInputSchema } from '@shared/schemas/shop-session'
 import * as ShopSessionManager from '../browser/shop-session-manager'
 import { detectStoreLoginStatus } from '../platform-adapters/platform-login-service'
 import { randomUUID } from 'crypto'
+import { ipcOk as ok, ipcFail as err } from './envelope'
 
 function rid(): string { return randomUUID() }
-function ok<T>(data: T, requestId: string): IPCResult<T> { return { ok: true, data, requestId } }
-function err(code: string, message: string, requestId: string): IPCResult {
-  return { ok: false, error: { code, message }, requestId }
-}
 
 function detectionError(error: unknown, requestId: string): IPCResult {
   const message = error instanceof Error ? error.message : String(error)

@@ -10,7 +10,7 @@
  * 写入侧任何情况下都不再产生新的 plain: 记录。
  */
 
-import { app, safeStorage } from 'electron'
+import { safeStorage } from 'electron'
 import { getDatabase } from '../db/database'
 import { logMain } from './logger'
 
@@ -193,6 +193,3 @@ export function deleteAiImageKey(): void {
 export function deleteAiImageTextKey(): void {
   getDatabase().prepare('DELETE FROM app_settings WHERE key = ?').run(AI_IMAGE_TEXT_KEY_SETTING)
 }
-
-// 保持 app 导入有效（文档性引用：safeStorage 需在 app.whenReady 后调用）
-void app

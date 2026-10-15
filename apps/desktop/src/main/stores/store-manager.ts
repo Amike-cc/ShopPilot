@@ -16,14 +16,12 @@ import type { Store, StoreCreateInput, StoreUpdateInput } from '@shared/schemas/
 import { normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
 import { StoreStatus } from '@shared/enums/store-status'
 
-type StoreStatusListener = (storeId: string, status: StoreStatus) => void
-const storeStatusListeners = new Set<StoreStatusListener>()
-
-/** 供主窗口把 Main 的状态变化安全地推送给 Renderer。 */
-export function onStoreStatusChanged(listener: StoreStatusListener): () => void {
-  storeStatusListeners.add(listener)
-  return () => storeStatusListeners.delete(listener)
-}
+// 店铺状态监听集合已移到叶子模块 store-status-bus.ts（2026-10-15 修复循环导入 TDZ：
+// window-manager 在模块顶层注册监听，本文件又 import window-manager，vitest5/vite7 的
+// 求值顺序下会在集合初始化前访问它——见 bus 模块头注释）。保留同名再导出，调用方零改动。
+import { emitStoreStatusChanged } from './store-status-bus'
+export { onStoreStatusChanged, emitStoreStatusChanged } from './store-status-bus'
+export type { StoreStatusListener } from './store-status-bus'
 
 /**
  * 生成店铺 ID
@@ -453,9 +451,7 @@ export function updateStoreStatus(storeId: string, status: StoreStatus): boolean
   
   const info = stmt.run(status, Date.now(), storeId)
   if (info.changes > 0) {
-    storeStatusListeners.forEach(listener => {
-      try { listener(storeId, status) } catch { /* 单个订阅者失败不能影响状态落库 */ }
-    })
+    emitStoreStatusChanged(storeId, status)
   }
   return info.changes > 0
 }

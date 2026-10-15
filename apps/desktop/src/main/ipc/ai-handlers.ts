@@ -22,9 +22,10 @@ import { logMain } from '../services/logger'
 import { syncMainAgentProfileFromAiConfig } from '../services/agent-runtime'
 import { assertTrustedRenderer } from '../services/renderer-trust'
 import { assertSafeImageSavePath } from '../services/safe-image-save'
+import { ipcOk, ipcFail } from './envelope'
 
-const success = <T>(data: T): IPCResult<T> => ({ ok: true, data, requestId: randomUUID() })
-const failure = (code: string, message: string): IPCResult => ({ ok: false, error: { code, message }, requestId: randomUUID() })
+const success = <T>(data: T): IPCResult<T> => ipcOk(data, randomUUID())
+const failure = (code: string, message: string): IPCResult => ipcFail(code, message, randomUUID())
 
 /**
  * 可信调用方校验（审计 P1）：这一族通道原来没有任何校验，而它们能改 AI 配置、写/清 API Key。

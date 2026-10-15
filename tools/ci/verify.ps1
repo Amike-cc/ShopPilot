@@ -27,6 +27,12 @@ if ($results['typecheck'] -ne 0) { Write-Host 'TYPECHECK_FAILED - abort'; exit 1
 Run-Step 'lint' 'pnpm.cmd lint'
 if ($results['lint'] -ne 0) { Write-Host 'LINT_FAILED - abort'; exit 1 }
 
+# 依赖安全门禁（2026-10-15 审查 P0-3）：high/critical 的 advisory 必须已修复或命中
+# .github/audit-allowlist.json 的带到期日豁免；moderate/low 只汇总不阻断。
+# 需要网络（读 npm registry）。
+Run-Step 'audit' 'node tools\ci\audit-gate.mjs'
+if ($results['audit'] -ne 0) { Write-Host 'AUDIT_FAILED - abort'; exit 1 }
+
 Run-Step 'vitest' 'pnpm.cmd exec vitest run'
 if ($results['vitest'] -ne 0) { Write-Host 'VITEST_FAILED - abort'; exit 1 }
 

@@ -9,7 +9,6 @@ import { IPC_CHANNELS, EVENT_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import { PLATFORM_CATALOG } from '@shared/constants/platforms'
 import type { AgentUiState } from '@shared/schemas/agent'
-import type { ModelProfile, ModelProfileInput } from '@shared/schemas/agent-domain'
 
 /**
  * 暴露给渲染进程的安全 API
@@ -333,13 +332,8 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.AGENT_CHAT, JSON.parse(JSON.stringify({ message, history: history || [] })))
   },
 
-  // 管理员手动配置 Agent 文本模型；不暴露 Job、记忆、技能、插件或执行接口。
-  agentSettings: {
-    modelList: (query: Record<string, unknown> = {}): Promise<IPCResult<{ items: ModelProfile[] }>> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_LIST, JSON.parse(JSON.stringify(query))),
-    modelSet: (profile: ModelProfileInput): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_SET, { profile: JSON.parse(JSON.stringify(profile)), actorAgentId: 'root-ceo' }),
-    modelDelete: (profileId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_DELETE, { profileId, actorAgentId: 'root-ceo' }),
-    modelTest: (profileId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AGENT_MODEL_TEST, { profileId, actorAgentId: 'root-ceo' })
-  },
+  // Agent 模型管理桥已随「Agent 模型」设置页一起下线：对话只走主 Agent 那条与「AI 配置」自动同步的
+  // Profile（syncMainAgentProfileFromAiConfig），不再向渲染层暴露模型 Profile 管理接口。
 
   // 店铺指标快照 - §5.11
   snapshot: {

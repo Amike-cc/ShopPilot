@@ -1,0 +1,57 @@
+# Dependabot 配置（审查报告 P0-3，2026-10-15）
+#
+# 目标：把"升级"变成常态。分组遵循本项目的技术聚类：
+#   · electron 系（运行时 + 打包 + 更新器，需一起验证）；
+#   · vue 系（渲染层）；
+#   · 构建与测试链（vite/vitest/typescript/eslint）。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      electron-stack:
+        patterns:
+          - electron
+          - electron-builder
+          - electron-updater
+          - electron-vite
+          - '@electron/*'
+      vue-stack:
+        patterns:
+          - vue
+          - vue-router
+          - pinia
+          - '@vue/*'
+          - '@vitejs/*'
+      build-and-test:
+        patterns:
+          - vite
+          - vitest
+          - '@vitest/*'
+          - typescript
+          - vue-tsc
+          - eslint
+          - eslint-plugin-vue
+          - '@types/*'
+      runtime-deps:
+        patterns:
+          - better-sqlite3
+          - zod
+    ignore:
+      # Electron 大版本升级需要人工回归（webview / safeStorage / 权限链路），不接受自动 PR；
+      # 补丁与小版本仍会自动提。
+      - dependency-name: electron
+        update-types: ['version-update:semver-major']
+      - dependency-name: electron-builder
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

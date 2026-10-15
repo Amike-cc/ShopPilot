@@ -44,12 +44,9 @@ import { ProductMediaService } from '../products/product-media-service'
 import * as ShopSessionManager from '../browser/shop-session-manager'
 import * as StoreManager from '../stores/store-manager'
 import { getDatabase } from '../db/database'
+import { ipcOk as ok, ipcFail as fail } from './envelope'
 
 function requestId(): string { return randomUUID() }
-function ok<T>(data: T, requestIdValue: string): IPCResult<T> { return { ok: true, data, requestId: requestIdValue } }
-function fail(code: string, message: string, requestIdValue: string): IPCResult {
-  return { ok: false, error: { code, message: message.slice(0, 300) }, requestId: requestIdValue }
-}
 function inputError(requestIdValue: string): IPCResult {
   return fail('INVALID_ARGUMENT', '商品请求参数不合法', requestIdValue)
 }

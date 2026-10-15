@@ -895,7 +895,7 @@ async function main() {
     const inputs = rows.map(r => r.querySelector('input'));
     const out = {
       open: !!document.querySelector('[data-test="settings-dialog"]'),
-      configTabOn: !!document.querySelector('[data-test="settings-config"]'),
+      configTabOn: !!document.querySelector('[data-test="settings-entry"]'),
       rows: rows.length,
       names: rows.map(r => (r.querySelector('.plat-name') || r).textContent.trim()),
       placeholders: inputs.map(i => i.placeholder),
@@ -915,14 +915,14 @@ async function main() {
       autocheck: document.querySelector('[data-test="update-autocheck"]') ? document.querySelector('[data-test="update-autocheck"]').checked : null,
       message: !!document.querySelector('[data-test="update-message"]')
     };
-    document.querySelector('[data-test="settings-tab-config"]').click();
+    document.querySelector('[data-test="settings-tab-entry"]').click();
     await new Promise(r => setTimeout(r, 300));
     document.querySelector('[data-test="settings-dialog"] .btn-ghost').click();
     await new Promise(r => setTimeout(r, 300));
     out.closedByCancel = !document.querySelector('[data-test="settings-dialog"]');
     return out;
   `)
-  check('设置弹窗：配置页列出四个平台、输入框默认空（占位符=平台默认地址）',
+  check('设置弹窗：平台入口页列出四个平台、输入框默认空（占位符=平台默认地址）',
     settingsUi.open === true && settingsUi.configTabOn === true && settingsUi.rows === 4 &&
     settingsUi.names.join(',') === '拼多多,微信小店,快手小店,抖店' &&
     settingsUi.placeholders.indexOf('https://mms.pinduoduo.com') >= 0 && settingsUi.valuesEmpty === true,
@@ -949,10 +949,13 @@ async function main() {
     document.querySelector('[data-test="settings-save"]').click();
     await new Promise(r => setTimeout(r, 900));
     const saved = (await window.shopilot.settings.get('platform.homeUrls')).data?.value || {};
+    // 保存不再自动关闭（0.4.66 起与 AI/更新保存同节奏）：草稿已保存，显式关闭以继续后续用例
+    document.querySelector('[data-test="settings-dialog"] .btn-ghost').click();
+    await new Promise(r => setTimeout(r, 400));
     const btn = document.querySelector('[data-test="nav-home"]');
     return { target, saved, closed: !document.querySelector('[data-test="settings-dialog"]'), btnTitle: btn ? btn.title : null };
   `)
-  check('配置平台首页并保存：写入 app_settings.platform.homeUrls 且弹窗关闭',
+  check('配置平台首页并保存：写入 app_settings.platform.homeUrls，保存后停留、手动关闭正常',
     overrideHome.saved && overrideHome.saved['拼多多'] === overrideHome.target && overrideHome.closed === true,
     JSON.stringify(overrideHome))
   check('配置值优先级最高：即便店铺自己填了后台地址，首页按钮也走配置值',
@@ -991,6 +994,8 @@ async function main() {
     document.querySelector('[data-test="settings-save"]').click();
     await new Promise(r => setTimeout(r, 900));
     const saved = (await window.shopilot.settings.get('platform.homeUrls')).data?.value || {};
+    document.querySelector('[data-test="settings-dialog"] .btn-ghost').click();
+    await new Promise(r => setTimeout(r, 400));
     const btn = document.querySelector('[data-test="nav-home"]');
     return { saved, btnTitle: btn ? btn.title : null, closed: !document.querySelector('[data-test="settings-dialog"]') };
   `)
@@ -1003,19 +1008,22 @@ async function main() {
     document.querySelector('[data-test="settings-open-btn"]').click();
     await new Promise(r => setTimeout(r, 700));
     const out = { tabs: [...document.querySelectorAll('.sub-tabs .stab')].map(b => b.textContent.trim()) };
-    document.querySelector('[data-test="settings-tab-square"]').click();
+    document.querySelector('[data-test="settings-tab-entry"]').click();
     await new Promise(r => setTimeout(r, 350));
-    const sq = document.querySelector('[data-test="settings-square"]');
+    const ent = document.querySelector('[data-test="settings-entry"]');
     const sqRows = [...document.querySelectorAll('[data-test="square-url-row"]')];
-    out.square = {
-      pane: !!sq,
-      configUnmounted: !document.querySelector('[data-test="settings-config"]'),
+    out.entry = {
+      pane: !!ent,
+      platformGroup: !!document.querySelector('[data-test="settings-entry-platform"]'),
+      squareGroup: !!document.querySelector('[data-test="settings-entry-square"]'),
+      homeRows: document.querySelectorAll('[data-test="platform-home-row"]').length,
+      aiUnmounted: !document.querySelector('[data-test="settings-ai"]'),
       aboutUnmounted: !document.querySelector('[data-test="settings-about"]'),
       rows: sqRows.length,
       names: sqRows.map(r => r.querySelector('.plat-name').textContent.trim()),
       placeholder: sqRows[0] ? sqRows[0].querySelector('input').placeholder : null,
       hasSave: !!document.querySelector('[data-test="settings-save"]'),
-      overflowX: sq ? sq.scrollWidth > sq.clientWidth + 2 : null
+      overflowX: ent ? ent.scrollWidth > ent.clientWidth + 2 : null
     };
     document.querySelector('[data-test="settings-tab-ai"]').click();
     await new Promise(r => setTimeout(r, 400));
@@ -1024,7 +1032,7 @@ async function main() {
     const keyInput = document.querySelector('[data-test="ai-key"]');
     out.ai = {
       pane: !!ai,
-      squareUnmounted: !document.querySelector('[data-test="settings-square"]'),
+      squareUnmounted: !document.querySelector('[data-test="settings-entry"]'),
       endpoint: ep ? ep.value : null,
       endpointPh: ep ? ep.placeholder : null,
       model: document.querySelector('[data-test="ai-model"]') ? document.querySelector('[data-test="ai-model"]').value : null,
@@ -1054,15 +1062,17 @@ async function main() {
     out.keyCleared = clr.ok && clr.data.hasKey === false;
     return out;
   `)
-  check('设置弹窗核心页签名称正确（配置 / 达人广场 / AI 配置 / Agent 模型 / 关于软件）',
-    settingsTabs.tabs.join(',') === '配置,达人广场,AI 配置,Agent 模型,关于软件', JSON.stringify(settingsTabs.tabs))
-  check('「达人广场」是独立页签：只列已支持平台、占位符=内置实测地址、无横向溢出',
-    settingsTabs.square?.pane === true && settingsTabs.square.configUnmounted === true &&
-    settingsTabs.square.aboutUnmounted === true && settingsTabs.square.rows === 3 &&
-    settingsTabs.square.names.join(',') === '抖店,微信小店,快手小店' &&
-    settingsTabs.square.placeholder === 'https://buyin.jinritemai.com/dashboard/servicehall/daren-square' &&
-    settingsTabs.square.hasSave === true && settingsTabs.square.overflowX === false,
-    JSON.stringify(settingsTabs.square))
+  check('设置弹窗核心页签名称正确（平台入口 / AI 配置 / 安全 / 数据与维护 / 关于软件）',
+    settingsTabs.tabs.join(',') === '平台入口,AI 配置,安全,数据与维护,关于软件', JSON.stringify(settingsTabs.tabs))
+  check('「平台入口」页签：平台首页与达人广场两组同屏、占位符=内置实测地址、无横向溢出',
+    settingsTabs.entry?.pane === true && settingsTabs.entry.platformGroup === true &&
+    settingsTabs.entry.squareGroup === true && settingsTabs.entry.homeRows === 4 &&
+    settingsTabs.entry.aiUnmounted === true && settingsTabs.entry.aboutUnmounted === true &&
+    settingsTabs.entry.rows === 3 &&
+    settingsTabs.entry.names.join(',') === '抖店,微信小店,快手小店' &&
+    settingsTabs.entry.placeholder === 'https://buyin.jinritemai.com/dashboard/servicehall/daren-square' &&
+    settingsTabs.entry.hasSave === true && settingsTabs.entry.overflowX === false,
+    JSON.stringify(settingsTabs.entry))
   check('「AI 配置」是独立页签：默认端点/模型回填、Key 为密码框且不显示明文、无横向溢出',
     settingsTabs.ai?.pane === true && settingsTabs.ai.squareUnmounted === true &&
     settingsTabs.ai.endpoint === 'https://api.deepseek.com/v1/chat/completions' &&
@@ -1081,7 +1091,7 @@ async function main() {
     const target = ${JSON.stringify(panelSiteUrl.replace(/\/$/, '') + '/daren-square')};
     document.querySelector('[data-test="settings-open-btn"]').click();
     await new Promise(r => setTimeout(r, 600));
-    document.querySelector('[data-test="settings-tab-square"]').click();
+    document.querySelector('[data-test="settings-tab-entry"]').click();
     await new Promise(r => setTimeout(r, 300));
     const inp = document.querySelector('[data-test="square-url-抖店"]');
     if (!inp) return { error: '没有抖店的达人广场地址输入框' };
@@ -1091,6 +1101,9 @@ async function main() {
     document.querySelector('[data-test="settings-save"]').click();
     await new Promise(r => setTimeout(r, 900));
     const saved = (await window.shopilot.settings.get('invite.squareUrls')).data?.value || {};
+    // 保存不再自动关闭（0.4.66）：显式关闭（草稿已保存）后再继续建店/开浏览器步骤
+    document.querySelector('[data-test="settings-dialog"] .btn-ghost').click();
+    await new Promise(r => setTimeout(r, 500));
     const closed = !document.querySelector('[data-test="settings-dialog"]');
     // 建一个抖店店铺（指向本地站点）并打开。注意：IPC 直接建出的店铺不会出现在渲染层侧栏，
     // 必须重载一次页面才会进列表（仓库既有结论，见下方"平台入口"用例）——所以先返回，重载后再走 UI。

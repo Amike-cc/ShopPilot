@@ -11,21 +11,10 @@ import * as BookmarkManager from '../browser/bookmark-manager'
 import * as DownloadManager from '../browser/download-manager'
 import * as StoreManager from '../stores/store-manager'
 import { randomUUID } from 'crypto'
+import { ipcOk as success, ipcFail as error } from './envelope'
 
 function generateRequestId(): string {
   return randomUUID()
-}
-
-function success<T>(data: T, requestId: string): IPCResult<T> {
-  return { ok: true, data, requestId }
-}
-
-function error(code: string, message: string, requestId: string): IPCResult {
-  return {
-    ok: false,
-    error: { code, message },
-    requestId
-  }
 }
 
 /**

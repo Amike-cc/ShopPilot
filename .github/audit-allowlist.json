@@ -1,0 +1,19 @@
+{
+  "_comment": "依赖安全豁免清单（规则见 tools/ci/audit-gate.mjs）：high/critical 的 advisory 必须已修复、或在此逐条登记（ghsa + package + reason + expires）；expires 到期后门禁自动恢复红灯。已修复的条目请删除，未命中任何 advisory 的条目只会提示清理。",
+  "allow": [
+    {
+      "ghsa": "GHSA-ch52-4w7c-c8xp",
+      "package": "http-cache-semantics",
+      "severity": "high",
+      "reason": "上游无可用补丁（registry 报 patched_versions=<0.0.0>）：max-stale 跨用户缓存泄露。位于构建/下载工具链的传递依赖（@electron/get → make-fetch-happen 系），不处理本项目控制的不可信输入；随上游发版复查，能升级即移除本豁免。",
+      "expires": "2027-04-30"
+    },
+    {
+      "ghsa": "GHSA-vfj7-8cjw-p6xm",
+      "package": "braces",
+      "severity": "high",
+      "reason": "上游无可用补丁（registry 报 patched_versions=<0.0.0>）：嵌套大括号栈耗尽 DoS。来自 eslint/glob 工具链的传递依赖，只处理仓库内已知模式的匹配串；随上游发版复查，能升级即移除本豁免。",
+      "expires": "2027-04-30"
+    }
+  ]
+}

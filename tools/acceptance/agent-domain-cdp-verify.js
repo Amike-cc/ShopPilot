@@ -1,5 +1,5 @@
-/* Packaged-style boundary acceptance: the renderer gets chat and model settings,
- * while Agent Job/skill/memory execution APIs remain outside the preload bridge. */
+/* Packaged-style boundary acceptance: the renderer gets plain chat only,
+ * while Agent Job/skill/memory/model management APIs remain outside the preload bridge. */
 const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
@@ -77,15 +77,15 @@ async function main() {
     const bridge = await cdp.eval(`return {agent:Object.keys(window.shopilot?.agent||{}).sort(),settings:Object.keys(window.shopilot?.agentSettings||{}).sort(),domain:typeof window.shopilot?.agentDomain,task:{create:typeof window.shopilot?.task?.create,run:typeof window.shopilot?.task?.run}}`)
     check('Agent bridge 只包含文本聊天与抽屉状态', bridge.agent.join(',') === 'chat,uiGet,uiSet' && bridge.domain === 'undefined', JSON.stringify(bridge))
     check('手动工作台任务仍由原 task API 独立提供', bridge.task.create === 'function' && bridge.task.run === 'function', JSON.stringify(bridge.task))
-    check('Agent 只暴露用户配置模型所需的 API', bridge.settings.join(',') === 'modelDelete,modelList,modelSet,modelTest', JSON.stringify(bridge.settings))
+    check('Agent 模型管理桥已下线（模型统一在「AI 配置」管理）', bridge.settings.join(',') === '', JSON.stringify(bridge.settings))
 
     const orbReady = await waitFor(() => cdp.eval('return !!document.querySelector(".agent-orb")').catch(() => false))
     if (!orbReady) throw new Error('Agent chat launcher did not render')
     const drawer = await cdp.eval(`document.querySelector('.agent-orb')?.click(); await new Promise(r=>setTimeout(r,250)); return {open:!!document.querySelector('[data-test="agent-floating-drawer"]'),note:document.querySelector('[data-test="agent-chat-only"]')?.textContent?.trim()||'',shortcuts:document.querySelectorAll('.agent-shortcuts button').length,plans:document.querySelectorAll('.agent-plan-card,.agent-software-plan-card').length,placeholder:document.querySelector('.agent-composer textarea')?.placeholder||''}`)
     check('Agent 面板只显示普通对话', drawer.open && drawer.note.includes('纯对话模式') && drawer.shortcuts === 0 && drawer.plans === 0 && drawer.placeholder.includes('想聊'), JSON.stringify(drawer))
 
-    const settings = await cdp.eval(`const nav=[...document.querySelectorAll('.dashboard-nav-item')].find(node=>node.textContent?.includes('设置')); nav?.click(); await new Promise(r=>setTimeout(r,250)); const tabs=[...document.querySelectorAll('.settings-nav button')].map(node=>node.textContent?.trim()); const agentTab=[...document.querySelectorAll('.settings-nav button')].find(node=>node.textContent?.includes('Agent 模型')); agentTab?.click(); await new Promise(r=>setTimeout(r,200)); return {tabs,modelPanel:!!document.querySelector('[data-agent-panel="models"]'),otherPanels:document.querySelectorAll('[data-test="agent-job-panel"],[data-test="agent-memory-panel"],[data-test="agent-org-panel"]').length}`)
-    check('设置只保留人工管理的 Agent 模型配置', settings.tabs.includes('Agent 模型') && !settings.tabs.includes('技能') && !settings.tabs.includes('插件') && settings.modelPanel && settings.otherPanels === 0, JSON.stringify(settings))
+    const settings = await cdp.eval(`const nav=[...document.querySelectorAll('.dashboard-nav-item')].find(node=>node.textContent?.includes('设置')); nav?.click(); await new Promise(r=>setTimeout(r,250)); const tabs=[...document.querySelectorAll('.settings-nav button')].map(node=>node.textContent?.trim()); return {tabs,modelPanel:!!document.querySelector('[data-agent-panel="models"]'),agentPanel:!!document.querySelector('[data-test="agent-admin-panel"]'),otherPanels:document.querySelectorAll('[data-test="agent-job-panel"],[data-test="agent-memory-panel"],[data-test="agent-org-panel"]').length}`)
+    check('设置页不再提供 Agent 模型页签（模型统一在「AI 配置」）', !settings.tabs.includes('Agent 模型') && settings.tabs.includes('AI 配置') && !settings.tabs.includes('技能') && !settings.tabs.includes('插件') && !settings.modelPanel && !settings.agentPanel && settings.otherPanels === 0, JSON.stringify(settings))
 
     report.status = report.checks.every(item => item.passed) ? 'passed' : 'failed'
   } catch (error) {

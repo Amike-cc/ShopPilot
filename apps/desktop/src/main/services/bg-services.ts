@@ -23,6 +23,9 @@ const MAINTENANCE_INTERVAL_MS = 6 * 3600 * 1000
 /** 启动后多久做第一次维护：避开启动高峰（迁移 + 会话恢复 + 首屏渲染都在抢主线程） */
 const MAINTENANCE_FIRST_DELAY_MS = 90 * 1000
 let maintenanceTimer: NodeJS.Timeout | null = null
+/** 代理巡检 / 空闲锁定定时器（P1-10：与 maintenanceTimer 同款——幂等守卫 + unref，重复装配不叠加） */
+let proxySweepTimer: NodeJS.Timeout | null = null
+let idleLockTimer: NodeJS.Timeout | null = null
 
 export function installLockGate(): void {
   const ALLOW_WHEN_LOCKED = new Set<string>([
@@ -63,8 +66,13 @@ export function startBackgroundServices(): void {
   try { BackupManager.pruneBackups() } catch { /* 清理失败不影响启动 */ }
 
   // 代理周期巡检（仅当存在绑定代理时产生网络动作）
-  const sweep = () => { ProxyManager.sweepBoundProxies(healthEmit).catch(() => { /* 巡检失败不打扰主流程 */ }) }
-  setInterval(sweep, SWEEP_INTERVAL_MS)
+  // P1-10（2026-10-15 审查）：原先裸 setInterval 无幂等守卫、无 unref——
+  // startBackgroundServices 若被重复调用会叠加定时器，并阻止事件循环退出。
+  if (!proxySweepTimer) {
+    const sweep = () => { ProxyManager.sweepBoundProxies(healthEmit).catch(() => { /* 巡检失败不打扰主流程 */ }) }
+    proxySweepTimer = setInterval(sweep, SWEEP_INTERVAL_MS)
+    if (typeof proxySweepTimer.unref === 'function') proxySweepTimer.unref()
+  }
 
   // 打开店铺浏览器时：绑定的代理若从未体检/状态异常/结果过期 → 先复检并如实展示
   onStoreBrowserOpened(async (storeId: string) => {
@@ -81,15 +89,19 @@ export function startBackgroundServices(): void {
   })
 
   // 空闲自动锁定（§189；主密码启用且 idleMinutes>0 才生效）
-  setInterval(() => {
-    // 取考勤设置本身要查库：**必须在 try 内**——退出流程里 closeDatabase() 之后定时器
-    // 还可能再跑一拍，抛在 try 外会直接进 uncaughtException（2026-09-28 审查确认）。
-    try {
-      const min = Security.getIdleMinutes()
-      if (min <= 0 || Security.isAppLocked()) return
-      if (powerMonitor.getSystemIdleTime() >= min * 60) Security.lockApp()
-    } catch { /* 无电源监视环境 / 库已关闭：跳过本轮 */ }
-  }, 30 * 1000)
+  // P1-10：同款幂等守卫 + unref（理由同 proxySweepTimer）
+  if (!idleLockTimer) {
+    idleLockTimer = setInterval(() => {
+      // 取考勤设置本身要查库：**必须在 try 内**——退出流程里 closeDatabase() 之后定时器
+      // 还可能再跑一拍，抛在 try 外会直接进 uncaughtException（2026-09-28 审查确认）。
+      try {
+        const min = Security.getIdleMinutes()
+        if (min <= 0 || Security.isAppLocked()) return
+        if (powerMonitor.getSystemIdleTime() >= min * 60) Security.lockApp()
+      } catch { /* 无电源监视环境 / 库已关闭：跳过本轮 */ }
+    }, 30 * 1000)
+    if (typeof idleLockTimer.unref === 'function') idleLockTimer.unref()
+  }
 
   // 维护任务：自动备份 + 数据保留策略（§28）。
   // 放在后台定时器而不是启动路径上：两者都要扫盘/删文件，不能拖慢"双击到可见"。

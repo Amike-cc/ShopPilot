@@ -90,6 +90,8 @@ export async function exportSessionPackage(
     if (r.canceled || !r.filePath) throw new Error('SESSION_CANCELLED: 未选择保存位置')
     outPath = r.filePath
   }
+  // @types/node 22.20 下 outPath 的流收窄不再覆盖两条分支，这里显式收口一次（此处不可能为 undefined）
+  if (!outPath) throw new Error('SESSION_CANCELLED: 未选择保存位置')
   if (rendererProvidedPath) {
     // 渲染层直传的路径在**落盘前**校验（第一次真正使用它之前）：未校验的路径绝不触碰文件系统，
     // 同时对话框流程（用户可取消）保持原样。

@@ -15,7 +15,7 @@
     <button class="add-read-step" type="button" :disabled="locked || proposalStepCount >= 12 || draft.steps.length >= 25" @click="addReadStep">＋ 添加读取标题步骤</button>
     <div class="schedule-box">
       <label class="schedule-toggle"><input type="checkbox" :checked="!!draft.schedule" :disabled="locked" @change="toggleSchedule(($event.target as HTMLInputElement).checked)" />重复调度</label>
-      <label v-if="draft.schedule" class="schedule-interval">每隔 <input type="number" min="1" max="43200" :value="Math.round(draft.schedule.everyMs / 60000)" :disabled="locked" @input="setInterval(Number(($event.target as HTMLInputElement).value))" /> 分钟执行</label>
+      <label v-if="draft.schedule" class="schedule-interval">每隔 <input type="number" min="1" max="43200" :value="Math.round(draft.schedule.everyMs / 60000)" :disabled="locked" @input="setScheduleMinutes(Number(($event.target as HTMLInputElement).value))" /> 分钟执行</label>
       <p v-if="draft.schedule" class="schedule-note">使用现有任务调度器；店铺未打开时按项目现有规则等待，不会静默打开浏览器。</p>
     </div>
     <div v-if="draft.requiresConfirmation" class="plan-confirm-note"><img :src="warningIcon" alt="" />此计划含 {{ draft.steps.filter(step => step.requiresConfirmation).length }} 个执行前人工确认门禁。</div>
@@ -52,7 +52,7 @@ function addReadStep() {
   publish({ ...draft.value, steps: [...draft.value.steps, step] })
 }
 function toggleSchedule(enabled: boolean) { publish({ ...draft.value, schedule: enabled ? { everyMs: 3600000 } : null }) }
-function setInterval(minutes: number) { publish({ ...draft.value, schedule: { everyMs: Math.min(Math.max(Math.round(minutes || 1), 1), 43200) * 60000 } }) }
+function setScheduleMinutes(minutes: number) { publish({ ...draft.value, schedule: { everyMs: Math.min(Math.max(Math.round(minutes || 1), 1), 43200) * 60000 } }) }
 </script>
 
 <style scoped>

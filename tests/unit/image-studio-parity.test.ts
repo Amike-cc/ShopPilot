@@ -138,8 +138,11 @@ describe('AI 商品图工作台页签细节', () => {
   it('生成中阻止离开图片工作台，并逐批持久化真实返回结果', () => {
     expect(studio).toContain("(event: 'busy-change', busy: boolean)")
     expect(studio).toContain("watch(generationBusy, busy => emit('busy-change', busy), { immediate: true })")
-    expect(studio).toContain('historyImages.value = [...batch, ...historyImages.value].slice(0, 500)')
-    expect(studio).toContain('persistHistory()')
+    expect(studio).toContain('historyImages.value = [...batch, ...historyImages.value].slice(0, HISTORY_MAX_ITEMS)')
+    // P1-6（2026-10-15 审查）：逐批持久化改为防抖调度 + 字节预算 + 配额失败显式提示（不再空 catch）
+    expect(studio).toContain('schedulePersistHistory()')
+    expect(studio).toContain('HISTORY_STORAGE_BUDGET')
+    expect(studio).toContain('function persistHistory()')
     expect(dashboard).toContain('@busy-change="imageStudioBusy = $event"')
     expect(dashboard).toContain('function preventBusyImageStudioExit()')
     expect(dashboard).toContain("activePage.value !== 'image-studio' || !imageStudioBusy.value")

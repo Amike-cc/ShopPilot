@@ -52,7 +52,7 @@ describe('Agent domain IPC is closed in plain conversation mode', () => {
     registerAgentDomainHandlers()
   })
 
-  it('rejects job execution, mutation, memory writes, and skill management in Main', async () => {
+  it('rejects job execution, mutation, memory writes, skill and model management in Main', async () => {
     const event = {} as Electron.IpcMainInvokeEvent
     const blocked = [
       IPC_CHANNELS.AGENT_JOB_CREATE,
@@ -90,7 +90,11 @@ describe('Agent domain IPC is closed in plain conversation mode', () => {
       IPC_CHANNELS.AGENT_QUALITY_METRICS,
       IPC_CHANNELS.AGENT_QUALITY_REVIEW,
       IPC_CHANNELS.AGENT_COMMERCE_LEDGER_LIST,
-      IPC_CHANNELS.AGENT_MODEL_BIND
+      IPC_CHANNELS.AGENT_MODEL_BIND,
+      IPC_CHANNELS.AGENT_MODEL_LIST,
+      IPC_CHANNELS.AGENT_MODEL_SET,
+      IPC_CHANNELS.AGENT_MODEL_DELETE,
+      IPC_CHANNELS.AGENT_MODEL_TEST
     ]
 
     for (const channel of blocked) {
@@ -110,10 +114,15 @@ describe('Agent domain IPC is closed in plain conversation mode', () => {
     expect(mocks.serviceFns.exportAgentPack).not.toHaveBeenCalled()
   })
 
-  it('keeps manual model configuration behind its separate admin IPC', async () => {
+  it('model Profile management is closed too (models live in AI 配置)', async () => {
     const event = {} as Electron.IpcMainInvokeEvent
-    const list = await mocks.handlers.get(IPC_CHANNELS.AGENT_MODEL_LIST)?.(event, {})
-    expect(list.ok).toBe(true)
-    expect(mocks.runtimeFns.listModelProfilesPage).toHaveBeenCalledTimes(1)
+    for (const channel of [IPC_CHANNELS.AGENT_MODEL_LIST, IPC_CHANNELS.AGENT_MODEL_SET, IPC_CHANNELS.AGENT_MODEL_DELETE, IPC_CHANNELS.AGENT_MODEL_TEST]) {
+      const result = await mocks.handlers.get(channel)?.(event, {})
+      expect(result, channel).toMatchObject({ ok: false, error: { code: 'AGENT_OPERATION_NOT_ALLOWED' } })
+    }
+    expect(mocks.runtimeFns.listModelProfilesPage).not.toHaveBeenCalled()
+    expect(mocks.runtimeFns.setModelProfile).not.toHaveBeenCalled()
+    expect(mocks.runtimeFns.deleteModelProfile).not.toHaveBeenCalled()
+    expect(mocks.runtimeFns.testModelProfile).not.toHaveBeenCalled()
   })
 })

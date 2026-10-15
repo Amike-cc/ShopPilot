@@ -1,3 +1,5 @@
+import { normalizeCellText as normalizeCellTextBase } from '../text-match'
+
 /**
  * 发票中心「平台档案」（抓取各平台**待开票信息**用）
  *
@@ -588,26 +590,9 @@ export function isInvoiceCollectTask(task: { name?: unknown } | string | null | 
  * 每半段至少要 2 个字符才判重复——否则「人人」这种叠字内容会被误削成「人」。
  */
 export function normalizeCellText(v: unknown): string {
-  const s = String(v ?? '').replace(/\s+/g, ' ').trim()
-  if (!s) return ''
-  // 整串正好由同一段重复两遍构成 → 只留一遍
-  const compact = s.replace(/ /g, '')
-  if (compact.length >= 4 && compact.length % 2 === 0) {
-    const half = compact.slice(0, compact.length / 2)
-    if (half === compact.slice(compact.length / 2)) {
-      // P2-12：从**带空格的原文**回填那前半段，而不是返回 compact——
-      // 直接返回 compact 会把「订单号 2000000038930468 订单号 2000000038930468」压成
-      // 「订单号2000000038930468」（空格没了），与页面上看到的文案不一致，导出的单元格也跟着变样。
-      let seen = 0
-      let cut = 0
-      for (let i = 0; i < s.length && seen < half.length; i++) {
-        if (s[i] !== ' ') seen++
-        cut = i + 1
-      }
-      return s.slice(0, cut).trim()
-    }
-  }
-  return s
+  // P2-1 收敛（2026-10-15 审查）：实现唯一在 @shared/text-match，本域入口只做参数选择——
+  // 发票/涉税表格需要"整串重复两遍"折叠（快手「处理记录」的月份被渲染两次）。
+  return normalizeCellTextBase(v, { dedupe: true })
 }
 
 /** 已实测可抓取待开票信息的平台（供界面如实展示） */

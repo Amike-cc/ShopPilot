@@ -149,16 +149,20 @@
 
           <div class="env-sec" data-test="lock-sec">
             <div class="env-h">应用锁</div>
-            <template v-if="!ws.securityEnabled"><div class="env-note">未设置主密码。设置后可随时锁定应用；锁定会隐藏浏览器视图并拒绝业务操作。</div><input v-model="pw1" type="password" placeholder="新主密码（≥8 位）" autocomplete="new-password" /><input v-model="pw2" type="password" placeholder="再次输入" autocomplete="new-password" /><button type="button" class="mini-btn primary" data-test="btn-set-pw" :disabled="pw1.length < 8 || pw1 !== pw2" @click="setMasterPw">设置主密码</button></template>
-            <template v-else><div class="cf-btns"><button type="button" class="mini-btn primary" data-test="btn-lock-now" @click="lockNow"><img class="button-icon" :src="securityLockIcon" alt="" />立即锁定</button><button type="button" class="mini-btn" @click="showChangePw = !showChangePw">{{ showChangePw ? '收起' : '更换密码' }}</button><button type="button" class="mini-btn danger-btn" @click="removePw">移除主密码</button></div><div class="bind-row idle-row"><span class="row-sub">空闲自动锁定</span><select v-model.number="idleMinSel" data-test="sel-idle" @change="applyIdle"><option :value="0">关闭</option><option :value="5">5 分钟</option><option :value="15">15 分钟</option><option :value="30">30 分钟</option><option :value="60">60 分钟</option></select></div><template v-if="showChangePw"><input v-model="oldPw" type="password" placeholder="旧主密码" autocomplete="off" /><input v-model="pw1" type="password" placeholder="新主密码（≥8 位）" autocomplete="new-password" /><input v-model="pw2" type="password" placeholder="再次输入" autocomplete="new-password" /><button type="button" class="mini-btn primary" :disabled="!oldPw || pw1.length < 8 || pw1 !== pw2" @click="setMasterPw">更新</button></template></template>
-            <div v-if="secMsg" class="env-note" :class="{ ok: secMsgOk }">{{ secMsg }}</div>
+            <template v-if="!ws.securityEnabled">
+              <div class="env-note">未设置主密码。设置后可随时锁定应用；锁定会隐藏浏览器视图并拒绝业务操作。</div>
+              <button type="button" class="mini-btn primary" data-test="lock-open-settings" @click="emit('open-settings', 'security')">去设置中心设置主密码 →</button>
+            </template>
+            <template v-else>
+              <div class="cf-btns"><button type="button" class="mini-btn primary" data-test="btn-lock-now" @click="lockNow"><img class="button-icon" :src="securityLockIcon" alt="" />立即锁定</button><button type="button" class="mini-btn" data-test="lock-open-settings" @click="emit('open-settings', 'security')">安全设置 →</button></div>
+              <div class="env-note">空闲自动锁定：{{ ws.idleMinutes ? ws.idleMinutes + ' 分钟' : '关闭' }}（在「设置中心 → 安全」中调整）</div>
+            </template>
           </div>
 
           <div class="env-sec" data-test="diag-sec">
-            <div class="env-h">备份与诊断</div><div class="cf-btns wrap"><button type="button" class="mini-btn" data-test="btn-backup" :disabled="busyBackup" @click="doBackup"><img class="button-icon" :src="databaseBackupIcon" alt="" />{{ busyBackup ? '备份中…' : '立即备份数据库' }}</button><button type="button" class="mini-btn" data-test="btn-diag" :disabled="busyDiag" @click="doDiagnostics"><img class="button-icon" :src="diagnosticsIcon" alt="" />导出诊断包</button><button type="button" class="mini-btn" data-test="btn-memory-diag" :disabled="busyMemoryDiag" @click="readMemoryDiagnostics"><img class="button-icon" :src="memorySnapshotIcon" alt="" />{{ busyMemoryDiag ? '读取中…' : '读取内存快照' }}</button><button type="button" class="mini-btn" @click="doAuditExport"><img class="button-icon" :src="auditLogIcon" alt="" />导出审计日志</button></div>
-            <div v-if="backups.length" class="row-sub backup-row">最近备份：{{ backups[0].createdAt ? new Date(backups[0].createdAt).toLocaleString() : '—' }}（{{ backups[0].sizeBytes ? (backups[0].sizeBytes / 1024).toFixed(0) : '—' }} KB） <button type="button" class="mini-btn" @click="doRestore(backups[0].id)"><img class="button-icon" :src="backupRestoreIcon" alt="" />恢复到此备份</button></div>
-            <div v-if="memoryDiag" class="row-sub memory-diag" data-test="memory-diag-result">内存 {{ formatMemory(memoryDiag.main?.rss) }} · 店铺 {{ memoryDiag.totals?.openStores || 0 }} · 标签 {{ memoryDiag.totals?.tabs || 0 }} · guest {{ memoryDiag.totals?.attachedGuests || 0 }} · WebContents {{ memoryDiag.totals?.webContents || 0 }}</div>
-            <div class="env-note">诊断包只含版本、系统、迁移版本、代理体检与脱敏日志，不含会话 Cookie、密码或订单原文。</div>
+            <div class="env-h">备份与诊断</div>
+            <div class="env-note">备份、恢复、诊断包与审计导出已移至「设置中心 → 数据与维护」，避免两处入口各自演化。</div>
+            <button type="button" class="mini-btn" data-test="diag-open-settings" @click="emit('open-settings', 'maintenance')">打开数据与维护 →</button>
           </div>
         </div>
 
@@ -323,11 +327,6 @@ import openIcon from '../../assets/generated/ui-icons/open-gen.png'
 import browserRetryIcon from '../../assets/generated/ui-icons/browser-retry-gen.png'
 import sessionExportIcon from '../../assets/generated/ui-icons/session-export-gen.png'
 import sessionImportIcon from '../../assets/generated/ui-icons/session-import-gen.png'
-import databaseBackupIcon from '../../assets/generated/ui-icons/database-backup-gen.png'
-import diagnosticsIcon from '../../assets/generated/ui-icons/diagnostics-gen.png'
-import memorySnapshotIcon from '../../assets/generated/ui-icons/memory-snapshot-gen.png'
-import auditLogIcon from '../../assets/generated/ui-icons/audit-log-gen.png'
-import backupRestoreIcon from '../../assets/generated/ui-icons/backup-restore-gen.png'
 import workspaceRefreshIcon from '../../assets/generated/ui-icons/workspace-refresh-gen.png'
 import settingsSaveIcon from '../../assets/generated/ui-icons/settings-save-gen.png'
 import panelExpandIcon from '../../assets/generated/ui-icons/panel-expand-gen.png'
@@ -348,6 +347,8 @@ import { isBackgroundCollectTask } from '@shared/constants/collection'
 const emit = defineEmits<{
   // 头部栏（含「返回经营总览」）已按用户要求整条移除；回经营总览走左栏导航，这里不再有该事件。
   'open-tasks': [create?: boolean]
+  // 环境面板的跳转入口：打开设置中心并落到指定页签（安全 / 数据与维护）
+  'open-settings': [tab?: string]
 }>()
 const props = defineProps<{ pickerMode?: boolean; active?: boolean }>()
 
@@ -379,18 +380,6 @@ const cookies = ref<any[]>([])
 const cookiesTotal = ref(0)
 const ckSearch = ref('')
 const secBusy = ref(false)
-const pw1 = ref('')
-const pw2 = ref('')
-const oldPw = ref('')
-const showChangePw = ref(false)
-const secMsg = ref('')
-const secMsgOk = ref(false)
-const idleMinSel = ref(0)
-const backups = ref<any[]>([])
-const busyBackup = ref(false)
-const busyDiag = ref(false)
-const busyMemoryDiag = ref(false)
-const memoryDiag = ref<any | null>(null)
 const confirmations = computed(() => Object.values(ws.confirmations).filter(Boolean))
 
 /**
@@ -752,7 +741,7 @@ async function refreshEnvironment() {
     envBindingNote.value = binding?.mode === 'bound' ? '当前：绑定代理' : '当前：直连'
     proxyAuthObserved.value = sessionResult.data?.proxyAuthObserved === true
   }
-  await Promise.all([refreshCookies(), refreshBackups(), ws.refreshSecurity()])
+  await Promise.all([refreshCookies(), ws.refreshSecurity()])
 }
 
 async function applyBind() {
@@ -856,70 +845,14 @@ async function clearCookies() {
   void refreshCookies()
 }
 
-function say(message: string, ok = true) { secMsg.value = message; secMsgOk.value = ok }
-async function setMasterPw() {
-  const result = await window.shopilot.security.setPassword(pw1.value, ws.securityEnabled ? oldPw.value : undefined)
-  if (result.ok) { say(ws.securityEnabled ? '主密码已更新' : '主密码已设置，可立即锁定或等待空闲自动锁定'); pw1.value = ''; pw2.value = ''; oldPw.value = ''; showChangePw.value = false; await ws.refreshSecurity() }
-  else say(result.error.message, false)
-}
-async function removePw() {
-  const credential = window.prompt('移除主密码需输入当前密码')
-  if (!credential) return
-  const result = await window.shopilot.security.removePassword(credential)
-  if (result.ok) { say('主密码已移除'); await ws.refreshSecurity() } else say(result.error.message, false)
-}
+/**
+ * 应用锁的「设置 / 更换 / 移除 / 空闲锁定」已整体迁移到「设置中心 → 安全」（单一入口）。
+ * 侧栏只保留最高频的「立即锁定」快捷与跳转链接，避免两处各自演化。
+ */
 async function lockNow() {
   const result = await window.shopilot.security.lock()
-  if (result.ok) await ws.refreshSecurity(); else say(result.error.message, false)
-}
-async function applyIdle() {
-  const result = await window.shopilot.settings.set('security.idleMinutes', idleMinSel.value)
-  if (result.ok) { say(idleMinSel.value ? `空闲 ${idleMinSel.value} 分钟自动锁定已启用` : '空闲自动锁定已关闭'); await ws.refreshSecurity() } else say(result.error.message, false)
-}
-
-async function refreshBackups() {
-  const result = await window.shopilot.backup.list()
-  if (result.ok) backups.value = (result.data || []).slice(0, 3)
-}
-async function doBackup() {
-  busyBackup.value = true
-  const result = await window.shopilot.backup.create()
-  busyBackup.value = false
-  if (result.ok) { ws.toast('数据库备份完成（含校验和）', 'success'); void refreshBackups() } else ws.toast(`备份失败：${result.error.message}`, 'error')
-}
-async function doRestore(id: string) {
-  if (!window.confirm('恢复将覆盖当前数据库（恢复前会自动创建安全快照）。继续？')) return
-  busyBackup.value = true
-  const result = await window.shopilot.backup.restore(id)
-  busyBackup.value = false
-  if (result.ok) { ws.toast('已恢复备份，安全快照已保留', 'success'); await ws.refreshStores() } else ws.toast(`恢复失败（现有数据未受影响）：${result.error.message}`, 'error')
-}
-async function doDiagnostics() {
-  busyDiag.value = true
-  const result = await window.shopilot.diagnostics.export()
-  busyDiag.value = false
-  if (result.ok) ws.toast(`诊断包已导出：${result.data.path}`, 'success')
-  else if (result.error.code !== 'SESSION_CANCELLED') ws.toast(`导出失败：${result.error.message}`, 'error')
-}
-function formatMemory(bytes: unknown): string {
-  const value = Number(bytes)
-  if (!Number.isFinite(value) || value <= 0) return '—'
-  return `${(value / 1024 / 1024).toFixed(0)} MB`
-}
-async function readMemoryDiagnostics() {
-  busyMemoryDiag.value = true
-  try {
-    const result = await window.shopilot.browser.memoryDiagnostics()
-    if (result.ok) memoryDiag.value = result.data
-    else ws.toast(`读取内存快照失败：${result.error.message}`, 'error')
-  } finally {
-    busyMemoryDiag.value = false
-  }
-}
-async function doAuditExport() {
-  const result = await window.shopilot.audit.export({ limit: 5000 })
-  if (result.ok) ws.toast(`审计日志已导出（${result.data.rows} 条）`, 'success')
-  else if (result.error.code !== 'SESSION_CANCELLED') ws.toast(`导出失败：${result.error.message}`, 'error')
+  if (result.ok) await ws.refreshSecurity()
+  else ws.toast(result.error.message, 'error')
 }
 
 function resetInviteDefaults() {
@@ -1231,7 +1164,6 @@ async function confirmRun(runId: string, approved: boolean) {
 watch(() => ws.activeTab?.url, value => { urlDraft.value = value || '' }, { immediate: true })
 watch(() => confirmations.value.length, count => { if (count > 0) panelOpen.value = true })
 watch(() => `${inviteRunId(inviteLatest.value)}:${inviteLogs(inviteLatest.value).length}`, () => { void nextTick(() => { if (inviteLiveLogEl.value) inviteLiveLogEl.value.scrollTop = inviteLiveLogEl.value.scrollHeight }) })
-watch(() => ws.idleMinutes, value => { idleMinSel.value = value }, { immediate: true })
 // 宿主不再随切页销毁（页面状态要留住），因此"回到浏览器页时重读设置"必须显式做：
 // 平台首页地址、达人广场地址、类目树都可能刚在设置中心被改过，靠旧的"重新挂载"刷新已经不成立。
 watch(() => props.active, active => {
@@ -1409,7 +1341,7 @@ onBeforeUnmount(() => {
 .button-icon { width:14px;height:14px;object-fit:contain;vertical-align:middle;margin-right:4px; }.mini-btn { min-height: 25px; padding: 0 8px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); cursor: pointer; font-size: 9px; white-space: nowrap; }.mini-btn:hover:not(:disabled), .mini-btn:focus-visible { border-color: rgba(145,116,255,.7); color: var(--dash-text); outline: none; }.mini-btn:disabled { cursor: not-allowed; opacity: .48; }.mini-btn.primary { border-color: #5b3df5; background: #6d4aff; color: #ffffff; }
 .row-del { display:grid;place-items:center; width: 21px; height: 23px; flex: 0 0 21px; border: 0; border-radius: 5px; background: transparent; color: #78849b; cursor: pointer; font-size: 15px; }.row-del img { width:14px;height:14px;object-fit:contain; }.row-del:hover, .row-del:focus-visible { background: rgba(217,45,32,.14); color: #d92d20; outline: none; }.row-del:disabled { cursor: default; opacity: .56; }
 .proxy-add { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }.proxy-add > input, .add-line input, .add-line select { min-height: 28px; padding: 0 7px; font-size: 9px; }.add-line { display: flex; gap: 6px; }.add-line select { width: 74px; min-width: 74px; flex: 0 0 74px; }.add-line .f-host { min-width: 60px; flex: 1 1 auto; }.add-line .f-port { width: 72px; min-width: 72px; flex: 0 0 72px; }.proxy-add > .mini-btn { align-self: flex-start; margin-top: 1px; }
-.verify-item { display: flex; align-items: center; gap: 7px; padding: 6px 0; }.verify-status-icon { width: 17px; height: 17px; flex: 0 0 17px; object-fit: contain; }.cf-btns { display: flex; flex-wrap: wrap; gap: 6px; }.cf-btns.wrap { gap: 6px; }.cf-btns .mini-btn { margin-top: 0; }.ck-search { width: 100%; min-height: 28px; margin-top: 7px; padding: 0 7px; font-size: 9px; }.cookie-count { margin: 5px 0; }.ck-item { padding: 5px 0; }.ck-flag { margin-left: 4px; padding: 1px 3px; border: 1px solid var(--dash-border); border-radius: 4px; color: var(--dash-text-muted); font-size: 8px; }.danger-btn { border-color: rgba(217,45,32,.35); color: #d92d20; }.idle-row { margin-top: 7px; justify-content: space-between; }.idle-row select { width: auto; min-width: 94px; }.backup-row { display: flex; align-items: center; gap: 5px; margin-top: 7px; white-space: normal; }.backup-row .mini-btn { margin-left: auto; }
+.verify-item { display: flex; align-items: center; gap: 7px; padding: 6px 0; }.verify-status-icon { width: 17px; height: 17px; flex: 0 0 17px; object-fit: contain; }.cf-btns { display: flex; flex-wrap: wrap; gap: 6px; }.cf-btns.wrap { gap: 6px; }.cf-btns .mini-btn { margin-top: 0; }.ck-search { width: 100%; min-height: 28px; margin-top: 7px; padding: 0 7px; font-size: 9px; }.cookie-count { margin: 5px 0; }.ck-item { padding: 5px 0; }.ck-flag { margin-left: 4px; padding: 1px 3px; border: 1px solid var(--dash-border); border-radius: 4px; color: var(--dash-text-muted); font-size: 8px; }.danger-btn { border-color: rgba(217,45,32,.35); color: #d92d20; }
 .browser-task-row { display: flex; align-items: center; gap: 7px; min-height: 54px; padding: 7px 3px; border-bottom: 1px solid rgba(111,137,177,.1); }
 .browser-task-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
 .browser-task-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dash-text-soft); font-size: 11px; }

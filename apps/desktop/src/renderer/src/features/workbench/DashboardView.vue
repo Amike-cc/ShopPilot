@@ -169,7 +169,7 @@
           :picker-mode="taskPicking"
           :active="browserHostActive"
           @open-tasks="openTasks"
-          @open-ai-settings="openInviteAiSettings"
+          @open-settings="openSettingsTab"
         />
       </div>
       <UnifiedTaskPage
@@ -461,6 +461,7 @@ import emptyAnalyticsArt from '../../assets/ui/dashboard/empty-analytics.png'
 import type { SalesMetrics, SalesMetricsPlanView } from '@shared/contracts/sales-metrics'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { isBackgroundCollectTask } from '@shared/constants/collection'
+import { storeStatusLabel } from '@shared/enums/store-status'
 
 type LoadState = 'loading' | 'ready' | 'empty' | 'error'
 type PeriodKey = 'today' | 'yesterday' | '7d' | '30d' | 'custom'
@@ -518,13 +519,13 @@ function tickClock() {
   nowLabel.value = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 type DashboardPage = 'overview' | 'browser' | 'products' | 'orders' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'tasks' | 'invoices' | 'image-studio'
-type SettingsTab = 'config' | 'square' | 'ai' | 'agents' | 'about'
+type SettingsTab = 'entry' | 'ai' | 'security' | 'maintenance' | 'about'
 const activePage = ref<DashboardPage>('overview')
 /** 生图请求仍在运行时保留图片工作台，避免卸载页面丢失返回结果。 */
 const imageStudioBusy = ref(false)
 const settingsReturnPage = ref<DashboardPage>('overview')
 const settingsReturnStoreId = ref<string | null>(null)
-const settingsTab = ref<SettingsTab>('config')
+const settingsTab = ref<SettingsTab>('entry')
 const taskAutoCreate = ref(false)
 const taskOverlay = ref(false)
 const taskPicking = ref(false)
@@ -993,7 +994,9 @@ const platformSyncRows = computed(() => {
 })
 
 function statusClass(status: string) { return status === 'online' ? 'online' : ['needs_login', 'proxy_error'].includes(status) ? 'warning' : 'offline' }
-function statusLabel(status: string) { return status === 'online' ? '在线' : status === 'needs_login' ? '登录失效' : status === 'launching' ? '启动中' : '离线' }
+// P2-2（2026-10-15 审查）：原先只判 online/needs_login/launching，proxy_error/archived/incomplete
+// 全部落「离线」——同一店铺在不同页显示互相矛盾的文案。统一走 shared 的单一映射。
+function statusLabel(status: string) { return storeStatusLabel(status) }
 function isTaskActive(task: any) {
   const run = task.latestRun
   const liveStatus = run?.id ? ws.runLive[run.id]?.status : null
@@ -1197,8 +1200,10 @@ function openTasks(create = false) {
   taskAutoCreate.value = create
   navigateTo('tasks')
 }
-function openInviteAiSettings() {
-  settingsTab.value = 'ai'
+/** 设置中心页签白名单：环境面板等入口只允许跳到已知页签，未知值回落到默认「平台入口」 */
+const SETTINGS_TABS: SettingsTab[] = ['entry', 'ai', 'security', 'maintenance', 'about']
+function openSettingsTab(tab?: string) {
+  settingsTab.value = (SETTINGS_TABS as string[]).includes(tab || '') ? (tab as SettingsTab) : 'entry'
   navigateTo('settings')
 }
 function closeTaskOverlay() {

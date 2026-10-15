@@ -6,7 +6,7 @@
  * 锁定态：销毁 lastProxyAuth 等敏感内存引用，业务 IPC 由中央门禁拒绝（见 index.ts）。
  */
 
-import { app, safeStorage } from 'electron'
+import { safeStorage } from 'electron'
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
 import { getDatabase } from '../db/database'
 import { writeAudit } from './audit-logger'
@@ -161,12 +161,35 @@ export function lockApp(): void {
   destroySensitive() // §189 敏感内存引用销毁
 }
 
+/**
+ * 解锁尝试限流（P3，2026-10-15 审查）：scrypt 已让每次尝试很慢，再加一层**进程内**计数——
+ * 连续失败 ≥5 次后指数退避（1s、2s、4s… 封顶 60s），成功即清零。
+ * 刻意的内存态：重启应用即清零，避免"忘记密码 + 退避状态持久化"把人永久锁在门外。
+ * （退避期间以 APP_LOCKED 结果如实拒绝，界面文案与密码错误一致，不泄露限流细节。）
+ */
+let unlockFailureCount = 0
+let unlockBlockedUntil = 0
+const UNLOCK_FREE_ATTEMPTS = 5
+const UNLOCK_MAX_BACKOFF_MS = 60_000
+
 export function unlockApp(credential: string): boolean {
   if (!hasMasterPassword()) { locked = false; return true }
-  if (!verifyMaster(credential)) {
+  const now = Date.now()
+  if (now < unlockBlockedUntil) {
     writeAudit('security.unlock', 'failure')
     return false
   }
+  if (!verifyMaster(credential)) {
+    unlockFailureCount++
+    if (unlockFailureCount >= UNLOCK_FREE_ATTEMPTS) {
+      const backoff = Math.min(UNLOCK_MAX_BACKOFF_MS, 1000 * 2 ** (unlockFailureCount - UNLOCK_FREE_ATTEMPTS))
+      unlockBlockedUntil = now + backoff
+    }
+    writeAudit('security.unlock', 'failure')
+    return false
+  }
+  unlockFailureCount = 0
+  unlockBlockedUntil = 0
   locked = false
   writeAudit('security.unlock', 'success')
   return true
@@ -191,6 +214,3 @@ export function setIdleMinutes(min: number): { ok: boolean } {
 export function getStatus(): LockStatus {
   return { enabled: hasMasterPassword(), locked, idleMinutes: getIdleMinutes() }
 }
-
-// void app 供 tree-shaker 保留 electron 依赖声明
-void app

@@ -78,6 +78,9 @@ function nextFrame(): Promise<void> {
  * 不用固定毫秒数猜——猜空的时候任务会对着一个还没挂上的页面点。
  */
 async function waitForStorePageReady(storeId: string, timeoutMs = 10000): Promise<boolean> {
+  // P1-7（2026-10-15 审查）：无 preload（纯渲染调试模式）时视为不可就绪，
+  // 直接返回 false 交调用方处理，而不是每 150ms 抛一次 TypeError
+  if (!window.shopilot) return false
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const res = await window.shopilot.browser.state()

@@ -1,6 +1,7 @@
 /**
  * 设置中心全功能验收：启动隔离 Electron，使用本地 HTTP fixture 验证设置页的
- * 配置、达人广场、三套 AI 配置、Agent 模型、更新偏好和横向布局。
+ * 平台入口（平台首页 + 达人广场合并）、三套 AI 配置、应用锁（安全）、
+ * 数据与维护（采集开关 / 备份恢复 / 内存快照）、更新偏好和横向布局。
  * 不访问真实供应商，不执行付费生图或安装更新。
  */
 const { spawn, execSync } = require('child_process')
@@ -148,60 +149,48 @@ async function main() {
       const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(el,${JSON.stringify(value)});
       el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); await new Promise(r=>setTimeout(r,80)); return el.value
     `)
-    const setFormInput = (index, value) => cdp.eval(`
-      const el=document.querySelectorAll('form.profile-form input')[${index}]; if(!el) throw new Error('找不到 Profile 表单输入框 ${index}');
-      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(el,${JSON.stringify(value)});
-      el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); await new Promise(r=>setTimeout(r,80)); return el.value
-    `)
     const clickAndWait = (selector, waitForSelector = null) => cdp.eval(`
       document.querySelector(${JSON.stringify(selector)})?.click(); await new Promise(r=>setTimeout(r,650));
       return ${waitForSelector ? `!!document.querySelector(${JSON.stringify(waitForSelector)})` : 'true'}
     `)
-    const acceptNativeConfirmation = async () => {
-      const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()
-      const target = targets.find(item => item.type === 'page' && item.url.includes('pw-dialog'))
-      if (!target) return false
-      const dialogCdp = new CDP(target.webSocketDebuggerUrl)
-      await dialogCdp.ready
-      await dialogCdp.eval(`document.querySelector('#ok')?.click(); return true`)
-      dialogCdp.close()
-      await sleep(350)
-      return true
-    }
-
-    await openSettings('config')
-    const configShape = await cdp.eval(`return {rows:document.querySelectorAll('[data-test="platform-home-row"]').length, names:[...document.querySelectorAll('[data-test="platform-home-row"] .plat-name')].map(x=>x.textContent.trim()), disabled:[...document.querySelectorAll('[data-test="platform-home-row"] input')].some(x=>x.disabled)}`)
-    check('配置页四个平台加载且输入可用', configShape.rows === 4 && configShape.names.join(',') === '拼多多,微信小店,快手小店,抖店' && !configShape.disabled, JSON.stringify(configShape))
+    await openSettings('entry')
+    const entryShape = await cdp.eval(`return {rows:document.querySelectorAll('[data-test="platform-home-row"]').length, squareRows:document.querySelectorAll('[data-test="square-url-row"]').length, groups:[!!document.querySelector('[data-test="settings-entry-platform"]'),!!document.querySelector('[data-test="settings-entry-square"]')], names:[...document.querySelectorAll('[data-test="platform-home-row"] .plat-name')].map(x=>x.textContent.trim()), disabled:[...document.querySelectorAll('[data-test="platform-home-row"] input')].some(x=>x.disabled)}`)
+    check('平台入口页同屏两组地址：四个平台首页 + 三个达人广场、输入可用', entryShape.rows === 4 && entryShape.squareRows === 3 && entryShape.groups[0] && entryShape.groups[1] && entryShape.names.join(',') === '拼多多,微信小店,快手小店,抖店' && !entryShape.disabled, JSON.stringify(entryShape))
     await setInput('[data-test="home-url-拼多多"]', 'not-a-url')
-    await clickAndWait('[data-test="settings-config"] [data-test="settings-save"]')
-    const invalidConfig = await cdp.eval(`return {open:!!document.querySelector('[data-test="settings-dialog"]'), error:document.querySelector('[data-test="settings-config"] .settings-note.error')?.textContent||''}`)
-    check('配置页拒绝不完整 URL 且保留编辑内容', invalidConfig.open && /格式无效/.test(invalidConfig.error), JSON.stringify(invalidConfig))
+    await clickAndWait('[data-test="settings-entry"] [data-test="settings-save"]')
+    const invalidConfig = await cdp.eval(`return {open:!!document.querySelector('[data-test="settings-dialog"]'), error:document.querySelector('[data-test="settings-entry"] .settings-note.error')?.textContent||''}`)
+    check('平台入口拒绝不完整 URL 且保留编辑内容', invalidConfig.open && /格式无效/.test(invalidConfig.error), JSON.stringify(invalidConfig))
     await setInput('[data-test="home-url-拼多多"]', `${fixtureBase}/home`)
-    await clickAndWait('[data-test="settings-config"] [data-test="settings-save"]')
+    await clickAndWait('[data-test="settings-entry"] [data-test="settings-save"]')
     const homeSaved = await cdp.eval(`return (await window.shopilot.settings.get('platform.homeUrls')).data?.value||{}`)
-    check('配置页保存平台首页并持久化', homeSaved['拼多多'] === `${fixtureBase}/home` && !await cdp.eval('return !!document.querySelector("[data-test=\\"settings-dialog\\"]")'), JSON.stringify(homeSaved))
-    await openSettings('config')
+    const afterEntrySave = await cdp.eval(`return {open:!!document.querySelector('[data-test="settings-dialog"]'), saved:(document.querySelector('.settings-save-state')?.textContent||'').replace(/\\s+/g,' ').trim()}`)
+    check('平台入口保存平台首页并持久化（保存后停留在设置中心）', homeSaved['拼多多'] === `${fixtureBase}/home` && afterEntrySave.open === true && /已保存/.test(afterEntrySave.saved), JSON.stringify({ homeSaved, afterEntrySave }))
+    // 未保存反馈：有草稿 → 徽标 + 放弃更改可用、保存按钮可用；放弃后 → 草稿还原、徽标消失、保存回到禁用
+    await setInput('[data-test="home-url-拼多多"]', `${fixtureBase}/home-draft`)
+    const dirtyState = await cdp.eval(`return {unsaved:!!document.querySelector('[data-test="settings-entry-unsaved"]'), discardEnabled:document.querySelector('[data-test="settings-entry-discard"]')?.disabled === false, saveEnabled:document.querySelector('[data-test="settings-save"]')?.disabled === false}`)
+    await clickAndWait('[data-test="settings-entry-discard"]')
+    const discarded = await cdp.eval(`return {value:document.querySelector('[data-test="home-url-拼多多"]')?.value||'', unsaved:!!document.querySelector('[data-test="settings-entry-unsaved"]'), saveDisabled:document.querySelector('[data-test="settings-save"]')?.disabled === true}`)
+    check('未保存修改有徽标与放弃更改；放弃后草稿还原到已保存值且保存按钮回到禁用', dirtyState.unsaved && dirtyState.discardEnabled && dirtyState.saveEnabled && discarded.value === `${fixtureBase}/home` && discarded.unsaved === false && discarded.saveDisabled === true, JSON.stringify({ dirtyState, discarded }))
+    await openSettings('entry')
     const restoredConfigValue = await cdp.eval(`return document.querySelector('[data-test="home-url-拼多多"]')?.value||''`)
     await cdp.eval(`document.querySelector('[data-test="home-url-拼多多"]')?.parentElement?.parentElement?.querySelector('button')?.click(); return true`)
     const clearedConfigValue = await cdp.eval(`return document.querySelector('[data-test="home-url-拼多多"]')?.value||''`)
-    check('配置页重新打开回显并可恢复默认', restoredConfigValue === `${fixtureBase}/home` && clearedConfigValue === '', JSON.stringify({ restoredConfigValue, clearedConfigValue }))
-    await clickAndWait('[data-test="settings-config"] [data-test="settings-save"]')
-    check('配置页恢复默认后清除覆盖值', Object.keys((await cdp.eval(`return (await window.shopilot.settings.get('platform.homeUrls')).data?.value||{}`))).length === 0)
+    check('平台入口再次进入回显并可恢复默认', restoredConfigValue === `${fixtureBase}/home` && clearedConfigValue === '', JSON.stringify({ restoredConfigValue, clearedConfigValue }))
+    await clickAndWait('[data-test="settings-entry"] [data-test="settings-save"]')
+    check('平台入口恢复默认后清除覆盖值', Object.keys((await cdp.eval(`return (await window.shopilot.settings.get('platform.homeUrls')).data?.value||{}`))).length === 0)
 
-    await openSettings('square')
     const squareShape = await cdp.eval(`return {rows:document.querySelectorAll('[data-test="square-url-row"]').length, names:[...document.querySelectorAll('[data-test="square-url-row"] .plat-name')].map(x=>x.textContent.trim())}`)
-    check('达人广场仅展示三个实测平台', squareShape.rows === 3 && squareShape.names.join(',') === '抖店,微信小店,快手小店', JSON.stringify(squareShape))
+    check('平台入口的达人广场组仅展示三个实测平台', squareShape.rows === 3 && squareShape.names.join(',') === '抖店,微信小店,快手小店', JSON.stringify(squareShape))
     await setInput('[data-test="square-url-抖店"]', 'ftp://invalid')
-    await clickAndWait('[data-test="settings-square"] [data-test="settings-save"]')
-    const invalidSquare = await cdp.eval(`return {open:!!document.querySelector('[data-test="settings-dialog"]'), error:document.querySelector('[data-test="settings-square"] .settings-note.error')?.textContent||''}`)
+    await clickAndWait('[data-test="settings-entry"] [data-test="settings-save"]')
+    const invalidSquare = await cdp.eval(`return {open:!!document.querySelector('[data-test="settings-dialog"]'), error:document.querySelector('[data-test="settings-entry"] .settings-note.error')?.textContent||''}`)
     check('达人广场拒绝非 HTTP(S) 地址', invalidSquare.open && /格式无效/.test(invalidSquare.error), JSON.stringify(invalidSquare))
     await setInput('[data-test="square-url-抖店"]', `${fixtureBase}/square`)
-    await clickAndWait('[data-test="settings-square"] [data-test="settings-save"]')
+    await clickAndWait('[data-test="settings-entry"] [data-test="settings-save"]')
     const squareSaved = await cdp.eval(`return (await window.shopilot.settings.get('invite.squareUrls')).data?.value||{}`)
     check('达人广场地址保存并持久化', squareSaved['抖店'] === `${fixtureBase}/square`, JSON.stringify(squareSaved))
-    await openSettings('square')
     await cdp.eval(`document.querySelector('[data-test="square-url-抖店"]')?.parentElement?.parentElement?.querySelector('button')?.click(); return true`)
-    await clickAndWait('[data-test="settings-square"] [data-test="settings-save"]')
+    await clickAndWait('[data-test="settings-entry"] [data-test="settings-save"]')
     check('达人广场恢复默认后清除覆盖值', Object.keys((await cdp.eval(`return (await window.shopilot.settings.get('invite.squareUrls')).data?.value||{}`))).length === 0)
 
     await openSettings('ai')
@@ -279,45 +268,6 @@ async function main() {
     check('生图文本 AI Key 可清除', (await cdp.eval(`return (await window.shopilot.ai.configGet()).data.hasImageTextKey`)) === false)
     check('AI fixture 请求覆盖模型列表和文本测试', fixture.stats().modelsRequests >= 3 && fixture.stats().chatRequests >= 2, JSON.stringify(fixture.stats()))
 
-    await openSettings('agents')
-    const agents = await cdp.eval(`return {panel:!!document.querySelector('[data-agent-panel="models"]'), text:document.querySelector('[data-test="agent-admin-panel"]')?.textContent||'', edit:[...document.querySelectorAll('[data-test="agent-admin-panel"] button')].map(x=>x.textContent.trim()).filter(x=>/编辑|删除|清除 Key/.test(x))}`)
-    check('Agent 模型页加载且主 Agent 不提供编辑/删除/清 Key 入口', agents.panel && agents.edit.length === 0 && /主 Agent/.test(agents.text), JSON.stringify(agents))
-    await setFormInput(0, '设置验收 Profile')
-    await setFormInput(1, 'settings-fixture')
-    await setFormInput(2, 'fixture-chat')
-    await setFormInput(3, `${fixtureBase}/v1/chat/completions`)
-    await setFormInput(4, 'fixture-agent-key')
-    const profileDraft = await cdp.eval(`return [...document.querySelectorAll('form.profile-form input')].map(x=>({value:x.value,required:x.required,valid:x.checkValidity()}))`)
-    const submitDispatch = await cdp.eval(`
-      const form=document.querySelector('form.profile-form'); const submitButton=form?.querySelector('button[type="submit"]'); const ev=new SubmitEvent('submit',{bubbles:true,cancelable:true,submitter:submitButton}); const dispatched=form?.dispatchEvent(ev); await new Promise(r=>setTimeout(r,1600));
-      const state=document.querySelector('[data-test="agent-admin-panel"]')?.__vueParentComponent?.setupState;
-      return {dispatched,defaultPrevented:ev.defaultPrevented,setupKeys:Object.keys(state||{}),saveMethod:typeof state?.saveModel,saving:state?.saving?.value??state?.saving}
-    `)
-    await acceptNativeConfirmation()
-    submitDispatch.targets = (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).map(item => ({ type: item.type, url: item.url, title: item.title }))
-    await cdp.eval(`await new Promise(r=>setTimeout(r,1200)); return true`)
-    submitDispatch.formButtonDisabled = await cdp.eval(`return !!document.querySelector('form.profile-form button[type="submit"]')?.disabled`)
-    let createdProfile = await cdp.eval(`return {cards:[...document.querySelectorAll('.profile-card')].map(x=>x.textContent), message:document.querySelector('.settings-message')?.textContent||'',draft:${JSON.stringify(profileDraft)},submit:${JSON.stringify(submitDispatch)}}`)
-    if (!createdProfile.cards.some(text => text.includes('设置验收 Profile')) && submitDispatch.saveMethod === 'function') {
-      await cdp.eval(`await document.querySelector('[data-test="agent-admin-panel"]')?.__vueParentComponent?.setupState?.saveModel?.(); await new Promise(r=>setTimeout(r,1600)); return true`)
-      createdProfile = await cdp.eval(`return {cards:[...document.querySelectorAll('.profile-card')].map(x=>x.textContent), message:document.querySelector('.settings-message')?.textContent||'',draft:${JSON.stringify(profileDraft)},submit:${JSON.stringify(submitDispatch)}}`)
-    }
-    const hasCreatedProfile = createdProfile.cards.some(text => text.includes('设置验收 Profile'))
-    check('Agent 模型 Profile 可创建并保存密钥', hasCreatedProfile && /已保存/.test(createdProfile.message) && !await cdp.eval(`return document.documentElement.outerHTML.includes('fixture-agent-key')`), JSON.stringify({ hasCreatedProfile, message: createdProfile.message, draft: createdProfile.draft, submit: createdProfile.submit }))
-    await cdp.eval(`const card=[...document.querySelectorAll('.profile-card')].find(x=>x.textContent.includes('设置验收 Profile')); card?.querySelector('.profile-actions button:first-child')?.click(); await new Promise(r=>setTimeout(r,700)); return true`)
-    const agentTest = await cdp.eval(`return document.querySelector('.settings-message')?.textContent||''`)
-    check('Agent 模型 Profile 可测试连接', /模型连接成功/.test(agentTest), agentTest)
-    await cdp.eval(`window.confirm=()=>true; const card=[...document.querySelectorAll('.profile-card')].find(x=>x.textContent.includes('设置验收 Profile')); [...(card?.querySelectorAll('button')||[])].find(x=>x.textContent.includes('清除 Key'))?.click(); await new Promise(r=>setTimeout(r,500)); return true`)
-    await acceptNativeConfirmation()
-    await cdp.eval(`await new Promise(r=>setTimeout(r,800)); return true`)
-    const clearedProfile = await cdp.eval(`const r=await window.shopilot.agentSettings.modelList({limit:200}); const p=r.data.items.find(x=>x.name==='设置验收 Profile'); return {hasKey:p?.hasKey, message:document.querySelector('.settings-message')?.textContent||''}`)
-    check('Agent 模型 Profile 的 Key 可清除', clearedProfile.hasKey === false && /已清除/.test(clearedProfile.message), JSON.stringify(clearedProfile))
-    await cdp.eval(`window.confirm=()=>true; const card=[...document.querySelectorAll('.profile-card')].find(x=>x.textContent.includes('设置验收 Profile')); [...(card?.querySelectorAll('button')||[])].find(x=>x.textContent.includes('删除'))?.click(); await new Promise(r=>setTimeout(r,500)); return true`)
-    await acceptNativeConfirmation()
-    await cdp.eval(`await new Promise(r=>setTimeout(r,800)); return true`)
-    const deletedProfile = await cdp.eval(`const r=await window.shopilot.agentSettings.modelList({limit:200}); return !r.data.items.some(x=>x.name==='设置验收 Profile')`)
-    check('Agent 模型 Profile 可删除', deletedProfile)
-
     await openSettings('about')
     const about = await cdp.eval(`return {version:document.querySelector('[data-test="about-version"]')?.textContent||'', channel:document.querySelector('[data-test="update-channel"]')?.value, auto:document.querySelector('[data-test="update-autocheck"]')?.checked, message:document.querySelector('[data-test="update-message"]')?.textContent||'', check:!!document.querySelector('[data-test="update-check-btn"]')}`)
     check('关于软件页加载版本、更新偏好和开发环境状态', /^v/.test(about.version) && about.channel === 'stable' && about.auto === false && about.check && /开发环境/.test(about.message), JSON.stringify(about))
@@ -329,7 +279,109 @@ async function main() {
     const updateStatus = await cdp.eval(`return {message:document.querySelector('[data-test="update-message"]')?.textContent||'', state:(await window.shopilot.update.status()).data?.state}`)
     check('关于软件页检查更新显示真实开发环境结果', /开发环境|已是最新|失败|检查/.test(updateStatus.message), JSON.stringify(updateStatus))
 
-    const tabs = ['config', 'square', 'ai', 'agents', 'about']
+    // ---------- 安全页签：应用锁完整链路（隔离环境内自建、测完自回收） ----------
+    await openSettings('security')
+    await sleep(600)
+    const securityStart = await cdp.eval(`return {state:(document.querySelector('[data-test="security-state"]')?.textContent||'').replace(/\\s+/g,' ').trim(), enabled:document.querySelector('[data-test="security-state"]')?.dataset.enabled, idle:document.querySelector('[data-test="security-idle"]')?.value, setForm:!!document.querySelector('[data-test="security-set-submit"]'), lockBtn:!!document.querySelector('[data-test="security-lock-now"]')}`)
+    check('安全页加载应用锁状态（初始未设置主密码、空闲锁定关闭）', securityStart.enabled === '0' && /未设置主密码/.test(securityStart.state) && securityStart.idle === '0' && securityStart.setForm === true && securityStart.lockBtn === false, JSON.stringify(securityStart))
+
+    await setInput('[data-test="security-new-pw"]', 'settings-master-1')
+    await setInput('[data-test="security-confirm-pw"]', 'settings-master-1')
+    await clickAndWait('[data-test="security-set-submit"]')
+    const securitySet = await cdp.eval(`return {enabled:(await window.shopilot.security.status()).data?.enabled, stateEnabled:document.querySelector('[data-test="security-state"]')?.dataset.enabled, lockBtn:!!document.querySelector('[data-test="security-lock-now"]'), changeToggle:!!document.querySelector('[data-test="security-change-toggle"]'), msg:(document.querySelector('[data-test="security-msg"]')?.textContent||'').replace(/\\s+/g,' ').trim()}`)
+    check('安全页设置主密码：状态切换为已启用并出现锁定/管理入口', securitySet.enabled === true && securitySet.stateEnabled === '1' && securitySet.lockBtn && securitySet.changeToggle && /已设置/.test(securitySet.msg), JSON.stringify(securitySet))
+
+    await cdp.eval(`const s=document.querySelector('[data-test="security-idle"]'); s.value='15'; s.dispatchEvent(new Event('change',{bubbles:true})); await new Promise(r=>setTimeout(r,700)); return true`)
+    const idleSaved = await cdp.eval(`return {stored:(await window.shopilot.settings.get('security.idleMinutes')).data?.value, msg:(document.querySelector('[data-test="security-msg"]')?.textContent||'').replace(/\\s+/g,' ').trim()}`)
+    check('安全页空闲自动锁定可保存（15 分钟写入 security.idleMinutes）', idleSaved.stored === 15 && /15 分钟/.test(idleSaved.msg), JSON.stringify(idleSaved))
+    await cdp.eval(`const s=document.querySelector('[data-test="security-idle"]'); s.value='0'; s.dispatchEvent(new Event('change',{bubbles:true})); await new Promise(r=>setTimeout(r,700)); return true`)
+    check('安全页空闲自动锁定可还原为关闭', (await cdp.eval(`return (await window.shopilot.settings.get('security.idleMinutes')).data?.value`)) === 0)
+
+    await clickAndWait('[data-test="security-change-toggle"]', '[data-test="security-change-panel"]')
+    const wrongOld = await cdp.eval(`
+      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+      const set=(sel,v)=>{const el=document.querySelector(sel); setter.call(el,v); el.dispatchEvent(new Event('input',{bubbles:true}));};
+      set('[data-test="security-old-pw"]','wrong-old');
+      set('[data-test="security-change-pw"]','settings-master-2');
+      set('[data-test="security-change-confirm"]','settings-master-2');
+      await new Promise(r=>setTimeout(r,150));
+      document.querySelector('[data-test="security-change-submit"]')?.click();
+      await new Promise(r=>setTimeout(r,750));
+      return {msg:(document.querySelector('[data-test="security-msg"]')?.textContent||'').replace(/\\s+/g,' ').trim(), enabled:(await window.shopilot.security.status()).data?.enabled}
+    `)
+    check('安全页更换主密码：旧密码错误时如实失败且原密码仍有效', wrongOld.enabled === true && /旧密码不正确/.test(wrongOld.msg), JSON.stringify(wrongOld))
+    await cdp.eval(`
+      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+      const set=(sel,v)=>{const el=document.querySelector(sel); setter.call(el,v); el.dispatchEvent(new Event('input',{bubbles:true}));};
+      set('[data-test="security-old-pw"]','settings-master-1');
+      set('[data-test="security-change-pw"]','settings-master-2');
+      set('[data-test="security-change-confirm"]','settings-master-2');
+      await new Promise(r=>setTimeout(r,150));
+      document.querySelector('[data-test="security-change-submit"]')?.click();
+      await new Promise(r=>setTimeout(r,850));
+      return true
+    `)
+    const changedPw = await cdp.eval(`return {enabled:(await window.shopilot.security.status()).data?.enabled, msg:(document.querySelector('[data-test="security-msg"]')?.textContent||'').replace(/\\s+/g,' ').trim(), panel:!!document.querySelector('[data-test="security-change-panel"]')}`)
+    check('安全页更换主密码：旧密码正确时更新成功并收起面板', changedPw.enabled === true && /已更新/.test(changedPw.msg) && changedPw.panel === false, JSON.stringify(changedPw))
+
+    await clickAndWait('[data-test="security-remove-toggle"]', '[data-test="security-remove-panel"]')
+    const removeWrong = await cdp.eval(`
+      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+      const el=document.querySelector('[data-test="security-remove-pw"]'); setter.call(el,'settings-master-1'); el.dispatchEvent(new Event('input',{bubbles:true}));
+      await new Promise(r=>setTimeout(r,150));
+      document.querySelector('[data-test="security-remove-submit"]')?.click();
+      await new Promise(r=>setTimeout(r,750));
+      return {msg:(document.querySelector('[data-test="security-msg"]')?.textContent||'').replace(/\\s+/g,' ').trim(), enabled:(await window.shopilot.security.status()).data?.enabled}
+    `)
+    check('安全页移除主密码：旧密码已被更换失效，如实拒绝', removeWrong.enabled === true && /不正确/.test(removeWrong.msg), JSON.stringify(removeWrong))
+    await cdp.eval(`
+      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+      const el=document.querySelector('[data-test="security-remove-pw"]'); setter.call(el,'settings-master-2'); el.dispatchEvent(new Event('input',{bubbles:true}));
+      await new Promise(r=>setTimeout(r,150));
+      document.querySelector('[data-test="security-remove-submit"]')?.click();
+      await new Promise(r=>setTimeout(r,850));
+      return true
+    `)
+    const removedPw = await cdp.eval(`return {enabled:(await window.shopilot.security.status()).data?.enabled, stateEnabled:document.querySelector('[data-test="security-state"]')?.dataset.enabled, setForm:!!document.querySelector('[data-test="security-set-submit"]')}`)
+    check('安全页移除主密码：新密码验证通过后解除应用锁并回到未设置状态', removedPw.enabled === false && removedPw.stateEnabled === '0' && removedPw.setForm === true, JSON.stringify(removedPw))
+
+    // ---------- 数据与维护页签：采集开关 / 备份恢复 / 内存快照 ----------
+    await openSettings('maintenance')
+    await sleep(800)
+    const maintenanceStart = await cdp.eval(`return {switch:document.querySelector('[data-test="maintenance-auto-collect"]')?.checked, state:(document.querySelector('[data-test="maintenance-auto-collect-state"]')?.textContent||'').trim(), backup:!!document.querySelector('[data-test="maintenance-backup-create"]'), diag:!!document.querySelector('[data-test="maintenance-diagnostics-export"]'), audit:!!document.querySelector('[data-test="maintenance-audit-export"]'), memory:!!document.querySelector('[data-test="maintenance-memory"]'), diagEnabled:!document.querySelector('[data-test="maintenance-diagnostics-export"]')?.disabled}`)
+    check('数据与维护页加载采集开关与维护入口（默认关闭）', maintenanceStart.switch === false && /已关闭/.test(maintenanceStart.state) && maintenanceStart.backup && maintenanceStart.diag && maintenanceStart.audit && maintenanceStart.memory && maintenanceStart.diagEnabled, JSON.stringify(maintenanceStart))
+
+    await cdp.eval(`document.querySelector('[data-test="maintenance-auto-collect"]')?.click(); await new Promise(r=>setTimeout(r,750)); return true`)
+    const collectOn = await cdp.eval(`return {stored:(await window.shopilot.settings.get('collection.autoEnabled')).data?.value, state:(document.querySelector('[data-test="maintenance-auto-collect-state"]')?.textContent||'').trim()}`)
+    check('采集总开关开启并持久化（collection.autoEnabled=true）', collectOn.stored === true && /已开启/.test(collectOn.state), JSON.stringify(collectOn))
+    await cdp.eval(`document.querySelector('[data-test="maintenance-auto-collect"]')?.click(); await new Promise(r=>setTimeout(r,750)); return true`)
+    const collectOff = await cdp.eval(`return {stored:(await window.shopilot.settings.get('collection.autoEnabled')).data?.value, state:(document.querySelector('[data-test="maintenance-auto-collect-state"]')?.textContent||'').trim()}`)
+    check('采集总开关关闭并持久化（collection.autoEnabled=false，fail-closed）', collectOff.stored === false && /已关闭/.test(collectOff.state), JSON.stringify(collectOff))
+
+    await cdp.eval(`document.querySelector('[data-test="maintenance-backup-create"]')?.click(); return true`)
+    let backupMade = null
+    for (let i = 0; i < 10; i++) {
+      await sleep(700)
+      backupMade = await cdp.eval(`return {count:((await window.shopilot.backup.list()).data||[]).length, rows:document.querySelectorAll('[data-test="maintenance-backup-row"]').length}`)
+      if (backupMade.count >= 1 && backupMade.rows >= 1) break
+    }
+    check('立即备份：创建备份记录并显示在最近备份列表', backupMade?.count >= 1 && backupMade?.rows >= 1, JSON.stringify(backupMade))
+
+    await clickAndWait('[data-test="maintenance-memory"]')
+    const memoryShown = await cdp.eval(`return (document.querySelector('[data-test="maintenance-memory-result"]')?.textContent||'').replace(/\\s+/g,' ').trim()`)
+    check('内存快照可读取并如实显示（含内存与店铺/标签计数）', /内存/.test(memoryShown) && memoryShown.includes('店铺') && memoryShown.includes('WebContents'), memoryShown)
+
+    // 恢复：真实执行（隔离库内，备份=当前状态副本）；恢复前自动快照 → 备份列表 +1 且应用保持可用
+    await cdp.eval(`window.confirm=()=>true; document.querySelector('[data-test^="maintenance-restore"]')?.click(); return true`)
+    let restored = null
+    for (let i = 0; i < 15; i++) {
+      await sleep(900)
+      restored = await cdp.eval(`const list=await window.shopilot.backup.list(); const stores=await window.shopilot.store.list(); return {count:(list.data||[]).length, storeListOk:stores.ok===true, msg:(document.querySelector('[data-test="maintenance-msg"]')?.textContent||'').replace(/\\s+/g,' ').trim()}`)
+      if (/已恢复备份/.test(restored.msg)) break
+    }
+    check('恢复备份：创建安全快照（列表 +1）且应用保持可用', restored?.count >= 2 && restored?.storeListOk === true && /已恢复备份/.test(restored?.msg || ''), JSON.stringify(restored))
+
+    const tabs = ['entry', 'ai', 'security', 'maintenance', 'about']
     const overflows = []
     for (const tab of tabs) {
       await openSettings(tab)

@@ -22,7 +22,9 @@ import {
 import { buildElementProbeScript, formatElementProbe, type ElementProbeResult } from './element-probe'
 import { buildElementPickerScript, describePickResult, type ElementPickResult, type PickMode } from './element-picker'
 import { getDatabase } from '../db/database'
-import { getStore, updateStoreStatus, updateStoreLastActive, onStoreStatusChanged } from '../stores/store-manager'
+import { getStore, updateStoreStatus, updateStoreLastActive } from '../stores/store-manager'
+// 2026-10-15：改从叶子总线模块导入（断开 store-manager ↔ window-manager 顶层注册的求值顺序问题）
+import { onStoreStatusChanged } from '../stores/store-status-bus'
 import { StoreStatus } from '@shared/enums/store-status'
 import { assertNavigableUrl } from '@shared/navigation'
 export { assertNavigableUrl } from '@shared/navigation'

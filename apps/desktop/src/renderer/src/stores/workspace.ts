@@ -20,6 +20,11 @@ const BUILTIN_PLATFORM_NAMES = new Set(PLATFORM_CATALOG.map(p => p.name))
 
 /** 事件监听只挂一次：热重载/重复 init 时重复挂会让每个事件被处理多遍（重复 toast、重复刷新） */
 let eventsSubscribed = false
+/**
+ * 已登记的事件监听（P1-10，2026-10-15 审查）：preload 的 off() 依赖回调引用相等，
+ * 匿名函数无法卸载——统一登记后由 unsubscribeEvents() 精确卸载，杜绝 HMR/重挂载后的重复处理。
+ */
+let eventHandlers: Array<{ channel: string; handler: (payload: any) => void }> = []
 
 const MAX_LIVE_RUNS = 128
 const MAX_TASK_LOG_RUNS = 96
@@ -195,7 +200,12 @@ export const useWorkspaceStore = defineStore('workspace', {
     subscribeEvents() {
       if (eventsSubscribed) return
       eventsSubscribed = true
-      window.shopilot.on(EVENT_CHANNELS.BROWSER_TAB_UPDATED, (payload: any) => {
+      // P1-10：所有订阅统一经此登记（见 eventHandlers 注释），卸载走 unsubscribeEvents()
+      const on = (channel: string, handler: (payload: any) => void): void => {
+        eventHandlers.push({ channel, handler })
+        window.shopilot.on(channel, handler)
+      }
+      on(EVENT_CHANNELS.BROWSER_TAB_UPDATED, (payload: any) => {
         if (!payload || !payload.storeId) return
         this.tabsByStore[payload.storeId] = payload.tabs || []
         this.activeTabIdByStore[payload.storeId] = payload.activeTabId ?? null
@@ -209,7 +219,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       // 主进程单方面切换了"当前显示哪家店"（采集任务批量开店铺、Agent 逐店动作都会走
       // openStoreBrowser → displayStore）：渲染层必须跟上，否则原生店铺视图会盖在当前 UI 上，
       // 而左栏高亮/标签栏/地址栏都停在旧状态。DashboardView 会据 displayedStoreId 切到浏览器页。
-      window.shopilot.on(EVENT_CHANNELS.BROWSER_DISPLAY_CHANGED, (payload: any) => {
+      on(EVENT_CHANNELS.BROWSER_DISPLAY_CHANGED, (payload: any) => {
         const storeId = payload?.storeId ?? null
         // 来源决定界面要不要"跟随切页"：只有主进程单方面显示（Agent 动作/开店后自动显示）
         // 才需要切页；渲染层自己请求的显示，界面本来就在正确的页上（跟随会打乱它自己的导航时序）
@@ -223,7 +233,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.displayedStoreId = storeId
         void Promise.all([this.refreshBookmarks(), this.refreshDownloads()])
       })
-      window.shopilot.on(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, (payload: any) => {
+      on(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, (payload: any) => {
         const key = `${payload?.storeId || ''}:${payload?.tabId || ''}`
         if (payload.isLoading) {
           if (!this.loadingTabs.includes(key)) this.loadingTabs = [...this.loadingTabs, key]
@@ -231,10 +241,10 @@ export const useWorkspaceStore = defineStore('workspace', {
           this.loadingTabs = this.loadingTabs.filter(k => k !== key)
         }
       })
-      window.shopilot.on(EVENT_CHANNELS.BROWSER_CRASHED, (payload: any) => {
+      on(EVENT_CHANNELS.BROWSER_CRASHED, (payload: any) => {
         this.toast(`页面异常已恢复（${payload.reason}）`, 'error')
       })
-      window.shopilot.on(EVENT_CHANNELS.STORE_STATUS_CHANGED, (payload: any) => {
+      on(EVENT_CHANNELS.STORE_STATUS_CHANGED, (payload: any) => {
         const storeId = String(payload?.storeId || '')
         const status = String(payload?.status || '')
         if (!storeId || !status) return
@@ -244,11 +254,11 @@ export const useWorkspaceStore = defineStore('workspace', {
       })
       // 下载：创建与进度都由主进程推送（2026-09-28 前主进程从不发送，面板只能手动刷新）。
       // 新下载 → 若正看着那家店的下载列表就刷新，并给一条轻提示；失败终态 → 明确告知。
-      window.shopilot.on(EVENT_CHANNELS.BROWSER_DOWNLOAD_CREATED, (payload: any) => {
+      on(EVENT_CHANNELS.BROWSER_DOWNLOAD_CREATED, (payload: any) => {
         if (!payload?.storeId) return
         if (this.displayedStoreId === payload.storeId) void this.refreshDownloads()
       })
-      window.shopilot.on(EVENT_CHANNELS.BROWSER_DOWNLOAD_PROGRESS, (payload: any) => {
+      on(EVENT_CHANNELS.BROWSER_DOWNLOAD_PROGRESS, (payload: any) => {
         if (!payload?.id) return
         const known = this.downloads.some(d => d.id === payload.id)
         if (this.displayedStoreId === payload.storeId && (known || payload.state !== 'progressing')) {
@@ -261,7 +271,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
       })
       // ---- 任务事件 - §6.6 ----
-      window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, (ev: any) => {
+      on(EVENT_CHANNELS.TASK_PROGRESS, (ev: any) => {
         const prev = this.runLive[ev.runId] || {}
         this.runLive = pruneRunRecordMap({
           ...this.runLive,
@@ -272,25 +282,36 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (['succeeded', 'failed', 'cancelled'].includes(ev.status)) this.clearConfirmation(ev.runId)
         if (ev.phase === 'finished' || ev.phase === 'failed') { this.refreshTasks() }
       })
-      window.shopilot.on(EVENT_CHANNELS.TASK_CONFIRMATION_REQUIRED, (ev: any) => {
+      on(EVENT_CHANNELS.TASK_CONFIRMATION_REQUIRED, (ev: any) => {
         this.confirmations = { ...this.confirmations, [ev.runId]: ev }
         this.toast(`任务「${ev.message}」等待人工确认`, 'info')
       })
-      window.shopilot.on(EVENT_CHANNELS.TASK_SCHEDULED_FIRED, (ev: any) => {
+      on(EVENT_CHANNELS.TASK_SCHEDULED_FIRED, (ev: any) => {
         this.toast(ev.message, 'info')
         this.refreshTasks()
       })
       // ---- 安全/健康事件 ----
-      window.shopilot.on(EVENT_CHANNELS.SECURITY_LOCKED, (ev: any) => {
+      on(EVENT_CHANNELS.SECURITY_LOCKED, (ev: any) => {
         this.appLocked = !!ev?.locked
         if (this.appLocked) this.toast('应用已锁定', 'info')
       })
-      window.shopilot.on(EVENT_CHANNELS.PROXY_HEALTH_CHANGED, (ev: any) => {
+      on(EVENT_CHANNELS.PROXY_HEALTH_CHANGED, (ev: any) => {
         this.proxyEpoch++
         if (ev?.status === 'error') {
           this.toast(`代理体检失败${ev.errorCode ? '（' + ev.errorCode + '）' : ''}：出口异常。按规范不会自动切换或降级，请在环境面板检查。`, 'error')
         }
       })
+    },
+
+    /**
+     * 卸载全部事件订阅（P1-10）。应用退出/组件树销毁时调用；可被 subscribeEvents() 重新建立。
+     */
+    unsubscribeEvents() {
+      for (const { channel, handler } of eventHandlers) {
+        try { window.shopilot?.off?.(channel, handler) } catch { /* preload 缺失/已卸载：忽略 */ }
+      }
+      eventHandlers = []
+      eventsSubscribed = false
     },
 
     async refreshSecurity() {

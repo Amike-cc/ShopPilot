@@ -68,9 +68,9 @@ async function main() {
     check('对话面板没有软件、页面、任务操作入口', drawer.open && drawer.mode.includes('纯对话模式') && drawer.operationButtons === 0 && drawer.composer.includes('想聊'), JSON.stringify(drawer))
 
     const settings = await cdp.eval(`const button=[...document.querySelectorAll('.dashboard-nav-item')].find(node=>node.textContent?.includes('设置')); button?.click(); await new Promise(r=>setTimeout(r,300)); return {page:!!document.querySelector('[data-test="unified-settings-page"]'),tabs:[...document.querySelectorAll('.settings-nav button')].map(node=>node.textContent?.trim())}`)
-    check('设置仅保留 Agent 模型入口', settings.page && settings.tabs.some(label => label.includes('Agent 模型')) && !settings.tabs.some(label => label.includes('技能') || label.includes('插件')), JSON.stringify(settings))
-    const models = await cdp.eval(`const button=[...document.querySelectorAll('.settings-nav button')].find(node=>node.textContent?.includes('Agent 模型')); button?.click(); await new Promise(r=>setTimeout(r,250)); return {panel:!!document.querySelector('[data-agent-panel="models"]'), tabs:[...document.querySelectorAll('[data-test="agent-admin-panel"] .admin-tab')].map(node=>node.textContent?.trim()), jobPanel:!!document.querySelector('[data-test="agent-job-panel"]')}`)
-    check('Agent 设置只保留模型配置', models.panel && models.tabs.length === 0 && !models.jobPanel, JSON.stringify(models))
+    check('设置页不再提供 Agent 模型入口（模型统一在「AI 配置」）', settings.page && !settings.tabs.some(label => label.includes('Agent 模型')) && settings.tabs.some(label => label.includes('AI 配置')) && !settings.tabs.some(label => label.includes('技能') || label.includes('插件')), JSON.stringify(settings))
+    const models = await cdp.eval(`return {panel:!!document.querySelector('[data-agent-panel="models"]'), agentPanel:!!document.querySelector('[data-test="agent-admin-panel"]'), jobPanel:!!document.querySelector('[data-test="agent-job-panel"]'), bridge:Object.keys(window.shopilot?.agentSettings||{}).length}`)
+    check('Agent 模型面板与操作设置均已移除', models.panel === false && models.agentPanel === false && !models.jobPanel && models.bridge === 0, JSON.stringify(models))
 
     const config = await cdp.eval(`return await window.shopilot.ai.configSet({endpoint:${JSON.stringify(`http://127.0.0.1:${server.address().port}/v1`)},model:'single-agent-fixture',timeoutMs:5000})`)
     const key = await cdp.eval(`return await window.shopilot.ai.setKey('single-agent-test-key')`)

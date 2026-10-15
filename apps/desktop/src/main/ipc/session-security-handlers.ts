@@ -17,10 +17,9 @@ import * as ShopSessionManager from '../browser/shop-session-manager'
 import { emitToRenderer, setBrowserViewsVisible } from '../browser/window-manager'
 import { writeAudit, auditRequestId } from '../services/audit-logger'
 import { customerMessageMonitor } from '../services/customer-message-monitor'
+import { ipcOk as ok, ipcFail as err, ipcErrFromUnknown } from './envelope'
 
 function rid(): string { return randomUUID() }
-function ok<T>(data: T, requestId: string): IPCResult<T> { return { ok: true, data, requestId } }
-function err(code: string, message: string, requestId: string): IPCResult { return { ok: false, error: { code, message }, requestId } }
 
 function sessionError(e: any, requestId: string): IPCResult {
   const msg = String(e?.message || e)
@@ -31,7 +30,8 @@ function sessionError(e: any, requestId: string): IPCResult {
   if (msg.startsWith('SECURITY_STORAGE_UNAVAILABLE')) return err(ERROR_CODES.SECURITY_STORAGE_UNAVAILABLE.code, msg.replace('SECURITY_STORAGE_UNAVAILABLE: ', ''), requestId)
   if (msg.includes('STORE_NOT_FOUND')) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
   if (msg.includes('INVALID_ARGUMENT')) return err(ERROR_CODES.INVALID_ARGUMENT.code, msg.replace(/^.*INVALID_ARGUMENT:\s*/, ''), requestId)
-  return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+  // 兜底走共享脱敏（P1-2）：会话包的校验错误可能夹带文件路径，只留干净文案
+  return ipcErrFromUnknown(e, requestId, { fallback: '会话操作失败，请重试' })
 }
 
 /**
@@ -145,7 +145,7 @@ export function registerSessionAndSecurityHandlers(): void {
       const msg = String(e?.message || e)
       if (msg.startsWith('DIAG_CANCELLED')) return err(ERROR_CODES.SESSION_CANCELLED.code, '已取消导出', requestId)
       if (msg.includes('INVALID_ARGUMENT')) return err(ERROR_CODES.INVALID_ARGUMENT.code, msg.replace(/^.*INVALID_ARGUMENT:\s*/, ''), requestId)
-      return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+      return ipcErrFromUnknown(e, requestId, { fallback: '导出诊断包失败' })
     }
   })
 
@@ -157,7 +157,7 @@ export function registerSessionAndSecurityHandlers(): void {
       const msg = String(e?.message || e)
       if (msg.startsWith('DIAG_CANCELLED')) return err(ERROR_CODES.SESSION_CANCELLED.code, '已取消导出', requestId)
       if (msg.includes('INVALID_ARGUMENT')) return err(ERROR_CODES.INVALID_ARGUMENT.code, msg.replace(/^.*INVALID_ARGUMENT:\s*/, ''), requestId)
-      return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+      return ipcErrFromUnknown(e, requestId, { fallback: '导出审计日志失败' })
     }
   })
 

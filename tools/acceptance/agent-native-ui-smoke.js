@@ -121,12 +121,12 @@ async function main() {
     const openRect = await rectFor(cdp, '[data-test="settings-open-btn"]')
     await clickRect(child.pid, openRect, scale)
     const settings = await waitFor(() => cdp.eval('return {open:!!document.querySelector("[data-test=\\"settings-dialog\\"]"),tabs:document.querySelectorAll("[data-test^=\\"settings-tab-\\"]").length}').catch(() => null))
-    check('native click opens settings dialog', settings?.open === true && settings.tabs >= 5, JSON.stringify(settings))
+    check('native click opens settings dialog', settings?.open === true && settings.tabs >= 4, JSON.stringify(settings))
 
-    const agentSettingsRect = await waitFor(() => rectFor(cdp, '[data-test="settings-tab-agents"]'))
-    await clickRect(child.pid, agentSettingsRect, scale)
-    const team = await waitFor(() => cdp.eval('return {root:!!document.querySelector("[data-test=\\"agent-admin-panel\\"]"),model:!!document.querySelector("[data-agent-panel=\\"models\\"]"),org:!!document.querySelector("[data-test=\\"agent-org-panel\\"]"),job:!!document.querySelector("[data-test=\\"agent-job-panel\\"]")}').catch(() => null))
-    check('native click opens Agent model settings only', team?.root === true && team.model === true && team.org === false && team.job === false, JSON.stringify(team))
+    const aboutTabRect = await waitFor(() => rectFor(cdp, '[data-test="settings-tab-about"]'))
+    await clickRect(child.pid, aboutTabRect, scale)
+    const aboutTab = await waitFor(() => cdp.eval('return {about:!!document.querySelector("[data-test=\\"settings-about\\"]"),agentTab:!!document.querySelector("[data-test=\\"settings-tab-agents\\"]"),agentPanel:!!document.querySelector("[data-test=\\"agent-admin-panel\\"]")}').catch(() => null))
+    check('native click switches settings tab; Agent 模型 tab is gone', aboutTab?.about === true && aboutTab.agentTab === false && aboutTab.agentPanel === false, JSON.stringify(aboutTab))
     report.status = report.checks.every(item => item.passed) ? 'passed' : 'failed'
   } catch (error) {
     report.error = String(error?.stack || error)

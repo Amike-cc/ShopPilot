@@ -6,6 +6,7 @@
  */
 
 import type Database from 'better-sqlite3'
+import { logMain } from '../services/logger'
 
 export interface Migration {
   version: number
@@ -1637,7 +1638,9 @@ export function getCurrentVersion(db: Database.Database): number {
   try {
     const row = db.prepare('SELECT MAX(version) as version FROM schema_migrations').get() as { version: number } | undefined
     return row?.version || 0
-  } catch {
+  } catch (error) {
+    // 读不到版本（新库/损坏/临时只读）按 0 处理；留一条 warn，否则"迁移从 0 重放"在持久日志里查不到（P3）
+    logMain('warn', `[migration] 读取当前 schema 版本失败，按 0 处理：${String((error as any)?.message || error).slice(0, 200)}`)
     return 0
   }
 }
@@ -1656,7 +1659,7 @@ export function migrate(db: Database.Database, targetVersion?: number): void {
   const toApply = migrations.filter(m => m.version > currentVersion && m.version <= target)
 
   for (const migration of toApply) {
-    console.log(`Applying migration ${migration.version}: ${migration.name}`)
+    logMain('info', `[migration] applying ${migration.version}: ${migration.name}`)
     
     db.transaction(() => {
       migration.up(db)
@@ -1667,6 +1670,6 @@ export function migrate(db: Database.Database, targetVersion?: number): void {
       `).run(migration.version, migration.name, Date.now())
     })()
 
-    console.log(`Migration ${migration.version} applied successfully`)
+    logMain('info', `[migration] ${migration.version} applied successfully`)
   }
 }

@@ -13,6 +13,7 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
 import { assertTrustedRenderer } from '../services/renderer-trust'
+import { ipcErrFromUnknown } from './envelope'
 
 export type FamilyHandler = (event: IpcMainInvokeEvent, ...args: any[]) => unknown
 
@@ -44,14 +45,8 @@ export function familyHandle(feature: string, options: { allowWhenLocked?: boole
         // 兜底：handler 内部 try-catch 漏出的异常也必须回 IPCResult 信封——否则渲染层
         // 拿到的是 Electron 原生 invoke rejection（"Error invoking remote method ..."），
         // 绕开 {ok,error} 契约直穿 UI。可信校验失败仍按原样抛出（不在此捕获）。
-        return {
-          ok: false,
-          error: {
-            code: String((error as any)?.code || 'INTERNAL_ERROR'),
-            message: String((error as any)?.message || error)
-          },
-          requestId: randomUUID()
-        }
+        // 文案统一走 envelope 的脱敏（P1-2）：内部路径/错误码只进日志，不回渲染层。
+        return ipcErrFromUnknown(error, randomUUID())
       }
     })
   }

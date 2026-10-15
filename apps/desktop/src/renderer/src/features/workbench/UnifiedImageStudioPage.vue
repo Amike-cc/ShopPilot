@@ -752,6 +752,13 @@ const generatedImages = ref<GeneratedImage[]>([])
 const restoringHistorySession = ref(false)
 const activeImageIndex = ref(0)
 const HISTORY_STORAGE_KEY = 'shopilot.image-studio.history.v1'
+/** 内存历史条数上限（不变） */
+const HISTORY_MAX_ITEMS = 500
+/**
+ * P1-6（2026-10-15 审查）：localStorage 落盘预算。条目是 base64 data URL（数 MB/张），
+ * 浏览器配额约 5MB——不做预算裁剪时几乎必然超限，且旧实现把失败静默吞掉。
+ */
+const HISTORY_STORAGE_BUDGET = 4 * 1024 * 1024
 const historyFilter = ref('all')
 const historyImages = ref<GeneratedImage[]>([])
 const historyPage = ref(1)
@@ -842,7 +849,8 @@ watch(sceneSource, (next) => {
 watch(materials, (next) => {
   variantCounts.value = next.map((_item, index) => Math.max(1, Number(variantCounts.value[index]) || 1))
 }, { deep: true })
-watch(historyImages, persistHistory, { deep: true })
+// P1-6（2026-10-15 审查）：deep watch 落库改为防抖调度——见 persistHistory/schedulePersistHistory 注释
+watch(historyImages, schedulePersistHistory, { deep: true })
 
 const configured = computed(() => Boolean(config.value?.hasImageKey && config.value.imageEndpoint && config.value.resolvedImageEndpoint && config.value.imageModel))
 /** 单独的"生图文本 API"（可选，配了就优先用它） */
@@ -865,12 +873,11 @@ function loadPersistedHistory() {
       return
     }
     const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) {
-      historyImages.value = []
-      generatedImages.value = []
-      return
-    }
-    historyImages.value = parsed.filter(item => item && typeof item.url === 'string' && typeof item.kind === 'string' && typeof item.mode === 'string').slice(0, 500) as GeneratedImage[]
+    // 兼容两种落盘格式：v1 = 裸数组；v2 = { version, items }（P1-6 起按字节预算裁剪后写入）
+    const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : []
+    historyImages.value = list
+      .filter((item: any) => item && typeof item.url === 'string' && typeof item.kind === 'string' && typeof item.mode === 'string')
+      .slice(0, HISTORY_MAX_ITEMS) as GeneratedImage[]
     // 历史记录独立于当前创作会话；打开软件时不把旧结果误显示为本次生成结果。
     generatedImages.value = []
   } catch {
@@ -879,9 +886,47 @@ function loadPersistedHistory() {
     generatedImages.value = []
   }
 }
-function persistHistory() {
-  try { window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(historyImages.value.slice(0, 500))) } catch {
-    // 本机存储空间不足时保留本次会话中的结果。
+
+let persistTimer: number | null = null
+let storageWarningShown = false
+
+/**
+ * P1-6（2026-10-15 审查）：旧实现每次历史变化都同步 `JSON.stringify(全部历史)`——
+ * 条目是 base64 data URL（数 MB/张），最多 500 张 = 数百 MB 序列化跑在主线程（卡顿）；
+ * 且 localStorage 配额（约 5MB）几乎必然被击穿，失败又被空 catch 吞掉，
+ * 表现为"历史看似在保存、重启后大面积消失"。现在：
+ *   · 变更先防抖 800ms 再落盘（一批生成只写一次）；
+ *   · 按字节预算（4MB）从新到旧收集"装得下的"条目，写 v2 信封格式；
+ *   · 配额/写入失败不再静默：用页面已有的 saveNotice 明确提示（只提示一次）。
+ */
+function schedulePersistHistory(): void {
+  if (typeof window === 'undefined') return
+  if (persistTimer != null) window.clearTimeout(persistTimer)
+  persistTimer = window.setTimeout(() => {
+    persistTimer = null
+    persistHistory()
+  }, 800)
+}
+
+function persistHistory(): void {
+  try {
+    const items: GeneratedImage[] = []
+    let bytes = 0
+    for (const item of historyImages.value) {
+      const approxBytes = item?.url ? item.url.length + 160 : 160
+      if (bytes + approxBytes > HISTORY_STORAGE_BUDGET) break
+      items.push(item)
+      bytes += approxBytes
+    }
+    window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify({ version: 2, items }))
+    storageWarningShown = false
+  } catch {
+    // 写入仍失败（配额满/隐私模式）：本次会话内保留结果，并明确告知用户
+    if (!storageWarningShown) {
+      storageWarningShown = true
+      saveNotice.value = '本地历史存储空间不足：新的生成结果将只在本次会话内可见，请手动下载需要保留的图片'
+      saveNoticeError.value = true
+    }
   }
 }
 function formatHistoryDate(value: number) {
@@ -1283,8 +1328,8 @@ async function submitGeneration() {
           collected.push(...batch)
           // 每个真实返回批次立即落入历史；组件卸载或窗口异常关闭时也能找回已完成图片。
           if (batch.length) {
-            historyImages.value = [...batch, ...historyImages.value].slice(0, 500)
-            persistHistory()
+            historyImages.value = [...batch, ...historyImages.value].slice(0, HISTORY_MAX_ITEMS)
+            schedulePersistHistory()
           }
           returned += images.length
           remaining -= images.length
@@ -1346,6 +1391,12 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (caseTimer) clearInterval(caseTimer)
+  // P1-6：卸载前把防抖中的历史立即落盘，避免刚生成的图片丢在 800ms 窗口里
+  if (persistTimer != null) {
+    window.clearTimeout(persistTimer)
+    persistTimer = null
+    persistHistory()
+  }
   emit('busy-change', false)
 })
 </script>

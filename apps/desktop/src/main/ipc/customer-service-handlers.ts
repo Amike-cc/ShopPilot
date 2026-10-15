@@ -7,13 +7,9 @@ import { CUSTOMER_SERVICE_PLATFORMS } from '@shared/contracts/customer-service'
 import { customerMessageMonitor } from '../services/customer-message-monitor'
 import { getStore } from '../stores/store-manager'
 import { waitForCustomerServiceSessionReady } from '../browser/session-manager'
+import { ipcOk as ok, ipcFail as fail } from './envelope'
 
 const handle = familyHandle('电商客服')
-
-function ok<T>(data: T, requestId: string): IPCResult<T> { return { ok: true, data, requestId } }
-function fail(code: string, message: string, requestId: string): IPCResult {
-  return { ok: false, error: { code, message }, requestId }
-}
 
 export function registerCustomerServiceHandlers(): void {
   handle(IPC_CHANNELS.CUSTOMER_SERVICE_PREPARE, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {

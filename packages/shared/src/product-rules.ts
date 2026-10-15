@@ -12,13 +12,12 @@
 
 import type { PlatformProductStatus, PlatformProductSku } from './contracts/platform-product'
 import type { ProductColumnKey, ProductProfile } from './constants/product'
+import { normalizeCellText as normalizeCellTextBase } from './text-match'
 
-/** 单元格文本清洗：合并空白、去零宽字符（平台常有 `\u200b`）。 */
+/** 单元格文本清洗（商品域入口，P2-1 收敛）：实现唯一在 @shared/text-match。
+ *  与发票域的区别：**不做"整串重复两遍"折叠**——商品标题/规格里的重复词有真语义。 */
 export function normalizeCellText(value: unknown): string {
-  return String(value ?? '')
-    .replace(/[\u200b-\u200f\ufeff]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
+  return normalizeCellTextBase(value)
 }
 
 /** 全角数字/符号 → 半角（个别平台列会混用）。 */

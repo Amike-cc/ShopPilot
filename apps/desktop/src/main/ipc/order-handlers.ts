@@ -13,12 +13,10 @@ import {
 } from '@shared/schemas/order'
 import { orderCollectionService } from '../orders/order-collection-service'
 import { pddOrderObservationService } from '../orders/pdd-order-observation-service'
+import { logMain } from '../services/logger'
+import { ipcOk as ok, ipcFail as fail } from './envelope'
 
 function requestId(): string { return randomUUID() }
-function ok<T>(data: T, requestIdValue: string): IPCResult<T> { return { ok: true, data, requestId: requestIdValue } }
-function fail(code: string, message: string, requestIdValue: string): IPCResult {
-  return { ok: false, error: { code, message: message.slice(0, 300) }, requestId: requestIdValue }
-}
 
 function inputError(requestIdValue: string): IPCResult {
   return fail('INVALID_ARGUMENT', '订单请求参数不合法', requestIdValue)
@@ -29,6 +27,8 @@ function serviceError(error: unknown, requestIdValue: string): IPCResult {
   if (code === 'STORE_NOT_FOUND') return fail('STORE_NOT_FOUND', '店铺不存在或已删除', requestIdValue)
   if (code === 'APP_LOCKED') return fail('APP_LOCKED', '应用已锁定', requestIdValue)
   if (code === 'INVALID_ARGUMENT') return fail('INVALID_ARGUMENT', '订单请求参数不合法', requestIdValue)
+  // 兜底不能静默丢原因（2026-10-15 审查同 product-handlers 的教训）：真实异常进日志
+  logMain('warn', `[order-ipc] 服务异常 requestId=${requestIdValue}：${String(code).slice(0, 300)}`)
   return fail('INTERNAL_ERROR', '订单操作失败', requestIdValue)
 }
 

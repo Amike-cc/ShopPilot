@@ -31,7 +31,7 @@
 
 <script setup lang="ts">
 // App Shell - §17.1：单工作台屏幕（内嵌 WebContentsView 需固定视口区域）
-import { ref, watch } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import DashboardView from '../features/workbench/DashboardView.vue'
 import CustomerServiceWorkspace from '../features/customer-service/CustomerServiceWorkspace.vue'
 import { useWorkspaceStore } from '../stores/workspace'
@@ -74,13 +74,21 @@ async function doUnlock() {
 }
 
 // §818 快捷键：Ctrl+Shift+L 锁定应用
-window.addEventListener('keydown', (e) => {
+// P1-10（2026-10-15 审查）：此前是匿名监听、永不清理——HMR/重挂载会叠加出多个监听
+// （按一次快捷键触发 N 次 lock），且旧闭包持续持有 store。改为具名监听 + 卸载清理。
+function onGlobalKeydown(e: KeyboardEvent): void {
   if (e.ctrlKey && e.shiftKey && (e.key === 'L' || e.key === 'l')) {
     e.preventDefault()
     if (!ws.appLocked && ws.securityEnabled) {
-      void window.shopilot.security.lock().then(() => ws.refreshSecurity())
+      void window.shopilot?.security?.lock().then(() => ws.refreshSecurity())
     }
   }
+}
+window.addEventListener('keydown', onGlobalKeydown)
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
+  // P1-10：连同事件订阅一起卸载，避免 HMR/重挂载后每个事件被处理多遍
+  ws.unsubscribeEvents()
 })
 </script>
 

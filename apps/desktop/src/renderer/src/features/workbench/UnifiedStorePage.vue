@@ -64,6 +64,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
+import { storeStatusLabel } from '@shared/enums/store-status'
 import addIcon from '../../assets/generated/ui-icons/add.png'
 import searchIcon from '../../assets/generated/ui-icons/search.png'
 import closeIcon from '../../assets/generated/ui-icons/close.png'
@@ -85,7 +86,9 @@ const view = ref<'active' | 'trash'>('active')
 const createOpen = ref(false)
 const creating = ref(false)
 const createError = ref('')
-const platformDefs = (window.shopilot.platforms || []) as Array<{ name: string; adminUrl: string }>
+// P1-7（2026-10-15 审查）：无 preload（纯渲染调试模式）时不再整页 TypeError 白屏，
+// 平台目录退化为空数组，页面以禁用态渲染。
+const platformDefs = (window.shopilot?.platforms || []) as Array<{ name: string; adminUrl: string }>
 const form = ref({ name: '', platform: platformDefs[0]?.name || '拼多多', adminUrl: platformDefs[0]?.adminUrl || '', tags: '', notes: '', licenseName: '', licenseNo: '' })
 const platforms = computed(() => [...new Set(ws.stores.map(store => store.platform))].sort((a, b) => a.localeCompare(b, 'zh-CN')))
 const filteredStores = computed(() => ws.stores.filter(store => {
@@ -95,7 +98,7 @@ const filteredStores = computed(() => ws.stores.filter(store => {
 }))
 
 function shortUrl(value: string) { try { return new URL(value).host } catch { return value || '未配置后台地址' } }
-function statusLabel(value: string) { return ({ online: '在线', launching: '启动中', needs_login: '登录失效', proxy_error: '代理异常', offline: '离线', incomplete: '离线', archived: '已归档' } as Record<string, string>)[value] || '未知状态' }
+function statusLabel(value: string) { return storeStatusLabel(value) }
 function statusClass(value: string) { return value === 'online' ? 'online' : ['needs_login', 'proxy_error'].includes(value) ? 'warning' : 'offline' }
 function openCreate() { createError.value = ''; createOpen.value = true }
 function refresh() { state.value = 'loading'; void ws.refreshStores().then(() => { state.value = 'ready' }).catch(error => { state.value = 'error'; errorMessage.value = error instanceof Error ? error.message : String(error) }) }

@@ -13,22 +13,22 @@ import * as BackupManager from '../services/backup-manager'
 import * as ShopSessionManager from '../browser/shop-session-manager'
 import { emitToRenderer } from '../browser/window-manager'
 import { randomUUID } from 'crypto'
+import { ipcOk as ok, ipcFail as err, ipcErrFromUnknown } from './envelope'
 
 function rid(): string { return randomUUID() }
-function ok<T>(data: T, requestId: string): IPCResult<T> { return { ok: true, data, requestId } }
-function err(code: string, message: string, requestId: string): IPCResult { return { ok: false, error: { code, message }, requestId } }
 
 function proxyError(errObj: any, requestId: string): IPCResult {
   const msg = String(errObj?.message || errObj)
   if (msg.includes('PROXY_INVALID')) return err(ERROR_CODES.PROXY_INVALID.code, ERROR_CODES.PROXY_INVALID.message, requestId)
-  return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+  // 兜底走共享脱敏（P1-2）：代理探测异常常带底层网络错误串
+  return ipcErrFromUnknown(errObj, requestId, { fallback: '代理操作失败' })
 }
 
 function sessionStatusError(errObj: any, requestId: string): IPCResult {
   const msg = String(errObj?.message || errObj)
   if (msg.includes('STORE_NOT_FOUND')) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
   if (msg.includes('INVALID_ARGUMENT')) return err(ERROR_CODES.INVALID_ARGUMENT.code, ERROR_CODES.INVALID_ARGUMENT.message, requestId)
-  return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+  return ipcErrFromUnknown(errObj, requestId, { fallback: '会话状态查询失败' })
 }
 
 function backupError(errObj: any, requestId: string): IPCResult {
@@ -36,7 +36,8 @@ function backupError(errObj: any, requestId: string): IPCResult {
   if (msg.includes('BACKUP_CHECKSUM_FAILED')) return err(ERROR_CODES.BACKUP_CHECKSUM_FAILED.code, ERROR_CODES.BACKUP_CHECKSUM_FAILED.message, requestId)
   if (msg.includes('BACKUP_NOT_FOUND')) return err(ERROR_CODES.BACKUP_CHECKSUM_FAILED.code, '备份不存在或文件缺失', requestId)
   if (msg.includes('BACKUP_VERSION_TOO_NEW')) return err(ERROR_CODES.BACKUP_CHECKSUM_FAILED.code, '备份来自更高版本，请先升级应用', requestId)
-  return err(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+  // 备份读写异常常带绝对路径（文件不存在/校验失败），文案统一脱敏
+  return ipcErrFromUnknown(errObj, requestId, { fallback: '备份操作失败' })
 }
 
 const handle = familyHandle('代理与备份')

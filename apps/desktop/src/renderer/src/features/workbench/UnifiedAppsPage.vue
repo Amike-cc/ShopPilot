@@ -349,6 +349,7 @@ export const readbackCache: { current: null | { itemId: string; suggestions: unk
 import { computed, onMounted, ref, watch } from 'vue'
 import { hasProductProfile } from '@shared/constants/product'
 import { productStatusLabel } from '@shared/product-rules'
+import { storeStatusLabel } from '@shared/enums/store-status'
 import type { PlatformProductStatus } from '@shared/contracts/platform-product'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import { useWorkspaceStore } from '../../stores/workspace'
@@ -405,7 +406,7 @@ const appLinks: Array<{ key: string; label: string; description: string; icon: s
   { key: 'tasks', label: 'AI 任务中心', description: '管理 TaskRunner 任务、运行、确认和进度。', icon: tasksAppIcon, tone: 'teal', page: 'tasks' },
   { key: 'settings', label: '设置中心', description: '平台地址、AI、Agent、技能、插件和软件更新。', icon: settingsAppIcon, tone: 'violet', page: 'settings' }
 ]
-function statusLabel(status: string) { return ({ online: '在线', launching: '启动中', needs_login: '登录失效', proxy_error: '代理异常', offline: '离线', incomplete: '离线', archived: '已归档' } as Record<string, string>)[status] || '未知状态' }
+function statusLabel(status: string) { return storeStatusLabel(status) }
 function statusClass(status: string) { return status === 'online' ? 'online' : ['needs_login', 'proxy_error'].includes(status) ? 'warning' : 'offline' }
 
 // ---------------------------------------------------------------- 商品管理（M1）
@@ -596,6 +597,8 @@ function yuanToMinor(text: string): number | null {
 
 async function loadLocalProducts(): Promise<void> {
   if (props.mode !== 'products') return
+  // P1-7（2026-10-15 审查）：无 preload（纯渲染调试模式）时跳过加载而不是抛错
+  if (!window.shopilot) return
   const result = await window.shopilot.products.library.list({ limit: 100 })
   if (!result.ok) { ws.toast('读取本地商品失败：' + result.error.message, 'error'); return }
   const data = result.data as { rows?: LocalRow[]; total?: number } | undefined

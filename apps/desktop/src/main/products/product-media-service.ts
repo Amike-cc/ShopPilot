@@ -16,6 +16,7 @@
 
 import { createHash } from 'crypto'
 import { mkdir, writeFile, access, readdir, stat, unlink } from 'fs/promises'
+import type { Dirent } from 'fs'
 import { join, dirname, relative, sep } from 'path'
 import type { Session } from 'electron'
 import {
@@ -315,7 +316,8 @@ async function walkMediaFiles(root: string): Promise<LocalMediaFile[]> {
   const out: LocalMediaFile[] = []
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (depth > 4) return                       // 目录结构是 `<2位>/<sha256>.<ext>`，不需要更深
-    let entries: Awaited<ReturnType<typeof readdir>>
+    // @types/node 22.20 起 Dirent 带泛型参数：字符串路径返回 Dirent<string>[]，显式标注避免默认泛型不匹配
+    let entries: Dirent<string>[]
     try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
     for (const entry of entries) {
       const absolute = join(dir, entry.name)

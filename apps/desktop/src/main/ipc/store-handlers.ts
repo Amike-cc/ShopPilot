@@ -19,30 +19,13 @@ import * as StoreManager from '../stores/store-manager'
 import * as TaskStore from '../tasks/task-store'
 import * as Runner from '../tasks/task-runner'
 import { randomUUID } from 'crypto'
+import { ipcOk as success, ipcFail as error, ipcErrFromUnknown } from './envelope'
 
 /**
  * 生成请求 ID
  */
 function generateRequestId(): string {
   return randomUUID()
-}
-
-/**
- * 包装成功响应
- */
-function success<T>(data: T, requestId: string): IPCResult<T> {
-  return { ok: true, data, requestId }
-}
-
-/**
- * 包装错误响应
- */
-function error(code: string, message: string, requestId: string, details?: any): IPCResult {
-  return {
-    ok: false,
-    error: { code, message, details },
-    requestId
-  }
 }
 
 function invalidInput(requestId: string, issues: Array<{ path: PropertyKey[]; message: string }>): IPCResult {
@@ -63,7 +46,8 @@ function runtimeCloseError(err: any, requestId: string): IPCResult {
   if (msg.includes('PROFILE_IN_USE')) {
     return error(ERROR_CODES.PROFILE_IN_USE.code, msg.replace(/^PROFILE_IN_USE:\s*/, ''), requestId)
   }
-  return error(ERROR_CODES.INTERNAL_ERROR.code, msg, requestId)
+  // 兜底走共享脱敏（P1-2）：浏览器运行时异常可能带内部路径/进程错误串
+  return ipcErrFromUnknown(err, requestId, { fallback: '店铺操作失败' })
 }
 
 /**

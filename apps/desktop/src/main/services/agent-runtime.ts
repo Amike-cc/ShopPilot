@@ -494,6 +494,13 @@ export function listModelProfiles(): ModelProfile[] {
   return (getDatabase().prepare('SELECT * FROM agent_model_profiles ORDER BY updated_at DESC').all() as any[]).map(mapProfile)
 }
 
+/**
+ * 模型 Profile 的管理接口（分页 / 保存 / 删除 / 测试）。
+ * 2026-10-15：「Agent 模型」设置页停用，AGENT_MODEL_* 四个管理通道随其它 Agent 域通道一起拒答
+ * （见 agent-domain-handlers 的 DISABLED 列表）——对话只用 root 那条与「AI 配置」自动同步的
+ * Profile（syncMainAgentProfileFromAiConfig）。这些实现保留（含预算 / 能力校验），供未来
+ * "备用模型"类功能复用或复活页签。
+ */
 export function listModelProfilesPage(raw: unknown = {}): { items: ModelProfile[]; nextCursor: string | null; hasMore: boolean } {
   const query = modelProfileListQuerySchema.parse(raw)
   const params: unknown[] = []
@@ -1113,6 +1120,9 @@ async function executeModelJob(row: any, actorAgentId: string): Promise<any> {
  * Resolve one configured fallback in Main.  The caller still owns the model
  * request and must pass the frozen Job snapshot; this helper never retries a
  * request after a page side effect or for a high-risk Job.
+ *
+ * @deprecated 退役（2026-10-15 审查 P3 标注）：chat-only 收口后全仓零调用。
+ * 保留实现是刻意的"复活路径"（备用模型路由恢复时直接可用）；新代码请勿引用。
  */
 export function resolveFallbackProfile(profileId: string, errorCode: string, sideEffectStarted = false, highRisk = false): ModelProfile | null {
   if (!canUseFallback(errorCode, sideEffectStarted, highRisk)) return null
@@ -1280,15 +1290,18 @@ export function createAgentJob(raw: AgentJobCreate, opts: { moneyConfirmationSat
   } : null
   const id = `ajob_${randomUUID()}`
   const t = now()
-  let browserTaskId: string | null = null
-  if (input.browserTask) {
-    if (!input.storeId) throw new AgentRuntimeError('AGENT_INVALID_INPUT', '浏览器 Job 必须指定 storeId')
-    const safeBrowserTask = sanitizeJobValue(input.browserTask) as NonNullable<AgentJobCreate['browserTask']>
-    const task = TaskStore.createTask({ name: safeBrowserTask.name, storeScope: safeBrowserTask.storeScope || input.storeId, steps: safeBrowserTask.steps as any } as any)
-    browserTaskId = task.id
-  }
   const db = getDatabase()
+  let browserTaskId: string | null = null
+  // P2-8（2026-10-15 审查）：原先"先建 browser task（其自身事务已提交）→ 再开 job 事务"，
+  // 第二步失败（INSERT 异常 / 并发幂等键冲突）会留下一张没有任何 Job 引用的孤儿 task。
+  // 现在两次写合并进同一个事务：任一失败整体回滚（better-sqlite3 事务嵌套走 SAVEPOINT）。
   db.transaction(() => {
+    if (input.browserTask) {
+      if (!input.storeId) throw new AgentRuntimeError('AGENT_INVALID_INPUT', '浏览器 Job 必须指定 storeId')
+      const safeBrowserTask = sanitizeJobValue(input.browserTask) as NonNullable<AgentJobCreate['browserTask']>
+      const task = TaskStore.createTask({ name: safeBrowserTask.name, storeScope: safeBrowserTask.storeScope || input.storeId, steps: safeBrowserTask.steps as any } as any)
+      browserTaskId = task.id
+    }
     db.prepare(`INSERT INTO agent_jobs(id,parent_job_id,created_by_agent_id,assigned_agent_id,browser_task_id,browser_run_id,store_id,goal,input_summary_json,permission_snapshot_json,store_scope_snapshot_json,memory_scope_snapshot_json,model_snapshot_json,payload_hash,status,priority,requires_confirmation,confirmation_id,confirmation_approved,confirmation_expires_at,lease_owner,lease_expires_at,idempotency_key,attempt_count,version,dependencies_json,risk,side_effect_started,created_at,started_at,completed_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       id, input.parentJobId, input.createdByAgentId, input.assignedAgentId, browserTaskId, null, input.storeId, safeGoal, json(safeInputSummary), json(frozenSnapshot), json(assigned.storeScope), json(assigned.memoryScope), modelSnapshot ? json(modelSnapshot) : null, hash, 'queued', input.priority, input.requiresConfirmation ? 1 : 0, input.requiresConfirmation ? `confirm_${randomUUID()}` : null, 0, null, null, null, input.idempotencyKey, 0, 0, json(dependencyIds), risk, 0, t, null, null, t
     )
@@ -1571,7 +1584,11 @@ export function markRecoverableJobsOnStartup(): number {
 let agentLeaseTimer: NodeJS.Timeout | null = null
 let lastMemoryMaintenanceAt = 0
 
-/** Chat-only mode: queued Agent Jobs are never started by a background scheduler. */
+/**
+ * Chat-only mode: queued Agent Jobs are never started by a background scheduler.
+ * @deprecated 空桩（2026-10-15 审查 P3 标注）：Job 队列已下线，这里刻意保持 no-op 以稳住
+ * 调用点结构；恢复 Job 调度时在此接入真实实现——读代码时不要误以为它有排空能力。
+ */
 function drainDelegatedQueue(): void {}
 
 function sweepAgentJobs(): void {
