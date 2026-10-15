@@ -102,7 +102,21 @@ async function api(url, token, opts = {}) {
   const repo = await api(base, token)
   console.log(`repo ${repo.full_name} private=${repo.private}`)
 
-  const notes = fs.readFileSync(path.join(ROOT, 'docs', 'RELEASE_NOTES.md'), 'utf8')
+  /**
+   * Release 正文只取「本版」章节（文件顶部到第一条 --- 分隔线）。
+   *
+   * 为什么（2026-10-15，发 0.4.65 实测）：GitHub Release body 上限 125000 字符，而本文件是
+   * **全量**变更历史、只增不减——0.4.65 时全量已到 125155 字符，create release 直接
+   * 422 Validation Failed（field: body）、发布中断（GitHub 还先把 tag 建了出来，留下
+   * "tag 在、release 不在"的中间态）。取本版章节后正文只有几 KB，不会再随版本累积；
+   * 取不到分隔线时退回全文，并做 120000 字符兜底截断——宁可截断，不让发布挂在体量上。
+   */
+  const rawNotes = fs.readFileSync(path.join(ROOT, 'docs', 'RELEASE_NOTES.md'), 'utf8')
+  const sectionEnd = rawNotes.indexOf('\n---\n')
+  let notes = (sectionEnd > 0 ? rawNotes.slice(0, sectionEnd) : rawNotes).trimEnd()
+  if (notes.length > 120000) {
+    notes = `${notes.slice(0, 120000)}\n\n（正文超长已截断，完整说明见仓库 docs/RELEASE_NOTES.md）`
+  }
   // 构建标签以 release.json 为准（release-manifest.js 按 CSC_LINK/签名配置算出来的），
   // 这里不再写死 INTERNAL_BUILD —— 一旦真的配上签名，Release 标题还会继续显示 INTERNAL_BUILD，
   // 误导用户与运维（2026-09-28 审查确认的三处硬编码之一）。
