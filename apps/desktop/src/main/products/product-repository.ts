@@ -65,9 +65,31 @@ export interface ProductLinkQuery {
   platform?: string
   /** 只看"平台上发现、本地未归并"的 */
   onlyOrphan?: boolean
+  /** v4 §4.2：平台状态筛选 */
+  platformStatus?: string
   keyword?: string
+  /** v4 §4.2：排序白名单（未识别值回退默认，不拼接用户输入） */
+  sort?: 'collected' | 'platformUpdated' | 'title' | 'price'
+  order?: 'asc' | 'desc'
   limit?: number
   offset?: number
+}
+
+/** 排序白名单：字段名 → 固定 SQL 表达式。**绝不把用户输入拼进 ORDER BY**。 */
+const LINK_SORT_SQL: Record<string, string> = {
+  collected: 'l.collected_at',
+  platformUpdated: 'l.platform_updated_at',
+  title: 'l.platform_title',
+  price: 'l.platform_price_minor'
+}
+
+/** 本地商品的排序白名单（与 LINK_SORT_SQL 同一纪律）。 */
+const PRODUCT_SORT_SQL: Record<string, string> = {
+  updated: 'p.updated_at',
+  created: 'p.created_at',
+  title: 'p.title',
+  priceMin: '(SELECT MIN(v.price_minor) FROM product_variants v WHERE v.product_id = p.id AND v.price_minor IS NOT NULL)',
+  stockTotal: '(SELECT SUM(v.stock) FROM product_variants v WHERE v.product_id = p.id)'
 }
 
 function nullableNumber(value: unknown): number | null {
@@ -300,14 +322,21 @@ export class ProductRepository {
     const params: unknown[] = []
     if (query.storeId) { where.push('l.store_id = ?'); params.push(query.storeId) }
     if (query.platform) { where.push('l.platform = ?'); params.push(query.platform) }
+    if (query.platformStatus) { where.push('l.platform_status = ?'); params.push(query.platformStatus) }
     if (query.onlyOrphan) where.push('l.product_id IS NULL')
     if (query.keyword) {
-      where.push('(l.platform_title LIKE ? OR p.title LIKE ?)')
-      params.push(`%${query.keyword}%`, `%${query.keyword}%`)
+      // 平台商品搜索：平台标题子串 + 平台商品 ID 前缀（ID 是数字串，前缀即可命中）+ 本地归属标题
+      where.push('(l.platform_title LIKE ? OR l.platform_product_id LIKE ? OR p.title LIKE ?)')
+      params.push(`%${query.keyword}%`, `${query.keyword}%`, `%${query.keyword}%`)
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
     const limit = Math.min(Math.max(Number(query.limit ?? 50), 1), 200)
     const offset = Math.max(Number(query.offset ?? 0), 0)
+
+    // 排序：白名单映射 + NULL 排最后（价格/更新时间可能取不到，不能把"未取到"排到最前）
+    const sortCol = LINK_SORT_SQL[query.sort ?? 'collected'] ?? LINK_SORT_SQL.collected
+    const dir = query.order === 'asc' ? 'ASC' : 'DESC'
+    const orderSql = `${sortCol} IS NULL, ${sortCol} ${dir}, l.collected_at DESC`
 
     const rows = this.db.prepare(`
       SELECT l.id AS link_id, l.platform, l.store_id, l.platform_product_id, l.platform_title,
@@ -317,7 +346,7 @@ export class ProductRepository {
       LEFT JOIN products p ON p.id = l.product_id
       LEFT JOIN stores s ON s.id = l.store_id
       ${whereSql}
-      ORDER BY l.collected_at DESC, l.platform_title ASC
+      ORDER BY ${orderSql}
       LIMIT ? OFFSET ?
     `).all(...params, limit, offset) as Array<Record<string, unknown>>
 
@@ -413,11 +442,12 @@ export class ProductRepository {
   private replaceVariants(productId: string, draft: LocalProductDraft, now: number): void {
     this.db.prepare('DELETE FROM product_variants WHERE product_id = ?').run(productId)
     const insert = this.db.prepare(`
-      INSERT INTO product_variants (id, product_id, spec_json, sku_code, price_minor, stock, sort_order, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO product_variants (id, product_id, spec_json, sku_code, barcode, price_minor, stock, sort_order, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     draft.variants.forEach((variant, index) => {
       insert.run(randomUUID(), productId, JSON.stringify(variant.spec ?? []), variant.skuCode ?? null,
+        (variant as { barcode?: string | null }).barcode ?? null,
         variant.priceMinor ?? null, variant.stock ?? null, index, now, now)
     })
   }
@@ -442,7 +472,10 @@ export class ProductRepository {
     draft.media.forEach((item, index) => {
       const state = item.state ?? 'pending'
       stateCounts[state] = (stateCounts[state] ?? 0) + 1
-      insert.run(randomUUID(), productId, item.role, 'platform', item.remoteUrl ?? null,
+      // origin：有远端 URL 的是平台图；编辑器"添加本地图片"进来的没有 remoteUrl，
+      // 必须记 'local'（此前硬编码 'platform'，孤儿判定与审计都会说谎）。
+      const origin = item.remoteUrl ? 'platform' : 'local'
+      insert.run(randomUUID(), productId, item.role, origin, item.remoteUrl ?? null,
         (item as { localPath?: string | null }).localPath ?? null,
         (item as { sha256?: string | null }).sha256 ?? null,
         state, (item as { failReason?: string | null }).failReason ?? null,
@@ -486,7 +519,8 @@ export class ProductRepository {
           spec: parseJsonArray<{ name: string; value: string }>(variant.spec_json),
           priceMinor: nullableNumber(variant.price_minor),
           stock: nullableNumber(variant.stock),
-          skuCode: nullableString(variant.sku_code)
+          skuCode: nullableString(variant.sku_code),
+          barcode: nullableString(variant.barcode)
         })),
         media: media.map(item => ({
           role: String(item.role) as 'cover' | 'gallery' | 'detail' | 'sku',
@@ -501,20 +535,71 @@ export class ProductRepository {
   }
 
   /** 本地商品列表（界面左栏）。 */
-  listProducts(query: { keyword?: string; limit?: number; offset?: number } = {}): { rows: Array<{ id: string; title: string; status: string; updatedAt: number; variantCount: number; coverState: string | null; linkCount: number }>; total: number } {
+  /**
+   * 本地商品列表（v4 §4.1/§4.2：筛选 / 排序白名单 / 聚合列）。
+   *
+   * 聚合列（价格区间 / 库存合计 / 挂载平台 / 封面本地路径）用相关子查询现算——
+   * **不做冗余缓存列**：多一份派生数据就多一处漂移风险（与 store-license 的"宁可少填不可填错"同理）；
+   * 万级行内子查询开销可控（§9.1 的 P95 预算），超过触发条件再评估反范式。
+   */
+  listProducts(query: {
+    keyword?: string
+    status?: string[]
+    linked?: 'any' | 'linked' | 'unlinked'
+    platform?: string
+    sort?: 'updated' | 'created' | 'title' | 'priceMin' | 'stockTotal'
+    order?: 'asc' | 'desc'
+    limit?: number
+    offset?: number
+  } = {}): {
+    rows: Array<{
+      id: string; title: string; status: string; updatedAt: number; createdAt: number
+      variantCount: number; priceMin: number | null; priceMax: number | null; stockTotal: number | null
+      coverState: string | null; coverLocalPath: string | null; linkCount: number; platforms: string[]
+    }>
+    total: number
+  } {
     const where: string[] = ['p.deleted_at IS NULL']
     const params: unknown[] = []
-    if (query.keyword) { where.push('p.title LIKE ?'); params.push(`%${query.keyword}%`) }
+    if (query.keyword) {
+      // 多字段搜索（v4 §4.5）：标题子串 + SKU 码 / 条码子串。
+      // 不引入 FTS 的理由见设计文档：中文 2 字查询常见，SQLite 内置分词器对 CJK 子串不友好。
+      where.push(`(p.title LIKE ? OR EXISTS (
+        SELECT 1 FROM product_variants v WHERE v.product_id = p.id AND (v.sku_code LIKE ? OR v.barcode LIKE ?)
+      ))`)
+      params.push(`%${query.keyword}%`, `%${query.keyword}%`, `%${query.keyword}%`)
+    }
+    if (query.status?.length) {
+      where.push(`p.status IN (${query.status.map(() => '?').join(',')})`)
+      params.push(...query.status)
+    }
+    if (query.linked === 'linked') where.push('EXISTS (SELECT 1 FROM product_platform_links l WHERE l.product_id = p.id)')
+    if (query.linked === 'unlinked') where.push('NOT EXISTS (SELECT 1 FROM product_platform_links l WHERE l.product_id = p.id)')
+    if (query.platform) {
+      where.push('EXISTS (SELECT 1 FROM product_platform_links l WHERE l.product_id = p.id AND l.platform = ?)')
+      params.push(query.platform)
+    }
     const whereSql = `WHERE ${where.join(' AND ')}`
     const limit = Math.min(Math.max(Number(query.limit ?? 50), 1), 200)
     const offset = Math.max(Number(query.offset ?? 0), 0)
+
+    // 排序：白名单映射 + NULL 排最后（价格/库存可能未填，不能压在最前面）
+    const sortCol = PRODUCT_SORT_SQL[query.sort ?? 'updated'] ?? PRODUCT_SORT_SQL.updated
+    const dir = query.order === 'asc' ? 'ASC' : 'DESC'
+    const orderSql = `${sortCol} IS NULL, ${sortCol} ${dir}, p.updated_at DESC`
+
     const rows = this.db.prepare(`
-      SELECT p.id, p.title, p.status, p.updated_at,
+      SELECT p.id, p.title, p.status, p.updated_at, p.created_at,
              (SELECT COUNT(*) FROM product_variants v WHERE v.product_id = p.id) AS variant_count,
+             (SELECT MIN(v.price_minor) FROM product_variants v WHERE v.product_id = p.id AND v.price_minor IS NOT NULL) AS price_min,
+             (SELECT MAX(v.price_minor) FROM product_variants v WHERE v.product_id = p.id AND v.price_minor IS NOT NULL) AS price_max,
+             (SELECT SUM(v.stock) FROM product_variants v WHERE v.product_id = p.id AND v.stock IS NOT NULL) AS stock_total,
              (SELECT state FROM product_media m WHERE m.product_id = p.id AND m.role = 'cover' ORDER BY m.sort_order LIMIT 1) AS cover_state,
-             (SELECT COUNT(*) FROM product_platform_links l WHERE l.product_id = p.id) AS link_count
+             (SELECT local_path FROM product_media m WHERE m.product_id = p.id AND m.role = 'cover' AND m.state = 'localized' AND m.local_path IS NOT NULL ORDER BY m.sort_order LIMIT 1) AS cover_local_path,
+             (SELECT COUNT(*) FROM product_platform_links l WHERE l.product_id = p.id) AS link_count,
+             (SELECT GROUP_CONCAT(DISTINCT l.platform) FROM product_platform_links l WHERE l.product_id = p.id) AS platforms
       FROM products p ${whereSql}
-      ORDER BY p.updated_at DESC LIMIT ? OFFSET ?
+      ORDER BY ${orderSql} LIMIT ? OFFSET ?
     `).all(...params, limit, offset) as Array<Record<string, unknown>>
     const totalRow = this.db.prepare(`SELECT COUNT(*) AS c FROM products p ${whereSql}`).get(...params) as { c: number } | undefined
     return {
@@ -523,12 +608,155 @@ export class ProductRepository {
         title: String(row.title ?? ''),
         status: String(row.status),
         updatedAt: Number(row.updated_at ?? 0),
+        createdAt: Number(row.created_at ?? 0),
         variantCount: Number(row.variant_count ?? 0),
+        priceMin: nullableNumber(row.price_min),
+        priceMax: nullableNumber(row.price_max),
+        stockTotal: nullableNumber(row.stock_total),
         coverState: nullableString(row.cover_state),
-        linkCount: Number(row.link_count ?? 0)
+        coverLocalPath: nullableString(row.cover_local_path),
+        linkCount: Number(row.link_count ?? 0),
+        platforms: String(row.platforms ?? '').split(',').filter(Boolean)
       })),
       total: Number(totalRow?.c ?? 0)
     }
+  }
+
+  /** 回收站列表（v4 §3.4）：软删商品 + 变体数 + 发布记录数（决定能否彻底删除）。 */
+  listTrash(query: { keyword?: string; limit?: number; offset?: number } = {}): {
+    rows: Array<{ id: string; title: string; status: string; deletedAt: number; variantCount: number; publishJobCount: number }>
+    total: number
+  } {
+    const where: string[] = ['p.deleted_at IS NOT NULL']
+    const params: unknown[] = []
+    if (query.keyword) { where.push('p.title LIKE ?'); params.push(`%${query.keyword}%`) }
+    const whereSql = `WHERE ${where.join(' AND ')}`
+    const limit = Math.min(Math.max(Number(query.limit ?? 50), 1), 200)
+    const offset = Math.max(Number(query.offset ?? 0), 0)
+    const rows = this.db.prepare(`
+      SELECT p.id, p.title, p.status, p.deleted_at, p.updated_at,
+             (SELECT COUNT(*) FROM product_variants v WHERE v.product_id = p.id) AS variant_count,
+             (SELECT COUNT(*) FROM product_publish_jobs j WHERE j.product_id = p.id) AS publish_job_count
+      FROM products p ${whereSql}
+      ORDER BY p.deleted_at DESC LIMIT ? OFFSET ?
+    `).all(...params, limit, offset) as Array<Record<string, unknown>>
+    const totalRow = this.db.prepare(`SELECT COUNT(*) AS c FROM products p ${whereSql}`).get(...params) as { c: number } | undefined
+    return {
+      rows: rows.map(row => ({
+        id: String(row.id),
+        title: String(row.title ?? ''),
+        status: String(row.status),
+        deletedAt: Number(row.deleted_at ?? 0),
+        variantCount: Number(row.variant_count ?? 0),
+        publishJobCount: Number(row.publish_job_count ?? 0)
+      })),
+      total: Number(totalRow?.c ?? 0)
+    }
+  }
+
+  /** 恢复软删商品（v4 §3.4）。**不自动恢复平台归并**（软删时已解绑，D2：归并永远人工确认）。 */
+  restoreProducts(productIds: readonly string[]): number {
+    const stmt = this.db.prepare('UPDATE products SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL')
+    const run = this.db.transaction(() => {
+      let restored = 0
+      for (const id of productIds) restored += Number(stmt.run(id).changes ?? 0)
+      return restored
+    })
+    return run()
+  }
+
+  /**
+   * 复制本地商品（v4 §3.1 R2）。
+   *
+   * 媒体文件**不复制**：行按 (product_id, sha256) 各留一条、local_path/sha256/bytes 原样引用
+   * 同一份磁盘文件（迁移 v32 之后的每商品唯一索引允许这样做）——这就是 DoD 里的
+   * "复制不重复下载媒体文件（sha256 复用）"。规格与文本列全量复制；发布记录（jobs）绝不复制。
+   */
+  duplicateProduct(sourceId: string, now = Date.now()): string | null {
+    const source = this.db.prepare('SELECT * FROM products WHERE id = ? AND deleted_at IS NULL').get(sourceId) as Record<string, unknown> | undefined
+    if (!source) return null
+    const newId = randomUUID()
+    const run = this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO products (id, title, subtitle, description, brand, local_category, tags_json,
+                              status, draft_hash, source_link_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, NULL, ?, ?)
+      `).run(
+        newId,
+        `${String(source.title ?? '')}（副本）`,
+        source.subtitle ?? null, source.description ?? null, source.brand ?? null,
+        source.local_category ?? null, source.tags_json ?? null,
+        // draft_hash 是 NOT NULL：先放源商品的指纹占位，服务层复制完立刻按新内容重算覆盖
+        String(source.draft_hash ?? ''),
+        now, now
+      )
+      // 规格：逐行复制（id 换新；barcode 表列在 draft schema 之外，一并带走）。
+      // 注意不能用 INSERT...SELECT ? 常量当 id——多行时每行主键都一样必撞 UNIQUE（2026-10-16 真机实录）。
+      const variantRows = this.db.prepare(
+        'SELECT spec_json, sku_code, barcode, price_minor, stock, sort_order FROM product_variants WHERE product_id = ? ORDER BY sort_order'
+      ).all(sourceId) as Array<Record<string, unknown>>
+      const insertVariant = this.db.prepare(`
+        INSERT INTO product_variants (id, product_id, spec_json, sku_code, barcode, price_minor, stock, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      for (const row of variantRows) {
+        insertVariant.run(randomUUID(), newId, row.spec_json ?? null, row.sku_code ?? null, row.barcode ?? null,
+          row.price_minor ?? null, row.stock ?? null, Number(row.sort_order ?? 0), now, now)
+      }
+      // 媒体：逐行复制——local_path/sha256/bytes/width/height 指向同一份文件（sha256 复用）；状态与排序原样
+      const mediaRows = this.db.prepare(
+        'SELECT variant_id, role, origin, remote_url, local_path, sha256, bytes, width, height, state, fail_reason, sort_order FROM product_media WHERE product_id = ? ORDER BY sort_order'
+      ).all(sourceId) as Array<Record<string, unknown>>
+      const insertMedia = this.db.prepare(`
+        INSERT INTO product_media (id, product_id, variant_id, role, origin, remote_url, local_path, sha256, bytes, width, height, state, fail_reason, sort_order, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      for (const row of mediaRows) {
+        insertMedia.run(randomUUID(), newId, row.variant_id ?? null, String(row.role), String(row.origin ?? 'platform'),
+          row.remote_url ?? null, row.local_path ?? null, row.sha256 ?? null,
+          row.bytes == null ? null : Number(row.bytes), row.width == null ? null : Number(row.width), row.height == null ? null : Number(row.height),
+          String(row.state ?? 'pending'), row.fail_reason ?? null, Number(row.sort_order ?? 0), now)
+      }
+    })
+    run()
+    return newId
+  }
+
+  /** 彻底删除（v4 §3.4）：仅限无发布记录的商品；级联删规格/媒体行；平台链接回到「未归并」。**绝不删磁盘文件**（孤儿清理负责）。 */
+  purgeProduct(productId: string): { variants: number; media: number } {
+    const publishJobs = this.db.prepare('SELECT COUNT(*) AS c FROM product_publish_jobs WHERE product_id = ?').get(productId) as { c: number }
+    if (Number(publishJobs?.c ?? 0) > 0) throw new Error('PRODUCT_HAS_PUBLISH_RECORDS')
+    const run = this.db.transaction(() => {
+      this.db.prepare('UPDATE product_platform_links SET product_id = NULL WHERE product_id = ?').run(productId)
+      const media = this.db.prepare('DELETE FROM product_media WHERE product_id = ?').run(productId).changes ?? 0
+      const variants = this.db.prepare('DELETE FROM product_variants WHERE product_id = ?').run(productId).changes ?? 0
+      this.db.prepare('DELETE FROM products WHERE id = ?').run(productId)
+      return { variants: Number(variants), media: Number(media) }
+    })
+    return run()
+  }
+
+  /** 单点写状态（v4 §4.4 重算协议的落库端；只写展示状态，不动 updated_at 以免干扰排序）。 */
+  setProductStatus(productId: string, status: string): void {
+    this.db.prepare('UPDATE products SET status = ? WHERE id = ? AND deleted_at IS NULL').run(status, productId)
+  }
+
+  /** 商品挂载的平台列表（状态重算时选平台规则用）。 */
+  platformsForProduct(productId: string): string[] {
+    const rows = this.db.prepare('SELECT DISTINCT platform FROM product_platform_links WHERE product_id = ?')
+      .all(productId) as Array<{ platform: string }>
+    return rows.map(row => String(row.platform))
+  }
+
+  /** 公共事务包装（R3 批量导入单事务落库用；fn 里所有语句要么全成要么全不做）。 */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)()
+  }
+
+  /** 状态回填的输入：全部未删商品的 id + 当前状态（升级后一次性重算用）。 */
+  listStatusCandidates(): Array<{ id: string; status: string }> {
+    const rows = this.db.prepare('SELECT id, status FROM products WHERE deleted_at IS NULL').all() as Array<Record<string, unknown>>
+    return rows.map(row => ({ id: String(row.id), status: String(row.status) }))
   }
 
   softDeleteProduct(productId: string, now = Date.now()): void {

@@ -1628,6 +1628,24 @@ export const migrations: Migration[] = [
       `)
     },
     down: (db) => db.exec('DROP INDEX IF EXISTS idx_customer_message_checks_status_time; DROP INDEX IF EXISTS idx_customer_message_checks_store_time; DROP TABLE IF EXISTS customer_message_checks;')
+  },
+  {
+    version: 32,
+    name: 'product_media_sha_per_product',
+    up: (db) => {
+      // v2 重设计（2026-10-15 R2）抓到的结构 bug：原索引把 sha256 做**全局**唯一，
+      // 与表注释"10 个商品共用一张主图 → 1 个文件、10 行记录"直接矛盾——第二个商品
+      // 保存同图时 replaceMedia 的 INSERT OR IGNORE 会静默丢行，且 getProduct 的
+      // draft.media 从行重建 → 图整个消失。改为 (product_id, sha256) 每商品唯一：
+      // 文件仍按 sha256 只存一份（复用），行按商品各留一条。
+      // 旧索引更严（全局唯一），存量数据必然满足新索引，直接重建即可。
+      db.exec(`
+        DROP INDEX IF EXISTS idx_media_sha;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_media_sha
+          ON product_media(product_id, sha256) WHERE sha256 IS NOT NULL;
+      `)
+    },
+    down: (db) => db.exec('DROP INDEX IF EXISTS idx_media_sha; CREATE UNIQUE INDEX IF NOT EXISTS idx_media_sha ON product_media(sha256) WHERE sha256 IS NOT NULL;')
   }
 ]
 

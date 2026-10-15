@@ -21,6 +21,8 @@ export interface ProductDraftVariant {
   priceMinor: number | null
   stock: number | null
   skuCode?: string | null
+  /** 条码（表列已有；不进 draftHash——它是补充标识，不影响发布内容指纹） */
+  barcode?: string | null
 }
 
 export interface ProductDraftMedia {
@@ -139,6 +141,25 @@ export function productDraftIssues(draft: LocalProductDraft, target: ProductDraf
 /** 有没有阻断项（保存/发布前的门禁）。 */
 export function hasBlockingIssue(issues: readonly ProductDraftIssue[]): boolean {
   return issues.some(issue => issue.level === 'blocker')
+}
+
+/**
+ * 商品展示状态（v4 重设计 §4.4）：**由草稿校验推导，不再人手维护**。
+ *
+ * 2026-10-15 审查实测：`products.status` 此前是死字段——INSERT 写死 'draft'、
+ * 全代码库零更新点，'ready'/'archived' 零引用；真实库 152/152 全是 draft。
+ * 本函数 + 主进程单点重算是它的替代：任何写路径（save / saveAsLocal / restore）
+ * 之后重算一次，规则只此一份。
+ *
+ * 语义收窄说明：'published' 不再作为主状态写入（挂载情况由列表的「挂载」列直出）；
+ * 枚举值保留在 DB CHECK 里仅为兼容存量数据，不参与写入。
+ */
+export function deriveProductStatus(
+  issues: readonly ProductDraftIssue[],
+  options: { archived?: boolean } = {}
+): 'draft' | 'ready' | 'archived' {
+  if (options.archived) return 'archived'
+  return hasBlockingIssue(issues) ? 'draft' : 'ready'
 }
 
 /**

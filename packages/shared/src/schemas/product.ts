@@ -24,7 +24,12 @@ export const productListQuerySchema = z.object({
   platform: z.string().trim().min(1).max(32).optional(),
   /** 只看"平台上发现、本地未归并"的商品 */
   onlyOrphan: z.boolean().optional(),
+  /** v4 §4.2：平台状态筛选（平台商品表的五态） */
+  platformStatus: z.enum(['on_sale', 'off_shelf', 'auditing', 'violation', 'missing', 'unknown']).optional(),
   keyword: z.string().trim().max(64).optional(),
+  /** v4 §4.2：排序白名单（仓储层映射为固定 SQL，绝不拼接用户输入） */
+  sort: z.enum(['collected', 'platformUpdated', 'title', 'price']).optional(),
+  order: z.enum(['asc', 'desc']).optional(),
   limit: z.number().int().min(1).max(200).optional(),
   offset: z.number().int().min(0).max(100_000).optional()
 }).strict()
@@ -37,13 +42,101 @@ export type ProductListQuery = z.infer<typeof productListQuerySchema>
 const productIdSchema = z.string().trim().min(1).max(128)
 const linkIdSchema = z.string().trim().min(1).max(128)
 
+/** v4 §4.4：本地商品的展示状态（推导值 + 显式归档；'published' 不再写入） */
+export const PRODUCT_LIBRARY_STATUSES = ['draft', 'ready', 'archived'] as const
+
 export const productLibraryListQuerySchema = z.object({
+  keyword: z.string().trim().max(64).optional(),
+  /** v4 §4.2：状态筛选（多选）；缺省 = 全部（含归档） */
+  status: z.array(z.enum(PRODUCT_LIBRARY_STATUSES)).max(3).optional(),
+  /** 挂载筛选：linked=有平台挂载；unlinked=无任何挂载 */
+  linked: z.enum(['any', 'linked', 'unlinked']).optional(),
+  /** 按"挂载了该平台链接"过滤 */
+  platform: z.string().trim().min(1).max(32).optional(),
+  /** 排序白名单（仓储层映射为固定 SQL） */
+  sort: z.enum(['updated', 'created', 'title', 'priceMin', 'stockTotal']).optional(),
+  order: z.enum(['asc', 'desc']).optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+  offset: z.number().int().min(0).max(100_000).optional()
+}).strict()
+
+/** 回收站列表（v4 §3.4）：只读展示软删商品 */
+export const productLibraryTrashListQuerySchema = z.object({
   keyword: z.string().trim().max(64).optional(),
   limit: z.number().int().min(1).max(200).optional(),
   offset: z.number().int().min(0).max(100_000).optional()
 }).strict()
 
+/** 恢复（v4 §3.4）：把回收站里的商品放回主列表；不自动恢复平台归并（D2）。 */
+export const productLibraryRestoreInputSchema = z.object({
+  productIds: z.array(productIdSchema).min(1).max(100)
+}).strict()
+
 export const productLibraryIdInputSchema = z.object({ productId: productIdSchema }).strict()
+
+/** 新建空白商品（v4 §3.1 R2）：标题可省（默认「未命名商品」，编辑器里改）。 */
+export const productLibraryCreateInputSchema = z.object({
+  title: z.string().trim().max(300).optional()
+}).strict()
+
+export const productLibraryDuplicateInputSchema = productLibraryIdInputSchema
+
+/** 归档 / 取消归档（v4 §3.3 R2）：archived 是显式态，取消归档按内容重算回推导值。 */
+export const productLibraryArchivedInputSchema = z.object({
+  productId: productIdSchema,
+  archived: z.boolean()
+}).strict()
+
+/** 彻底删除（v4 §3.4 R2）：仅限无发布记录的商品（守卫在服务层，这里只校验形状）。 */
+export const productLibraryPurgeInputSchema = productLibraryIdInputSchema
+
+/** 添加本地图片（v4 §3.3 R2 编辑器媒体分区）：渲染层文件对话框拿到的绝对路径。 */
+export const productMediaImportLocalInputSchema = z.object({
+  productId: productIdSchema,
+  paths: z.array(z.string().min(1).max(512)).min(1).max(10),
+  role: z.enum(['cover', 'gallery', 'detail'])
+}).strict()
+
+// ---------------------------------------------------------------- v4 R3：批量操作 + CSV
+
+export const productBatchOperationSchema = z.enum(['price', 'tags.add', 'tags.remove', 'archive', 'unarchive', 'delete'])
+
+const productBatchBase = {
+  /** 商品 id 集合（服务层再按操作各自的上限校验；多选全局 ≤500） */
+  productIds: z.array(productIdSchema).min(1).max(500),
+  params: z.object({
+    mode: z.enum(['percent', 'fixed']).optional(),
+    /** percent: ±百分比数值；fixed: ±元 */
+    value: z.number().min(-99_999).max(99_999).optional(),
+    floorMinor: z.number().int().min(1).max(100_000_000).optional(),
+    tags: z.array(z.string().trim().min(1).max(30)).max(10).optional()
+  }).strict().optional()
+}
+
+export const productBatchPreviewInputSchema = z.object({
+  operation: productBatchOperationSchema,
+  ...productBatchBase
+}).strict()
+
+export const productBatchExecuteInputSchema = z.object({
+  operation: productBatchOperationSchema,
+  ...productBatchBase
+}).strict()
+
+export const productExportCsvInputSchema = z.object({
+  mode: z.enum(['selected', 'filtered']),
+  productIds: z.array(productIdSchema).max(500).optional(),
+  query: z.object({
+    keyword: z.string().max(64).optional(),
+    status: z.array(z.string().max(16)).max(4).optional(),
+    linked: z.enum(['any', 'linked', 'unlinked']).optional(),
+    platform: z.string().max(32).optional()
+  }).strict().optional()
+}).strict()
+
+export const productImportCsvInputSchema = z.object({
+  csvText: z.string().min(1).max(2_000_000)
+}).strict()
 
 export const productLibrarySaveAsInputSchema = z.object({
   platform: z.string().trim().min(1).max(32),
@@ -85,7 +178,8 @@ export const productLibrarySaveInputSchema = z.object({
       spec: z.array(draftSpecSchema).max(6),
       priceMinor: z.number().int().min(0).max(100_000_000).nullable(),
       stock: z.number().int().min(0).max(100_000_000).nullable(),
-      skuCode: z.string().max(64).nullable().optional()
+      skuCode: z.string().max(64).nullable().optional(),
+      barcode: z.string().max(64).nullable().optional()
     })).max(200),
     media: z.array(draftMediaSchema).max(50)
   }).strict()

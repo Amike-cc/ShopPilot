@@ -59,7 +59,7 @@ describe('本地商品库：另存为（本地商品从哪来）', () => {
     const product = repo.getProduct(result.productId)!
     expect(product.draft.title).toBe('儿童加厚款暖暖套装')
     // 列表页拿不到 SKU → 单规格占位（不是猜 SKU，是如实建一个待补的规格）
-    expect(product.draft.variants).toEqual([{ spec: [], priceMinor: 2990, stock: 60000, skuCode: null }])
+    expect(product.draft.variants).toEqual([{ spec: [], priceMinor: 2990, stock: 60000, skuCode: null, barcode: null }])
     // 图片用同步时采到的真实地址（v20 补的列），不是空的
     expect(product.draft.media).toHaveLength(1)
     expect(product.draft.media[0]).toMatchObject({ role: 'cover', remoteUrl: 'https://mmec.wxqcloud.qq.com.cn/a.jpg', state: 'pending' })

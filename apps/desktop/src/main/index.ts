@@ -24,6 +24,8 @@ import { registerPlatformHandlers } from './ipc/platform-handlers'
 import { registerOrderHandlers } from './ipc/order-handlers'
 import { registerSalesMetricsHandlers } from './ipc/sales-metrics-handlers'
 import { registerProductHandlers } from './ipc/product-handlers'
+import { backfillProductStatusesIfNeeded } from './products/product-library-service'
+import { registerProductMediaProtocol, registerProductMediaScheme } from './products/product-media-protocol'
 import { stopSalesMetricsScheduler } from './sales-metrics/sales-metrics-scheduler'
 import { registerTaskHandlers } from './ipc/task-handlers'
 import { registerSessionAndSecurityHandlers } from './ipc/session-security-handlers'
@@ -499,6 +501,12 @@ async function initialize(): Promise<void> {
     registerCustomerServiceHandlers()
     console.log('IPC handlers registered')
 
+    // 商品域启动任务（v4 重设计）：
+    //   · 图片只读协议（缩略图用；仅映射 userData/product-media 之下的图片文件）；
+    //   · 展示状态一次性回填（幂等、失败不阻塞启动——见函数注释）。
+    registerProductMediaProtocol()
+    backfillProductStatusesIfNeeded()
+
     // 锁定动作的统一善后（手动锁定与空闲自动锁定同路径）- §189
     Security.setDestroySensitiveHook(() => {
       clearProxyAuthTracking()
@@ -617,6 +625,9 @@ async function handleStartupFailure(error: any): Promise<void> {
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 }
+
+// 商品图片只读协议（v4 §4.7）：scheme 权限必须在 app ready 之前登记
+registerProductMediaScheme()
 
 // 单实例：两个实例同写一个 SQLite 库会互相干扰（M4 验收发现的结构性风险），
 // 第二次启动直接把已有窗口带到前台后退出。

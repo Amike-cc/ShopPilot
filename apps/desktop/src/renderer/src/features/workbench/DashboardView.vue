@@ -187,7 +187,8 @@
       <UnifiedTaskPage v-else-if="activePage === 'tasks'" :auto-create="taskAutoCreate" @open-store="openStoreFromPage" />
       <UnifiedSettingsPage v-else-if="activePage === 'settings'" :initial-tab="settingsTab" @close="closeSettings" />
       <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" @busy-change="imageStudioBusy = $event" />
-      <UnifiedAppsPage v-else-if="activePage === 'products' || activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-store="openStoreFromPage" @open-assistant="openAssistant" />
+      <ProductManagementPage v-else-if="activePage === 'products'" @navigate="navigateTo" @open-store="openStoreFromPage" />
+      <UnifiedAppsPage v-else-if="activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-assistant="openAssistant" />
       <div v-else-if="activePage === 'overview'" class="overview-page">
         <div v-if="dataState === 'error'" class="dashboard-error" role="alert">
           <img class="state-icon" :src="errorIcon" alt="" />
@@ -414,6 +415,7 @@ import AgentDock from '../agent/AgentDock.vue'
 import DashboardBrowserSurface from './DashboardBrowserSurface.vue'
 import UnifiedImageStudioPage from './UnifiedImageStudioPage.vue'
 import UnifiedAppsPage from './UnifiedAppsPage.vue'
+import ProductManagementPage from '../products/ProductManagementPage.vue'
 import UnifiedDataPage from './UnifiedDataPage.vue'
 import UnifiedSettingsPage from './UnifiedSettingsPage.vue'
 import UnifiedStorePage from './UnifiedStorePage.vue'

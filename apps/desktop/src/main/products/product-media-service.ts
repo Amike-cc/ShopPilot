@@ -15,7 +15,7 @@
  */
 
 import { createHash } from 'crypto'
-import { mkdir, writeFile, access, readdir, stat, unlink } from 'fs/promises'
+import { mkdir, writeFile, access, readdir, stat, unlink, readFile } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { join, dirname, relative, sep } from 'path'
 import type { Session } from 'electron'
@@ -251,6 +251,69 @@ export class ProductMediaService {
     }
     // 同一张图（同 sha256）第二次下载时，磁盘上已经有文件 → 记为 deduped，但仍算"已本地化"
     return { state: 'localized', reason: null, deduped: alreadyOnDisk, relativePath, sha256 }
+  }
+
+  /**
+   * 添加**本地图片**（v4 §3.3 编辑器媒体分区）：文件对话框选中的绝对路径 →
+   * 校验类型与大小 → sha256 → 与平台图同一套落盘布局（复用/去重）→ 返回草稿媒体条目。
+   *
+   * 只写文件、不替用户改草稿：编辑器把返回的条目并进自己的 draft.media，随"保存"的
+   * 全量替换落库——草稿写入永远走 save 单一漏斗，避免两处写者打架。
+   * 未保存期间文件可能暂时无行引用——孤儿清理有宽限期，不会立刻误删。
+   */
+  async importLocalImages(input: { productId: string; absolutePaths: readonly string[]; role: 'cover' | 'gallery' | 'detail' }): Promise<{
+    imported: Array<{ role: 'cover' | 'gallery' | 'detail'; state: 'localized'; localPath: string; sha256: string }>
+    skipped: Array<{ path: string; reason: string }>
+  }> {
+    const runtime = this.runtimeFactory()
+    const product = runtime.repository.getProduct(input.productId)
+    if (!product) throw new Error('PRODUCT_NOT_FOUND')
+    const imported: Array<{ role: 'cover' | 'gallery' | 'detail'; state: 'localized'; localPath: string; sha256: string }> = []
+    const skipped: Array<{ path: string; reason: string }> = []
+
+    for (const rawPath of input.absolutePaths) {
+      const absolute = String(rawPath ?? '').trim()
+      if (!absolute || !(absolute.includes('/') || absolute.includes('\\')) || absolute.includes('\0')) {
+        skipped.push({ path: absolute, reason: 'bad_path' })
+        continue
+      }
+      let bytes: Uint8Array
+      try {
+        bytes = new Uint8Array(await readFile(absolute))
+      } catch {
+        skipped.push({ path: absolute, reason: 'not_readable' })
+        continue
+      }
+      if (bytes.byteLength === 0 || exceedsSizeLimit(bytes.byteLength, MAX_IMAGE_BYTES)) {
+        skipped.push({ path: absolute, reason: 'too_large' })
+        continue
+      }
+      const type = detectImageType(bytes)
+      if (!type) {
+        skipped.push({ path: absolute, reason: looksLikeSvg(bytes) ? 'svg_rejected' : 'unsupported_type' })
+        continue
+      }
+      // 平台图同一套布局：sha256 → <前2位>/<sha256>.<ext>；磁盘已有同文件则复用（零复制）
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      const relativePath = mediaRelativePath(sha256, type.ext)
+      const target = join(runtime.mediaRoot, relativePath)
+      const onDisk = await access(target).then(() => true).catch(() => false)
+      if (!onDisk) {
+        try {
+          await mkdir(dirname(target), { recursive: true })
+          await writeFile(target, bytes)
+        } catch (error) {
+          logMain('warn', `[product-media] 本地图片写盘失败 path=${relativePath} error=${String((error as Error)?.message || error)}`)
+          skipped.push({ path: absolute, reason: 'write_failed' })
+          continue
+        }
+      }
+      imported.push({ role: input.role, state: 'localized', localPath: relativePath, sha256 })
+    }
+    if (imported.length) {
+      logMain('info', `[product-media] 本地图片导入 product=${input.productId.slice(0, 8)} 成功=${imported.length} 跳过=${skipped.length} role=${input.role}`)
+    }
+    return { imported, skipped }
   }
 
   /**

@@ -3,9 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- CSP（P3，2026-10-15 审查加固）：object-src/base-uri/frame-ancestors 显式收口。
-       style-src 保留 'unsafe-inline' 是 Vue 运行时样式绑定的既定取舍。 -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'">
+  <!-- CSP（P3，2026-10-15 审查加固）：object-src/base-uri 显式收口。
+       style-src 保留 'unsafe-inline' 是 Vue 运行时样式绑定的既定取舍。
+       img-src 加入 shopilot-media:（商品缩略图只读协议，v4 §4.7）；
+       frame-ancestors 已移除——meta 里交付的 frame-ancestors 会被浏览器忽略并打日志（实测噪声）。 -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: shopilot-media:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'">
   <title>ShopPilot</title>
 </head>
 <body>

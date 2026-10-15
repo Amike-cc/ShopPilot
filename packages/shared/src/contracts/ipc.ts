@@ -126,7 +126,23 @@ export const IPC_CHANNELS = {
   PRODUCT_LIBRARY_MERGE: 'products:library:merge',
   PRODUCT_LIBRARY_UNMERGE: 'products:library:unmerge',
   PRODUCT_LIBRARY_REMOVE: 'products:library:remove',
+  // v4 重设计（2026-10-15）：回收站列表 / 恢复（软删可逆；恢复不自动重挂平台归并——D2）
+  PRODUCT_LIBRARY_TRASH: 'products:library:trash',
+  PRODUCT_LIBRARY_RESTORE: 'products:library:restore',
+  // v4 R2（2026-10-15）：新建空白商品 / 复制（媒体 sha256 复用）/ 归档流转 / 彻底删除（无发布记录才可）
+  PRODUCT_LIBRARY_CREATE: 'products:library:create',
+  PRODUCT_LIBRARY_DUPLICATE: 'products:library:duplicate',
+  PRODUCT_LIBRARY_SET_ARCHIVED: 'products:library:setArchived',
+  PRODUCT_LIBRARY_PURGE: 'products:library:purge',
   PRODUCT_MEDIA_LOCALIZE: 'products:media:localize',
+  // v4 R2：编辑器媒体分区「添加本地图片」（主进程校验类型/大小后入 product-media）
+  PRODUCT_MEDIA_IMPORT_LOCAL: 'products:media:importLocal',
+  // v4 R3：批量（预览 → 确认执行 → 回执）+ CSV 导出/导入
+  PRODUCT_LIBRARY_BATCH_PREVIEW: 'products:library:batchPreview',
+  PRODUCT_LIBRARY_BATCH_EXECUTE: 'products:library:batchExecute',
+  PRODUCT_LIBRARY_EXPORT_CSV: 'products:library:exportCsv',
+  PRODUCT_LIBRARY_IMPORT_PREVIEW: 'products:library:importPreview',
+  PRODUCT_LIBRARY_IMPORT_EXECUTE: 'products:library:importExecute',
   // 详情页采集（商品图 + 规格）：只导航并读 DOM，不填写不提交
   PRODUCT_DETAIL_COLLECT: 'products:detail:collect',
   // 发布（M3）：**只到人工确认门禁为止** —— 预检与打开发布页，没有任何提交动作

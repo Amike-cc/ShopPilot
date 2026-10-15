@@ -4,7 +4,7 @@
  * §10.1 Electron 安全：contextIsolation + sandbox
  */
 
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, EVENT_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import { PLATFORM_CATALOG } from '@shared/constants/platforms'
@@ -184,14 +184,39 @@ const api = {
   products: {
     sync: (input: { storeId: string; trigger?: 'manual' | 'schedule'; maxPages?: number; maxProducts?: number; timeoutMs?: number }): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC, input),
-    list: (query: { storeId?: string; platform?: string; onlyOrphan?: boolean; keyword?: string; limit?: number; offset?: number }): Promise<IPCResult> =>
+    list: (query: { storeId?: string; platform?: string; onlyOrphan?: boolean; platformStatus?: string; keyword?: string; sort?: string; order?: 'asc' | 'desc'; limit?: number; offset?: number }): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIST, query),
     syncRuns: (query: { storeId?: string } = {}): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC_RUNS, query),
     // 本地商品库（M2）：归并由用户触发；图片本地化只下载图片到本机
     library: {
-      list: (query: { keyword?: string; limit?: number; offset?: number } = {}): Promise<IPCResult> =>
+      list: (query: { keyword?: string; status?: string[]; linked?: 'any' | 'linked' | 'unlinked'; platform?: string; sort?: string; order?: 'asc' | 'desc'; limit?: number; offset?: number } = {}): Promise<IPCResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_LIST, query),
+      // 回收站（v4 §3.4）：列表只读；恢复不自动重挂平台归并（D2）
+      trash: (query: { keyword?: string; limit?: number; offset?: number } = {}): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_TRASH, query),
+      restore: (productIds: string[]): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_RESTORE, { productIds }),
+      // v4 R2：新建空白商品 / 复制（媒体 sha256 复用）/ 归档流转 / 彻底删除（无发布记录才可）
+      create: (input: { title?: string } = {}): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_CREATE, input),
+      duplicate: (productId: string): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_DUPLICATE, { productId }),
+      setArchived: (input: { productId: string; archived: boolean }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_SET_ARCHIVED, input),
+      purge: (productId: string): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_PURGE, { productId }),
+      // v4 R3：批量（预览 → 执行）+ CSV 导出/导入
+      batchPreview: (input: { operation: string; productIds: string[]; params?: Record<string, unknown> }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_BATCH_PREVIEW, input),
+      batchExecute: (input: { operation: string; productIds: string[]; params?: Record<string, unknown> }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_BATCH_EXECUTE, input),
+      exportCsv: (input: { mode: 'selected' | 'filtered'; productIds?: string[]; query?: Record<string, unknown> }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_EXPORT_CSV, input),
+      importPreview: (csvText: string): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_PREVIEW, { csvText }),
+      importExecute: (csvText: string): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_EXECUTE, { csvText }),
       get: (productId: string): Promise<IPCResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_GET, { productId }),
       save: (input: { productId: string; platform?: string; draft: unknown }): Promise<IPCResult> =>
@@ -206,6 +231,11 @@ const api = {
         ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_REMOVE, { productId }),
       localizeMedia: (productId: string): Promise<IPCResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_LOCALIZE, { productId }),
+      // v4 R2：编辑器媒体分区「添加本地图片」——主进程校验类型/大小后落盘，返回草稿媒体条目
+      importLocalImages: (input: { productId: string; paths: string[]; role: 'cover' | 'gallery' | 'detail' }): Promise<IPCResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_IMPORT_LOCAL, input),
+      // Electron ≥32 移除了 File.path，官方路径是 webUtils.getPathForFile（必须在 preload 里调）
+      getPathForFile: (file: File): string => webUtils.getPathForFile(file),
       // 图片本地化队列与保留策略：scan 只算、run 逐张下、orphans 只判定、cleanup 用户确认后才删
       queueScan: (input: { maxItems?: number } = {}): Promise<IPCResult> =>
         ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_QUEUE_SCAN, input),

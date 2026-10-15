@@ -7,18 +7,33 @@
 
 import type { IpcMainInvokeEvent } from 'electron'
 import { logMain } from '../services/logger'
-import { app } from 'electron'
+import { app, dialog, BrowserWindow } from 'electron'
 import { randomUUID } from 'crypto'
 import { join } from 'path'
+import { writeFileSync } from 'fs'
+import { ensureCsvExtension } from '@shared/invoice-csv'
+import { buildProductCsv } from '@shared/product-batch'
+import { ProductBatchService } from '../products/product-batch-service'
 import { familyHandle } from './family-handle'
 import { IPC_CHANNELS, type IPCResult } from '@shared/contracts/ipc'
 import {
+  productLibraryArchivedInputSchema,
+  productLibraryCreateInputSchema,
+  productLibraryDuplicateInputSchema,
   productLibraryIdInputSchema,
   productLibraryListQuerySchema,
   productLibraryMergeInputSchema,
+  productLibraryPurgeInputSchema,
+  productLibraryRestoreInputSchema,
   productLibrarySaveAsInputSchema,
   productLibrarySaveInputSchema,
+  productLibraryTrashListQuerySchema,
   productLibraryUnmergeInputSchema,
+  productBatchExecuteInputSchema,
+  productBatchPreviewInputSchema,
+  productExportCsvInputSchema,
+  productImportCsvInputSchema,
+  productMediaImportLocalInputSchema,
   productDetailCollectInputSchema,
   productPublishAcceptInputSchema,
   productPublishBatchCreateInputSchema,
@@ -160,11 +175,127 @@ export function registerProductHandlers(): void {
     try { library().remove(parsed.data); return ok({ removed: true }, rid) } catch (error) { return serviceError(error, rid) }
   })
 
+  // ---------------------------------------------------------------- 回收站（v4 重设计 §3.4）
+  //
+  // 软删的商品在回收站可见、可恢复；恢复**不自动重挂平台归并**（D2：归并永远人工确认）。
+  // 彻底删除（purge）按设计只对"无发布证据"的商品开放——在仓储层再校验，这里先只开列+恢复。
+
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_TRASH, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productLibraryTrashListQuerySchema.safeParse(raw ?? {})
+    if (!parsed.success) return inputError(rid)
+    try {
+      return ok(new ProductRepository(getDatabase()).listTrash(parsed.data), rid)
+    } catch (error) { return serviceError(error, rid) }
+  })
+
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_RESTORE, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productLibraryRestoreInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try { return ok(library().restore(parsed.data), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
   handle(IPC_CHANNELS.PRODUCT_MEDIA_LOCALIZE, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
     const rid = requestId()
     const parsed = productLibraryIdInputSchema.safeParse(raw)
     if (!parsed.success) return inputError(rid)
     try { return ok(await library().localizeMedia(parsed.data), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
+  // ---------------------------------------------------------------- v4 R2：新建 / 复制 / 归档 / 彻底删除 / 本地图片
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_CREATE, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productLibraryCreateInputSchema.safeParse(raw ?? {})
+    if (!parsed.success) return inputError(rid)
+    try { return ok(library().createBlank(parsed.data), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_DUPLICATE, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productLibraryDuplicateInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try { return ok(library().duplicate(parsed.data), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_SET_ARCHIVED, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productLibraryArchivedInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try { return ok(library().setArchived(parsed.data), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_PURGE, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productLibraryPurgeInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try { return ok(library().purge(parsed.data), rid) } catch (error) {
+      // 有发布记录是**预期内的拒绝**：给界面明确的错误码，而不是笼统的内部错误
+      if (String((error as Error)?.message || '').includes('PRODUCT_HAS_PUBLISH_RECORDS')) {
+        return fail('PRODUCT_HAS_PUBLISH_RECORDS', '该商品有发布记录（发布台账是审计材料），不能彻底删除', rid)
+      }
+      return serviceError(error, rid)
+    }
+  })
+
+  handle(IPC_CHANNELS.PRODUCT_MEDIA_IMPORT_LOCAL, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productMediaImportLocalInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try { return ok(await library().importLocalImages({ productId: parsed.data.productId, absolutePaths: parsed.data.paths, role: parsed.data.role }), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
+  // ---------------------------------------------------------------- v4 R3：批量（预览→执行）+ CSV 导出/导入
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_BATCH_PREVIEW, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productBatchPreviewInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try { return ok(batch().preview(parsed.data), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_BATCH_EXECUTE, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productBatchExecuteInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try { return ok(await batch().execute(parsed.data), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_EXPORT_CSV, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productExportCsvInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try {
+      const dataRows = batch().exportRows(parsed.data)
+      if (!dataRows.length) return fail('PRODUCT_EXPORT_EMPTY', '当前范围内没有可导出的商品', rid)
+      const csv = buildProductCsv(dataRows)
+      const stamp = new Date().toISOString().slice(0, 10)
+      const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+      const res = await dialog.showSaveDialog(win, {
+        title: '导出商品清单（CSV）',
+        defaultPath: join(app.getPath('documents'), `商品清单-${stamp}.csv`),
+        filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
+      })
+      if (res.canceled || !res.filePath) return ok({ canceled: true }, rid)
+      // 保存框不强制扩展名——统一补成 .csv（发票中心 C6 同款处理）
+      const filePath = ensureCsvExtension(res.filePath)
+      writeFileSync(filePath, csv, 'utf8')
+      logMain('info', `[product-csv] 导出 行=${dataRows.length} mode=${parsed.data.mode}`)
+      return ok({ canceled: false, filePath, count: dataRows.length }, rid)
+    } catch (error) { return serviceError(error, rid) }
+  })
+
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_PREVIEW, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productImportCsvInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try { return ok(batch().importPreview(parsed.data.csvText), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
+  handle(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_EXECUTE, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productImportCsvInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try { return ok(batch().importExecute(parsed.data.csvText), rid) } catch (error) { return serviceError(error, rid) }
   })
 
   handle(IPC_CHANNELS.PRODUCT_DETAIL_COLLECT, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
@@ -317,6 +448,10 @@ export function registerProductHandlers(): void {
     const rid = requestId()
     try { return ok(await library().cleanupOrphanMedia(), rid) } catch (error) { return serviceError(error, rid) }
   })
+}
+
+function batch(): ProductBatchService {
+  return new ProductBatchService(new ProductRepository(getDatabase()), library())
 }
 
 /** 懒建服务实例：图片根目录要等 Electron ready 之后才拿得到（`app.getPath('userData')`）。 */
