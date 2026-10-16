@@ -243,21 +243,31 @@ export function buildInjectScript(o: FpOverrides): string {
     //    不动渲染结果本身 —— 页面正常显示/我们自己的截图都不受影响。
     if (P.noiseSeed != null) {
       try {
-        let seed = (P.noiseSeed >>> 0) || 1;
-        const rnd = () => {
-          seed = (seed + 0x6D2B79F5) >>> 0;
-          let t = seed;
-          t = Math.imul(t ^ (t >>> 15), t | 1);
-          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        // ⚠️ 不能用"有状态的随机序列"：那样同一份画布读两次结果不同（页面连续调用两次 toDataURL
+        // 一对比就知道被改写），而且同一家店换一次加载顺序噪声就变。真机验收抓到的就是这个。
+        // 现在噪声**只由 (种子, 位置)** 决定：同内容永远同结果、跨店不同、与调用次数/顺序无关。
+        const mix = (a, b) => {
+          let h = (a ^ b) >>> 0;
+          h = Math.imul(h ^ (h >>> 15), 0x85EBCA6B) >>> 0;
+          h = (h ^ (h >>> 13)) >>> 0;
+          return Math.imul(h, 0xC2B2AE35) >>> 0;
         };
-        // 少量像素各偏 ±1：肉眼不可见，但两次采样哈希不同（且同店稳定）
+        const positions = (lengthInPixels) => {
+          const out = [];
+          for (let k = 0; k < 4; k++) {
+            const h = mix(P.noiseSeed | 0, k + 1);
+            out.push(((h >>> 8) % lengthInPixels) * 4);
+          }
+          return out;
+        };
+        // 幅度只有 ±1：肉眼不可见，但采样哈希不同
         const perturb = (data) => {
-          const times = Math.min(4, Math.max(1, Math.floor(data.length / 4000)));
-          for (let i = 0; i < times; i++) {
-            const idx = (Math.floor(rnd() * (data.length / 4)) * 4) >>> 0;
+          const pixels = Math.floor(data.length / 4);
+          if (pixels <= 0) return data;
+          for (const idx of positions(pixels)) {
             if (idx + 2 >= data.length) continue;
-            data[idx] = (data[idx] + (rnd() < 0.5 ? 255 : 1)) & 255;
+            const flip = (mix(P.noiseSeed | 0, idx) & 1) === 1 ? 1 : -1;
+            data[idx] = (data[idx] + flip + 256) & 255;
           }
           return data;
         };
@@ -298,9 +308,14 @@ export function buildInjectScript(o: FpOverrides): string {
             Object.defineProperty(AudioBuffer.prototype, 'getChannelData', { value: mask(function (channel) {
               const data = origChannel.call(this, channel);
               try {
-                for (let i = 0; i < 8 && data.length; i++) {
-                  const idx = Math.floor(rnd() * data.length);
-                  data[idx] = data[idx] + (rnd() - 0.5) * 1e-7; // 听不出来，但频域指纹变了
+                // 同样按位置定噪声（与调用次数无关，见上面 canvas 的说明）
+                const pixels = data.length;
+                if (pixels > 0) {
+                  for (let k = 0; k < 8; k++) {
+                    const idx = mix(P.noiseSeed | 0, (k + 1) * 7919) % pixels;
+                    const sign = (mix(P.noiseSeed | 0, idx) & 1) === 1 ? 1 : -1;
+                    data[idx] = data[idx] + sign * 1e-7; // 听不出来，但频域指纹变了
+                  }
                 }
               } catch (e) {}
               return data;
@@ -313,7 +328,11 @@ export function buildInjectScript(o: FpOverrides): string {
             Object.defineProperty(AnalyserNode.prototype, 'getFloatFrequencyData', { value: mask(function (array) {
               origFloat.call(this, array);
               try {
-                for (let i = 0; i < 4 && array.length; i++) array[Math.floor(rnd() * array.length)] += (rnd() - 0.5) * 1e-4;
+                for (let k = 0; k < 4 && array.length; k++) {
+                  const idx = mix(P.noiseSeed | 0, (k + 1) * 104729) % array.length;
+                  const sign = (mix(P.noiseSeed | 0, idx) & 1) === 1 ? 1 : -1;
+                  array[idx] = array[idx] + sign * 1e-4;
+                }
               } catch (e) {}
             }, 'getFloatFrequencyData'), writable: true, configurable: true });
           } catch (e) {}

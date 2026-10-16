@@ -194,6 +194,21 @@ describe('canvas 噪声：同店稳定、跨店不同（审查 P0 的去匿名�
     expect(readPixels(424242)).not.toEqual(readPixels(999999))
   })
 
+  it('同一份画布连续读两次结果一致（有状态的随机序列会让页面一对比就发现被改写）', () => {
+    const stub = canvasStub(PIXELS)
+    runScript({ ...PROFILE, noiseSeed: 424242 }, {
+      HTMLCanvasElement: stub.HTMLCanvasElement,
+      CanvasRenderingContext2D: stub.CanvasRenderingContext2D,
+      document: stub.document
+    } as never)
+    const canvas = new (stub.HTMLCanvasElement as any)()
+    const first = Array.from(canvas.getContext('2d').getImageData(0, 0, 16, 4).data as Uint8ClampedArray)
+    const second = Array.from(canvas.getContext('2d').getImageData(0, 0, 16, 4).data as Uint8ClampedArray)
+    expect(second).toEqual(first)
+    // 也不能依赖"第几次读"：与新建画布后的首次读取结果一致（真机曾抓到同店两次加载哈希不同）
+    expect(second).toEqual(readPixels(424242))
+  })
+
   it('扰动幅度只有 ±1 且只动极少数像素（肉眼不可见，不影响正常显示与截图）', () => {
     const base = Array.from(new Uint8ClampedArray(PIXELS))
     const noised = readPixels(424242)
