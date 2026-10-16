@@ -1,6 +1,6 @@
 {
   "name": "shopilot",
-  "version": "0.4.68",
+  "version": "0.4.69",
   "description": "ShopPilot - 电商店铺浏览器工作台",
   "private": true,
   "packageManager": "pnpm@10.34.7",
@@ -21,6 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:custom-local": "node tools/acceptance/custom-task-local-verify.js",
+    "test:maintenance-local": "node tools/acceptance/maintenance-cache-local-verify.js",
     "test:invite-douyin-local": "node tools/acceptance/douyin-invite-local-verify.js",
     "test:customer-service-switch": "node tools/acceptance/customer-service-switch-local-verify.js",
     "test:invite-live-log": "node tools/acceptance/invite-live-log-verify.js",
