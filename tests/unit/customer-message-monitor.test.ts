@@ -80,8 +80,14 @@ describe('客服消息监控', () => {
     expect(wc.loadURL).toHaveBeenCalledOnce()
     expect(release).toHaveBeenCalledOnce()
     expect(mocks.inserted).toHaveLength(2)
-    expect(mocks.emit).toHaveBeenCalledTimes(2)
-    expect(mocks.emit.mock.calls.map(call => (call[1] as any).status)).toEqual(['CHECKING', 'AVAILABLE'])
+    // 第三次是「客服有新消息」提醒事件：未读从无到 3 属于首次增长，按判据提醒一次
+    // （节流/去重/读掉解禁的细节在 tests/unit/customer-message-alert.test.ts 里钉死）
+    expect(mocks.emit.mock.calls.map(call => call[0])).toEqual([
+      'customerService:statusChanged',
+      'customerService:statusChanged',
+      'customerService:newMessage'
+    ])
+    expect(mocks.emit.mock.calls.slice(0, 2).map(call => (call[1] as any).status)).toEqual(['CHECKING', 'AVAILABLE'])
   })
 
   it('页面已在该店铺允许的客服域名时重复检查只探测，不反复重载页面', async () => {

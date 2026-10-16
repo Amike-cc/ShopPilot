@@ -8,6 +8,7 @@ import { defineStore } from 'pinia'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { PLATFORM_CATALOG } from '@shared/constants/platforms'
 import type { TabInfo } from '../env'
+import { playCustomerMessageBeep } from '../features/customer-service/customer-message-sound'
 
 /**
  * 「其他」平台筛选项的哨兵值：内置平台目录之外的自定义平台聚合成一个 chip
@@ -97,6 +98,8 @@ export const useWorkspaceStore = defineStore('workspace', {
     stores: [] as StoreRow[],
     search: '',
     filterPlatform: '',
+    /** 客服未读数（storeId → 未读条数）：来自「实时检测店铺消息」的提醒事件，用于侧栏红点 */
+    customerUnread: {} as Record<string, number>,
     selectedStoreId: null as string | null,
     /** 当前内嵌显示的店铺（null = 欢迎页） */
     displayedStoreId: null as string | null,
@@ -205,6 +208,14 @@ export const useWorkspaceStore = defineStore('workspace', {
         eventHandlers.push({ channel, handler })
         window.shopilot.on(channel, handler)
       }
+      on(EVENT_CHANNELS.CUSTOMER_SERVICE_NEW_MESSAGE, (payload: any) => {
+        // 客服有新消息（2026-10-16「实时检测店铺消息」）：主进程已经把"要不要提醒"判好了
+        // （未读从少变多 + 60s 节流 + 读掉即解禁），这里只做两件界面事：更新红点、响提示音。
+        if (!payload || !payload.storeId) return
+        const unread = Number(payload.unreadCount)
+        if (!Number.isFinite(unread) || unread < 0) return
+        this.customerUnread = { ...this.customerUnread, [payload.storeId]: unread }
+        if (payload.sound === true) playCustomerMessageBeep()      })
       on(EVENT_CHANNELS.BROWSER_TAB_UPDATED, (payload: any) => {
         if (!payload || !payload.storeId) return
         this.tabsByStore[payload.storeId] = payload.tabs || []

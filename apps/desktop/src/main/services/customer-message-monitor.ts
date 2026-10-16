@@ -4,9 +4,10 @@ import type { WebContents } from 'electron'
 import { onCustomerServiceSessionClosed, registerCustomerServiceWebContents, waitForCustomerServiceSessionReady } from '../browser/session-manager'
 import { getStore, listStores } from '../stores/store-manager'
 import { getDatabase } from '../db/database'
-import { emitToRenderer, isHostWindowFocused } from '../browser/window-manager'
+import { displayStore as displayStoreInMain, emitToRenderer, isHostWindowFocused } from '../browser/window-manager'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
-import { pickCustomerCheckDelayMs } from '@shared/customer-message-alert'
+import { createCustomerAlertState, decideCustomerAlert, pickCustomerCheckDelayMs, type CustomerAlertState } from '@shared/customer-message-alert'
+import { Notification } from 'electron'
 import {
   CUSTOMER_SERVICE_PLATFORMS,
   customerServiceSessionPartition,
@@ -136,6 +137,8 @@ interface MonitorRuntime {
   isLocked?: () => boolean
   /** 主窗口是否在前台：前台检测更勤，后台降低频率但**不中断**（2026-10-16 用户要求常驻含后台） */
   isWindowFocused?: () => boolean
+  /** 系统通知被点击时切到该店铺（null 安全；失败不影响监控循环） */
+  displayStore?: (storeId: string) => void
 }
 
 /**
@@ -277,7 +280,9 @@ function defaultRuntime(): MonitorRuntime {
     // 安全状态读取失败时监控应停在安全侧，不能在数据库/锁状态异常时继续碰远程页。
     isLocked: () => { try { return isAppLocked() } catch { return true } },
     // 主窗口在前台就查得更勤（12s），不在前台降到 45s 但**继续查**（用户要求常驻含后台）
-    isWindowFocused: () => { try { return isHostWindowFocused() } catch { return false } }
+    isWindowFocused: () => { try { return isHostWindowFocused() } catch { return false } },
+    // 系统通知被点击时切到那家店（用户要求：不自动切店，只在点击时切）
+    displayStore: (storeId: string) => { try { displayStoreInMain(storeId, 'main') } catch { /* 窗口可能已关 */ } }
   }
 }
 
@@ -572,8 +577,57 @@ export class CustomerMessageMonitor {
     }
   }
 
+  private readonly alertStates = new Map<string, CustomerAlertState>()
+
   private emit(item: CustomerMessageCheck): void {
     try { this.runtime.emit(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, item) } catch { /* 窗口尚未创建或已关闭 */ }
+    // 只有真读到未读数才谈提醒：CHECKING/错误这些 transient 结果 unreadCount 是 null
+    if (typeof item.unreadCount === 'number') this.applyUnreadAlert(item)
+  }
+
+  /**
+   * 未读变化 → 决定要不要提醒（2026-10-16「实时检测店铺消息」）。
+   * 判据全在 @shared/customer-message-alert（未读从少变多才提醒、60s 节流、读掉即解禁），
+   * 这里只负责两件"有副作用"的事：弹系统通知、把提醒事件发给界面（红点+提示音）。
+   */
+  private applyUnreadAlert(item: CustomerMessageCheck): void {
+    const state = this.alertStates.get(item.storeId) || createCustomerAlertState()
+    const decision = decideCustomerAlert({
+      unread: item.unreadCount,
+      now: this.runtime.now(),
+      state,
+      windowFocused: this.runtime.isWindowFocused?.() === true
+    })
+    this.alertStates.set(item.storeId, decision.nextState)
+    if (!decision.notify && !decision.sound) return
+
+    let storeName = item.storeId
+    try { storeName = listStores().find(store => store.id === item.storeId)?.name || item.storeId } catch { /* 取名字失败不影响提醒 */ }
+    if (decision.notify) {
+      // 窗口不在前台才弹系统通知；点一下切到那家店（用户明确要求"不做自动切店"，所以只在点击时切）
+      try {
+        const notification = new Notification({
+          title: `客服有新消息 · ${item.platform}`,
+          body: `${storeName}：未读 ${item.unreadCount} 条`
+        })
+        notification.on('click', () => { try { this.runtime.displayStore?.(item.storeId) } catch { /* 窗口可能已关 */ } })
+        notification.show()
+      } catch (error) {
+        logMain('warn', `[customer-service] 系统通知失败 store=${item.storeId}: ${String((error as Error)?.message || error).slice(0, 120)}`)
+      }
+    }
+    try {
+      this.runtime.emit(EVENT_CHANNELS.CUSTOMER_SERVICE_NEW_MESSAGE, {
+        storeId: item.storeId,
+        platform: item.platform,
+        storeName,
+        unreadCount: item.unreadCount,
+        desktopNotified: decision.notify,
+        sound: decision.sound,
+        reason: decision.reason
+      })
+    } catch { /* 窗口尚未创建或已关闭 */ }
+    logMain('info', `[customer-service] 新消息提醒 store=${item.storeId} unread=${item.unreadCount} reason=${decision.reason} desktop=${decision.notify}`)
   }
 }
 

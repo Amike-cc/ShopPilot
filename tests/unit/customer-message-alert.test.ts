@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import {
   CUSTOMER_ALERT_THROTTLE_MS,
   CUSTOMER_CHECK_DELAY_BACKGROUND_MS,
@@ -11,6 +12,11 @@ import {
   shouldShowUnreadBadge,
   sumUnreadCounts
 } from '@shared/customer-message-alert'
+import {
+  __setAudioContextForTest,
+  playCustomerMessageBeep,
+  setCustomerMessageSoundEnabled
+} from '../../apps/desktop/src/renderer/src/features/customer-service/customer-message-sound'
 
 /**
  * 「实时检测店铺消息」提醒判据的回归网（2026-10-16 用户要求）。
@@ -22,6 +28,8 @@ import {
 
 const read = (p: string) => readFileSync(resolve(p), 'utf8')
 const MONITOR = read('apps/desktop/src/main/services/customer-message-monitor.ts')
+const WORKSPACE = read('apps/desktop/src/renderer/src/stores/workspace.ts')
+const SOUND = read('apps/desktop/src/renderer/src/features/customer-service/customer-message-sound.ts')
 
 describe('decideCustomerAlert：什么时候提醒、提醒几次', () => {
   const now = 1_000_000
@@ -116,5 +124,71 @@ describe('接线：主进程按前台/后台选节奏', () => {
     expect(MONITOR).toContain('pickCustomerCheckDelayMs')
     expect(MONITOR).toContain('isWindowFocused')
     expect(MONITOR).not.toContain('scheduleNextCheck(45_000)')
+  })
+
+  it('只有真读到未读数才谈提醒（CHECKING/错误不提醒）', () => {
+    const fn = MONITOR.match(/private emit\(item: CustomerMessageCheck\)[\s\S]*?\n {2}\}/)
+    expect(fn).toBeTruthy()
+    expect(fn![0]).toContain("if (typeof item.unreadCount === 'number') this.applyUnreadAlert(item)")
+  })
+
+  it('提醒走共享判据；桌面通知只在窗口不在前台时弹，点击才切店', () => {
+    const fn = MONITOR.match(/private applyUnreadAlert[\s\S]*?\n {2}\}/)
+    expect(fn).toBeTruthy()
+    expect(fn![0]).toContain('decideCustomerAlert({')
+    expect(fn![0]).toContain('windowFocused: this.runtime.isWindowFocused?.() === true')
+    expect(fn![0]).toContain('if (decision.notify)')
+    expect(fn![0]).toContain('new Notification({')
+    expect(fn![0]).toContain("notification.on('click'")
+    expect(fn![0]).toContain('this.runtime.displayStore?.(item.storeId)')
+    // 未读状态按店铺各存一份
+    expect(MONITOR).toContain('private readonly alertStates = new Map<string, CustomerAlertState>()')
+  })
+
+  it('提醒事件走新通道，且带上"是否已弹桌面通知"供界面决定声音', () => {
+    expect(EVENT_CHANNELS.CUSTOMER_SERVICE_NEW_MESSAGE).toBe('customerService:newMessage')
+    expect(MONITOR).toContain('EVENT_CHANNELS.CUSTOMER_SERVICE_NEW_MESSAGE')
+    expect(MONITOR).toMatch(/desktopNotified: decision\.notify/)
+    expect(MONITOR).toMatch(/sound: decision\.sound/)
+  })
+})
+
+describe('界面侧：红点数据 + 提示音', () => {
+  it('订阅新消息事件 → 更新未读红点，且只在 sound=true 时响', () => {
+    const fn = WORKSPACE.match(/on\(EVENT_CHANNELS\.CUSTOMER_SERVICE_NEW_MESSAGE[\s\S]*?\n {6}\}\)/)
+    expect(fn).toBeTruthy()
+    expect(fn![0]).toContain("if (payload.sound === true) playCustomerMessageBeep()")
+    expect(WORKSPACE).toContain('customerUnread: {} as Record<string, number>')
+    expect(WORKSPACE).toMatch(/this\.customerUnread = \{ \.\.\.this\.customerUnread, \[payload\.storeId\]: unread \}/)
+  })
+
+  it('提示音可关：关掉后一次都不发声', () => {
+    const started: number[] = []
+    const fakeAudioContext = function (this: unknown) {
+      return {
+        currentTime: 0,
+        destination: {},
+        createOscillator: () => ({ type: '', frequency: { value: 0 }, connect() {}, start(at: number) { started.push(at) }, stop() {} }),
+        createGain: () => ({ gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} })
+      }
+    }
+    __setAudioContextForTest(fakeAudioContext)
+    setCustomerMessageSoundEnabled(false)
+    playCustomerMessageBeep()
+    expect(started).toHaveLength(0)
+    setCustomerMessageSoundEnabled(true)
+    playCustomerMessageBeep()
+    expect(started).toHaveLength(2) // 两声短提示
+    __setAudioContextForTest(undefined)
+    setCustomerMessageSoundEnabled(true)
+  })
+
+  it('没有音频能力时静默不抛（提醒主体是红点与通知）', () => {
+    __setAudioContextForTest(undefined)
+    expect(() => playCustomerMessageBeep()).not.toThrow()
+    // 声音模块自身也要可关 + 失败静默（源码级：默认开、开关函数、catch 兜底）
+    expect(SOUND).toContain('let soundEnabled = true')
+    expect(SOUND).toContain('export function setCustomerMessageSoundEnabled')
+    expect(SOUND).toContain('} catch {')
   })
 })

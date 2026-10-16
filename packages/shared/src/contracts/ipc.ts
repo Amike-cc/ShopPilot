@@ -403,6 +403,8 @@ export const EVENT_CHANNELS = {
   SALES_METRICS_RUN_FINISHED: 'salesMetrics:runFinished',
   SALES_METRICS_HEALTH_CHANGED: 'salesMetrics:healthChanged',
   CUSTOMER_SERVICE_STATUS_CHANGED: 'customerService:statusChanged',
+  /** 客服有新消息（未读从少变多）：界面据此挂红点并响提示音；桌面通知由主进程直接弹 */
+  CUSTOMER_SERVICE_NEW_MESSAGE: 'customerService:newMessage',
   AGENT_STATUS_CHANGED: 'agent:statusChanged',
   AGENT_PANEL_OPEN: 'agent:panelOpen',
   AGENT_JOB_PROGRESS: 'agent:jobProgress',
