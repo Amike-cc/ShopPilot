@@ -302,4 +302,11 @@ describe('guest id 就绪等待：读不到 ≠ 失败（用户实报回归）',
     expect(fn![0]).toContain('SELECT admin_url FROM stores WHERE id = ?')
     expect(fn![0]).not.toContain("createTab(storeId, 'about:blank')")
   })
+
+  it('恢复时优先挑非空白标签，并把「上次所在标签」写回库（旧库被写坏也能自愈）', () => {
+    const fn = WINDOW_MANAGER.match(/function restoreTabs[\s\S]*?\n\}/)![0]
+    expect(fn).toContain("const realTabs = savedTabs.filter((savedTab: any) => savedTab.url && savedTab.url !== 'about:blank')")
+    expect(fn).toContain('const pool = realTabs.length > 0 ? realTabs : savedTabs')
+    expect(fn).toMatch(/UPDATE tabs SET last_active_at = \?, updated_at = \? WHERE id = \?/)
+  })
 })

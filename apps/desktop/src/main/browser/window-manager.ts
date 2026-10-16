@@ -1745,16 +1745,25 @@ function restoreTabs(storeId: string): void {
   // 恢复"上次所在的那个标签"：必须取 last_active_at **最大**的那条，而不是"第一条有值的"。
   // 查询是按 order_index 升序返回的，`find(t => t.last_active_at)` 于是会命中 order 最小的
   // 那个曾被点过的标签——用户点过 #2、#3 最后停在 #3，重启却恢复到 #2（2026-09-28 审查确认）。
-  const lastActive = savedTabs.reduce((best: any, cur: any) => {
+  const pickLastActive = (rows: any[]): any | null => rows.reduce((best: any, cur: any) => {
     const curAt = Number(cur?.last_active_at) || 0
     if (!curAt) return best
     const bestAt = Number(best?.last_active_at) || 0
     return curAt > bestAt ? cur : best
-  }, null) || savedTabs[0]
+  }, null)
+  // 空白页不配当"上次那一页"：旧版本会把 about:blank 写回库里（2026-10-16 实报的残留损坏），
+  // 只按 order_index/时间挑就会把用户恢复到一张空白标签上——只要还有真页面就一律优先真页面。
+  const realTabs = savedTabs.filter((savedTab: any) => savedTab.url && savedTab.url !== 'about:blank')
+  const pool = realTabs.length > 0 ? realTabs : savedTabs
+  const lastActive = pickLastActive(pool) || pool[0]
   const first = (lastActive && state.tabs.get(idMap.get(String(lastActive.id)) || ''))
     || Array.from(state.tabs.values())[0]
   if (first) {
     state.activeTabId = first.id
+    // 把"上次所在标签"的记忆写回去：重建的这批行 last_active_at 全是 NULL，
+    // 不写回的话下次重启又只能退回 order 最小的那个（这个字段本该跨重启有效）。
+    const now = Date.now()
+    getDatabase().prepare('UPDATE tabs SET last_active_at = ?, updated_at = ? WHERE id = ?').run(now, now, first.id)
     emitTabs(storeId)
   }
 }
