@@ -290,23 +290,41 @@ describe('guest id 就绪等待：读不到 ≠ 失败（用户实报回归）',
     expect(nav).toBeTruthy()
     expect(nav![0]).toContain("if (newUrl !== 'about:blank' || tab.url === 'about:blank')")
     expect(nav![0]).toMatch(/tab\.url = newUrl[\s\S]*saveTabToDatabase\(tab\)/)
-    // 关店保存同样不许被 about:blank 洗掉
-    const save = WINDOW_MANAGER.match(/function saveTabs[\s\S]*?\n\}/)
-    expect(save).toBeTruthy()
-    expect(save![0]).toContain("if (live && (live !== 'about:blank' || tab.url === 'about:blank')) tab.url = live")
+    // 关店路径不再保存 URL（标签行直接删掉），所以"关店时被 about:blank 洗掉"这条路已不存在；
+    // 仍然要守住 did-navigate 那条：guest 首次落 about:blank 不许覆盖待导航的真实 URL
+    expect(WINDOW_MANAGER).not.toContain('function saveTabs')
   })
 
-  it('新店第一次打开落到自己的后台地址，而不是一张空白页', () => {
-    const fn = WINDOW_MANAGER.match(/function restoreTabs[\s\S]*?\n\}/)
+  it('打开店铺只给一张干净的后台首页：不再恢复旧标签（2026-10-16 用户要求）', () => {
+    // 恢复逻辑（restoreTabs/saveTabs）整段移除：离开即关、回来保持干净
+    expect(WINDOW_MANAGER).not.toContain('function restoreTabs')
+    expect(WINDOW_MANAGER).not.toContain('function saveTabs')
+    expect(WINDOW_MANAGER).toContain('function createFreshStoreTab')
+    expect(WINDOW_MANAGER).toContain('SELECT admin_url FROM stores WHERE id = ?')
+    // 打开店铺走的是建干净首页那条路
+    expect(WINDOW_MANAGER).toMatch(/try \{\s*\n\s+createFreshStoreTab\(storeId\)/)
+  })
+
+  it('离开店铺就关干净：被任务占用时不打断，等空了再关', () => {
+    const fn = WINDOW_MANAGER.match(/function closeStoreWhenIdle[\s\S]*?\n\}/)
     expect(fn).toBeTruthy()
-    expect(fn![0]).toContain('SELECT admin_url FROM stores WHERE id = ?')
-    expect(fn![0]).not.toContain("createTab(storeId, 'about:blank')")
+    // 不打断任务：用现成的占用理由判据
+    expect(fn![0]).toContain('isStoreLifecycleBlocked(storeId)')
+    expect(fn![0]).toContain('closeStoreBrowser(storeId)')
+    // 用户切回来了就别关
+    expect(fn![0]).toContain('displayedStoreId === storeId')
+    // 切店时触发（只认渲染层发起的用户操作）
+    const display = WINDOW_MANAGER.match(/export function displayStore[\s\S]*?\n\}/)
+    expect(display).toBeTruthy()
+    expect(display![0]).toContain('const previousStoreId = displayedStoreId')
+    expect(display![0]).toContain("if (source === 'renderer' && previousStoreId && previousStoreId !== storeId) closeStoreWhenIdle(previousStoreId)")
   })
 
-  it('恢复时优先挑非空白标签，并把「上次所在标签」写回库（旧库被写坏也能自愈）', () => {
-    const fn = WINDOW_MANAGER.match(/function restoreTabs[\s\S]*?\n\}/)![0]
-    expect(fn).toContain("const realTabs = savedTabs.filter((savedTab: any) => savedTab.url && savedTab.url !== 'about:blank')")
-    expect(fn).toContain('const pool = realTabs.length > 0 ? realTabs : savedTabs')
-    expect(fn).toMatch(/UPDATE tabs SET last_active_at = \?, updated_at = \? WHERE id = \?/)
+  it('关闭店铺时清掉标签行与"稍后再关"定时器（不留陈旧数据）', () => {
+    const fn = WINDOW_MANAGER.match(/export function closeStoreBrowser[\s\S]*?\n\}/)
+    expect(fn).toBeTruthy()
+    expect(fn![0]).toContain('clearIdleCloseTimer(storeId)')
+    expect(fn![0]).toContain("DELETE FROM tabs WHERE store_id = ?")
+    expect(fn![0]).not.toContain('saveTabs(storeId)')
   })
 })

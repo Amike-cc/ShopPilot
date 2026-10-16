@@ -144,6 +144,48 @@ function isStoreLifecycleBlocked(storeId: string): boolean {
   return storeLifecycleBlockReasons(storeId).length > 0
 }
 
+/** 离开店铺后的"稍后再关"定时器（店铺被任务占用时用） */
+const idleCloseTimers = new Map<string, ReturnType<typeof setInterval>>()
+
+function clearIdleCloseTimer(storeId: string): void {
+  const timer = idleCloseTimers.get(storeId)
+  if (timer) {
+    clearInterval(timer)
+    idleCloseTimers.delete(storeId)
+  }
+}
+
+/**
+ * 用户切到别的店铺后，把刚才那家关干净（2026-10-16 用户要求：离开就关、回来是干净的）。
+ *
+ * 两条边界：
+ *   ① **不打断正在用它的东西**：采集/邀约任务、采集专用页、下载、独立窗口都会在
+ *      storeLifecycleBlockReasons 里留下理由——有理由就先不关，每 5 秒回看一眼，
+ *      等它自己空下来再关（最多等 10 分钟，超时交给既有 reap 机制，绝不强杀任务）。
+ *   ② 用户又切回来了（displayedStoreId 变回它）→ 立刻放弃关闭，别把用户正在看的页面关掉。
+ */
+function closeStoreWhenIdle(storeId: string): void {
+  if (!browserStates.has(storeId) || displayedStoreId === storeId) return
+  clearIdleCloseTimer(storeId)
+  if (!isStoreLifecycleBlocked(storeId)) {
+    closeStoreBrowser(storeId)
+    return
+  }
+  const deadline = Date.now() + 10 * 60 * 1000
+  const timer = setInterval(() => {
+    if (!browserStates.has(storeId) || displayedStoreId === storeId) return clearIdleCloseTimer(storeId)
+    if (isStoreLifecycleBlocked(storeId)) {
+      // 还在被任务用着：继续等；超时就不再自己关，交回既有 reap 机制
+      if (Date.now() >= deadline) clearIdleCloseTimer(storeId)
+      return
+    }
+    clearIdleCloseTimer(storeId)
+    closeStoreBrowser(storeId)
+  }, 5000)
+  if (typeof (timer as any).unref === 'function') (timer as any).unref()
+  idleCloseTimers.set(storeId, timer)
+}
+
 function getWarmStoreIdsForReap(): Set<string> {
   return new Set(storeLifecycle.getWarmStoreIds(displayedStoreId, STORE_WARM_CACHE_LIMIT))
 }
@@ -385,7 +427,7 @@ export function openStoreBrowser(storeId: string, opts: { display?: boolean; sou
     browserStates.set(storeId, state)
     storeLifecycle.opened(storeId)
     try {
-      restoreTabs(storeId)
+      createFreshStoreTab(storeId)
       // 打开浏览器只代表 Session 已建立，不能据此推断平台已登录——但**同样不能据此断言未登录**。
       // 只有平台适配器给出明确证据才会切换为 online / needs_login（见 markBrowserWindowState）。
       markBrowserWindowState(storeId)
@@ -421,6 +463,7 @@ export function openStoreBrowser(storeId: string, opts: { display?: boolean; sou
  */
 export function displayStore(storeId: string | null, source: 'renderer' | 'main' = 'main'): void {
   if (!hostWindow || hostWindow.isDestroyed()) return
+  const previousStoreId = displayedStoreId
   if (storeId === null) {
     displayedStoreId = null
     for (const id of browserStates.keys()) applyStoreBackgroundThrottling(id)
@@ -447,6 +490,9 @@ export function displayStore(storeId: string | null, source: 'renderer' | 'main'
   for (const id of browserStates.keys()) applyStoreBackgroundThrottling(id)
   emitTabs(storeId)
   emit(EVENT_CHANNELS.BROWSER_DISPLAY_CHANGED, { storeId, source })
+  // 用户切到别的店铺 = 离开刚才那家：立刻把它关干净（被任务占用时不打断，等空了再关）。
+  // 只认渲染层发起（用户点的）；主进程为任务临时显示的店铺不算"用户离开"。
+  if (source === 'renderer' && previousStoreId && previousStoreId !== storeId) closeStoreWhenIdle(previousStoreId)
   scheduleAllStoreReaps()
 }
 
@@ -488,6 +534,7 @@ function effectiveViewport(): ViewportBounds {
  */
 export function closeStoreBrowser(storeId: string): void {
   clearStoreReapTimer(storeId)
+  clearIdleCloseTimer(storeId)
   storeLifecycle.forget(storeId)
   storeLifecycleBlocks.delete(storeId)
   // 独立窗口不在 browserStates 里，必须显式销毁：否则会出现"店铺已删、独立窗口还放着那家店的页面"，
@@ -503,7 +550,9 @@ export function closeStoreBrowser(storeId: string): void {
   const state = browserStates.get(storeId)
   if (!state) return
 
-  saveTabs(storeId)
+  // 不再为"下次恢复"保存标签（2026-10-16 用户要求：离开即关、回来保持干净）：
+  // 直接清掉本店标签行，免得留一堆永远不会被恢复的陈旧 URL。
+  getDatabase().prepare('DELETE FROM tabs WHERE store_id = ?').run(storeId)
   state.tabs.forEach(tab => {
     detachGuestWebContents(tab)
     // tabReloadGuard 只在 closeTab 里清过；关店铺这条路径漏了 → 长期开关店铺 + 偶发页面崩溃
@@ -1707,83 +1756,19 @@ export async function getMemoryDiagnostics(): Promise<{
 }
 
 /**
- * 从数据库恢复标签页（§4.3 重启恢复）
+ * 打开店铺时建**一张干净的后台首页**（2026-10-16 用户要求：离开即关、回来保持干净）。
+ *
+ * 此前这里从库里恢复上次的全部标签（§4.3 重启恢复），现在不再恢复任何旧标签——
+ * 开哪家店都只给一张它的后台地址；地址非法时 createTab 自己会退化成 about:blank。
+ * 顺带清掉该店的旧标签行：它们已经没有恢复意义，留着只会越积越多。
  */
-function restoreTabs(storeId: string): void {
+function createFreshStoreTab(storeId: string): void {
   const db = getDatabase()
-  const savedTabs = db.prepare(`
-    SELECT * FROM tabs WHERE store_id = ? ORDER BY order_index ASC
-  `).all(storeId) as any[]
-
-  const state = browserStates.get(storeId)!
-
-  if (savedTabs.length === 0) {
-    // 没有任何历史标签 = 这家店第一次打开。别只给一张空白页：用户点开店期待看到的就是它的后台，
-    // 而"空白页 + 正在连接"在 2026-10-16 被实报成"连接不到店铺网页"。地址非法时
-    // createTab 自己会退化成 about:blank（assertNavigableUrl 兜底）。
-    const store = db.prepare('SELECT admin_url FROM stores WHERE id = ?').get(storeId) as { admin_url?: string } | undefined
-    createTab(storeId, store?.admin_url || undefined)
-    return
-  }
-
-  // 恢复会生成新 tabId；先清掉本店铺的旧行，避免每次重开累积翻倍
-  db.prepare('DELETE FROM tabs WHERE store_id = ?').run(storeId)
-
-  // 恢复生成的是新 tabId，旧 savedTab.id 已失效：建旧→新映射，
-  // 否则 lastActive 用旧 id 查新表永远取不到，重启后活动页恢复退化成第一个。
-  const idMap = new Map<string, string>()
-  savedTabs.forEach((savedTab: any) => {
-    const tabId = createTab(storeId, savedTab.url === 'about:blank' ? undefined : savedTab.url)
-    idMap.set(String(savedTab.id), tabId)
-    const tab = state.tabs.get(tabId)
-    if (tab) {
-      tab.isPinned = savedTab.is_pinned === 1
-      tab.title = savedTab.title || tab.title
-    }
-  })
-
-  // 恢复"上次所在的那个标签"：必须取 last_active_at **最大**的那条，而不是"第一条有值的"。
-  // 查询是按 order_index 升序返回的，`find(t => t.last_active_at)` 于是会命中 order 最小的
-  // 那个曾被点过的标签——用户点过 #2、#3 最后停在 #3，重启却恢复到 #2（2026-09-28 审查确认）。
-  const pickLastActive = (rows: any[]): any | null => rows.reduce((best: any, cur: any) => {
-    const curAt = Number(cur?.last_active_at) || 0
-    if (!curAt) return best
-    const bestAt = Number(best?.last_active_at) || 0
-    return curAt > bestAt ? cur : best
-  }, null)
-  // 空白页不配当"上次那一页"：旧版本会把 about:blank 写回库里（2026-10-16 实报的残留损坏），
-  // 只按 order_index/时间挑就会把用户恢复到一张空白标签上——只要还有真页面就一律优先真页面。
-  const realTabs = savedTabs.filter((savedTab: any) => savedTab.url && savedTab.url !== 'about:blank')
-  const pool = realTabs.length > 0 ? realTabs : savedTabs
-  const lastActive = pickLastActive(pool) || pool[0]
-  const first = (lastActive && state.tabs.get(idMap.get(String(lastActive.id)) || ''))
-    || Array.from(state.tabs.values())[0]
-  if (first) {
-    state.activeTabId = first.id
-    // 把"上次所在标签"的记忆写回去：重建的这批行 last_active_at 全是 NULL，
-    // 不写回的话下次重启又只能退回 order 最小的那个（这个字段本该跨重启有效）。
-    const now = Date.now()
-    getDatabase().prepare('UPDATE tabs SET last_active_at = ?, updated_at = ? WHERE id = ?').run(now, now, first.id)
-    emitTabs(storeId)
-  }
-}
-
-function saveTabs(storeId: string): void {
+  const store = db.prepare('SELECT admin_url FROM stores WHERE id = ?').get(storeId) as { admin_url?: string } | undefined
+  const tabId = createTab(storeId, store?.admin_url || undefined)
   const state = browserStates.get(storeId)
-  if (!state) return
-  state.tabs.forEach(tab => {
-    // 记录实时 URL/标题
-    try {
-      if (tab.webContents && !tab.webContents.isDestroyed()) {
-        const live = tab.webContents.getURL() || ''
-        // 与 did-navigate 同一口径：guest 还停在 about:blank（没真正导航过）时不许覆盖
-        // 已知的真实 URL，否则关一次店就把恢复用的 URL 洗成空白页
-        if (live && (live !== 'about:blank' || tab.url === 'about:blank')) tab.url = live
-        tab.title = tab.webContents.getTitle() || tab.title
-      }
-    } catch { /* ignore */ }
-    saveTabToDatabase(tab)
-  })
+  if (state) state.activeTabId = tabId
+  db.prepare('DELETE FROM tabs WHERE store_id = ?').run(storeId)
 }
 
 function saveTabToDatabase(tab: Tab): void {
