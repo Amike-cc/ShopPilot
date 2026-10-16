@@ -13,7 +13,24 @@ import * as BackupManager from '../services/backup-manager'
 import * as ShopSessionManager from '../browser/shop-session-manager'
 import { emitToRenderer } from '../browser/window-manager'
 import { randomUUID } from 'crypto'
+import { z } from 'zod'
 import { ipcOk as ok, ipcFail as err, ipcErrFromUnknown } from './envelope'
+
+const proxyDraftSchema = z.object({
+  type: z.enum(['http', 'https', 'socks5']),
+  host: z.string().trim().min(1).max(255),
+  port: z.number().int().min(1).max(65535),
+  label: z.string().max(200).optional(),
+  tags: z.array(z.string().max(80)).max(50).optional(),
+  expiresAt: z.number().int().positive().nullable().optional()
+}).strict()
+const proxyTestInputSchema = z.object({ proxyDraft: proxyDraftSchema, proxyId: z.string().trim().min(1).max(200).optional() }).strict()
+const proxyCredentialSchema = z.string().max(512).optional()
+const proxyCreateInputSchema = z.object({ draft: proxyDraftSchema, username: proxyCredentialSchema, password: proxyCredentialSchema }).strict()
+const proxyUpdateInputSchema = z.object({
+  proxyId: z.string().trim().min(1).max(200),
+  patch: proxyDraftSchema.partial().extend({ username: proxyCredentialSchema, password: proxyCredentialSchema }).strict()
+}).strict()
 
 function rid(): string { return randomUUID() }
 
@@ -46,8 +63,10 @@ export function registerProxyAndBackupHandlers(): void {
   // ---------- 代理 §6.3 ----------
   handle(IPC_CHANNELS.PROXY_TEST, async (_e: IpcMainInvokeEvent, input: { proxyDraft: any; proxyId?: string }): Promise<IPCResult> => {
     const requestId = rid()
+    const parsed = proxyTestInputSchema.safeParse(input)
+    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理参数不合法', requestId)
     try {
-      const result = await ProxyManager.testProxyAsync(input.proxyDraft, { proxyId: input.proxyId })
+      const result = await ProxyManager.testProxyAsync(parsed.data.proxyDraft, { proxyId: parsed.data.proxyId })
       return ok(result, requestId)
     } catch (e: any) {
       return proxyError(e, requestId)
@@ -56,8 +75,10 @@ export function registerProxyAndBackupHandlers(): void {
 
   handle(IPC_CHANNELS.PROXY_CREATE, async (_e: IpcMainInvokeEvent, input: { draft: any; username?: string; password?: string }): Promise<IPCResult> => {
     const requestId = rid()
+    const parsed = proxyCreateInputSchema.safeParse(input)
+    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理参数不合法', requestId)
     try {
-      return ok(ProxyManager.createProxy(input.draft, input.username, input.password), requestId)
+      return ok(ProxyManager.createProxy(parsed.data.draft, parsed.data.username, parsed.data.password), requestId)
     } catch (e: any) {
       return proxyError(e, requestId)
     }
@@ -74,8 +95,10 @@ export function registerProxyAndBackupHandlers(): void {
 
   handle(IPC_CHANNELS.PROXY_UPDATE, async (_e: IpcMainInvokeEvent, input: { proxyId: string; patch: any }): Promise<IPCResult> => {
     const requestId = rid()
+    const parsed = proxyUpdateInputSchema.safeParse(input)
+    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理参数不合法', requestId)
     try {
-      return ok(await ProxyManager.updateProxy(input.proxyId, input.patch), requestId)
+      return ok(await ProxyManager.updateProxy(parsed.data.proxyId, parsed.data.patch), requestId)
     } catch (e: any) {
       return proxyError(e, requestId)
     }

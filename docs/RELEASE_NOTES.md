@@ -1,3 +1,23 @@
+# ShopPilot 0.4.72 变更说明（指纹运行时、代理体检与安全边界修复）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收。
+
+## 本次更新
+
+- Profile 修改会同步到已运行的店铺 Session、所有标签页、独立窗口和客服页面；UA、UA-CH、时区与文档注入会刷新，必要时自动重载当前页面。
+- document-start 注入的异步失败会记录并立即回退到当前文档与后续 `dom-ready` 注入；补全 UA-CH 高熵页面值和请求头。
+- 补齐视口、DPR、visualViewport、orientation 的一致性覆盖，移除页面可枚举的字符串指纹标记，修复 AudioBuffer 重复读取累积噪声。
+- 代理体检改为真实协议握手、HTTP 状态和出口 IP 检测；结果写入历史与当前代理状态。启动参数补上 WebRTC 非代理 UDP 与 DNS 预取防泄漏策略。
+- Profile IPC 增加运行时 Zod 严格校验，配置复制同步色深、核心数和 UA-CH 落库字段。
+
+## 验证
+
+- `pnpm test`：144 个测试文件、1544 项通过。
+- `pnpm run typecheck`：通过；`pnpm run lint`：0 errors（仓库存量 warnings）。
+- `pnpm run build`：通过；Windows x64 NSIS、安装、启动与关键页面探针将在本版本产物生成后记录。
+
+---
+
 # ShopPilot 0.4.71 变更说明（客服消息实时提醒、店铺名自动获取、店铺浏览器干净开关）
 
 > **构建标签：INTERNAL_BUILD** —— 未配置 Windows 代码签名证书，本包用于内部试用和验收。

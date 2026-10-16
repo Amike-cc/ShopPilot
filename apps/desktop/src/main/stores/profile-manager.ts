@@ -185,8 +185,11 @@ export function updateProfile(storeId: string, patch: ProfilePatch): BrowserProf
 
   const nextVersion = current.configVersion + 1
   const merged = { ...current, ...patch }
-  updates.push('config_version = ?', 'config_digest = ?', 'updated_at = ?')
-  values.push(nextVersion, profileConfigDigest(merged), Date.now(), storeId)
+  // UA-CH 是 UA 的派生配置，不能让旧的落库 JSON 继续代表新 UA。
+  updates.push('ua_client_hints_json = ?', 'config_version = ?', 'config_digest = ?', 'updated_at = ?')
+  const hints = merged.userAgent ? parseUaClientHints(merged.userAgent) : null
+  values.push(hints ? JSON.stringify(hints) : null,
+    nextVersion, profileConfigDigest(merged), Date.now(), storeId)
 
   db.prepare(`UPDATE browser_profiles SET ${updates.join(', ')} WHERE store_id = ?`).run(...values)
   return getProfile(storeId)!
@@ -253,11 +256,14 @@ export function copyProfileConfig(
     db.prepare(`
       UPDATE browser_profiles
       SET user_agent = ?, language = ?, timezone = ?, screen_width = ?, screen_height = ?,
-          webgl_vendor = ?, webgl_renderer = ?,
+          color_depth = ?, hardware_concurrency = ?, webgl_vendor = ?, webgl_renderer = ?,
+          ua_client_hints_json = ?,
           config_version = config_version + 1, config_digest = ?, updated_at = ?
       WHERE store_id = ?
     `).run(source.userAgent, source.language, source.timezone, source.screenWidth, source.screenHeight,
-      source.webglVendor, source.webglRenderer, profileConfigDigest(source), now, targetId)
+      source.colorDepth, source.hardwareConcurrency, source.webglVendor, source.webglRenderer,
+      source.uaClientHintsJson || (parseUaClientHints(source.userAgent) ? JSON.stringify(parseUaClientHints(source.userAgent)) : null),
+      profileConfigDigest(source), now, targetId)
     copied++
   }
   return { copied, skipped }

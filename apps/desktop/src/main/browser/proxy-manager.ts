@@ -5,8 +5,11 @@
 
 import { randomBytes } from 'crypto'
 import { connect, Socket } from 'net'
+import { request as httpRequest } from 'http'
+import { connect as tlsConnect, TLSSocket } from 'tls'
+import { URL } from 'url'
 import { getDatabase } from '../db/database'
-import { saveProxyCredentials, deleteProxyCredentials, credentialRefs } from '../services/credential-store'
+import { saveProxyCredentials, deleteProxyCredentials, credentialRefs, getProxyCredentials } from '../services/credential-store'
 import { reconfigureProxy } from '../browser/session-manager'
 import { writeAudit } from '../services/audit-logger'
 
@@ -159,30 +162,192 @@ export async function deleteProxy(proxyId: string): Promise<{ deleted: boolean; 
   return { deleted: info.changes > 0, unboundStores: info.changes > 0 ? boundStoreIds.length : 0 }
 }
 
-/**
- * 连接体检（异步）：TCP 可达性 + 延迟。写入 proxy_checks（若已知 proxyId）。
- * 退出 IP 检测需外部回显服务（网络相关），此处如实留空。
- */
+export interface ProxyCheckResult {
+  ok: boolean
+  latencyMs: number | null
+  httpStatus: number | null
+  exitIp: string | null
+  geoCountry: string | null
+  errorCode: string | null
+}
+
+const DEFAULT_PROXY_ECHO_URL = 'https://api.ipify.org?format=json'
+
+function proxyAuthHeader(credentials?: { username?: string; password?: string }): string | undefined {
+  if (!credentials?.username) return undefined
+  return `Basic ${Buffer.from(`${credentials.username}:${credentials.password || ''}`).toString('base64')}`
+}
+
+function parseExitIp(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as { ip?: unknown; address?: unknown }
+    const candidate = String(parsed.ip ?? parsed.address ?? '').trim()
+    return /^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-f:]{3,45}$/i.test(candidate) ? candidate : null
+  } catch {
+    const match = /\b(?:\d{1,3}\.){3}\d{1,3}\b/.exec(body)
+    return match?.[0] || null
+  }
+}
+
+function requestOverConnectedSocket(socket: Socket | TLSSocket, target: URL, timeoutMs: number, connectedTls = false): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    let requestSocket: Socket | TLSSocket = socket
+    let settled = false
+    const finish = (error?: Error, result?: { status: number; body: string }) => {
+      if (settled) return
+      settled = true
+      try { requestSocket.destroy() } catch { /* already closed */ }
+      if (error) reject(error); else resolve(result!)
+    }
+    const start = (readySocket: Socket | TLSSocket): void => {
+      requestSocket = readySocket
+      const req = httpRequest({
+        method: 'GET', host: target.hostname, port: target.port || (target.protocol === 'https:' ? 443 : 80),
+        path: `${target.pathname || '/'}${target.search || ''}`,
+        headers: { Host: target.host, Connection: 'close', Accept: 'application/json' },
+        createConnection: () => readySocket,
+        agent: false
+      }, res => {
+        const chunks: Buffer[] = []
+        res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+        res.on('end', () => finish(undefined, { status: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8').slice(0, 64 * 1024) }))
+        res.on('error', error => finish(error))
+      })
+      req.setTimeout(timeoutMs, () => { req.destroy(new Error('PROXY_TIMEOUT')) })
+      req.on('error', error => finish(error))
+      req.end()
+    }
+    if (connectedTls || target.protocol !== 'https:') { start(socket); return }
+    const tlsSocket = tlsConnect({ socket, servername: target.hostname, rejectUnauthorized: true })
+    tlsSocket.once('secureConnect', () => start(tlsSocket))
+    tlsSocket.once('error', error => finish(error))
+    tlsSocket.setTimeout(timeoutMs, () => finish(new Error('PROXY_TIMEOUT')))
+  })
+}
+
+function connectHttpProxy(draft: ProxyDraft, target: URL, timeoutMs: number, credentials?: { username?: string; password?: string }): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const proxyAuth = proxyAuthHeader(credentials)
+    if (draft.type === 'http' && target.protocol === 'http:') {
+      const req = httpRequest({
+        method: 'GET', host: draft.host, port: draft.port,
+        path: target.toString(), headers: { Host: target.host, Connection: 'close', Accept: 'application/json', ...(proxyAuth ? { 'Proxy-Authorization': proxyAuth } : {}) },
+        agent: false
+      }, res => {
+        const chunks: Buffer[] = []
+        res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+        res.on('end', () => resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8').slice(0, 64 * 1024) }))
+      })
+      req.setTimeout(timeoutMs, () => req.destroy(new Error('PROXY_TIMEOUT')))
+      req.on('error', reject)
+      req.end()
+      return
+    }
+    const raw = draft.type === 'https'
+      ? tlsConnect({ host: draft.host, port: draft.port, servername: draft.host, rejectUnauthorized: true })
+      : connect({ host: draft.host, port: draft.port })
+    raw.setTimeout(timeoutMs, () => raw.destroy(new Error('PROXY_TIMEOUT')))
+    raw.once('error', reject)
+    let tunnelStarted = false
+    const startTunnel = (): void => {
+      if (tunnelStarted) return
+      tunnelStarted = true
+      const headers = [`CONNECT ${target.hostname}:${target.port || (target.protocol === 'https:' ? 443 : 80)} HTTP/1.1`, `Host: ${target.host}`, 'Connection: keep-alive']
+      if (proxyAuth) headers.push(`Proxy-Authorization: ${proxyAuth}`)
+      raw.write(`${headers.join('\r\n')}\r\n\r\n`)
+    }
+    if (draft.type === 'https') raw.once('secureConnect', startTunnel)
+    else raw.once('connect', startTunnel)
+    let buffer = Buffer.alloc(0)
+    const onData = (chunk: Buffer): void => {
+      buffer = Buffer.concat([buffer, chunk])
+      const end = buffer.indexOf('\r\n\r\n')
+      if (end < 0) return
+      raw.off('data', onData)
+      const head = buffer.subarray(0, end).toString('latin1')
+      const status = Number(/^HTTP\/\d\.\d\s+(\d+)/i.exec(head)?.[1] || 0)
+      if (status !== 200) { raw.destroy(); reject(new Error(`PROXY_HTTP_${status || 'INVALID'}`)); return }
+      // CONNECT 之后的响应头后如果已经带了正文，交给后续请求前丢弃；代理不会在此处合法返回正文。
+      // HTTPS 代理的第一跳已是 TLS，但 CONNECT 后仍要为目标 HTTPS 建立第二层 TLS。
+      requestOverConnectedSocket(raw, target, timeoutMs, false)
+        .then(resolve, reject)
+    }
+    raw.on('data', onData)
+  })
+}
+
+function connectSocks5Proxy(draft: ProxyDraft, target: URL, timeoutMs: number, credentials?: { username?: string; password?: string }): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const raw = connect({ host: draft.host, port: draft.port })
+    raw.setTimeout(timeoutMs, () => raw.destroy(new Error('PROXY_TIMEOUT')))
+    raw.once('error', reject)
+    let stage: 'greeting' | 'auth' | 'connect' = 'greeting'
+    let buffer = Buffer.alloc(0)
+    const consume = (length: number): Buffer | null => {
+      if (buffer.length < length) return null
+      const out = buffer.subarray(0, length); buffer = buffer.subarray(length); return out
+    }
+    raw.on('data', (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk])
+      try {
+        if (stage === 'greeting') {
+          const head = consume(2); if (!head) return
+          if (head[0] !== 5) throw new Error('PROXY_SOCKS5_INVALID')
+          if (head[1] === 2 && credentials?.username) {
+            const user = Buffer.from(credentials.username); const pass = Buffer.from(credentials.password || '')
+            raw.write(Buffer.concat([Buffer.from([1, user.length]), user, Buffer.from([pass.length]), pass])); stage = 'auth'; return
+          }
+          if (head[1] !== 0) throw new Error('PROXY_AUTH_REQUIRED')
+          stage = 'connect'
+          const host = Buffer.from(target.hostname)
+          const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80))
+          raw.write(Buffer.concat([Buffer.from([5, 1, 0, 3, host.length]), host, Buffer.from([port >> 8, port & 255])]))
+          return
+        }
+        if (stage === 'auth') {
+          const auth = consume(2); if (!auth) return
+          if (auth[1] !== 0) throw new Error('PROXY_AUTH_FAILED')
+          stage = 'connect'
+          const host = Buffer.from(target.hostname)
+          const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80))
+          raw.write(Buffer.concat([Buffer.from([5, 1, 0, 3, host.length]), host, Buffer.from([port >> 8, port & 255])]))
+          return
+        }
+        const head = consume(4); if (!head) return
+        if (head[0] !== 5 || head[1] !== 0) throw new Error('PROXY_SOCKS5_CONNECT_FAILED')
+        const addressLength = head[3] === 1 ? 4 : head[3] === 4 ? 16 : buffer[0]
+        const skip = head[3] === 3 ? 1 + addressLength + 2 : addressLength + 2
+        if (!consume(skip)) return
+        raw.removeAllListeners('data')
+        requestOverConnectedSocket(raw, target, timeoutMs).then(resolve, reject)
+      } catch (error) { raw.destroy(); reject(error) }
+    })
+    raw.once('connect', () => raw.write(Buffer.from([5, credentials?.username ? 2 : 1, 0, ...(credentials?.username ? [2] : [])])))
+  })
+}
+
+/** 代理体检：真实协议握手 + HTTP 状态 + 出口 IP。只做连接测试不会再被标记为健康。 */
 export async function testProxyAsync(
   draft: ProxyDraft,
   opts: { proxyId?: string; timeoutMs?: number } = {}
-): Promise<{ ok: boolean; latencyMs: number | null; errorCode: string | null }> {
+): Promise<ProxyCheckResult> {
+  assertValidDraft(draft)
   const timeoutMs = opts.timeoutMs ?? 4000
   const start = Date.now()
-  const result = await new Promise<{ ok: boolean; latencyMs: number | null; errorCode: string | null }>((resolve) => {
-    let settled = false
-    const sock: Socket = connect({ host: draft.host, port: draft.port })
-    const finish = (ok: boolean, errorCode: string | null) => {
-      if (settled) return
-      settled = true
-      sock.destroy()
-      resolve({ ok, latencyMs: ok ? Date.now() - start : null, errorCode })
-    }
-    sock.setTimeout(timeoutMs)
-    sock.once('connect', () => finish(true, null))
-    sock.once('timeout', () => finish(false, 'PROXY_UNREACHABLE'))
-    sock.once('error', () => finish(false, 'PROXY_UNREACHABLE'))
-  })
+  const credentials = opts.proxyId ? getProxyCredentials(opts.proxyId) : undefined
+  const echoUrl = new URL(process.env.SHOPILOT_PROXY_ECHO_URL || DEFAULT_PROXY_ECHO_URL)
+  let result: ProxyCheckResult
+  try {
+    const response = draft.type === 'socks5'
+      ? await connectSocks5Proxy(draft, echoUrl, timeoutMs, credentials || undefined)
+      : await connectHttpProxy(draft, echoUrl, timeoutMs, credentials || undefined)
+    const exitIp = parseExitIp(response.body)
+    const ok = response.status >= 200 && response.status < 400 && !!exitIp
+    result = { ok, latencyMs: Date.now() - start, httpStatus: response.status || null, exitIp, geoCountry: null, errorCode: ok ? null : (!exitIp ? 'PROXY_EXIT_IP_UNAVAILABLE' : 'PROXY_HTTP_STATUS') }
+  } catch (error) {
+    const msg = String((error as Error)?.message || error)
+    result = { ok: false, latencyMs: null, httpStatus: null, exitIp: null, geoCountry: null, errorCode: msg === 'PROXY_TIMEOUT' ? 'PROXY_TIMEOUT' : msg.startsWith('PROXY_') ? msg.slice(0, 64) : 'PROXY_UNREACHABLE' }
+  }
 
   if (opts.proxyId) {
     recordCheck(opts.proxyId, result)
@@ -190,17 +355,17 @@ export async function testProxyAsync(
   return result
 }
 
-function recordCheck(proxyId: string, result: { ok: boolean; latencyMs: number | null; errorCode: string | null }): void {
+function recordCheck(proxyId: string, result: ProxyCheckResult): void {
   const db = getDatabase()
   const now = Date.now()
   db.prepare(`
     INSERT INTO proxy_checks (id, proxy_id, ok, http_status, latency_ms, exit_ip, geo_country, error_code, checked_at)
-    VALUES (?, ?, ?, NULL, ?, NULL, NULL, ?, ?)
-  `).run(`pc_${randomBytes(10).toString('hex')}`, proxyId, result.ok ? 1 : 0, result.latencyMs, result.errorCode, now)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(`pc_${randomBytes(10).toString('hex')}`, proxyId, result.ok ? 1 : 0, result.httpStatus, result.latencyMs, result.exitIp, result.geoCountry, result.errorCode, now)
 
   db.prepare(`
-    UPDATE proxies SET status = ?, last_latency_ms = ?, last_checked_at = ?, updated_at = ? WHERE id = ?
-  `).run(result.ok ? 'ok' : 'error', result.latencyMs, now, now, proxyId)
+    UPDATE proxies SET status = ?, last_ip = ?, last_latency_ms = ?, last_checked_at = ?, updated_at = ? WHERE id = ?
+  `).run(result.ok ? 'ok' : 'error', result.exitIp, result.latencyMs, now, now, proxyId)
 
   // 每代理保留最近 100 条，滚动清理 - §5.3.1
   db.prepare(`
@@ -259,7 +424,7 @@ export function boundProxyRecords(): ProxyRecord[] {
  * emit 注入避免对 window-manager 的反向依赖。
  */
 export async function sweepBoundProxies(
-  emit: (payload: { proxyId: string; status: string; latencyMs: number | null; errorCode: string | null }) => void
+  emit: (payload: { proxyId: string; status: string; latencyMs: number | null; httpStatus: number | null; exitIp: string | null; errorCode: string | null }) => void
 ): Promise<number> {
   let n = 0
   for (const rec of boundProxyRecords()) {
@@ -270,18 +435,18 @@ export async function sweepBoundProxies(
     )
     n++
     const after = r.ok ? 'ok' : 'error'
-    if (after !== before || !r.ok) emit({ proxyId: rec.id, status: after, latencyMs: r.latencyMs, errorCode: r.errorCode })
+    if (after !== before || !r.ok) emit({ proxyId: rec.id, status: after, latencyMs: r.latencyMs, httpStatus: r.httpStatus, exitIp: r.exitIp, errorCode: r.errorCode })
   }
   return n
 }
 
 /** 单代理复检（开店铺浏览器时的新鲜度检查） */
-export async function revalidateProxy(proxyId: string): Promise<{ status: string; latencyMs: number | null; errorCode: string | null } | null> {
+export async function revalidateProxy(proxyId: string): Promise<{ status: string; latencyMs: number | null; httpStatus: number | null; exitIp: string | null; errorCode: string | null } | null> {
   const rec = getProxy(proxyId)
   if (!rec) return null
   const r = await testProxyAsync(
     { type: rec.type as ProxyType, host: rec.host, port: rec.port },
     { proxyId, timeoutMs: 4000 }
   )
-  return { status: r.ok ? 'ok' : 'error', latencyMs: r.latencyMs, errorCode: r.errorCode }
+  return { status: r.ok ? 'ok' : 'error', latencyMs: r.latencyMs, httpStatus: r.httpStatus, exitIp: r.exitIp, errorCode: r.errorCode }
 }

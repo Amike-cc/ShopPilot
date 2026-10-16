@@ -19,7 +19,7 @@ import {
   restoreStoreSession, restoreCustomerServiceSession, clearStoreSessionSnapshot, cancelCustomerServiceSessionRestore,
   cancelStoreSessionRestore, clearLegacyCustomerServiceCookies
 } from '../services/session-persistence'
-import { parseUaClientHints } from './fingerprint-injector'
+import { parseUaClientHints, refreshFingerprintTargets } from './fingerprint-injector'
 import { getStore, listStores } from '../stores/store-manager'
 import { partitionDirName, sumDirectorySize } from './partition-usage'
 import { buildFallbackUserAgent } from './ua-fallback'
@@ -28,7 +28,8 @@ import { buildFallbackUserAgent } from './ua-fallback'
  * 改写 UA-CH 客户端提示请求头，使之与自定义 User-Agent 成对一致（§4.3）。
  * 仅作用于该 session，不安装到默认 session。
  */
-/** UA-CH 头改写幂等标记（WeakSet：session 被 GC/重建自然失效，不挂实例属性）。 */
+/** UA-CH 配置按 Session 保存；更新 Profile 时只更新配置，不重复叠加 webRequest 监听器。 */
+const uaChSessionConfigs = new WeakMap<Session, ReturnType<typeof parseUaClientHints> | null>()
 const uaChHookedSessions = new WeakSet<Session>()
 
 function applyUserAgentClientHints(sess: Session, userAgent: string): void {
@@ -38,24 +39,42 @@ function applyUserAgentClientHints(sess: Session, userAgent: string): void {
     // DEVELOPMENT_SPEC「只改 UA 造成自相矛盾」明令禁止的状态。**必须留痕**（此前静默 return，
     // 界面还会显示"全部一致"—— 2026-10-16 审查 P1）。
     logMain('warn', `[fingerprint] UA 无法解析出 Client Hints，UA-CH 与 userAgentData 未生效：${String(userAgent).slice(0, 80)}`)
-    return
   }
-  // 每个 session 只注册一次
+  // 每个 Session 只注册一次；回调每次读取 WeakMap，Profile 修改后立即生效。
+  uaChSessionConfigs.set(sess, ch)
   if (uaChHookedSessions.has(sess)) return
   uaChHookedSessions.add(sess)
-  const brandsHeader = ch.brands.map(b => `"${b.brand}";v="${b.version}"`).join(', ')
   sess.webRequest.onBeforeSendHeaders((details, callback) => {
+    const current = uaChSessionConfigs.get(sess)
     const h = { ...details.requestHeaders }
+    if (!current) { callback({ requestHeaders: h }); return }
+    const brandsHeader = current.brands.map(b => `"${b.brand}";v="${b.version}"`).join(', ')
+    const fullVersionList = current.fullVersionList.map(b => `"${b.brand}";v="${b.version}"`).join(', ')
+    const high = highEntropyHeaders(current)
     const set = (name: string, value: string) => {
       // 大小写不敏感地覆盖
       for (const k of Object.keys(h)) if (k.toLowerCase() === name) delete h[k]
       h[name] = value
     }
     set('sec-ch-ua', brandsHeader)
-    set('sec-ch-ua-mobile', ch.mobile ? '?1' : '?0')
-    set('sec-ch-ua-platform', `"${ch.platform}"`)
+    set('sec-ch-ua-mobile', current.mobile ? '?1' : '?0')
+    set('sec-ch-ua-platform', `"${current.platform}"`)
+    set('sec-ch-ua-arch', `"${high.architecture}"`)
+    set('sec-ch-ua-bitness', `"${high.bitness}"`)
+    set('sec-ch-ua-full-version', `"${current.fullVersionList.find(item => item.brand === 'Google Chrome')?.version || current.fullVersionList[0]?.version || ''}"`)
+    set('sec-ch-ua-full-version-list', fullVersionList)
+    set('sec-ch-ua-model', '""')
+    set('sec-ch-ua-platform-version', `"${high.platformVersion}"`)
+    set('sec-ch-ua-wow64', high.wow64 ? '?1' : '?0')
     callback({ requestHeaders: h })
   })
+}
+
+function highEntropyHeaders(ch: NonNullable<ReturnType<typeof parseUaClientHints>>): { architecture: string; bitness: string; platformVersion: string; wow64: boolean } {
+  const ua = ch.platform
+  if (ua === 'macOS' || ua === 'iOS') return { architecture: 'arm', bitness: '64', platformVersion: '15.0.0', wow64: false }
+  if (ua === 'Android' || ua === 'Linux') return { architecture: 'x86', bitness: '64', platformVersion: '15.0.0', wow64: false }
+  return { architecture: 'x86', bitness: '64', platformVersion: '10.0.0', wow64: false }
 }
 
 /** 店铺名转安全文件名片段 */
@@ -309,6 +328,37 @@ export function getActiveStoreSession(storeId: string): Session | undefined {
 
 export function getActiveCustomerServiceSession(storeId: string): Session | undefined {
   return customerServiceSessions.get(storeId)
+}
+
+/**
+ * Profile IPC 更新后的运行时同步。
+ * `setUserAgent` 只影响后续请求，主世界 getter/CDP 脚本也会捕获旧值，
+ * 因此这里同时更新 Session 的 UA/UA-CH 配置并刷新该店所有已登记 WebContents。
+ */
+export async function refreshProfileRuntime(storeId: string, options: { reload?: boolean } = {}): Promise<void> {
+  const profile = getDatabase().prepare(`
+    SELECT user_agent, language FROM browser_profiles WHERE store_id = ?
+  `).get(storeId) as { user_agent?: string; language?: string } | undefined
+  if (!profile) return
+  const userAgent = profile.user_agent || buildFallbackUserAgent(process.versions.chrome || '')
+  const langs = profile.language ? `${profile.language},en-US` : undefined
+  const sessions = new Set<Session>()
+  const active = activeSessions.get(storeId)
+  const customer = customerServiceSessions.get(storeId)
+  if (active) sessions.add(active)
+  if (customer) sessions.add(customer)
+  for (const sess of sessions) {
+    try {
+      sess.setUserAgent(userAgent, langs)
+      applyUserAgentClientHints(sess, userAgent)
+      if (profile.language) {
+        try { sess.setSpellCheckerLanguages([profile.language]) } catch { /* 不支持该语言词典时继续 */ }
+      }
+    } catch (error) {
+      logMain('warn', `[fingerprint] 更新 Session UA 失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+    }
+  }
+  await refreshFingerprintTargets(storeId, { reload: options.reload !== false })
 }
 
 /** Wait until customer-service proxy/session policy is ready before its first navigation. */

@@ -41,7 +41,7 @@ import * as Security from './services/security-manager'
 import { setBrowserHostWindow, setBrowserViewsVisible, emitToRenderer } from './browser/window-manager'
 import { customerMessageMonitor } from './services/customer-message-monitor'
 import { clearProxyAuthTracking, applyDefaultSessionPermissions, registerCustomerServiceWebContents } from './browser/session-manager'
-import { verifyStoreFingerprint } from './browser/fingerprint-injector'
+import { verifyStoreFingerprint, registerFingerprintTarget, unregisterFingerprintTarget } from './browser/fingerprint-injector'
 import { createStore, deleteStorePermanent, getStore, listStores } from './stores/store-manager'
 import { updateProfile } from './stores/profile-manager'
 import { assertNavigableUrl } from '@shared/navigation'
@@ -300,6 +300,11 @@ function createWindow(): void {
         return
       }
       registerCustomerServiceWebContents(guestWebContents, customerServiceStoreId)
+      const fingerprintTargetId = `customer-webview:${guestWebContents.id}`
+      registerFingerprintTarget(customerServiceStoreId, fingerprintTargetId, guestWebContents)
+      guestWebContents.once('destroyed', () => {
+        try { unregisterFingerprintTarget(customerServiceStoreId, fingerprintTargetId) } catch { /* guest 关闭时幂等 */ }
+      })
       guestWebContents.setWindowOpenHandler(({ url }: { url: string }) => {
         const store = getStore(customerServiceStoreId)
         if (!store || !isAllowedCustomerServiceUrl(store.platform, url)) {
@@ -628,6 +633,12 @@ async function handleStartupFailure(error: any): Promise<void> {
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 }
+
+// 店铺代理必须覆盖 WebRTC 出口；禁用非代理 UDP，避免 ICE 候选把本机局域网/真实公网地址
+// 暴露给远程页面。该开关需在 app ready 前设置，所有店铺 Session 继承同一策略。
+app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'disable_non_proxied_udp')
+app.commandLine.appendSwitch('webrtc.ip_handling_policy', 'disable_non_proxied_udp')
+app.commandLine.appendSwitch('dns-prefetch-disable')
 
 // 商品图片只读协议（v4 §4.7）：scheme 权限必须在 app ready 之前登记
 registerProductMediaScheme()

@@ -1471,6 +1471,10 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
       partition: `persist:store_${storeId}`
     }
   })
+  const fingerprintTargetId = `standalone:${win.webContents.id}`
+  try { registerFingerprintTarget(storeId, fingerprintTargetId, win.webContents) } catch (error) {
+    logMain('warn', `[fingerprint] 独立窗口注入注册失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+  }
 
   // tab.url 建页时已过白名单；window.open 的 targetUrl 来自页面，必须再过一遍
   if (url) {
@@ -1505,6 +1509,7 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
   list.add(win)
   standaloneWindows.set(storeId, list)
   win.on('closed', () => {
+    try { unregisterFingerprintTarget(storeId, fingerprintTargetId) } catch { /* 窗口关闭时幂等 */ }
     const current = standaloneWindows.get(storeId)
     current?.delete(win)
     if (current && current.size === 0) standaloneWindows.delete(storeId)

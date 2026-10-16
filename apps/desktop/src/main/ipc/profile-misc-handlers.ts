@@ -33,7 +33,29 @@ import { filterRowsByLicenseKey, licenseScopeLabel } from '@shared/store-license
 import { ordersProfileFor } from '@shared/constants/orders'
 import { mapOrdersRows, orderColumnLabel } from '@shared/orders-steps'
 import { randomUUID } from 'crypto'
+import { z } from 'zod'
 import { ipcOk as success, ipcFail as error } from './envelope'
+import { refreshProfileRuntime } from '../browser/session-manager'
+
+const profileStoreIdSchema = z.string().trim().min(1).max(200)
+const profilePatchSchema = z.object({
+  userAgent: z.string().trim().min(1).max(512).optional(),
+  language: z.string().trim().regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/).optional(),
+  timezone: z.string().trim().min(1).max(100).optional(),
+  screenWidth: z.number().int().min(1).max(16384).optional(),
+  screenHeight: z.number().int().min(1).max(16384).optional(),
+  hardwareConcurrency: z.number().int().min(1).max(256).optional(),
+  colorDepth: z.number().int().min(1).max(64).optional(),
+  webglVendor: z.string().trim().min(1).max(256).optional(),
+  webglRenderer: z.string().trim().min(1).max(512).optional()
+}).strict()
+const profileUpdateInputSchema = z.object({ storeId: profileStoreIdSchema, patch: profilePatchSchema }).strict()
+const profileStoreInputSchema = z.object({ storeId: profileStoreIdSchema }).strict()
+const profileLockInputSchema = z.object({ storeId: profileStoreIdSchema, locked: z.boolean() }).strict()
+const profileCopyInputSchema = z.object({
+  sourceStoreId: profileStoreIdSchema,
+  targetStoreIds: z.array(profileStoreIdSchema).max(200)
+}).strict()
 
 
 function generateRequestId(): string {
@@ -124,8 +146,10 @@ export function registerProfileAndMiscHandlers(): void {
   // profile:get
   handle(IPC_CHANNELS.PROFILE_GET, async (_e: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
+    const parsed = profileStoreInputSchema.safeParse(input)
+    if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, 'storeId 无效', requestId)
     try {
-      const profile = ProfileManager.getProfile(input.storeId)
+      const profile = ProfileManager.getProfile(parsed.data.storeId)
       if (!profile) return error(ERROR_CODES.PROFILE_NOT_READY.code, ERROR_CODES.PROFILE_NOT_READY.message, requestId)
       return success(profile, requestId)
     } catch (err: any) {
@@ -136,13 +160,16 @@ export function registerProfileAndMiscHandlers(): void {
   // profile:update（locked 拒绝 + config_version 递增，§6.6）
   handle(IPC_CHANNELS.PROFILE_UPDATE, async (_e: IpcMainInvokeEvent, input: { storeId: string, patch: ProfileManager.ProfilePatch }): Promise<IPCResult> => {
     const requestId = generateRequestId()
+    const parsed = profileUpdateInputSchema.safeParse(input)
+    if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, '环境配置参数不合法', requestId)
     try {
-      const profile = ProfileManager.updateProfile(input.storeId, input.patch)
-      writeAudit('profile.update', 'success', { storeId: input.storeId, requestId })
+      const profile = ProfileManager.updateProfile(parsed.data.storeId, parsed.data.patch)
+      await refreshProfileRuntime(parsed.data.storeId)
+      writeAudit('profile.update', 'success', { storeId: parsed.data.storeId, requestId })
       return success(profile, requestId)
     } catch (err: any) {
       if (err instanceof ProfileManager.ProfileLockedError) {
-        writeAudit('profile.update', 'failure', { storeId: input.storeId, requestId })
+        writeAudit('profile.update', 'failure', { storeId: parsed.data.storeId, requestId })
         return error(ERROR_CODES.PROFILE_LOCKED.code, ERROR_CODES.PROFILE_LOCKED.message, requestId)
       }
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
@@ -152,8 +179,10 @@ export function registerProfileAndMiscHandlers(): void {
   // profile:verify - 逐字段 实际/期望/已验证|未验证（§4.3：浏览器未开或注入失败如实标未验证）
   handle(IPC_CHANNELS.PROFILE_VERIFY, async (_e: IpcMainInvokeEvent, input: { storeId: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
+    const parsed = profileStoreInputSchema.safeParse(input)
+    if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, 'storeId 无效', requestId)
     try {
-      return success({ items: await verifyStoreFingerprint(input.storeId) }, requestId)
+      return success({ items: await verifyStoreFingerprint(parsed.data.storeId) }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }
@@ -162,9 +191,11 @@ export function registerProfileAndMiscHandlers(): void {
   // profile:lock
   handle(IPC_CHANNELS.PROFILE_LOCK, async (_e: IpcMainInvokeEvent, input: { storeId: string, locked: boolean }): Promise<IPCResult> => {
     const requestId = generateRequestId()
+    const parsed = profileLockInputSchema.safeParse(input)
+    if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, '锁定参数不合法', requestId)
     try {
-      const profile = ProfileManager.lockProfile(input.storeId, input.locked)
-      writeAudit(input.locked ? 'profile.lock' : 'profile.unlock', 'success', { storeId: input.storeId, requestId })
+      const profile = ProfileManager.lockProfile(parsed.data.storeId, parsed.data.locked)
+      writeAudit(parsed.data.locked ? 'profile.lock' : 'profile.unlock', 'success', { storeId: parsed.data.storeId, requestId })
       return success(profile, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
@@ -174,9 +205,12 @@ export function registerProfileAndMiscHandlers(): void {
   // profile:copyConfig - 只复制配置，不含会话/凭据（§6.6）
   handle(IPC_CHANNELS.PROFILE_COPY_CONFIG, async (_e: IpcMainInvokeEvent, input: { sourceStoreId: string, targetStoreIds: string[] }): Promise<IPCResult> => {
     const requestId = generateRequestId()
+    const parsed = profileCopyInputSchema.safeParse(input)
+    if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, '复制配置参数不合法', requestId)
     try {
-      const result = ProfileManager.copyProfileConfig(input.sourceStoreId, input.targetStoreIds)
-      writeAudit('profile.copyConfig', 'success', { storeId: input.sourceStoreId, requestId })
+      const result = ProfileManager.copyProfileConfig(parsed.data.sourceStoreId, parsed.data.targetStoreIds)
+      await Promise.all(parsed.data.targetStoreIds.map(storeId => refreshProfileRuntime(storeId)))
+      writeAudit('profile.copyConfig', 'success', { storeId: parsed.data.sourceStoreId, requestId })
       return success(result, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)

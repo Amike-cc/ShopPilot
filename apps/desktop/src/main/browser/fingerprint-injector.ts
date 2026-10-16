@@ -32,6 +32,7 @@ interface FpOverrides {
 interface TabReg {
   wc: WebContents
   attached: boolean
+  overrides: FpOverrides | null
   /** document-start 注入脚本的 CDP 标识（注销时要撤掉，否则一直跟着这个 WebContents） */
   scriptId?: string | null
 }
@@ -136,10 +137,12 @@ export function buildInjectScript(o: FpOverrides): string {
     deviceMemory: o.hardwareConcurrency && o.hardwareConcurrency >= 8 ? 8 : (o.hardwareConcurrency ? 4 : null)
   }
   return `(() => {
-  // 装过就不再装：注册时会对"当前文档"补一次注入，和 document-start 钩子可能在同一文档上撞车，
-  // 重复执行会把 Function.prototype.toString 一层层包下去
-  if (globalThis.__fpReady) return;
-  globalThis.__fpReady = true;
+  // 注册时会对"当前文档"补一次注入，和 document-start 钩子可能在同一文档上撞车。
+  // 用不可枚举 Symbol 保存状态，避免向页面暴露可搜索的产品/自动化标记。
+  const stateKey = Symbol.for('toStringTag');
+  if (navigator[stateKey]) return;
+  const state = { masked: new WeakMap(), canvas: false, canvasGet: null, audio: false, analyser: false, webgl: new WeakSet() };
+  try { Object.defineProperty(navigator, stateKey, { value: state, configurable: false }); } catch (e) { return; }
   const P = ${JSON.stringify(payload)};
   // Chromium 只暴露 0.25/0.5/1/2/4/8 这几档，越界的值本身就是特征
   const clampDeviceMemory = (v) => [0.25, 0.5, 1, 2, 4, 8].includes(v) ? v : 8;
@@ -148,7 +151,7 @@ export function buildInjectScript(o: FpOverrides): string {
     //    Object.getOwnPropertyDescriptor(Navigator.prototype,'userAgent').get.toString()
     //    就能看出是不是 [native code]（2026-10-16 审查 P1）。这里统一登记 + 代理 toString。
     const nativeToString = Function.prototype.toString;
-    const masked = new WeakMap();
+    const masked = state.masked;
     const mask = (fn, label) => { try { masked.set(fn, 'function ' + (label || fn.name || '') + '() { [native code] }'); } catch (e) {} return fn; };
     const toStringProxy = new Proxy(nativeToString, {
       apply: (target, thisArg, args) => {
@@ -189,6 +192,37 @@ export function buildInjectScript(o: FpOverrides): string {
       define(screen, 'colorDepth', () => P.colorDepth, 'get colorDepth');
       define(screen, 'pixelDepth', () => P.colorDepth, 'get pixelDepth');
     }
+    // 视口字段必须和实际窗口保持同一套度量：屏幕尺寸是显示器档案，视口尺寸仍取
+    // Chromium 当前窗口的真实布局值，避免 screen 与任务引擎看到的 innerWidth 自相矛盾。
+    const rawInnerWidth = Number(window.innerWidth);
+    const rawInnerHeight = Number(window.innerHeight);
+    const rawOuterWidth = Number(window.outerWidth);
+    const rawOuterHeight = Number(window.outerHeight);
+    const rawDpr = Number(window.devicePixelRatio);
+    const viewportWidth = rawInnerWidth > 0 ? rawInnerWidth : (P.screenWidth || 1);
+    const viewportHeight = rawInnerHeight > 0 ? rawInnerHeight : (P.screenHeight || 1);
+    define(window, 'innerWidth', () => viewportWidth, 'get innerWidth');
+    define(window, 'innerHeight', () => viewportHeight, 'get innerHeight');
+    define(window, 'outerWidth', () => rawOuterWidth > 0 ? rawOuterWidth : viewportWidth, 'get outerWidth');
+    define(window, 'outerHeight', () => rawOuterHeight > 0 ? rawOuterHeight : viewportHeight, 'get outerHeight');
+    define(window, 'devicePixelRatio', () => rawDpr > 0 ? rawDpr : 1, 'get devicePixelRatio');
+    try {
+      const vv = window.visualViewport;
+      if (vv) {
+        const rawScale = Number(vv.scale);
+        define(vv, 'width', () => viewportWidth, 'get width');
+        define(vv, 'height', () => viewportHeight, 'get height');
+        define(vv, 'scale', () => rawScale > 0 ? rawScale : 1, 'get scale');
+      }
+    } catch (e) {}
+    try {
+      const orientation = screen.orientation;
+      if (orientation) {
+        const landscape = viewportWidth >= viewportHeight;
+        define(orientation, 'type', () => landscape ? 'landscape-primary' : 'portrait-primary', 'get type');
+        define(orientation, 'angle', () => 0, 'get angle');
+      }
+    } catch (e) {}
     if (P.userAgent && P.clientHints) {
       const parsed = P.clientHints;
       define(navigator, 'userAgentData', () => ({
@@ -201,7 +235,7 @@ export function buildInjectScript(o: FpOverrides): string {
             architecture: P.highEntropy.architecture,
             bitness: P.highEntropy.bitness,
             brands: parsed.brands,
-            fullVersionList: parsed.brands,
+            fullVersionList: parsed.fullVersionList,
             mobile: parsed.mobile,
             model: '',
             platform: parsed.platform,
@@ -218,10 +252,8 @@ export function buildInjectScript(o: FpOverrides): string {
       // 打补丁的标记用**无描述 Symbol**：属性名不能带品牌串（曾用带产品名的属性名，
       // 页面一行 Object.keys 就能看出被本软件改过 —— 2026-10-16 审查；说明写在本函数 JSDoc 里，
       // 这份脚本是要注入页面的字符串，里面不留任何品牌串）
-      const PATCHED = Symbol();
       const patch = (proto) => {
-        if (!proto || proto[PATCHED]) return;
-        try { Object.defineProperty(proto, PATCHED, { value: true }); } catch (e) { return }
+        if (!proto || state.webgl.has(proto)) return;
         const orig = proto.getParameter;
         const patched = mask(function (pname) {
           if (P.webglVendor && (pname === 37445 || pname === 7936)) return P.webglVendor;
@@ -229,6 +261,7 @@ export function buildInjectScript(o: FpOverrides): string {
           return orig.call(this, pname);
         }, 'getParameter');
         try { Object.defineProperty(proto, 'getParameter', { value: patched, writable: true, configurable: true }); } catch (e) {}
+        try { state.webgl.add(proto); } catch (e) {}
       };
       // 只用 window.* 取构造器：裸全局在某些上下文里不存在，会让整段补丁静默失效
       // （注意：这段是**要注入页面执行的 JS 字符串**，里面不能出现 TS 语法）
@@ -274,15 +307,16 @@ export function buildInjectScript(o: FpOverrides): string {
         if (typeof HTMLCanvasElement !== 'undefined') {
           const CanvasProto = HTMLCanvasElement.prototype;
           const ctxProto = typeof CanvasRenderingContext2D !== 'undefined' ? CanvasRenderingContext2D.prototype : null;
-          if (ctxProto && !ctxProto.__noised) {
+          if (ctxProto && !state.canvas) {
             const origGet = ctxProto.getImageData;
             try {
-              Object.defineProperty(ctxProto, '__noised', { value: true });
+              state.canvasGet = origGet;
               Object.defineProperty(ctxProto, 'getImageData', { value: mask(function () {
                 const img = origGet.apply(this, arguments);
                 try { perturb(img.data) } catch (e) {}
                 return img;
               }, 'getImageData'), writable: true, configurable: true });
+              state.canvas = true;
             } catch (e) {}
           }
           const origToDataURL = CanvasProto.toDataURL;
@@ -291,7 +325,10 @@ export function buildInjectScript(o: FpOverrides): string {
               try {
                 const ctx = this.getContext && this.getContext('2d');
                 if (!ctx || !this.width || !this.height) return origToDataURL.apply(this, arguments);
-                const img = ctx.getImageData(0, 0, this.width, this.height);
+                // 绕过上面的读出补丁，确保 toDataURL 只扰动一次。
+                const img = state.canvasGet
+                  ? state.canvasGet.call(ctx, 0, 0, this.width, this.height)
+                  : ctx.getImageData(0, 0, this.width, this.height);
                 perturb(img.data);
                 const copy = document.createElement('canvas');
                 copy.width = this.width; copy.height = this.height;
@@ -301,28 +338,30 @@ export function buildInjectScript(o: FpOverrides): string {
             }, 'toDataURL'), writable: true, configurable: true });
           } catch (e) {}
         }
-        if (typeof AudioBuffer !== 'undefined' && AudioBuffer.prototype && !AudioBuffer.prototype.__noised) {
+        if (typeof AudioBuffer !== 'undefined' && AudioBuffer.prototype && !state.audio) {
           const origChannel = AudioBuffer.prototype.getChannelData;
           try {
-            Object.defineProperty(AudioBuffer.prototype, '__noised', { value: true });
             Object.defineProperty(AudioBuffer.prototype, 'getChannelData', { value: mask(function (channel) {
               const data = origChannel.call(this, channel);
               try {
                 // 同样按位置定噪声（与调用次数无关，见上面 canvas 的说明）
                 const pixels = data.length;
+                const copy = new data.constructor(data);
                 if (pixels > 0) {
                   for (let k = 0; k < 8; k++) {
                     const idx = mix(P.noiseSeed | 0, (k + 1) * 7919) % pixels;
                     const sign = (mix(P.noiseSeed | 0, idx) & 1) === 1 ? 1 : -1;
-                    data[idx] = data[idx] + sign * 1e-7; // 听不出来，但频域指纹变了
+                    copy[idx] = copy[idx] + sign * 1e-7; // 听不出来，但频域指纹变了
                   }
                 }
+                return copy;
               } catch (e) {}
               return data;
             }, 'getChannelData'), writable: true, configurable: true });
+            state.audio = true;
           } catch (e) {}
         }
-        if (typeof AnalyserNode !== 'undefined' && AnalyserNode.prototype) {
+        if (typeof AnalyserNode !== 'undefined' && AnalyserNode.prototype && !state.analyser) {
           const origFloat = AnalyserNode.prototype.getFloatFrequencyData;
           try {
             Object.defineProperty(AnalyserNode.prototype, 'getFloatFrequencyData', { value: mask(function (array) {
@@ -335,6 +374,7 @@ export function buildInjectScript(o: FpOverrides): string {
                 }
               } catch (e) {}
             }, 'getFloatFrequencyData'), writable: true, configurable: true });
+            state.analyser = true;
           } catch (e) {}
         }
       } catch (e) { /* 噪声装不上不影响其它改写 */ }
@@ -349,10 +389,10 @@ export function buildInjectScript(o: FpOverrides): string {
  */
 export function registerFingerprintTarget(storeId: string, tabId: string, wc: WebContents): void {
   if (!tabs.has(storeId)) tabs.set(storeId, new Map())
-  const reg: TabReg = { wc, attached: false }
+  const reg: TabReg = { wc, attached: false, overrides: readOverrides(storeId) }
   tabs.get(storeId)!.set(tabId, reg)
 
-  const o = readOverrides(storeId)
+  const o = reg.overrides
   if (!o) return
 
   // CDP 时区覆盖（attach 失败 → 字段保持未验证，不影响其余能力）
@@ -363,8 +403,9 @@ export function registerFingerprintTarget(storeId: string, tabId: string, wc: We
       if (wc.isDestroyed()) return
       wc.debugger.attach('1.3')
       reg.attached = true
-      wc.debugger.sendCommand('Emulation.setTimezoneOverride', { timezoneId: o.timezone }).catch(() => {
+      wc.debugger.sendCommand('Emulation.setTimezoneOverride', { timezoneId: o.timezone }).catch((error: unknown) => {
         reg.attached = false
+        logMain('warn', `[fingerprint] 时区覆盖失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
       })
     } catch {
       // 已有其他调试会话等 → 放弃时区覆盖
@@ -385,6 +426,7 @@ export function registerFingerprintTarget(storeId: string, tabId: string, wc: We
    * 在**每个新文档、每个框架**（含 iframe）的页面脚本之前注入。attach 不可用（调试器被别的会话占用/
    * 总开关关闭）时返回 false，由调用方退回 dom-ready 注入。
    */
+  let injectFallback: (() => void) | null = null
   const injectAtDocumentStart = (): boolean => {
     if (cdpDisabled || wc.isDestroyed()) return false
     try {
@@ -399,7 +441,13 @@ export function registerFingerprintTarget(storeId: string, tabId: string, wc: We
             reg.scriptId = String((result as { identifier?: unknown })?.identifier || '') || null
           })
           .catch((error: unknown) => {
+            reg.scriptId = null
             logMain('warn', `[fingerprint] document-start 注入失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+            // Promise 异步拒绝不能被同步 true 吞掉：当前文档立即补注入，后续导航挂 dom-ready 兜底。
+            if (injectFallback) {
+              try { wc.on('dom-ready', injectFallback) } catch { /* 页面关闭时幂等 */ }
+              injectFallback()
+            }
           })
       }
       return true
@@ -415,11 +463,14 @@ export function registerFingerprintTarget(storeId: string, tabId: string, wc: We
   const inject = () => {
     try {
       if (wc.isDestroyed()) return
-      wc.executeJavaScript(buildInjectScript(o), true).catch((error: unknown) => {
+      const latest = reg.overrides || readOverrides(storeId)
+      if (!latest) return
+      wc.executeJavaScript(buildInjectScript(latest), true).catch((error: unknown) => {
         logMain('warn', `[fingerprint] 注入失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
       })
     } catch { /* ignore */ }
   }
+  injectFallback = inject
 
   if (!injectAtDocumentStart()) {
     wc.on('dom-ready', inject)
@@ -429,6 +480,63 @@ export function registerFingerprintTarget(storeId: string, tabId: string, wc: We
   // 就是没被覆盖的宿主真值，而另一家店已被覆盖成 zh-CN,en-US）
   inject()
   wc.on('did-navigate', tryTimezone)
+}
+
+/**
+ * 重新把最新 Profile 应用到已经存在的 WebContents。
+ * Profile 更新不能只改 SQLite：旧 document 的 getter、CDP 时区和后续 document
+ * 的 addScript 都会继续捕获旧值。这里在不重复挂业务事件监听的前提下替换脚本，
+ * 并可选刷新页面让 session UA/UA-CH 在真实导航中生效。
+ */
+export async function refreshFingerprintTargets(
+  storeId: string,
+  options: { reload?: boolean } = {}
+): Promise<void> {
+  const m = tabs.get(storeId)
+  if (!m) return
+  const cdpDisabled = process.env.SHOPILOT_DISABLE_CDP_FP === '1'
+  for (const reg of m.values()) {
+    reg.overrides = readOverrides(storeId)
+    const o = reg.overrides
+    const wc = reg.wc
+    if (!o || wc.isDestroyed()) continue
+    try {
+      if (reg.attached && reg.scriptId) {
+        await wc.debugger.sendCommand('Page.removeScriptToEvaluateOnNewDocument', { identifier: reg.scriptId }).catch(() => undefined)
+        reg.scriptId = null
+      }
+      if (!cdpDisabled) {
+        if (!reg.attached) {
+          try { wc.debugger.attach('1.3'); reg.attached = true } catch (error) {
+            reg.attached = false
+            logMain('warn', `[fingerprint] 刷新时调试器不可用 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+          }
+        }
+        if (reg.attached) {
+          try {
+            const result = await wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', { source: buildInjectScript(o), runImmediately: true })
+            reg.scriptId = String((result as { identifier?: unknown })?.identifier || '') || null
+          } catch (error) {
+            reg.scriptId = null
+            logMain('warn', `[fingerprint] 刷新 document-start 注入失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+            try { wc.on('dom-ready', () => { void wc.executeJavaScript(buildInjectScript(o), true).catch(() => {}) }) } catch { /* 页面关闭时幂等 */ }
+          }
+          try { await wc.debugger.sendCommand('Emulation.setTimezoneOverride', { timezoneId: o.timezone }) } catch (error) {
+            logMain('warn', `[fingerprint] 刷新时区覆盖失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+          }
+        }
+      }
+      await wc.executeJavaScript(buildInjectScript(o), true).catch((error: unknown) => {
+        logMain('warn', `[fingerprint] 刷新当前文档注入失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+      })
+      if (options.reload !== false && typeof (wc as any).reload === 'function' &&
+        (typeof (wc as any).isLoading !== 'function' || !(wc as any).isLoading())) {
+        try { wc.reload() } catch (error) { logMain('warn', `[fingerprint] 刷新页面失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 120)}`) }
+      }
+    } catch (error) {
+      logMain('warn', `[fingerprint] 更新运行时指纹失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+    }
+  }
 }
 
 export function unregisterFingerprintTarget(storeId: string, tabId: string): void {
@@ -468,6 +576,8 @@ export interface ActualValuesResult {
 export async function collectActualValues(storeId: string): Promise<ActualValuesResult> {
   const m = tabs.get(storeId)
   if (!m) return { state: 'no-tab', values: null }
+  let sawTimeout = false
+  let sawException = false
   for (const reg of m.values()) {
     if (reg.wc.isDestroyed() || reg.wc.isCrashed?.()) continue
     try {
@@ -511,6 +621,7 @@ export async function collectActualValues(storeId: string): Promise<ActualValues
         timeout
       ])
       if (result === 'timeout') {
+        sawTimeout = true
         logMain('warn', `[fingerprint] 实测超时（4s）：store=${storeId}`)
         continue
       }
@@ -518,12 +629,13 @@ export async function collectActualValues(storeId: string): Promise<ActualValues
       logMain('warn', `[fingerprint] 实测脚本在页面里抛错：store=${storeId}`)
       continue
     } catch (error) {
+      sawException = true
       logMain('warn', `[fingerprint] 实测执行失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
       continue
     }
   }
-  // 有标签但都没测成：区分"超时"还是"异常"无从细分时，如实给 timeout（页面通常只是慢）
-  return { state: m.size > 0 ? 'timeout' : 'no-tab', values: null }
+  // 有标签但都没测成时保留真实原因；如果两类都发生，超时通常是页面未就绪的主因。
+  return { state: m.size > 0 ? (sawTimeout ? 'timeout' : sawException ? 'exception' : 'exception') : 'no-tab', values: null }
 }
 
 /**
@@ -551,7 +663,11 @@ export async function verifyStoreFingerprint(storeId: string): Promise<ProfileVe
     items.push({
       field: '实测取值',
       expected: '打开店铺页面后实测',
-      actual: collected.state === 'no-tab' ? '没有已注册的标签页' : '页面 4 秒内未响应（可能正在加载）',
+      actual: collected.state === 'no-tab'
+        ? '没有已注册的标签页'
+        : collected.state === 'exception'
+          ? '页面脚本执行失败（请重载页面后重试）'
+          : '页面 4 秒内未响应（可能正在加载）',
       state: 'unverified'
     })
   }

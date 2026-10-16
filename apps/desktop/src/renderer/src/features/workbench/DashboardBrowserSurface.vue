@@ -978,8 +978,13 @@ async function testProxy(proxy: ProxyLite) {
   testingIds.value = [...testingIds.value, proxy.id]
   const result = await window.shopilot.proxy.test({ type: proxy.type, host: proxy.host, port: proxy.port }, proxy.id)
   testingIds.value = testingIds.value.filter(id => id !== proxy.id)
-  if (result.ok && result.data?.ok) ws.toast(`代理可达，延迟 ${result.data.latencyMs} ms`, 'success')
-  else ws.toast(`代理不可达：${result.ok ? result.data?.errorCode || '出口异常' : result.error.message}`, 'error')
+  if (result.ok && result.data?.ok) {
+    const detail = [result.data.httpStatus ? `HTTP ${result.data.httpStatus}` : '', result.data.exitIp ? `出口 ${result.data.exitIp}` : '', result.data.latencyMs != null ? `${result.data.latencyMs} ms` : ''].filter(Boolean).join(' · ')
+    ws.toast(`代理可用${detail ? `（${detail}）` : ''}`, 'success')
+  } else {
+    const detail = result.ok ? [result.data?.errorCode || '出口异常', result.data?.httpStatus ? `HTTP ${result.data.httpStatus}` : ''].filter(Boolean).join(' · ') : result.error.message
+    ws.toast(`代理不可用：${detail}`, 'error')
+  }
   void refreshEnvironment()
 }
 

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 import { onCustomerServiceSessionClosed, registerCustomerServiceWebContents, waitForCustomerServiceSessionReady } from '../browser/session-manager'
+import { registerFingerprintTarget, unregisterFingerprintTarget } from '../browser/fingerprint-injector'
 import { getStore, listStores } from '../stores/store-manager'
 import { getDatabase } from '../db/database'
 import { displayStore as displayStoreInMain, emitToRenderer, isHostWindowFocused } from '../browser/window-manager'
@@ -240,8 +241,13 @@ function getCustomerServiceMonitorWindow(storeId: string): BrowserWindow {
     }
   })
   monitorWindow.webContents.setBackgroundThrottling(false)
+  const fingerprintTargetId = `customer-monitor:${storeId}:${monitorWindow.webContents.id}`
+  try { registerFingerprintTarget(storeId, fingerprintTargetId, monitorWindow.webContents) } catch (error) {
+    logMain('warn', `[fingerprint] 客服监控窗口注入注册失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+  }
   installCustomerMonitorWindowSecurity(monitorWindow, storeId)
   monitorWindow.on('closed', () => {
+    try { unregisterFingerprintTarget(storeId, fingerprintTargetId) } catch { /* 窗口关闭时幂等 */ }
     if (customerServiceMonitorWindows.get(storeId) === monitorWindow) customerServiceMonitorWindows.delete(storeId)
   })
   customerServiceMonitorWindows.set(storeId, monitorWindow)

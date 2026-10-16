@@ -1,9 +1,14 @@
 {
   "name": "shopilot",
-  "version": "0.4.71",
+  "version": "0.4.72",
   "description": "ShopPilot - 电商店铺浏览器工作台",
   "private": true,
   "packageManager": "pnpm@10.34.7",
+  "pnpm": {
+    "overrides": {
+      "http-cache-semantics": "4.3.0"
+    }
+  },
   "main": "apps/desktop/out/main/index.js",
   "scripts": {
     "postinstall": "node tools/maintenance/postinstall-native.mjs",
