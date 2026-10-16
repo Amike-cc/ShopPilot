@@ -65,6 +65,13 @@
             >
               <PlatformIcon :name="store.platform" :size="22" />
               <span class="dashboard-store-name store-name">{{ store.name }}</span>
+              <!-- 客服未读红点（2026-10-16「实时检测店铺消息」）：哪家有新消息一眼看到 -->
+              <span
+                v-if="(ws.customerUnread[store.id] || 0) > 0"
+                class="unread-badge store-unread-badge"
+                data-test="store-unread"
+                :title="`客服未读 ${ws.customerUnread[store.id]} 条`"
+              >{{ ws.customerUnread[store.id] > 99 ? '99+' : ws.customerUnread[store.id] }}</span>
               <span class="store-online-label"><i :class="['store-status-dot', statusClass(store.status)]" aria-hidden="true"></i>{{ statusLabel(store.status) }}</span>
               <span
                 class="store-action"
@@ -141,6 +148,8 @@
           >
             <span class="workspace-product-spark" aria-hidden="true">✦</span>
             <span>电商客服</span>
+            <!-- 客服入口红点：所有店铺未读之和（实时检测事件驱动，不轮询界面） -->
+            <span v-if="customerUnreadTotal > 0" class="unread-badge" data-test="customer-service-unread" :title="`客服未读 ${customerUnreadTotal} 条`">{{ customerUnreadTotal > 99 ? '99+' : customerUnreadTotal }}</span>
           </button>
         </div>
         <div class="toolbar-actions">
@@ -513,6 +522,13 @@ const PAGE_TITLES: Record<string, string> = {
   tasks: '任务中心', 'image-studio': '图片工作台'
 }
 const pageTitle = computed(() => PAGE_TITLES[activePage.value] || '经营总览')
+/**
+ * 客服未读总数（2026-10-16「实时检测店铺消息」）：侧栏客服入口红点用。
+ * 只累加真读到的正数——读不到的店按 0 算，绝不虚报（口径与 @shared/customer-message-alert 一致）。
+ */
+const customerUnreadTotal = computed(() =>
+  Object.values(ws.customerUnread || {}).reduce((sum, value) => sum + (Number.isFinite(value) && value > 0 ? Number(value) : 0), 0)
+)
 /** 顶栏时间（设计稿里是实时时钟；每秒走一格，和系统时间一致） */
 const nowLabel = ref('')
 let clockTimer: number | undefined
@@ -1590,6 +1606,9 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .dashboard-store-row.displayed { background: rgba(124, 92, 255, .18); color: #fff; }
 .dashboard-store-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--side-text); }
 .store-online-label { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: #38d39f; font-size: 11px; }
+/* 客服未读红点：侧栏客服入口与对应店铺行共用（不抢焦点、不改变行高） */
+.unread-badge { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; background: #ff4d4f; color: #fff; font-size: 10.5px; line-height: 1; font-weight: 600; }
+.store-unread-badge { margin-left: 4px; }
 .store-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--side-text-muted); }
 .store-status-dot.online { background: #38d39f; box-shadow: 0 0 0 3px rgba(56, 211, 159, .18); }
 .store-status-dot.warning { background: #f5b457; }

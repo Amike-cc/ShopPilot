@@ -30,6 +30,7 @@ const read = (p: string) => readFileSync(resolve(p), 'utf8')
 const MONITOR = read('apps/desktop/src/main/services/customer-message-monitor.ts')
 const WORKSPACE = read('apps/desktop/src/renderer/src/stores/workspace.ts')
 const SOUND = read('apps/desktop/src/renderer/src/features/customer-service/customer-message-sound.ts')
+const DASHBOARD = read('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue')
 
 describe('decideCustomerAlert：什么时候提醒、提醒几次', () => {
   const now = 1_000_000
@@ -190,5 +191,28 @@ describe('界面侧：红点数据 + 提示音', () => {
     expect(SOUND).toContain('let soundEnabled = true')
     expect(SOUND).toContain('export function setCustomerMessageSoundEnabled')
     expect(SOUND).toContain('} catch {')
+  })
+})
+
+describe('侧栏红点：客服入口 + 对应店铺行', () => {
+  it('店铺行显示该店未读数，客服入口显示总数（都只在 >0 时出现）', () => {
+    expect(DASHBOARD).toContain('data-test="store-unread"')
+    expect(DASHBOARD).toMatch(/v-if="\(ws\.customerUnread\[store\.id\] \|\| 0\) > 0"/)
+    expect(DASHBOARD).toContain('data-test="customer-service-unread"')
+    expect(DASHBOARD).toMatch(/v-if="customerUnreadTotal > 0"/)
+    // 超过 99 折叠显示，别把行撑坏
+    expect(DASHBOARD).toContain("> 99 ? '99+' :")
+  })
+
+  it('总数只累加真读到的正数（读不到的店按 0，不虚报）', () => {
+    const fn = DASHBOARD.match(/const customerUnreadTotal = computed\([\s\S]*?\n\)/)
+    expect(fn).toBeTruthy()
+    expect(fn![0]).toContain('Number.isFinite(value) && value > 0')
+    expect(fn![0]).toContain('ws.customerUnread')
+  })
+
+  it('红点样式存在且不改变行高（侧栏行不会被撑开）', () => {
+    expect(DASHBOARD).toMatch(/\.unread-badge \{[^}]*height: 16px/)
+    expect(DASHBOARD).toContain('.store-unread-badge')
   })
 })
