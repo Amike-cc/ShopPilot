@@ -5,6 +5,8 @@
 
 import { randomBytes, createHash } from 'crypto'
 import { getDatabase } from '../db/database'
+import { seedProfileValues } from './profile-seed'
+import { parseUaClientHints } from '../browser/fingerprint-injector'
 
 export interface BrowserProfile {
   id: string
@@ -92,25 +94,29 @@ export function ensureProfileForStore(storeId: string, storeName: string): Brows
   const now = Date.now()
   const id = `prof_${randomBytes(12).toString('hex')}`
   const partition = `persist:store_${storeId}`
+  // 每店独立播种（2026-10-16 指纹审查 P0）：UA/分辨率/核心数/显卡都从档位池按 storeId 取值，
+  // 同店永远同值、跨店互不相同；不再给 hardware_concurrency/webgl_* 写 null（那是"不覆盖"，
+  // 页面会读到宿主真实的核数与显卡）
+  const seeded = seedProfileValues(storeId, process.versions.chrome || '')
   const defaults = {
     browserVersion: process.versions.chrome || '126.0.0.0',
-    osDisplay: 'Windows 10',
-    language: 'zh-CN',
-    timezone: 'Asia/Shanghai',
-    screenWidth: 1920,
-    screenHeight: 1080
+    osDisplay: seeded.osDisplay,
+    language: seeded.language,
+    timezone: seeded.timezone,
+    screenWidth: seeded.screenWidth,
+    screenHeight: seeded.screenHeight
   }
-  const userAgent = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${defaults.browserVersion} Safari/537.36`
+  const userAgent = seeded.userAgent
   const configDigest = profileConfigDigest({
     userAgent,
     language: defaults.language,
     timezone: defaults.timezone,
     screenWidth: defaults.screenWidth,
     screenHeight: defaults.screenHeight,
-    colorDepth: 24,
-    hardwareConcurrency: null,
-    webglVendor: null,
-    webglRenderer: null
+    colorDepth: seeded.colorDepth,
+    hardwareConcurrency: seeded.hardwareConcurrency,
+    webglVendor: seeded.webglVendor,
+    webglRenderer: seeded.webglRenderer
   })
 
   db.prepare(`
@@ -121,9 +127,12 @@ export function ensureProfileForStore(storeId: string, storeName: string): Brows
       profile_schema_version, locked, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    id, storeId, `${storeName} 环境`, defaults.browserVersion, defaults.osDisplay, userAgent, null,
-    defaults.language, defaults.timezone, defaults.screenWidth, defaults.screenHeight, 24, null,
-    null, null, partition, 1, configDigest, 1, 0, now, now
+    id, storeId, `${storeName} 环境`, defaults.browserVersion, defaults.osDisplay, userAgent,
+    // UA-CH 落库（此前这列永远为 null）：让"实际会发的 CH 头"有据可查，而不是每次现推
+    JSON.stringify(parseUaClientHints(userAgent)),
+    defaults.language, defaults.timezone, defaults.screenWidth, defaults.screenHeight,
+    seeded.colorDepth, seeded.hardwareConcurrency,
+    seeded.webglVendor, seeded.webglRenderer, partition, 1, configDigest, 1, 0, now, now
   )
 
   return getProfile(storeId)!
