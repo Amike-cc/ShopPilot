@@ -141,6 +141,21 @@
           </div>
           <div v-if="memoryText" class="settings-note" data-test="maintenance-memory-result">{{ memoryText }}</div>
         </div>
+        <div class="settings-group" data-test="maintenance-partition">
+          <div class="settings-actions">
+            <button type="button" class="unified-button" data-test="maintenance-partition-usage" :disabled="partitionBusy" @click="readPartitionUsage">{{ partitionBusy ? '统计中…' : '读取店铺分区占用' }}</button>
+            <span class="settings-hint" data-test="maintenance-partition-hint">清理只删缓存与站点存储，**登录态（Cookie）保留**。</span>
+          </div>
+          <div v-if="partitionUsage.length" class="maintenance-backup-list" data-test="maintenance-partition-list">
+            <div v-for="item in partitionUsage" :key="item.storeId" class="maintenance-backup-row" data-test="maintenance-partition-row">
+              <span class="maintenance-backup-meta"><b>{{ item.storeName }}</b><em>{{ formatBytes(item.bytes) }}</em></span>
+              <button type="button" class="unified-button ghost" :data-test="'maintenance-partition-clean-' + item.storeId"
+                      :disabled="partitionCleaningId === item.storeId || item.bytes === 0" @click="cleanPartition(item.storeId)">
+                {{ partitionCleaningId === item.storeId ? '清理中…' : '清理（保留登录态）' }}</button>
+            </div>
+          </div>
+          <div v-else class="settings-hint" data-test="maintenance-partition-empty">点「读取店铺分区占用」查看各店浏览器数据占用。</div>
+        </div>
         <div v-if="maintenanceMsg" class="settings-note" :class="{ ok: maintenanceMsgOk }" data-test="maintenance-msg">{{ maintenanceMsg }}</div>
       </section>
       <section v-else class="settings-section" data-test="settings-about" data-unified-test="unified-settings-about">
@@ -270,6 +285,35 @@ const diagBusy = ref(false)
 const auditBusy = ref(false)
 const memoryBusy = ref(false)
 const memoryText = ref('')
+// ---- 店铺分区占用与清理（浏览器审查 S-1）----
+interface PartitionUsageItem { storeId: string; storeName: string; bytes: number; skipped: number }
+const partitionUsage = ref<PartitionUsageItem[]>([])
+const partitionBusy = ref(false)
+const partitionCleaningId = ref('')
+function formatBytes(bytes: number): string {
+  if (!bytes) return '0 B'
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+async function readPartitionUsage(): Promise<void> {
+  partitionBusy.value = true
+  try {
+    const result = await window.shopilot.browser.partitionUsage()
+    if (!result.ok) { ws.toast('读取失败：' + result.error.message, 'error'); return }
+    partitionUsage.value = (result.data as PartitionUsageItem[]) ?? []
+  } finally { partitionBusy.value = false }
+}
+async function cleanPartition(storeId: string): Promise<void> {
+  if (!window.confirm('清理该店的浏览器缓存与站点存储？\n登录态（Cookie）保留，不需要重新登录。')) return
+  partitionCleaningId.value = storeId
+  try {
+    const result = await window.shopilot.browser.partitionClean(storeId)
+    if (!result.ok) { ws.toast('清理失败：' + result.error.message, 'error'); return }
+    ws.toast('已清理（登录态保留）', 'success')
+    await readPartitionUsage()
+  } finally { partitionCleaningId.value = '' }
+}
 
 const aiProvider = ref('__custom__')
 const aiDraft = reactive({ endpoint: DEFAULT_AI_ENDPOINT, model: DEFAULT_AI_MODEL, timeoutMs: DEFAULT_AI_TIMEOUT_MS })

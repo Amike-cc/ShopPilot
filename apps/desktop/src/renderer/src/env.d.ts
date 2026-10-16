@@ -49,6 +49,8 @@ declare global {
         registerWebview: (storeId: string, tabId: string, webContentsId: number) => Promise<IPCResult>
         /** 上报浏览器内容区域边界，供已注册 webview 同步布局 */
         setViewport: (bounds: { x: number; y: number; width: number; height: number }) => Promise<IPCResult>
+        partitionUsage: () => Promise<IPCResult>
+        partitionClean: (storeId: string) => Promise<IPCResult>
         tab: {
           create: (storeId: string, url?: string) => Promise<IPCResult>
           activate: (storeId: string, tabId: string) => Promise<IPCResult>

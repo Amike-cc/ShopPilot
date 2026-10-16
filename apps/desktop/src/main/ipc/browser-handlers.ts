@@ -11,10 +11,11 @@ import { normalizeDouyinCategoryTree } from '@shared/douyin-category-tree'
 import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as WindowManager from '../browser/window-manager'
 import * as StoreManager from '../stores/store-manager'
-import { clearStoreData } from '../browser/session-manager'
+import { clearStoreData, cleanStorePartition, listStorePartitionUsage } from '../browser/session-manager'
 import { randomUUID } from 'crypto'
 import { ipcOk as success, ipcFail as error, ipcErrFromUnknown } from './envelope'
 import { mkdirSync } from 'fs'
+import { writeAudit } from '../services/audit-logger'
 import { writeFile } from 'fs/promises'
 import { join } from 'path'
 import {
@@ -688,6 +689,22 @@ export function registerBrowserHandlers(): void {
       return browserError(err, requestId)
     }
   })
+  handle(IPC_CHANNELS.BROWSER_PARTITION_USAGE, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try { return success(listStorePartitionUsage(), requestId) } catch (e) { return error(ERROR_CODES.INTERNAL_ERROR.code, '读取分区占用失败', requestId) }
+  })
+
+  handle(IPC_CHANNELS.BROWSER_PARTITION_CLEAN, async (_e: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    const storeId = String((raw as { storeId?: unknown })?.storeId ?? '').trim()
+    if (!/^[0-9a-f-]{8,64}$/i.test(storeId)) return error(ERROR_CODES.INVALID_ARGUMENT.code, '店铺标识不合法', requestId)
+    try {
+      writeAudit('browser.partition.clean', 'success', { requestId: JSON.stringify({ storeId: storeId.slice(0, 8) }) })
+      const result = await cleanStorePartition(storeId)
+      return success(result, requestId)
+    } catch (e) { return ipcErrFromUnknown(e, requestId, { fallback: '分区清理失败' }) }
+  })
+
 
   // browser:setViewsObscured - 渲染层弹层遮挡：摘除/恢复原生视图挂载
   handle(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, async (_event: IpcMainInvokeEvent, input: { obscured: boolean, reason?: 'modal' | 'agent' }): Promise<IPCResult> => {

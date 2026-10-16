@@ -9,7 +9,7 @@ import { logMain } from './logger'
 
 export type AuditAction =
   | 'store.create' | 'store.archive' | 'store.restore' | 'store.deletePermanent' | 'store.purge'
-  | 'browser.clearData' | 'session.export' | 'session.import'
+  | 'browser.clearData' | 'browser.partition.clean' | 'session.export' | 'session.import'
   | 'proxy.create' | 'proxy.delete' | 'proxy.bind'
   | 'profile.update' | 'profile.lock' | 'profile.unlock' | 'profile.copyConfig'
   | 'security.lock' | 'security.unlock' | 'security.setPassword' | 'security.removePassword'

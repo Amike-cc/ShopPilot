@@ -274,7 +274,7 @@ function createWindow(): void {
   // 可以把客服 webview 导向 file/data/javascript 等非业务协议，或绕过应用内页面
   // 直接创建未受控的原生窗口。http(s) 的平台内跳转继续允许，弹窗改为当前客服页
   // 内导航，保留扫码/OAuth 等人工登录流程而不创建额外 BrowserWindow。
-  ;(mainWindow.webContents as any).on('did-attach-webview', (_event: Electron.Event, guestWebContents: Electron.WebContents) => {
+  mainWindow.webContents.on('did-attach-webview', (_event: Electron.Event, guestWebContents: Electron.WebContents) => {
     // Session does not expose its partition name as a public Electron property.
     // did-attach follows will-attach for the same guest, so pair them FIFO.
     const attachment = pendingWebviewAttachments.shift() || null

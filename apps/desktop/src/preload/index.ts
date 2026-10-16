@@ -41,6 +41,8 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.BROWSER_REGISTER_WEBVIEW, { storeId, tabId, webContentsId }),
     /** 上报浏览器内容区域边界，供已注册 webview 同步布局 */
     setViewport: (bounds: { x: number, y: number, width: number, height: number }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SET_VIEWPORT, bounds),
+    partitionUsage: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PARTITION_USAGE),
+    partitionClean: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PARTITION_CLEAN, { storeId }),
     /** 弹层打开/关闭：暂时隐藏/恢复已注册 webview */
     setViewsObscured: (obscured: boolean, reason: 'modal' | 'agent' = 'modal'): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, { obscured, reason }),
     

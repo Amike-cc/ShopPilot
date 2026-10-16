@@ -49,6 +49,8 @@ export const IPC_CHANNELS = {
   BROWSER_REGISTER_WEBVIEW: 'browser:registerWebview',
   /** 渲染层上报浏览器内容区域边界，供已注册 webview 同步布局 */
   BROWSER_SET_VIEWPORT: 'browser:setViewport',
+  BROWSER_PARTITION_USAGE: 'browser:partitionUsage',
+  BROWSER_PARTITION_CLEAN: 'browser:partitionClean',
   BROWSER_TAB_CREATE: 'browser:tab:create',
   BROWSER_TAB_ACTIVATE: 'browser:tab:activate',
   BROWSER_TAB_CLOSE: 'browser:tab:close',

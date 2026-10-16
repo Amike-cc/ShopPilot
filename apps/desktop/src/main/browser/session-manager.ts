@@ -20,17 +20,23 @@ import {
   cancelStoreSessionRestore, clearLegacyCustomerServiceCookies
 } from '../services/session-persistence'
 import { parseUaClientHints } from './fingerprint-injector'
+import { getStore, listStores } from '../stores/store-manager'
+import { partitionDirName, sumDirectorySize } from './partition-usage'
+import { buildFallbackUserAgent } from './ua-fallback'
 
 /**
  * 改写 UA-CH 客户端提示请求头，使之与自定义 User-Agent 成对一致（§4.3）。
  * 仅作用于该 session，不安装到默认 session。
  */
+/** UA-CH 头改写幂等标记（WeakSet：session 被 GC/重建自然失效，不挂实例属性）。 */
+const uaChHookedSessions = new WeakSet<Session>()
+
 function applyUserAgentClientHints(sess: Session, userAgent: string): void {
   const ch = parseUaClientHints(userAgent)
   if (!ch) return
   // 每个 session 只注册一次
-  if ((sess as any).__chHooked) return
-  ;(sess as any).__chHooked = true
+  if (uaChHookedSessions.has(sess)) return
+  uaChHookedSessions.add(sess)
   const brandsHeader = ch.brands.map(b => `"${b.brand}";v="${b.version}"`).join(', ')
   sess.webRequest.onBeforeSendHeaders((details, callback) => {
     const h = { ...details.requestHeaders }
@@ -338,12 +344,12 @@ function configureSession(sess: Session, storeId: string): Promise<void> {
     WHERE store_id = ?
   `).get(storeId) as { user_agent?: string; language?: string; ua_client_hints_json?: string } | undefined
   
-  if (profile?.user_agent) {
-    // UA 与 accept-languages 成对设置；UA-CH 请求头随之改写（§4.3：禁止只改 UA 造成自相矛盾）
-    const langs = profile.language ? `${profile.language},en-US` : undefined
-    sess.setUserAgent(profile.user_agent, langs)
-    applyUserAgentClientHints(sess, profile.user_agent)
-  }
+  // UA 兜底（2026-10-16 浏览器审查 N-1）：没有档案（存量店/档案被删）也绝不暴露
+  // `ShopPilot/x Electron/44` 痕迹——用与本机 Chromium 同版本的干净 Windows UA。
+  const userAgent = profile?.user_agent || buildFallbackUserAgent(process.versions.chrome || '')
+  const langs = profile?.language ? `${profile.language},en-US` : undefined
+  sess.setUserAgent(userAgent, langs)
+  applyUserAgentClientHints(sess, userAgent)
   
   // 设置语言（拼写检查语言需词典支持，非关键，失败忽略）
   if (profile?.language) {
@@ -716,4 +722,47 @@ export function closeCustomerServiceSession(storeId: string, options: CloseStore
  */
 export function getActiveSessions(): Map<string, Session> {
   return activeSessions
+}
+
+// ---------------------------------------------------------------- 分区占用与清理（2026-10-16 浏览器审查 S-1）
+
+export interface StorePartitionUsage {
+  storeId: string
+  storeName: string
+  /** 分区目录字节数（0 = 目录不存在/尚未创建） */
+  bytes: number
+  /** 统计时跳过的不可读条目数（如实计数） */
+  skipped: number
+}
+
+/** 各店分区磁盘占用（只读统计；目录遍历在 partition-usage.ts，可单测）。 */
+export function listStorePartitionUsage(): StorePartitionUsage[] {
+  const userData = app.getPath('userData')
+  return listStores().map(store => {
+    const dirName = partitionDirName(getStorePartition(store.id))
+    if (!dirName) return { storeId: store.id, storeName: store.name, bytes: 0, skipped: 0 }
+    const { bytes, skipped } = sumDirectorySize(join(userData, 'Partitions', dirName))
+    return { storeId: store.id, storeName: store.name, bytes, skipped }
+  })
+}
+
+/**
+ * 清理店铺分区腾空间，**保留 Cookie（登录态不动）**：
+ * `clearCache`（HTTP 缓存）+ `clearStorageData`（localstorage/indexdb/websql/
+ * serviceworkers/cachestorage/shadercache/filesystem，显式排除 cookies）。
+ * 返回实际执行了的清理项（界面如实回显）。
+ */
+export async function cleanStorePartition(storeId: string): Promise<{ cleared: string[] }> {
+  const store = getStore(storeId)
+  if (!store) throw new Error('STORE_NOT_FOUND')
+  const sess = getStoreSession(storeId)
+  const cleared: string[] = []
+  await sess.clearCache()
+  cleared.push('HTTP 缓存')
+  await sess.clearStorageData({
+    storages: ['localstorage', 'indexdb', 'serviceworkers', 'cachestorage', 'shadercache', 'filesystem']
+  })
+  cleared.push('站点存储（localStorage/IndexedDB 等，Cookie 与登录态保留）')
+  logMain('info', `[partition] 分区清理完成 store=${storeId.slice(0, 8)} 项=${cleared.length}（登录态保留）`)
+  return { cleared }
 }
