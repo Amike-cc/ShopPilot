@@ -3,6 +3,11 @@
     <header class="customer-service-toolbar">
       <div class="customer-service-brand"><span class="customer-service-brand-mark" aria-hidden="true">✦</span><div><strong>电商客服</strong><span>人工接待工作区</span></div></div>
       <div class="customer-service-mode"><span class="mode-dot" aria-hidden="true"></span><strong>电商客服</strong><span>登录与工作台同步</span></div>
+      <!-- 新消息提示音开关（2026-10-16「实时检测店铺消息」）：可关，选择持久保存到 notify.customerSound -->
+      <label class="customer-service-sound-toggle" data-test="customer-sound-toggle" title="客服有新消息时是否响提示音">
+        <input type="checkbox" data-test="customer-sound-checkbox" :checked="soundEnabled" @change="onToggleSound($event)" />
+        <span>新消息提示音</span>
+      </label>
       <div class="workspace-switcher" role="tablist" aria-label="工作区切换">
         <button
           type="button"
@@ -85,9 +90,22 @@ import {
 } from '@shared/contracts/customer-service'
 import type { CustomerMessageCheck, CustomerMessageStatus } from '@shared/contracts/customer-service'
 import { createStoreScopedCheckController } from './store-scoped-check-controller'
+import {
+  initCustomerMessageSound,
+  isCustomerMessageSoundEnabled,
+  setCustomerMessageSoundEnabled
+} from './customer-message-sound'
 import { resolveCustomerServiceNavigationUrl } from './customer-service-navigation'
 
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: false })
+/** 新消息提示音开关（持久在 notify.customerSound；默认开，关掉后一次都不响） */
+const soundEnabled = ref(isCustomerMessageSoundEnabled())
+async function onToggleSound(event: Event): Promise<void> {
+  const next = (event.target as HTMLInputElement | null)?.checked === true
+  setCustomerMessageSoundEnabled(next)
+  soundEnabled.value = next
+  try { await window.shopilot.settings.set('notify.customerSound', next) } catch { /* 存不上也不影响本次开关 */ }
+}
 const emit = defineEmits<{ 'back-commerce': [] }>()
 const ws = useWorkspaceStore()
 // 客服工作区只保存自己的店铺选择；兼容旧版的 shopilot.customer-service-monitor-store 记忆。
@@ -288,7 +306,7 @@ watch(() => props.active, active => {
   void nextTick(() => { if (selectedStoreId.value) kickPreparation(selectedStoreId.value) })
 })
 watch(() => [props.active, ws.ready, ws.stores.length, ws.appLocked] as const, ([active, ready, count, locked]) => { if (!active || !ready || !count || locked) { stopStatusTimers(); return }; void refreshStatuses(); startStatusTimers() }, { immediate: true })
-onMounted(() => { workspaceMounted = true; window.shopilot.on(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, onStatusChanged); ws.stores.forEach(ensureBrowserState) })
+onMounted(() => { workspaceMounted = true; void initCustomerMessageSound().then((enabled) => { soundEnabled.value = enabled }); window.shopilot.on(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, onStatusChanged); ws.stores.forEach(ensureBrowserState) })
 onBeforeUnmount(() => { workspaceMounted = false; ws.stores.forEach(store => bumpWebviewGeneration(store.id)); preparingStoreIds.clear(); stopStatusTimers(); window.shopilot.off(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, onStatusChanged) })
 </script>
 

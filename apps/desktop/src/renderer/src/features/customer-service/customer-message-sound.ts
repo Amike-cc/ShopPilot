@@ -20,6 +20,21 @@ export function isCustomerMessageSoundEnabled(): boolean {
   return soundEnabled
 }
 
+/**
+ * 启动时按设置应用一次（`notify.customerSound`，默认开）。
+ * 读设置失败就保持默认开——提示音不是关键路径，不能因为读设置失败把提醒搞哑。
+ */
+export async function initCustomerMessageSound(): Promise<boolean> {
+  try {
+    const result = await window.shopilot.settings.get('notify.customerSound')
+    const value = result?.ok ? (result.data as { value?: unknown } | null)?.value : undefined
+    if (typeof value === 'boolean') soundEnabled = value
+  } catch {
+    // 保持默认（开）
+  }
+  return soundEnabled
+}
+
 /** 两声短促提示（880Hz → 1320Hz）：比单音更容易被注意到，也不刺耳 */
 const BEEP_TONES = [880, 1320]
 const BEEP_GAP_SECONDS = 0.16

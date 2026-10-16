@@ -8,7 +8,7 @@ import { defineStore } from 'pinia'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { PLATFORM_CATALOG } from '@shared/constants/platforms'
 import type { TabInfo } from '../env'
-import { playCustomerMessageBeep } from '../features/customer-service/customer-message-sound'
+import { initCustomerMessageSound, playCustomerMessageBeep } from '../features/customer-service/customer-message-sound'
 
 /**
  * 「其他」平台筛选项的哨兵值：内置平台目录之外的自定义平台聚合成一个 chip
@@ -357,6 +357,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.subscribeEvents()
       await this.refreshSecurity()
       await this.refreshStores()
+      // 新消息提示音开关：启动就按设置应用（默认开），否则"关掉后重启又响了"
+      void initCustomerMessageSound()
       // 回收站徽标（左栏底栏 / 收起后的窄轨角标）依赖 trashStores，必须启动就加载，
       // 否则库里已有回收站店铺时徽标仍是空的（原先只在点开抽屉时才拉）。
       await this.refreshTrash()

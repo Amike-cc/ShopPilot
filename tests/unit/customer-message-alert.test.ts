@@ -216,3 +216,28 @@ describe('侧栏红点：客服入口 + 对应店铺行', () => {
     expect(DASHBOARD).toContain('.store-unread-badge')
   })
 })
+
+describe('提示音开关：可关、可持久、重启仍生效', () => {
+  const WORKSPACE_CS = read('apps/desktop/src/renderer/src/features/customer-service/CustomerServiceWorkspace.vue')
+
+  it('客服工作区里有开关，切换即持久到 notify.customerSound', () => {
+    expect(WORKSPACE_CS).toContain('data-test="customer-sound-toggle"')
+    expect(WORKSPACE_CS).toContain('data-test="customer-sound-checkbox"')
+    const fn = WORKSPACE_CS.match(/async function onToggleSound[\s\S]*?\n\}/)
+    expect(fn).toBeTruthy()
+    expect(fn![0]).toContain('setCustomerMessageSoundEnabled(next)')
+    expect(fn![0]).toContain("window.shopilot.settings.set('notify.customerSound', next)")
+  })
+
+  it('启动时按设置应用一次（关掉后重启不能又响）', () => {
+    expect(SOUND).toContain('export async function initCustomerMessageSound')
+    expect(SOUND).toContain("window.shopilot.settings.get('notify.customerSound')")
+    expect(WORKSPACE).toContain('void initCustomerMessageSound()')
+  })
+
+  it('读设置失败保持默认开（提示音不是关键路径）', () => {
+    const fn = SOUND.match(/export async function initCustomerMessageSound[\s\S]*?\n\}/)
+    expect(fn).toBeTruthy()
+    expect(fn![0]).toContain('} catch {')
+  })
+})
