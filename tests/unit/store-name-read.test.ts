@@ -179,22 +179,25 @@ describe('接线：主进程取候选、界面只预填不静默改名', () => {
     expect(READER).not.toContain('ipcRenderer')
   })
 
-  it('界面用真实店名预填重命名对话框，由人点保存才落库', () => {
+  it('界面直接更新店铺名（右键是明确意图，不再弹对话框），且改了什么说得清', () => {
     const fn = DASHBOARD.match(/if \(kind === 'readname'\)[\s\S]*?\n {2}\}/)
     expect(fn).toBeTruthy()
     expect(fn![0]).toContain('window.shopilot.browser.readStoreName(store.id)')
-    expect(fn![0]).toContain('renameDialog.value = data.name')
-    expect(fn![0]).toContain('renameDialog.note')
-    // 不静默改名：这段里不许直接调 store.update
-    expect(fn![0]).not.toContain('store.update')
+    // 直接写库 + 刷新 + 提示（不是预填让用户再点一次）
+    expect(fn![0]).toContain('window.shopilot.store.update({ storeId: store.id, patch: { name: data.name } })')
+    expect(fn![0]).toContain('ws.refreshStores()')
+    expect(fn![0]).toContain('店铺名已更新')
+    expect(fn![0]).not.toContain('renameDialog')
     // 登录页给"先登录"的提示，不是报错
     expect(fn![0]).toContain("data?.pageKind === 'login' ? 'info' : 'error'")
   })
 
   it('右键菜单里有入口（真实用户路径）', () => {
     expect(DASHBOARD).toContain('data-test="ctx-readname"')
-    expect(DASHBOARD).toContain('读取店铺名（从页面）')
-    expect(DASHBOARD).toContain('data-test="rename-note"')
+    expect(DASHBOARD).toContain('读取并更新店铺名（从页面）')
+    // 手工改名入口仍在（直接更新之外还留了可改的地方）
+    expect(DASHBOARD).toContain('data-test="ctx-rename"')
+    expect(DASHBOARD).toContain('data-test="rename-dialog"')
   })
 
   it('页面加载完自动把占位名改成真名，但绝不碰手输的名字', () => {
