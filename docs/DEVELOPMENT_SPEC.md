@@ -537,6 +537,8 @@ maintenance:softwareDiagnostics  {}                       # 只读自检：11 �
 
 ~~~text
 store:statusChanged
+customerService:statusChanged     # 客服检查结果（CHECKING/AVAILABLE/…）
+customerService:newMessage        # 客服未读从少变多：界面挂红点并响提示音（桌面通知由主进程直接弹）
 browser:tabUpdated
 browser:loadingChanged
 browser:downloadCreated
