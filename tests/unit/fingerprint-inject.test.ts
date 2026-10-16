@@ -52,17 +52,38 @@ const PROFILE = {
   webglRenderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)'
 }
 
-/** 把注入脚本跑在一个只有 navigator/screen/window 的最小沙箱里 */
-function runScript(profile: Record<string, unknown>): { navigator: any; screen: any } {
+/** 把注入脚本跑在一个只有 navigator/screen/window + 可选 DOM 桩的沙箱里 */
+function runScript(profile: Record<string, unknown>, extra: Record<string, unknown> = {}): { navigator: any; screen: any; canvas: any } {
   const sandbox = {
     navigator: {} as Record<string, unknown>,
     screen: {} as Record<string, unknown>,
     window: {} as Record<string, unknown>
   }
   const script = buildInjectScript(profile as never)
-  const fn = new Function('navigator', 'screen', 'window', script)
-  fn(sandbox.navigator, sandbox.screen, sandbox.window)
-  return { navigator: sandbox.navigator, screen: sandbox.screen }
+  const names = ['navigator', 'screen', 'window', ...Object.keys(extra)]
+  const fn = new Function(...names, script)
+  fn(sandbox.navigator, sandbox.screen, sandbox.window, ...Object.values(extra))
+  return { navigator: sandbox.navigator, screen: sandbox.screen, canvas: (extra.HTMLCanvasElement as any)?.prototype }
+}
+
+/** 极简 canvas 桩：16×4 像素，getImageData 返回给定像素的副本 */
+function canvasStub(pixels: number[]) {
+  const base = Uint8ClampedArray.from(pixels)
+  class FakeCtx {
+    getImageData() { return { data: Uint8ClampedArray.from(base) } }
+    putImageData() { /* 只用于拷贝画布 */ }
+  }
+  const contexts = new Map<FakeCanvas, FakeCtx>()
+  class FakeCanvas {
+    width = 16
+    height = 4
+    getContext() {
+      if (!contexts.has(this)) contexts.set(this, new FakeCtx())
+      return contexts.get(this)!
+    }
+    toDataURL() { return 'data:image/png;base64,ORIGINAL' }
+  }
+  return { HTMLCanvasElement: FakeCanvas, CanvasRenderingContext2D: FakeCtx, document: { createElement: () => new FakeCanvas() }, base }
 }
 
 describe('注入脚本真跑：值改对了，而且不像被改过', () => {
@@ -144,6 +165,52 @@ describe('注入脚本真跑：值改对了，而且不像被改过', () => {
     expect(high.model).toBe('')
     // 未请求的键不许回（真实现的行为）
     expect(high.bitness).toBeUndefined()
+  })
+})
+
+describe('canvas 噪声：同店稳定、跨店不同（审查 P0 的去匿名化关键）', () => {
+  const PIXELS = Array.from({ length: 64 }, (_, i) => (i * 3) % 256)
+
+  function readPixels(noiseSeed: number): number[] {
+    const stub = canvasStub(PIXELS)
+    runScript({ ...PROFILE, noiseSeed }, {
+      HTMLCanvasElement: stub.HTMLCanvasElement,
+      CanvasRenderingContext2D: stub.CanvasRenderingContext2D,
+      document: stub.document
+    } as never)
+    const canvas = new (stub.HTMLCanvasElement as any)()
+    const data = canvas.getContext('2d').getImageData(0, 0, 16, 4).data as Uint8ClampedArray
+    return Array.from(data)
+  }
+
+  it('同一个种子两次读到的像素完全一致（同店稳定，页面自己前后对比看不出变化）', () => {
+    expect(readPixels(424242)).toEqual(readPixels(424242))
+  })
+
+  it('不同种子读到的像素不同（跨店不能被并成一个实体）', () => {
+    expect(readPixels(424242)).not.toEqual(readPixels(999999))
+  })
+
+  it('扰动幅度只有 ±1 且只动极少数像素（肉眼不可见，不影响正常显示与截图）', () => {
+    const base = Array.from(new Uint8ClampedArray(PIXELS))
+    const noised = readPixels(424242)
+    const diffs = noised.map((v, i) => v - base[i]).filter(d => d !== 0)
+    expect(diffs.length).toBeGreaterThan(0)
+    expect(diffs.length).toBeLessThanOrEqual(4)
+    for (const d of diffs) expect(Math.abs(d)).toBe(1)
+  })
+
+  it('音频同样接上了噪声（getChannelData / getFloatFrequencyData）', () => {
+    const script = buildInjectScript({ ...PROFILE, noiseSeed: 7 } as never)
+    expect(script).toContain('getChannelData')
+    expect(script).toContain('getFloatFrequencyData')
+    // 噪声装不上不能影响其它改写：整段有自己的 try/catch
+    expect(script).toContain("/* 噪声装不上不影响其它改写 */")
+  })
+
+  it('没有噪声种子时不装噪声（没播种的档案行为不变）', () => {
+    const script = buildInjectScript({ ...PROFILE } as never)
+    expect(script).toContain('if (P.noiseSeed != null)')
   })
 })
 

@@ -12,6 +12,7 @@
 import { WebContents } from 'electron'
 import { getDatabase } from '../db/database'
 import { logMain } from '../services/logger'
+import { hashSeed } from '../stores/profile-seed'
 import type { ProfileVerifyItem } from '../stores/profile-manager'
 
 interface FpOverrides {
@@ -24,6 +25,8 @@ interface FpOverrides {
   hardwareConcurrency: number | null
   webglVendor: string | null
   webglRenderer: string | null
+  /** canvas/audio 噪声种子：由 storeId 确定性派生（同店稳定、跨店不同），不落库 */
+  noiseSeed?: number | null
 }
 
 interface TabReg {
@@ -81,6 +84,8 @@ function readOverrides(storeId: string): FpOverrides | null {
     userAgent: row.user_agent || null,
     language: row.language || null,
     timezone: row.timezone || null,
+    // canvas/audio 噪声种子：按 storeId 确定性派生（同店稳定、跨店不同），不占库列
+    noiseSeed: hashSeed(`noise:${storeId}`),
     screenWidth: row.screen_width ?? null,
     screenHeight: row.screen_height ?? null,
     colorDepth: row.color_depth ?? null,
@@ -227,6 +232,89 @@ export function buildInjectScript(o: FpOverrides): string {
       const gl2 = window.WebGL2RenderingContext;
       if (gl1 && gl1.prototype) patch(gl1.prototype);
       if (gl2 && gl2.prototype) patch(gl2.prototype);
+    }
+    // ② canvas / audio 噪声（2026-10-16 审查 P0：此前完全没有噪声，画布与音频指纹就是宿主真值）。
+    //    种子由主进程按 storeId 派生：**同店每次渲染都一样**（否则页面自己前后对比就能发现），
+    //    **跨店不同**（否则多店仍可被并成一个实体）。只扰动"读出来的数据"，
+    //    不动渲染结果本身 —— 页面正常显示/我们自己的截图都不受影响。
+    if (P.noiseSeed != null) {
+      try {
+        let seed = (P.noiseSeed >>> 0) || 1;
+        const rnd = () => {
+          seed = (seed + 0x6D2B79F5) >>> 0;
+          let t = seed;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+        // 少量像素各偏 ±1：肉眼不可见，但两次采样哈希不同（且同店稳定）
+        const perturb = (data) => {
+          const times = Math.min(4, Math.max(1, Math.floor(data.length / 4000)));
+          for (let i = 0; i < times; i++) {
+            const idx = (Math.floor(rnd() * (data.length / 4)) * 4) >>> 0;
+            if (idx + 2 >= data.length) continue;
+            data[idx] = (data[idx] + (rnd() < 0.5 ? 255 : 1)) & 255;
+          }
+          return data;
+        };
+        if (typeof HTMLCanvasElement !== 'undefined') {
+          const CanvasProto = HTMLCanvasElement.prototype;
+          const ctxProto = typeof CanvasRenderingContext2D !== 'undefined' ? CanvasRenderingContext2D.prototype : null;
+          if (ctxProto && !ctxProto.__noised) {
+            const origGet = ctxProto.getImageData;
+            try {
+              Object.defineProperty(ctxProto, '__noised', { value: true });
+              Object.defineProperty(ctxProto, 'getImageData', { value: mask(function () {
+                const img = origGet.apply(this, arguments);
+                try { perturb(img.data) } catch (e) {}
+                return img;
+              }, 'getImageData'), writable: true, configurable: true });
+            } catch (e) {}
+          }
+          const origToDataURL = CanvasProto.toDataURL;
+          try {
+            Object.defineProperty(CanvasProto, 'toDataURL', { value: mask(function () {
+              try {
+                const ctx = this.getContext && this.getContext('2d');
+                if (!ctx || !this.width || !this.height) return origToDataURL.apply(this, arguments);
+                const img = ctx.getImageData(0, 0, this.width, this.height);
+                perturb(img.data);
+                const copy = document.createElement('canvas');
+                copy.width = this.width; copy.height = this.height;
+                copy.getContext('2d').putImageData(img, 0, 0);
+                return origToDataURL.apply(copy, arguments);
+              } catch (e) { return origToDataURL.apply(this, arguments) }
+            }, 'toDataURL'), writable: true, configurable: true });
+          } catch (e) {}
+        }
+        if (typeof AudioBuffer !== 'undefined' && AudioBuffer.prototype && !AudioBuffer.prototype.__noised) {
+          const origChannel = AudioBuffer.prototype.getChannelData;
+          try {
+            Object.defineProperty(AudioBuffer.prototype, '__noised', { value: true });
+            Object.defineProperty(AudioBuffer.prototype, 'getChannelData', { value: mask(function (channel) {
+              const data = origChannel.call(this, channel);
+              try {
+                for (let i = 0; i < 8 && data.length; i++) {
+                  const idx = Math.floor(rnd() * data.length);
+                  data[idx] = data[idx] + (rnd() - 0.5) * 1e-7; // 听不出来，但频域指纹变了
+                }
+              } catch (e) {}
+              return data;
+            }, 'getChannelData'), writable: true, configurable: true });
+          } catch (e) {}
+        }
+        if (typeof AnalyserNode !== 'undefined' && AnalyserNode.prototype) {
+          const origFloat = AnalyserNode.prototype.getFloatFrequencyData;
+          try {
+            Object.defineProperty(AnalyserNode.prototype, 'getFloatFrequencyData', { value: mask(function (array) {
+              origFloat.call(this, array);
+              try {
+                for (let i = 0; i < 4 && array.length; i++) array[Math.floor(rnd() * array.length)] += (rnd() - 0.5) * 1e-4;
+              } catch (e) {}
+            }, 'getFloatFrequencyData'), writable: true, configurable: true });
+          } catch (e) {}
+        }
+      } catch (e) { /* 噪声装不上不影响其它改写 */ }
     }
     // 不往页面 console 打任何东西：日志前缀本身就是指纹（失败由主进程 profile:verify 如实呈现）
   } catch (e) { /* 注入失败不写页面日志，主进程侧 verify 会标记未验证 */ }
