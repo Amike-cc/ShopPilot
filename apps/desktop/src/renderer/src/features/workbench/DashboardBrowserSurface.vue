@@ -63,8 +63,13 @@
           <div v-if="webviewDiagnostics.length" class="dashboard-browser-webview-diagnostics" data-test="webview-diagnostics" role="status">
             <strong>浏览器视图诊断</strong>
             <span v-for="diagnostic in webviewDiagnostics" :key="diagnostic.key">
-              {{ diagnostic.text }}
-              <button v-if="diagnostic.failed" type="button" class="mini-btn icon-btn" @click="retryWebview(diagnostic.key)"><img class="button-icon" :src="browserRetryIcon" alt="" />重试</button>
+              <span class="diagnostic-text">{{ diagnostic.text }}</span>
+              <span v-if="diagnostic.failed" class="diagnostic-actions">
+                <button type="button" class="mini-btn icon-btn" :aria-label="`重试连接 ${diagnostic.storeName}`" @click="retryWebview(diagnostic.key)"><img class="button-icon" :src="browserRetryIcon" alt="" />重试</button>
+                <button type="button" class="mini-btn icon-btn" :aria-label="`检查 ${diagnostic.storeName} 代理`" @click="openProxyPanel()">检查代理</button>
+                <button type="button" class="mini-btn icon-btn" :aria-label="`重新登录 ${diagnostic.storeName}`" @click="reopenHome(diagnostic.storeId)">重新登录</button>
+                <button type="button" class="mini-btn icon-btn" :aria-label="`清理 ${diagnostic.storeName} 站点数据`" @click="clearSiteData(diagnostic.storeId)">清理站点数据</button>
+              </span>
             </span>
           </div>
         </div>
@@ -408,6 +413,9 @@ const webviewRefCallbacks = new Map<string, (element: unknown) => void>()
 /** 注册/加载失败的如实原因（key → 文案），成功即清除；界面据此显示诊断而不是空白页。 */
 const webviewFailures = reactive<Record<string, string>>({})
 const registeringKeys = new Set<string>()
+/** attach 看门狗（key → timer）：元素挂载后到点仍没注册成功，就把「正在连接…」升级为可操作的失败。 */
+const attachWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
+const ATTACH_TIMEOUT_MS = 30_000
 
 const openWebviews = computed<OpenWebviewEntry[]>(() => {
   const entries: OpenWebviewEntry[] = []
@@ -450,18 +458,38 @@ function webviewAttached(item: OpenWebviewEntry): boolean {
 const webviewDiagnostics = computed(() => openWebviews.value
   // 采集专用页不参与诊断：它是后台自己的页面，用户没让它出现，就不该在界面上闪"正在连接店铺页面…"
   .filter(item => !item.internal)
-  .filter(item => !webviewAttached(item))
+  // 失败态与「连接中」是两个独立门控（2026-10-16 审查 P1）：
+  // 失败必须不受 guestAttached 约束——注册成功后 guestAttached 恒为 true，
+  // 而 did-fail-load 只在注册成功之后才会发生，旧的 `!webviewAttached` 过滤会把
+  // 网络/代理失败（用户最常见的故障）整个吞掉，只剩白屏。
   .map(item => ({
     key: item.key,
-    failed: !!webviewFailures[item.key],
-    text: webviewFailures[item.key]
-      ? `${item.storeName}：页面未就绪——${webviewFailures[item.key]}`
-      : `${item.storeName}：正在连接店铺页面…`
+    storeId: item.storeId,
+    storeName: item.storeName,
+    failure: webviewFailures[item.key] as string | undefined,
+    attached: webviewAttached(item)
+  }))
+  .filter(row => !!row.failure || !row.attached)
+  .map(row => ({
+    key: row.key,
+    storeId: row.storeId,
+    storeName: row.storeName,
+    failed: !!row.failure,
+    text: row.failure
+      ? `${row.storeName}：页面未就绪——${row.failure}`
+      : `${row.storeName}：正在连接店铺页面…`
   })))
 
 function setWebviewRef(key: string, element: unknown): void {
-  if (element) webviewEls.set(key, element)
-  else webviewEls.delete(key)
+  if (element) {
+    webviewEls.set(key, element)
+    // 元素挂上后起看门狗：did-attach 若因 will-attach-webview 被拒等原因永不触发，
+    // 30 秒后把「正在连接…」升级为可操作的失败（2026-10-16 审查 P2-3）
+    startAttachWatchdog(key)
+  } else {
+    webviewEls.delete(key)
+    clearAttachWatchdog(key)
+  }
 }
 
 function webviewRefCallback(key: string): (element: unknown) => void {
@@ -476,7 +504,12 @@ async function handleWebviewAttach(item: OpenWebviewEntry): Promise<void> {
   const key = item.key
   if (registeringKeys.has(key)) return
   const element = webviewEls.get(key)
-  if (!element) return
+  if (!element) {
+    // 元素登记缺失不能静默返回（2026-10-16 审查 P2-4）——留下可见状态，重试按钮仍在
+    webviewFailures[key] = '视图元素缺失，未能注册页面'
+    return
+  }
+  clearAttachWatchdog(key)
   let webContentsId = 0
   try { webContentsId = Number(element.getWebContentsId()) } catch { webContentsId = 0 }
   if (!Number.isInteger(webContentsId) || webContentsId <= 0) {
@@ -503,27 +536,85 @@ async function handleWebviewAttach(item: OpenWebviewEntry): Promise<void> {
   }
 }
 
+function startAttachWatchdog(key: string): void {
+  clearAttachWatchdog(key)
+  attachWatchdogs.set(key, setTimeout(() => {
+    attachWatchdogs.delete(key)
+    // 只在「既没注册成功、也没失败」时升级为失败——若已成功，webviewFailures 已被清除，
+    // 这里不能把已就绪的页面误报成失败
+    if (!webviewFailures[key]) {
+      webviewFailures[key] = '超过 30 秒仍未就绪（可能被安全策略拦下，可重试或重新打开店铺）'
+    }
+  }, ATTACH_TIMEOUT_MS))
+}
+
+function clearAttachWatchdog(key: string): void {
+  const timer = attachWatchdogs.get(key)
+  if (timer) {
+    clearTimeout(timer)
+    attachWatchdogs.delete(key)
+  }
+}
+
 function retryWebview(key: string): void {
   const item = openWebviews.value.find(entry => entry.key === key)
   if (!item) return
+  // 先判后做（2026-10-16 审查 P2-4）：元素登记缺失时保留失败态 + 按钮，别把自救入口点掉
+  if (!webviewEls.get(key)) {
+    webviewFailures[key] = '视图元素已卸载，请切换标签页或重新打开店铺'
+    return
+  }
   delete webviewFailures[key]
   void handleWebviewAttach(item)
 }
 
 function clearWebviewError(item: OpenWebviewEntry): void {
   delete webviewFailures[item.key]
+  clearAttachWatchdog(item.key)
 }
 
 function handleWebviewFailure(item: OpenWebviewEntry, event: any): void {
   const code = Number(event?.errorCode)
   // -3 = ERR_ABORTED：被新导航/重定向打断，不是页面失败
   if (code === -3) return
+  // 子框架（广告/统计）失败不是整页失败（2026-10-16 审查 P3-8）
+  if (event?.isMainFrame === false) return
   webviewFailures[item.key] = `加载失败（${event?.errorDescription || code || '未知原因'}）`
 }
 
 function handleWebviewDestroyed(item: OpenWebviewEntry): void {
   delete webviewFailures[item.key]
-  webviewEls.delete(item.key)
+  clearAttachWatchdog(item.key)
+  // 不再 webviewEls.delete(item.key)（2026-10-16 审查 P2-5）：同一 key 的新元素
+  // 可能已挂上，旧元素的 destroyed 是异步派发的，删了会误删新登记。登记的增删
+  // 统一交给 Vue 的 ref 回调（挂载给元素 / 卸载给 null）。
+}
+
+// ---- 失败卡片的 4 个规范动作（§3.3 / §17.1：重试 / 检查代理 / 重新登录 / 清理站点数据）----
+
+function openProxyPanel(): void {
+  // 切到右侧「环境」面板并落到代理区——代理绑定/测试入口都在那里
+  selectPanel('env')
+  void refreshEnvironment()
+}
+
+function reopenHome(storeId: string): void {
+  // 重新登录：跳到店铺首页（平台登录态失效时首页会引导重新登录）
+  const target = ws.stores.find(store => store.id === storeId)
+  const url = target ? (platformHomeUrls.value[target.platform] || target.adminUrl || '') : ''
+  if (url) void ws.navigate(url)
+  else void ws.tabControl('reload')
+}
+
+function clearSiteData(storeId: string): void {
+  // 清理「当前站点数据」：cookie 之外的站点存储（localStorage/IndexedDB 等）。
+  // 复用既有 clearData IPC；这里清理站点数据不动 Cookie，登录态保留。
+  void window.shopilot.browser.clearData(storeId, ['localstorage', 'indexdb', 'cachestorage', 'serviceworkers', 'filesystem'])
+    .then(result => {
+      if (result.ok) ws.toast('已清理该店铺站点数据（登录态保留）', 'success')
+      else ws.toast('清理失败：' + (result.error?.message || '未知原因'), 'error')
+    })
+    .catch(() => ws.toast('清理失败：请求异常', 'error'))
 }
 
 // 右侧「任务中心 → 任务列表」：后台自动采集任务不列（发票采集 + 涉税报送采集，用户口径：

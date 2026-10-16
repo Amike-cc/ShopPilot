@@ -16,6 +16,7 @@ import { randomUUID } from 'crypto'
 import { ipcOk as success, ipcFail as error, ipcErrFromUnknown } from './envelope'
 import { mkdirSync } from 'fs'
 import { writeAudit } from '../services/audit-logger'
+import { logMain } from '../services/logger'
 import { writeFile } from 'fs/promises'
 import { join } from 'path'
 import {
@@ -104,6 +105,9 @@ export function registerBrowserHandlers(): void {
       const data = await WindowManager.registerWebview(parsed.data.storeId, parsed.data.tabId, parsed.data.webContentsId)
       return success(data, requestId)
     } catch (err: any) {
+      // 注册失败是「店铺打不开」的关键现场（2026-10-16 审查 P2-6）：browserError 只映射
+      // 文案不记日志，这里补一条（脱敏：只记 store/tab 前缀，不记凭据）
+      logMain('warn', `[webview] register failed store=${String(parsed.data.storeId).slice(0, 16)} tab=${String(parsed.data.tabId).slice(0, 16)} reason=${String(err?.message || err).slice(0, 160)}`)
       return browserError(err, requestId)
     }
   })

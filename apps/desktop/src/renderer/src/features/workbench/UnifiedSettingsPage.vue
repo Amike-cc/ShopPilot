@@ -138,8 +138,18 @@
             <button type="button" class="unified-button" data-test="maintenance-diagnostics-export" :disabled="diagBusy" @click="doDiagnostics"><img class="button-icon" :src="diagnosticsIcon" alt="" />{{ diagBusy ? '导出中…' : '导出诊断包' }}</button>
             <button type="button" class="unified-button" data-test="maintenance-audit-export" :disabled="auditBusy" @click="doAuditExport"><img class="button-icon" :src="auditLogIcon" alt="" />{{ auditBusy ? '导出中…' : '导出审计日志' }}</button>
             <button type="button" class="unified-button" data-test="maintenance-memory" :disabled="memoryBusy" @click="readMemoryDiagnostics"><img class="button-icon" :src="memorySnapshotIcon" alt="" />{{ memoryBusy ? '读取中…' : '读取内存快照' }}</button>
+            <button type="button" class="unified-button" data-test="maintenance-view-check" :disabled="viewCheckBusy" @click="runViewCheck">{{ viewCheckBusy ? '体检中…' : '视图体检' }}</button>
           </div>
           <div v-if="memoryText" class="settings-note" data-test="maintenance-memory-result">{{ memoryText }}</div>
+          <div v-if="viewCheckResult" class="maintenance-backup-list" data-test="maintenance-view-result">
+            <div v-for="v in viewCheckResult" :key="v.tabId" class="maintenance-backup-row" :data-test="'view-probe-' + v.storeId">
+              <span class="maintenance-backup-meta">
+                <b>{{ viewStoreName(v.storeId) }}</b>
+                <em>{{ viewStateLabel(v) }} · {{ v.title || '（无标题）' }}</em>
+              </span>
+              <span class="product-title" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ v.url }}</span>
+            </div>
+          </div>
         </div>
         <div class="settings-group" data-test="maintenance-partition">
           <div class="settings-actions">
@@ -285,6 +295,35 @@ const diagBusy = ref(false)
 const auditBusy = ref(false)
 const memoryBusy = ref(false)
 const memoryText = ref('')
+// ---- 视图体检（浏览器视图诊断：每视图 loading/挂起/崩溃）----
+interface ViewProbe { storeId: string; tabId: string; url: string; title: string; loading: boolean; destroyed: boolean; responsive: 'ok' | 'hung' | 'error' }
+const viewCheckBusy = ref(false)
+const viewCheckResult = ref<ViewProbe[] | null>(null)
+function viewStoreName(storeId: string): string {
+  return storeMap.value[storeId] || storeId.slice(0, 8)
+}
+function viewStateLabel(v: ViewProbe): string {
+  if (v.destroyed) return '已销毁'
+  if (v.responsive === 'hung') return '⏱ 卡死'
+  if (v.responsive === 'error') return '❌ 崩溃/异常'
+  return v.loading ? '加载中' : '正常'
+}
+async function runViewCheck(): Promise<void> {
+  viewCheckBusy.value = true
+  viewCheckResult.value = null
+  try {
+    const result = await window.shopilot.browser.memoryDiagnostics()
+    if (!result.ok) throw new Error(responseError(result, '视图体检失败'))
+    const data = (result.data || {}) as { views?: ViewProbe[] }
+    viewCheckResult.value = data.views ?? []
+    if (!viewCheckResult.value.length) ws.toast('当前没有已挂载的店铺视图', 'error')
+  } catch (error) {
+    const message = '视图体检失败：' + String((error as Error)?.message || error)
+    ws.toast(message, 'error')
+  } finally {
+    viewCheckBusy.value = false
+  }
+}
 // ---- 店铺分区占用与清理（浏览器审查 S-1）----
 interface PartitionUsageItem { storeId: string; storeName: string; bytes: number; skipped: number }
 const partitionUsage = ref<PartitionUsageItem[]>([])

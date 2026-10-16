@@ -859,6 +859,13 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
     if (displayedStoreId === tab.storeId) emit(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, { storeId: tab.storeId, tabId: tab.id, isLoading: false })
     scheduleLoginDetection(tab.storeId)
   })
+  // 页面加载失败在主进程侧留痕（2026-10-16 审查 P2-6）：渲染层诊断浮层只活在当前渲染进程，
+  // 重启即消失；这里记录让诊断包里的 app.log 也能查到「哪个店、哪个标签页、因为什么失败」。
+  wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+    if (code === -3) return // ERR_ABORTED：被新导航/重定向打断
+    if (isMainFrame === false) return // 子框架（广告/统计）失败不记
+    logMain('warn', `[webview] load failed store=${tab.storeId.slice(0, 16)} tab=${tab.id.slice(0, 16)} code=${code} desc=${String(desc).slice(0, 120)} url=${String(url).slice(0, 120)}`)
+  })
   wc.on('render-process-gone', (_e, details) => {
     // 主动冷回收/关标签页会先从 Tab 上解绑 guest，再调用 wc.close()。
     // Electron 随后仍可能发出 render-process-gone；这不是页面崩溃，不能让
@@ -1512,7 +1519,75 @@ export function getOpenStoreIds(): string[] {
   return Array.from(browserStates.keys())
 }
 
-/** 只读性能采样：返回主进程、Electron 子进程和店铺页面生命周期摘要。 */
+/** 视图级探针结果（「视图体检」核心）：直接回答"这个店铺页面是正常/加载中/卡死/崩溃"。 */
+export interface ViewProbe {
+  storeId: string
+  tabId: string
+  /** 只回 origin + path，不带查询串（隐私：不泄漏 token/redirect 参数） */
+  url: string
+  title: string
+  /** 页面当前是否在加载（isLoading，非阻塞） */
+  loading: boolean
+  /** webContents 是否已销毁（探针无法执行） */
+  destroyed: boolean
+  /**
+   * 挂起判定：executeJavaScript('1') 在超时内是否返回。
+   * 'ok' 正常 / 'hung' 超时未响应（渲染主线程卡死）/ 'error' 求值抛异常（含已崩溃进程）。
+   */
+  responsive: 'ok' | 'hung' | 'error'
+}
+
+/** 视图探针超时（ms）：挂起的 renderer 会让 executeJavaScript 无限期不返回，必须限时。 */
+const VIEW_PROBE_TIMEOUT_MS = 3000
+
+/** 对单个 guest 做只读探针（不读正文/凭据；URL 去查询串；带超时，挂起不阻塞）。 */
+async function probeView(tab: Tab, storeId: string): Promise<ViewProbe> {
+  const base = { storeId, tabId: tab.id }
+  const wc = tab.webContents
+  if (!wc || wc.isDestroyed()) {
+    return { ...base, url: stripQuery(tab.url), title: tab.title || '', loading: false, destroyed: true, responsive: 'error' }
+  }
+  let loading = false
+  let title = tab.title || ''
+  let url = tab.url
+  try {
+    loading = wc.isLoading()
+    url = wc.getURL() || tab.url
+    title = wc.getTitle() || tab.title || ''
+  } catch {
+    // getURL/getTitle 对已销毁 contents 会抛，按不可读处理
+  }
+  let responsive: ViewProbe['responsive'] = 'error'
+  try {
+    responsive = await withTimeout(
+      wc.executeJavaScript('1', true),
+      VIEW_PROBE_TIMEOUT_MS
+    ).then(() => 'ok' as const, () => 'hung' as const)
+  } catch {
+    responsive = 'error'
+  }
+  return { ...base, url: stripQuery(url), title, loading, destroyed: false, responsive }
+}
+
+function stripQuery(u: string): string {
+  try {
+    const parsed = new URL(u)
+    if (parsed.protocol === 'file:') return '（应用界面）'
+    return parsed.origin + parsed.pathname
+  } catch {
+    return u
+  }
+}
+
+/** 给 Promise 套超时：到点先归失败，绝不让挂起的视图卡住诊断本身。 */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms)
+    p.then(v => { clearTimeout(timer); resolve(v) }, e => { clearTimeout(timer); reject(e) })
+  })
+}
+
+/** 只读性能采样：返回主进程、Electron 子进程、店铺页面生命周期摘要，以及视图级探针。 */
 export async function getMemoryDiagnostics(): Promise<{
   capturedAt: number
   main: NodeJS.MemoryUsage
@@ -1525,6 +1600,8 @@ export async function getMemoryDiagnostics(): Promise<{
     standaloneWindows: number
     lifecycle: { idleMs: number; warm: boolean; blockedBy: string[] }
   }>
+  /** 视图体检：每个已挂载 guest 的加载/挂起/崩溃状态（并发探针，单个挂起不影响整体） */
+  views: ViewProbe[]
   /** 后台采集借用的页面：谁还开着、是借用中还是用户接手 */
   pageLeases: ReturnType<StorePageLeases['snapshot']>
   /** 仍在下载的店铺，仅用于诊断和回收门禁，不包含文件信息。 */
@@ -1556,11 +1633,21 @@ export async function getMemoryDiagnostics(): Promise<{
   const tabs = storeRows.reduce((sum, row) => sum + row.tabs, 0)
   const attachedGuests = storeRows.reduce((sum, row) => sum + row.attachedGuests, 0)
   const standaloneCount = storeRows.reduce((sum, row) => sum + row.standaloneWindows, 0)
+  // 视图体检：并发探针（Promise.all 不短路——单个视图挂起只在它自己的超时里等待，
+  // 不会拖慢整体，也不阻塞别的视图）
+  const views = await Promise.all(
+    Array.from(browserStates.entries()).flatMap(([storeId, state]) =>
+      Array.from(state.tabs.values())
+        .filter(tab => tab.guestAttached && tab.webContents && !tab.webContents.isDestroyed())
+        .map(tab => probeView(tab, storeId))
+    )
+  )
   return {
     capturedAt: Date.now(),
     main: process.memoryUsage(),
     appMetrics: metrics,
     stores: storeRows,
+    views,
     /** 后台采集借用的页面：谁还开着、是借用中还是用户接手（"占用为什么没降下来"看这里） */
     pageLeases: pageLeases.snapshot(),
     activeDownloads: getActiveDownloadStoreIds(),

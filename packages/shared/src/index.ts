@@ -57,3 +57,6 @@ export * from './navigation'
 
 // 发布台账状态词表（三套命名曾互不一致，收敛到一处 + 源码扫描测试兜底）
 export * from './product-status'
+
+// 浏览器视图状态（诊断浮层与「视图体检」共用的口径 + did-fail-load / 地址展示判据）
+export * from './view-state'

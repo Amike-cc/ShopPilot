@@ -135,4 +135,48 @@ describe('主窗口 DOM <webview> 嵌入边界', () => {
     expect(VITE_CONFIG).toContain('isCustomElement')
     expect(VITE_CONFIG).toContain("tag === 'webview'")
   })
+
+  // ---- 视图诊断浮层（2026-10-16 审查 P1/P2 修复的回归钉）----
+
+  it('诊断浮层的失败态与「连接中」是两个独立门控（失败不受 guestAttached 约束）', () => {
+    // 失败文案必须能显示：旧实现 `.filter(item => !webviewAttached(item))` 会把
+    // 注册成功后的 did-fail-load 失败整个吞掉（guestAttached 恒 true）
+    expect(SURFACE).toContain('.filter(row => !!row.failure || !row.attached)')
+    // 失败不得再被 !webviewAttached 过滤
+    expect(SURFACE).not.toMatch(/filter\(item => !webviewAttached\(item\)\)/)
+  })
+
+  it('失败卡片带 4 个规范动作（重试/检查代理/重新登录/清理站点数据）', () => {
+    expect(SURFACE).toContain('retryWebview')
+    expect(SURFACE).toContain('openProxyPanel')
+    expect(SURFACE).toContain('reopenHome')
+    expect(SURFACE).toContain('clearSiteData')
+  })
+
+  it('did-fail-load 过滤子框架（isMainFrame）', () => {
+    expect(SURFACE).toContain('isMainFrame === false')
+  })
+
+  it('attach 超时看门狗存在，且成功/销毁时清除', () => {
+    expect(SURFACE).toContain('ATTACH_TIMEOUT_MS')
+    expect(SURFACE).toContain('startAttachWatchdog')
+    expect(SURFACE).toContain('clearAttachWatchdog')
+  })
+
+  it('destroyed 不再删除元素登记（登记统一交给 Vue ref 回调，防竞态）', () => {
+    // 函数体内不得有实际的 webviewEls.delete 语句（注释里解释性文字不算）
+    const fn = SURFACE.match(/function handleWebviewDestroyed[\s\S]*?\n\}/)
+    expect(fn).toBeTruthy()
+    expect(fn![0]).not.toMatch(/\n\s+webviewEls\.delete\(/)
+  })
+
+  it('重试先判后做：元素缺失时保留失败态与按钮，不静默返回', () => {
+    expect(SURFACE).toContain('视图元素已卸载')
+    expect(SURFACE).toContain('视图元素缺失，未能注册页面')
+  })
+
+  it('主进程对注册失败与页面加载失败都留痕（诊断包 app.log 可查）', () => {
+    expect(BROWSER_HANDLERS).toContain('[webview] register failed')
+    expect(WINDOW_MANAGER).toContain('[webview] load failed')
+  })
 })
