@@ -26,6 +26,7 @@ import { describeStoreNameSource } from '../../apps/desktop/src/main/browser/sto
 const read = (p: string) => readFileSync(resolve(p), 'utf8')
 const READER = read('apps/desktop/src/main/browser/store-name-reader.ts')
 const DASHBOARD = read('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue')
+const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue')
 const PRELOAD = read('apps/desktop/src/preload/index.ts')
 
 describe('isLoginLikePage：登录页没有店名，不许硬凑', () => {
@@ -194,5 +195,23 @@ describe('接线：主进程取候选、界面只预填不静默改名', () => {
     expect(DASHBOARD).toContain('data-test="ctx-readname"')
     expect(DASHBOARD).toContain('读取店铺名（从页面）')
     expect(DASHBOARD).toContain('data-test="rename-note"')
+  })
+
+  it('页面加载完自动把占位名改成真名，但绝不碰手输的名字', () => {
+    const fn = SURFACE.match(/async function maybeAutoNameStore[\s\S]*?\n\}/)
+    expect(fn).toBeTruthy()
+    // 只动占位名（「11121」这种）——手输的名字可能是有意命名，不许悄悄覆盖
+    expect(fn![0]).toContain('looksLikePlaceholderStoreName(store.name)')
+    // 走和手动改名同一条写库路径，并刷新列表 + 弹提示（不静默改数据）
+    expect(fn![0]).toContain('window.shopilot.store.update({ storeId: item.storeId, patch: { name: data.name } })')
+    expect(fn![0]).toContain('ws.refreshStores()')
+    expect(fn![0]).toContain('店铺名已按店铺页面自动更新')
+    // 一次会话只自动改一次；读不到（页面没就绪）要允许下次再试
+    expect(fn![0]).toContain('autoNamedStores.has(item.storeId)')
+    expect(fn![0]).toContain('autoNamedStores.delete(item.storeId)')
+    // 由 did-finish-load（clearWebviewError）触发，且只对已挂上的视图做
+    const clear = SURFACE.match(/function clearWebviewError[\s\S]*?\n\}/)![0]
+    expect(clear).toContain('if (!webviewAttached(item)) return')
+    expect(clear).toContain('void maybeAutoNameStore(item)')
   })
 })

@@ -368,6 +368,7 @@ import { isBackgroundCollectTask } from '@shared/constants/collection'
 // 视图诊断判据与词表（2026-10-16 审查第 8 条 / V4）：与主进程的 did-fail-load 监听、
 // 「视图体检」读同一份定义，避免两处各写一遍、各错一半
 import { BROWSER_VIEW_STATE_SENTENCE, classifyLoadFailure, readGuestWebContentsId } from '@shared/view-state'
+import { looksLikePlaceholderStoreName } from '@shared/store-name'
 
 const emit = defineEmits<{
   // 头部栏（含「返回经营总览」）已按用户要求整条移除；回经营总览走左栏导航，这里不再有该事件。
@@ -637,6 +638,41 @@ function clearWebviewError(item: OpenWebviewEntry): void {
   if (!webviewAttached(item)) return
   delete webviewFailures[item.key]
   clearAttachWatchdog(item.key)
+  void maybeAutoNameStore(item)
+}
+
+/** 本会话里已经自动命名过的店铺：一次就够，别每加载一页就写一次库 */
+const autoNamedStores = new Set<string>()
+
+/**
+ * 页面加载完成 → 把**占位名**的店铺自动改成平台上写的真名（2026-10-16 用户要求）。
+ *
+ * 为什么只动占位名：`11121`「店铺1」这种是建店时的出生名，改成真名只有好处；
+ * 而「慕么美」「福气满满」可能是用户**有意**起的内部代号，被平台名悄悄覆盖、且每次开页
+ * 都再覆盖一次，属于帮倒忙。手输的名字一律不碰（右键「读取店铺名」可随时手动采用）。
+ *
+ * 全程可见、可回退：写库走 store:update（和手动改名同一条路）、刷新列表、并弹提示告知
+ * 改成了什么——不静默改数据。
+ */
+async function maybeAutoNameStore(item: OpenWebviewEntry): Promise<void> {
+  if (item.internal) return
+  if (autoNamedStores.has(item.storeId)) return
+  const store = ws.stores.find(row => row.id === item.storeId)
+  if (!store || !looksLikePlaceholderStoreName(store.name)) return
+  autoNamedStores.add(item.storeId)
+  const result = await window.shopilot.browser.readStoreName(item.storeId, item.tabId)
+  if (!result.ok) {
+    // 页面还没就绪/读超时：不是"这家店没有真名"，留着下次页面加载再试
+    autoNamedStores.delete(item.storeId)
+    return
+  }
+  const data = result.data as { name?: string | null; sourceLabel?: string | null } | null
+  if (!data?.name || data.name === store.name) return
+  const updated = await window.shopilot.store.update({ storeId: item.storeId, patch: { name: data.name } })
+  if (!updated.ok) return
+  autoNamedStores.delete(item.storeId)
+  await ws.refreshStores()
+  ws.toast(`店铺名已按店铺页面自动更新：「${store.name}」→「${data.name}」（来源：${data.sourceLabel || '页面'}）`, 'success', 6000)
 }
 
 function handleWebviewFailure(item: OpenWebviewEntry, event: any): void {
