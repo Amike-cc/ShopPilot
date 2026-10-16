@@ -11,6 +11,7 @@
 
 import { WebContents } from 'electron'
 import { getDatabase } from '../db/database'
+import { logMain } from '../services/logger'
 import type { ProfileVerifyItem } from '../stores/profile-manager'
 
 interface FpOverrides {
@@ -28,6 +29,8 @@ interface FpOverrides {
 interface TabReg {
   wc: WebContents
   attached: boolean
+  /** document-start 注入脚本的 CDP 标识（注销时要撤掉，否则一直跟着这个 WebContents） */
+  scriptId?: string | null
 }
 
 /** storeId → tabId → 注册表（window-manager 在标签生命周期内调用） */
@@ -88,54 +91,100 @@ function readOverrides(storeId: string): FpOverrides | null {
 }
 
 /** 注入主世界脚本：覆盖 navigator/screen/WebGL（不暴露任何 Electron/IPC 句柄，§10.1） */
-function buildInjectScript(o: FpOverrides): string {
+export function buildInjectScript(o: FpOverrides): string {
   const payload = {
     ...o,
-    clientHints: o.userAgent ? parseUaClientHints(o.userAgent) : null
+    clientHints: o.userAgent ? parseUaClientHints(o.userAgent) : null,
+    // 平台名从 UA 推（与 userAgentData.platform 同源），避免 navigator.platform 与 UA 互相矛盾
+    platform: o.userAgent && /Windows/i.test(o.userAgent) ? 'Win32' : null,
+    // deviceMemory 没有档案字段：按核心数给一个自洽值（Chromium 只暴露 0.25/0.5/1/2/4/8）
+    deviceMemory: o.hardwareConcurrency && o.hardwareConcurrency >= 8 ? 8 : (o.hardwareConcurrency ? 4 : null)
   }
   return `(() => {
   const P = ${JSON.stringify(payload)};
+  // Chromium 只暴露 0.25/0.5/1/2/4/8 这几档，越界的值本身就是特征
+  const clampDeviceMemory = (v) => [0.25, 0.5, 1, 2, 4, 8].includes(v) ? v : 8;
   try {
-    if (P.userAgent) Object.defineProperty(navigator, 'userAgent', { get: () => P.userAgent, configurable: true });
+    // ① 改写的 getter 必须伪装成原生：平台只要一句
+    //    Object.getOwnPropertyDescriptor(Navigator.prototype,'userAgent').get.toString()
+    //    就能看出是不是 [native code]（2026-10-16 审查 P1）。这里统一登记 + 代理 toString。
+    const nativeToString = Function.prototype.toString;
+    const masked = new WeakMap();
+    const mask = (fn, label) => { try { masked.set(fn, 'function ' + (label || fn.name || '') + '() { [native code] }'); } catch (e) {} return fn; };
+    const toStringProxy = new Proxy(nativeToString, {
+      apply: (target, thisArg, args) => {
+        const m = masked.get(thisArg);
+        return m !== undefined ? m : Reflect.apply(target, thisArg, args);
+      }
+    });
+    mask(toStringProxy, 'toString');
+    try { Object.defineProperty(Function.prototype, 'toString', { value: toStringProxy, writable: true, configurable: true }); } catch (e) {}
+    const define = (target, prop, getter, label) => {
+      try { Object.defineProperty(target, prop, { get: mask(getter, label || prop), configurable: true }); } catch (e) {}
+    };
+
+    if (P.userAgent) define(navigator, 'userAgent', () => P.userAgent, 'get userAgent');
+    // 自动化痕迹：即使没开 --enable-automation 也显式声明为 false
+    define(navigator, 'webdriver', () => false, 'get webdriver');
     if (P.language) {
-      Object.defineProperty(navigator, 'language', { get: () => P.language, configurable: true });
-      Object.defineProperty(navigator, 'languages', { get: () => [P.language], configurable: true });
+      define(navigator, 'language', () => P.language, 'get language');
+      define(navigator, 'languages', () => [P.language], 'get languages');
     }
-    if (P.hardwareConcurrency) Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => P.hardwareConcurrency, configurable: true });
+    if (P.hardwareConcurrency) define(navigator, 'hardwareConcurrency', () => P.hardwareConcurrency, 'get hardwareConcurrency');
+    if (P.deviceMemory) define(navigator, 'deviceMemory', () => clampDeviceMemory(P.deviceMemory), 'get deviceMemory');
+    if (P.platform) define(navigator, 'platform', () => P.platform, 'get platform');
     if (P.screenWidth) {
-      Object.defineProperty(screen, 'width', { get: () => P.screenWidth, configurable: true });
-      Object.defineProperty(screen, 'availWidth', { get: () => P.screenWidth, configurable: true });
+      define(screen, 'width', () => P.screenWidth, 'get width');
+      define(screen, 'availWidth', () => P.screenWidth, 'get availWidth');
     }
     if (P.screenHeight) {
-      Object.defineProperty(screen, 'height', { get: () => P.screenHeight, configurable: true });
-      Object.defineProperty(screen, 'availHeight', { get: () => P.screenHeight - 40, configurable: true });
+      define(screen, 'height', () => P.screenHeight, 'get height');
+      // 任务栏高度不再硬编码 40：按屏幕高度给一档自洽值并 clamp（<40 的屏幕曾算出负数，
+      // 一行断言就能检出 —— 2026-10-16 审查 P2），同时补齐 availTop/availLeft
+      const taskbar = P.screenHeight >= 900 ? 48 : 40;
+      define(screen, 'availHeight', () => Math.max(1, P.screenHeight - taskbar), 'get availHeight');
+      define(screen, 'availTop', () => 0, 'get availTop');
+      define(screen, 'availLeft', () => 0, 'get availLeft');
     }
     if (P.colorDepth) {
-      Object.defineProperty(screen, 'colorDepth', { get: () => P.colorDepth, configurable: true });
-      Object.defineProperty(screen, 'pixelDepth', { get: () => P.colorDepth, configurable: true });
+      define(screen, 'colorDepth', () => P.colorDepth, 'get colorDepth');
+      define(screen, 'pixelDepth', () => P.colorDepth, 'get pixelDepth');
     }
     if (P.userAgent && P.clientHints) {
       const parsed = P.clientHints;
-      Object.defineProperty(navigator, 'userAgentData', { configurable: true, get: () => ({
+      define(navigator, 'userAgentData', () => ({
         brands: parsed.brands, mobile: parsed.mobile, platform: parsed.platform,
-        getHighEntropyValues: () => Promise.resolve(Object.assign({}, parsed, { platformVersion: '15.0.0', architecture: 'x86', bitness: '64', model: ' ' }))
-      })});
+        getHighEntropyValues: mask(
+          () => Promise.resolve(Object.assign({}, parsed, { platformVersion: '15.0.0', architecture: 'x86', bitness: '64', model: ' ' })),
+          'getHighEntropyValues'
+        )
+      }), 'get userAgentData');
     }
     if (P.webglVendor || P.webglRenderer) {
+      // 打补丁的标记用**无描述 Symbol**：属性名不能带品牌串（曾用带产品名的属性名，
+      // 页面一行 Object.keys 就能看出被本软件改过 —— 2026-10-16 审查；说明写在本函数 JSDoc 里，
+      // 这份脚本是要注入页面的字符串，里面不留任何品牌串）
+      const PATCHED = Symbol();
       const patch = (proto) => {
-        if (!proto || proto.__shopilotPatched) return;
-        proto.__shopilotPatched = true;
+        if (!proto || proto[PATCHED]) return;
+        try { Object.defineProperty(proto, PATCHED, { value: true }); } catch (e) { return }
         const orig = proto.getParameter;
-        proto.getParameter = function (pname) {
+        const patched = mask(function (pname) {
           if (P.webglVendor && (pname === 37445 || pname === 7936)) return P.webglVendor;
           if (P.webglRenderer && (pname === 37446 || pname === 7937)) return P.webglRenderer;
           return orig.call(this, pname);
-        };
+        }, 'getParameter');
+        try { Object.defineProperty(proto, 'getParameter', { value: patched, writable: true, configurable: true }); } catch (e) {}
       };
-      if (window.WebGLRenderingContext) patch(WebGLRenderingContext.prototype);
-      if (window.WebGL2RenderingContext) patch(WebGL2RenderingContext.prototype);
+      // 只用 window.* 取构造器：裸全局在某些上下文里不存在，会让整段补丁静默失效
+      // （注意：这段是**要注入页面执行的 JS 字符串**，里面不能出现 TS 语法）
+      const gl1 = window.WebGLRenderingContext;
+      const gl2 = window.WebGL2RenderingContext;
+      if (gl1 && gl1.prototype) patch(gl1.prototype);
+      if (gl2 && gl2.prototype) patch(gl2.prototype);
     }
-  } catch (e) { /* 注入失败静默，verify 将标记未验证 */ }
+    // 不往页面 console 打任何东西：日志前缀本身就是指纹（失败由主进程 profile:verify 如实呈现）
+  } catch (e) { /* 注入失败不写页面日志，主进程侧 verify 会标记未验证 */ }
 })();`
 }
 
@@ -166,17 +215,61 @@ export function registerFingerprintTarget(storeId: string, tabId: string, wc: We
       reg.attached = false
     }
   }
+  // 之前这里每次导航都重新 `setTimezoneOverride`，但 `reg.attached` 门闩让它成为死代码；
+  // 同时 attach 失败完全静默。现在：失败写日志、detach 时复位状态（等下一次机会重挂）。
+  wc.debugger.on?.('detach', () => { reg.attached = false; reg.scriptId = null })
   tryTimezone()
 
-  // 主世界注入：每次导航在 DOM 就绪时重新应用（覆盖跨文档）
+  /**
+   * document-start 注入（2026-10-16 审查 P0）：原来的注入挂在 `dom-ready`，那是**页面脚本早就跑完
+   * 之后**——风控 SDK 在解析期读到的 navigator/screen/WebGL 全是真机值，之后再被改写，等于
+   * "自相矛盾"，比不伪装更可疑；而且注册时那次 executeJavaScript 打在 about:blank 上，会被首次导航丢弃。
+   *
+   * 时区本来就要挂调试器，所以这里零额外成本：用 CDP `Page.addScriptToEvaluateOnNewDocument`
+   * 在**每个新文档、每个框架**（含 iframe）的页面脚本之前注入。attach 不可用（调试器被别的会话占用/
+   * 总开关关闭）时返回 false，由调用方退回 dom-ready 注入。
+   */
+  const injectAtDocumentStart = (): boolean => {
+    if (cdpDisabled || wc.isDestroyed()) return false
+    try {
+      if (!reg.attached) {
+        wc.debugger.attach('1.3')
+        reg.attached = true
+      }
+      if (!reg.scriptId) {
+        wc.debugger
+          .sendCommand('Page.addScriptToEvaluateOnNewDocument', { source: buildInjectScript(o), runImmediately: true })
+          .then((result: unknown) => {
+            reg.scriptId = String((result as { identifier?: unknown })?.identifier || '') || null
+          })
+          .catch((error: unknown) => {
+            logMain('warn', `[fingerprint] document-start 注入失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+          })
+      }
+      return true
+    } catch (error) {
+      // 已有其他调试会话等 → 交给 dom-ready 兜底，但必须留痕（此前是静默失败）
+      logMain('warn', `[fingerprint] 调试器不可用，退回 dom-ready 注入 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+      reg.attached = false
+      return false
+    }
+  }
+
+  // 主世界注入兜底：调试器不可用时，每次导航在 DOM 就绪时应用（覆盖跨文档；iframe 覆盖不到）
   const inject = () => {
     try {
-      if (!wc.isDestroyed()) wc.executeJavaScript(buildInjectScript(o), true).catch(() => { /* ignore */ })
+      if (wc.isDestroyed()) return
+      wc.executeJavaScript(buildInjectScript(o), true).catch((error: unknown) => {
+        logMain('warn', `[fingerprint] 注入失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
+      })
     } catch { /* ignore */ }
   }
-  wc.on('dom-ready', inject)
+
+  if (!injectAtDocumentStart()) {
+    wc.on('dom-ready', inject)
+    inject()
+  }
   wc.on('did-navigate', tryTimezone)
-  inject()
 }
 
 export function unregisterFingerprintTarget(storeId: string, tabId: string): void {
@@ -184,7 +277,17 @@ export function unregisterFingerprintTarget(storeId: string, tabId: string): voi
   if (!m) return
   const reg = m.get(tabId)
   if (reg) {
-    try { if (reg.attached && !reg.wc.isDestroyed()) reg.wc.debugger.detach() } catch { /* ignore */ }
+    try {
+      if (reg.attached && !reg.wc.isDestroyed()) {
+        // 先撤掉 document-start 脚本再 detach：不然脚本会一直跟着这个 WebContents
+        if (reg.scriptId) {
+          reg.wc.debugger
+            .sendCommand('Page.removeScriptToEvaluateOnNewDocument', { identifier: reg.scriptId })
+            .catch(() => { /* 已经随导航/销毁失效 */ })
+        }
+        reg.wc.debugger.detach()
+      }
+    } catch { /* ignore */ }
     m.delete(tabId)
   }
   if (m.size === 0) tabs.delete(storeId)
