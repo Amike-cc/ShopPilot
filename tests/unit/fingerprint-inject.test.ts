@@ -147,6 +147,37 @@ describe('注入脚本真跑：值改对了，而且不像被改过', () => {
   })
 })
 
+describe('验证口径：补全易矛盾项 + 失败原因如实呈现', () => {
+  const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue')
+
+  it('verify 覆盖 platform / languages / deviceMemory / UA-CH（此前完全没验）', () => {
+    const fn = INJECTOR.match(/export async function verifyStoreFingerprint[\s\S]*?\n\}/)
+    expect(fn).toBeTruthy()
+    for (const field of ["item('platform'", "item('languages'", "item('deviceMemory'", "item('uaClientHints'"]) {
+      expect(fn![0]).toContain(field)
+    }
+    // 期望值必须与注入脚本同源（都用 platformFromUa），否则"验的"和"注入的"会各说一套
+    expect(fn![0]).toContain('platformFromUa(p.user_agent)')
+  })
+
+  it('取不到实测值时先如实说原因，而不是伪装成逐项未验证', () => {
+    expect(INJECTOR).toContain("state: 'ok' | 'timeout' | 'exception' | 'no-tab'")
+    expect(INJECTOR).toContain("field: '实测取值'")
+    expect(INJECTOR).toContain('没有已注册的标签页')
+    expect(INJECTOR).toContain('页面 4 秒内未响应（可能正在加载）')
+    // 超时/异常都要写主进程日志（此前是 console.log + catch{continue} 静默吞）
+    expect(INJECTOR).not.toContain("console.log('[fp] collectActualValues")
+    expect(INJECTOR).toContain('实测超时（4s）')
+    expect(INJECTOR).toContain('实测脚本在页面里抛错')
+  })
+
+  it('界面文案按实际覆盖字段措辞，不再宣称"全部字段一致"', () => {
+    expect(SURFACE).not.toContain('环境指纹全部字段实测一致')
+    expect(SURFACE).toContain('已实测 ${verifiedCount} 项全部一致')
+    expect(SURFACE).toContain("item.field === '实测取值'")
+  })
+})
+
 describe('接线：失败要留痕、硬编码要消失', () => {
   it('注入失败写主进程日志（不再只写页面注释）', () => {
     expect(INJECTOR).toContain('logMain')

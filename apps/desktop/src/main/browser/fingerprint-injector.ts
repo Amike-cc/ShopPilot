@@ -338,18 +338,29 @@ export function unregisterFingerprintTarget(storeId: string, tabId: string): voi
   if (m.size === 0) tabs.delete(storeId)
 }
 
+/** 实测结果：**必须区分"没取到"的原因**，否则界面会把"超时"和"注入没生效"混成一句话 */
+export interface ActualValuesResult {
+  state: 'ok' | 'timeout' | 'exception' | 'no-tab'
+  values: Record<string, any> | null
+}
+
 /**
- * 采集页面内实际值（profile:verify 用）
+ * 采集页面内实际值（profile:verify 用）。
+ *
+ * 2026-10-16 审查 P1：原来只返回 `Record|null`，超时/异常/没标签页三种情况全被压成 null，
+ * 面板只能一律显示"未验证"，用户无从知道是"没生效"还是"没来得及测"；异常还被 `catch { continue }`
+ * 静默吞掉。现在返回 state + 原因，并写主进程日志。
  */
-export async function collectActualValues(storeId: string): Promise<Record<string, any> | null> {
+export async function collectActualValues(storeId: string): Promise<ActualValuesResult> {
   const m = tabs.get(storeId)
-  if (!m) return null
+  if (!m) return { state: 'no-tab', values: null }
   for (const reg of m.values()) {
     if (reg.wc.isDestroyed() || reg.wc.isCrashed?.()) continue
     try {
-      const timeout = new Promise<null>(r => setTimeout(() => r(null), 4000))
+      const timeout = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 4000))
       const result = await Promise.race([
-        reg.wc.executeJavaScript(`(() => {
+        // 异步探针：UA-CH 的高熵值要 await（真实现就是异步的）
+        reg.wc.executeJavaScript(`(async () => {
         try {
           const canvas = document.createElement('canvas');
           const gl = canvas.getContext('webgl');
@@ -359,9 +370,22 @@ export async function collectActualValues(storeId: string): Promise<Record<strin
             wv = gl.getParameter(ext ? ext.UNMASKED_VENDOR_WEBGL : gl.VENDOR);
             wr = gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
           }
+          let uaChPlatform = null, uaChArch = null;
+          try {
+            const uad = navigator.userAgentData;
+            if (uad) {
+              uaChPlatform = uad.platform ?? null;
+              const high = await uad.getHighEntropyValues(['architecture']);
+              uaChArch = high && high.architecture ? high.architecture : null;
+            }
+          } catch (e) { /* UA-CH 不可用就留 null，交给 verify 如实标记 */ }
           return {
             userAgent: navigator.userAgent,
             language: navigator.language,
+            languages: (navigator.languages || []).join(','),
+            platform: navigator.platform,
+            deviceMemory: typeof navigator.deviceMemory === 'number' ? navigator.deviceMemory : null,
+            uaChPlatform, uaChArch,
             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
             screen: screen.width + 'x' + screen.height,
             colorDepth: screen.colorDepth,
@@ -372,11 +396,20 @@ export async function collectActualValues(storeId: string): Promise<Record<strin
       })()`, true),
         timeout
       ])
-      if (result) return result
-      console.log('[fp] collectActualValues: executeJavaScript 超时，跳过该 tab')
-    } catch { continue }
+      if (result === 'timeout') {
+        logMain('warn', `[fingerprint] 实测超时（4s）：store=${storeId}`)
+        continue
+      }
+      if (result) return { state: 'ok', values: result as Record<string, any> }
+      logMain('warn', `[fingerprint] 实测脚本在页面里抛错：store=${storeId}`)
+      continue
+    } catch (error) {
+      logMain('warn', `[fingerprint] 实测执行失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
+      continue
+    }
   }
-  return null
+  // 有标签但都没测成：区分"超时"还是"异常"无从细分时，如实给 timeout（页面通常只是慢）
+  return { state: m.size > 0 ? 'timeout' : 'no-tab', values: null }
 }
 
 /**
@@ -391,19 +424,36 @@ export async function verifyStoreFingerprint(storeId: string): Promise<ProfileVe
   `).get(storeId) as any
   if (!p) throw new Error('PROFILE_NOT_FOUND')
 
-  const actual = await collectActualValues(storeId)
+  const collected = await collectActualValues(storeId)
+  const actual = collected.values
   const item = (field: string, expected: any, actualVal: any): ProfileVerifyItem => ({
     field, expected, actual: actualVal ?? null,
     state: (actualVal != null && String(actualVal) === String(expected)) ? 'verified' : 'unverified'
   })
 
-  const items: ProfileVerifyItem[] = [
+  // 取不到实测值时先把原因如实摆出来：界面不该把"超时/没标签页"伪装成"逐项未验证"
+  const items: ProfileVerifyItem[] = []
+  if (collected.state !== 'ok') {
+    items.push({
+      field: '实测取值',
+      expected: '打开店铺页面后实测',
+      actual: collected.state === 'no-tab' ? '没有已注册的标签页' : '页面 4 秒内未响应（可能正在加载）',
+      state: 'unverified'
+    })
+  }
+
+  items.push(
     item('userAgent', p.user_agent, actual?.userAgent),
     item('language', p.language, actual?.language),
     item('timezone', p.timezone, actual?.timezone),
     item('screen', `${p.screen_width}x${p.screen_height}`, actual?.screen),
-    item('hardwareConcurrency', p.hardware_concurrency, actual?.hardwareConcurrency)
-  ]
+    item('hardwareConcurrency', p.hardware_concurrency, actual?.hardwareConcurrency),
+    // 2026-10-16 审查 P1：以下四项此前**完全没验**，而它们恰好是最容易互相矛盾的地方
+    item('platform', platformFromUa(p.user_agent), actual?.platform),
+    item('languages', p.language ? `${p.language},en-US` : null, actual?.languages),
+    item('deviceMemory', p.hardware_concurrency ? (p.hardware_concurrency >= 8 ? 8 : 4) : null, actual?.deviceMemory),
+    item('uaClientHints', platformFromUa(p.user_agent), actual?.uaChPlatform)
+  )
   if (p.color_depth != null) items.push(item('colorDepth', p.color_depth, actual?.colorDepth))
   if (p.webgl_vendor) items.push(item('webglVendor', p.webgl_vendor, actual?.webglVendor))
   if (p.webgl_renderer) items.push(item('webglRenderer', p.webgl_renderer, actual?.webglRenderer))

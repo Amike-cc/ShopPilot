@@ -1012,8 +1012,17 @@ async function verifyEnv() {
   if (ws.displayedStoreId !== storeId) return
   if (!result.ok) { ws.toast(`验证失败：${result.error.message}`, 'error'); return }
   verifyItems.value = result.data?.items || []
+  const verifiedCount = verifyItems.value.filter(item => item.state === 'verified').length
   const failed = verifyItems.value.filter(item => item.state !== 'verified').length
-  ws.toast(failed ? `${failed} 个字段未验证（需浏览器打开该店铺页面）` : '环境指纹全部字段实测一致', failed ? 'info' : 'success')
+  // 文案按**实际覆盖到的字段**措辞（2026-10-16 审查）：此前一句"全部字段实测一致"，
+  // 而 platform / UA-CH / languages / deviceMemory 这些最易矛盾的项根本没在验证范围内。
+  const detail = verifyItems.value.find(item => item.field === '实测取值')?.actual
+  ws.toast(
+    failed
+      ? `已实测 ${verifiedCount} 项一致、${failed} 项未验证${detail ? `（${detail}）` : '（点「验证环境」前先打开该店铺页面）'}`
+      : `已实测 ${verifiedCount} 项全部一致`,
+    failed ? 'info' : 'success'
+  )
 }
 
 function clip(value: unknown) {
