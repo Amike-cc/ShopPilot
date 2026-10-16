@@ -145,7 +145,8 @@
             <div v-for="v in viewCheckResult" :key="v.tabId" class="maintenance-backup-row" :data-test="'view-probe-' + v.storeId">
               <span class="maintenance-backup-meta">
                 <b>{{ viewStoreName(v.storeId) }}</b>
-                <em>{{ viewStateLabel(v) }} · {{ v.title || '（无标题）' }}</em>
+                <em>{{ viewStateLabel(v) }}<template v-if="v.internal"> · 采集专用页</template> · {{ v.title || '（无标题）' }}</em>
+                <em v-if="v.reason" class="view-probe-reason">{{ v.reason }}</em>
               </span>
               <span class="product-title" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ v.url }}</span>
             </div>
@@ -211,6 +212,8 @@ import diagnosticsIcon from '../../assets/generated/ui-icons/observe.png'
 import auditLogIcon from '../../assets/generated/ui-icons/date.png'
 import memorySnapshotIcon from '../../assets/generated/ui-icons/memory.png'
 import { INVITE_PROFILES } from '@shared/constants/invite'
+// 视图状态词表：与诊断浮层同一份（2026-10-16 审查 V4），不再各写一套判断
+import { BROWSER_VIEW_STATE_LABEL, type BrowserViewState } from '@shared/view-state'
 import { parseAutoCollectionEnabled, AUTO_COLLECTION_SETTING } from '@shared/constants/collection'
 import { AI_IMAGE_TIMEOUT_MAX_MS, AI_PROVIDER_PRESETS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS, DEFAULT_AI_ENDPOINT, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL, DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, INVITE_SQUARE_URLS_SETTING, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint } from '@shared/constants/ai'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
@@ -295,18 +298,29 @@ const diagBusy = ref(false)
 const auditBusy = ref(false)
 const memoryBusy = ref(false)
 const memoryText = ref('')
-// ---- 视图体检（浏览器视图诊断：每视图 loading/挂起/崩溃）----
-interface ViewProbe { storeId: string; tabId: string; url: string; title: string; loading: boolean; destroyed: boolean; responsive: 'ok' | 'hung' | 'error' }
+// ---- 视图体检（浏览器视图诊断：每视图 未挂载/加载中/正常/卡死/崩溃）----
+// 状态词表与诊断浮层同源（@shared/view-state）：过去这里自带一套 `responsive` 判断，
+// 把"崩溃"显示成"卡死"，而界面为崩溃准备的标签永远不出现（2026-10-16 审查 V1/V4）。
+interface ViewProbe {
+  storeId: string
+  tabId: string
+  url: string
+  title: string
+  loading: boolean
+  destroyed: boolean
+  attached: boolean
+  internal: boolean
+  state: BrowserViewState
+  reason?: string
+}
 const viewCheckBusy = ref(false)
 const viewCheckResult = ref<ViewProbe[] | null>(null)
 function viewStoreName(storeId: string): string {
-  return storeMap.value[storeId] || storeId.slice(0, 8)
+  // 店铺名从工作区 store 取；设置页可能先于店铺列表加载完成，取不到就退回 id 前缀（不显示空）
+  return ws.stores.find(store => store.id === storeId)?.name || storeId.slice(0, 8)
 }
 function viewStateLabel(v: ViewProbe): string {
-  if (v.destroyed) return '已销毁'
-  if (v.responsive === 'hung') return '⏱ 卡死'
-  if (v.responsive === 'error') return '❌ 崩溃/异常'
-  return v.loading ? '加载中' : '正常'
+  return BROWSER_VIEW_STATE_LABEL[v.state] || v.state
 }
 async function runViewCheck(): Promise<void> {
   viewCheckBusy.value = true
@@ -316,7 +330,8 @@ async function runViewCheck(): Promise<void> {
     if (!result.ok) throw new Error(responseError(result, '视图体检失败'))
     const data = (result.data || {}) as { views?: ViewProbe[] }
     viewCheckResult.value = data.views ?? []
-    if (!viewCheckResult.value.length) ws.toast('当前没有已挂载的店铺视图', 'error')
+    // 列表现在含未挂载的视图（主进程侧已改），空列表才是真的"一家店都没打开"
+    if (!viewCheckResult.value.length) ws.toast('当前没有打开的店铺视图', 'error')
   } catch (error) {
     const message = '视图体检失败：' + String((error as Error)?.message || error)
     ws.toast(message, 'error')
@@ -1539,6 +1554,8 @@ onBeforeUnmount(() => {
 .maintenance-backup-meta{display:inline-flex;align-items:baseline;gap:6px}
 .maintenance-backup-meta b{color:#344054;font-weight:600}
 .maintenance-backup-meta em{color:#98a2b3;font-style:normal}
+/* 失败/异常原因：在标签之后单独一行，读得清是哪一步出的问题（审查 V1） */
+.maintenance-backup-meta .view-probe-reason{color:#b54708;font-size:10px;overflow-wrap:anywhere}
 .maintenance-backup-row .unified-button{margin-left:auto}
 .about-grid>div{border:1px solid #eef1f6;background:#fafbfd}
 .about-grid select{height:30px}

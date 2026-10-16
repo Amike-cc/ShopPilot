@@ -346,3 +346,46 @@ try {
 3. 快速 A→B→A 切标签页 20 次 → 每次都能正常注册（不出现"白屏且无诊断"）；
 4. 导出诊断包 → `app.log` 里能查到上述失败的店铺/标签页/原因，且不含凭据（沿用既有脱敏口径）；
 5. 「视图体检」：① 在店铺页面控制台执行长阻塞脚本（`while(true){}` 级）后体检 → 显示「卡死」；② 用 `wc.forcefullyCrashRenderer()` 制造崩溃后体检 → 必须显示「崩溃/异常」而不是「卡死」；③ 刚打开还没导航的店铺 → 显示「空白页」而不是 `nullblank`。
+
+---
+
+## 七、修复记录（2026-10-16）
+
+**分工说明**：修复期间有另一个会话在按本报告顺序并行改（提交 `fdb9cee`，随后被 reset，代码留在工作区）。它先落地了第 1、2、3、4、5 条、第 6 条的主进程侧、第 8 条的 `isMainFrame`、第 9 条的 aria-label；本次在此基础上补齐第 4 组（V1/V2/V4）与第 6/8/9/10/11 条的剩余部分，并在验收该批次时修掉 3 处缺陷（见下）。
+
+| 条目 | 状态 | 落点 |
+| --- | --- | --- |
+| 1 失败态不受 `guestAttached` 约束 | ✅ | `DashboardBrowserSurface.vue` 的 `webviewDiagnostics`（三段式：map → filter → map） |
+| 2 规范要求的 4 个动作 | ✅ | 失败卡片：重试 / 检查代理 / 重新登录 / 清理站点数据（`focusDiagnosedStore` / `openProxyPanel` / `reopenHome` / `clearSiteData`） |
+| 3 attach 看门狗 | ✅ | `ATTACH_TIMEOUT_MS = 30_000` + `startAttachWatchdog` / `clearAttachWatchdog` |
+| 4 重试先判后做 | ✅ | `retryWebview` 元素缺失时保留失败态；`handleWebviewAttach` 元素缺失不再静默返回 |
+| 5 `destroyed` 不删元素登记 | ✅ | `handleWebviewDestroyed` 只管失败态与看门狗，登记交给 Vue ref 回调 |
+| 6 失败落日志 | ✅ | 主进程：`[webview] load failed` + `[webview] register failed`；渲染层：`console.warn('[webview-diagnostics] …')`（走既有 `console-message` 桥接） |
+| 7 / V5 回归断言 | ✅ | 新增 [browser-view-diagnostics.test.ts](tests/unit/browser-view-diagnostics.test.ts)（24 例：真值表 + 接线）；并行会话在 `webview-embedding-boundary.test.ts` 另加 7 条 |
+| 8 子框架 + 取消型加载 | ✅ | 判据收敛到 `@shared/view-state.classifyLoadFailure`，主进程与渲染层同源（内联的 `code === -3` / `isMainFrame === false` 两份实现已删除） |
+| 9 可访问性 | ✅ | live region 只包文本、按钮移出；每个按钮带店铺名 `aria-label`；`focus-visible` 显式描边 |
+| 10 浮层盖页面 | ✅（部分） | 可收起 + 标题栏显示失败条数；条目仍覆盖所有已打开店铺（带店铺名），未改成"只显示当前店铺" |
+| 11 `webviewRefCallbacks` 回收 | ✅ | `watch(openWebviews)` 回收已消失的 key；`onBeforeUnmount` 清空闭包与全部看门狗 |
+| V1 崩溃 ≠ 卡死 | ✅ | `probeResponsiveness` 按 `classifyProbeFailure` 分流（超时 → `hung`，进程消失/求值失败 → `crashed` + `reason`）；删掉让 `error` 不可达的 `.then(ok, hung)` |
+| V2 地址可读 | ✅ | `formatViewUrl` 取代 `stripQuery`：`about:blank` → 空白页、`chrome-error:` → 加载失败页、非 http(s) 走协议兜底（不再有 `nullblank` / `nullchromewebdata`） |
+| V3 超时不取消底层求值 | ✅（注释） | `withTimeout` 写明"超时≠取消"，只保证诊断自身不卡住 |
+| V4 统一视图状态口径 | ✅ | 新增 [view-state.ts](packages/shared/src/view-state.ts)：状态词表 + `classifyLoadFailure` + `formatViewUrl` + `classifyProbeState`；体检**含未挂载视图**（`attached` 字段），设置页用 `BROWSER_VIEW_STATE_LABEL[v.state]` 渲染 |
+
+### 验收该批次时发现并修掉的 3 处缺陷
+
+1. **「清理站点数据」永远失败**：并行批次传的是 `['localstorage','indexdb','cachestorage','serviceworkers','filesystem']`，而 `packages/shared/src/schemas/browser.ts` 的白名单只有 `['cookies','cache','localStorage','downloads']`（大小写敏感、最多 4 项）→ 每次点击都返回"数据清理参数不合法"。改为 `['localStorage','cache']`（main 侧 `localStorage` 一项即覆盖 localstorage + indexeddb，且不动 Cookie）。
+2. **「重新登录」会导航错店铺**：原实现用 `ws.navigate(url)`，而该 action 走 `displayedStoreId`——诊断条目可能属于后台店铺，等于把**另一家店**的页面导航走（正是 §3.3 明令要防的跨店误操作）。改为先 `focusDiagnosedStore(storeId)`，再用 `browser.navigate(storeId, tabId, url)` 落到被诊断的那个店铺/标签页。
+3. **设置页 `storeMap` 未定义**（`vue-tsc: Cannot find name 'storeMap'`）：`viewStoreName()` 引用了不存在的变量，会在渲染体检结果时抛错。改为从 `ws.stores` 查名字，取不到退回 id 前缀。
+
+### 验证基线（本次实测）
+
+- `tsc --noEmit`：**exit 0**。
+- `vue-tsc --noEmit`：8 处错误，**全部是 HEAD 既有**（`ProductEditorDrawer.vue` 6 处 + `DashboardBrowserSurface.vue:308` 2 处，后者在 HEAD 里就是邀请实时日志那行）；本次改动新增 0 处、并修掉并行批次引入的 1 处。
+- `eslint`（全部改动文件）：**0 error**，39 warning（全是既有 `no-explicit-any`）。
+- `vitest run`（全量）：**139 个文件 / 1424 个用例全部通过，exit 0**。其间出现过一次 `sales-metrics-scheduler.test.ts` 收尾竞态导致的 exit 1（用例本身全过，与本报告范围无关，本仓库既有记录见 [invoice-module-review.md](docs/invoice-module-review.md)），复跑即 exit 0。
+
+### 仍未做（需要真机/打包态）
+
+- 第六节那 5 个场景需要启动应用（真实店铺页、代理、诊断包导出）才能验收；本机沙箱只跑到"静态 + 单测"这一层。
+- 第 10 条的"只显示当前店铺"取舍、以及把 `tools/acceptance/m1-cdp-verify.js` 扩一条 `[data-test="webview-diagnostics"]` 断言，留待下一次。
+- 另一个会话仍在同一工作区活动（其改动与本次改动同在暂存/未暂存区），提交前建议由一个人统一 `git add` 一次，避免把两份半成品混进同一提交。

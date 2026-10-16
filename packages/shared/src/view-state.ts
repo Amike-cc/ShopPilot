@@ -131,10 +131,15 @@ export function classifyProbeFailure(error: unknown): { outcome: ViewProbeOutcom
 
 /** 探针结果 → 视图状态（主进程探针与界面标签共用同一次归类）。 */
 export function classifyProbeState(input: {
+  /** 是否已注册 guest；false = 视图还没挂上（浮层负责的那一段） */
+  attached: boolean
   destroyed: boolean
   outcome: ViewProbeOutcome
   loading: boolean
 }): BrowserViewState {
+  // 没挂上不等于崩溃：从未挂载是"未挂载"，曾挂上但进程没了才是"崩溃"
+  // （两者处置完全不同：一个是重试注册，一个是重开页面）
+  if (!input.attached) return input.destroyed ? 'crashed' : 'unattached'
   if (input.destroyed) return 'crashed'
   if (input.outcome === 'timeout') return 'hung'
   if (input.outcome === 'error') return 'crashed'

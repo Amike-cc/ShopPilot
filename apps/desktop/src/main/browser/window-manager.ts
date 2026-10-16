@@ -29,6 +29,15 @@ import { StoreStatus } from '@shared/enums/store-status'
 import { assertNavigableUrl } from '@shared/navigation'
 export { assertNavigableUrl } from '@shared/navigation'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+// 视图状态判据（2026-10-16 审查 V1/V2/V4）：与渲染层诊断浮层读同一份定义
+import {
+  VIEW_PROBE_TIMEOUT_MARKER,
+  classifyLoadFailure,
+  classifyProbeFailure,
+  classifyProbeState,
+  formatViewUrl,
+  type BrowserViewState
+} from '@shared/view-state'
 import { logMain } from '../services/logger'
 import { randomBytes } from 'crypto'
 import {
@@ -861,10 +870,11 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
   })
   // 页面加载失败在主进程侧留痕（2026-10-16 审查 P2-6）：渲染层诊断浮层只活在当前渲染进程，
   // 重启即消失；这里记录让诊断包里的 app.log 也能查到「哪个店、哪个标签页、因为什么失败」。
+  // 判据与浮层同源（@shared/view-state.classifyLoadFailure）：子框架失败、被取消的加载都不算整页失败。
   wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
-    if (code === -3) return // ERR_ABORTED：被新导航/重定向打断
-    if (isMainFrame === false) return // 子框架（广告/统计）失败不记
-    logMain('warn', `[webview] load failed store=${tab.storeId.slice(0, 16)} tab=${tab.id.slice(0, 16)} code=${code} desc=${String(desc).slice(0, 120)} url=${String(url).slice(0, 120)}`)
+    const reason = classifyLoadFailure({ errorCode: code, errorDescription: desc, isMainFrame })
+    if (!reason) return
+    logMain('warn', `[webview] load failed store=${tab.storeId.slice(0, 16)} tab=${tab.id.slice(0, 16)} code=${code} reason=${reason.slice(0, 120)} url=${formatViewUrl(url).slice(0, 120)}`)
   })
   wc.on('render-process-gone', (_e, details) => {
     // 主动冷回收/关标签页会先从 Tab 上解绑 guest，再调用 wc.close()。
@@ -1530,11 +1540,19 @@ export interface ViewProbe {
   loading: boolean
   /** webContents 是否已销毁（探针无法执行） */
   destroyed: boolean
+  /** guest 是否已注册。**未挂载的视图也出现在结果里**（2026-10-16 审查 V4）——
+   *  过去只探已挂载的，导致"浮层说正在连接、体检说一切正常"这种互为盲区的结论。 */
+  attached: boolean
+  /** 采集专用页（后台隐藏视图）：诊断里保留，但界面要标注它不是用户打开的那一个 */
+  internal: boolean
   /**
-   * 挂起判定：executeJavaScript('1') 在超时内是否返回。
-   * 'ok' 正常 / 'hung' 超时未响应（渲染主线程卡死）/ 'error' 求值抛异常（含已崩溃进程）。
+   * 视图状态（@shared/view-state 的唯一口径）。
+   * 与旧 `responsive: 'ok'|'hung'|'error'` 的区别：**崩溃不再被归成"卡死"**——
+   * 超时是 `hung`，进程消失/求值失败是 `crashed`，两者在界面上的处置完全不同。
    */
-  responsive: 'ok' | 'hung' | 'error'
+  state: BrowserViewState
+  /** 非 ok 状态的可读原因（脱敏、截断） */
+  reason?: string
 }
 
 /** 视图探针超时（ms）：挂起的 renderer 会让 executeJavaScript 无限期不返回，必须限时。 */
@@ -1542,47 +1560,69 @@ const VIEW_PROBE_TIMEOUT_MS = 3000
 
 /** 对单个 guest 做只读探针（不读正文/凭据；URL 去查询串；带超时，挂起不阻塞）。 */
 async function probeView(tab: Tab, storeId: string): Promise<ViewProbe> {
-  const base = { storeId, tabId: tab.id }
+  const internal = tab.internal === true
+  const base = { storeId, tabId: tab.id, internal }
   const wc = tab.webContents
-  if (!wc || wc.isDestroyed()) {
-    return { ...base, url: stripQuery(tab.url), title: tab.title || '', loading: false, destroyed: true, responsive: 'error' }
+  const attached = !!wc && !wc.isDestroyed() && tab.guestAttached === true
+  if (!attached) {
+    // 没挂上（或曾挂上但进程已销毁）：也算一行，状态交给判据统一给——
+    // 从未挂载是"未挂载"（可重试注册），曾挂上但进程没了是"崩溃"（要重开页面）
+    const destroyed = !!wc && wc.isDestroyed()
+    return {
+      ...base,
+      url: formatViewUrl(tab.url),
+      title: tab.title || '',
+      loading: false,
+      destroyed,
+      attached: false,
+      state: classifyProbeState({ attached: false, destroyed, outcome: 'error', loading: false })
+    }
   }
   let loading = false
   let title = tab.title || ''
   let url = tab.url
+  let reason: string | undefined
   try {
-    loading = wc.isLoading()
-    url = wc.getURL() || tab.url
-    title = wc.getTitle() || tab.title || ''
-  } catch {
+    loading = wc!.isLoading()
+    url = wc!.getURL() || tab.url
+    title = wc!.getTitle() || tab.title || ''
+  } catch (error) {
     // getURL/getTitle 对已销毁 contents 会抛，按不可读处理
+    reason = String((error as Error)?.message || error).slice(0, 120)
   }
-  let responsive: ViewProbe['responsive'] = 'error'
+  let outcome: 'ok' | 'timeout' | 'error' = 'ok'
   try {
-    responsive = await withTimeout(
-      wc.executeJavaScript('1', true),
-      VIEW_PROBE_TIMEOUT_MS
-    ).then(() => 'ok' as const, () => 'hung' as const)
-  } catch {
-    responsive = 'error'
+    await withTimeout(wc!.executeJavaScript('1', true), VIEW_PROBE_TIMEOUT_MS)
+  } catch (error) {
+    // 超时 ≠ 崩溃（2026-10-16 审查 V1）：过去 `then(() => 'ok', () => 'hung')` 把两者混成一个
+    const classified = classifyProbeFailure(error)
+    outcome = classified.outcome
+    if (classified.reason) reason = classified.reason
   }
-  return { ...base, url: stripQuery(url), title, loading, destroyed: false, responsive }
+  return {
+    ...base,
+    url: formatViewUrl(url),
+    title,
+    loading,
+    destroyed: false,
+    attached: true,
+    state: classifyProbeState({ attached: true, destroyed: false, outcome, loading }),
+    ...(reason ? { reason } : {})
+  }
 }
 
-function stripQuery(u: string): string {
-  try {
-    const parsed = new URL(u)
-    if (parsed.protocol === 'file:') return '（应用界面）'
-    return parsed.origin + parsed.pathname
-  } catch {
-    return u
-  }
-}
-
-/** 给 Promise 套超时：到点先归失败，绝不让挂起的视图卡住诊断本身。 */
+/**
+ * 给 Promise 套超时：到点先归失败，绝不让挂起的视图卡住诊断本身。
+ *
+ * 注意（2026-10-16 审查 V3）：超时**不等于取消**——`executeJavaScript` 没有取消接口，
+ * 底层 promise 仍会挂着（真挂死的 renderer 上每次体检留一个 pending promise，量级可忽略）。
+ * 这里只保证"诊断自己不会跟着卡住"。
+ */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('timeout')), ms)
+    // 标记串与 @shared/view-state 的 VIEW_PROBE_TIMEOUT_MARKER 一致：
+    // classifyProbeFailure 靠它区分"超时未响应"与"进程已消失/求值失败"
+    const timer = setTimeout(() => reject(new Error(VIEW_PROBE_TIMEOUT_MARKER)), ms)
     p.then(v => { clearTimeout(timer); resolve(v) }, e => { clearTimeout(timer); reject(e) })
   })
 }
@@ -1633,12 +1673,13 @@ export async function getMemoryDiagnostics(): Promise<{
   const tabs = storeRows.reduce((sum, row) => sum + row.tabs, 0)
   const attachedGuests = storeRows.reduce((sum, row) => sum + row.attachedGuests, 0)
   const standaloneCount = storeRows.reduce((sum, row) => sum + row.standaloneWindows, 0)
-  // 视图体检：并发探针（Promise.all 不短路——单个视图挂起只在它自己的超时里等待，
-  // 不会拖慢整体，也不阻塞别的视图）
+  // 视图体检：**所有**标签页都成行（含未挂载的），并发探针（Promise.all 不短路——
+  // 单个视图挂起只在它自己的超时里等待，不会拖慢整体，也不阻塞别的视图）。
+  // 过去只探已挂载的 guest，于是"浮层说正在连接、体检说没有视图"互为盲区（2026-10-16 审查 V4）；
+  // 未挂载的视图不执行页面脚本，只回报状态（见 probeView 的 attached 分支）。
   const views = await Promise.all(
     Array.from(browserStates.entries()).flatMap(([storeId, state]) =>
       Array.from(state.tabs.values())
-        .filter(tab => tab.guestAttached && tab.webContents && !tab.webContents.isDestroyed())
         .map(tab => probeView(tab, storeId))
     )
   )

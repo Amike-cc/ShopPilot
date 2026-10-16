@@ -60,17 +60,33 @@
             @did-finish-load="clearWebviewError(item)"
             @destroyed="handleWebviewDestroyed(item)"
           ></webview>
-          <div v-if="webviewDiagnostics.length" class="dashboard-browser-webview-diagnostics" data-test="webview-diagnostics" role="status">
-            <strong>浏览器视图诊断</strong>
-            <span v-for="diagnostic in webviewDiagnostics" :key="diagnostic.key">
-              <span class="diagnostic-text">{{ diagnostic.text }}</span>
-              <span v-if="diagnostic.failed" class="diagnostic-actions">
-                <button type="button" class="mini-btn icon-btn" :aria-label="`重试连接 ${diagnostic.storeName}`" @click="retryWebview(diagnostic.key)"><img class="button-icon" :src="browserRetryIcon" alt="" />重试</button>
-                <button type="button" class="mini-btn icon-btn" :aria-label="`检查 ${diagnostic.storeName} 代理`" @click="openProxyPanel()">检查代理</button>
-                <button type="button" class="mini-btn icon-btn" :aria-label="`重新登录 ${diagnostic.storeName}`" @click="reopenHome(diagnostic.storeId)">重新登录</button>
-                <button type="button" class="mini-btn icon-btn" :aria-label="`清理 ${diagnostic.storeName} 站点数据`" @click="clearSiteData(diagnostic.storeId)">清理站点数据</button>
-              </span>
-            </span>
+          <div v-if="webviewDiagnostics.length" class="dashboard-browser-webview-diagnostics" data-test="webview-diagnostics">
+            <div class="diagnostic-head">
+              <strong>浏览器视图诊断</strong>
+              <span class="diagnostic-count">{{ failedDiagnostics.length ? `${failedDiagnostics.length} 个页面未就绪` : '连接中' }}</span>
+              <button
+                type="button"
+                class="mini-btn icon-btn diagnostic-collapse"
+                :aria-expanded="!diagnosticsCollapsed"
+                :aria-label="diagnosticsCollapsed ? '展开诊断详情' : '收起诊断详情（失败列表仍会保留）'"
+                @click="diagnosticsCollapsed = !diagnosticsCollapsed"
+              >{{ diagnosticsCollapsed ? '展开' : '收起' }}</button>
+            </div>
+            <template v-if="!diagnosticsCollapsed">
+              <!-- live region 只包文本：按钮放在 region 外，避免每次店铺/标签切换都被朗读器重播一遍控件 -->
+              <div class="diagnostic-list" aria-live="polite" aria-atomic="false">
+                <span v-for="diagnostic in webviewDiagnostics" :key="diagnostic.key" class="diagnostic-text">{{ diagnostic.text }}</span>
+              </div>
+              <div v-if="failedDiagnostics.length" class="diagnostic-actions-list">
+                <div v-for="diagnostic in failedDiagnostics" :key="diagnostic.key" class="diagnostic-actions">
+                  <span class="diagnostic-action-store">{{ diagnostic.storeName }}</span>
+                  <button type="button" class="mini-btn icon-btn" :aria-label="`重试连接 ${diagnostic.storeName}`" @click="retryWebview(diagnostic.key)"><img class="button-icon" :src="browserRetryIcon" alt="" />重试</button>
+                  <button type="button" class="mini-btn icon-btn" :aria-label="`检查 ${diagnostic.storeName} 代理`" @click="openProxyPanel(diagnostic)">检查代理</button>
+                  <button type="button" class="mini-btn icon-btn" :aria-label="`重新登录 ${diagnostic.storeName}`" @click="reopenHome(diagnostic)">重新登录</button>
+                  <button type="button" class="mini-btn icon-btn" :aria-label="`清理 ${diagnostic.storeName} 站点数据（保留登录态）`" @click="clearSiteData(diagnostic)">清理站点数据</button>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
       </div>
@@ -348,6 +364,9 @@ import { inviteProfileFor, isBatchProfile, type CategoryNode } from '@shared/con
 import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig, parseInviteProductIds } from '@shared/invite-task'
 import { inviteConfigKey, legacyInviteConfigKey } from '@shared/invite-config'
 import { isBackgroundCollectTask } from '@shared/constants/collection'
+// 视图诊断判据与词表（2026-10-16 审查第 8 条 / V4）：与主进程的 did-fail-load 监听、
+// 「视图体检」读同一份定义，避免两处各写一遍、各错一半
+import { BROWSER_VIEW_STATE_SENTENCE, classifyLoadFailure } from '@shared/view-state'
 
 const emit = defineEmits<{
   // 头部栏（含「返回经营总览」）已按用户要求整条移除；回经营总览走左栏导航，这里不再有该事件。
@@ -455,8 +474,35 @@ function webviewAttached(item: OpenWebviewEntry): boolean {
   return tab?.guestAttached === true
 }
 
-const webviewDiagnostics = computed(() => openWebviews.value
+/**
+ * 标签页/店铺关掉后，这个 key 不会再回来：把它的 ref 闭包、看门狗、失败记录与在途登记一起回收
+ * （2026-10-16 审查 P4-11）。元素登记表 webviewEls 由 Vue 的 ref 回调负责增减，这里不碰；
+ * 过去 webviewRefCallbacks 只增不减，一次会话里开过的每个 storeId:tabId 都会永久留一个闭包。
+ */
+watch(openWebviews, list => {
+  const alive = new Set(list.map(entry => entry.key))
+  for (const key of Array.from(webviewRefCallbacks.keys())) {
+    if (alive.has(key)) continue
+    webviewRefCallbacks.delete(key)
+    clearAttachWatchdog(key)
+    delete webviewFailures[key]
+    registeringKeys.delete(key)
+  }
+})
+
+/** 诊断条目（浮层一行）：失败态与「连接中」共用一份结构，失败才带动作按钮 */
+interface ViewDiagnostic {
+  key: string
+  storeId: string
+  tabId: string
+  storeName: string
+  failed: boolean
+  text: string
+}
+
+const webviewDiagnostics = computed<ViewDiagnostic[]>(() => openWebviews.value
   // 采集专用页不参与诊断：它是后台自己的页面，用户没让它出现，就不该在界面上闪"正在连接店铺页面…"
+  // （它的状态在设置中心「视图体检」里可见）
   .filter(item => !item.internal)
   // 失败态与「连接中」是两个独立门控（2026-10-16 审查 P1）：
   // 失败必须不受 guestAttached 约束——注册成功后 guestAttached 恒为 true，
@@ -465,6 +511,7 @@ const webviewDiagnostics = computed(() => openWebviews.value
   .map(item => ({
     key: item.key,
     storeId: item.storeId,
+    tabId: item.tabId,
     storeName: item.storeName,
     failure: webviewFailures[item.key] as string | undefined,
     attached: webviewAttached(item)
@@ -473,12 +520,20 @@ const webviewDiagnostics = computed(() => openWebviews.value
   .map(row => ({
     key: row.key,
     storeId: row.storeId,
+    tabId: row.tabId,
     storeName: row.storeName,
     failed: !!row.failure,
+    // 文案与「视图体检」同源（@shared/view-state）：两处不再各写一套措辞
     text: row.failure
-      ? `${row.storeName}：页面未就绪——${row.failure}`
-      : `${row.storeName}：正在连接店铺页面…`
+      ? `${row.storeName}：${BROWSER_VIEW_STATE_SENTENCE.load_failed}——${row.failure}`
+      : `${row.storeName}：${BROWSER_VIEW_STATE_SENTENCE.connecting}`
   })))
+
+/** 失败条目单独取一份：动作按钮要放在 live region 之外 */
+const failedDiagnostics = computed(() => webviewDiagnostics.value.filter(diagnostic => diagnostic.failed))
+
+/** 浮层可收起（2026-10-16 审查 P3-10）：它是绝对定位、会盖住平台页面左下角 */
+const diagnosticsCollapsed = ref(false)
 
 function setWebviewRef(key: string, element: unknown): void {
   if (element) {
@@ -574,12 +629,17 @@ function clearWebviewError(item: OpenWebviewEntry): void {
 }
 
 function handleWebviewFailure(item: OpenWebviewEntry, event: any): void {
-  const code = Number(event?.errorCode)
-  // -3 = ERR_ABORTED：被新导航/重定向打断，不是页面失败
-  if (code === -3) return
-  // 子框架（广告/统计）失败不是整页失败（2026-10-16 审查 P3-8）
-  if (event?.isMainFrame === false) return
-  webviewFailures[item.key] = `加载失败（${event?.errorDescription || code || '未知原因'}）`
+  // 判据与主进程同源（@shared/view-state.classifyLoadFailure）：
+  // · 子框架（广告/统计/第三方登录 iframe）失败不是整页失败；
+  // · 被取消的加载（-3 = net::ERR_ABORTED，Electron 对 did-fail-load 的定义就包含 cancelled）
+  //   也不是失败——只豁免 -3、或者只看 isMainFrame，都会漏掉另一半（2026-10-16 审查 P3-8）。
+  const reason = classifyLoadFailure(event)
+  if (!reason) return
+  const message = `加载失败（${reason}）`
+  webviewFailures[item.key] = message
+  // 渲染层有到主日志的现成桥接（main/index.ts 的 console-message 监听，level>=2 才记）：
+  // 落一条 warn，诊断包的 app.log 才查得到"哪个店、哪个标签页、因为什么失败"（审查 P2-6）
+  console.warn(`[webview-diagnostics] ${item.storeName}(${item.storeId.slice(0, 8)}/${item.tabId.slice(0, 8)}) ${message}`)
 }
 
 function handleWebviewDestroyed(item: OpenWebviewEntry): void {
@@ -591,27 +651,51 @@ function handleWebviewDestroyed(item: OpenWebviewEntry): void {
 }
 
 // ---- 失败卡片的 4 个规范动作（§3.3 / §17.1：重试 / 检查代理 / 重新登录 / 清理站点数据）----
+//
+// 跨店红线（§3.3「跨店铺切换时显示确认提示，防止把操作发到错误店铺」）：
+// 诊断条目可能属于**后台店铺**（openWebviews 遍历所有已打开店铺），而右上环境面板、
+// ws.navigate 这些入口看的都是"当前显示的店铺"。所以每个动作都必须先把被诊断的店铺
+// 切到前台、再用它自己的 storeId/tabId 调 IPC——直接调 ws.navigate 会把**别的店**导航走。
 
-function openProxyPanel(): void {
-  // 切到右侧「环境」面板并落到代理区——代理绑定/测试入口都在那里
+/** 动作前先把被诊断的店铺显示出来：环境面板与地址栏都跟着 displayedStoreId 走 */
+async function focusDiagnosedStore(storeId: string): Promise<void> {
+  if (ws.displayedStoreId === storeId) return
+  try { await ws.showStore(storeId) } catch { /* 显示失败不阻塞动作本身，下面各自如实报错 */ }
+}
+
+async function openProxyPanel(diagnostic: ViewDiagnostic): Promise<void> {
+  await focusDiagnosedStore(diagnostic.storeId)
+  // 切到右侧「环境」面板——代理绑定/测试入口都在那里（读的是当前显示的店铺）
   selectPanel('env')
-  void refreshEnvironment()
+  await refreshEnvironment()
 }
 
-function reopenHome(storeId: string): void {
-  // 重新登录：跳到店铺首页（平台登录态失效时首页会引导重新登录）
-  const target = ws.stores.find(store => store.id === storeId)
+async function reopenHome(diagnostic: ViewDiagnostic): Promise<void> {
+  const target = ws.stores.find(store => store.id === diagnostic.storeId)
   const url = target ? (platformHomeUrls.value[target.platform] || target.adminUrl || '') : ''
-  if (url) void ws.navigate(url)
-  else void ws.tabControl('reload')
+  if (!url) {
+    ws.toast('这家店铺还没有配置首页地址，请先在地址栏输入并打开', 'error')
+    return
+  }
+  await focusDiagnosedStore(diagnostic.storeId)
+  // 必须用被诊断店铺自己的 tabId：navigateTab 在没有 guest 时只记下待导航地址，
+  // 之后 registerWebview 会把它作为 pendingUrl 交给渲染层真正载入（window-manager.navigateTab）
+  const result = await window.shopilot.browser.navigate(diagnostic.storeId, diagnostic.tabId, url)
+  if (!result.ok) {
+    ws.toast('重新登录失败：' + (result.error?.message || '未知原因'), 'error')
+    return
+  }
+  retryWebview(diagnostic.key)
 }
 
-function clearSiteData(storeId: string): void {
-  // 清理「当前站点数据」：cookie 之外的站点存储（localStorage/IndexedDB 等）。
-  // 复用既有 clearData IPC；这里清理站点数据不动 Cookie，登录态保留。
-  void window.shopilot.browser.clearData(storeId, ['localstorage', 'indexdb', 'cachestorage', 'serviceworkers', 'filesystem'])
+function clearSiteData(diagnostic: ViewDiagnostic): void {
+  // 清理「当前站点数据」：只清站点存储与缓存，**不动 Cookie**（登录态保留）。
+  // 类型白名单是 packages/shared/src/schemas/browser.ts 的 ['cookies','cache','localStorage','downloads']
+  // ——大小写敏感、最多 4 项；main 侧 'localStorage' 一项即覆盖 localstorage + indexeddb
+  // （window-manager.clearStoreData）。写成 'indexdb'/'cachestorage' 会被 schema 拒绝、永远报参数不合法。
+  void window.shopilot.browser.clearData(diagnostic.storeId, ['localStorage', 'cache'])
     .then(result => {
-      if (result.ok) ws.toast('已清理该店铺站点数据（登录态保留）', 'success')
+      if (result.ok) ws.toast(`已清理 ${diagnostic.storeName} 站点数据（登录态保留）`, 'success')
       else ws.toast('清理失败：' + (result.error?.message || '未知原因'), 'error')
     })
     .catch(() => ws.toast('清理失败：请求异常', 'error'))
@@ -1302,7 +1386,11 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (inviteSaveTimer) clearTimeout(inviteSaveTimer)
   inviteSaveTimer = null
+  // 看门狗与 ref 闭包一起清（2026-10-16 审查 P4-11）：否则卸载后定时器仍会跑，
+  // 往已经没人看的 reactive 表里写失败态
+  for (const key of Array.from(attachWatchdogs.keys())) clearAttachWatchdog(key)
   webviewEls.clear()
+  webviewRefCallbacks.clear()
   window.removeEventListener('keydown', onBrowserKeydown)
 })
 </script>
@@ -1372,9 +1460,21 @@ onBeforeUnmount(() => {
    opacity 保持"页面可见"语义，同时用户看不到也点不到。 */
 .dashboard-browser-webview { position: absolute; inset: 0; display: flex; width: 100%; height: 100%; border: 0; opacity: 0; pointer-events: none; z-index: 0; }
 .dashboard-browser-webview.active { opacity: 1; pointer-events: auto; z-index: 1; }
-.dashboard-browser-webview-diagnostics { position: absolute; left: 10px; bottom: 10px; z-index: 3; display: flex; max-width: calc(100% - 20px); flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid rgba(242, 165, 87, .36); border-radius: 8px; background: #fff8ec; color: #92400e; font-size: 10px; line-height: 1.5; }
-.dashboard-browser-webview-diagnostics strong { color: #7a3d0a; font-size: 10px; }
-.dashboard-browser-webview-diagnostics span { display: flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.dashboard-browser-webview-diagnostics { position: absolute; left: 10px; bottom: 10px; z-index: 3; display: flex; max-width: min(560px, calc(100% - 20px)); flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid rgba(242, 165, 87, .36); border-radius: 8px; background: #fff8ec; color: #92400e; font-size: 10px; line-height: 1.5; }
+/* 头部：标题 + 失败条数 + 收起。收起后只剩这一行，避免浮层长期盖住平台页面左下角（审查 P3-10） */
+.diagnostic-head { display: flex; align-items: center; gap: 8px; }
+.diagnostic-head strong { color: #7a3d0a; font-size: 10px; }
+.diagnostic-count { flex: 0 0 auto; color: var(--dash-text-muted); font-size: 9px; }
+.diagnostic-collapse { margin-left: auto; }
+.diagnostic-collapse:focus-visible { outline: 2px solid rgba(146, 64, 14, .55); outline-offset: 1px; }
+.diagnostic-list { display: flex; flex-direction: column; gap: 4px; }
+.diagnostic-actions-list { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
+.diagnostic-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 4px; border-top: 1px dashed rgba(146, 64, 14, .22); }
+.diagnostic-action-store { color: var(--dash-text-muted); font-size: 9px; }
+/* 关键动作必须有可见焦点（规范 §17.2）：浮层底色是浅黄，只靠 .mini-btn 的边框换色偏弱 */
+.dashboard-browser-webview-diagnostics .mini-btn:focus-visible { outline: 2px solid rgba(146, 64, 14, .55); outline-offset: 1px; border-color: rgba(146, 64, 14, .6); }
+/* 只给文本行设换行规则：不再用 `span { display:flex }` 一刀切（会把按钮行与计数也变成 flex 行） */
+.dashboard-browser-webview-diagnostics .diagnostic-text { display: block; overflow-wrap: anywhere; }
 .dashboard-browser-panel { width: 320px; min-width: 320px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--dash-border); border-radius: 12px; background: #ffffff; }
 .dashboard-browser-panel.collapsed { width: 44px; min-width: 44px; align-items: center; }
 .panel-rail-expand, .panel-rail-button { width: 30px; height: 30px; margin: 7px 0 0; border: 0; border-radius: 7px; background: transparent; color: var(--dash-text-muted); cursor: pointer; }

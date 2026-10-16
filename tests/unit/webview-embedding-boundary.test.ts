@@ -153,8 +153,12 @@ describe('主窗口 DOM <webview> 嵌入边界', () => {
     expect(SURFACE).toContain('clearSiteData')
   })
 
-  it('did-fail-load 过滤子框架（isMainFrame）', () => {
-    expect(SURFACE).toContain('isMainFrame === false')
+  it('did-fail-load 的判据走共享函数（子框架 / 被取消的加载都不算整页失败）', () => {
+    // 2026-10-16：内联的 `isMainFrame === false` + `code === -3` 收敛到
+    // @shared/view-state.classifyLoadFailure —— 主进程监听与渲染层浮层读同一份判据
+    // （此前两处各写一遍、各漏一半：只挡 -3 会被"被取消的加载"刷屏，只看 isMainFrame 会漏掉取消型）
+    expect(SURFACE).toContain('classifyLoadFailure(event)')
+    expect(SURFACE).toContain("from '@shared/view-state'")
   })
 
   it('attach 超时看门狗存在，且成功/销毁时清除', () => {
