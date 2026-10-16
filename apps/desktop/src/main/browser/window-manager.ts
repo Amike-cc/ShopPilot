@@ -457,6 +457,11 @@ export function openStoreBrowser(storeId: string, opts: { display?: boolean; sou
   displayStore(storeId, opts.source === 'renderer' ? 'renderer' : 'main')
 }
 
+/** 主窗口是否在前台（客服监控据此选检测节奏；窗口不可用时按"不在前台"处理） */
+export function isHostWindowFocused(): boolean {
+  return !!hostWindow && !hostWindow.isDestroyed() && hostWindow.isFocused()
+}
+
 /**
  * 切换当前显示店铺。DOM <webview> 的可见性由 Renderer 依据这些状态控制，
  * 主进程不再把 guest 挂到 BrowserWindow.contentView。

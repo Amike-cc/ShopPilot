@@ -4,8 +4,9 @@ import type { WebContents } from 'electron'
 import { onCustomerServiceSessionClosed, registerCustomerServiceWebContents, waitForCustomerServiceSessionReady } from '../browser/session-manager'
 import { getStore, listStores } from '../stores/store-manager'
 import { getDatabase } from '../db/database'
-import { emitToRenderer } from '../browser/window-manager'
+import { emitToRenderer, isHostWindowFocused } from '../browser/window-manager'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import { pickCustomerCheckDelayMs } from '@shared/customer-message-alert'
 import {
   CUSTOMER_SERVICE_PLATFORMS,
   customerServiceSessionPartition,
@@ -133,6 +134,8 @@ interface MonitorRuntime {
   emit: (channel: string, payload: unknown) => void
   closeAll?: () => void
   isLocked?: () => boolean
+  /** 主窗口是否在前台：前台检测更勤，后台降低频率但**不中断**（2026-10-16 用户要求常驻含后台） */
+  isWindowFocused?: () => boolean
 }
 
 /**
@@ -272,7 +275,9 @@ function defaultRuntime(): MonitorRuntime {
     emit: emitToRenderer,
     closeAll: closeCustomerServiceMonitorWindows,
     // 安全状态读取失败时监控应停在安全侧，不能在数据库/锁状态异常时继续碰远程页。
-    isLocked: () => { try { return isAppLocked() } catch { return true } }
+    isLocked: () => { try { return isAppLocked() } catch { return true } },
+    // 主窗口在前台就查得更勤（12s），不在前台降到 45s 但**继续查**（用户要求常驻含后台）
+    isWindowFocused: () => { try { return isHostWindowFocused() } catch { return false } }
   }
 }
 
@@ -454,7 +459,11 @@ export class CustomerMessageMonitor {
     } catch (error) {
       logMain('warn', `[customer-service] 调度失败: ${String((error as Error)?.message || error).slice(0, 160)}`)
     }
-    if (this.started && !this.isPaused()) this.scheduleNextCheck(45_000)
+    if (this.started && !this.isPaused()) {
+      // 前台（用户正看着）12s 一轮、后台 45s 一轮，后台不停——见 @shared/customer-message-alert
+      const focused = this.runtime.isWindowFocused?.() === true
+      this.scheduleNextCheck(pickCustomerCheckDelayMs(focused))
+    }
   }
 
   private isPaused(version?: number): boolean {

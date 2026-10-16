@@ -66,3 +66,6 @@ export * from './software-diagnostics'
 
 // 店铺名读取判据（主进程读页面 → 界面预填重命名对话框；登录页/界面词不许当店名）
 export * from './store-name'
+
+// 客服消息提醒判据（实时检测：未读从少变多才提醒、节流去重、前台/后台节奏）
+export * from './customer-message-alert'
