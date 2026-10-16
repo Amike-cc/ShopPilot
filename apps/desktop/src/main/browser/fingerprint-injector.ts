@@ -136,6 +136,10 @@ export function buildInjectScript(o: FpOverrides): string {
     deviceMemory: o.hardwareConcurrency && o.hardwareConcurrency >= 8 ? 8 : (o.hardwareConcurrency ? 4 : null)
   }
   return `(() => {
+  // 装过就不再装：注册时会对"当前文档"补一次注入，和 document-start 钩子可能在同一文档上撞车，
+  // 重复执行会把 Function.prototype.toString 一层层包下去
+  if (globalThis.__fpReady) return;
+  globalThis.__fpReady = true;
   const P = ${JSON.stringify(payload)};
   // Chromium 只暴露 0.25/0.5/1/2/4/8 这几档，越界的值本身就是特征
   const clampDeviceMemory = (v) => [0.25, 0.5, 1, 2, 4, 8].includes(v) ? v : 8;
@@ -400,8 +404,11 @@ export function registerFingerprintTarget(storeId: string, tabId: string, wc: We
 
   if (!injectAtDocumentStart()) {
     wc.on('dom-ready', inject)
-    inject()
   }
+  // 无论走哪条腿，都立刻对**当前已存在的文档**注入一次：注册往往发生在页面已经开始加载之后，
+  // 只挂"新文档"钩子会让当前这一页留着真机值（真机验收抓到：某店 languages=zh-CN,zh-Hans-CN
+  // 就是没被覆盖的宿主真值，而另一家店已被覆盖成 zh-CN,en-US）
+  inject()
   wc.on('did-navigate', tryTimezone)
 }
 
@@ -540,7 +547,9 @@ export async function verifyStoreFingerprint(storeId: string): Promise<ProfileVe
     item('platform', platformFromUa(p.user_agent), actual?.platform),
     item('languages', p.language ? `${p.language},en-US` : null, actual?.languages),
     item('deviceMemory', p.hardware_concurrency ? (p.hardware_concurrency >= 8 ? 8 : 4) : null, actual?.deviceMemory),
-    item('uaClientHints', platformFromUa(p.user_agent), actual?.uaChPlatform)
+    // 期望值必须与注入脚本同源：`navigator.userAgentData.platform` 是 'Windows'，
+    // 而 `navigator.platform` 是 'Win32' —— 真机验收抓到这两者被我错配在一起（恒 unverified）
+    item('uaClientHints', parseUaClientHints(p.user_agent)?.platform ?? null, actual?.uaChPlatform)
   )
   if (p.color_depth != null) items.push(item('colorDepth', p.color_depth, actual?.colorDepth))
   if (p.webgl_vendor) items.push(item('webglVendor', p.webgl_vendor, actual?.webglVendor))

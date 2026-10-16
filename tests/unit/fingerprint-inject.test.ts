@@ -62,6 +62,8 @@ function runScript(profile: Record<string, unknown>, extra: Record<string, unkno
   const script = buildInjectScript(profile as never)
   const names = ['navigator', 'screen', 'window', ...Object.keys(extra)]
   const fn = new Function(...names, script)
+  // 真实环境里每个文档有各自的 globalThis；单测共用 Node 全局，所以要手动复位"只装一次"的守卫
+  delete (globalThis as unknown as Record<string, unknown>).__fpReady
   fn(sandbox.navigator, sandbox.screen, sandbox.window, ...Object.values(extra))
   return { navigator: sandbox.navigator, screen: sandbox.screen, canvas: (extra.HTMLCanvasElement as any)?.prototype }
 }
@@ -127,6 +129,7 @@ describe('注入脚本真跑：值改对了，而且不像被改过', () => {
   it('WebGL 供应商/渲染器被改写，且 getParameter 也伪装成原生', () => {
     const sandbox = { navigator: {}, screen: {}, window: { WebGLRenderingContext: function WebGLRenderingContext(this: unknown) {} } as Record<string, unknown> }
     const script = buildInjectScript(PROFILE as never)
+    delete (globalThis as unknown as Record<string, unknown>).__fpReady
     new Function('navigator', 'screen', 'window', script)(sandbox.navigator, sandbox.screen, sandbox.window)
     const proto = (sandbox.window.WebGLRenderingContext as any).prototype
     expect(proto.getParameter(37445)).toBe(PROFILE.webglVendor)
