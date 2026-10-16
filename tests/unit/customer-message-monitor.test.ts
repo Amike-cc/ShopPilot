@@ -113,7 +113,9 @@ describe('客服消息监控', () => {
     await monitor.check('store-1')
 
     expect(wc.loadURL).toHaveBeenCalledOnce()
-    expect(wc.executeJavaScript).toHaveBeenCalledTimes(2)
+    // 两次探测 + 观察器**只注入一次**（watchedWebContents 按 guest 去重）：
+    // 重复检查不能把脚本越注越多
+    expect(wc.executeJavaScript).toHaveBeenCalledTimes(3)
   })
 
   it('应用锁定时不创建客服页面、不读取店铺列表，也不写入监控台账', async () => {

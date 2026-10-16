@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import { buildCustomerUnreadWatcherScript } from '../../apps/desktop/src/main/services/customer-message-monitor'
 import {
   CUSTOMER_ALERT_THROTTLE_MS,
   CUSTOMER_CHECK_DELAY_BACKGROUND_MS,
@@ -239,5 +240,38 @@ describe('提示音开关：可关、可持久、重启仍生效', () => {
     const fn = SOUND.match(/export async function initCustomerMessageSound[\s\S]*?\n\}/)
     expect(fn).toBeTruthy()
     expect(fn![0]).toContain('} catch {')
+  })
+})
+
+describe('实时化：页面变化即推送（MutationObserver + console 通道）', () => {
+  it('观察器脚本只看真变化、取不到就不上报', () => {
+    const script = buildCustomerUnreadWatcherScript()
+    // 标题与徽标两条取数口径都在
+    expect(script).toContain('条?未读')
+    expect(script).toContain("[class*=unread i]")
+    expect(script).toContain('MutationObserver')
+    // 数字没变不上报（否则平台页面重绘就刷爆通道）
+    expect(script).toContain('if (value === window.__shopilotLastUnread) return')
+    // 取不到就不上报，交给轮询兜底
+    expect(script).toContain('if (value === null || !isFinite(value) || value < 0) return')
+    // 幂等：页面里只装一次
+    expect(script).toContain('if (window.__shopilotUnreadWatcher) return')
+  })
+
+  it('主进程：每个 guest 只挂一次，收到上报即走同一条提醒管线', () => {
+    const fn = MONITOR.match(/private attachUnreadWatcher[\s\S]*?\n {2}\}/)
+    expect(fn).toBeTruthy()
+    expect(fn![0]).toContain('if (this.watchedWebContents.has(wc.id)) return')
+    expect(fn![0]).toContain("wc.on('console-message'")
+    expect(fn![0]).toContain('__CUSTOMER_UNREAD__:(\\d+)')
+    expect(fn![0]).toContain('this.applyUnreadAlert({ storeId, platform, unreadCount: unread })')
+    expect(fn![0]).toContain('buildCustomerUnreadWatcherScript()')
+    // 页面一到手就挂（不是等下一轮）
+    expect(MONITOR).toMatch(/currentUrl = wc\.getURL\(\)[\s\S]{0,240}this\.attachUnreadWatcher\(storeId, store\.platform, wc\)/)
+  })
+
+  it('轮询仍在（观察器挂了也保留兜底节奏）', () => {
+    expect(MONITOR).toContain('pickCustomerCheckDelayMs')
+    expect(MONITOR).toContain('checkAll()')
   })
 })

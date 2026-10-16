@@ -44,6 +44,47 @@ export const CUSTOMER_MESSAGE_PROBE_TIMEOUT_MS = 15_000
  * 采集脚本只回传计数和布尔信号，绝不回传 body.innerText、聊天正文、昵称或完整 DOM。
  * 选择器只使用语义属性/关键词；平台的构建哈希 class 不会写入长期适配规则。
  */
+/**
+ * 注入客服页的"未读变化即上报"脚本（2026-10-16「实时检测店铺消息」）。
+ *
+ * 只在**数字真的变了**时才 console 一次，避免平台页面频繁重绘刷爆通道；
+ * 取数顺序：标题里的未读数（多数平台都写标题）→ class/属性带 unread 的徽标（取最大）。
+ * 取不到就不上报——宁可让轮询兜底，也不上报一个猜测值。
+ */
+export function buildCustomerUnreadWatcherScript(): string {
+  return `(() => {
+  if (window.__shopilotUnreadWatcher) return 'already'
+  window.__shopilotUnreadWatcher = true
+  const report = () => {
+    let value = null
+    const title = String(document.title || '')
+    const patterns = [/[（(\\[]\\s*(\\d{1,4})\\s*[)）\\]]/, /(\\d{1,4})\\s*条?未读/]
+    for (const pattern of patterns) {
+      const hit = pattern.exec(title)
+      if (hit) { value = Number(hit[1]); break }
+    }
+    if (value === null) {
+      const nodes = Array.from(document.querySelectorAll('[class*=unread i],[class*=Unread],[data-unread]')).slice(0, 20)
+      const counts = []
+      for (const node of nodes) {
+        const digits = /^(\\d{1,4})$/.exec(String(node.textContent || '').trim())
+        if (digits) counts.push(Number(digits[1]))
+      }
+      if (counts.length) value = Math.max.apply(null, counts)
+    }
+    if (value === null || !isFinite(value) || value < 0) return
+    if (value === window.__shopilotLastUnread) return
+    window.__shopilotLastUnread = value
+    console.log('__CUSTOMER_UNREAD__:' + value)
+  }
+  const observer = new MutationObserver(() => report())
+  try { observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'title'] }) } catch (error) { /* 观察不到就靠轮询 */ }
+  try { document.addEventListener('visibilitychange', report) } catch (error) { /* 同上 */ }
+  report()
+  return 'installed'
+})()`
+}
+
 export function buildCustomerMessageProbeScript(keywords: readonly string[]): string {
   return `(() => {
     const normalize = value => String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
@@ -373,6 +414,9 @@ export class CustomerMessageMonitor {
         }, config.url, lifecycleVersion)
         let currentUrl = ''
         try { currentUrl = wc.getURL() } catch { /* WebContents may be between navigations */ }
+        // 页面拿到手就挂"变化即推送"的观察器（2026-10-16「实时检测」）：
+        // 之后未读徽标/标题一变，页面自己把数字报回来，不必等下一个轮询周期
+        this.attachUnreadWatcher(storeId, store.platform, wc)
         if (customerServiceMonitorNeedsReload.has(storeId) || !isAllowedCustomerServiceUrl(store.platform, currentUrl)) {
           try {
             await this.withTimeout(wc.loadURL(config.url), 25_000)
@@ -578,6 +622,38 @@ export class CustomerMessageMonitor {
   }
 
   private readonly alertStates = new Map<string, CustomerAlertState>()
+  /** 已经挂过观察器的 guest：同一个 WebContents 只挂一次（重复挂会 N 倍回调） */
+  private readonly watchedWebContents = new Set<number>()
+
+  /**
+   * 在客服页里装一个 MutationObserver：未读徽标或标题一变就立刻把数字报回来。
+   *
+   * 为什么用 console 通道：guest 页里没有我们的 preload，没法直接 invoke 主进程；
+   * 注入脚本 `console.log('__CUSTOMER_UNREAD__:n')` + 主进程监听 console-message 是
+   * 无侵入的做法（不改平台页面、不需要额外 IPC 白名单）。轮询仍然保留，作为兜底。
+   */
+  private attachUnreadWatcher(storeId: string, platform: string, wc: WebContents): void {
+    if (this.watchedWebContents.has(wc.id)) return
+    this.watchedWebContents.add(wc.id)
+    try {
+      wc.on('console-message', (event: unknown, ...legacy: unknown[]) => {
+        // Electron 37+ 传事件对象；更早的版本是 (event, level, message, ...)
+        const message = String(
+          (event as { message?: unknown })?.message
+          ?? (typeof legacy[1] === 'string' ? legacy[1] : '')
+          ?? ''
+        )
+        const match = /__CUSTOMER_UNREAD__:(\d+)/.exec(message)
+        if (!match) return
+        const unread = Number(match[1])
+        if (!Number.isFinite(unread) || unread < 0) return
+        this.applyUnreadAlert({ storeId, platform, unreadCount: unread })
+      })
+    } catch { /* 拿不到 console 通道就算了，轮询兜底 */ }
+    void wc.executeJavaScript(buildCustomerUnreadWatcherScript(), true)
+      .then(() => { logMain('info', `[customer-service] 已装未读观察器 store=${storeId}`) })
+      .catch((error: unknown) => { logMain('warn', `[customer-service] 未读观察器注入失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 120)}`) })
+  }
 
   private emit(item: CustomerMessageCheck): void {
     try { this.runtime.emit(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, item) } catch { /* 窗口尚未创建或已关闭 */ }
@@ -590,7 +666,7 @@ export class CustomerMessageMonitor {
    * 判据全在 @shared/customer-message-alert（未读从少变多才提醒、60s 节流、读掉即解禁），
    * 这里只负责两件"有副作用"的事：弹系统通知、把提醒事件发给界面（红点+提示音）。
    */
-  private applyUnreadAlert(item: CustomerMessageCheck): void {
+  private applyUnreadAlert(item: { storeId: string; platform: string; unreadCount: number | null }): void {
     const state = this.alertStates.get(item.storeId) || createCustomerAlertState()
     const decision = decideCustomerAlert({
       unread: item.unreadCount,
