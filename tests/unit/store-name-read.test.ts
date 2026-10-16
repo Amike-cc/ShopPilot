@@ -167,6 +167,13 @@ describe('接线：主进程取候选、界面只预填不静默改名', () => {
     expect(douyin.indexOf('shoptitle')).toBeLessThan(douyin.indexOf('shopname'))
   })
 
+  it('选择器要与真实类名同形（拼多多是 user-name-text，写成 username 命不中）', () => {
+    const pdd = READER.match(/拼多多: \[([\s\S]*?)\],\n/)![1]
+    // 真机实测：拼多多后台首页的店名在 [user-name-text]（→「柚子货架」）
+    expect(pdd.indexOf('user-name-text')).toBeGreaterThan(-1)
+    expect(pdd.indexOf('user-name-text')).toBeLessThan(pdd.indexOf('mall-name'))
+  })
+
   it('来源给的是人话标签，不是选择器串', () => {
     expect(describeStoreNameSource('[class*=shop-info-popover]>leaf')).toBe('店铺信息卡')
     expect(describeStoreNameSource('title')).toBe('页面标题')

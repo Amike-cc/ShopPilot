@@ -41,7 +41,7 @@ const SOURCE_LABELS: Array<[RegExp, string]> = [
   [/shopdetails|shop-details/i, '店铺信息'],
   [/mallname|mall-name/i, '店铺名区域'],
   [/merchantname/i, '商家名称'],
-  [/username/i, '账号区域'],
+  [/username|user-name/i, '账号区域'],
   [/title/i, '页面标题']
 ]
 
@@ -61,7 +61,9 @@ export function describeStoreNameSource(source: string | null): string {
 const PLATFORM_SELECTORS: Record<string, string[]> = {
   微信小店: ['[class*=shop-info i]', '[class*=shopname i]', '[class*=shop-name i]', '[class*=shopinfo i]'],
   抖店: ['[class*=shoptitle i]', '[class*=shop-title i]', '[class*=shopname i]', '[class*=shop-name i]', '[class*=shopdetails i]', '[class*=shopinfo i]', '[class*=merchantname i]'],
-  拼多多: ['[class*=mall-name i]', '[class*=mallname i]', '[class*=shopname i]', '[class*=shop-name i]', '[class*=username i]'],
+  // 拼多多后台首页的店名在 [user-name-text]（真机实测 →「柚子货架」）；
+  // 注意类名是 `user-name`（带破折号），只写 username 一条都命不中——与大小写那次同一类坑
+  拼多多: ['[class*=user-name-text i]', '[class*=user-name-name i]', '[class*=mms-header__user-info i]', '[class*=mall-name i]', '[class*=mallname i]', '[class*=shopname i]', '[class*=shop-name i]', '[class*=username i]'],
   快手小店: ['[class*=shop-name i]', '[class*=shopname i]', '[class*=shopinfo i]', '[class*=username i]']
 }
 
