@@ -90,13 +90,43 @@ function readOverrides(storeId: string): FpOverrides | null {
   }
 }
 
+/**
+ * 从 UA 推 `navigator.platform`：**必须全平台映射**，不能只认 Windows。
+ * 旧实现只处理 `/Windows/`，macOS/Linux 档案下 `navigator.platform` 会保留宿主真实值（如 Win32），
+ * 与 `userAgentData.platform`、`sec-ch-ua-platform` 三者互相矛盾（2026-10-16 审查 P1）。
+ */
+export function platformFromUa(userAgent: string | null | undefined): string | null {
+  const ua = String(userAgent || '')
+  if (!ua) return null
+  if (/Windows/i.test(ua)) return 'Win32'
+  if (/iPhone|iPod/i.test(ua)) return 'iPhone'
+  if (/iPad/i.test(ua)) return 'iPad' // iPadOS 的桌面模式 UA 里会带 Macintosh，先判 iPad
+  if (/Android/i.test(ua)) return 'Linux armv8l'
+  if (/Macintosh|Mac OS X/i.test(ua)) return 'MacIntel'
+  if (/CrOS/i.test(ua)) return 'Linux x86_64'
+  if (/Linux/i.test(ua)) return 'Linux x86_64'
+  return null // 认不出来就不覆盖（宁可保留真实值，也不给一个自相矛盾的常量）
+}
+
+/** 与 UA 平台自洽的高熵常量：macOS 不能报 x86（Apple Silicon 机型下自相矛盾） */
+function highEntropyConstants(userAgent: string | null | undefined): { architecture: string; bitness: string; platformVersion: string } {
+  const ua = String(userAgent || '')
+  if (/Macintosh|Mac OS X|iPhone|iPad/i.test(ua)) return { architecture: 'arm', bitness: '64', platformVersion: '15.0.0' }
+  if (/Android|Linux/i.test(ua)) return { architecture: 'x86', bitness: '64', platformVersion: '15.0.0' }
+  return { architecture: 'x86', bitness: '64', platformVersion: '15.0.0' }
+}
+
 /** 注入主世界脚本：覆盖 navigator/screen/WebGL（不暴露任何 Electron/IPC 句柄，§10.1） */
 export function buildInjectScript(o: FpOverrides): string {
   const payload = {
     ...o,
     clientHints: o.userAgent ? parseUaClientHints(o.userAgent) : null,
-    // 平台名从 UA 推（与 userAgentData.platform 同源），避免 navigator.platform 与 UA 互相矛盾
-    platform: o.userAgent && /Windows/i.test(o.userAgent) ? 'Win32' : null,
+    // 平台名与高熵常量都从 UA 推，保证 navigator.platform / userAgentData / sec-ch-ua-platform 三者同源
+    platform: platformFromUa(o.userAgent),
+    highEntropy: highEntropyConstants(o.userAgent),
+    // 与 Session 层 Accept-Language 用**同一个列表**（session-manager 发的是 `${language},en-US`）：
+    // 界面里 navigator.languages 只有一个元素时，一句比对就能发现环境被改写（2026-10-16 审查 P2）
+    languages: o.language ? [o.language, 'en-US'] : null,
     // deviceMemory 没有档案字段：按核心数给一个自洽值（Chromium 只暴露 0.25/0.5/1/2/4/8）
     deviceMemory: o.hardwareConcurrency && o.hardwareConcurrency >= 8 ? 8 : (o.hardwareConcurrency ? 4 : null)
   }
@@ -128,7 +158,7 @@ export function buildInjectScript(o: FpOverrides): string {
     define(navigator, 'webdriver', () => false, 'get webdriver');
     if (P.language) {
       define(navigator, 'language', () => P.language, 'get language');
-      define(navigator, 'languages', () => [P.language], 'get languages');
+      define(navigator, 'languages', () => P.languages || [P.language], 'get languages');
     }
     if (P.hardwareConcurrency) define(navigator, 'hardwareConcurrency', () => P.hardwareConcurrency, 'get hardwareConcurrency');
     if (P.deviceMemory) define(navigator, 'deviceMemory', () => clampDeviceMemory(P.deviceMemory), 'get deviceMemory');
@@ -154,10 +184,25 @@ export function buildInjectScript(o: FpOverrides): string {
       const parsed = P.clientHints;
       define(navigator, 'userAgentData', () => ({
         brands: parsed.brands, mobile: parsed.mobile, platform: parsed.platform,
-        getHighEntropyValues: mask(
-          () => Promise.resolve(Object.assign({}, parsed, { platformVersion: '15.0.0', architecture: 'x86', bitness: '64', model: ' ' })),
-          'getHighEntropyValues'
-        )
+        // 只回调用方**请求**的键（真实现就是这样，多回键本身就是特征），
+        // 且常量与 UA 平台自洽（macOS 不能报 x86；model 用空串而不是空格 —— 2026-10-16 审查 P1）
+        getHighEntropyValues: mask(function (hints) {
+          const requested = Array.isArray(hints) ? hints : [];
+          const all = {
+            architecture: P.highEntropy.architecture,
+            bitness: P.highEntropy.bitness,
+            brands: parsed.brands,
+            fullVersionList: parsed.brands,
+            mobile: parsed.mobile,
+            model: '',
+            platform: parsed.platform,
+            platformVersion: P.highEntropy.platformVersion,
+            wow64: false
+          };
+          const out = {};
+          for (const key of requested) { if (key in all) out[key] = all[key] }
+          return Promise.resolve(out);
+        }, 'getHighEntropyValues')
       }), 'get userAgentData');
     }
     if (P.webglVendor || P.webglRenderer) {

@@ -33,7 +33,13 @@ const uaChHookedSessions = new WeakSet<Session>()
 
 function applyUserAgentClientHints(sess: Session, userAgent: string): void {
   const ch = parseUaClientHints(userAgent)
-  if (!ch) return
+  if (!ch) {
+    // UA 不是 `Chrome/<数字>` 形态时，UA-CH 头与 userAgentData 都改不了 —— 那正是
+    // DEVELOPMENT_SPEC「只改 UA 造成自相矛盾」明令禁止的状态。**必须留痕**（此前静默 return，
+    // 界面还会显示"全部一致"—— 2026-10-16 审查 P1）。
+    logMain('warn', `[fingerprint] UA 无法解析出 Client Hints，UA-CH 与 userAgentData 未生效：${String(userAgent).slice(0, 80)}`)
+    return
+  }
   // 每个 session 只注册一次
   if (uaChHookedSessions.has(sess)) return
   uaChHookedSessions.add(sess)

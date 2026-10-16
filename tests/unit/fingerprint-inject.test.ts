@@ -22,7 +22,7 @@ vi.mock('../../apps/desktop/src/main/db/database', () => ({
 }))
 vi.mock('../../apps/desktop/src/main/services/logger', () => ({ logMain: vi.fn() }))
 
-import { buildInjectScript, registerFingerprintTarget, unregisterFingerprintTarget } from '../../apps/desktop/src/main/browser/fingerprint-injector'
+import { buildInjectScript, platformFromUa, registerFingerprintTarget, unregisterFingerprintTarget } from '../../apps/desktop/src/main/browser/fingerprint-injector'
 
 /**
  * 指纹注入脚本的回归网（2026-10-16 审查）。
@@ -70,7 +70,7 @@ describe('注入脚本真跑：值改对了，而且不像被改过', () => {
     const { navigator } = runScript(PROFILE)
     expect(navigator.userAgent).toBe(PROFILE.userAgent)
     expect(navigator.language).toBe('zh-CN')
-    expect(navigator.languages).toEqual(['zh-CN'])
+    expect(navigator.languages).toEqual(['zh-CN', 'en-US']) // 与请求头 `zh-CN,en-US` 同源，不能只有一个
     expect(navigator.hardwareConcurrency).toBe(16)
     expect(navigator.webdriver).toBe(false)
     expect(navigator.platform).toBe('Win32') // 从 UA 推，不能与 UA 矛盾
@@ -118,6 +118,32 @@ describe('注入脚本真跑：值改对了，而且不像被改过', () => {
     expect(script).not.toContain('console.log')
     expect(script).not.toContain('console.warn')
     expect(script).not.toContain('shopilot')
+  })
+
+  it('platform 全平台映射：macOS/Linux 档案不再保留宿主 Win32', () => {
+    const mac = {
+      ...PROFILE,
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36'
+    }
+    const macRun = runScript(mac)
+    expect(macRun.navigator.platform).toBe('MacIntel')
+    expect(platformFromUa(mac.userAgent)).toBe('MacIntel')
+    expect(platformFromUa('Mozilla/5.0 (X11; Linux x86_64) Chrome/152.0.0.0')).toBe('Linux x86_64')
+    expect(platformFromUa('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Chrome/152.0.0.0')).toBe('iPhone')
+    expect(platformFromUa('')).toBeNull()
+  })
+
+  it('高熵值只回请求的键，且与 UA 平台自洽（macOS 不许报 x86、model 用空串）', async () => {
+    const mac = runScript({
+      ...PROFILE,
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36'
+    })
+    const high = await mac.navigator.userAgentData.getHighEntropyValues(['architecture', 'model'])
+    expect(Object.keys(high).sort()).toEqual(['architecture', 'model'])
+    expect(high.architecture).toBe('arm') // 不能是 x86
+    expect(high.model).toBe('')
+    // 未请求的键不许回（真实现的行为）
+    expect(high.bitness).toBeUndefined()
   })
 })
 
