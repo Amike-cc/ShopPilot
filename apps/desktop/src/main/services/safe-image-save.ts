@@ -15,7 +15,8 @@
  */
 import { app } from 'electron'
 import { homedir, tmpdir } from 'os'
-import { isAbsolute, resolve, sep } from 'path'
+import { existsSync, realpathSync, statSync } from 'fs'
+import { isAbsolute, relative, resolve, sep } from 'path'
 
 /**
  * 校验并归一化生图保存路径。不合法时抛 `AI_BAD_INPUT` 前缀的错误（IPC 层原样转码）。
@@ -35,6 +36,18 @@ export function assertSafeImageSavePath(rawPath: string, ext: string): string {
   let target = p
   if (!new RegExp(`\\.${ext}$`, 'i').test(target)) target = `${target}.${ext}`
   const resolved = resolve(target)
+  let physical = resolved
+  try {
+    let parent = resolved
+    const suffix: string[] = []
+    while (!existsSync(parent)) {
+      const next = resolve(parent, '..')
+      if (next === parent) break
+      suffix.unshift(parent.slice(next.length + 1))
+      parent = next
+    }
+    if (existsSync(parent)) physical = resolve(realpathSync.native(parent), ...suffix)
+  } catch { throw new Error('AI_BAD_INPUT: 保存路径无法解析') }
 
   const roots = [resolve(homedir()), resolve(tmpdir())]
   if (!app.isPackaged) {
@@ -43,10 +56,51 @@ export function assertSafeImageSavePath(rawPath: string, ext: string): string {
   const allowed = roots.some(root => {
     const cmp = process.platform === 'win32' ? resolved.toLowerCase() : resolved
     const base = process.platform === 'win32' ? root.toLowerCase() : root
-    return cmp === base || cmp.startsWith(base.endsWith(sep) ? base : base + sep)
+    const physicalCmp = process.platform === 'win32' ? physical.toLowerCase() : physical
+    const rel = relative(base, physicalCmp)
+    return (cmp === base || cmp.startsWith(base.endsWith(sep) ? base : base + sep)) &&
+      (rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)))
   })
   if (!allowed) {
     throw new Error('AI_BAD_INPUT: 保存路径必须位于用户目录或系统临时目录下（开发态可写入应用目录）')
   }
   return resolved
+}
+
+/**
+ * 校验渲染层要求文件管理器定位的图片路径。
+ *
+ * reveal 不是写盘操作，但 `shell.showItemInFolder` 同样会把一个任意路径
+ * 交给操作系统。只允许应用可写的用户/临时根目录，并解析最终真实路径，
+ * 防止用户目录里的 junction/symlink 把定位请求带到任意盘符。
+ */
+export function assertSafeImageRevealPath(rawPath: string): string {
+  const p = String(rawPath || '').trim()
+  if (!p) throw new Error('AI_BAD_INPUT: 文件路径为空')
+  if (p.includes('\0') || p.split(/[\\/]+/).some(seg => seg === '..')) {
+    throw new Error('AI_BAD_INPUT: 文件路径含非法跳过段')
+  }
+  if (!isAbsolute(p)) throw new Error('AI_BAD_INPUT: 文件路径必须是绝对路径')
+  if (!existsSync(p)) throw new Error('AI_IMAGE_NOT_FOUND: 文件不存在，可能已被移动或删除')
+  let physical: string
+  try {
+    physical = realpathSync.native(p)
+    if (!statSync(physical).isFile()) throw new Error('AI_IMAGE_NOT_FOUND: 目标不是文件')
+  } catch (error) {
+    if (String((error as Error)?.message || error).startsWith('AI_IMAGE_NOT_FOUND')) throw error
+    throw new Error('AI_IMAGE_NOT_FOUND: 文件不存在，可能已被移动或删除')
+  }
+
+  const roots = [resolve(homedir()), resolve(tmpdir())]
+  if (!app.isPackaged) {
+    try { roots.push(resolve(app.getAppPath())) } catch { /* 开发路径不可用时不放行 */ }
+  }
+  const inside = roots.some(root => {
+    const cmp = process.platform === 'win32' ? physical.toLowerCase() : physical
+    const base = process.platform === 'win32' ? root.toLowerCase() : root
+    const rel = relative(base, cmp)
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  })
+  if (!inside) throw new Error('AI_BAD_INPUT: 文件路径必须位于用户目录或系统临时目录下（开发态可定位应用目录）')
+  return physical
 }

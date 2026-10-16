@@ -14,8 +14,10 @@ import * as Runner from '../tasks/task-runner'
 import * as Scheduler from '../tasks/scheduler'
 import { getOpenStoreIds } from '../browser/window-manager'
 import { ipcOk as ok, ipcFail as err, ipcErrFromUnknown } from './envelope'
+import { z } from 'zod'
 
 function rid(): string { return randomUUID() }
+const taskConfirmInputSchema = z.object({ runId: z.string().trim().min(1).max(200), approved: z.boolean() }).strict()
 
 function taskError(e: any, requestId: string): IPCResult {
   const msg = String(e?.message || e)
@@ -89,9 +91,11 @@ export function registerTaskHandlers(): void {
     try { Runner.cancelRun(input.runId); return ok({ success: true }, requestId) } catch (e: any) { return taskError(e, requestId) }
   })
 
-  handle(IPC_CHANNELS.TASK_CONFIRM, async (_e: IpcMainInvokeEvent, input: { runId: string; approved: boolean }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.TASK_CONFIRM, async (_e: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = rid()
-    try { Runner.confirmRun(input.runId, !!input.approved); return ok({ success: true }, requestId) } catch (e: any) { return taskError(e, requestId) }
+    const parsed = taskConfirmInputSchema.safeParse(input)
+    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '确认参数不合法', requestId)
+    try { Runner.confirmRun(parsed.data.runId, parsed.data.approved); return ok({ success: true }, requestId) } catch (e: any) { return taskError(e, requestId) }
   })
 
   handle(IPC_CHANNELS.TASK_RESULTS, async (_e: IpcMainInvokeEvent, input: { runId: string }): Promise<IPCResult> => {

@@ -71,9 +71,12 @@ function applyUserAgentClientHints(sess: Session, userAgent: string): void {
 }
 
 function highEntropyHeaders(ch: NonNullable<ReturnType<typeof parseUaClientHints>>): { architecture: string; bitness: string; platformVersion: string; wow64: boolean } {
-  const ua = ch.platform
-  if (ua === 'macOS' || ua === 'iOS') return { architecture: 'arm', bitness: '64', platformVersion: '15.0.0', wow64: false }
-  if (ua === 'Android' || ua === 'Linux') return { architecture: 'x86', bitness: '64', platformVersion: '15.0.0', wow64: false }
+  // 取值与 fingerprint-injector 的高熵常量保持同源，避免 JS 与请求头互相矛盾。
+  const platform = ch.platform
+  if (platform === 'macOS' || platform === 'iOS') return { architecture: 'arm', bitness: '64', platformVersion: '15.0.0', wow64: false }
+  if (platform === 'Android') return { architecture: 'arm', bitness: '64', platformVersion: '15.0.0', wow64: false }
+  if (platform === 'Linux') return { architecture: 'x86', bitness: '64', platformVersion: '0.0.0', wow64: false }
+  if (platform === 'Windows') return { architecture: 'x86', bitness: '64', platformVersion: '10.0.0', wow64: false }
   return { architecture: 'x86', bitness: '64', platformVersion: '10.0.0', wow64: false }
 }
 

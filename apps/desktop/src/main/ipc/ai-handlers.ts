@@ -10,7 +10,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'crypto'
-import { existsSync, writeFileSync } from 'fs'
+import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC_CHANNELS, type IPCResult } from '@shared/contracts/ipc'
 import { AI_IMAGE_SETTING_KEYS, AI_IMAGE_TEXT_SETTING_KEYS, AI_IMAGE_TIMEOUT_MAX_MS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS } from '@shared/constants/ai'
@@ -21,7 +21,7 @@ import { writeAudit, auditRequestId } from '../services/audit-logger'
 import { logMain } from '../services/logger'
 import { syncMainAgentProfileFromAiConfig } from '../services/agent-runtime'
 import { assertTrustedRenderer } from '../services/renderer-trust'
-import { assertSafeImageSavePath } from '../services/safe-image-save'
+import { assertSafeImageRevealPath, assertSafeImageSavePath } from '../services/safe-image-save'
 import { ipcOk, ipcFail } from './envelope'
 
 const success = <T>(data: T): IPCResult<T> => ipcOk(data, randomUUID())
@@ -499,9 +499,9 @@ export function registerAiHandlers(): void {
       assertTrusted(event)
       const target = String(input?.path || '').trim()
       if (!target) return failure('AI_BAD_INPUT', '没有要定位的文件路径')
-      if (!existsSync(target)) return failure('AI_IMAGE_NOT_FOUND', '文件不存在，可能已被移动或删除')
-      shell.showItemInFolder(target)
-      return success({ path: target })
+      const safeTarget = assertSafeImageRevealPath(target)
+      shell.showItemInFolder(safeTarget)
+      return success({ path: safeTarget })
     } catch (e: any) {
       const denied = deniedResult(e)
       if (denied) return denied

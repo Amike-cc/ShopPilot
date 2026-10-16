@@ -355,7 +355,7 @@ function planFromActions(actions: AgentSoftwareAction[], goal: string, nameHint 
     risk: softwareActionHasSideEffect(action.type) ? 'write' as const : 'read' as const,
     requiresConfirmation: AGENT_CONFIRM_REQUIRED_ACTIONS.has(action.type)
   }))
-  return agentSoftwarePlanSchema.parse({
+  const draft = agentSoftwarePlanSchema.parse({
     id: randomUUID(),
     name: redactAgentText(nameHint || steps[0]?.description || '软件操作', 80),
     goal: redactAgentText(goal, 500),
@@ -363,6 +363,9 @@ function planFromActions(actions: AgentSoftwareAction[], goal: string, nameHint 
     requiresConfirmation: steps.some(step => step.requiresConfirmation),
     status: 'draft'
   })
+  // 资金文本可能出现在动作参数/描述里，而动作类型本身不在静态确认集合。
+  // 统一走同一策略函数，不能只看 action.type。
+  return agentSoftwarePlanSchema.parse({ ...draft, requiresConfirmation: planRequiresApproval(draft) })
 }
 
 /** 自治策略：资金动作与例外清单（如彻底删除店铺）需要用户确认，其余自动执行。 */
@@ -963,15 +966,15 @@ async function runAgentTurn(goal: string, context: AgentSoftwareContext, history
     if (repeatedActionCount >= 1) {
       return { kind: 'chat', text: redactAgentText(parsed.reply || lastReply || executed.join('；') || '已停止重复动作。', 1200), model: redactAgentText(lastModel, 120), elapsedMs, executed, thoughts, jobIds, usage }
     }
-    if (parsed.actions.some(action => AGENT_CONFIRM_REQUIRED_ACTIONS.has(action.type))) {
-      const plan = planFromActions(parsed.actions, goal, parsed.reply)
+    const plan = planFromActions(parsed.actions, goal, parsed.reply)
+    if (planRequiresApproval(plan)) {
       return { kind: 'software', plan, context: currentContext, model: redactAgentText(lastModel, 120), elapsedMs, thought: parsed.thought, requiresApproval: planRequiresApproval(plan), usage }
     }
     if (!parsed.actions.length) {
       return { kind: 'chat', text: redactAgentText(parsed.reply || lastReply || '收到。', 1200), model: redactAgentText(lastModel, 120), elapsedMs, executed, thoughts, jobIds, usage }
     }
     try {
-      const result = await executeAgentSoftwarePlan({ plan: planFromActions(parsed.actions, goal), confirmed: true })
+      const result = await executeAgentSoftwarePlan({ plan, confirmed: true })
       executed.push(...result.messages)
       jobIds.push(...result.jobIds)
       currentContext = result.context
@@ -1659,7 +1662,7 @@ export function validateAgentSoftwarePlan(rawPlan: unknown): { plan: AgentSoftwa
     validateSoftwareAction(step.action)
     if (AGENT_CONFIRM_REQUIRED_ACTIONS.has(step.action.type) && !step.requiresConfirmation) softwareError('AGENT_CONFIRMATION_REQUIRED', '该软件操作必须经过人工确认')
   }
-  const forcedConfirmation = parsed.data.steps.some(step => AGENT_CONFIRM_REQUIRED_ACTIONS.has(step.action.type))
+  const forcedConfirmation = parsed.data.steps.some(step => AGENT_CONFIRM_REQUIRED_ACTIONS.has(step.action.type)) || planRequiresApproval(parsed.data)
   const normalized = agentSoftwarePlanSchema.parse({
     ...parsed.data,
     requiresConfirmation: parsed.data.requiresConfirmation || forcedConfirmation,

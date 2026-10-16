@@ -7,6 +7,7 @@ import { app, BrowserWindow, dialog, crashReporter } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { writeFileSync, existsSync } from 'fs'
+import { randomUUID } from 'crypto'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import {
   LEGACY_CUSTOMER_SERVICE_SESSION_PARTITION_PREFIX,
@@ -224,9 +225,11 @@ function createWindow(): void {
     show: false
   })
 
-  // Electron does not expose a guest's partition string on Session. Keep the
-  // validated attach metadata in order and pair it with did-attach-webview.
+  // Electron does not expose a guest's partition string on Session. Carry an
+  // unforgeable per-attach token through additionalArguments so interleaved
+  // will/did events cannot mis-pair customer-service metadata with a guest.
   const pendingWebviewAttachments: Array<{ partition: string; customerServiceStoreId: string | null }> = []
+  const pendingWebviewByToken = new Map<string, { partition: string; customerServiceStoreId: string | null }>()
 
   // webview 的初始参数来自 Renderer，必须在主窗口开始加载前收口，避免不受信任的
   // preload、partition 或初始 URL 被 Electron 接受。仅允许真实店铺自己的持久分区。
@@ -267,6 +270,16 @@ function createWindow(): void {
       return
     }
     pendingWebviewAttachments.push({ partition: String(params.partition), customerServiceStoreId })
+    const attachment = pendingWebviewAttachments[pendingWebviewAttachments.length - 1]
+    const token = randomUUID()
+    const currentArgs = Array.isArray((webPreferences as any).additionalArguments) ? (webPreferences as any).additionalArguments : []
+    ;(webPreferences as any).additionalArguments = [...currentArgs.filter((value: unknown) => !String(value).startsWith('--shopilot-attach-token=')), `--shopilot-attach-token=${token}`]
+    pendingWebviewByToken.set(token, attachment)
+    setTimeout(() => {
+      if (!pendingWebviewByToken.delete(token)) return
+      const index = pendingWebviewAttachments.indexOf(attachment)
+      if (index >= 0) pendingWebviewAttachments.splice(index, 1)
+    }, 15000)
   })
 
   // 客服和工作台是两个 webview guest，但共用同一店铺 Session。
@@ -276,9 +289,20 @@ function createWindow(): void {
   // 直接创建未受控的原生窗口。http(s) 的平台内跳转继续允许，弹窗改为当前客服页
   // 内导航，保留扫码/OAuth 等人工登录流程而不创建额外 BrowserWindow。
   mainWindow.webContents.on('did-attach-webview', (_event: Electron.Event, guestWebContents: Electron.WebContents) => {
-    // Session does not expose its partition name as a public Electron property.
-    // did-attach follows will-attach for the same guest, so pair them FIFO.
-    const attachment = pendingWebviewAttachments.shift() || null
+    const prefs = (guestWebContents as any).getLastWebPreferences?.() as { additionalArguments?: unknown[] } | undefined
+    const token = (prefs?.additionalArguments || []).map(value => String(value)).find(value => value.startsWith('--shopilot-attach-token='))?.slice('--shopilot-attach-token='.length)
+    let attachment = token ? pendingWebviewByToken.get(token) || null : null
+    if (token) pendingWebviewByToken.delete(token)
+    if (attachment) {
+      const index = pendingWebviewAttachments.indexOf(attachment)
+      if (index >= 0) pendingWebviewAttachments.splice(index, 1)
+    } else if (!token && pendingWebviewAttachments.length === 1) {
+      // Older Electron/test doubles may not expose getLastWebPreferences;
+      // retain the single in-flight fallback, never guess when events overlap.
+      attachment = pendingWebviewAttachments.shift() || null
+    } else if (!attachment) {
+      logMain('warn', 'main window: unable to associate did-attach-webview with validated metadata')
+    }
     const customerServiceStoreId = attachment?.customerServiceStoreId || null
     if (!customerServiceStoreId) return
     const partition = attachment?.partition || ''

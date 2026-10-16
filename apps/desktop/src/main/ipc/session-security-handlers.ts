@@ -18,8 +18,16 @@ import { emitToRenderer, setBrowserViewsVisible } from '../browser/window-manage
 import { writeAudit, auditRequestId } from '../services/audit-logger'
 import { customerMessageMonitor } from '../services/customer-message-monitor'
 import { ipcOk as ok, ipcFail as err, ipcErrFromUnknown } from './envelope'
+import { z } from 'zod'
 
 function rid(): string { return randomUUID() }
+const cookieDeleteInputSchema = z.object({
+  storeId: z.string().trim().min(1).max(200),
+  name: z.string().min(1).max(4096),
+  domain: z.string().trim().regex(/^(?:\.[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)$/),
+  path: z.string().startsWith('/').max(2048),
+  secure: z.boolean().optional()
+}).strict()
 
 function sessionError(e: any, requestId: string): IPCResult {
   const msg = String(e?.message || e)
@@ -96,17 +104,19 @@ export function registerSessionAndSecurityHandlers(): void {
     } catch (e: any) { return sessionError(e, requestId) }
   })
 
-  handle(IPC_CHANNELS.SESSION_DELETE_COOKIE, async (_e: IpcMainInvokeEvent, input: { storeId: string; name: string; domain: string; path: string; secure?: boolean }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.SESSION_DELETE_COOKIE, async (_e: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = rid()
+    const parsed = cookieDeleteInputSchema.safeParse(input)
+    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, 'Cookie 参数不合法', requestId)
     try {
-      const storeId = requireStoreId(input?.storeId)
+      const storeId = requireStoreId(parsed.data.storeId)
       if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
-      const url = `${input.secure ? 'https' : 'http'}://${input.domain.replace(/^\./, '')}${input.path || '/'}`
+      const url = `${parsed.data.secure ? 'https' : 'http'}://${parsed.data.domain.replace(/^\./, '')}${parsed.data.path}`
       await SessionPersistence.restoreStoreSession(storeId)
       await SessionPersistence.restoreCustomerServiceSession(storeId)
       await SessionPersistence.cancelStoreSessionRestore(storeId)
       await SessionPersistence.cancelCustomerServiceSessionRestore(storeId)
-      await storeSession(storeId).cookies.remove(url, input.name)
+      await storeSession(storeId).cookies.remove(url, parsed.data.name)
       await SessionPersistence.clearLegacyCustomerServiceCookies(storeId)
       // 清理新旧两种快照入口，避免旧版客服 Cookie 在重启后被迁移回来。
       SessionPersistence.clearStoreSessionSnapshot(storeId)

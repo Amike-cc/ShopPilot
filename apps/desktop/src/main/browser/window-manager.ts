@@ -14,7 +14,7 @@
 import { BrowserWindow, Menu, clipboard, webContents } from 'electron'
 import { getSession, waitForSessionReady } from './shop-session-manager'
 import { StorePageLeases } from './page-lease'
-import { registerFingerprintTarget, unregisterFingerprintTarget } from './fingerprint-injector'
+import { registerFingerprintTarget, setFingerprintTargetActive, unregisterFingerprintTarget } from './fingerprint-injector'
 import {
   buildStoreContextMenu, runStoreMenuAction, toStoreMenuInput, toElectronMenuTemplate,
   type StoreContextMenuParams, type StoreMenuDeps
@@ -344,6 +344,7 @@ const TAB_RELOAD_MIN_INTERVAL_MS = 5 * 60 * 1000
 const tabReloadGuard = new Map<string, number>()
 /** did-navigate-in-page 的落库节流（tabId → 上次落库时间）；与 tabReloadGuard 同生命周期清理 */
 const inPageSaveAt = new Map<string, number>()
+const inPageSaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 /** §8.2：注入宿主（主）窗口 */
 export function setBrowserHostWindow(win: BrowserWindow): void {
@@ -535,7 +536,7 @@ function effectiveViewport(): ViewportBounds {
 }
 
 /**
- * 关闭店铺浏览器：销毁其全部标签页 view（数据保留在 DB 供恢复）
+ * 关闭店铺浏览器：销毁其全部标签页 view，并清理标签元数据（下次开店创建干净首页）。
  */
 export function closeStoreBrowser(storeId: string): void {
   clearStoreReapTimer(storeId)
@@ -564,6 +565,9 @@ export function closeStoreBrowser(storeId: string): void {
     // 会让这个 Map 只增不减（tabId 是随机串，等于慢性泄漏，2026-09-28 审查确认）
     tabReloadGuard.delete(tab.id)
     inPageSaveAt.delete(tab.id)
+    const pendingSave = inPageSaveTimers.get(tab.id)
+    if (pendingSave) clearTimeout(pendingSave)
+    inPageSaveTimers.delete(tab.id)
   })
   browserStates.delete(storeId)
 
@@ -578,7 +582,6 @@ export function closeStoreBrowser(storeId: string): void {
     clearTimeout(loginTimer)
     loginDetectionTimers.delete(storeId)
   }
-  // 注意：不删除 tabs 行 —— 店铺下次打开/应用重启时按 §4.3 恢复
   // 关掉窗口不代表登录失效（Cookie 仍在分区里），所以这里不写状态：
   // 关一次窗口就把"已确认登录/需要登录"的结论抹成 offline，界面会显示成"登录没了"。
   emitTabs(storeId)
@@ -917,11 +920,19 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
     if (!isMainFrame) return
     tab.url = newUrl
     emitTabs(tab.storeId)
-    const last = inPageSaveAt.get(tab.id) || 0
     const now = Date.now()
-    if (now - last >= 2000) {
-      inPageSaveAt.set(tab.id, now)
+    const last = inPageSaveAt.get(tab.id) || 0
+    const persist = () => {
+      inPageSaveTimers.delete(tab.id)
+      if (tab.webContents !== wc || wc.isDestroyed()) return
+      inPageSaveAt.set(tab.id, Date.now())
       saveTabToDatabase(tab)
+    }
+    if (now - last >= 2000) persist()
+    else {
+      const pending = inPageSaveTimers.get(tab.id)
+      if (pending) clearTimeout(pending)
+      inPageSaveTimers.set(tab.id, setTimeout(persist, Math.max(1, 2000 - (now - last))))
     }
     scheduleLoginDetection(tab.storeId)
   })
@@ -963,7 +974,10 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
   wc.once('destroyed', () => {
     if (tab.webContents === wc) detachGuestWebContents(tab, false)
   })
-  try { registerFingerprintTarget(tab.storeId, tab.id, wc) } catch { /* ignore */ }
+  try {
+    registerFingerprintTarget(tab.storeId, tab.id, wc)
+    setFingerprintTargetActive(tab.storeId, tab.id, browserStates.get(tab.storeId)?.activeTabId === tab.id)
+  } catch { /* ignore */ }
   notifyGuestWaiters(tab)
   saveTabToDatabase(tab)
   emitTabs(tab.storeId)
@@ -1021,6 +1035,7 @@ export function activateTab(storeId: string, tabId: string): void {
   if (!tab) throw new Error('Tab not found')
 
   state.activeTabId = tabId
+  for (const item of state.tabs.values()) setFingerprintTargetActive(storeId, item.id, item.id === tabId)
   storeLifecycle.used(storeId, displayedStoreId === storeId ? 'displayed' : 'background')
   applyStoreBackgroundThrottling(storeId)
   scheduleStoreReap(storeId)
@@ -1043,6 +1058,9 @@ export function closeTab(storeId: string, tabId: string): void {
   detachGuestWebContents(tab)
   tabReloadGuard.delete(tabId)
   inPageSaveAt.delete(tabId)
+  const pendingSave = inPageSaveTimers.get(tabId)
+  if (pendingSave) clearTimeout(pendingSave)
+  inPageSaveTimers.delete(tabId)
 
   state.tabs.delete(tabId)
   getDatabase().prepare('DELETE FROM tabs WHERE id = ?').run(tabId)

@@ -1,3 +1,25 @@
+# ShopPilot 0.4.73 变更说明（审查问题修复与发布加固）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收。
+
+## 本次更新
+
+- AI 图片保存/定位、诊断导出和备份清理统一校验真实路径，拒绝 symlink/junction 越界；备份恢复增加互斥、完整性失败清理和失败回滚。
+- 店铺与默认 Profile 原子创建；UA、IANA 时区和代理凭据增加结构/字节长度校验；任务确认、Cookie、下载和分区 IPC 改为严格运行时 schema。
+- 代理创建、批量导入、更新、删除和绑定收口到事务并在活动 Session 应用失败时回滚；SOCKS5 字段不再发生单字节长度溢出。
+- Agent 软件回合统一先构造计划并检查资金/高风险文本，动态资金动作不能绕过人工确认。
+- 指纹注入修正完整 UA-CH 版本和 GREASE 品牌、平台高熵版本、原生 UAData 原型、Canvas/OffscreenCanvas/Audio 覆盖；实测优先当前活动标签页，避免重复兜底监听。
+- WebView 客服 guest 使用每次 attach 的关联令牌，交错 attach 不再依赖 FIFO 配对；页内导航保存改为尾部落盘。
+
+## 验证
+
+- `pnpm test -- --run`：144 个测试文件、1544 项通过。
+- `pnpm run typecheck`：通过。
+- `pnpm run lint`：0 errors（仓库存量 warnings）。
+- `pnpm run build`：通过；Windows x64 NSIS 安装包和真实 Windows 安装/升级/卸载仍需按本版产物单独验收。
+
+---
+
 # ShopPilot 0.4.72 变更说明（指纹运行时、代理体检与安全边界修复）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收。

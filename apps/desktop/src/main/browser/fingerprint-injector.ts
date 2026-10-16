@@ -35,6 +35,8 @@ interface TabReg {
   overrides: FpOverrides | null
   /** document-start 注入脚本的 CDP 标识（注销时要撤掉，否则一直跟着这个 WebContents） */
   scriptId?: string | null
+  fallbackListenerAttached?: boolean
+  active?: boolean
 }
 
 /** storeId → tabId → 注册表（window-manager 在标签生命周期内调用） */
@@ -47,25 +49,26 @@ export function parseUaClientHints(ua: string): {
   mobile: boolean
   platform: string
 } | null {
-  const chromeMatch = ua.match(/Chrome\/(\d+)(\.(\d+)(?:\.(\d+))?)/)
+  const chromeMatch = ua.match(/Chrome\/(\d+)\.(\d+)\.(\d+)\.(\d+)/)
   if (!chromeMatch) return null
   const major = chromeMatch[1]
-  const full = `${chromeMatch[1]}.${chromeMatch[3] || '0'}.${chromeMatch[4] || '0'}.0`
+  const full = `${chromeMatch[1]}.${chromeMatch[2]}.${chromeMatch[3]}.${chromeMatch[4]}`
   let platform = 'Windows'
   if (/Android/i.test(ua)) platform = 'Android'
   else if (/iPhone|iPad/i.test(ua)) platform = 'iOS'
   else if (/Mac OS X/i.test(ua)) platform = 'macOS'
   else if (/Linux/i.test(ua)) platform = 'Linux'
+  const greaseBrand = platform === 'Windows' ? 'Not_A Brand' : 'Not)A;Brand'
   const brands = [
     { brand: 'Chromium', version: major },
-    { brand: platform === 'Windows' ? 'Not_A Brand' : 'Not)A;Brand', version: '24' },
+    { brand: greaseBrand, version: '24' },
     { brand: 'Google Chrome', version: major }
   ]
   return {
     brands,
     fullVersionList: [
       { brand: 'Chromium', version: full },
-      { brand: 'Not_A Brand', version: '24.0.0.0' },
+      { brand: greaseBrand, version: '24.0.0.0' },
       { brand: 'Google Chrome', version: full }
     ],
     mobile: /Mobile/i.test(ua),
@@ -115,11 +118,14 @@ export function platformFromUa(userAgent: string | null | undefined): string | n
 }
 
 /** 与 UA 平台自洽的高熵常量：macOS 不能报 x86（Apple Silicon 机型下自相矛盾） */
-function highEntropyConstants(userAgent: string | null | undefined): { architecture: string; bitness: string; platformVersion: string } {
+export function highEntropyConstants(userAgent: string | null | undefined): { architecture: string; bitness: string; platformVersion: string } {
   const ua = String(userAgent || '')
   if (/Macintosh|Mac OS X|iPhone|iPad/i.test(ua)) return { architecture: 'arm', bitness: '64', platformVersion: '15.0.0' }
-  if (/Android|Linux/i.test(ua)) return { architecture: 'x86', bitness: '64', platformVersion: '15.0.0' }
-  return { architecture: 'x86', bitness: '64', platformVersion: '15.0.0' }
+  if (/Android/i.test(ua)) return { architecture: 'arm', bitness: '64', platformVersion: '15.0.0' }
+  if (/CrOS/i.test(ua)) return { architecture: 'x86', bitness: '64', platformVersion: '14500.0.0' }
+  if (/Linux/i.test(ua)) return { architecture: 'x86', bitness: '64', platformVersion: '0.0.0' }
+  // Windows 的 UA-CH 高熵版本必须和 session-manager 改写的请求头完全一致。
+  return { architecture: 'x86', bitness: '64', platformVersion: '10.0.0' }
 }
 
 /** 注入主世界脚本：覆盖 navigator/screen/WebGL（不暴露任何 Electron/IPC 句柄，§10.1） */
@@ -137,12 +143,9 @@ export function buildInjectScript(o: FpOverrides): string {
     deviceMemory: o.hardwareConcurrency && o.hardwareConcurrency >= 8 ? 8 : (o.hardwareConcurrency ? 4 : null)
   }
   return `(() => {
-  // 注册时会对"当前文档"补一次注入，和 document-start 钩子可能在同一文档上撞车。
-  // 用不可枚举 Symbol 保存状态，避免向页面暴露可搜索的产品/自动化标记。
-  const stateKey = Symbol.for('toStringTag');
-  if (navigator[stateKey]) return;
-  const state = { masked: new WeakMap(), canvas: false, canvasGet: null, audio: false, analyser: false, webgl: new WeakSet() };
-  try { Object.defineProperty(navigator, stateKey, { value: state, configurable: false }); } catch (e) { return; }
+  // 状态只存在本次脚本闭包里，不在 Navigator 上挂 Symbol/自有属性。
+  // 真实页面使用 document-start 单次注入；兜底路径由主进程保证监听器幂等。
+  const state = { masked: new WeakMap(), canvas: false, canvasGet: null, audio: false, audioSeen: new WeakMap(), analyser: false, webgl: new WeakSet() };
   const P = ${JSON.stringify(payload)};
   // Chromium 只暴露 0.25/0.5/1/2/4/8 这几档，越界的值本身就是特征
   const clampDeviceMemory = (v) => [0.25, 0.5, 1, 2, 4, 8].includes(v) ? v : 8;
@@ -161,36 +164,40 @@ export function buildInjectScript(o: FpOverrides): string {
     });
     mask(toStringProxy, 'toString');
     try { Object.defineProperty(Function.prototype, 'toString', { value: toStringProxy, writable: true, configurable: true }); } catch (e) {}
+    // 原生 Navigator/Screen 放在 prototype 上；只有测试桩等非原生对象才使用自有 getter。
+    // 这样页面无法用 hasOwnProperty/自有 descriptor 识别注入层。
+    const navigatorTarget = (typeof Navigator !== 'undefined' && navigator instanceof Navigator) ? Navigator.prototype : navigator;
+    const screenTarget = (typeof Screen !== 'undefined' && screen instanceof Screen) ? Screen.prototype : screen;
     const define = (target, prop, getter, label) => {
-      try { Object.defineProperty(target, prop, { get: mask(getter, label || prop), configurable: true }); } catch (e) {}
+      try { Object.defineProperty(target, prop, { get: mask(getter, label || prop), configurable: true, enumerable: false }); } catch (e) {}
     };
 
-    if (P.userAgent) define(navigator, 'userAgent', () => P.userAgent, 'get userAgent');
+    if (P.userAgent) define(navigatorTarget, 'userAgent', () => P.userAgent, 'get userAgent');
     // 自动化痕迹：即使没开 --enable-automation 也显式声明为 false
-    define(navigator, 'webdriver', () => false, 'get webdriver');
+    define(navigatorTarget, 'webdriver', () => false, 'get webdriver');
     if (P.language) {
-      define(navigator, 'language', () => P.language, 'get language');
-      define(navigator, 'languages', () => P.languages || [P.language], 'get languages');
+      define(navigatorTarget, 'language', () => P.language, 'get language');
+      define(navigatorTarget, 'languages', () => P.languages || [P.language], 'get languages');
     }
-    if (P.hardwareConcurrency) define(navigator, 'hardwareConcurrency', () => P.hardwareConcurrency, 'get hardwareConcurrency');
-    if (P.deviceMemory) define(navigator, 'deviceMemory', () => clampDeviceMemory(P.deviceMemory), 'get deviceMemory');
-    if (P.platform) define(navigator, 'platform', () => P.platform, 'get platform');
+    if (P.hardwareConcurrency) define(navigatorTarget, 'hardwareConcurrency', () => P.hardwareConcurrency, 'get hardwareConcurrency');
+    if (P.deviceMemory) define(navigatorTarget, 'deviceMemory', () => clampDeviceMemory(P.deviceMemory), 'get deviceMemory');
+    if (P.platform) define(navigatorTarget, 'platform', () => P.platform, 'get platform');
     if (P.screenWidth) {
-      define(screen, 'width', () => P.screenWidth, 'get width');
-      define(screen, 'availWidth', () => P.screenWidth, 'get availWidth');
+      define(screenTarget, 'width', () => P.screenWidth, 'get width');
+      define(screenTarget, 'availWidth', () => P.screenWidth, 'get availWidth');
     }
     if (P.screenHeight) {
-      define(screen, 'height', () => P.screenHeight, 'get height');
+      define(screenTarget, 'height', () => P.screenHeight, 'get height');
       // 任务栏高度不再硬编码 40：按屏幕高度给一档自洽值并 clamp（<40 的屏幕曾算出负数，
       // 一行断言就能检出 —— 2026-10-16 审查 P2），同时补齐 availTop/availLeft
       const taskbar = P.screenHeight >= 900 ? 48 : 40;
-      define(screen, 'availHeight', () => Math.max(1, P.screenHeight - taskbar), 'get availHeight');
-      define(screen, 'availTop', () => 0, 'get availTop');
-      define(screen, 'availLeft', () => 0, 'get availLeft');
+      define(screenTarget, 'availHeight', () => Math.max(1, P.screenHeight - taskbar), 'get availHeight');
+      define(screenTarget, 'availTop', () => 0, 'get availTop');
+      define(screenTarget, 'availLeft', () => 0, 'get availLeft');
     }
     if (P.colorDepth) {
-      define(screen, 'colorDepth', () => P.colorDepth, 'get colorDepth');
-      define(screen, 'pixelDepth', () => P.colorDepth, 'get pixelDepth');
+      define(screenTarget, 'colorDepth', () => P.colorDepth, 'get colorDepth');
+      define(screenTarget, 'pixelDepth', () => P.colorDepth, 'get pixelDepth');
     }
     // 视口字段必须和实际窗口保持同一套度量：屏幕尺寸是显示器档案，视口尺寸仍取
     // Chromium 当前窗口的真实布局值，避免 screen 与任务引擎看到的 innerWidth 自相矛盾。
@@ -225,28 +232,36 @@ export function buildInjectScript(o: FpOverrides): string {
     } catch (e) {}
     if (P.userAgent && P.clientHints) {
       const parsed = P.clientHints;
-      define(navigator, 'userAgentData', () => ({
-        brands: parsed.brands, mobile: parsed.mobile, platform: parsed.platform,
-        // 只回调用方**请求**的键（真实现就是这样，多回键本身就是特征），
-        // 且常量与 UA 平台自洽（macOS 不能报 x86；model 用空串而不是空格 —— 2026-10-16 审查 P1）
-        getHighEntropyValues: mask(function (hints) {
+      const makeUserAgentData = () => {
+        const proto = (typeof NavigatorUAData !== 'undefined' && NavigatorUAData.prototype) ? NavigatorUAData.prototype : Object.prototype;
+        const data = Object.create(proto);
+        const brands = Object.freeze(parsed.brands.map(item => ({ ...item })));
+        const all = {
+          architecture: P.highEntropy.architecture,
+          bitness: P.highEntropy.bitness,
+          brands,
+          fullVersionList: Object.freeze(parsed.fullVersionList.map(item => ({ ...item }))),
+          mobile: parsed.mobile,
+          model: '',
+          platform: parsed.platform,
+          platformVersion: P.highEntropy.platformVersion,
+          wow64: false
+        };
+        Object.defineProperties(data, {
+          brands: { value: brands, enumerable: true },
+          mobile: { value: parsed.mobile, enumerable: true },
+          platform: { value: parsed.platform, enumerable: true },
+          getHighEntropyValues: { value: mask(function (hints) {
           const requested = Array.isArray(hints) ? hints : [];
-          const all = {
-            architecture: P.highEntropy.architecture,
-            bitness: P.highEntropy.bitness,
-            brands: parsed.brands,
-            fullVersionList: parsed.fullVersionList,
-            mobile: parsed.mobile,
-            model: '',
-            platform: parsed.platform,
-            platformVersion: P.highEntropy.platformVersion,
-            wow64: false
-          };
           const out = {};
           for (const key of requested) { if (key in all) out[key] = all[key] }
           return Promise.resolve(out);
-        }, 'getHighEntropyValues')
-      }), 'get userAgentData');
+          }, 'getHighEntropyValues'), enumerable: false },
+          toJSON: { value: mask(function () { return { brands, mobile: parsed.mobile, platform: parsed.platform }; }, 'toJSON'), enumerable: false }
+        });
+        return data;
+      };
+      define(navigatorTarget, 'userAgentData', makeUserAgentData, 'get userAgentData');
     }
     if (P.webglVendor || P.webglRenderer) {
       // 打补丁的标记用**无描述 Symbol**：属性名不能带品牌串（曾用带产品名的属性名，
@@ -337,6 +352,52 @@ export function buildInjectScript(o: FpOverrides): string {
               } catch (e) { return origToDataURL.apply(this, arguments) }
             }, 'toDataURL'), writable: true, configurable: true });
           } catch (e) {}
+          const origToBlob = CanvasProto.toBlob;
+          if (typeof origToBlob === 'function') try {
+            Object.defineProperty(CanvasProto, 'toBlob', { value: mask(function (callback) {
+              try {
+                const ctx = this.getContext && this.getContext('2d');
+                if (!ctx || !this.width || !this.height) return origToBlob.apply(this, arguments);
+                const img = state.canvasGet
+                  ? state.canvasGet.call(ctx, 0, 0, this.width, this.height)
+                  : ctx.getImageData(0, 0, this.width, this.height);
+                perturb(img.data);
+                const copy = document.createElement('canvas');
+                copy.width = this.width; copy.height = this.height;
+                copy.getContext('2d').putImageData(img, 0, 0);
+                return origToBlob.call(copy, callback, arguments[1], arguments[2]);
+              } catch (e) { return origToBlob.apply(this, arguments) }
+            }, 'toBlob'), writable: true, configurable: true });
+          } catch (e) {}
+        }
+        // OffscreenCanvas 不经过 HTMLCanvasElement.prototype；风控常用它绕过 toDataURL 补丁。
+        if (typeof OffscreenCanvas !== 'undefined' && OffscreenCanvas.prototype) {
+          const OffProto = OffscreenCanvas.prototype;
+          const makeNoisyOffscreen = (source) => {
+            const ctx = source.getContext && source.getContext('2d');
+            if (!ctx || !source.width || !source.height) return null;
+            const img = state.canvasGet
+              ? state.canvasGet.call(ctx, 0, 0, source.width, source.height)
+              : ctx.getImageData(0, 0, source.width, source.height);
+            perturb(img.data);
+            const copy = new OffscreenCanvas(source.width, source.height);
+            copy.getContext('2d').putImageData(img, 0, 0);
+            return copy;
+          };
+          const offToDataURL = OffProto.toDataURL;
+          if (typeof offToDataURL === 'function') try {
+            Object.defineProperty(OffProto, 'toDataURL', { value: mask(function () {
+              try { const copy = makeNoisyOffscreen(this); return copy ? offToDataURL.apply(copy, arguments) : offToDataURL.apply(this, arguments); }
+              catch (e) { return offToDataURL.apply(this, arguments) }
+            }, 'toDataURL'), writable: true, configurable: true });
+          } catch (e) {}
+          const offToBlob = OffProto.convertToBlob;
+          if (typeof offToBlob === 'function') try {
+            Object.defineProperty(OffProto, 'convertToBlob', { value: mask(function () {
+              try { const copy = makeNoisyOffscreen(this); return copy ? offToBlob.apply(copy, arguments) : offToBlob.apply(this, arguments); }
+              catch (e) { return offToBlob.apply(this, arguments) }
+            }, 'convertToBlob'), writable: true, configurable: true });
+          } catch (e) {}
         }
         if (typeof AudioBuffer !== 'undefined' && AudioBuffer.prototype && !state.audio) {
           const origChannel = AudioBuffer.prototype.getChannelData;
@@ -344,17 +405,20 @@ export function buildInjectScript(o: FpOverrides): string {
             Object.defineProperty(AudioBuffer.prototype, 'getChannelData', { value: mask(function (channel) {
               const data = origChannel.call(this, channel);
               try {
-                // 同样按位置定噪声（与调用次数无关，见上面 canvas 的说明）
-                const pixels = data.length;
-                const copy = new data.constructor(data);
-                if (pixels > 0) {
-                  for (let k = 0; k < 8; k++) {
+                // 原生 getChannelData 对同一 AudioBuffer 返回同一份可写数组；
+                // 只在首次读取时就地扰动，避免返回副本被探针识别。
+                let seen = state.audioSeen.get(this);
+                if (!seen) { seen = new Set(); state.audioSeen.set(this, seen); }
+                if (!seen.has(channel)) {
+                  const pixels = data.length;
+                  if (pixels > 0) for (let k = 0; k < 8; k++) {
                     const idx = mix(P.noiseSeed | 0, (k + 1) * 7919) % pixels;
                     const sign = (mix(P.noiseSeed | 0, idx) & 1) === 1 ? 1 : -1;
-                    copy[idx] = copy[idx] + sign * 1e-7; // 听不出来，但频域指纹变了
+                    data[idx] = data[idx] + sign * 1e-7;
                   }
+                  seen.add(channel);
                 }
-                return copy;
+                return data;
               } catch (e) {}
               return data;
             }, 'getChannelData'), writable: true, configurable: true });
@@ -389,7 +453,7 @@ export function buildInjectScript(o: FpOverrides): string {
  */
 export function registerFingerprintTarget(storeId: string, tabId: string, wc: WebContents): void {
   if (!tabs.has(storeId)) tabs.set(storeId, new Map())
-  const reg: TabReg = { wc, attached: false, overrides: readOverrides(storeId) }
+  const reg: TabReg = { wc, attached: false, overrides: readOverrides(storeId), fallbackListenerAttached: false, active: false }
   tabs.get(storeId)!.set(tabId, reg)
 
   const o = reg.overrides
@@ -444,7 +508,8 @@ export function registerFingerprintTarget(storeId: string, tabId: string, wc: We
             reg.scriptId = null
             logMain('warn', `[fingerprint] document-start 注入失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
             // Promise 异步拒绝不能被同步 true 吞掉：当前文档立即补注入，后续导航挂 dom-ready 兜底。
-            if (injectFallback) {
+            if (injectFallback && !reg.fallbackListenerAttached) {
+              reg.fallbackListenerAttached = true
               try { wc.on('dom-ready', injectFallback) } catch { /* 页面关闭时幂等 */ }
               injectFallback()
             }
@@ -473,12 +538,12 @@ export function registerFingerprintTarget(storeId: string, tabId: string, wc: We
   injectFallback = inject
 
   if (!injectAtDocumentStart()) {
+    reg.fallbackListenerAttached = true
     wc.on('dom-ready', inject)
+    inject()
   }
-  // 无论走哪条腿，都立刻对**当前已存在的文档**注入一次：注册往往发生在页面已经开始加载之后，
-  // 只挂"新文档"钩子会让当前这一页留着真机值（真机验收抓到：某店 languages=zh-CN,zh-Hans-CN
-  // 就是没被覆盖的宿主真值，而另一家店已被覆盖成 zh-CN,en-US）
-  inject()
+  // CDP 的 runImmediately 已覆盖当前文档；只有调试器不可用时才由上面的
+  // dom-ready 兜底执行，避免同一文档被重复包裹。
   wc.on('did-navigate', tryTimezone)
 }
 
@@ -560,6 +625,13 @@ export function unregisterFingerprintTarget(storeId: string, tabId: string): voi
   if (m.size === 0) tabs.delete(storeId)
 }
 
+/** window-manager 在切换标签页时同步活动目标，verify 只读取用户当前页。 */
+export function setFingerprintTargetActive(storeId: string, tabId: string, active: boolean): void {
+  const m = tabs.get(storeId)
+  const reg = m?.get(tabId)
+  if (reg) reg.active = active
+}
+
 /** 实测结果：**必须区分"没取到"的原因**，否则界面会把"超时"和"注入没生效"混成一句话 */
 export interface ActualValuesResult {
   state: 'ok' | 'timeout' | 'exception' | 'no-tab'
@@ -578,7 +650,10 @@ export async function collectActualValues(storeId: string): Promise<ActualValues
   if (!m) return { state: 'no-tab', values: null }
   let sawTimeout = false
   let sawException = false
-  for (const reg of m.values()) {
+  // 注册顺序不等于用户当前页面（客服监控/独立窗口常常更早注册）。
+  // 活动标签页优先，随后才按 WebContents id 稳定排序，避免读到后台页。
+  const candidates = Array.from(m.values()).sort((a, b) => Number(b.active === true) - Number(a.active === true) || a.wc.id - b.wc.id)
+  for (const reg of candidates) {
     if (reg.wc.isDestroyed() || reg.wc.isCrashed?.()) continue
     try {
       const timeout = new Promise<'timeout'>(r => setTimeout(() => r('timeout'), 4000))

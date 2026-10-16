@@ -12,10 +12,12 @@ import * as DownloadManager from '../browser/download-manager'
 import * as StoreManager from '../stores/store-manager'
 import { randomUUID } from 'crypto'
 import { ipcOk as success, ipcFail as error } from './envelope'
+import { z } from 'zod'
 
 function generateRequestId(): string {
   return randomUUID()
 }
+const downloadListInputSchema = z.object({ storeId: z.string().trim().min(1).max(200), limit: z.number().int().min(1).max(200).optional() }).strict()
 
 /**
  * 注册书签和下载相关的 IPC 处理器
@@ -73,11 +75,12 @@ export function registerBookmarkAndDownloadHandlers(): void {
   })
   
   // download:list
-  handle(IPC_CHANNELS.DOWNLOAD_LIST, async (_event: IpcMainInvokeEvent, input: { storeId: string, limit?: number }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.DOWNLOAD_LIST, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
-    
+    const parsed = downloadListInputSchema.safeParse(input)
+    if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, '下载查询参数不合法', requestId)
     try {
-      const downloads = DownloadManager.listDownloads(input.storeId, input.limit)
+      const downloads = DownloadManager.listDownloads(parsed.data.storeId, parsed.data.limit)
       return success(downloads, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)

@@ -715,7 +715,7 @@ export function registerBrowserHandlers(): void {
   handle(IPC_CHANNELS.BROWSER_PARTITION_CLEAN, async (_e: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()
     const storeId = String((raw as { storeId?: unknown })?.storeId ?? '').trim()
-    if (!/^[0-9a-f-]{8,64}$/i.test(storeId)) return error(ERROR_CODES.INVALID_ARGUMENT.code, '店铺标识不合法', requestId)
+    if (!/^store_[0-9a-f]{8,64}$/i.test(storeId)) return error(ERROR_CODES.INVALID_ARGUMENT.code, '店铺标识不合法', requestId)
     try {
       writeAudit('browser.partition.clean', 'success', { requestId: JSON.stringify({ storeId: storeId.slice(0, 8) }) })
       const result = await cleanStorePartition(storeId)

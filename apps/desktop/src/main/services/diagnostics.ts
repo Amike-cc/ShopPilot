@@ -7,9 +7,9 @@
 
 import { app } from 'electron'
 import { createHash } from 'crypto'
-import { existsSync, writeFileSync, readFileSync } from 'fs'
+import { existsSync, writeFileSync, readFileSync, realpathSync } from 'fs'
 import { homedir, tmpdir } from 'os'
-import { extname, isAbsolute, resolve, sep } from 'path'
+import { extname, isAbsolute, relative, resolve, sep, dirname, basename, join } from 'path'
 import { getDatabase } from '../db/database'
 import * as ProxyManager from '../browser/proxy-manager'
 import { queryAudit } from './audit-logger'
@@ -109,10 +109,28 @@ export function assertSafeExportPath(rawPath: string, allowedExts: string[], wha
 
   const resolved = resolve(p)
   const roots = [resolve(homedir()), resolve(tmpdir())]
+  // 解析已经存在的父目录，避免用户目录中的 junction/symlink 绕过根目录前缀。
+  let physical = resolved
+  try {
+    let parent = resolved
+    const suffix: string[] = []
+    while (!existsSync(parent)) {
+      const next = dirname(parent)
+      if (next === parent) break
+      suffix.unshift(basename(parent))
+      parent = next
+    }
+    if (existsSync(parent)) physical = join(realpathSync.native(parent), ...suffix)
+  } catch {
+    throw new Error(`INVALID_ARGUMENT: ${what}路径无法解析`)
+  }
   const inAllowedRoot = roots.some(root => {
     const cmp = process.platform === 'win32' ? resolved.toLowerCase() : resolved
     const base = process.platform === 'win32' ? root.toLowerCase() : root
-    return cmp === base || cmp.startsWith(base.endsWith(sep) ? base : base + sep)
+    const physicalCmp = process.platform === 'win32' ? physical.toLowerCase() : physical
+    const physicalRel = relative(base, physicalCmp)
+    return (cmp === base || cmp.startsWith(base.endsWith(sep) ? base : base + sep)) &&
+      (physicalRel === '' || (physicalRel !== '..' && !physicalRel.startsWith(`..${sep}`) && !isAbsolute(physicalRel)))
   })
   if (!inAllowedRoot) throw new Error(`INVALID_ARGUMENT: ${what}路径必须位于用户目录或系统临时目录下`)
 

@@ -81,15 +81,15 @@ export interface Download {
  */
 export function listDownloads(storeId: string, limit?: number): Download[] {
   const db = getDatabase()
-  
+  const boundedLimit = limit === undefined ? 50 : Math.min(200, Math.max(1, Math.floor(Number(limit))))
   const query = `
     SELECT * FROM downloads 
     WHERE store_id = ?
     ORDER BY created_at DESC
-    ${limit ? `LIMIT ${Number(limit) || 20}` : 'LIMIT 50'}
+    LIMIT ?
   `
   
-  return (db.prepare(query).all(storeId) as any[]).map((r: any) => ({
+  return (db.prepare(query).all(storeId, Number.isFinite(boundedLimit) ? boundedLimit : 50) as any[]).map((r: any) => ({
     id: r.id,
     storeId: r.store_id,
     pageUrl: r.page_url ?? null,

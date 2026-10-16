@@ -39,9 +39,9 @@ import { refreshProfileRuntime } from '../browser/session-manager'
 
 const profileStoreIdSchema = z.string().trim().min(1).max(200)
 const profilePatchSchema = z.object({
-  userAgent: z.string().trim().min(1).max(512).optional(),
+  userAgent: z.string().trim().min(1).max(512).refine(ProfileManager.isValidProfileUserAgent, 'userAgent 格式不合法').optional(),
   language: z.string().trim().regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/).optional(),
-  timezone: z.string().trim().min(1).max(100).optional(),
+  timezone: z.string().trim().min(1).max(100).refine(ProfileManager.isValidIanaTimezone, 'timezone 必须是有效的 IANA 时区').optional(),
   screenWidth: z.number().int().min(1).max(16384).optional(),
   screenHeight: z.number().int().min(1).max(16384).optional(),
   hardwareConcurrency: z.number().int().min(1).max(256).optional(),

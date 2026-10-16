@@ -18,25 +18,30 @@ import { ipcOk as ok, ipcFail as err, ipcErrFromUnknown } from './envelope'
 
 const proxyDraftSchema = z.object({
   type: z.enum(['http', 'https', 'socks5']),
-  host: z.string().trim().min(1).max(255),
+  host: z.string().trim().min(1).max(255).refine(value => Buffer.byteLength(value, 'utf8') <= 255, '代理主机名过长'),
   port: z.number().int().min(1).max(65535),
   label: z.string().max(200).optional(),
   tags: z.array(z.string().max(80)).max(50).optional(),
   expiresAt: z.number().int().positive().nullable().optional()
 }).strict()
 const proxyTestInputSchema = z.object({ proxyDraft: proxyDraftSchema, proxyId: z.string().trim().min(1).max(200).optional() }).strict()
-const proxyCredentialSchema = z.string().max(512).optional()
+const proxyCredentialSchema = z.string().max(512).refine(value => Buffer.byteLength(value, 'utf8') <= 255, '代理凭据超过 SOCKS5 单字节长度限制').optional()
 const proxyCreateInputSchema = z.object({ draft: proxyDraftSchema, username: proxyCredentialSchema, password: proxyCredentialSchema }).strict()
 const proxyUpdateInputSchema = z.object({
   proxyId: z.string().trim().min(1).max(200),
   patch: proxyDraftSchema.partial().extend({ username: proxyCredentialSchema, password: proxyCredentialSchema }).strict()
 }).strict()
+const proxyDeleteInputSchema = z.object({ proxyId: z.string().trim().min(1).max(200) }).strict()
+const proxyBatchInputSchema = z.object({ items: z.array(proxyCreateInputSchema).max(200) }).strict()
+const proxyBindInputSchema = z.object({ storeId: z.string().trim().min(1).max(200), proxyId: z.string().trim().min(1).max(200).nullable() }).strict()
+const proxyHistoryInputSchema = z.object({ proxyId: z.string().trim().min(1).max(200), limit: z.number().int().min(1).max(100).optional() }).strict()
 
 function rid(): string { return randomUUID() }
 
 function proxyError(errObj: any, requestId: string): IPCResult {
   const msg = String(errObj?.message || errObj)
   if (msg.includes('PROXY_INVALID')) return err(ERROR_CODES.PROXY_INVALID.code, ERROR_CODES.PROXY_INVALID.message, requestId)
+  if (msg.includes('PROXY_BATCH_TOO_LARGE') || msg.includes('PROXY_SOCKS5_CREDENTIAL_TOO_LONG')) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理批量或凭据参数超出限制', requestId)
   // 兜底走共享脱敏（P1-2）：代理探测异常常带底层网络错误串
   return ipcErrFromUnknown(errObj, requestId, { fallback: '代理操作失败' })
 }
@@ -50,6 +55,8 @@ function sessionStatusError(errObj: any, requestId: string): IPCResult {
 
 function backupError(errObj: any, requestId: string): IPCResult {
   const msg = String(errObj?.message || errObj)
+  if (msg.includes('BACKUP_RESTORE_BUSY')) return err(ERROR_CODES.INVALID_ARGUMENT.code, '已有恢复操作正在进行，请稍候再试', requestId)
+  if (msg.includes('BACKUP_PATH_UNSAFE')) return err(ERROR_CODES.INVALID_ARGUMENT.code, '备份路径不安全，已拒绝操作', requestId)
   if (msg.includes('BACKUP_CHECKSUM_FAILED')) return err(ERROR_CODES.BACKUP_CHECKSUM_FAILED.code, ERROR_CODES.BACKUP_CHECKSUM_FAILED.message, requestId)
   if (msg.includes('BACKUP_NOT_FOUND')) return err(ERROR_CODES.BACKUP_CHECKSUM_FAILED.code, '备份不存在或文件缺失', requestId)
   if (msg.includes('BACKUP_VERSION_TOO_NEW')) return err(ERROR_CODES.BACKUP_CHECKSUM_FAILED.code, '备份来自更高版本，请先升级应用', requestId)
@@ -89,7 +96,7 @@ export function registerProxyAndBackupHandlers(): void {
     try {
       return ok(ProxyManager.listProxies(), requestId)
     } catch (e: any) {
-      return err(ERROR_CODES.INTERNAL_ERROR.code, String(e?.message), requestId)
+      return proxyError(e, requestId)
     }
   })
 
@@ -104,51 +111,59 @@ export function registerProxyAndBackupHandlers(): void {
     }
   })
 
-  handle(IPC_CHANNELS.PROXY_DELETE, async (_e: IpcMainInvokeEvent, input: { proxyId: string }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.PROXY_DELETE, async (_e: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = rid()
+    const parsed = proxyDeleteInputSchema.safeParse(input)
+    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理参数不合法', requestId)
     try {
       // unboundStores 回给界面：删掉被绑定的代理会让那几家店**回落直连真实 IP**，
       // 这是用户必须知道的事（此前只回 success，界面一句提示都没有）
-      const { deleted, unboundStores } = await ProxyManager.deleteProxy(input.proxyId)
+      const { deleted, unboundStores } = await ProxyManager.deleteProxy(parsed.data.proxyId)
       return ok({ success: deleted, unboundStores }, requestId)
     } catch (e: any) {
-      return err(ERROR_CODES.INTERNAL_ERROR.code, String(e?.message), requestId)
+      return proxyError(e, requestId)
     }
   })
 
-  handle(IPC_CHANNELS.PROXY_IMPORT_BATCH, async (_e: IpcMainInvokeEvent, input: { items: Array<{ draft: any; username?: string; password?: string }> }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.PROXY_IMPORT_BATCH, async (_e: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = rid()
+    const parsed = proxyBatchInputSchema.safeParse(input)
+    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理批量参数不合法', requestId)
     try {
-      const created = (input.items || []).map(item => ProxyManager.createProxy(item.draft, item.username, item.password))
+      const created = ProxyManager.createProxiesBatch(parsed.data.items)
       return ok({ created, count: created.length }, requestId)
     } catch (e: any) {
       return proxyError(e, requestId)
     }
   })
 
-  handle(IPC_CHANNELS.PROXY_BIND, async (_e: IpcMainInvokeEvent, input: { storeId: string; proxyId: string | null }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.PROXY_BIND, async (_e: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = rid()
+    const parsed = proxyBindInputSchema.safeParse(input)
+    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理绑定参数不合法', requestId)
     try {
-      await ProxyManager.bindProxy(input.storeId, input.proxyId)
+      await ProxyManager.bindProxy(parsed.data.storeId, parsed.data.proxyId)
       // 绑定即复检（§8.1 失败展示原因；只广播状态，绝不自动切换/降级）
-      if (input.proxyId) {
-        const proxyId = input.proxyId
+      if (parsed.data.proxyId) {
+        const proxyId = parsed.data.proxyId
         ProxyManager.revalidateProxy(proxyId).then(r => {
-          if (r) emitToRenderer(EVENT_CHANNELS.PROXY_HEALTH_CHANGED, { proxyId, ...r, storeId: input.storeId })
+          if (r) emitToRenderer(EVENT_CHANNELS.PROXY_HEALTH_CHANGED, { proxyId, ...r, storeId: parsed.data.storeId })
         }).catch(() => { /* 复检异常不影响绑定结果 */ })
       }
-      return ok({ success: true, binding: ProxyManager.getStoreProxy(input.storeId) }, requestId)
+      return ok({ success: true, binding: ProxyManager.getStoreProxy(parsed.data.storeId) }, requestId)
     } catch (e: any) {
-      return err(ERROR_CODES.INTERNAL_ERROR.code, String(e?.message), requestId)
+      return proxyError(e, requestId)
     }
   })
 
-  handle(IPC_CHANNELS.PROXY_HISTORY, async (_e: IpcMainInvokeEvent, input: { proxyId: string; limit?: number }): Promise<IPCResult> => {
+  handle(IPC_CHANNELS.PROXY_HISTORY, async (_e: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = rid()
+    const parsed = proxyHistoryInputSchema.safeParse(input)
+    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理历史参数不合法', requestId)
     try {
-      return ok(ProxyManager.proxyHistory(input.proxyId, input.limit), requestId)
+      return ok(ProxyManager.proxyHistory(parsed.data.proxyId, parsed.data.limit), requestId)
     } catch (e: any) {
-      return err(ERROR_CODES.INTERNAL_ERROR.code, String(e?.message), requestId)
+      return proxyError(e, requestId)
     }
   })
 

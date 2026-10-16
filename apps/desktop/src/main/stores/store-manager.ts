@@ -163,16 +163,19 @@ export function createStore(input: StoreCreateInput): Store {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   
-  stmt.run(
-    store.id, store.name, store.platform, store.adminUrl, store.status,
-    store.avatarColor, store.sortOrder, store.groupName, store.externalCode,
-    store.owner, store.region, store.licenseName, store.licenseNo,
-    store.tagsJson, store.notes, store.lastActiveAt,
-    store.createdAt, store.updatedAt, store.deletedAt
-  )
+  // 店铺和默认 Profile 必须是一个原子操作：否则 profile 插入失败时会留下
+  // 一个看似可用、实际没有环境配置的半成品店铺。
+  db.transaction(() => {
+    stmt.run(
+      store.id, store.name, store.platform, store.adminUrl, store.status,
+      store.avatarColor, store.sortOrder, store.groupName, store.externalCode,
+      store.owner, store.region, store.licenseName, store.licenseNo,
+      store.tagsJson, store.notes, store.lastActiveAt,
+      store.createdAt, store.updatedAt, store.deletedAt
+    )
+    ensureProfileForStore(storeId, input.name)
+  })()
 
-  // §8.1 步骤3：同步创建 browser_profiles 记录
-  ensureProfileForStore(storeId, input.name)
   writeAudit('store.create', 'success', { storeId })
 
   return store as Store

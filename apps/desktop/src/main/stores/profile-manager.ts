@@ -159,10 +159,46 @@ export interface ProfilePatch {
   webglRenderer?: string
 }
 
+function containsControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
+/** Profile 值会直接进入 Chromium Session/页面注入，不能只做长度校验。 */
+export function isValidProfileUserAgent(value: unknown): value is string {
+  if (typeof value !== 'string' || containsControlCharacter(value)) return false
+  const ua = value.trim()
+  if (ua.length < 16 || ua.length > 512 || !/^Mozilla\/5\.0 \([^)]{1,240}\)/.test(ua)) return false
+  return /(?:Chrome|Chromium|CriOS|Edg|OPR)\/\d+\.\d+\.\d+\.\d+/.test(ua) && /Safari\/\d+(?:\.\d+)+/.test(ua)
+}
+
+export function isValidIanaTimezone(value: unknown): value is string {
+  if (typeof value !== 'string' || containsControlCharacter(value)) return false
+  const timezone = value.trim()
+  if (!timezone || timezone.length > 100) return false
+  // Intl 负责真实 IANA 解析；UTC/GMT 是 Chromium/Intl 的合法别名但不在
+  // supportedValuesOf 列表中，单独放行这两个标准值。
+  try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format() } catch { return false }
+  if (timezone === 'UTC' || timezone === 'GMT') return true
+  try {
+    const supported = (Intl as typeof Intl & { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf
+    return typeof supported === 'function' && supported('timeZone').includes(timezone)
+  } catch { return false }
+}
+
+export function assertValidProfilePatch(patch: ProfilePatch): void {
+  if (patch.userAgent !== undefined && !isValidProfileUserAgent(patch.userAgent)) throw new Error('INVALID_ARGUMENT: userAgent 格式不合法')
+  if (patch.timezone !== undefined && !isValidIanaTimezone(patch.timezone)) throw new Error('INVALID_ARGUMENT: timezone 必须是有效的 IANA 时区')
+}
+
 /**
  * 更新环境配置：locked 拒绝；config_version+1；重算 digest（§6.6）
  */
 export function updateProfile(storeId: string, patch: ProfilePatch): BrowserProfile {
+  assertValidProfilePatch(patch)
   const db = getDatabase()
   const current = getProfile(storeId)
   if (!current) throw new Error('PROFILE_NOT_FOUND')

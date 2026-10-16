@@ -9,8 +9,8 @@
 
 import { app } from 'electron'
 import { createHash, randomBytes } from 'crypto'
-import { createReadStream, existsSync, statSync, copyFileSync, mkdirSync, renameSync, rmSync } from 'fs'
-import { join, resolve, sep } from 'path'
+import { createReadStream, existsSync, statSync, copyFileSync, mkdirSync, renameSync, rmSync, realpathSync, lstatSync } from 'fs'
+import { join, relative, resolve, sep } from 'path'
 import { getDatabase, closeDatabase, initDatabase, getDatabasePath } from '../db/database'
 import { writeAudit } from '../services/audit-logger'
 
@@ -39,6 +39,35 @@ function backupsDir(): string {
  */
 function sanitizeBackupLabel(label: unknown): string {
   return String(label ?? '').replace(/[^\w\u4e00-\u9fa5-]/g, '').slice(0, 40)
+}
+
+function removeBackupFiles(filePath: string): void {
+  for (const ext of ['', '-wal', '-shm']) {
+    try { rmSync(filePath + ext, { force: true }) } catch { /* 清理失败留给下一次 prune */ }
+  }
+}
+
+function removeBackupSidecars(filePath: string): void {
+  for (const ext of ['-wal', '-shm']) {
+    try { rmSync(filePath + ext, { force: true }) } catch { /* 不存在即跳过 */ }
+  }
+}
+
+/** 数据库中的路径是不可信数据；清理/恢复前必须确认它仍在真实 backups 目录内。 */
+function assertBackupFilePath(filePath: string, mustExist = false): string {
+  const dir = resolve(backupsDir())
+  const candidate = resolve(String(filePath || ''))
+  if (mustExist && !existsSync(candidate)) throw new Error('BACKUP_CHECKSUM_FAILED')
+  if (lstatSync(dir).isSymbolicLink()) throw new Error('BACKUP_PATH_UNSAFE')
+  const dirPhysical = realpathSync.native(dir)
+  let physical = candidate
+  if (existsSync(candidate)) {
+    physical = realpathSync.native(candidate)
+    if (!lstatSync(candidate).isFile()) throw new Error('BACKUP_CHECKSUM_FAILED')
+  }
+  const rel = relative(dirPhysical, physical)
+  if (rel === '..' || rel.startsWith(`..${sep}`) || require('path').isAbsolute(rel)) throw new Error('BACKUP_PATH_UNSAFE')
+  return candidate
 }
 
 /** 流式 SHA-256：备份是整库大小（几百 MB 起），`readFileSync` 会同步阻塞主进程并吃掉同量内存 */
@@ -96,35 +125,39 @@ export async function createBackup(label?: string): Promise<BackupRecord> {
   // 第二道断言：白名单化之后仍确认落点在 backups 目录内（防将来有人改坏 sanitizeBackupLabel）
   if (!resolve(filePath).startsWith(resolve(dir) + sep)) throw new Error('BACKUP_PATH_UNSAFE')
 
-  // better-sqlite3 Online Backup API
-  await db.backup(filePath)
+  let registered = false
+  try {
+    // better-sqlite3 Online Backup API
+    await db.backup(filePath)
 
-  // 校验备份可读且通过完整性检查
-  const Database = require('better-sqlite3')
-  const check = new Database(filePath, { readonly: true })
-  const integrity = check.pragma('integrity_check', { simple: true })
-  check.close()
-  // 只读打开一个 WAL 模式的库仍会生成 -wal/-shm：备份目录里的成品应当**只有一个 .db**
-  // （实测自动备份后目录里躺着 `xxx-auto.db/-wal/-shm` 三个文件，而 pruneBackups 只删 .db，
-  // 兄弟文件会一直留下去）。备份内容是 Online Backup API 写出的自足文件，删掉兄弟无影响。
-  for (const ext of ['-wal', '-shm']) {
-    try { rmSync(filePath + ext, { force: true }) } catch { /* 不存在即跳过 */ }
+    // 校验备份可读且通过完整性检查；无论打开/校验/统计/登记哪一步失败，
+    // 都删除成品及 WAL 兄弟，避免磁盘上出现不可回收的“孤儿备份”。
+    const Database = require('better-sqlite3')
+    const check = new Database(filePath, { readonly: true })
+    let integrity: unknown
+    try { integrity = check.pragma('integrity_check', { simple: true }) } finally { check.close() }
+    if (integrity !== 'ok') throw new Error('BACKUP_INTEGRITY_FAILED')
+
+    const sha256 = await sha256OfFile(filePath)
+    const sizeBytes = statSync(filePath).size
+    removeBackupSidecars(filePath)
+    const now = Date.now()
+
+    db.prepare(`
+      INSERT INTO backups (id, file_path, sha256, size_bytes, created_at, restore_status)
+      VALUES (?, ?, ?, ?, ?, NULL)
+    `).run(id, filePath, sha256, sizeBytes, now)
+    registered = true
+
+    writeAudit('backup.create', 'success')
+    return getBackup(id)!
+  } catch (error) {
+    if (registered) {
+      try { db.prepare('DELETE FROM backups WHERE id = ?').run(id) } catch { /* 留给后续完整性巡检 */ }
+    }
+    removeBackupFiles(filePath)
+    throw error
   }
-  if (integrity !== 'ok') {
-    throw new Error('BACKUP_INTEGRITY_FAILED')
-  }
-
-  const sha256 = await sha256OfFile(filePath)
-  const sizeBytes = statSync(filePath).size
-  const now = Date.now()
-
-  db.prepare(`
-    INSERT INTO backups (id, file_path, sha256, size_bytes, created_at, restore_status)
-    VALUES (?, ?, ?, ?, ?, NULL)
-  `).run(id, filePath, sha256, sizeBytes, now)
-
-  writeAudit('backup.create', 'success')
-  return getBackup(id)!
 }
 
 export function listBackups(): BackupRecord[] {
@@ -141,9 +174,10 @@ export function getBackup(backupId: string): BackupRecord | null {
  * 恢复后需重启店铺浏览器会话（session 层缓存的 partition 数据不变）。
  */
 export async function restoreBackup(backupId: string): Promise<{ success: true; safetyBackupId: string }> {
+  if (restoring) throw new Error('BACKUP_RESTORE_BUSY')
   const target = getBackup(backupId)
   if (!target) throw new Error('BACKUP_NOT_FOUND')
-  if (!existsSync(target.filePath)) throw new Error('BACKUP_CHECKSUM_FAILED')
+  assertBackupFilePath(target.filePath, true)
 
   restoring = true
   try {
@@ -158,6 +192,7 @@ async function restoreBackupInner(target: BackupRecord): Promise<{ success: true
   const safety = await createBackup('pre-restore')
 
   // 2) 校验备份文件哈希与库内记录一致
+  assertBackupFilePath(target.filePath, true)
   const actual = await sha256OfFile(target.filePath)
   if (actual !== target.sha256) {
     throw new Error('BACKUP_CHECKSUM_FAILED')
@@ -166,10 +201,14 @@ async function restoreBackupInner(target: BackupRecord): Promise<{ success: true
   // 3) 校验备份内部完整性 + schema 版本不高于当前
   const Database = require('better-sqlite3')
   const pre = new Database(target.filePath, { readonly: true })
-  const integrity = pre.pragma('integrity_check', { simple: true })
-  const backupVersion = (pre.prepare('SELECT MAX(version) v FROM schema_migrations').get() as any)?.v ?? 0
-  const currentVersion = (getDatabase().prepare('SELECT MAX(version) v FROM schema_migrations').get() as any)?.v ?? 0
-  pre.close()
+  let integrity: unknown
+  let backupVersion: number
+  let currentVersion: number
+  try {
+    integrity = pre.pragma('integrity_check', { simple: true })
+    backupVersion = (pre.prepare('SELECT MAX(version) v FROM schema_migrations').get() as any)?.v ?? 0
+    currentVersion = (getDatabase().prepare('SELECT MAX(version) v FROM schema_migrations').get() as any)?.v ?? 0
+  } finally { pre.close() }
   if (integrity !== 'ok') throw new Error('BACKUP_CHECKSUM_FAILED')
   if (backupVersion > currentVersion) throw new Error('BACKUP_VERSION_TOO_NEW')
 
@@ -221,10 +260,12 @@ export function pruneBackups(keep = 7): number {
   for (const row of stale) {
     let filesRemoved = true
     try {
-      if (existsSync(row.file_path)) rmSync(row.file_path, { force: true })
+      // 数据库可能来自旧版本/手工篡改；绝不直接信任路径并执行 rm。
+      const safePath = assertBackupFilePath(String(row.file_path || ''), false)
+      if (existsSync(safePath)) rmSync(safePath, { force: true })
       // 历史备份可能残留 -wal/-shm 兄弟（旧版本写的），一并收口
       for (const ext of ['-wal', '-shm']) {
-        if (existsSync(row.file_path + ext)) rmSync(row.file_path + ext, { force: true })
+        if (existsSync(safePath + ext)) rmSync(safePath + ext, { force: true })
       }
     } catch {
       // B7（2026-10-15 审查）：文件删不掉（被占用等）时**保留元数据行**，下一轮再试——

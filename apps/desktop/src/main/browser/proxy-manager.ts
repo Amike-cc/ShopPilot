@@ -63,6 +63,16 @@ function assertValidDraft(draft: ProxyDraft): void {
   if (!draft || !draft.host) throw new Error('PROXY_INVALID')
   if (!['http', 'https', 'socks5'].includes(draft.type)) throw new Error('PROXY_INVALID')
   if (!Number.isInteger(draft.port) || draft.port < 1 || draft.port > 65535) throw new Error('PROXY_INVALID')
+  if (Buffer.byteLength(String(draft.host), 'utf8') > 255) throw new Error('PROXY_INVALID')
+}
+
+function assertCredentialField(value: string | null | undefined): void {
+  if (value == null) return
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) throw new Error('PROXY_INVALID')
+  }
+  if (Buffer.byteLength(value, 'utf8') > 255) throw new Error('PROXY_INVALID')
 }
 
 export function createProxy(draft: ProxyDraft, username?: string, password?: string): ProxyRecord {
@@ -74,24 +84,52 @@ export function createProxy(draft: ProxyDraft, username?: string, password?: str
 
   const hasUser = username !== undefined && username !== null && username !== ''
   const hasPass = password !== undefined && password !== null && password !== ''
-  if (hasUser || hasPass) {
-    saveProxyCredentials(id, username ?? null, password ?? null)
-  }
-
-  db.prepare(`
+  assertCredentialField(username)
+  assertCredentialField(password)
+  const insert = db.prepare(`
     INSERT INTO proxies (id, type, host, port, username_ref, password_ref, label, tags_json,
       expires_at, status, last_ip, last_latency_ms, last_checked_at, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', NULL, NULL, NULL, ?, ?)
-  `).run(
-    id, draft.type, draft.host, draft.port,
-    (hasUser || hasPass) ? refs.usernameRef : null,
-    (hasUser || hasPass) ? refs.passwordRef : null,
-    draft.label ?? null, JSON.stringify(draft.tags || []),
-    draft.expiresAt ?? null, now, now
-  )
+  `)
+  db.transaction(() => {
+    if (hasUser || hasPass) saveProxyCredentials(id, username ?? null, password ?? null)
+    insert.run(
+      id, draft.type, draft.host, draft.port,
+      (hasUser || hasPass) ? refs.usernameRef : null,
+      (hasUser || hasPass) ? refs.passwordRef : null,
+      draft.label ?? null, JSON.stringify(draft.tags || []),
+      draft.expiresAt ?? null, now, now
+    )
+  })()
 
   writeAudit('proxy.create', 'success')
   return getProxy(id)!
+}
+
+/** 批量导入与单条创建使用同一事务，任一条失败都不留下半批数据。 */
+export function createProxiesBatch(items: Array<{ draft: ProxyDraft; username?: string; password?: string }>): ProxyRecord[] {
+  if (items.length > 200) throw new Error('PROXY_BATCH_TOO_LARGE')
+  const db = getDatabase()
+  const createdIds: string[] = []
+  db.transaction(() => {
+    for (const item of items) {
+      assertValidDraft(item.draft)
+      assertCredentialField(item.username)
+      assertCredentialField(item.password)
+      const id = generateProxyId()
+      const refs = credentialRefs(id)
+      const now = Date.now()
+      const hasCredentials = !!((item.username ?? '') || (item.password ?? ''))
+      if (hasCredentials) saveProxyCredentials(id, item.username ?? null, item.password ?? null)
+      db.prepare(`INSERT INTO proxies (id, type, host, port, username_ref, password_ref, label, tags_json, expires_at, status, last_ip, last_latency_ms, last_checked_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', NULL, NULL, NULL, ?, ?)`)
+        .run(id, item.draft.type, item.draft.host, item.draft.port, hasCredentials ? refs.usernameRef : null, hasCredentials ? refs.passwordRef : null,
+          item.draft.label ?? null, JSON.stringify(item.draft.tags || []), item.draft.expiresAt ?? null, now, now)
+      createdIds.push(id)
+    }
+  })()
+  createdIds.forEach(() => writeAudit('proxy.create', 'success'))
+  return createdIds.map(id => getProxy(id)!).filter(Boolean)
 }
 
 export function getProxy(proxyId: string): ProxyRecord | null {
@@ -110,6 +148,8 @@ export async function updateProxy(
   const db = getDatabase()
   const existing = getProxy(proxyId)
   if (!existing) throw new Error('PROXY_NOT_FOUND')
+  const previousRow = db.prepare('SELECT * FROM proxies WHERE id = ?').get(proxyId) as any
+  const previousCredentials = getProxyCredentials(proxyId)
 
   const merged: ProxyDraft = {
     type: (patch.type ?? existing.type) as ProxyType,
@@ -120,46 +160,79 @@ export async function updateProxy(
     expiresAt: patch.expiresAt !== undefined ? patch.expiresAt : existing.expiresAt
   }
   assertValidDraft(merged)
+  assertCredentialField(patch.username)
+  assertCredentialField(patch.password)
 
   const sets: string[] = ['type = ?', 'host = ?', 'port = ?', 'label = ?', 'tags_json = ?', 'expires_at = ?', 'updated_at = ?']
   const vals: any[] = [merged.type, merged.host, merged.port, merged.label ?? null, JSON.stringify(merged.tags || []), merged.expiresAt ?? null, Date.now()]
 
   if (patch.username !== undefined || patch.password !== undefined) {
-    saveProxyCredentials(proxyId, patch.username ?? null, patch.password ?? null)
+    // 部分更新不能把未传入的另一半凭据清空。
     const refs = credentialRefs(proxyId)
     sets.push('username_ref = ?', 'password_ref = ?')
     vals.push(refs.usernameRef, refs.passwordRef)
   }
 
   vals.push(proxyId)
-  db.prepare(`UPDATE proxies SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+  db.transaction(() => {
+    db.prepare(`UPDATE proxies SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+    if (patch.username !== undefined) saveProxyCredentials(proxyId, patch.username)
+    if (patch.password !== undefined) saveProxyCredentials(proxyId, undefined, patch.password)
+  })()
   // 活动店铺必须立即使用新地址/端口/凭据，不能等下一次打开浏览器。
   const boundStoreIds = (db.prepare('SELECT store_id FROM store_proxies WHERE proxy_id = ? AND mode = ?').all(proxyId, 'bound') as Array<{ store_id: string }>).map(row => row.store_id)
-  await Promise.all(boundStoreIds.map(storeId => reconfigureProxy(storeId)))
+  try {
+    await Promise.all(boundStoreIds.map(storeId => reconfigureProxy(storeId)))
+  } catch (error) {
+    db.transaction(() => {
+      db.prepare(`UPDATE proxies SET type=?, host=?, port=?, username_ref=?, password_ref=?, label=?, tags_json=?, expires_at=?, status=?, last_ip=?, last_latency_ms=?, last_checked_at=?, created_at=?, updated_at=? WHERE id=?`)
+        .run(previousRow.type, previousRow.host, previousRow.port, previousRow.username_ref, previousRow.password_ref, previousRow.label, previousRow.tags_json, previousRow.expires_at, previousRow.status, previousRow.last_ip, previousRow.last_latency_ms, previousRow.last_checked_at, previousRow.created_at, previousRow.updated_at, proxyId)
+      deleteProxyCredentials(proxyId)
+      if (previousCredentials) saveProxyCredentials(proxyId, previousCredentials.username, previousCredentials.password)
+    })()
+    await Promise.all(boundStoreIds.map(storeId => reconfigureProxy(storeId).catch(() => undefined)))
+    throw error
+  }
   return getProxy(proxyId)!
 }
 
 export async function deleteProxy(proxyId: string): Promise<{ deleted: boolean; unboundStores: number }> {
   const db = getDatabase()
-  // 外键会把绑定记录的 proxy_id 置空；保存受影响的店铺，删除后让活动 session 回落直连。
-  const boundStoreIds = (db.prepare('SELECT store_id FROM store_proxies WHERE proxy_id = ?').all(proxyId) as Array<{ store_id: string }>).map(row => row.store_id)
-  const info = db.prepare('DELETE FROM proxies WHERE id = ?').run(proxyId)
-  if (info.changes > 0) {
-    // **必须同步把绑定记录回落成 direct**：外键只把 proxy_id 置 NULL，`mode` 会留在 'bound'，
-    // 于是 getStoreProxy 仍返回 {mode:'bound', proxyId:null} → 界面继续显示"当前：绑定代理"
-    // （用户以为还有代理保护），而 session 实际已回落直连＝真实 IP 暴露，
-    // 且 boundProxyRecords 要求 proxy_id IS NOT NULL → 该店从此不再被巡检。
-    // 用户删代理的动机常常正是"这个代理有问题"，所以这条路径最容易踩（2026-09-28 审查确认）。
+  const previousRow = db.prepare('SELECT * FROM proxies WHERE id = ?').get(proxyId) as any
+  if (!previousRow) return { deleted: false, unboundStores: 0 }
+  const previousCredentials = getProxyCredentials(proxyId)
+  const bindings = db.prepare('SELECT * FROM store_proxies WHERE proxy_id = ?').all(proxyId) as any[]
+  const boundStoreIds = bindings.filter(row => row.mode === 'bound').map(row => row.store_id as string)
+
+  db.transaction(() => {
+    db.prepare('DELETE FROM proxies WHERE id = ?').run(proxyId)
+    // 外键只会把 proxy_id 置 NULL，mode 仍是 bound；显式回落 direct，
+    // 否则界面会继续显示“已绑定代理”而活动 Session 已直连。
     const unbind = db.prepare("UPDATE store_proxies SET mode = 'direct', updated_at = ? WHERE store_id = ? AND mode = 'bound' AND proxy_id IS NULL")
     const now = Date.now()
-    for (const storeId of boundStoreIds) {
-      try { unbind.run(now, storeId) } catch { /* 单店失败不影响删除结果 */ }
-    }
+    for (const storeId of boundStoreIds) unbind.run(now, storeId)
     deleteProxyCredentials(proxyId)
+  })()
+
+  try {
     await Promise.all(boundStoreIds.map(storeId => reconfigureProxy(storeId)))
-    writeAudit('proxy.delete', 'success', { requestId: JSON.stringify({ proxyId, unboundStores: boundStoreIds.length }) })
+  } catch (error) {
+    db.transaction(() => {
+      db.prepare(`INSERT INTO proxies (id, type, host, port, username_ref, password_ref, label, tags_json, expires_at, status, last_ip, last_latency_ms, last_checked_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(previousRow.id, previousRow.type, previousRow.host, previousRow.port, previousRow.username_ref, previousRow.password_ref, previousRow.label, previousRow.tags_json, previousRow.expires_at, previousRow.status, previousRow.last_ip, previousRow.last_latency_ms, previousRow.last_checked_at, previousRow.created_at, previousRow.updated_at)
+      for (const row of bindings) {
+        db.prepare(`INSERT INTO store_proxies (store_id, proxy_id, mode, updated_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT(store_id) DO UPDATE SET proxy_id=excluded.proxy_id, mode=excluded.mode, updated_at=excluded.updated_at`)
+          .run(row.store_id, row.proxy_id, row.mode, row.updated_at)
+      }
+      if (previousCredentials) saveProxyCredentials(proxyId, previousCredentials.username, previousCredentials.password)
+    })()
+    await Promise.all(boundStoreIds.map(storeId => reconfigureProxy(storeId).catch(() => undefined)))
+    throw error
   }
-  return { deleted: info.changes > 0, unboundStores: info.changes > 0 ? boundStoreIds.length : 0 }
+  writeAudit('proxy.delete', 'success', { requestId: JSON.stringify({ proxyId, unboundStores: boundStoreIds.length }) })
+  return { deleted: true, unboundStores: boundStoreIds.length }
 }
 
 export interface ProxyCheckResult {
@@ -176,6 +249,14 @@ const DEFAULT_PROXY_ECHO_URL = 'https://api.ipify.org?format=json'
 function proxyAuthHeader(credentials?: { username?: string; password?: string }): string | undefined {
   if (!credentials?.username) return undefined
   return `Basic ${Buffer.from(`${credentials.username}:${credentials.password || ''}`).toString('base64')}`
+}
+
+function assertSocks5Fields(credentials: { username?: string; password?: string } | undefined, host: string): void {
+  if (Buffer.byteLength(host, 'utf8') > 255) throw new Error('PROXY_SOCKS5_INVALID')
+  if (!credentials) return
+  if (Buffer.byteLength(credentials.username || '', 'utf8') > 255 || Buffer.byteLength(credentials.password || '', 'utf8') > 255) {
+    throw new Error('PROXY_SOCKS5_CREDENTIAL_TOO_LONG')
+  }
 }
 
 function parseExitIp(body: string): string | null {
@@ -277,6 +358,7 @@ function connectHttpProxy(draft: ProxyDraft, target: URL, timeoutMs: number, cre
 }
 
 function connectSocks5Proxy(draft: ProxyDraft, target: URL, timeoutMs: number, credentials?: { username?: string; password?: string }): Promise<{ status: number; body: string }> {
+  assertSocks5Fields(credentials, target.hostname)
   return new Promise((resolve, reject) => {
     const raw = connect({ host: draft.host, port: draft.port })
     raw.setTimeout(timeoutMs, () => raw.destroy(new Error('PROXY_TIMEOUT')))
@@ -381,16 +463,29 @@ function recordCheck(proxyId: string, result: ProxyCheckResult): void {
  */
 export async function bindProxy(storeId: string, proxyId: string | null): Promise<void> {
   const db = getDatabase()
+  if (proxyId && !getProxy(proxyId)) throw new Error('PROXY_NOT_FOUND')
+  const previous = db.prepare('SELECT * FROM store_proxies WHERE store_id = ?').get(storeId) as any
   const mode = proxyId ? 'bound' : 'direct'
-  db.prepare(`
-    INSERT INTO store_proxies (store_id, proxy_id, mode, updated_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(store_id) DO UPDATE SET
-      proxy_id = excluded.proxy_id, mode = excluded.mode, updated_at = excluded.updated_at
-  `).run(storeId, proxyId, mode, Date.now())
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO store_proxies (store_id, proxy_id, mode, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(store_id) DO UPDATE SET
+        proxy_id = excluded.proxy_id, mode = excluded.mode, updated_at = excluded.updated_at
+    `).run(storeId, proxyId, mode, Date.now())
+  })()
 
   // 若该店铺浏览器已打开，重新应用代理配置（首次导航前设置）
-  await reconfigureProxy(storeId)
+  try {
+    await reconfigureProxy(storeId)
+  } catch (error) {
+    db.transaction(() => {
+      if (previous) db.prepare(`UPDATE store_proxies SET proxy_id=?, mode=?, updated_at=? WHERE store_id=?`).run(previous.proxy_id, previous.mode, previous.updated_at, storeId)
+      else db.prepare('DELETE FROM store_proxies WHERE store_id = ?').run(storeId)
+    })()
+    try { await reconfigureProxy(storeId) } catch { /* 回滚 Session 失败会由下次打开时重新应用 */ }
+    throw error
+  }
   writeAudit('proxy.bind', 'success', { storeId })
 }
 
