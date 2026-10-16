@@ -11,6 +11,7 @@ import { normalizeDouyinCategoryTree } from '@shared/douyin-category-tree'
 import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as WindowManager from '../browser/window-manager'
 import * as StoreManager from '../stores/store-manager'
+import { readStoreNameFromTab } from '../browser/store-name-reader'
 import { clearStoreData, cleanStorePartition, listStorePartitionUsage } from '../browser/session-manager'
 import { randomUUID } from 'crypto'
 import { ipcOk as success, ipcFail as error, ipcErrFromUnknown } from './envelope'
@@ -27,6 +28,7 @@ import {
   browserNavigateSchema,
   browserOpenSchema,
   browserOpenWindowSchema,
+  browserReadStoreNameSchema,
   browserPickElementSchema,
   browserRegisterWebviewSchema,
   browserStoreIdSchema,
@@ -648,6 +650,18 @@ export function registerBrowserHandlers(): void {
     const requestId = generateRequestId()
     try {
       return success(await WindowManager.getMemoryDiagnostics(), requestId)
+    } catch (err: any) {
+      return browserError(err, requestId)
+    }
+  })
+
+  // browser:readStoreName - 从店铺页面读真实店铺名（只读页面；返回的是建议值，改名仍走 store:update 由人确认）
+  handle(IPC_CHANNELS.BROWSER_READ_STORE_NAME, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId?: string }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    const parsed = browserReadStoreNameSchema.safeParse(input)
+    if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, '店铺名读取参数不合法', requestId)
+    try {
+      return success(await readStoreNameFromTab(parsed.data.storeId, parsed.data.tabId), requestId)
     } catch (err: any) {
       return browserError(err, requestId)
     }

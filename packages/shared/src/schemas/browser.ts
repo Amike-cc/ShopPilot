@@ -21,6 +21,8 @@ export const browserTabReorderSchema = z.object({
   })
 }).strict()
 export const browserNavigateSchema = z.object({ storeId, tabId, url }).strict()
+/** 读店铺名：tabId 可省，默认取该店铺当前活动标签页 */
+export const browserReadStoreNameSchema = z.object({ storeId, tabId: tabId.optional() }).strict()
 export const browserInviteSquareSchema = z.object({
   storeId,
   url,

@@ -68,7 +68,9 @@ const api = {
     openWindow: (storeId: string, tabId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_OPEN_WINDOW, { storeId, tabId }),
     /** 只读：当前显示的店铺与各已打开店铺的标签页（渲染层重载后补齐状态用） */
     state: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_STATE),
-    memoryDiagnostics: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_MEMORY_DIAGNOSTICS)
+    memoryDiagnostics: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_MEMORY_DIAGNOSTICS),
+    /** 从店铺页面读真实店铺名（只读页面；返回建议值，改名仍走 store.update 由用户确认） */
+    readStoreName: (storeId: string, tabId?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_READ_STORE_NAME, { storeId, tabId })
   },
   
   // 书签

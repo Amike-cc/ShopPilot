@@ -63,3 +63,6 @@ export * from './view-state'
 
 // 软件自检与缓存清理口径（设置中心「清除软件缓存 / 清除浏览器缓存 / 诊断软件」）
 export * from './software-diagnostics'
+
+// 店铺名读取判据（主进程读页面 → 界面预填重命名对话框；登录页/界面词不许当店名）
+export * from './store-name'

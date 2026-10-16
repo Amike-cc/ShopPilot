@@ -333,6 +333,7 @@
       <button type="button" class="ctx-item" data-test="ctx-standalone" :disabled="!canOpenStandalone" @click="storeContextAction('standalone')"><img :src="dashboardExternalIcon" alt="" />在独立窗口打开当前标签页</button>
       <div class="ctx-sep"></div>
       <button type="button" class="ctx-item" data-test="ctx-rename" @click="storeContextAction('rename')"><img :src="dashboardRenameIcon" alt="" />重命名…</button>
+      <button type="button" class="ctx-item" data-test="ctx-readname" @click="storeContextAction('readname')"><img :src="dashboardRenameIcon" alt="" />读取店铺名（从页面）</button>
       <button type="button" class="ctx-item" data-test="ctx-copycfg" :disabled="otherStoreOptions.length === 0" @click="storeContextAction('copycfg')"><img :src="dashboardCopyIcon" alt="" />复制环境配置到其他店铺…</button>
       <button type="button" class="ctx-item" data-test="ctx-copyid" @click="storeContextAction('copyid')"><img :src="dashboardCopyIcon" alt="" />复制店铺 ID</button>
       <div class="ctx-sep"></div>
@@ -343,6 +344,7 @@
       <section class="dashboard-dialog" role="dialog" aria-modal="true" aria-label="重命名店铺">
         <h2>重命名店铺</h2>
         <input v-model="renameDialog.value" data-test="rename-input" maxlength="60" placeholder="店铺名称" @keydown.enter="saveStoreRename" />
+        <p v-if="renameDialog.note" class="dashboard-dialog-note" data-test="rename-note">{{ renameDialog.note }}</p>
         <div class="dashboard-dialog-actions"><button type="button" class="unified-button" @click="renameDialog.open = false">取消</button><button type="button" class="unified-button primary" data-test="rename-save" :disabled="!renameDialog.value.trim()" @click="saveStoreRename">保存</button></div>
       </section>
     </div>
@@ -538,7 +540,7 @@ const browserHostActive = computed(() => props.active && activePage.value === 'b
 /** 采集数据的定时刷新只在总览页有意义（别的页面不显示这些卡片，白刷就是白耗） */
 const isOnOverview = computed(() => activePage.value === 'overview')
 const storeContext = reactive({ open: false, x: 0, y: 0, store: null as StoreRow | null })
-const renameDialog = reactive({ open: false, value: '' })
+const renameDialog = reactive({ open: false, value: '', note: '' })
 const copyConfigDialog = reactive({ open: false, sourceId: '', sourceName: '', targets: [] as string[] })
 const confirmDialog = reactive({ open: false, title: '', message: '', action: null as null | (() => Promise<void>) })
 const createStoreDialog = reactive({ open: false, name: '', platform: '拼多多', adminUrl: '' })
@@ -1287,7 +1289,7 @@ function openStoreContext(store: StoreRow, event: MouseEvent) {
   storeContext.open = true
 }
 function closeStoreContext() { storeContext.open = false }
-async function storeContextAction(kind: 'toggle' | 'standalone' | 'rename' | 'copycfg' | 'copyid' | 'trash') {
+async function storeContextAction(kind: 'toggle' | 'standalone' | 'rename' | 'readname' | 'copycfg' | 'copyid' | 'trash') {
   const store = storeContext.store
   closeStoreContext()
   if (!store) return
@@ -1302,7 +1304,26 @@ async function storeContextAction(kind: 'toggle' | 'standalone' | 'rename' | 'co
     showNotice(result.ok ? '已在独立窗口打开当前标签页' : `打开失败：${result.error.message}`)
     return
   }
-  if (kind === 'rename') { renameDialog.value = store.name; renameDialog.open = true; return }
+  if (kind === 'rename') { renameDialog.value = store.name; renameDialog.note = ''; renameDialog.open = true; return }
+  if (kind === 'readname') {
+    // 先从页面读出真名（只读），再**预填**重命名对话框由用户确认——绝不静默改名：
+    // 页面上的名字可能是子账号名、副标题或平台给的标题，只有人能判对。
+    if (!ws.openStoreIds.includes(store.id)) { ws.toast('先打开这家店的浏览器，再去读店铺名', 'info'); return }
+    ws.toast('正在从店铺页面读取店铺名…', 'info', 2000)
+    const result = await window.shopilot.browser.readStoreName(store.id)
+    if (!result.ok) { ws.toast(`读取失败：${result.error.message}`, 'error'); return }
+    const data = result.data as { ok?: boolean; name?: string | null; source?: string | null; sourceLabel?: string | null; reason?: string | null; pageKind?: string } | null
+    if (!data?.name) {
+      // 读不到就如实说：登录页说"先登录"，子页面说"回首页再试"，不拿界面词硬凑一个名字
+      ws.toast(data?.reason || '这个页面读不到店铺名', data?.pageKind === 'login' ? 'info' : 'error', 5000)
+      return
+    }
+    if (data.name === store.name) { ws.toast(`店铺名已经是「${data.name}」`, 'success'); return }
+    renameDialog.value = data.name
+    renameDialog.note = `来自店铺页面（${data.sourceLabel || '页面'}）：${data.name}`
+    renameDialog.open = true
+    return
+  }
   if (kind === 'copycfg') { copyConfigDialog.sourceId = store.id; copyConfigDialog.sourceName = store.name; copyConfigDialog.targets = []; copyConfigDialog.open = true; return }
   if (kind === 'copyid') {
     try { await navigator.clipboard.writeText(store.id); showNotice('已复制店铺 ID') } catch { showNotice(`复制失败：${store.id}`) }
@@ -1320,6 +1341,7 @@ async function saveStoreRename() {
   const result = await window.shopilot.store.update({ storeId: store.id, patch: { name } })
   if (!result.ok) { showNotice(`重命名失败：${result.error.message}`); return }
   renameDialog.open = false
+  renameDialog.note = ''
   await ws.refreshStores()
   showNotice('已重命名')
 }

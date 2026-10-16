@@ -74,6 +74,8 @@ declare global {
         /** 只读：当前显示的店铺与各已打开店铺的标签页（渲染层重载后补齐状态用） */
         state: () => Promise<IPCResult<{ displayedStoreId: string | null; stores: Array<{ storeId: string; activeTabId: string | null; tabs: TabInfo[] }> }>>
         memoryDiagnostics: () => Promise<IPCResult>
+        /** 从店铺页面读真实店铺名（只读页面；返回建议值，改名仍走 store.update 由用户确认） */
+        readStoreName: (storeId: string, tabId?: string) => Promise<IPCResult<{ ok: boolean; name: string | null; source: string | null; sourceLabel: string | null; pageKind: 'backend' | 'login'; url: string; reason: string | null }>>
       }
       bookmark: {
         list: (storeId?: string) => Promise<IPCResult>

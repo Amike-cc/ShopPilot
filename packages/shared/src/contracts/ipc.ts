@@ -76,6 +76,8 @@ export const IPC_CHANNELS = {
   BROWSER_STATE: 'browser:state',
   /** 只读内存/WebContents诊断，供性能采样使用，不改变页面行为 */
   BROWSER_MEMORY_DIAGNOSTICS: 'browser:memoryDiagnostics',
+  /** 从店铺页面读出真实店铺名（只读页面；返回的是**建议值**，改名仍走 store:update 由人确认） */
+  BROWSER_READ_STORE_NAME: 'browser:readStoreName',
 
   // 书签 - §6.2
   BOOKMARK_LIST: 'bookmark:list',
