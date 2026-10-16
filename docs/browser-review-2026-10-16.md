@@ -119,3 +119,24 @@ sandbox、webview 收口、导航/弹窗白名单、权限成对收口、Cookie 
 2. 屏幕共享未设权限 handler——Electron 未设即拒绝，设错反而放行，故留空。
 3. Cookie 快照加密不可用时**不覆盖**旧快照——宁可保留旧登录态也不明文落盘。
 4. 弹窗统一 deny 并页内加载——不产生未受控原生窗口。
+
+---
+
+## 修复记录（2026-10-16 上午，全部完成）
+
+| # | 建议 | 状态 | 提交 |
+| --- | --- | --- | --- |
+| 1 | P2-1 无档案 session 兜底干净 UA | ✅ `ua-fallback.ts` 纯函数 + `configureSession` 无条件 setUserAgent（UA-CH 幂等改用 WeakSet） | `bc83d80` |
+| 2 | P2-2 分区占用可视化 + 清理 | ✅ `partition-usage.ts` + IPC `BROWSER_PARTITION_USAGE/_CLEAN` + 设置中心维护页「店铺分区存储」组（每店占用 + 保登录态清理 + 审计 `browser.partition.clean`） | `bc83d80` |
+| 3 | P3-3 any 断言收窄 | ✅ did-attach-webview 直接删 as any（类型本就存在）；`__chHooked` → WeakSet | `bc83d80` |
+| 4 | P3-4 webview → WebContentsView | ⏸ **决策：暂缓**——涉及 3 组件 + window-manager 重构，当前 attach 收口严格、风险受控；列入技术债清单 | — |
+| 5 | P3-5 CI actions Node 升级 | ✅ checkout/setup-node v4→v5（pnpm/action-setup v4 暂无 node24 版） | `bc83d80` |
+| — | 附加 | 编辑器条码字段 + CSV 导入模板下载（§3.3/§4.6 规格收尾） | `5e8964d` |
+
+**修复过程中测试抓到的两个真问题**：
+1. `statSync` 会跟随符号链接（`isSymbolicLink` 恒 false）——分区统计在 Linux CI 上把链接指向的
+   字节计入（377→477）。改用 `lstatSync(…, { throwIfNoEntry: false })` 判定，链接不计。
+2. 兜底 UA 初版写了 `if (userAgent !== sess.getUserAgent())` 才挂 UA-CH 钩子——`setUserAgent`
+   之后两者必然相等，钩子永远不会挂。改为无条件挂（幂等由 WeakSet 保证）。
+
+验证：本地全量 138 文件 1393 用例绿 + CI 全绿（`eabc416`）；应用已用含修复的包重启。
