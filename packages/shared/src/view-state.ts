@@ -129,6 +129,39 @@ export function classifyProbeFailure(error: unknown): { outcome: ViewProbeOutcom
   return { outcome: 'error', reason: message ? message.slice(0, 120) : undefined }
 }
 
+/** 读取 guest `webContentsId` 的最大尝试次数（有界，避免"一次读不到就当失败"）。 */
+export const GUEST_ID_READ_ATTEMPTS = 12
+
+/**
+ * 读取 `<webview>` 的 guest `webContentsId` —— 必须容忍"还没就绪"。
+ *
+ * `did-attach` 触发时 guest 的 `webContentsId` **可能还读不到**：整个面板可见时元素走同步
+ * attach 快路径，实测 `did-attach` 时刻读到 `0`、约 40ms 后才可读（`dom-ready` 时必定可读）。
+ * 2026-10-16 用户实报的"点侧栏卡片开店后永远停在正在连接"就是这个：旧实现一次读不到就当失败
+ * 返回、从不重试注册，而这条失败随后又被 `did-finish-load`（about:blank 也算加载完成）擦掉，
+ * 界面于是退回"正在连接店铺页面…"，用户既看不到原因也没有重试按钮。
+ *
+ * @param read  读一次 guest id 的函数（未就绪时返回 0/非正整数或抛错都算"还没好"）
+ * @param sleep 注入等待实现，便于单测（默认 setTimeout）
+ * @returns 可用的 guest id；有界次尝试后仍读不到才返回 0（此时如实报错）
+ */
+export async function readGuestWebContentsId(
+  read: () => number,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) }),
+  attempts: number = GUEST_ID_READ_ATTEMPTS
+): Promise<number> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const id = Number(read())
+      if (Number.isInteger(id) && id > 0) return id
+    } catch {
+      // guest 还没就绪：继续等，不当失败
+    }
+    if (attempt < attempts - 1) await sleep(attempt < 3 ? 16 : 60)
+  }
+  return 0
+}
+
 /** 探针结果 → 视图状态（主进程探针与界面标签共用同一次归类）。 */
 export function classifyProbeState(input: {
   /** 是否已注册 guest；false = 视图还没挂上（浮层负责的那一段） */

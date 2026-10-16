@@ -25,7 +25,8 @@
     "test:invite-douyin-local": "node tools/acceptance/douyin-invite-local-verify.js",
     "test:customer-service-switch": "node tools/acceptance/customer-service-switch-local-verify.js",
     "test:invite-live-log": "node tools/acceptance/invite-live-log-verify.js",
-    "test:custom-realclick": "node tools/acceptance/custom-task-real-click-verify.js"
+    "test:custom-realclick": "node tools/acceptance/custom-task-real-click-verify.js",
+    "test:webview-attach": "node tools/acceptance/webview-attach-local-verify.js"
   },
   "dependencies": {
     "better-sqlite3": "13.0.3",

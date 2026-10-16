@@ -56,6 +56,7 @@
             :aria-label="`${item.storeName} · ${item.tabTitle || '新标签页'}`"
             allowpopups
             @did-attach="handleWebviewAttach(item)"
+            @dom-ready="handleWebviewAttach(item)"
             @did-fail-load="handleWebviewFailure(item, $event)"
             @did-finish-load="clearWebviewError(item)"
             @destroyed="handleWebviewDestroyed(item)"
@@ -366,7 +367,7 @@ import { inviteConfigKey, legacyInviteConfigKey } from '@shared/invite-config'
 import { isBackgroundCollectTask } from '@shared/constants/collection'
 // 视图诊断判据与词表（2026-10-16 审查第 8 条 / V4）：与主进程的 did-fail-load 监听、
 // 「视图体检」读同一份定义，避免两处各写一遍、各错一半
-import { BROWSER_VIEW_STATE_SENTENCE, classifyLoadFailure } from '@shared/view-state'
+import { BROWSER_VIEW_STATE_SENTENCE, classifyLoadFailure, readGuestWebContentsId } from '@shared/view-state'
 
 const emit = defineEmits<{
   // 头部栏（含「返回经营总览」）已按用户要求整条移除；回经营总览走左栏导航，这里不再有该事件。
@@ -558,6 +559,9 @@ function webviewRefCallback(key: string): (element: unknown) => void {
 async function handleWebviewAttach(item: OpenWebviewEntry): Promise<void> {
   const key = item.key
   if (registeringKeys.has(key)) return
+  // 已经挂上就什么都不用做：`dom-ready` 会为每次页面加载再触发一次本函数，
+  // 重复注册会让主进程重复挂监听器（window-open / 标题 / 导航拦截各多一份）。
+  if (webviewAttached(item)) return
   const element = webviewEls.get(key)
   if (!element) {
     // 元素登记缺失不能静默返回（2026-10-16 审查 P2-4）——留下可见状态，重试按钮仍在
@@ -565,14 +569,17 @@ async function handleWebviewAttach(item: OpenWebviewEntry): Promise<void> {
     return
   }
   clearAttachWatchdog(key)
-  let webContentsId = 0
-  try { webContentsId = Number(element.getWebContentsId()) } catch { webContentsId = 0 }
-  if (!Number.isInteger(webContentsId) || webContentsId <= 0) {
-    webviewFailures[key] = '无法读取页面进程标识'
-    return
-  }
+  // 先占位再 await：`did-attach` 与 `dom-ready` 可能几乎同时打进来，双开注册要挡住
   registeringKeys.add(key)
   try {
+    // `did-attach` 时刻 guest 常常还没把 webContentsId 暴露出来（2026-10-16 用户实报：
+    // 点侧栏卡片开店 → 面板已可见 → 元素走同步 attach 快路径 → 读到 0）。
+    // 这里必须有界等它，读不到才算失败；把"还没好"当失败会让页面永远停在"正在连接"。
+    const webContentsId = await readGuestWebContentsId(() => Number(element.getWebContentsId()))
+    if (!webContentsId) {
+      webviewFailures[key] = '页面进程标识不可读（guest 未就绪），请重试'
+      return
+    }
     const result = await window.shopilot.browser.registerWebview(item.storeId, item.tabId, webContentsId)
     if (!result.ok) {
       webviewFailures[key] = result.error?.message || '注册失败'
@@ -624,6 +631,10 @@ function retryWebview(key: string): void {
 }
 
 function clearWebviewError(item: OpenWebviewEntry): void {
+  // 只有"已经真正挂上"的视图才配清失败态：未注册时 about:blank 加载完也会触发
+  // did-finish-load，清掉注册失败的如实原因后界面退回"正在连接…"，
+  // 用户从此刻起既看不到原因、也没有重试按钮（2026-10-16 用户实报的现场）。
+  if (!webviewAttached(item)) return
   delete webviewFailures[item.key]
   clearAttachWatchdog(item.key)
 }

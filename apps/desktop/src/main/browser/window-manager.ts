@@ -807,6 +807,10 @@ export async function waitForStoreWebContents(storeId: string, timeoutMs = 15000
 }
 
 function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
+  // 幂等：同一个 guest 重复注册必须直接返回。下面每个 on(...) / setWindowOpenHandler
+  // 每执行一次就多一份监听器——重复注册会变成"点一次开 N 个标签页"、emitTabs 风暴与
+  // 内存泄漏（渲染层的 did-attach + dom-ready 双触发、重试按钮都可能走到这里）。
+  if (tab.guestAttached && tab.webContents === wc && !wc.isDestroyed()) return
   tab.webContents = wc
   tab.guestWebContentsId = wc.id
   tab.guestAttached = true
@@ -844,8 +848,14 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
   }))
   attachStoreReloadShortcuts(wc)
   wc.on('did-navigate', (_e, newUrl) => {
-    tab.url = newUrl
-    saveTabToDatabase(tab)
+    // guest 挂载时 Chromium 会先落一次 about:blank：那不是用户的导航目标，**不许**拿它覆盖
+    // 刚恢复出来的真实 URL —— 否则 registerWebview 依 tab.url 算出的 pendingUrl 会变成
+    // about:blank、恢复出来的页面永远不导航（2026-10-16 实报"连接不到店铺网页"的第二个成因），
+    // 而且会把 about:blank 写回库里，把用户标签页的 URL 永久洗成空白页。
+    if (newUrl !== 'about:blank' || tab.url === 'about:blank') {
+      tab.url = newUrl
+      saveTabToDatabase(tab)
+    }
     emitTabs(tab.storeId)
     scheduleLoginDetection(tab.storeId)
   })
@@ -1708,7 +1718,11 @@ function restoreTabs(storeId: string): void {
   const state = browserStates.get(storeId)!
 
   if (savedTabs.length === 0) {
-    createTab(storeId, 'about:blank')
+    // 没有任何历史标签 = 这家店第一次打开。别只给一张空白页：用户点开店期待看到的就是它的后台，
+    // 而"空白页 + 正在连接"在 2026-10-16 被实报成"连接不到店铺网页"。地址非法时
+    // createTab 自己会退化成 about:blank（assertNavigableUrl 兜底）。
+    const store = db.prepare('SELECT admin_url FROM stores WHERE id = ?').get(storeId) as { admin_url?: string } | undefined
+    createTab(storeId, store?.admin_url || undefined)
     return
   }
 
@@ -1752,7 +1766,10 @@ function saveTabs(storeId: string): void {
     // 记录实时 URL/标题
     try {
       if (tab.webContents && !tab.webContents.isDestroyed()) {
-        tab.url = tab.webContents.getURL() || tab.url
+        const live = tab.webContents.getURL() || ''
+        // 与 did-navigate 同一口径：guest 还停在 about:blank（没真正导航过）时不许覆盖
+        // 已知的真实 URL，否则关一次店就把恢复用的 URL 洗成空白页
+        if (live && (live !== 'about:blank' || tab.url === 'about:blank')) tab.url = live
         tab.title = tab.webContents.getTitle() || tab.title
       }
     } catch { /* ignore */ }
