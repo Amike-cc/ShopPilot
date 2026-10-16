@@ -29,6 +29,7 @@ import { registerProductMediaProtocol, registerProductMediaScheme } from './prod
 import { stopSalesMetricsScheduler } from './sales-metrics/sales-metrics-scheduler'
 import { registerTaskHandlers } from './ipc/task-handlers'
 import { registerSessionAndSecurityHandlers } from './ipc/session-security-handlers'
+import { registerMaintenanceHandlers } from './ipc/maintenance-handlers'
 import { registerUpdateHandlers } from './ipc/update-handlers'
 import { registerAiHandlers } from './ipc/ai-handlers'
 import { registerAgentHandlers } from './ipc/agent-handlers'
@@ -494,6 +495,8 @@ async function initialize(): Promise<void> {
   registerProductHandlers()
     registerTaskHandlers()
     registerSessionAndSecurityHandlers()
+  // 缓存清理与软件自检（设置中心「数据与维护」）
+  registerMaintenanceHandlers()
     registerUpdateHandlers()
     registerAiHandlers()
     registerAgentHandlers()

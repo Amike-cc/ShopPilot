@@ -137,6 +137,16 @@ const api = {
     export: (outputPath?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.DIAGNOSTICS_EXPORT, { outputPath })
   },
 
+  // 缓存清理与软件自检（设置中心「数据与维护」）——2026-10-16 新增
+  maintenance: {
+    /** 清除软件缓存：只清应用界面自己的缓存（默认会话），不动店铺数据与登录态 */
+    clearAppCache: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.MAINTENANCE_CLEAR_APP_CACHE),
+    /** 清除浏览器缓存：所有店铺分区的网页缓存，Cookie 与站点存储保留 */
+    clearBrowserCache: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.MAINTENANCE_CLEAR_BROWSER_CACHE),
+    /** 诊断软件：只读自检，逐项返回事实与下一步 */
+    softwareDiagnostics: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.MAINTENANCE_SOFTWARE_DIAGNOSTICS)
+  },
+
   // 代理 - §6.3（渲染层可传明文凭据，Main 立即加密保管，绝不回显）
   proxy: {
     test: (proxyDraft: any, proxyId?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.PROXY_TEST, { proxyDraft, proxyId }),

@@ -526,6 +526,9 @@ settings:set           { key, value }
 audit:query            { filter }                        # 按店铺、动作、时间筛选（FUNCTIONAL §3.9）
 audit:export           { filter, outputPath }
 diagnostics:export     { outputPath }                    # §22 脱敏诊断包
+maintenance:clearAppCache        {}                       # 清应用界面缓存（不动店铺数据/登录态）
+maintenance:clearBrowserCache    {}                       # 清所有店铺网页缓存（Cookie 与站点存储保留）
+maintenance:softwareDiagnostics  {}                       # 只读自检：11 项，逐项给事实与下一步
 ~~~
 
 ## 7. 事件通道

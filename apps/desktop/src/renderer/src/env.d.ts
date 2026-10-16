@@ -120,6 +120,12 @@ declare global {
         export: (filter?: any, outputPath?: string) => Promise<IPCResult>
       }
       diagnostics: { export: (outputPath?: string) => Promise<IPCResult> }
+      /** 缓存清理与软件自检（设置中心「数据与维护」） */
+      maintenance: {
+        clearAppCache: () => Promise<IPCResult>
+        clearBrowserCache: () => Promise<IPCResult>
+        softwareDiagnostics: () => Promise<IPCResult>
+      }
       proxy: {
         test: (proxyDraft: any, proxyId?: string) => Promise<IPCResult>
         list: () => Promise<IPCResult>

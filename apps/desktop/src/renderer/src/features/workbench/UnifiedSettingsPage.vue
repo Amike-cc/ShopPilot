@@ -152,6 +152,33 @@
             </div>
           </div>
         </div>
+        <div class="settings-group" data-test="maintenance-cache">
+          <div class="settings-group-head">
+            <h3>缓存清理与软件诊断</h3>
+            <span>清理只动缓存文件：不删数据库、登录态、收藏与备份</span>
+          </div>
+          <div class="settings-actions">
+            <button type="button" class="unified-button" data-test="maintenance-clear-app-cache" :disabled="appCacheBusy" @click="clearAppCache">{{ appCacheBusy ? '清理中…' : '清除软件缓存' }}</button>
+            <button type="button" class="unified-button" data-test="maintenance-clear-browser-cache" :disabled="browserCacheBusy" @click="clearBrowserCache">{{ browserCacheBusy ? '清理中…' : '清除浏览器缓存' }}</button>
+            <button type="button" class="unified-button" data-test="maintenance-software-check" :disabled="softwareCheckBusy" @click="runSoftwareCheck">{{ softwareCheckBusy ? '诊断中…' : '诊断软件' }}</button>
+          </div>
+          <div class="settings-hint" data-test="maintenance-cache-hint">
+            软件缓存 = 应用界面自己的网页缓存（不含任何店铺数据）；浏览器缓存 = 所有店铺的网页缓存（Cookie 与站点存储保留，比下面「店铺分区存储」的整店清理更轻）。
+          </div>
+          <div v-if="cacheResultText" class="settings-note" :class="{ ok: cacheResultOk }" data-test="maintenance-cache-result">{{ cacheResultText }}</div>
+          <div v-if="softwareCheckSummary" class="settings-note" :class="{ ok: softwareCheckSummary.status === 'ok' }" data-test="maintenance-software-summary">
+            软件诊断：{{ softwareCheckSummary.headline }}<template v-if="softwareCheckSummary.status !== 'ok'"> · 可在上方「导出诊断包」把现场一并带给技术支持</template>
+          </div>
+          <div v-if="softwareCheckReport" class="maintenance-backup-list" data-test="maintenance-software-result">
+            <div v-for="item in softwareCheckReport.items" :key="item.key" class="maintenance-backup-row" :data-test="'software-check-' + item.key">
+              <span class="maintenance-backup-meta">
+                <b>{{ item.label }}</b>
+                <em :class="'check-' + item.status" :data-test="'software-check-status-' + item.key">{{ SOFTWARE_CHECK_STATUS_LABEL[item.status] }} · {{ item.detail }}</em>
+                <em v-if="item.hint" class="view-probe-reason">{{ item.hint }}</em>
+              </span>
+            </div>
+          </div>
+        </div>
         <div class="settings-group" data-test="maintenance-partition">
           <div class="settings-actions">
             <button type="button" class="unified-button" data-test="maintenance-partition-usage" :disabled="partitionBusy" @click="readPartitionUsage">{{ partitionBusy ? '统计中…' : '读取店铺分区占用' }}</button>
@@ -214,6 +241,15 @@ import memorySnapshotIcon from '../../assets/generated/ui-icons/memory.png'
 import { INVITE_PROFILES } from '@shared/constants/invite'
 // 视图状态词表：与诊断浮层同一份（2026-10-16 审查 V4），不再各写一套判断
 import { BROWSER_VIEW_STATE_LABEL, type BrowserViewState } from '@shared/view-state'
+// 缓存清理与软件诊断：文案与汇总口径（失败要说失败、最差的一项决定总体）
+import {
+  SOFTWARE_CHECK_STATUS_LABEL,
+  describeCacheClearResult,
+  summarizeSoftwareChecks,
+  type CacheClearResult,
+  type SoftwareCheckSummary,
+  type SoftwareDiagnosticsReport
+} from '@shared/software-diagnostics'
 import { parseAutoCollectionEnabled, AUTO_COLLECTION_SETTING } from '@shared/constants/collection'
 import { AI_IMAGE_TIMEOUT_MAX_MS, AI_PROVIDER_PRESETS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS, DEFAULT_AI_ENDPOINT, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL, DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, INVITE_SQUARE_URLS_SETTING, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint } from '@shared/constants/ai'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
@@ -367,6 +403,57 @@ async function cleanPartition(storeId: string): Promise<void> {
     ws.toast('已清理（登录态保留）', 'success')
     await readPartitionUsage()
   } finally { partitionCleaningId.value = '' }
+}
+
+// ---- 缓存清理与软件诊断（2026-10-16 新增：清除软件缓存 / 清除浏览器缓存 / 诊断软件）----
+// 三件事的边界见 shared/software-diagnostics.ts 顶部注释；这里的职责只有"调用 + 如实回显"：
+// 文案复用 describeCacheClearResult / summarizeSoftwareChecks，界面不自己编结论。
+const appCacheBusy = ref(false)
+const browserCacheBusy = ref(false)
+const softwareCheckBusy = ref(false)
+const cacheResultText = ref('')
+const cacheResultOk = ref(true)
+const softwareCheckReport = ref<SoftwareDiagnosticsReport | null>(null)
+const softwareCheckSummary = computed<SoftwareCheckSummary | null>(() =>
+  softwareCheckReport.value ? summarizeSoftwareChecks(softwareCheckReport.value.items) : null
+)
+
+async function clearAppCache(): Promise<void> {
+  appCacheBusy.value = true
+  try {
+    const result = await window.shopilot.maintenance.clearAppCache()
+    if (!result.ok) { ws.toast('清除软件缓存失败：' + responseError(result, '未知原因'), 'error'); return }
+    const described = describeCacheClearResult(result.data as CacheClearResult)
+    cacheResultText.value = described.text
+    cacheResultOk.value = described.ok
+    // performed=false 时不能说"已清理"：什么都没做却弹成功，是这个功能最容易撒的谎
+    ws.toast(described.text, described.ok ? (described.performed ? 'success' : 'info') : 'error')
+  } finally { appCacheBusy.value = false }
+}
+
+async function clearBrowserCache(): Promise<void> {
+  if (!window.confirm('清除所有店铺的网页缓存？\n只清缓存：登录态（Cookie）与站点存储保留，不需要重新登录。')) return
+  browserCacheBusy.value = true
+  try {
+    const result = await window.shopilot.maintenance.clearBrowserCache()
+    if (!result.ok) { ws.toast('清除浏览器缓存失败：' + responseError(result, '未知原因'), 'error'); return }
+    const described = describeCacheClearResult(result.data as CacheClearResult)
+    cacheResultText.value = described.text
+    cacheResultOk.value = described.ok
+    ws.toast(described.text, described.ok ? (described.performed ? 'success' : 'info') : 'error')
+  } finally { browserCacheBusy.value = false }
+}
+
+async function runSoftwareCheck(): Promise<void> {
+  softwareCheckBusy.value = true
+  try {
+    const result = await window.shopilot.maintenance.softwareDiagnostics()
+    if (!result.ok) { ws.toast('软件诊断失败：' + responseError(result, '未知原因'), 'error'); return }
+    const report = result.data as SoftwareDiagnosticsReport
+    softwareCheckReport.value = report
+    const summary = summarizeSoftwareChecks(report.items)
+    ws.toast(`软件诊断：${summary.headline}`, summary.status === 'error' ? 'error' : summary.status === 'warn' ? 'info' : 'success')
+  } finally { softwareCheckBusy.value = false }
 }
 
 const aiProvider = ref('__custom__')
@@ -1554,6 +1641,10 @@ onBeforeUnmount(() => {
 .maintenance-backup-meta{display:inline-flex;align-items:baseline;gap:6px}
 .maintenance-backup-meta b{color:#344054;font-weight:600}
 .maintenance-backup-meta em{color:#98a2b3;font-style:normal}
+/* 软件诊断的逐项状态：正常/注意/异常必须一眼分得开（颜色不是唯一线索，前面还有文字标签） */
+.maintenance-backup-meta em.check-ok{color:#067647}
+.maintenance-backup-meta em.check-warn{color:#b54708}
+.maintenance-backup-meta em.check-error{color:#b42318}
 /* 失败/异常原因：在标签之后单独一行，读得清是哪一步出的问题（审查 V1） */
 .maintenance-backup-meta .view-probe-reason{color:#b54708;font-size:10px;overflow-wrap:anywhere}
 .maintenance-backup-row .unified-button{margin-left:auto}

@@ -318,6 +318,11 @@ export const IPC_CHANNELS = {
   AUDIT_EXPORT: 'audit:export',
   DIAGNOSTICS_EXPORT: 'diagnostics:export',
 
+  // 缓存清理与软件自检（设置中心「数据与维护」）——2026-10-16 新增
+  MAINTENANCE_CLEAR_APP_CACHE: 'maintenance:clearAppCache',
+  MAINTENANCE_CLEAR_BROWSER_CACHE: 'maintenance:clearBrowserCache',
+  MAINTENANCE_SOFTWARE_DIAGNOSTICS: 'maintenance:softwareDiagnostics',
+
   // 窗口装饰 - §17（titleBarStyle:'hidden' 融合顶栏：右上角原生窗口按钮
   // overlay 颜色需随 UI 状态切换 —— 欢迎页/工作台/应用锁三种底色）
   WINDOW_SET_TITLEBAR_OVERLAY: 'window:setTitlebarOverlay'
