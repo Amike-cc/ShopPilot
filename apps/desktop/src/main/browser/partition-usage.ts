@@ -8,7 +8,7 @@
  *
  * 统计是纯 fs 遍历，不碰 Electron——目录存在性与大小可以被单测钉死。
  */
-import { readdirSync, statSync } from 'fs'
+import { lstatSync, readdirSync, statSync } from 'fs'
 import { join } from 'path'
 
 /** 递归求目录字节数（符号链接不跟随，统计失败的单项跳过并计数——如实不猜）。 */
@@ -25,10 +25,10 @@ export function sumDirectorySize(dir: string): { bytes: number; skipped: number 
     }
     for (const entry of entries) {
       const child = join(current, entry)
-      let stat
-      try {
-        stat = statSync(child)
-      } catch {
+      // 用 lstat 判定符号链接：statSync 会跟随链接（CI Linux 实测 2026-10-16，
+      // 链接指向的字节被计入统计——统计语义是"本分区磁盘占用"，链接不跟随）
+      let stat = lstatSync(child, { throwIfNoEntry: false })
+      if (!stat) {
         skipped += 1
         continue
       }
