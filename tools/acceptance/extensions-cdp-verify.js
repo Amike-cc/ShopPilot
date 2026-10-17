@@ -241,10 +241,10 @@ async function main() {
       page.close()
       page = await findStorePage()
       const badge = page
-        ? await page.eval(`const el = document.querySelector('#__shopilot_my_extension__ .shopilot-ext-badge'); return { present: !!el, text: el ? el.textContent : null, styled: el ? getComputedStyle(el).position === 'static' || true : false }`)
+        ? await page.eval(`const el = document.querySelector('#__shopilot_my_extension__ .shopilot-ext-badge'); const r = el ? el.getBoundingClientRect() : null; return { present: !!el, text: el ? el.textContent : null, width: r ? Math.round(r.width) : 0, right: r ? Math.round(r.right) : 0, viewport: innerWidth }`)
         : { present: false }
-      check('自研插件模板注入生效（右下角徽章可见）',
-        badge.present === true && /插件已注入/.test(String(badge.text)),
+      check('自研插件模板注入生效（右下角徽章可见、样式生效）',
+        badge.present === true && /插件已注入/.test(String(badge.text)) && badge.width > 0 && badge.right <= badge.viewport + 1,
         JSON.stringify(badge))
 
       const removedTemplate = await ui.eval(`return await window.shopilot.extensions.remove(${JSON.stringify(importedItem.id)})`)

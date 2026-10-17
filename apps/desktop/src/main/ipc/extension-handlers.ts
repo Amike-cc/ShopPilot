@@ -73,14 +73,23 @@ export function registerExtensionHandlers(): void {
   handle(IPC_CHANNELS.EXTENSION_IMPORT, async (): Promise<IPCResult<BrowserExtensionImportResult>> => {
     const requestId = randomUUID()
     try {
-      const win = BrowserWindow.getFocusedWindow()
-      const options: Electron.OpenDialogOptions = {
-        title: '选择扩展文件夹（包含 manifest.json）',
-        properties: ['openDirectory']
+      // 验收钩子：打包版无法驱动原生目录选择框，允许在显式声明 SHOPILOT_ACCEPTANCE=1 时
+      // 用环境变量指定源目录。导入后的复制/校验逻辑与手动选择完全一致，不放宽安全边界。
+      const testDir = process.env.SHOPILOT_TEST_EXTENSION_IMPORT_DIR
+      let sourceDir = ''
+      if (testDir && process.env.SHOPILOT_ACCEPTANCE === '1') {
+        sourceDir = testDir
+      } else {
+        const win = BrowserWindow.getFocusedWindow()
+        const options: Electron.OpenDialogOptions = {
+          title: '选择扩展文件夹（包含 manifest.json）',
+          properties: ['openDirectory']
+        }
+        const picked = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+        if (picked.canceled || !picked.filePaths[0]) return ipcOk({ canceled: true }, requestId)
+        sourceDir = picked.filePaths[0]
       }
-      const picked = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
-      if (picked.canceled || !picked.filePaths[0]) return ipcOk({ canceled: true }, requestId)
-      const item = ExtensionManager.importExtensionFromDirectory(picked.filePaths[0])
+      const item = ExtensionManager.importExtensionFromDirectory(sourceDir)
       reloadOpenStoreTabs()
       return ipcOk({ canceled: false, item }, requestId)
     } catch (error) {
