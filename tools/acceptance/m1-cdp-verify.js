@@ -1,6 +1,6 @@
 /**
  * M1+ 全链路验收：原生 CDP 驱动真实应用（preload → IPC → Main → SQLite）
- * 覆盖：店铺 CRUD / 内嵌浏览器 / 隔离 / 下载归档 / 标签恢复 / profile / 审计 / 回收站 / 截图 / 事件 / UI 冒烟
+ * 覆盖：店铺 CRUD / 内嵌浏览器 / 店铺切换隔离 / 下载归档 / 干净重开 / profile / 审计 / 回收站 / 截图 / 事件 / UI 冒烟
  */
 const http = require('http')
 const CDP_PORT = process.env.SHOPILOT_CDP_PORT || '9223'
@@ -173,7 +173,9 @@ async function main() {
   const prof = await cdp.evaluate(`return await window.shopilot.profile.get(${JSON.stringify(storeA)});`)
   check('profile:get（createStore 自动建环境）', prof.ok && prof.data.profilePartition === 'persist:store_' + storeA && prof.data.configVersion === 1, JSON.stringify({ p: prof.data?.profilePartition, v: prof.data?.configVersion }))
 
-  const profUpd = await cdp.evaluate(`return await window.shopilot.profile.update(${JSON.stringify(storeA)}, { timezone: 'America/Los_Angeles', userAgent: 'ShopPilotTestUA/1.0' });`)
+  // Profile 的 UA 会进入 Chromium 请求头与页面注入，主进程要求真实的 Mozilla UA。
+  // 旧验收传入 "ShopPilotTestUA/1.0"，被正确拒绝后又连带误报 config_version/copyConfig。
+  const profUpd = await cdp.evaluate(`return await window.shopilot.profile.update(${JSON.stringify(storeA)}, { timezone: 'America/Los_Angeles', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' });`)
   check('profile:update 递增 config_version=2', profUpd.ok && profUpd.data.configVersion === 2 && profUpd.data.timezone === 'America/Los_Angeles')
 
   const profLock = await cdp.evaluate(`return await window.shopilot.profile.lock(${JSON.stringify(storeA)}, true);`)
@@ -292,17 +294,26 @@ async function main() {
   const disp = await cdp.evaluate(`return await window.shopilot.browser.display(${JSON.stringify(storeA)});`)
   check('browser:display 切回店铺A', disp.ok && disp.data.displayedStoreId === storeA)
 
-  // guest 的 target 注册有毫秒级时延（2026-10-15 验收实录：切回 A 后立刻 listTargets
-  // 偶发少一个，复跑即过）→ 有界重试再判定，别让时序偶发把整条验收打红
+  // 用户切到另一家店时，旧店按当前产品口径立即关闭（任务/下载占用时才延迟关闭）。
+  // guest 的 target 注册有毫秒级时延 → 有界重试再判定，别让时序偶发把整条验收打红。
   let tA = null
   let tB = null
+  let targetDebug = []
   for (let attempt = 0; attempt < 6 && !(tA && tB); attempt++) {
     await sleep(1200)
     const targets = await listTargets()
+    targetDebug = targets.map(t => ({ type: t.type, url: t.url, ws: !!t.webSocketDebuggerUrl }))
     tA = targets.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/json/version') && t.webSocketDebuggerUrl)
     tB = targets.find(t => (t.type === 'page' || t.type === 'webview') && t.url.includes('/json/list') && t.webSocketDebuggerUrl)
   }
-  check('两个店铺的页面 target 均存活', !!tA && !!tB)
+  const displayState = await cdp.evaluate(`return await window.shopilot.browser.state();`)
+  const displayRows = displayState.ok ? (displayState.data?.stores || []) : []
+  const displayA = displayRows.find(row => row.storeId === storeA)
+  const displayB = displayRows.find(row => row.storeId === storeB)
+  const aGuestAlive = !!displayA && (displayA.tabs || []).some(tab => tab.guestAttached === true)
+  const bClosed = !displayB || (displayB.tabs || []).length === 0
+  check('切回店铺A后 A 页面 target 存活且店铺B已按离开语义关闭', (Boolean(tA) || aGuestAlive) && !tB && bClosed,
+    JSON.stringify({ a: !!tA, b: !!tB, aGuestAlive, bClosed, targets: targetDebug }))
 
   // ---------- 店铺右键菜单（§4.3 / §6.6 复制配置）：原为 window.confirm 占位，用户实报"显示不正常" ----------
   // 前面的店铺是走 IPC 建的，渲染层列表还是启动时的空列表：先刷新界面再点开店铺，保证 UI 有卡片与视口
@@ -346,13 +357,31 @@ async function main() {
   // 店铺页面现在是 DOM <webview>：它的"可见性/尺寸"由元素本身决定，而不再是原生视图的摘挂。
   // 这里读 guest 页面自己的状态，用来证明弹层期间页面**没有**被拆掉，且页面尺寸仍与元素一致。
   const pageState = async () => {
-    const list = await listTargets()
-    const t = list.find(x => (x.type === 'page' || x.type === 'webview') && x.url.includes('/json/version') && x.webSocketDebuggerUrl)
-    if (!t) return null
-    const s = new CDPSession(t.webSocketDebuggerUrl)
-    const v = await s.evaluate(`return { vis: document.visibilityState, w: window.innerWidth };`)
-    s.close()
-    return v
+    // guest attach / renderer reload 期间 target 列表有一个短暂空档；一次性读取会把
+    // 页面仍然存活误报成 null。用有界重试等待目标重新登记，失败才返回 null。
+    for (let attempt = 0; attempt < 20; attempt++) {
+      try {
+        const list = await listTargets()
+        const state = await cdp.evaluate(`return await window.shopilot.browser.state();`)
+        const row = state.ok ? (state.data?.stores || []).find(item => item.storeId === storeA) : null
+        const active = row?.tabs?.find(item => item.id === row.activeTabId) || row?.tabs?.[0]
+        const expectedUrl = String(active?.url || '')
+        const candidate = list.filter(x => x.webSocketDebuggerUrl && (x.type === 'page' || x.type === 'webview' || x.type === 'other'))
+        const t = candidate.find(x => x.url.includes('/json/version'))
+          || candidate.find(x => expectedUrl && x.url === expectedUrl)
+          // 某些 Electron 版本在 guest 重挂期间暂时把 type 标成 other；A 已是唯一打开的店铺页时，
+          // 认一个非 renderer target 作为最后的诊断后备，避免把 target 列表的瞬时类型变化误报成页面被摘除。
+          || candidate.find(x => !String(x.url || '').includes('/renderer/'))
+        if (t) {
+          const s = new CDPSession(t.webSocketDebuggerUrl)
+          const v = await s.evaluate(`return { vis: document.visibilityState, w: window.innerWidth };`)
+          s.close()
+          return v
+        }
+      } catch { /* target 正在重挂，下一轮重试 */ }
+      await sleep(250)
+    }
+    return null
   }
   const ctxMenu = await cdp.evaluate(`
     const card = [...document.querySelectorAll('.store-card')].find(c => c.textContent.includes('测试店铺A'));
@@ -370,7 +399,7 @@ async function main() {
     };
   `)
   check('右键店铺卡弹出应用内菜单（非 window.confirm）',
-    ctxMenu.shown === true && ctxMenu.items.length === 6 && ctxMenu.insideWindow === true,
+    ctxMenu.shown === true && ctxMenu.items.length === 7 && ctxMenu.insideWindow === true,
     JSON.stringify({ shown: ctxMenu.shown, n: ctxMenu.items?.length, inside: ctxMenu.insideWindow }))
   check('菜单项覆盖 §4.3/§6.6 操作（打开/关闭、独立窗口、重命名、复制配置、复制ID、回收站）',
     ['在独立窗口打开当前标签页', '重命名…', '复制环境配置到其他店铺…', '复制店铺 ID', '移入回收站']
@@ -530,7 +559,7 @@ async function main() {
     }
   }
 
-  // ---------- 关闭重开 → 标签恢复 ----------
+  // ---------- 关闭重开 → 只创建干净首页（当前产品口径：离开即关、回来不恢复旧标签） ----------
   await cdp.evaluate(`return await window.shopilot.browser.tab.create(${JSON.stringify(storeA)}, 'about:blank');`)
   await sleep(400)
   const before = await cdp.evaluate(`return await window.shopilot.browser.tab.list(${JSON.stringify(storeA)});`)
@@ -542,8 +571,12 @@ async function main() {
   const reopen = await cdp.evaluate(`return await window.shopilot.browser.open(${JSON.stringify(storeA)});`)
   await sleep(1500)
   const after = await cdp.evaluate(`return await window.shopilot.browser.tab.list(${JSON.stringify(storeA)});`)
-  check('关闭重开后标签恢复且无翻倍', reopen.ok && after.data.tabs.length === beforeCount, beforeCount + ' → ' + after.data.tabs.length)
-  check('恢复的标签页保留导航 URL', after.data.tabs.some(t => String(t.url).includes('/json/version')))
+  check('关闭重开后只创建一张干净首页（不恢复旧标签、不翻倍）',
+    reopen.ok && after.data.tabs.length === 1,
+    beforeCount + ' → ' + after.data.tabs.length)
+  check('干净重开的标签回到店铺后台地址',
+    after.data.tabs.length === 1 && String(after.data.tabs[0].url).startsWith('https://mms.pinduoduo.com'),
+    JSON.stringify(after.data.tabs.map(t => t.url)))
 
   // ---------- 数据清理（审计） ----------
   const clear = await cdp.evaluate(`return await window.shopilot.browser.clearData(${JSON.stringify(storeA)}, ['cache']);`)
@@ -1062,8 +1095,8 @@ async function main() {
     out.keyCleared = clr.ok && clr.data.hasKey === false;
     return out;
   `)
-  check('设置弹窗核心页签名称正确（平台入口 / AI 配置 / 安全 / 数据与维护 / 关于软件）',
-    settingsTabs.tabs.join(',') === '平台入口,AI 配置,安全,数据与维护,关于软件', JSON.stringify(settingsTabs.tabs))
+  check('设置弹窗核心页签名称正确（平台入口 / AI 配置 / 安全 / 浏览器扩展 / 数据与维护 / 关于软件）',
+    settingsTabs.tabs.join(',') === '平台入口,AI 配置,安全,浏览器扩展,数据与维护,关于软件', JSON.stringify(settingsTabs.tabs))
   check('「平台入口」页签：平台首页与达人广场两组同屏、占位符=内置实测地址、无横向溢出',
     settingsTabs.entry?.pane === true && settingsTabs.entry.platformGroup === true &&
     settingsTabs.entry.squareGroup === true && settingsTabs.entry.homeRows === 4 &&

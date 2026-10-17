@@ -201,33 +201,58 @@ export function buildInjectScript(o: FpOverrides): string {
     }
     // 视口字段必须和实际窗口保持同一套度量：屏幕尺寸是显示器档案，视口尺寸仍取
     // Chromium 当前窗口的真实布局值，避免 screen 与任务引擎看到的 innerWidth 自相矛盾。
-    const rawInnerWidth = Number(window.innerWidth);
-    const rawInnerHeight = Number(window.innerHeight);
-    const rawOuterWidth = Number(window.outerWidth);
-    const rawOuterHeight = Number(window.outerHeight);
-    const rawDpr = Number(window.devicePixelRatio);
-    const viewportWidth = rawInnerWidth > 0 ? rawInnerWidth : (P.screenWidth || 1);
-    const viewportHeight = rawInnerHeight > 0 ? rawInnerHeight : (P.screenHeight || 1);
-    define(window, 'innerWidth', () => viewportWidth, 'get innerWidth');
-    define(window, 'innerHeight', () => viewportHeight, 'get innerHeight');
-    define(window, 'outerWidth', () => rawOuterWidth > 0 ? rawOuterWidth : viewportWidth, 'get outerWidth');
-    define(window, 'outerHeight', () => rawOuterHeight > 0 ? rawOuterHeight : viewportHeight, 'get outerHeight');
-    define(window, 'devicePixelRatio', () => rawDpr > 0 ? rawDpr : 1, 'get devicePixelRatio');
+    //
+    // **必须每次读取都取实时值**：早期实现把 document-start 时的 innerWidth 固化成常量，
+    // 用户收起侧栏/缩放窗口后页面仍按旧宽度排版（响应式布局失效），且 innerWidth 与
+    // outerWidth/visualViewport 互相矛盾（2026-10-17 真机验收：容器 778→498，innerWidth 不动）。
+    // 这里先保存原生 getter，再定义返回实时值的 getter；读不到/为 0 时才回落到启动时快照。
+    const nativeGetter = (obj, prop) => {
+      try {
+        const own = Object.getOwnPropertyDescriptor(obj, prop);
+        if (own && typeof own.get === 'function') return own.get;
+        let proto = Object.getPrototypeOf(obj);
+        while (proto) {
+          const d = Object.getOwnPropertyDescriptor(proto, prop);
+          if (d && typeof d.get === 'function') return d.get;
+          proto = Object.getPrototypeOf(proto);
+        }
+      } catch (e) {}
+      return null;
+    };
+    const readLive = (obj, prop, fallback) => {
+      const get = nativeGetter(obj, prop);
+      // 没有原生 getter（测试桩等非常规宿主）时先取快照，绝不能回读 obj[prop]：
+      // 那已经是下面 define 出来的本 getter，会无限递归直到栈溢出。
+      const snapshot = get ? null : Number(obj[prop]);
+      return () => {
+        try {
+          const v = get ? Number(get.call(obj)) : snapshot;
+          if (Number.isFinite(v) && v > 0) return v;
+        } catch (e) {}
+        return fallback;
+      };
+    };
+    const viewportWidth = Number(window.innerWidth) > 0 ? Number(window.innerWidth) : (P.screenWidth || 1);
+    const viewportHeight = Number(window.innerHeight) > 0 ? Number(window.innerHeight) : (P.screenHeight || 1);
+    define(window, 'innerWidth', readLive(window, 'innerWidth', viewportWidth), 'get innerWidth');
+    define(window, 'innerHeight', readLive(window, 'innerHeight', viewportHeight), 'get innerHeight');
+    define(window, 'outerWidth', readLive(window, 'outerWidth', viewportWidth), 'get outerWidth');
+    define(window, 'outerHeight', readLive(window, 'outerHeight', viewportHeight), 'get outerHeight');
+    define(window, 'devicePixelRatio', readLive(window, 'devicePixelRatio', 1), 'get devicePixelRatio');
     try {
       const vv = window.visualViewport;
       if (vv) {
-        const rawScale = Number(vv.scale);
-        define(vv, 'width', () => viewportWidth, 'get width');
-        define(vv, 'height', () => viewportHeight, 'get height');
-        define(vv, 'scale', () => rawScale > 0 ? rawScale : 1, 'get scale');
+        define(vv, 'width', readLive(vv, 'width', viewportWidth), 'get width');
+        define(vv, 'height', readLive(vv, 'height', viewportHeight), 'get height');
+        define(vv, 'scale', readLive(vv, 'scale', 1), 'get scale');
       }
     } catch (e) {}
     try {
       const orientation = screen.orientation;
       if (orientation) {
-        const landscape = viewportWidth >= viewportHeight;
-        define(orientation, 'type', () => landscape ? 'landscape-primary' : 'portrait-primary', 'get type');
-        define(orientation, 'angle', () => 0, 'get angle');
+        // 方向与角度同样按当前视口实时判断：桌面端横屏 angle=0、竖屏 angle=90。
+        define(orientation, 'type', () => Number(window.innerWidth) >= Number(window.innerHeight) ? 'landscape-primary' : 'portrait-primary', 'get type');
+        define(orientation, 'angle', () => Number(window.innerWidth) >= Number(window.innerHeight) ? 0 : 90, 'get angle');
       }
     } catch (e) {}
     if (P.userAgent && P.clientHints) {
@@ -503,6 +528,16 @@ export function registerFingerprintTarget(storeId: string, tabId: string, wc: We
           .sendCommand('Page.addScriptToEvaluateOnNewDocument', { source: buildInjectScript(o), runImmediately: true })
           .then((result: unknown) => {
             reg.scriptId = String((result as { identifier?: unknown })?.identifier || '') || null
+            // `runImmediately` is not consistently honored for an already-loaded
+            // about:blank guest on Electron 30. The document-start hook protects
+            // future navigations, while this explicit execution makes the current
+            // document observable immediately after registration as well.
+            if (!wc.isDestroyed()) {
+              return wc.executeJavaScript(buildInjectScript(o), true).catch((error: unknown) => {
+                logMain('warn', `[fingerprint] 当前文档注入失败 store=${storeId}：${String((error as Error)?.message || error).slice(0, 160)}`)
+              })
+            }
+            return undefined
           })
           .catch((error: unknown) => {
             reg.scriptId = null

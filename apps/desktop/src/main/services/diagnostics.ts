@@ -108,7 +108,10 @@ export function assertSafeExportPath(rawPath: string, allowedExts: string[], wha
   if (!isAbsolute(p)) throw new Error(`INVALID_ARGUMENT: ${what}路径必须是绝对路径`)
 
   const resolved = resolve(p)
-  const roots = [resolve(homedir()), resolve(tmpdir())]
+  // Electron 的 userData 目录可能被便携版、测试实例或系统策略自定义到
+  // 用户主目录之外；它仍是应用自己托管的可信根。保留 homedir/TEMP 兼容
+  // 用户选择的普通路径，并对三者都做 realpath 物理路径校验。
+  const roots = [resolve(homedir()), resolve(tmpdir()), resolve(app.getPath('userData'))]
   // 解析已经存在的父目录，避免用户目录中的 junction/symlink 绕过根目录前缀。
   let physical = resolved
   try {

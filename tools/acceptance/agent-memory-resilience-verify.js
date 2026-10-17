@@ -4,9 +4,11 @@ const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
+const { resolveApp, appArgs } = require('./app-launch')
 
 const ROOT = path.resolve(__dirname, '../..')
-const APP = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
+const APP_CONFIG = resolveApp(ROOT)
+const APP = APP_CONFIG.executable
 const PORT = Number(process.env.SHOPILOT_MEMORY_RESILIENCE_PORT || 9240)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -44,10 +46,23 @@ async function main() {
   const userData = path.join(os.tmpdir(), `shopilot-agent-memory-boundary-${Date.now()}`)
   const appData = path.join(userData, 'appdata')
   fs.mkdirSync(appData, { recursive: true })
-  const child = spawn(APP, [ROOT, '--no-sandbox', `--remote-debugging-port=${PORT}`, `--user-data-dir=${userData}`], {
+  const child = spawn(APP, appArgs(ROOT, APP_CONFIG, {
+    port: PORT,
+    userData,
+    extra: ['--disable-features=CalculateNativeWinOcclusion']
+  }), {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, APPDATA: appData, LOCALAPPDATA: appData, NODE_ENV: 'production', SHOPILOT_DISABLE_CDP_FP: '1' }
   })
+  // 必须消费子进程管道：Electron 启动期间可能输出 Chromium 警告，若 pipe
+  // 无人读取，Windows 缓冲区填满后主进程会卡在写日志，DevTools 端点也就
+  // 永远不会出现。保留短尾日志，启动失败时能区分真实崩溃与 CDP 竞态。
+  let childLog = ''
+  const appendLog = chunk => {
+    childLog = (childLog + String(chunk)).slice(-8000)
+  }
+  child.stdout?.on('data', appendLog)
+  child.stderr?.on('data', appendLog)
   let cdp
   const results = []
   const check = (name, passed, detail = '') => {
@@ -62,7 +77,10 @@ async function main() {
       if (ready) break
       await sleep(250)
     }
-    if (!ready) throw new Error('CDP endpoint not ready')
+    if (!ready) {
+      const exited = child.exitCode != null || child.signalCode != null
+      throw new Error(`CDP endpoint not ready${exited ? `（应用已退出 code=${child.exitCode ?? 'null'} signal=${child.signalCode ?? 'null'}）` : ''}${childLog ? `\nElectron log tail:\n${childLog}` : ''}`)
+    }
     const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()
     const target = targets.find(item => item.type === 'page' && (item.url.includes('index.html') || item.url.startsWith('file:')))
     if (!target) throw new Error('ShopPilot renderer target missing')

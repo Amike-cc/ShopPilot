@@ -428,6 +428,41 @@ export const ERROR_CODES = {
     code: 'AGENT_CONCURRENCY_LIMIT',
     message: 'Agent 或模型 Profile 已达到并发上限',
     retryable: true
+  },
+  EXTENSION_INVALID: {
+    code: 'EXTENSION_INVALID',
+    message: '扩展清单不合法',
+    retryable: false
+  },
+  EXTENSION_PERMISSION_BLOCKED: {
+    code: 'EXTENSION_PERMISSION_BLOCKED',
+    message: '扩展申请了本地插件不支持的权限',
+    retryable: false
+  },
+  EXTENSION_MAIN_WORLD_UNSUPPORTED: {
+    code: 'EXTENSION_MAIN_WORLD_UNSUPPORTED',
+    message: '暂不支持主世界内容脚本',
+    retryable: false
+  },
+  EXTENSION_TOO_LARGE: {
+    code: 'EXTENSION_TOO_LARGE',
+    message: '扩展文件数量或总大小超过上限',
+    retryable: false
+  },
+  EXTENSION_NOT_FOUND: {
+    code: 'EXTENSION_NOT_FOUND',
+    message: '扩展不存在',
+    retryable: false
+  },
+  EXTENSION_REMOVE_FAILED: {
+    code: 'EXTENSION_REMOVE_FAILED',
+    message: '扩展删除失败',
+    retryable: true
+  },
+  EXTENSION_LOAD_FAILED: {
+    code: 'EXTENSION_LOAD_FAILED',
+    message: '扩展加载失败',
+    retryable: true
   }
 } as const
 

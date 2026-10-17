@@ -4,9 +4,11 @@ const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
+const { resolveApp, appArgs } = require('./app-launch')
 
 const ROOT = path.resolve(__dirname, '../..')
-const APP = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
+const APP_CONFIG = resolveApp(ROOT)
+const APP = APP_CONFIG.executable
 const PORT = Number(process.env.SHOPILOT_AGENT_DOMAIN_PORT || 9238)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const reportPath = path.join(ROOT, 'artifacts', 'agent', 'cdp-report.json')
@@ -61,7 +63,7 @@ async function main() {
     const occupied = await fetch(`http://127.0.0.1:${PORT}/json/version`).then(response => response.ok).catch(() => false)
     if (occupied) throw new Error(`CDP 端口 ${PORT} 已被占用`)
     fs.mkdirSync(path.join(userData, 'appdata'), { recursive: true })
-    appProcess = spawn(APP, [ROOT, '--no-sandbox', `--remote-debugging-port=${PORT}`, `--user-data-dir=${userData}`, '--disable-features=CalculateNativeWinOcclusion'], {
+    appProcess = spawn(APP, appArgs(ROOT, APP_CONFIG, { port: PORT, userData, extra: ['--disable-features=CalculateNativeWinOcclusion'] }), {
       cwd: ROOT,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, APPDATA: path.join(userData, 'appdata'), LOCALAPPDATA: path.join(userData, 'appdata'), NODE_ENV: 'production', SHOPILOT_DISABLE_CDP_FP: '1' }

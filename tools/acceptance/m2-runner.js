@@ -8,9 +8,11 @@ const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
+const { resolveApp, appArgs } = require('./app-launch')
 
 const root = path.resolve(__dirname, '../..')
-const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
+const app = resolveApp(root)
+const electronExe = app.executable
 const PORT = '9224'
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
@@ -43,16 +45,17 @@ async function stage1() {
   const userData = path.join(os.tmpdir(), 'shopilot-m2-test-' + Date.now())
   fs.mkdirSync(userData, { recursive: true })
   console.log('=== 阶段1：M2 主套件（代理/407/备份） ===')
-  const app = spawn(electronExe, [
-    root, '--no-sandbox', `--remote-debugging-port=${PORT}`, '--user-data-dir=' + userData
-  ], {
+  const appProcess = spawn(electronExe, appArgs(root, app, { port: PORT, userData }), {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1', SHOPILOT_DISABLE_CDP_FP: '1' }
+    // 体检默认目标改为 HTTP 版本，配合 m2-cdp-verify 的本地确定性代理响应；
+    // 不访问公网，仍会真实走 HTTP 代理协议并解析出口 IP。
+    env: { ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1', SHOPILOT_DISABLE_CDP_FP: '1', SHOPILOT_PROXY_ECHO_URL: 'http://api.ipify.org?format=json' }
   })
   let appLog = ''
-  app.stdout.on('data', d => { appLog += d.toString() })
-  app.stderr.on('data', d => { appLog += d.toString() })
-  app.on('exit', code => { if (code) console.log('!!! 应用退出 code=' + code + '\n' + appLog.slice(-2000)) })
+  let stopping = false
+  appProcess.stdout.on('data', d => { appLog += d.toString() })
+  appProcess.stderr.on('data', d => { appLog += d.toString() })
+  appProcess.on('exit', code => { if (code && !stopping) console.log('!!! 应用退出 code=' + code + '\n' + appLog.slice(-2000)) })
 
   let code = 1
   try {
@@ -67,7 +70,8 @@ async function stage1() {
       if (interesting.length) console.log('--- 应用代理相关日志 ---\n' + interesting.slice(-30).join('\n'))
     }
   } finally {
-    killTree(app)
+    stopping = true
+    killTree(appProcess)
     await sleep(1000)
   }
   return code === 0
@@ -78,20 +82,20 @@ async function stage2() {
   const userData = path.join(os.tmpdir(), 'shopilot-m2-fp-' + Date.now())
   const resultPath = path.join(os.tmpdir(), `shopilot-fp-result-${Date.now()}.json`)
   fs.mkdirSync(userData, { recursive: true })
-  const app = spawn(electronExe, [root, '--no-sandbox', '--user-data-dir=' + userData], {
+  const appProcess = spawn(electronExe, appArgs(root, app, { userData }), {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, NODE_ENV: 'production', SHOPILOT_FP_AUTOTEST: '1', SHOPILOT_FP_RESULT: resultPath }
   })
   let log = ''
-  app.stdout.on('data', d => { log += d.toString() })
-  app.stderr.on('data', d => { log += d.toString() })
+  appProcess.stdout.on('data', d => { log += d.toString() })
+  appProcess.stderr.on('data', d => { log += d.toString() })
 
   const t0 = Date.now()
   while (!fs.existsSync(resultPath) && Date.now() - t0 < 40000) {
     await sleep(500)
-    if (app.exitCode !== null && !fs.existsSync(resultPath) && Date.now() - t0 > 5000) break
+    if (appProcess.exitCode !== null && !fs.existsSync(resultPath) && Date.now() - t0 > 5000) break
   }
-  try { killTree(app) } catch {}
+  try { killTree(appProcess) } catch {}
 
   if (!fs.existsSync(resultPath)) {
     console.log('FAIL - 指纹自检无结果文件\n日志尾部:\n' + log.slice(-2000))

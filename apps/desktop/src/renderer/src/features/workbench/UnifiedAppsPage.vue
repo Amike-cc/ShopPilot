@@ -22,21 +22,21 @@ import assistantArt from '../../assets/generated/ai-assistant-generated.png'
 import assistantOpenIcon from '../../assets/generated/ui-icons/assistant-open-gen.png'
 
 type Mode = 'ai' | 'apps'
-type Page = 'stores' | 'analytics' | 'orders' | 'invoices' | 'tasks' | 'settings' | 'image-studio'
+type Page = 'stores' | 'analytics' | 'orders' | 'invoices' | 'tasks' | 'settings' | 'image-studio' | 'products'
 const props = defineProps<{ mode: Mode }>()
 const emit = defineEmits<{
   navigate: [page: Page]
   'open-assistant': []
 }>()
 const title = computed(() => props.mode === 'ai' ? 'AI 创作工具' : '应用中心')
-const subtitle = computed(() => props.mode === 'ai' ? '访问当前已接入的 Agent 助手、配置和任务能力。' : '从同一工作区进入店铺、数据、任务和设置页面。')
+const subtitle = computed(() => props.mode === 'ai' ? '访问当前已接入的 AI 助手、模型配置与任务能力。' : '从同一工作区进入店铺、数据、任务和设置页面。')
 const appLinks: Array<{ key: string; label: string; description: string; icon: string; tone: string; page: Page }> = [
   { key: 'stores', label: '店铺管理', description: '管理店铺、平台、登录状态和本机浏览器工作区。', icon: storesAppIcon, tone: 'blue', page: 'stores' },
   { key: 'analytics', label: '数据分析', description: '查看真实快照、经营指标和数据采集入口。', icon: analyticsAppIcon, tone: 'purple', page: 'analytics' },
   { key: 'orders', label: '订单管理', description: '查看已经采集的订单快照和平台支持状态。', icon: ordersAppIcon, tone: 'cyan', page: 'orders' },
   { key: 'invoices', label: '发票中心', description: '汇总真实待开票记录，并导出 CSV。', icon: invoicesAppIcon, tone: 'orange', page: 'invoices' },
   { key: 'tasks', label: 'AI 任务中心', description: '管理 TaskRunner 任务、运行、确认和进度。', icon: tasksAppIcon, tone: 'teal', page: 'tasks' },
-  { key: 'settings', label: '设置中心', description: '平台地址、AI、Agent、技能、插件和软件更新。', icon: settingsAppIcon, tone: 'violet', page: 'settings' }
+  { key: 'settings', label: '设置中心', description: '平台地址、AI 配置、应用锁、数据维护与软件更新。', icon: settingsAppIcon, tone: 'violet', page: 'settings' }
 ]
 </script>
 
@@ -53,15 +53,15 @@ const appLinks: Array<{ key: string; label: string; description: string; icon: s
     <template v-if="mode === 'ai'">
       <div class="ai-assistant-card">
         <div class="ai-orb" aria-hidden="true"><img :src="assistantArt" alt="" /></div>
-        <div class="ai-assistant-copy"><span class="available-pill"><i></i>已接入</span><h2>AI 电商助手</h2><p>通过当前 Agent 助手进行分析、规划和店铺工作流协助。执行写入操作仍会按现有流程请求确认。</p></div>
+        <div class="ai-assistant-copy" data-test="ai-assistant-copy"><span class="available-pill"><i></i>已接入</span><h2>AI 电商助手</h2><p>纯文本对话：可以讨论问题、整理思路或给出手动操作建议；不会读取或操作店铺、网页、任务与软件数据。</p></div>
         <button type="button" class="unified-button primary" @click="emit('open-assistant')"><img class="button-icon" :src="assistantOpenIcon" alt="" />打开助手</button>
       </div>
       <div class="app-card-grid">
         <article class="app-card app-card-action" @click="emit('navigate', 'image-studio')" @keydown.enter="emit('navigate', 'image-studio')" tabindex="0" role="button"><span class="app-card-icon purple"><img :src="aiAppIcon" alt="" /></span><div><h2>AI 生成商品图</h2><p>进入模型选择、对话生图和真实结果预览工作台。</p></div><span class="app-card-arrow"><img :src="forwardIcon" alt="" /></span></article>
-        <article class="app-card"><span class="app-card-icon blue"><img :src="publishAppIcon" alt="" /></span><div><h2>批量发布商品</h2><p>尚无商品发布页面或发布 API。</p></div><span class="unavailable-pill">暂不可用</span></article>
+        <article class="app-card app-card-action" data-test="app-publish" @click="emit('navigate', 'products')" @keydown.enter="emit('navigate', 'products')" tabindex="0" role="button"><span class="app-card-icon blue"><img :src="publishAppIcon" alt="" /></span><div><h2>批量发布商品</h2><p>进入商品管理，发起发布预检与批量编排；提交仍需在店铺页面人工确认。</p></div><span class="app-card-arrow"><img :src="forwardIcon" alt="" /></span></article>
         <article class="app-card"><span class="app-card-icon teal"><img :src="videoAppIcon" alt="" /></span><div><h2>短视频去重</h2><p>当前项目没有对应的媒体处理模块。</p></div><span class="unavailable-pill">暂不可用</span></article>
         <article class="app-card"><span class="app-card-icon orange"><img :src="mediaAppIcon" alt="" /></span><div><h2>影像级干扰</h2><p>当前项目没有对应的影像处理模块。</p></div><span class="unavailable-pill">暂不可用</span></article>
-        <article class="app-card app-card-action" @click="emit('navigate', 'settings')" @keydown.enter="emit('navigate', 'settings')" tabindex="0" role="button"><span class="app-card-icon violet"><img :src="settingsAppIcon" alt="" /></span><div><h2>AI 模型配置</h2><p>查看现有服务商、模型连接和 Agent 配置。</p></div><span class="app-card-arrow"><img :src="forwardIcon" alt="" /></span></article>
+        <article class="app-card app-card-action" @click="emit('navigate', 'settings')" @keydown.enter="emit('navigate', 'settings')" tabindex="0" role="button"><span class="app-card-icon violet"><img :src="settingsAppIcon" alt="" /></span><div><h2>AI 模型配置</h2><p>查看文本/生图服务商、模型连接与凭据状态。</p></div><span class="app-card-arrow"><img :src="forwardIcon" alt="" /></span></article>
         <article class="app-card app-card-action" @click="emit('navigate', 'tasks')" @keydown.enter="emit('navigate', 'tasks')" tabindex="0" role="button"><span class="app-card-icon cyan"><img :src="tasksAppIcon" alt="" /></span><div><h2>AI 任务中心</h2><p>查看 TaskRunner 中真实任务与运行状态。</p></div><span class="app-card-arrow"><img :src="forwardIcon" alt="" /></span></article>
       </div>
     </template>

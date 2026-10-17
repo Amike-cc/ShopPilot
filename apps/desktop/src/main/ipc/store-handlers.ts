@@ -96,8 +96,9 @@ export function registerStoreHandlers(): void {
       if (!parsed.success) return invalidInput(requestId, parsed.error.issues)
       const store = StoreManager.createStore(parsed.data)
       
-      // TODO: 创建 browser_profile（§8.1 步骤 3）
-      // TODO: 如果配置代理，执行连接测试（§8.1 步骤 5）
+      // §8.1 步骤 3（创建 browser_profile）已在 StoreManager.createStore 的同一事务内完成
+      // （ensureProfileForStore），不再由 IPC 层补写；建店入参本就不含代理，
+      // §8.1 步骤 5 的代理连接测试发生在 proxy:bind（proxy-backup-handlers 的绑定体检）。
       
       return success(store, requestId)
     } catch (err: any) {

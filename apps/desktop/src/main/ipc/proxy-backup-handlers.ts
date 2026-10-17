@@ -71,7 +71,10 @@ export function registerProxyAndBackupHandlers(): void {
   handle(IPC_CHANNELS.PROXY_TEST, async (_e: IpcMainInvokeEvent, input: { proxyDraft: any; proxyId?: string }): Promise<IPCResult> => {
     const requestId = rid()
     const parsed = proxyTestInputSchema.safeParse(input)
-    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理参数不合法', requestId)
+    // 代理草稿的结构/端口/协议属于代理域校验。统一返回 PROXY_INVALID，
+    // 让 UI 与运行时 assertValidDraft 使用同一错误契约（此前 Zod 先拦截时
+    // 返回 INVALID_ARGUMENT，导致 99999 端口/ftp 类型在实际接口上与文档不一致）。
+    if (!parsed.success) return err(ERROR_CODES.PROXY_INVALID.code, ERROR_CODES.PROXY_INVALID.message, requestId)
     try {
       const result = await ProxyManager.testProxyAsync(parsed.data.proxyDraft, { proxyId: parsed.data.proxyId })
       return ok(result, requestId)
@@ -83,7 +86,7 @@ export function registerProxyAndBackupHandlers(): void {
   handle(IPC_CHANNELS.PROXY_CREATE, async (_e: IpcMainInvokeEvent, input: { draft: any; username?: string; password?: string }): Promise<IPCResult> => {
     const requestId = rid()
     const parsed = proxyCreateInputSchema.safeParse(input)
-    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理参数不合法', requestId)
+    if (!parsed.success) return err(ERROR_CODES.PROXY_INVALID.code, ERROR_CODES.PROXY_INVALID.message, requestId)
     try {
       return ok(ProxyManager.createProxy(parsed.data.draft, parsed.data.username, parsed.data.password), requestId)
     } catch (e: any) {
@@ -103,7 +106,7 @@ export function registerProxyAndBackupHandlers(): void {
   handle(IPC_CHANNELS.PROXY_UPDATE, async (_e: IpcMainInvokeEvent, input: { proxyId: string; patch: any }): Promise<IPCResult> => {
     const requestId = rid()
     const parsed = proxyUpdateInputSchema.safeParse(input)
-    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, '代理参数不合法', requestId)
+    if (!parsed.success) return err(ERROR_CODES.PROXY_INVALID.code, ERROR_CODES.PROXY_INVALID.message, requestId)
     try {
       return ok(await ProxyManager.updateProxy(parsed.data.proxyId, parsed.data.patch), requestId)
     } catch (e: any) {

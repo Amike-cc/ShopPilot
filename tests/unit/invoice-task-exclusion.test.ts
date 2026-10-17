@@ -93,9 +93,11 @@ describe('后台采集不计入任务的各个口径', () => {
     expect(TASK_PAGE).toMatch(/visibleTasks = computed\(\(\) => ws\.tasks/)
   })
 
-  it('概览：待办任务卡与工具栏红点都不含后台采集任务', () => {
+  it('概览：待办任务卡与工具栏通知红点都不含后台采集任务', () => {
     expect(DASHBOARD).toMatch(/pendingTasks = computed\([\s\S]{0,240}?isBackgroundCollectTask/)
-    expect(DASHBOARD).toMatch(/activeTaskCount = computed\([\s\S]{0,320}?isBackgroundCollectTask/)
+    // 2026-10-17：工具栏红点改由通知中心统一驱动（进行中/待确认/失败/客服未读）。
+    // 通知数据同样必须排除后台采集任务，否则发票/涉税采集会把红点一直点亮。
+    expect(DASHBOARD).toMatch(/notificationTasks = computed\([\s\S]{0,400}?isBackgroundCollectTask/)
   })
 
   it('浏览器右栏「任务中心 → 任务列表」同样排除（只取 6 条，不排就被挤出去）', () => {

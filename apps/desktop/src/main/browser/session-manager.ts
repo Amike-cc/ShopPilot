@@ -23,6 +23,7 @@ import { parseUaClientHints, refreshFingerprintTargets } from './fingerprint-inj
 import { getStore, listStores } from '../stores/store-manager'
 import { partitionDirName, sumDirectorySize } from './partition-usage'
 import { buildFallbackUserAgent } from './ua-fallback'
+import { applyToSession as applyExtensionsToSession, forgetSession as forgetExtensionSession } from '../services/extension-manager'
 
 /**
  * 改写 UA-CH 客户端提示请求头，使之与自定义 User-Agent 成对一致（§4.3）。
@@ -394,7 +395,7 @@ export async function waitForStoreSessionReady(storeId: string): Promise<void> {
 /**
  * 配置 session 的基本设置
  */
-function configureSession(sess: Session, storeId: string): Promise<void> {
+async function configureSession(sess: Session, storeId: string): Promise<void> {
   // 设置 User-Agent - 从 browser_profiles 读取
   const db = getDatabase()
   const profile = db.prepare(`
@@ -500,7 +501,14 @@ function configureSession(sess: Session, storeId: string): Promise<void> {
     })
   }
 
-  return proxyReady
+  // 浏览器扩展（本地解包，实验性）：必须在首次导航前加载；失败只标记扩展，不阻断店铺打开。
+  await proxyReady
+  try {
+    await applyExtensionsToSession(storeId, sess)
+  } catch (error) {
+    logMain('warn', `[extensions] 应用扩展失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
+  }
+
 }
 
 /**
@@ -746,6 +754,7 @@ export function closeStoreSession(storeId: string, options: CloseStoreSessionOpt
     activeSessions.delete(storeId)
     sessionReady.delete(storeId)
   }
+  if (!customerServiceSessions.has(storeId)) forgetExtensionSession(storeId)
   untrackStoreSession(storeId)
 }
 
@@ -770,6 +779,7 @@ export function closeCustomerServiceSession(storeId: string, options: CloseStore
     customerServiceSessions.delete(storeId)
     customerServiceSessionReady.delete(storeId)
   }
+  if (!activeSessions.has(storeId)) forgetExtensionSession(storeId)
   untrackCustomerServiceSession(storeId)
   for (const listener of customerServiceSessionClosedListeners) {
     try { listener(storeId) } catch { /* 依赖运行时的清理失败不能阻塞店铺删除 */ }

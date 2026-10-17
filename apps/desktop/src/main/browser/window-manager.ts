@@ -91,6 +91,13 @@ let viewport: ViewportBounds = { x: 0, y: 0, width: 0, height: 0 }
 const guestTabs = new Map<number, Tab>()
 /** 注册完成前等待页面句柄的任务/页面工具。 */
 const guestWaiters = new Map<string, Set<(wc: Electron.WebContents | null) => void>>()
+/**
+ * DOM `<webview>` 被 Vue 卸载后，guest 通常会自行销毁。切店/关标签时如果在同一个
+ * 主进程 tick 里直接调用 `webContents.close()`，宿主 Renderer 仍可能持有旧元素，
+ * Electron 44 会在 guest detach 与 DOM teardown 交错时崩掉渲染进程。先解绑状态并
+ * 给宿主一个渲染机会，再兜底关闭仍未销毁的 guest，避免进程泄漏。
+ */
+const pendingGuestCloseTimers = new Map<number, ReturnType<typeof setTimeout>>()
 /** 任务执行期间即使页面未显示也必须保持活动；任务结束后恢复后台节流。 */
 const taskAwakeStores = new Set<string>()
 /** 后台采集借用店铺页面的租约账本：采集结束按需关页面（见 page-lease.ts）。 */
@@ -1005,6 +1012,28 @@ function scheduleLoginDetection(storeId: string, delayMs = 300): void {
   loginDetectionTimers.set(storeId, timer)
 }
 
+function scheduleGuestClose(wc: Electron.WebContents): void {
+  if (wc.isDestroyed()) return
+  const existing = pendingGuestCloseTimers.get(wc.id)
+  if (existing) clearTimeout(existing)
+  // BROWSER_DISPLAY_CHANGED/BROWSER_TAB_UPDATED must reach the host Renderer first so
+  // Vue can remove the corresponding <webview>. The timeout is only a leak guard for
+  // a stale element or a host render that is already recovering.
+  const timer = setTimeout(() => {
+    pendingGuestCloseTimers.delete(wc.id)
+    try { if (!wc.isDestroyed()) wc.close() } catch { /* guest 已由 DOM 卸载 */ }
+  }, 250)
+  if (typeof (timer as any).unref === 'function') (timer as any).unref()
+  pendingGuestCloseTimers.set(wc.id, timer)
+  wc.once('destroyed', () => {
+    const pending = pendingGuestCloseTimers.get(wc.id)
+    if (pending) {
+      clearTimeout(pending)
+      pendingGuestCloseTimers.delete(wc.id)
+    }
+  })
+}
+
 function detachGuestWebContents(tab: Tab, close = true): void {
   const wc = tab.webContents
   if (wc) {
@@ -1014,7 +1043,7 @@ function detachGuestWebContents(tab: Tab, close = true): void {
     tab.guestWebContentsId = undefined
     tab.guestAttached = false
     if (close) {
-      try { if (!wc.isDestroyed()) wc.close() } catch { /* ignore */ }
+      scheduleGuestClose(wc)
     }
   } else {
     tab.guestAttached = false

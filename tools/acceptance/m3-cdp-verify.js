@@ -289,16 +289,25 @@ async function main() {
 
   /** 通过 UI 点击打开店铺（渲染 viewport + displayedStoreId，真实用户路径） */
   async function openStoreViaUI(name) {
-    await cdp.evaluate(`setTimeout(() => location.reload(), 30); return true;`)
+    // 用浏览器的 Page.reload 而不是在页面里 setTimeout(location.reload)：后者在导航开始后
+    // 同一 CDP 会话紧接着发的 Runtime.evaluate 会永久不 settle，整套验收卡在 45s 超时
+    // （2026-10-17 连续两次实录；换 Page.reload 后稳定）。
+    await cdp.send('Page.reload')
     await sleep(3500)
-    return cdp.evaluate(`
-      const cards = [...document.querySelectorAll('.store-card')];
-      const c = cards.find(x => x.textContent.includes(${JSON.stringify(name)}));
-      if (!c) return false;
-      const btn = c.querySelector('.store-action');
-      (btn || c).click();
-      return true;
-    `)
+    // 冷启动/大库时卡片可能晚于固定等待：有界轮询到它出现再点击。
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const opened = await cdp.evaluate(`
+        const cards = [...document.querySelectorAll('.store-card')];
+        const c = cards.find(x => x.textContent.includes(${JSON.stringify(name)}));
+        if (!c) return false;
+        const btn = c.querySelector('.store-action');
+        (btn || c).click();
+        return true;
+      `)
+      if (opened) return true
+      await sleep(500)
+    }
+    return false
   }
 
   const s1 = await api.storeCreate({ name: 'M3店铺一', platform: '拼多多', adminUrl: BASE + '/orders' })

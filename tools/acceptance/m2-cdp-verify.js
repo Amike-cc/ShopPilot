@@ -65,8 +65,17 @@ function startAuthProxy() {
     const decoded = Buffer.from(b64, 'base64').toString('utf8')
     if (decoded === 'alice:proxy-pass-9x') {
       stats.sawAuthed++
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-      res.end('<html><head><title>PROXIED-407-OK</title></head><body>proxied</body></html>')
+      // 同一台本地代理同时服务两条验收路径：页面导航需要 HTML 标题，
+      // proxy:test 需要可解析的出口 IP。按绝对 URI 区分并返回确定性 JSON，
+      // 让体检不依赖公网 api.ipify.org。
+      const isEcho = String(req.url || '').includes('api.ipify.org')
+      if (isEcho) {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end('{"ip":"127.0.0.1"}')
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end('<html><head><title>PROXIED-407-OK</title></head><body>proxied</body></html>')
+      }
     } else {
       stats.sawBad++
       res.writeHead(407, { 'Proxy-Authenticate': 'Basic realm="shopilot-m2"', 'Content-Length': '0' })
@@ -119,7 +128,7 @@ async function main() {
   const badType = await cdp.evaluate(`return await window.shopilot.proxy.create({ type:'ftp', host:'127.0.0.1', port: 21 });`)
   check('非法类型被拒', badType.ok === false && badType.error.code === 'PROXY_INVALID')
 
-  const p1 = await cdp.evaluate(`return await window.shopilot.proxy.create({ type:'http', host:'127.0.0.1', port: ${CDP_PORT}, label:'体检目标' }, 'alice', 'proxy-pass-9x');`)
+  const p1 = await cdp.evaluate(`return await window.shopilot.proxy.create({ type:'http', host:'127.0.0.1', port: ${proxyPort}, label:'体检目标' }, 'alice', 'proxy-pass-9x');`)
   check('proxy:create 成功且含凭据引用', p1.ok === true && p1.data.hasCredential === true && p1.data.id.startsWith('proxy_'), JSON.stringify({ id: p1.data?.id, hc: p1.data?.hasCredential }))
   const p1Id = p1.data.id
 
@@ -130,7 +139,7 @@ async function main() {
   const listRes = await cdp.evaluate(`return await window.shopilot.proxy.list();`)
   check('proxy:list 返回 2 条', listRes.ok && listRes.data.length === 2)
 
-  const t1 = await cdp.evaluate(`return await window.shopilot.proxy.test({ type:'http', host:'127.0.0.1', port: ${CDP_PORT} }, ${JSON.stringify(p1Id)});`)
+  const t1 = await cdp.evaluate(`return await window.shopilot.proxy.test({ type:'http', host:'127.0.0.1', port: ${proxyPort} }, ${JSON.stringify(p1Id)});`)
   check('proxy:test TCP 可达 ok + 延迟', t1.ok && t1.data.ok === true && typeof t1.data.latencyMs === 'number', JSON.stringify(t1.data))
 
   const t2 = await cdp.evaluate(`return await window.shopilot.proxy.test({ type:'socks5', host:'127.0.0.1', port: 45999 }, ${JSON.stringify(p2Id)});`)

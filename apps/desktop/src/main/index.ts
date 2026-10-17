@@ -31,6 +31,7 @@ import { stopSalesMetricsScheduler } from './sales-metrics/sales-metrics-schedul
 import { registerTaskHandlers } from './ipc/task-handlers'
 import { registerSessionAndSecurityHandlers } from './ipc/session-security-handlers'
 import { registerMaintenanceHandlers } from './ipc/maintenance-handlers'
+import { registerExtensionHandlers } from './ipc/extension-handlers'
 import { registerUpdateHandlers } from './ipc/update-handlers'
 import { registerAiHandlers } from './ipc/ai-handlers'
 import { registerAgentHandlers } from './ipc/agent-handlers'
@@ -46,7 +47,7 @@ import { verifyStoreFingerprint, registerFingerprintTarget, unregisterFingerprin
 import { createStore, deleteStorePermanent, getStore, listStores } from './stores/store-manager'
 import { updateProfile } from './stores/profile-manager'
 import { assertNavigableUrl } from '@shared/navigation'
-import { openStoreBrowser, closeStoreBrowser, getStoreTabs } from './browser/window-manager'
+import { openStoreBrowser, closeStoreBrowser, getStoreTabs, waitForTabWebContents } from './browser/window-manager'
 import { startSessionPersistence } from './services/session-persistence'
 import { latestBackupFileOnDisk, recoverDatabaseFromLatestBackup } from './services/backup-manager'
 import { migrateLegacyAgentMemoryFilesToRoot, migrateLegacyMemoryRoot } from './services/agent-memory'
@@ -81,9 +82,29 @@ async function runFingerprintAutotest(): Promise<void> {
     const tabs = getStoreTabs(store.id)
     report.steps.push('browser-opened tabs=' + tabs.length)
     console.log('[fp-autotest] browser opened, tabs =', tabs.length)
-    // 等 dom-ready + 注入 + 时区 CDP 应用
-    await new Promise(r => setTimeout(r, 2500))
-    report.items = await verifyStoreFingerprint(store.id)
+    // 等真实 DOM <webview> guest 注册完成。固定 sleep 会在慢机器/冷启动时
+    // 早于 registerFingerprintTarget，导致自检读到 about:blank 的宿主值。
+    const firstTab = getStoreTabs(store.id)[0]
+    if (!firstTab) throw new Error('FP_AUTOTEST_NO_TAB')
+    try {
+      await waitForTabWebContents(store.id, firstTab.id, 15000)
+      report.steps.push('guest-registered')
+    } catch (error) {
+      report.steps.push('guest-registration-failed:' + String((error as Error)?.message || error).slice(0, 160))
+    }
+
+    // 页面脚本注入与 guest 注册是异步的；短轮询只等待真实验证结果，
+    // 不把“固定等够了”误当成“注入已完成”。
+    const verifyDeadline = Date.now() + 15000
+    let lastItems: any[] = []
+    while (Date.now() < verifyDeadline) {
+      lastItems = await verifyStoreFingerprint(store.id)
+      const required = new Set(['userAgent', 'language', 'timezone', 'screen', 'hardwareConcurrency', 'webglVendor', 'webglRenderer'])
+      const requiredItems = lastItems.filter(item => required.has(item.field))
+      if (requiredItems.length === required.size && requiredItems.every(item => item.state === 'verified')) break
+      await new Promise(r => setTimeout(r, 250))
+    }
+    report.items = lastItems
     console.log('[fp-autotest] verified items =', report.items.length)
     closeStoreBrowser(store.id)
     deleteStorePermanent(store.id)
@@ -526,6 +547,7 @@ async function initialize(): Promise<void> {
     registerSessionAndSecurityHandlers()
   // 缓存清理与软件自检（设置中心「数据与维护」）
   registerMaintenanceHandlers()
+  registerExtensionHandlers()
     registerUpdateHandlers()
     registerAiHandlers()
     registerAgentHandlers()

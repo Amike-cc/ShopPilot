@@ -11,7 +11,9 @@ const os = require('os')
 const http = require('http')
 
 const ROOT = path.resolve(__dirname, '../..')
-const APP = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
+const { resolveApp, appArgs } = require('./app-launch')
+const APP_CONFIG = resolveApp(ROOT)
+const APP = APP_CONFIG.executable
 const PORT = Number(process.env.SHOPILOT_SETTINGS_CDP_PORT || 9238)
 const USER_DATA = path.join(os.tmpdir(), `shopilot-settings-${Date.now()}`)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -118,8 +120,8 @@ async function main() {
     await new Promise(resolve => fixture.server.listen(0, '127.0.0.1', resolve))
     const fixtureBase = `http://127.0.0.1:${fixture.server.address().port}`
     fs.mkdirSync(USER_DATA, { recursive: true })
-    app = spawn(APP, [ROOT, '--no-sandbox', `--remote-debugging-port=${PORT}`, `--user-data-dir=${USER_DATA}`, '--disable-features=CalculateNativeWinOcclusion'], {
-      stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'production', SHOPPILOT_TEST_AUTOCONFIRM: '1' }
+    app = spawn(APP, appArgs(ROOT, APP_CONFIG, { port: PORT, userData: USER_DATA, extra: ['--disable-features=CalculateNativeWinOcclusion'] }), {
+      stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'production', SHOPILOT_TEST_AUTOCONFIRM: '1', SHOPILOT_ACCEPTANCE: '1' }
     })
     app.stdout.on('data', chunk => { appLog += chunk.toString() })
     app.stderr.on('data', chunk => { appLog += chunk.toString() })
@@ -139,9 +141,20 @@ async function main() {
     `)
 
     const openSettings = async tab => cdp.eval(`
-      if (!document.querySelector('[data-test="settings-dialog"]')) document.querySelector('[data-test="settings-open-btn"]')?.click();
-      await new Promise(r=>setTimeout(r,500));
-      ${tab ? `document.querySelector('[data-test="settings-tab-${tab}"]')?.click(); await new Promise(r=>setTimeout(r,500));` : ''}
+      // 打包版冷启动时设置页是异步挂载的，固定 500ms 会在慢机器上抢跑；
+      // 改为有界轮询：入口按钮可重复点（已打开时无副作用），页签出现后再点。
+      for (let i = 0; i < 40 && !document.querySelector('[data-test="settings-dialog"]'); i++) {
+        document.querySelector('[data-test="settings-open-btn"]')?.click();
+        await new Promise(r=>setTimeout(r,150));
+      }
+      ${tab ? `
+      for (let i = 0; i < 40; i++) {
+        const el = document.querySelector('[data-test="settings-tab-${tab}"]');
+        if (el) { el.click(); break }
+        await new Promise(r=>setTimeout(r,100));
+      }
+      for (let i = 0; i < 40 && !document.querySelector('[data-test="settings-${tab}"]'); i++) await new Promise(r=>setTimeout(r,100));
+      ` : ''}
       return !!document.querySelector('[data-test="settings-dialog"]')
     `)
     const setInput = (selector, value) => cdp.eval(`
@@ -270,14 +283,14 @@ async function main() {
 
     await openSettings('about')
     const about = await cdp.eval(`return {version:document.querySelector('[data-test="about-version"]')?.textContent||'', channel:document.querySelector('[data-test="update-channel"]')?.value, auto:document.querySelector('[data-test="update-autocheck"]')?.checked, message:document.querySelector('[data-test="update-message"]')?.textContent||'', check:!!document.querySelector('[data-test="update-check-btn"]')}`)
-    check('关于软件页加载版本、更新偏好和开发环境状态', /^v/.test(about.version) && about.channel === 'stable' && about.auto === false && about.check && /开发环境/.test(about.message), JSON.stringify(about))
+    check('关于软件页加载版本、更新偏好和开发环境状态', /^v/.test(about.version) && about.channel === 'stable' && about.auto === false && about.check && /开发环境|可以检查更新|免安装/.test(about.message), JSON.stringify(about))
     await cdp.eval(`const s=document.querySelector('[data-test="update-channel"]'); s.value='beta'; s.dispatchEvent(new Event('change',{bubbles:true})); await new Promise(r=>setTimeout(r,500)); const a=document.querySelector('[data-test="update-autocheck"]'); a.click(); await new Promise(r=>setTimeout(r,500)); return true`)
     const updatePrefs = await cdp.eval(`return {channel:(await window.shopilot.settings.get('update.channel')).data.value, auto:(await window.shopilot.settings.get('update.autoCheck')).data.value}`)
     check('关于软件页更新通道与自动检查偏好可保存', updatePrefs.channel === 'beta' && updatePrefs.auto === true, JSON.stringify(updatePrefs))
     await cdp.eval(`const s=document.querySelector('[data-test="update-channel"]'); s.value='stable'; s.dispatchEvent(new Event('change',{bubbles:true})); await new Promise(r=>setTimeout(r,350)); const a=document.querySelector('[data-test="update-autocheck"]'); a.click(); await new Promise(r=>setTimeout(r,350)); return true`)
     await cdp.eval(`document.querySelector('[data-test="update-check-btn"]')?.click(); await new Promise(r=>setTimeout(r,850)); return true`)
     const updateStatus = await cdp.eval(`return {message:document.querySelector('[data-test="update-message"]')?.textContent||'', state:(await window.shopilot.update.status()).data?.state}`)
-    check('关于软件页检查更新显示真实开发环境结果', /开发环境|已是最新|失败|检查/.test(updateStatus.message), JSON.stringify(updateStatus))
+    check('关于软件页检查更新显示真实运行环境结果', /开发环境|已是最新|失败|检查|免安装|更新配置/.test(updateStatus.message), JSON.stringify(updateStatus))
 
     // ---------- 安全页签：应用锁完整链路（隔离环境内自建、测完自回收） ----------
     await openSettings('security')
@@ -381,13 +394,29 @@ async function main() {
     }
     check('恢复备份：创建安全快照（列表 +1）且应用保持可用', restored?.count >= 2 && restored?.storeListOk === true && /已恢复备份/.test(restored?.msg || ''), JSON.stringify(restored))
 
-    const tabs = ['entry', 'ai', 'security', 'maintenance', 'about']
+    const tabs = ['entry', 'ai', 'security', 'extensions', 'maintenance', 'about']
     const overflows = []
     for (const tab of tabs) {
       await openSettings(tab)
       overflows.push(await cdp.eval(`const e=document.querySelector('.settings-content'); const p=document.querySelector('[data-test="settings-dialog"]'); return {tab:${JSON.stringify(tab)}, content:e?e.scrollWidth>e.clientWidth+1:true, modal:p?p.scrollWidth>p.clientWidth+1:true, doc:document.documentElement.scrollWidth>document.documentElement.clientWidth+1}`))
     }
-    check('五个设置页签无横向溢出', overflows.every(x => !x.content && !x.modal && !x.doc), JSON.stringify(overflows))
+    check('六个设置页签无横向溢出', overflows.every(x => !x.content && !x.modal && !x.doc), JSON.stringify(overflows))
+
+    // 浏览器扩展页签（2026-10-17）：空状态如实说明只支持本地解包目录；总开关默认关闭
+    await openSettings('extensions')
+    const extensionShape = await cdp.eval(`
+      return {
+        pane: !!document.querySelector('[data-test="settings-extensions"]'),
+        importBtn: !!document.querySelector('[data-test="extensions-import"]'),
+        master: document.querySelector('[data-test="extensions-master"]')?.getAttribute('aria-pressed'),
+        empty: !!document.querySelector('[data-test="extensions-empty"]'),
+        error: document.querySelector('[data-test="extensions-error"]')?.textContent || ''
+      }
+    `)
+    check('浏览器扩展页签：导入入口 + 总开关默认关闭 + 空状态如实说明',
+      extensionShape.pane === true && extensionShape.importBtn === true && extensionShape.master === 'false' &&
+        extensionShape.empty === true && !extensionShape.error,
+      JSON.stringify(extensionShape))
 
     const report = { status: checks.every(x => x.ok) ? 'passed' : 'failed', checks, fixture: fixture.stats(), finishedAt: new Date().toISOString() }
     fs.mkdirSync(path.join(ROOT, 'artifacts', 'settings'), { recursive: true })

@@ -17,10 +17,11 @@ const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/Dashboard
 const VIEW = read('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue')
 
 describe('设置中心页签结构', () => {
-  it('五个页签：平台入口 / AI 配置 / 安全 / 数据与维护 / 关于软件', () => {
+  it('六个页签：平台入口 / AI 配置 / 安全 / 浏览器扩展 / 数据与维护 / 关于软件', () => {
     expect(PAGE).toContain("{ key: 'entry', label: '平台入口'")
     expect(PAGE).toContain("{ key: 'ai', label: 'AI 配置'")
     expect(PAGE).toContain("{ key: 'security', label: '安全'")
+    expect(PAGE).toContain("{ key: 'extensions', label: '浏览器扩展'")
     expect(PAGE).toContain("{ key: 'maintenance', label: '数据与维护'")
     expect(PAGE).toContain("{ key: 'about', label: '关于软件'")
     // 旧的独立「配置 / 达人广场」页签已合并，选择器不再存在
@@ -156,8 +157,8 @@ describe('数据与维护页签（自侧栏迁入）', () => {
 describe('接线：环境面板 → 设置中心页签', () => {
   it('DashboardView 白名单映射页签，未知值回落「平台入口」', () => {
     expect(VIEW).toContain('@open-settings="openSettingsTab"')
-    expect(VIEW).toMatch(/const SETTINGS_TABS: SettingsTab\[\] = \['entry', 'ai', 'security', 'maintenance', 'about'\]/)
+    expect(VIEW).toMatch(/const SETTINGS_TABS: SettingsTab\[\] = \['entry', 'ai', 'security', 'extensions', 'maintenance', 'about'\]/)
     expect(VIEW).toMatch(/function openSettingsTab[\s\S]{0,220}navigateTo\('settings'\)/)
-    expect(VIEW).toContain("type SettingsTab = 'entry' | 'ai' | 'security' | 'maintenance' | 'about'")
+    expect(VIEW).toContain("type SettingsTab = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'")
   })
 })

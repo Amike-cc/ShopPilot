@@ -364,6 +364,11 @@ async function main() {
       `)
       return Array.isArray(r) ? r : []
     }
+    // R1 最后停在回收站页签；R2 的新建/状态/复制断言都基于「本地商品」页。
+    // 空回收站时上面的恢复闭环整段跳过，页签不会自己切回来 —— 必须显式复位
+    // （2026-10-17 隔离库实录：状态徽标与复制按钮全部读不到，正是停在回收站页）。
+    await cdp.evaluate(`document.querySelector('[data-test="product-tab-local"]').click(); return true`)
+    await sleep(UI_WAIT + 200)
     await cdp.send('Page.enable') // 幂等：后面两处 window.confirm 需要收到弹窗事件
     // 清理上次运行可能残留的验收产物（标题精确匹配「未命名商品」= 脚本创建的默认标题；
     // purge 服务要求无发布记录——这些新建品不可能有）。残留会污染差值断言（2026-10-15 实录）。
@@ -387,14 +392,43 @@ async function main() {
     const leftovers = await cleanupLeftovers()
     const idsBeforeR2 = await listIds()
     check('R2 前置：在册商品 id 集合已读到', Array.isArray(idsBeforeR2), `count=${idsBeforeR2.length} 残留清理=${leftovers.local + leftovers.trash}`)
-    const restoreSource = await cdp.evaluate(`
+    let restoreSource = await cdp.evaluate(`
       const t = await window.shopilot.products.library.trash({ limit: 1 })
       if (!(t && t.ok && t.data.rows.length)) return null
       const row = t.data.rows[0]
       const r = await window.shopilot.products.library.restore([row.id])
       return r && r.ok ? row.id : null
     `)
-    check('R2 前置：已从回收站恢复一条作复制源', !!restoreSource, `source=${restoreSource ? restoreSource.slice(0, 8) : 'null'}`)
+    // 隔离库（临时 userData）里没有历史回收站数据：本用例必须能自备复制源，
+    // 否则 R2 复制 / R3 批量整段连锁失败（2026-10-17 验收实录：26/37）。
+    // 自备路径与真人一致：新建 → 移入回收站 → 恢复。
+    let seededSource = false
+    if (!restoreSource) {
+      restoreSource = await cdp.evaluate(`
+        // 用可辨识的标题：R3 的导入用标题匹配更新行，默认标题「未命名商品」会与新建空白品重名，
+        // 规划阶段只能如实报冲突（2026-10-17 隔离库实录）。
+        const c = await window.shopilot.products.library.create({ title: '验收复制源' })
+        if (!c || !c.ok) return null
+        const id = c.data.productId
+        // 必须带一个真实价格：R3 的“-10% 改价”用例要求源商品有价可改，
+        // 全空的恢复品会如实报“价格无变化”，用例本身失去意义。
+        const saved = await window.shopilot.products.library.save({
+          productId: id,
+          draft: {
+            title: '验收复制源',
+            variants: [{ spec: [{ name: '规格', value: '默认' }], priceMinor: 10000, stock: 5 }],
+            media: []
+          }
+        })
+        if (!saved || !saved.ok) return null
+        const removed = await window.shopilot.products.library.remove(id)
+        if (!removed || !removed.ok) return null
+        const back = await window.shopilot.products.library.restore([id])
+        return back && back.ok ? id : null
+      `)
+      seededSource = !!restoreSource
+    }
+    check('R2 前置：已从回收站恢复一条作复制源', !!restoreSource, `source=${restoreSource ? restoreSource.slice(0, 8) : 'null'}${seededSource ? '（自备）' : ''}`)
 
     // ① 新建空白商品 → 创建即进编辑器
     await cdp.evaluate(`document.querySelector('[data-test="local-create"]').click(); return true`)
@@ -422,9 +456,16 @@ async function main() {
     const blanksAfter = await findIdsByTitle('未命名商品')
     const blankId = blanksAfter[0] ?? null
     check('R2 新建：列表出现「未命名商品」', !!blankId, `blankId=${blankId ? blankId.slice(0, 8) : 'null'}`)
-    const blankStatus = await cdp.evaluate(`
-      return document.querySelector('[data-test="local-status-${blankId}"]') ? document.querySelector('[data-test="local-status-${blankId}"]').textContent.trim() : null
-    `)
+    // 列表刷新是 IPC → Vue 渲染的异步链路：刚关闭编辑器时行可能还没落到 DOM，
+    // 单次读取会把"尚未渲染"误报成"没有状态徽标"（2026-10-17 实录）。有界轮询。
+    let blankStatus = null
+    for (let i = 0; i < 20; i++) {
+      blankStatus = await cdp.evaluate(`
+        return document.querySelector('[data-test="local-status-${blankId}"]') ? document.querySelector('[data-test="local-status-${blankId}"]').textContent.trim() : null
+      `)
+      if (blankStatus) break
+      await sleep(250)
+    }
     check('R2 新建：状态徽标为「草稿」', blankStatus === '草稿', `status="${blankStatus}"`)
 
     // ② 复制（对恢复出来的源商品做，验证 sha256 复用）
@@ -561,7 +602,9 @@ async function main() {
       const r = await window.shopilot.products.library.list({ limit: 200 })
       if (r && r.ok) {
         for (const row of r.data.rows) {
-          if (row.id !== ${JSON.stringify(r3Source)} && row.title === ${JSON.stringify(r3SourceTitle)}) {
+          // 绝不清掉本用例刚建的两个目标商品（源被自备时标题可能与空白品同名前缀；
+          // 早先只排除源，结果把 r3Blank 一起 purge，后续勾选/改价全报 PRODUCT_NOT_FOUND）
+          if (row.id !== ${JSON.stringify(r3Source)} && row.id !== ${JSON.stringify(r3Blank)} && row.title === ${JSON.stringify(r3SourceTitle)}) {
             await window.shopilot.products.library.remove(row.id)
             await window.shopilot.products.library.purge(row.id)
           }

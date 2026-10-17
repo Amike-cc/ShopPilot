@@ -10,9 +10,11 @@ const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
+const { resolveApp, appArgs } = require('./app-launch')
 
 const root = path.resolve(__dirname, '../..')
-const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
+const app = resolveApp(root)
+const electronExe = app.executable
 const userData = path.join(os.tmpdir(), 'shopilot-m1-test-' + Date.now())
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
@@ -88,34 +90,34 @@ async function main() {
 
   console.log('=== 启动应用（独立测试 userData） ===')
   freeDebugPort(9223)
-  const app = spawn(electronExe, [
-    root,
-    '--no-sandbox',
-    '--remote-debugging-port=9223',
-    '--user-data-dir=' + userData,
+  const appProcess = spawn(electronExe, appArgs(root, app, {
+    port: '9223',
+    userData,
+    extra: [
     // 开发机上常有其他浏览器窗口压在测试窗口上：默认的 Windows 原生遮挡计算会让被遮挡窗口
     // 停止合成（截图/视口测量随之失真）。测试环境专用，产品启动参数不变。
     '--disable-features=CalculateNativeWinOcclusion',
     '--disable-backgrounding-occluded-windows'
-  ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1' } })
+    ]
+  }), { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1' } })
 
   let appLog = ''
   // 只有"收尾前就自己退出"才算异常；收尾时被我们杀掉是正常路径，无条件报 !!! 会被误读成崩溃
   let stopping = false
-  app.stdout.on('data', d => { appLog += d.toString() })
-  app.stderr.on('data', d => { appLog += d.toString() })
-  app.on('exit', (code) => { if (!stopping) console.log('!!! 应用提前退出，code=' + code + '\n日志:\n' + appLog) })
+  appProcess.stdout.on('data', d => { appLog += d.toString() })
+  appProcess.stderr.on('data', d => { appLog += d.toString() })
+  appProcess.on('exit', (code) => { if (!stopping) console.log('!!! 应用提前退出，code=' + code + '\n日志:\n' + appLog) })
 
   let keepFocus = null
   try {
     await waitForCDP('http://127.0.0.1:9223')
     console.log('CDP 就绪，运行 M1 全链路验证（原生 CDP）...')
-    keepFocus = keepAppForeground(app.pid)
+    keepFocus = keepAppForeground(appProcess.pid)
     await sleep(1000)
 
     const e2e = spawn(process.execPath, [path.join(root, 'tools', 'acceptance', 'm1-cdp-verify.js')], {
       stdio: 'inherit',
-      env: { ...process.env, SHOPILOT_CDP_PORT: '9223', SHOPILOT_APP_PID: String(app.pid) }
+      env: { ...process.env, SHOPILOT_CDP_PORT: '9223', SHOPILOT_APP_PID: String(appProcess.pid) }
     })
     const e2eCode = await new Promise(r => e2e.on('exit', r))
 
@@ -124,7 +126,7 @@ async function main() {
   } finally {
     if (keepFocus) clearInterval(keepFocus)
     stopping = true
-    killTree(app)
+    killTree(appProcess)
     await sleep(1000)
   }
 }

@@ -29,9 +29,11 @@ const http = require('http')
 const crypto = require('crypto')
 const os = require('os')
 const path = require('path')
+const { resolveApp, appArgs } = require('./app-launch')
 
 const root = path.resolve(__dirname, '../..')
-const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
+const appConfig = resolveApp(root)
+const electronExe = appConfig.executable
 const CDP_PORT = process.env.SHOPILOT_CUSTOM_CDP_PORT || '9271'
 const results = []
 
@@ -304,12 +306,7 @@ async function main() {
   let app = null
   let ui = null
   try {
-    app = spawn(electronExe, [
-      '.',
-      `--remote-debugging-port=${CDP_PORT}`,
-      '--user-data-dir=' + userData,
-      '--no-sandbox'
-    ], {
+    app = spawn(electronExe, appArgs(root, appConfig, { port: CDP_PORT, userData }), {
       cwd: root,
       env: { ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1', SHOPILOT_DISABLE_CDP_FP: '1' },
       stdio: 'ignore'
@@ -600,6 +597,27 @@ async function main() {
       await ui.eval(`${DOM} await waitFor(() => q('[data-test="custom-editor"]')); return true;`)
     }
 
+    // 拾取接口只对店铺当前活动标签页生效。前面的真实运行验收会让引擎
+    // 为 navigate 创建/切换页面，但为了验证“可见页面语义”，这里必须通过
+    // 真实 Browser API 把本地仿真页对应的标签页激活；不能对隐藏标签页做
+    // 断言，否则会把合法的“只操作活动页”行为误报成拾取失败。
+    const activateInspectTab = async () => {
+      const listed = await ui.eval(`return await window.shopilot.browser.tab.list(${JSON.stringify(storeId)});`)
+      if (!listed?.ok) throw new Error('读取店铺标签页失败: ' + JSON.stringify(listed?.error || listed))
+      const tab = (listed.data?.tabs || []).find(t => String(t.url || '').includes('/inspect'))
+      if (!tab) throw new Error('找不到本地仿真页标签页: ' + inspectUrl)
+      const activated = await ui.eval(`return await window.shopilot.browser.tab.activate(${JSON.stringify(storeId)}, ${JSON.stringify(tab.id)});`)
+      if (!activated?.ok) throw new Error('激活本地仿真页标签页失败: ' + JSON.stringify(activated?.error || activated))
+      const until = Date.now() + 8000
+      while (Date.now() < until) {
+        const state = await ui.eval(`return await window.shopilot.browser.state();`)
+        const current = state?.ok && state.data?.stores?.find(s => s.storeId === storeId)
+        if (current?.activeTabId === tab.id) return tab
+        await sleep(120)
+      }
+      throw new Error('激活标签页后活动页状态未同步: ' + JSON.stringify(tab))
+    }
+
     const addStep = async (type, index, fields) => {
       await ui.eval(`${DOM}
         const item = q('[data-test="custom-palette-${type}"]');
@@ -702,9 +720,22 @@ async function main() {
     const clickCountBeforePick = site.state.clicked
     const targetCenter = `const r = document.querySelector('#do-click').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 };`
     const startPick = async (testId) => {
+      await activateInspectTab()
       await ui.eval(`${DOM} q('[data-test="${testId}"]').click(); return true;`)
       const ready = await waitOnStorePage(inspectUrl, `return !!document.getElementById('__shopilot_pick_mask__') && !!document.getElementById('__shopilot_pick_banner__');`)
-      if (!ready) throw new Error('拾取遮罩未出现: ' + testId)
+      if (!ready) {
+        const diag = await ui.eval(`${DOM}
+          const state = await window.shopilot.browser.state();
+          return {
+            testId: ${JSON.stringify(testId)},
+            pickButtons: Array.from(document.querySelectorAll('[data-test^="custom-pick-"]')).map(e => e.getAttribute('data-test')),
+            pickerMode: !!q('.picker-mode'),
+            toast: document.body.innerText.slice(-600),
+            state: state.ok ? state.data?.stores?.map(s => ({ storeId: s.storeId, activeTabId: s.activeTabId, tabs: s.tabs?.map(t => ({ id: t.id, url: t.url, guestAttached: t.guestAttached })) })) : state.error
+          };
+        `)
+        throw new Error('拾取遮罩未出现: ' + testId + ' diag=' + JSON.stringify(diag))
+      }
     }
     const restoredField = async (testId) => ui.eval(`${DOM}
       const field = await waitFor(() => !q('.picker-mode') && q('[data-test="task-dialog"]')?.getBoundingClientRect().width && q('[data-test="${testId}"]'));

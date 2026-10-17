@@ -1,0 +1,42 @@
+/* 自研插件模板样式：全部走自己的 id/类名，避免影响店铺页原有布局。 */
+#__shopilot_my_extension__ {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  font: 12px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: #1f2430;
+  pointer-events: auto;
+}
+
+#__shopilot_my_extension__ .shopilot-ext-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid #d7dce6;
+  box-shadow: 0 6px 18px rgba(24, 39, 75, 0.12);
+  cursor: pointer;
+  user-select: none;
+}
+
+#__shopilot_my_extension__ .shopilot-ext-badge:hover {
+  border-color: #9aa7bd;
+}
+
+#__shopilot_my_extension__ .shopilot-ext-detail {
+  display: none;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #e6eaf2;
+  box-shadow: 0 6px 18px rgba(24, 39, 75, 0.08);
+  max-width: 260px;
+  word-break: break-all;
+}
+
+#__shopilot_my_extension__ .shopilot-ext-detail.is-open {
+  display: block;
+}

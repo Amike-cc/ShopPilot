@@ -149,6 +149,18 @@ const api = {
     softwareDiagnostics: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.MAINTENANCE_SOFTWARE_DIAGNOSTICS)
   },
 
+  // 浏览器扩展（本地解包，实验性）：导入路径只能由主进程目录选择框产生
+  extensions: {
+    list: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_LIST),
+    import: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_IMPORT),
+    setEnabled: (id: string, enabled: boolean): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SET_ENABLED, { id, enabled }),
+    setMaster: (enabled: boolean): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SET_MASTER, { enabled }),
+    remove: (id: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_REMOVE, { id }),
+    reload: (id: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_RELOAD, { id }),
+    /** 打开扩展目录（不带 id 打开管理根目录），方便自己写插件后直接编辑并重载 */
+    openDir: (id?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_OPEN_DIR, id ? { id } : {})
+  },
+
   // 代理 - §6.3（渲染层可传明文凭据，Main 立即加密保管，绝不回显）
   proxy: {
     test: (proxyDraft: any, proxyId?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.PROXY_TEST, { proxyDraft, proxyId }),

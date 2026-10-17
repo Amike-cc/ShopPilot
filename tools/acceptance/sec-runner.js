@@ -6,9 +6,11 @@ const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
+const { resolveApp, appArgs } = require('./app-launch')
 
 const root = path.resolve(__dirname, '../..')
-const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
+const app = resolveApp(root)
+const electronExe = app.executable
 const PORT = process.env.SHOPILOT_CDP_PORT || '9226'
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
@@ -78,38 +80,45 @@ function keepAppForeground(pid) {
 
 async function main() {
   console.log('=== 安全能力套件（会话包/Cookie/应用锁/代理巡检） ===')
-  const userData = path.join(os.tmpdir(), 'shopilot-sec-test-' + Date.now())
+  // Windows 当前沙箱对 source Electron 写入 %TEMP% 的 profile 偶发拒绝访问；
+  // 源码验收仍使用独立 profile，但放在仓库 artifacts 下。打包版继续使用系统临时目录。
+  const userData = process.env.SHOPILOT_ACCEPTANCE_SOURCE === '1'
+    ? path.join(root, 'sourceprofile-sec-' + Date.now())
+    : path.join(os.tmpdir(), 'shopilot-sec-test-' + Date.now())
   fs.mkdirSync(userData, { recursive: true })
   freeDebugPort(PORT)
-  const app = spawn(electronExe, [
-    root, '--no-sandbox', `--remote-debugging-port=${PORT}`, '--user-data-dir=' + userData,
+  const appProcess = spawn(electronExe, appArgs(root, app, {
+    port: PORT,
+    userData,
     // 开发机上常有其他窗口压在被测窗口上：默认的 Windows 原生遮挡计算会让页面被标成 hidden，
     // 弹层遮挡用例断言的就是 visibilityState，会被环境直接带偏。测试环境专用，产品启动参数不变。
-    '--disable-features=CalculateNativeWinOcclusion',
-    '--disable-backgrounding-occluded-windows'
-  ], {
+    extra: ['--disable-features=CalculateNativeWinOcclusion', '--disable-backgrounding-occluded-windows']
+  }), {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1',
       SHOPILOT_DISABLE_CDP_FP: '1',
       SHOPILOT_TEST_PASSWORD: 'exp0rt-pw-123',
-      SHOPILOT_TEST_AUTOCONFIRM: '1'
+      SHOPILOT_TEST_AUTOCONFIRM: '1',
+      // 验收跑打包版（app-launch）：打包态默认关闭测试钩子，需显式声明验收模式
+      SHOPILOT_ACCEPTANCE: '1'
     }
   })
   let appLog = ''
-  app.stdout.on('data', d => { appLog += d.toString() })
-  app.stderr.on('data', d => { appLog += d.toString() })
-  app.on('exit', code => { if (code) console.log('!!! 应用退出 code=' + code + '\n' + appLog.slice(-2500)) })
+  let stopping = false
+  appProcess.stdout.on('data', d => { appLog += d.toString() })
+  appProcess.stderr.on('data', d => { appLog += d.toString() })
+  appProcess.on('exit', code => { if (code && !stopping) console.log('!!! 应用退出 code=' + code + '\n' + appLog.slice(-2500)) })
 
   let code = 1
   let keepFocus = null
   try {
     await waitForCDP()
-    keepFocus = keepAppForeground(app.pid)
+    keepFocus = keepAppForeground(appProcess.pid)
     await sleep(1000)
     const v = spawn(process.execPath, [path.join(root, 'tools', 'acceptance', 'sec-cdp-verify.js')], {
       stdio: 'inherit',
-      env: { ...process.env, SHOPILOT_CDP_PORT: PORT, SHOPILOT_USERDATA_DIR: userData, SHOPILOT_APP_PID: String(app.pid) }
+      env: { ...process.env, SHOPILOT_CDP_PORT: PORT, SHOPILOT_USERDATA_DIR: userData, SHOPILOT_APP_PID: String(appProcess.pid) }
     })
     code = await new Promise(r => v.on('exit', r))
     if (code !== 0) {
@@ -120,7 +129,8 @@ async function main() {
     console.error('RUNNER_FAIL', e)
   } finally {
     if (keepFocus) clearInterval(keepFocus)
-    killTree(app)
+    stopping = true
+    killTree(appProcess)
     await sleep(1000)
   }
   console.log('\n安全套件: ' + (code === 0 ? 'PASS' : 'FAIL'))

@@ -15,7 +15,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const crypto = require('crypto')
-const { spawn, execSync } = require('child_process')
+const { spawn, spawnSync, execSync } = require('child_process')
 
 const ROOT = path.resolve(__dirname, '../..')
 const LOG_DIR = path.join(ROOT, 'logs')
@@ -24,6 +24,11 @@ const FEED_PORT = 9245
 const FEED_URL = `http://127.0.0.1:${FEED_PORT}/`
 const NEW_VERSION = '9.9.9'
 const APP_VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version
+// 在线更新必须在 NSIS 安装态验收：解包目录没有 resources/app-update.yml，
+// 产品会如实拒绝它。允许调用方传入临时安装目录中的 EXE；没有传入时，
+// 主流程会把当前安装包静默装到独立临时目录后再验收，避免把解包版误当成
+// 可更新版本。
+const APP_OVERRIDE = process.env.SHOPILOT_UPDATE_APP || ''
 
 const items = []
 function record(name, ok, detail) {
@@ -115,10 +120,12 @@ async function attachApp(retries = 30) {
 // ---------- 应用进程 ----------
 let appChild = null
 let userDataDir = ''
+let runtimeAppExe = APP_OVERRIDE
+let ownedInstallDir = ''
 function killTree(pid) { try { execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' }) } catch { /* ignore */ } }
 function spawnApp() {
-  const exe = path.join(ROOT, 'release', 'win-unpacked', 'ShopPilot.exe')
-  if (!fs.existsSync(exe)) fail('release/win-unpacked/ShopPilot.exe 不存在，请先 pnpm dist')
+  const exe = runtimeAppExe || path.join(ROOT, 'release', 'win-unpacked', 'ShopPilot.exe')
+  if (!fs.existsSync(exe)) fail(`${exe} 不存在，请先 pnpm dist`)
   appChild = spawn(exe, [`--remote-debugging-port=${CDP_PORT}`, '--no-sandbox', `--user-data-dir=${userDataDir}`], {
     env: { ...process.env, SHOPPILOT_UPDATE_FEED: FEED_URL },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -128,6 +135,21 @@ function spawnApp() {
   appChild.on('exit', (code) => { console.log(`[app] exited code=${code}`) })
 }
 function killApp() { if (appChild && appChild.pid) { killTree(appChild.pid); appChild = null } }
+
+function installRuntimeApp(setupExe) {
+  if (runtimeAppExe) {
+    if (!fs.existsSync(runtimeAppExe)) fail(`SHOPILOT_UPDATE_APP 不存在: ${runtimeAppExe}`)
+    return
+  }
+  ownedInstallDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shopilot-update-installed-'))
+  const result = spawnSync(setupExe, ['/S', `/D=${ownedInstallDir}`], { stdio: 'ignore', timeout: 5 * 60 * 1000 })
+  runtimeAppExe = path.join(ownedInstallDir, 'ShopPilot.exe')
+  if (result.error || result.status !== 0 || !fs.existsSync(runtimeAppExe)) {
+    fail(`当前安装包无法静默安装到更新验收目录: ${ownedInstallDir}`)
+  }
+  const updateConfig = path.join(ownedInstallDir, 'resources', 'app-update.yml')
+  if (!fs.existsSync(updateConfig)) fail(`安装态缺少 resources/app-update.yml: ${updateConfig}`)
+}
 
 async function pollStatus(c, predicate, timeoutMs, label) {
   const t0 = Date.now(); let last = null
@@ -148,6 +170,7 @@ async function main() {
 
   const setupExe = path.join(ROOT, 'release', `ShopPilot-Setup-${APP_VERSION}.exe`)
   if (!fs.existsSync(setupExe)) fail(`${setupExe} 不存在，请先 pnpm dist`)
+  installRuntimeApp(setupExe)
 
   feedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shopilot-feed-'))
   userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shopilot-update-userdata-'))
@@ -273,6 +296,9 @@ async function main() {
     await sleep(1500)
     try { fs.rmSync(userDataDir, { recursive: true, force: true }) } catch { /* ignore */ }
     try { fs.rmSync(feedDir, { recursive: true, force: true }) } catch { /* ignore */ }
+    if (ownedInstallDir) {
+      try { fs.rmSync(ownedInstallDir, { recursive: true, force: true }) } catch { /* ignore */ }
+    }
   }
 }
 main()

@@ -13,6 +13,7 @@ import type {
   SalesMetricsRunListResult
 } from '@shared/contracts/sales-metrics'
 import type { AgentUiState } from '@shared/schemas/agent'
+import type { BrowserExtensionImportResult, BrowserExtensionListResult, BrowserExtensionOpenDirResult } from '@shared/contracts/extensions'
 
 export interface TabInfo {
   id: string
@@ -127,6 +128,15 @@ declare global {
         clearAppCache: () => Promise<IPCResult>
         clearBrowserCache: () => Promise<IPCResult>
         softwareDiagnostics: () => Promise<IPCResult>
+      }
+      extensions: {
+        list: () => Promise<IPCResult<BrowserExtensionListResult>>
+        import: () => Promise<IPCResult<BrowserExtensionImportResult>>
+        setEnabled: (id: string, enabled: boolean) => Promise<IPCResult<BrowserExtensionListResult>>
+        setMaster: (enabled: boolean) => Promise<IPCResult<BrowserExtensionListResult>>
+        remove: (id: string) => Promise<IPCResult<BrowserExtensionListResult>>
+        reload: (id: string) => Promise<IPCResult<BrowserExtensionListResult>>
+        openDir: (id?: string) => Promise<IPCResult<BrowserExtensionOpenDirResult>>
       }
       proxy: {
         test: (proxyDraft: any, proxyId?: string) => Promise<IPCResult>

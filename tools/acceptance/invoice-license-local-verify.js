@@ -15,7 +15,9 @@ const path = require('path')
 const { DatabaseSync } = require('node:sqlite')
 
 const root = path.resolve(__dirname, '../..')
-const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
+const { resolveApp, appArgs } = require('./app-launch')
+const appConfig = resolveApp(root)
+const electronExe = appConfig.executable
 const CDP_PORT = process.env.SHOPILOT_INVOICE_LICENSE_CDP_PORT || '9263'
 const results = []
 
@@ -195,14 +197,11 @@ async function main() {
   let app = null
   let ui = null
   try {
-    app = spawn(electronExe, [
-      root,
-      '--no-sandbox',
-      `--remote-debugging-port=${CDP_PORT}`,
-      '--user-data-dir=' + userData,
-      '--disable-features=CalculateNativeWinOcclusion',
-      '--disable-backgrounding-occluded-windows'
-    ], {
+    app = spawn(electronExe, appArgs(root, appConfig, {
+      port: CDP_PORT,
+      userData,
+      extra: ['--disable-features=CalculateNativeWinOcclusion', '--disable-backgrounding-occluded-windows']
+    }), {
       cwd: root,
       stdio: 'ignore',
       env: { ...process.env, NODE_ENV: 'production', SHOPILOT_DISABLE_CDP_FP: '1' }

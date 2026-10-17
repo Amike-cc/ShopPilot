@@ -325,10 +325,18 @@ export const IPC_CHANNELS = {
   MAINTENANCE_CLEAR_BROWSER_CACHE: 'maintenance:clearBrowserCache',
   MAINTENANCE_SOFTWARE_DIAGNOSTICS: 'maintenance:softwareDiagnostics',
 
+  // 浏览器扩展（本地解包，实验性；2026-10-17）
+  EXTENSION_LIST: 'extensions:list',
+  EXTENSION_IMPORT: 'extensions:import',
+  EXTENSION_SET_ENABLED: 'extensions:setEnabled',
+  EXTENSION_SET_MASTER: 'extensions:setMaster',
+  EXTENSION_REMOVE: 'extensions:remove',
+  EXTENSION_RELOAD: 'extensions:reload',
+  EXTENSION_OPEN_DIR: 'extensions:openDir',
+
   // 窗口装饰 - §17（titleBarStyle:'hidden' 融合顶栏：右上角原生窗口按钮
   // overlay 颜色需随 UI 状态切换 —— 欢迎页/工作台/应用锁三种底色）
-  WINDOW_SET_TITLEBAR_OVERLAY: 'window:setTitlebarOverlay'
-  ,
+  WINDOW_SET_TITLEBAR_OVERLAY: 'window:setTitlebarOverlay',
   // 软件更新
   UPDATE_STATUS: 'update:status',
   UPDATE_CHECK: 'update:check',

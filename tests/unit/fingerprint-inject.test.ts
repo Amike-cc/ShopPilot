@@ -115,6 +115,30 @@ describe('注入脚本真跑：值改对了，而且不像被改过', () => {
     expect(tiny.screen.availHeight).toBeGreaterThanOrEqual(1)
   })
 
+  it('视口字段跟随窗口实时变化（回归：2026-10-17 收起侧栏后 innerWidth 仍是旧宽度）', () => {
+    // 模拟真实 Window：innerWidth 是可变 accessor；注入后必须仍返回实时值，
+    // 不能把 document-start 那一刻的宽度固化成常量（否则响应式页面永不回流）。
+    let width = 778
+    let height = 706
+    const win: Record<string, unknown> = {}
+    Object.defineProperty(win, 'innerWidth', { configurable: true, get: () => width })
+    Object.defineProperty(win, 'innerHeight', { configurable: true, get: () => height })
+    Object.defineProperty(win, 'outerWidth', { configurable: true, get: () => 1416 })
+    Object.defineProperty(win, 'outerHeight', { configurable: true, get: () => 908 })
+    Object.defineProperty(win, 'devicePixelRatio', { configurable: true, get: () => 1.25 })
+    const script = buildInjectScript(PROFILE as never)
+    delete (globalThis as unknown as Record<string, unknown>).__fpReady
+    new Function('navigator', 'screen', 'window', script)({}, {}, win)
+    expect(win.innerWidth).toBe(778)
+    expect(win.devicePixelRatio).toBe(1.25)
+    width = 498
+    height = 640
+    expect(win.innerWidth).toBe(498)
+    expect(win.innerHeight).toBe(640)
+    // 宿主窗口宽度不随 webview 容器变化，仍取真实值
+    expect(win.outerWidth).toBe(1416)
+  })
+
   it('getter 伪装成原生：toString 不许暴露被改写的事实', () => {
     const { navigator, screen } = runScript(PROFILE)
     const uaGetter = Object.getOwnPropertyDescriptor(navigator, 'userAgent')!.get as () => string

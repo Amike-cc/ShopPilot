@@ -156,10 +156,19 @@
           <button type="button" class="toolbar-datetime" title="时间取自本机系统时钟" @click="showNotice('时间取自本机系统时钟；采集周期与调用记录都以它为准')">
             <img class="dt-icon" :src="dateIcon" alt="" />{{ nowLabel }}<img class="dt-caret" :src="caretDownIcon" alt="" />
           </button>
-          <button type="button" class="toolbar-icon-button" title="通知" @click="showNotice('通知中心暂未接入独立页面')">
-            <img class="toolbar-action-icon" :src="notificationIcon" alt="" />
-            <i v-if="activeTaskCount" class="notification-dot" aria-label="有进行中的任务"></i>
-          </button>
+          <div class="notification-anchor">
+            <button type="button" class="toolbar-icon-button" data-test="notification-bell" :aria-expanded="notificationOpen" title="通知" @click="notificationOpen = !notificationOpen">
+              <img class="toolbar-action-icon" :src="notificationIcon" alt="" />
+              <i v-if="notificationCount" class="notification-dot" :aria-label="`有 ${notificationCount} 条通知`"></i>
+            </button>
+            <div v-if="notificationOpen" class="notification-center" data-test="notification-center" role="dialog" aria-label="通知中心">
+              <header><strong>通知</strong><span>{{ notificationCount }} 条</span></header>
+              <div v-if="!notifications.length" class="notification-empty" data-test="notification-empty">暂无通知：进行中的任务、待确认任务、24 小时内的失败任务与客服未读会出现在这里。</div>
+              <button v-for="item in notifications" :key="item.id" type="button" class="notification-item" :class="'tone-' + item.tone" :data-test="'notification-item-' + item.id" @click="runNotification(item)">
+                <strong>{{ item.title }}</strong><span>{{ item.detail }}</span>
+              </button>
+            </div>
+          </div>
           <button type="button" class="toolbar-icon-button" title="帮助（Ctrl+K 打开命令面板）" @click="showNotice('按 Ctrl+K 打开命令面板；店铺、任务与设置入口在左栏与各页面内')"><img :src="helpIcon" alt="" /></button>
           <span class="toolbar-avatar" aria-hidden="true" title="ShopPilot Pro">SP</span>
         </div>
@@ -283,10 +292,10 @@
             <section id="quick-start" class="ov-card">
               <div class="ov-card-head"><div class="ov-card-title"><h2>快捷操作</h2><span>常用能力一键直达</span></div></div>
               <div class="shortcut-grid">
-                <article v-for="tile in quickActions" :key="tile.key" :class="['shortcut-tile', `tone-${tile.tone}`, { disabled: !tile.available }]">
+                <article v-for="tile in quickActions" :key="tile.key" :class="['shortcut-tile', `tone-${tile.tone}`, { disabled: !tile.available }]" :data-test="'quick-action-' + tile.key">
                   <span class="tile-icon" aria-hidden="true"><img :src="tile.icon" alt="" /></span>
                   <div class="tile-copy"><strong>{{ tile.label }}</strong><small>{{ tile.description }}</small></div>
-                  <button type="button" class="tile-action" :disabled="!tile.available" @click="handleQuickAction(tile)"><template v-if="tile.available">{{ tile.actionLabel }} <img class="inline-action-icon" :src="forwardIcon" alt="" /></template><template v-else>待接入</template></button>
+                  <button type="button" class="tile-action" :data-test="'quick-action-btn-' + tile.key" :disabled="!tile.available" @click="handleQuickAction(tile)"><template v-if="tile.available">{{ tile.actionLabel }} <img class="inline-action-icon" :src="forwardIcon" alt="" /></template><template v-else>待接入</template></button>
                 </article>
               </div>
             </section>
@@ -430,6 +439,7 @@ import UnifiedDataPage from './UnifiedDataPage.vue'
 import UnifiedSettingsPage from './UnifiedSettingsPage.vue'
 import UnifiedStorePage from './UnifiedStorePage.vue'
 import UnifiedTaskPage from './UnifiedTaskPage.vue'
+import { buildWorkbenchNotifications, type WorkbenchNotificationItem } from './notification-center'
 import { useAgentStore } from '../../stores/agent'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import homeIcon from '../../assets/icons/nav-home.svg'
@@ -538,7 +548,7 @@ function tickClock() {
   nowLabel.value = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 type DashboardPage = 'overview' | 'browser' | 'products' | 'orders' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'tasks' | 'invoices' | 'image-studio'
-type SettingsTab = 'entry' | 'ai' | 'security' | 'maintenance' | 'about'
+type SettingsTab = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'
 const activePage = ref<DashboardPage>('overview')
 /** 生图请求仍在运行时保留图片工作台，避免卸载页面丢失返回结果。 */
 const imageStudioBusy = ref(false)
@@ -592,14 +602,36 @@ const periodOptions: Array<{ key: PeriodKey; label: string }> = [
 ]
 const quickActions = [
   { key: 'image', label: 'AI 生成商品图', description: '一键生成专业商品图', icon: aiIcon, tone: 'purple', available: true, actionLabel: '立即创作' },
-  { key: 'publish', label: '批量发布商品', description: '高效上架多平台商品', icon: ordersIcon, tone: 'blue', available: false, actionLabel: '待接入' },
+  { key: 'publish', label: '批量发布商品', description: '高效上架多平台商品', icon: ordersIcon, tone: 'blue', available: true, actionLabel: '去发布' },
   { key: 'dedupe', label: '短视频去重', description: '检测相似视频内容', icon: tasksIcon, tone: 'teal', available: false, actionLabel: '待接入' },
   { key: 'interference', label: '影像级干扰', description: '智能处理商品图片', icon: invoicesIcon, tone: 'rose', available: false, actionLabel: '待接入' }
 ]
 
 const platformOptions = computed(() => [...new Set(snapshots.value.map(item => item.platform))].sort((a, b) => a.localeCompare(b, 'zh-CN')))
-/** 工具栏任务红点：后台采集任务（发票/涉税）是后台刷新、不计入任务，所以也不点亮红点 */
-const activeTaskCount = computed(() => ws.tasks.filter((task: any) => task.latestRun && isTaskActive(task) && !isBackgroundCollectTask(task)).length)
+/**
+ * 顶栏通知中心（2026-10-17）：只聚合界面已有的真实状态——进行中/待确认/24h 内失败的任务
+ * 与客服未读。没有数据时显示「暂无通知」，不再弹「暂未接入独立页面」。
+ */
+const notificationOpen = ref(false)
+/** 任务状态以 runLive 的实时值为准（latestRun 可能停在列表加载那一刻）；
+ *  后台采集任务（发票/涉税）不进通知中心——与概览任务卡/红点同一口径。 */
+const notificationTasks = computed(() => (ws.tasks as any[])
+  .filter(task => !isBackgroundCollectTask(task))
+  .map(task => {
+    const run = task?.latestRun
+    const live = run?.id ? ws.runLive?.[run.id]?.status : null
+    return live && run ? { ...task, latestRun: { ...run, status: live } } : task
+  }))
+const notifications = computed<WorkbenchNotificationItem[]>(() => buildWorkbenchNotifications({
+  tasks: notificationTasks.value as any,
+  customerUnread: customerUnreadTotal.value
+}))
+const notificationCount = computed(() => notifications.value.length)
+function runNotification(item: WorkbenchNotificationItem) {
+  notificationOpen.value = false
+  if (item.target === 'customer-service') emit('open-customer-service')
+  else openTasks()
+}
 const otherStoreOptions = computed(() => ws.stores.filter(store => store.id !== storeContext.store?.id))
 const canOpenStandalone = computed(() => !!storeContext.store && ws.displayedStoreId === storeContext.store.id && !!ws.activeTab)
 
@@ -1016,11 +1048,6 @@ function statusClass(status: string) { return status === 'online' ? 'online' : [
 // P2-2（2026-10-15 审查）：原先只判 online/needs_login/launching，proxy_error/archived/incomplete
 // 全部落「离线」——同一店铺在不同页显示互相矛盾的文案。统一走 shared 的单一映射。
 function statusLabel(status: string) { return storeStatusLabel(status) }
-function isTaskActive(task: any) {
-  const run = task.latestRun
-  const liveStatus = run?.id ? ws.runLive[run.id]?.status : null
-  return ['queued', 'running', 'waiting_confirmation', 'paused'].includes(liveStatus || run?.status)
-}
 
 async function waitForWorkspace() {
   if (ws.ready) return
@@ -1153,6 +1180,8 @@ async function loadSnapshots() {
 function showNotice(message: string) { notice.value = message; if (noticeTimer) window.clearTimeout(noticeTimer); noticeTimer = window.setTimeout(() => { notice.value = '' }, 3600) }
 function handleQuickAction(action: any) {
   if (action.key === 'image') { navigateTo('image-studio'); return }
+  // 批量发布已落地（商品管理内的预检/批量编排/人工确认），快捷入口不能再显示「待接入」。
+  if (action.key === 'publish') { navigateTo('products'); return }
   if (!action.available) showNotice(`${action.label}：${action.description}`)
 }
 function handleNav(item: { label: string }) {
@@ -1220,7 +1249,7 @@ function openTasks(create = false) {
   navigateTo('tasks')
 }
 /** 设置中心页签白名单：环境面板等入口只允许跳到已知页签，未知值回落到默认「平台入口」 */
-const SETTINGS_TABS: SettingsTab[] = ['entry', 'ai', 'security', 'maintenance', 'about']
+const SETTINGS_TABS: SettingsTab[] = ['entry', 'ai', 'security', 'extensions', 'maintenance', 'about']
 function openSettingsTab(tab?: string) {
   settingsTab.value = (SETTINGS_TABS as string[]).includes(tab || '') ? (tab as SettingsTab) : 'entry'
   navigateTo('settings')
@@ -1413,6 +1442,7 @@ function onKeydown(event: KeyboardEvent) {
     if (confirmDialog.open) { confirmDialog.open = false; event.preventDefault() }
     else if (renameDialog.open) { renameDialog.open = false; event.preventDefault() }
     else if (copyConfigDialog.open) { copyConfigDialog.open = false; event.preventDefault() }
+    else if (notificationOpen.value) { notificationOpen.value = false; event.preventDefault() }
     else if (storeContext.open) { closeStoreContext(); event.preventDefault() }
     else if (agent.ui.drawerOpen) { agent.setDrawerOpen(false); event.preventDefault() }
     commandOpen.value = false
@@ -1421,6 +1451,9 @@ function onKeydown(event: KeyboardEvent) {
 function onDocumentMouseDown(event: MouseEvent) {
   const target = event.target as HTMLElement | null
   if (storeContext.open && !target?.closest('[data-test="store-ctx"]')) closeStoreContext()
+  if (notificationOpen.value && !target?.closest('[data-test="notification-center"]') && !target?.closest('[data-test="notification-bell"]')) {
+    notificationOpen.value = false
+  }
 }
 watch(() => [storeContext.open, storeContext.x, storeContext.y], () => { void syncStoreContextOcclusion() })
 watch(() => ws.trashOpen, open => { void window.shopilot.browser.setViewsObscured(!!open) })
@@ -1716,6 +1749,17 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .dt-caret { width:13px;height:13px;margin-left: 2px;object-fit:contain; }
 .toolbar-icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: 0; border-radius: 10px; background: transparent; color: var(--dash-text-soft); font-size: 16px; cursor: pointer; }.toolbar-icon-button img { width: 20px; height: 20px; object-fit: contain; }
 .toolbar-icon-button:hover, .toolbar-icon-button:focus-visible { background: #f2f4f8; color: var(--dash-text); outline: none; }
+.notification-anchor { position: relative; display: inline-flex; }
+.notification-center { position: absolute; top: 42px; right: 0; z-index: 80; display: flex; width: 320px; max-height: 380px; flex-direction: column; gap: 2px; overflow: auto; padding: 8px; border: 1px solid var(--dash-border); border-radius: 12px; background: #fff; box-shadow: 0 18px 40px rgba(16, 24, 40, .18); }
+.notification-center header { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 8px; color: var(--dash-text-muted); font-size: 11px; }
+.notification-center header strong { color: var(--dash-text); font-size: 12px; }
+.notification-item { display: flex; width: 100%; flex-direction: column; gap: 3px; padding: 9px 10px; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
+.notification-item:hover, .notification-item:focus-visible { background: #f4f5f7; outline: none; }
+.notification-item strong { color: var(--dash-text); font-size: 12px; font-weight: 600; }
+.notification-item span { color: var(--dash-text-muted); font-size: 11px; line-height: 1.5; }
+.notification-item.tone-error strong { color: #b42318; }
+.notification-item.tone-warning strong { color: #b54708; }
+.notification-empty { padding: 14px 10px; color: var(--dash-text-muted); font-size: 11px; line-height: 1.6; }
 .notification-dot { position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border: 1.5px solid #fff; border-radius: 50%; background: #fb5470; }
 .toolbar-avatar { display: inline-flex; width: 34px; height: 34px; align-items: center; justify-content: center; border-radius: 50%; background: var(--brand-gradient); color: #fff; font-size: 11px; font-weight: 800; }
 

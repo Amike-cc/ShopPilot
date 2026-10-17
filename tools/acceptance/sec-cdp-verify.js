@@ -245,7 +245,10 @@ async function main() {
   check('Cookie 搜索按名称/域过滤', (ckSearch.data?.items || []).length === 1 && ckSearch.data.items[0].name === 'M5HTTPONLY')
 
   // ---------- 1. 导出加密包 ----------
-  const outPath = path.join(process.env.TEMP || '/tmp', `m5-session-${Date.now()}.shopilot`)
+  // 与被测应用使用同一个本轮独立 profile，避免 Windows 沙箱对系统 TEMP
+  // 下由另一个进程创建的路径返回 EPERM；这仍然是真实主进程落盘链路。
+  const outRoot = process.env.SHOPILOT_USERDATA_DIR || process.env.TEMP || '/tmp'
+  const outPath = path.join(outRoot, `m5-session-${Date.now()}.shopilot`)
   const exp = await A.sExport(sa.id, outPath)
   check('session:export 成功（主进程对话框经测试钩子应答）', exp.ok && exp.data.cookieCount >= 2, JSON.stringify(exp.data || exp.error))
   const pkgBuf = fs.existsSync(outPath) ? fs.readFileSync(outPath) : null
@@ -260,6 +263,12 @@ async function main() {
   check('店铺 B 预置自有 Cookie（M5_B_ONLY）', (ckB0.data?.items || []).some(x => x.name === 'M5_B_ONLY'))
 
   // ---------- 3. 篡改/过期拒绝导入（§13） ----------
+  if (!pkgBuf) {
+    // 导出失败时不要继续对 null 做 Buffer 操作，把真实失败原因留在上面三条断言里。
+    check('篡改包 → SESSION_IMPORT_INVALID（GCM 认证拒绝）', false, '导出包缺失，无法构造篡改包')
+    check('导入失败绝不动目标现有会话（M5_B_ONLY 仍在）', false, '导出包缺失，未执行导入')
+    throw new Error('SESSION_EXPORT_REQUIRED: 导出包缺失，终止依赖导入的验收')
+  }
   const tampered = Buffer.from(pkgBuf)
   tampered[tampered.length - 20] ^= 0xff // 翻动 tag 字节
   const tPath = outPath + '.tampered'
@@ -269,7 +278,7 @@ async function main() {
   const ckB1 = await A.cookies(sb.id)
   check('导入失败绝不动目标现有会话（M5_B_ONLY 仍在）', (ckB1.data?.items || []).some(x => x.name === 'M5_B_ONLY'))
 
-  const expiredPath = path.join(process.env.TEMP || '/tmp', `m5-expired-${Date.now()}.shopilot`)
+  const expiredPath = path.join(outRoot, `m5-expired-${Date.now()}.shopilot`)
   const expNeg = await A.sExport(sa.id, expiredPath, -1) // 有效期 -1 天（验收专用，UI 不提供）
   const impExp = await A.sImport(sb.id, expiredPath)
   check('过期包一律拒绝导入 SESSION_PACKAGE_EXPIRED', expNeg.ok && !impExp.ok && impExp.error?.code === 'SESSION_PACKAGE_EXPIRED', impExp.error?.message)

@@ -10,6 +10,8 @@
  */
 import { app, BrowserWindow } from 'electron'
 import { autoUpdater, type UpdateInfo } from 'electron-updater'
+import { existsSync } from 'fs'
+import { join } from 'path'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { emitToRenderer } from '../browser/window-manager'
 import { getDatabase } from '../db/database'
@@ -140,6 +142,12 @@ export function getUpdateStatus(): UpdateStatus {
 export async function checkForUpdates(): Promise<UpdateStatus> {
   configure()
   if (!app.isPackaged) return publish({ state: 'not-available', error: '开发环境不会执行在线更新检查' })
+  // 解包版（electron-builder --dir / 便携使用）没有 app-update.yml：electron-updater 会抛
+  // ENOENT 并把 Windows 绝对路径直接显示在界面上（2026-10-17 验收实录）。这里提前判定，
+  // 给用户可理解的原因，而不是泄漏内部路径。
+  if (!existsSync(join(process.resourcesPath, 'app-update.yml'))) {
+    return publish({ state: 'error', error: '当前为免安装（解包）版本，缺少更新配置；请使用安装包版本以启用在线更新' })
+  }
   try {
     applyChannel()
     phase = 'check'
@@ -159,6 +167,9 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
 export async function downloadUpdate(): Promise<UpdateStatus> {
   configure()
   if (!app.isPackaged) return publish({ state: 'error', error: '开发环境不执行更新下载，请使用安装包验证' })
+  if (!existsSync(join(process.resourcesPath, 'app-update.yml'))) {
+    return publish({ state: 'error', error: '当前为免安装（解包）版本，缺少更新配置；请使用安装包版本以启用在线更新' })
+  }
   try {
     phase = 'download'
     publish({ state: 'downloading', percent: 0, error: undefined })

@@ -197,6 +197,23 @@ function findUninstaller(realDir) {
   return null
 }
 
+/**
+ * 复制整棵解包目录。
+ *
+ * 2026-10-17 实测：在本机宿主环境里 `fs.cpSync` 复制到 `ShopPilot.exe` 时整个 Node
+ * 进程被静默终止（exit 127，无异常、无 stderr），M4 永远进不了阶段 1。
+ * robocopy 是系统自带、独立进程，实测可完整复制；非 Windows 仍回退 fs.cpSync。
+ * robocopy 退出码 0–7 都表示成功（1=复制了文件，2=有额外文件，3=两者都有…）。
+ */
+function copyTree(src, dest) {
+  if (process.platform === 'win32') {
+    const r = spawnSync('robocopy', [src, dest, '/E', '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/R:2', '/W:2'], { encoding: 'utf8' })
+    if (typeof r.status === 'number' && r.status < 8) return
+    throw new Error(`robocopy 失败 status=${r.status}: ${String(r.stderr || r.stdout || '').slice(0, 300)}`)
+  }
+  fs.cpSync(src, dest, { recursive: true })
+}
+
 async function main() {
   // 前置：清掉可能残留的应用进程（避免安装器认为应用正在运行而静默放弃）
   killStray('启动前')
@@ -216,7 +233,7 @@ async function main() {
   fs.mkdirSync(tmpRoot, { recursive: true })
   const appCopyDir = path.join(tmpRoot, 'app')
   console.log('[准备] 复制解包版到临时目录（避免与构建产物相互干扰）')
-  fs.cpSync(path.join(RELEASE, 'win-unpacked'), appCopyDir, { recursive: true })
+  copyTree(path.join(RELEASE, 'win-unpacked'), appCopyDir)
   const copyExe = path.join(appCopyDir, 'ShopPilot.exe')
 
   const ud = path.join(tmpRoot, 'userdata-packaged')
@@ -241,6 +258,10 @@ async function main() {
     })
     fs.closeSync(out)
     try { second.kill('SIGKILL') } catch {}
+    // logMain 为了不阻塞主进程把普通日志批量写入，默认有 300ms 的落盘窗口。
+    // 首实例仍在运行，不能靠进程退出触发 flush；等一个完整批次再读取日志，避免
+    // 把已经收到的 second-instance 事件误报为“没有日志”。
+    await sleep(600)
     // 主实例把"重复启动"写进 userData 日志（stdout 不带），故以日志文件为证据
     let mainLogText = ''
     const ld = path.join(ud, 'logs')
@@ -325,10 +346,20 @@ async function main() {
   await sleep(1200)
   // 升级完整性：等一段时间再复核，捕捉"挂起删除"把新装文件清空的场景
   const asarPath = path.join(installDir, 'resources', 'app.asar')
-  const intactNow = fs.existsSync(installedExe) && fs.existsSync(asarPath)
-  await sleep(10000)
-  const intactLater = fs.existsSync(installedExe) && fs.existsSync(asarPath)
-  record('阶段3 升级后安装目录完整（无挂起删除）', intactNow && intactLater, intactNow === intactLater ? 'exe+app.asar 均在' : '安装后被清空')
+  const exeNow = fs.existsSync(installedExe)
+  const asarNow = fs.existsSync(asarPath)
+  const intactNow = exeNow && asarNow
+  // NSIS 覆盖安装会先移走旧文件，再把新文件写回；在安装器进程退出
+  // 后仍可能有一个短暂的“两个文件都不存在”窗口。固定立刻检查会把
+  // 正常替换误报成挂起删除，所以只把“在有界时间内恢复且随后保持”
+  // 作为完整性判据。
+  const intactLater = await waitForFilesStable([installedExe, asarPath], 60_000, 2_000)
+  const exeLater = fs.existsSync(installedExe)
+  const asarLater = fs.existsSync(asarPath)
+  record('阶段3 升级后安装目录完整（无挂起删除）', intactLater,
+    intactLater
+      ? (intactNow ? 'exe+app.asar 均在' : '安装替换窗口后 exe+app.asar 恢复并保持')
+      : JSON.stringify({ intactNow, intactLater, exeNow, asarNow, exeLater, asarLater }))
   ctx = launchApp(installedExe, udInstalled, 9228)
   if (!(await waitForCDP(9228))) {
     record('阶段3 升级后可启动', false)
@@ -364,6 +395,19 @@ async function waitForFileMissing(p, timeoutMs) {
   while (Date.now() - start < timeoutMs) {
     if (!fs.existsSync(p)) return true
     await sleep(1000)
+  }
+  return false
+}
+
+async function waitForFilesStable(paths, timeoutMs, stableMs) {
+  const start = Date.now()
+  let readySince = 0
+  while (Date.now() - start < timeoutMs) {
+    const ready = paths.every(p => fs.existsSync(p))
+    if (!ready) readySince = 0
+    else if (!readySince) readySince = Date.now()
+    else if (Date.now() - readySince >= stableMs) return true
+    await sleep(500)
   }
   return false
 }

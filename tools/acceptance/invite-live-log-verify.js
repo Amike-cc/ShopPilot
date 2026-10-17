@@ -12,9 +12,11 @@ const { spawn, execSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { resolveApp, appArgs } = require('./app-launch')
 
 const root = path.resolve(__dirname, '../..')
-const electronExe = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
+const appConfig = resolveApp(root)
+const electronExe = appConfig.executable
 const CDP_PORT = process.env.SHOPILOT_INVITELOG_CDP_PORT || '9275'
 const results = []
 
@@ -113,7 +115,7 @@ async function main() {
   let ui = null
   let idleInviteTaskId = null
   try {
-    app = spawn(electronExe, ['.', `--remote-debugging-port=${CDP_PORT}`, '--user-data-dir=' + userData, '--no-sandbox'], {
+    app = spawn(electronExe, appArgs(root, appConfig, { port: CDP_PORT, userData }), {
       cwd: root,
       env: { ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1', SHOPILOT_DISABLE_CDP_FP: '1' },
       stdio: 'ignore'

@@ -7,9 +7,38 @@ try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catc
 $results = [ordered]@{}
 
 function Kill-ShopPilot {
-  Get-Process -Name 'ShopPilot' -ErrorAction SilentlyContinue | ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {} }
-  Get-Process -Name 'electron' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'D:\code\*' } | ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {} }
-  Start-Sleep -Seconds 2
+  # Stop-Process 只结束主 PID，Chromium 的 GPU/renderer 子进程可能继续持有
+  # exe 或 userData 锁，导致下一套验收连到旧端口或把自定义任务卡在旧页面。
+  # 只匹配本工作区构建出来的进程，再按进程树结束，避免触碰用户的其他实例。
+  $rootPrefix = ($repoRoot -replace '\\', '/')
+  $targets = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    $name = [string]$_.Name
+    $exe = ([string]$_.ExecutablePath -replace '\\', '/')
+    $cmd = ([string]$_.CommandLine -replace '\\', '/')
+    ($name -eq 'ShopPilot.exe' -or $name -eq 'electron.exe') -and
+      (($exe -like "$rootPrefix/release/*") -or ($cmd -like "*$rootPrefix*") -or ($cmd -like '*electron-vite*'))
+  }
+  foreach ($p in $targets) {
+    try { & taskkill.exe /PID $p.ProcessId /T /F 2>$null | Out-Null } catch {}
+  }
+  for ($i = 0; $i -lt 40; $i++) {
+    $alive = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+      $name = [string]$_.Name
+      $exe = ([string]$_.ExecutablePath -replace '\\', '/')
+      $cmd = ([string]$_.CommandLine -replace '\\', '/')
+      ($name -eq 'ShopPilot.exe' -or $name -eq 'electron.exe') -and
+        (($exe -like "$rootPrefix/release/*") -or ($cmd -like "*$rootPrefix*") -or ($cmd -like '*electron-vite*'))
+    }
+    if (-not $alive) { break }
+    # Chromium 子进程有时脱离 Electron 的 Windows 进程树；只杀首个 PID
+    # 会留下 renderer/GPU 继续锁住 win-unpacked。每轮对当前快照逐 PID
+    # 强制结束，直到工作区进程确实清空，再进入下一套件。
+    foreach ($p in @($alive)) {
+      try { & taskkill.exe /PID $p.ProcessId /F 2>$null | Out-Null } catch {}
+    }
+    Start-Sleep -Milliseconds 250
+  }
+  Start-Sleep -Milliseconds 500
 }
 
 function Run-Step($name, $cmd) {

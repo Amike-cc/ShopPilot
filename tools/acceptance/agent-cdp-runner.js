@@ -3,9 +3,11 @@ const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
+const { resolveApp, appArgs } = require('./app-launch')
 const PORT = Number(process.env.SHOPILOT_AGENT_CDP_PORT || 9226)
 const ROOT = path.resolve(__dirname, '../..')
-const APP = path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe')
+const APP_CONFIG = resolveApp(ROOT)
+const APP = APP_CONFIG.executable
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 async function waitForCDP(timeoutMs = 30000) {
@@ -40,7 +42,7 @@ async function main() {
     // 隔离应用数据：verify 会写 app_settings、AI Key、临时店铺，绝不能碰真实用户目录。
     const fixtureAppData = path.join(userData, 'appdata')
     fs.mkdirSync(fixtureAppData, { recursive: true })
-    const child = spawn(APP, [ROOT, '--no-sandbox', `--remote-debugging-port=${PORT}`, `--user-data-dir=${userData}`, '--disable-features=CalculateNativeWinOcclusion'], {
+    const child = spawn(APP, appArgs(ROOT, APP_CONFIG, { port: PORT, userData, extra: ['--disable-features=CalculateNativeWinOcclusion'] }), {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, APPDATA: fixtureAppData, LOCALAPPDATA: fixtureAppData, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1', SHOPILOT_DISABLE_CDP_FP: '1' }
     })

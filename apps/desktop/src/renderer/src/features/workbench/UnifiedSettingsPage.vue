@@ -110,6 +110,39 @@
           <div v-if="securityMsg" class="settings-note" :class="{ ok: securityMsgOk }" data-test="security-msg">{{ securityMsg }}</div>
         </template>
       </section>
+      <section v-else-if="activeTab === 'extensions'" class="settings-section" data-test="settings-extensions" data-unified-test="unified-settings-extensions">
+        <div class="settings-section-head">
+          <div><h2>浏览器扩展</h2><p>只支持本地解包扩展（包含 manifest.json 的文件夹），不支持 Chrome 商店与 .crx。导入会复制到应用管理目录：自己写插件时用「目录」打开副本编辑，改完点「重载」生效。扩展可以读取和修改店铺页面内容，请只导入你自己编写或可信来源的代码。</p></div>
+          <div class="settings-head-actions-row">
+            <button type="button" class="unified-button ghost" data-test="extensions-open-root" :disabled="extensionsBusy" @click="openExtensionDir()">打开扩展目录</button>
+            <button type="button" class="unified-button primary" data-test="extensions-import" :disabled="extensionsBusy" @click="importExtension">导入扩展文件夹</button>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-head"><h3>总开关（实验性）</h3><span>关闭会立即卸载所有扩展并重载已打开的店铺页；开启后，新打开的店铺会加载已启用的扩展。</span></div>
+          <div class="settings-field-row maintenance-toggle-row">
+            <label class="maintenance-switch-label"><span>启用浏览器扩展</span>
+              <button type="button" :class="['maintenance-switch', { on: extensionsMaster }]" data-test="extensions-master" :aria-pressed="extensionsMaster" :disabled="extensionsBusy" @click="toggleExtensionsMaster"><i></i></button>
+            </label>
+          </div>
+        </div>
+        <div v-if="extensionsError" class="settings-note error" data-test="extensions-error">{{ extensionsError }}</div>
+        <div v-else-if="extensionsLoading" class="settings-note" role="status">正在读取扩展…</div>
+        <div v-else-if="!extensions.length" class="settings-note" data-test="extensions-empty">还没有导入扩展。点击右上角「导入扩展文件夹」，选择包含 manifest.json 的目录。</div>
+        <div v-else class="settings-group" data-test="extensions-list">
+          <div v-for="item in extensions" :key="item.id" class="settings-field-row extension-row" :data-test="'extensions-row-' + item.id">
+            <label class="extension-copy">
+              <span class="extension-title">{{ item.name }} <b>v{{ item.version }}</b> <em>MV{{ item.manifestVersion }}</em></span>
+              <span class="extension-meta">{{ extensionStatusLabel(item) }} · {{ item.permissions.length ? item.permissions.join(' / ') : '无声明权限' }} · {{ formatBytes(item.sizeBytes) }}</span>
+              <span v-if="item.loadError" class="extension-error">{{ item.loadError }}</span>
+            </label>
+            <button type="button" class="unified-button ghost" data-test="extensions-toggle" :disabled="extensionsBusy || item.status === 'invalid'" @click="toggleExtension(item)">{{ item.enabled ? '停用' : '启用' }}</button>
+            <button type="button" class="unified-button ghost" data-test="extensions-open-dir" :disabled="extensionsBusy" @click="openExtensionDir(item)">目录</button>
+            <button type="button" class="unified-button ghost" data-test="extensions-reload" :disabled="extensionsBusy || !item.enabled" @click="reloadExtension(item)">重载</button>
+            <button type="button" class="unified-button danger" data-test="extensions-remove" :disabled="extensionsBusy" @click="removeExtension(item)">删除</button>
+          </div>
+        </div>
+      </section>
       <section v-else-if="activeTab === 'maintenance'" class="settings-section" data-test="settings-maintenance" data-unified-test="unified-settings-maintenance">
         <div class="settings-section-head"><div><h2>数据与维护</h2><p>采集总开关、数据库备份与恢复、诊断与审计导出。恢复会覆盖当前数据库，恢复前自动为当前状态创建安全快照。</p></div></div>
         <div v-if="maintenanceLoadError" class="settings-note error" role="alert">{{ maintenanceLoadError }}<button type="button" class="settings-inline-retry" :disabled="maintenanceLoading" @click="loadMaintenance">{{ maintenanceLoading ? '读取中…' : '重试读取' }}</button></div>
@@ -222,9 +255,11 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import type { BrowserExtensionItem, BrowserExtensionListResult } from '@shared/contracts/extensions'
 import { useWorkspaceStore } from '../../stores/workspace'
 import settingsIcon from '../../assets/icons/nav-settings.svg'
 import configIcon from '../../assets/icons/settings-config.svg'
+import extensionsIcon from '../../assets/icons/settings-extensions.svg'
 import aiIcon from '../../assets/icons/settings-ai.svg'
 import aboutIcon from '../../assets/icons/settings-about.svg'
 import brandMark from '../../assets/generated/shopilot-logo-generated.png'
@@ -269,6 +304,7 @@ const tabs = [
   { key: 'entry', label: '平台入口', icon: configIcon },
   { key: 'ai', label: 'AI 配置', icon: aiIcon },
   { key: 'security', label: '安全', icon: securityLockIcon },
+  { key: 'extensions', label: '浏览器扩展', icon: extensionsIcon },
   { key: 'maintenance', label: '数据与维护', icon: databaseBackupIcon },
   { key: 'about', label: '关于软件', icon: aboutIcon }
 ] as const
@@ -510,6 +546,7 @@ const tabIssues = computed<Record<TabKey, boolean>>(() => ({
   entry: Boolean(homeLoadError.value || squareLoadError.value),
   ai: Boolean(aiLoadError.value || imageTextLoadError.value),
   security: Boolean(securityLoadError.value),
+  extensions: Boolean(extensionsError.value),
   maintenance: Boolean(maintenanceLoadError.value),
   about: Boolean(updateLoadError.value)
 }))
@@ -576,6 +613,7 @@ function selectTab(tab: TabKey) {
   if (tab === 'ai' && !aiLoaded.value && !aiConfigLoading.value) void loadAi()
   if (tab === 'ai' && !imageTextLoaded.value && !imageTextConfigLoading.value) void loadImageTextAi()
   if (tab === 'security' && !securityLoaded.value && !securityLoading.value) void loadSecurity()
+  if (tab === 'extensions' && !extensionsLoaded.value && !extensionsLoading.value) void loadExtensions()
   if (tab === 'maintenance' && !collectionLoaded.value && !maintenanceLoading.value) void loadMaintenance()
   if (tab === 'about' && !updateLoaded.value && !updateLoading.value) void loadUpdate()
 }
@@ -863,6 +901,121 @@ async function lockNow(): Promise<void> {
   const result = await window.shopilot.security.lock()
   if (result.ok) await ws.refreshSecurity()
   else secSay(result.error?.message || '锁定失败', false)
+}
+
+// ---------- 浏览器扩展（本地解包，实验性） ----------
+
+const extensions = ref<BrowserExtensionItem[]>([])
+const extensionsMaster = ref(false)
+const extensionsLoading = ref(false)
+const extensionsLoaded = ref(false)
+const extensionsBusy = ref(false)
+const extensionsError = ref('')
+
+function extensionStatusLabel(item: BrowserExtensionItem): string {
+  return ({
+    loaded: '已加载',
+    enabled: '已启用（打开店铺后生效）',
+    disabled: '未启用',
+    invalid: '清单不合法',
+    load_failed: '加载失败',
+    missing: '文件缺失'
+  } as Record<string, string>)[item.status] || item.status
+}
+
+function applyExtensions(result: BrowserExtensionListResult | null | undefined): void {
+  extensionsMaster.value = result?.master === true
+  extensions.value = Array.isArray(result?.items) ? result.items : []
+}
+
+async function loadExtensions(): Promise<void> {
+  extensionsLoading.value = true
+  extensionsError.value = ''
+  try {
+    const result = await window.shopilot.extensions.list()
+    if (!result.ok) throw new Error(responseError(result, '读取扩展失败'))
+    applyExtensions(result.data as BrowserExtensionListResult)
+    extensionsLoaded.value = true
+  } catch (error) {
+    extensionsLoaded.value = false
+    extensionsError.value = '读取扩展失败：' + String((error as Error)?.message || error)
+  } finally {
+    extensionsLoading.value = false
+  }
+}
+
+async function runExtensionAction(action: () => Promise<any>, successMessage: string): Promise<void> {
+  extensionsBusy.value = true
+  extensionsError.value = ''
+  try {
+    const result = await action()
+    if (!result?.ok) throw new Error(responseError(result, '扩展操作失败'))
+    applyExtensions(result.data as BrowserExtensionListResult)
+    flashSavedMessage(successMessage)
+  } catch (error) {
+    extensionsError.value = String((error as Error)?.message || error)
+  } finally {
+    extensionsBusy.value = false
+  }
+}
+
+function toggleExtensionsMaster(): Promise<void> {
+  const next = !extensionsMaster.value
+  return runExtensionAction(
+    () => window.shopilot.extensions.setMaster(next),
+    next ? '已开启浏览器扩展（新打开/重载的店铺生效）' : '已关闭浏览器扩展，已打开的店铺页已重载'
+  )
+}
+
+async function importExtension(): Promise<void> {
+  extensionsBusy.value = true
+  extensionsError.value = ''
+  try {
+    const result = await window.shopilot.extensions.import()
+    if (!result.ok) throw new Error(responseError(result, '导入扩展失败'))
+    const data = result.data as { canceled?: boolean }
+    if (data?.canceled) return
+    await loadExtensions()
+    flashSavedMessage('扩展已导入；启用后打开店铺生效')
+  } catch (error) {
+    extensionsError.value = String((error as Error)?.message || error)
+  } finally {
+    extensionsBusy.value = false
+  }
+}
+
+function toggleExtension(item: BrowserExtensionItem): Promise<void> {
+  const next = !item.enabled
+  return runExtensionAction(
+    () => window.shopilot.extensions.setEnabled(item.id, next),
+    next ? `已启用「${item.name}」` : `已停用「${item.name}」，已打开的店铺页已重载`
+  )
+}
+
+function reloadExtension(item: BrowserExtensionItem): Promise<void> {
+  return runExtensionAction(() => window.shopilot.extensions.reload(item.id), `已重载「${item.name}」`)
+}
+
+async function removeExtension(item: BrowserExtensionItem): Promise<void> {
+  if (!window.confirm(`删除扩展「${item.name}」？\n管理目录中的文件会被删除，此操作不可撤销。`)) return
+  await runExtensionAction(() => window.shopilot.extensions.remove(item.id), `已删除「${item.name}」`)
+}
+
+/** 打开应用内的扩展副本目录：自己写插件时改这里，改完点「重载」生效（不会重新读取原目录）。 */
+async function openExtensionDir(item?: BrowserExtensionItem): Promise<void> {
+  extensionsBusy.value = true
+  extensionsError.value = ''
+  try {
+    const result = await window.shopilot.extensions.openDir(item?.id)
+    if (!result.ok) throw new Error(responseError(result, '打开扩展目录失败'))
+    const data = result.data as { opened?: boolean; reason?: string }
+    if (!data?.opened) throw new Error(data?.reason || '系统文件管理器没有打开该目录')
+    flashSavedMessage(item ? `已打开「${item.name}」的目录` : '已打开扩展目录')
+  } catch (error) {
+    extensionsError.value = String((error as Error)?.message || error)
+  } finally {
+    extensionsBusy.value = false
+  }
 }
 
 // ---------- 数据与维护 ----------
@@ -1652,5 +1805,13 @@ onBeforeUnmount(() => {
 .maintenance-backup-row .unified-button{margin-left:auto}
 .about-grid>div{border:1px solid #eef1f6;background:#fafbfd}
 .about-grid select{height:30px}
+.extension-row{align-items:flex-start}
+.extension-copy{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.extension-title{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--dash-text);font-size:12px}
+.extension-title b{color:var(--dash-text-muted);font-size:10px;font-weight:500}
+.extension-title em{color:#5b3df5;font-size:9px;font-style:normal;border:1px solid rgba(91,61,245,.25);border-radius:4px;padding:1px 4px}
+.extension-meta{color:var(--dash-text-muted);font-size:10px;line-height:1.5;overflow-wrap:anywhere}
+.extension-error{color:#b42318;font-size:10px;line-height:1.5;overflow-wrap:anywhere}
+.extension-row .unified-button{flex:none;margin-top:2px}
 @media(max-width:820px){.settings-group-head{flex-direction:column;gap:2px}.maintenance-backup-row{flex-wrap:wrap}.maintenance-backup-row .unified-button{margin-left:0}}
 </style>

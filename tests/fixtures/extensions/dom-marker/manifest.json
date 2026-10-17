@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "ShopPilot Fixture Marker",
+  "version": "1.0.0",
+  "description": "Acceptance fixture: marks the page with data-shopilot-fixture.",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ]
+}

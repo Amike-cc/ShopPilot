@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "我的首个店铺插件",
+  "version": "1.0.0",
+  "description": "ShopPilot 自研插件模板：在店铺页面右下角显示一个可折叠的小徽章。",
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

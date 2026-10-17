@@ -91,9 +91,20 @@ function runWindow(query: Record<string, string>, timeoutMs = 180000): Promise<s
   })
 }
 
-/** 测试钩子只在开发态生效：打包版若机器残留这些环境变量，等于把导出/资金确认门永久打开 */
+let acceptanceHookLogged = false
+/**
+ * 测试钩子：开发态直接生效；打包态必须由验收器显式声明 `SHOPILOT_ACCEPTANCE=1`
+ * （生产安装包不会设置它，机器上残留 SHOPILOT_TEST_* 也无法单独打开确认门）。
+ */
 function testHooksEnabled(): boolean {
-  return !app.isPackaged
+  if (!app.isPackaged) return true
+  if (process.env.SHOPILOT_ACCEPTANCE !== '1') return false
+  if (!acceptanceHookLogged) {
+    acceptanceHookLogged = true
+    // 打包态启用钩子必须留痕，便于事后审计"这次导出为何没有人工确认"。
+    logMain('warn', '[acceptance] 打包态测试钩子已启用（SHOPILOT_ACCEPTANCE=1）：人工确认/密码对话框将被环境变量替代')
+  }
+  return true
 }
 
 /** 采集密码；取消返回 null */
