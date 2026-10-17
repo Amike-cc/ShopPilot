@@ -63,7 +63,7 @@ function specToText(spec: Array<{ name: string; value: string }>): string {
 }
 
 /** 编辑器当前草稿（保存与实时校验共用同一份构建，避免两处口径漂移）。 */
-function buildDraft(description: string | null, passthroughVariants: Array<Record<string, unknown>>): LocalProductDraft {
+function buildDraft(description: string | null): LocalProductDraft {
   return {
     title: title.value,
     subtitle: subtitle.value.trim() ? subtitle.value : null,
@@ -71,18 +71,15 @@ function buildDraft(description: string | null, passthroughVariants: Array<Recor
     brand: brand.value.trim() ? brand.value : null,
     localCategory: localCategory.value.trim() ? localCategory.value : null,
     tags: [...tags.value],
-    variants: variants.value.map((variant, index) => {
-      const passthrough = passthroughVariants[index] as { barcode?: string | null } | undefined
-      return {
+    variants: variants.value.map(variant => ({
         spec: parseSpecText(variant.specText),
         priceMinor: yuanToMinor(variant.priceYuan),
         stock: variant.stockText.trim() ? Number(variant.stockText) : null,
         skuCode: variant.skuCode.trim() ? variant.skuCode : null,
+        // 条码在编辑器中是可见且可编辑字段；清空后必须真的保存为 null，
+        // 不能再从旧的透传值恢复，避免用户无法删除过期条码。
         barcode: variant.barcodeText.trim() ? variant.barcodeText : null,
-        // 表列里的 barcode 与编辑值合并（schema 已支持；导入进来的条码不被编辑器清掉）
-        ...(passthrough?.barcode != null && !variant.barcodeText.trim() ? { barcode: passthrough.barcode } : {})
-      }
-    }),
+      })),
     media: mediaItems.value.map(item => ({ ...item }))
   }
 }
@@ -90,14 +87,14 @@ function buildDraft(description: string | null, passthroughVariants: Array<Recor
 const liveIssues = computed<DraftIssue[]>(() => {
   if (loading.value || loadError.value) return serverIssues.value
   try {
-    return productDraftIssues(buildDraft(passthrough.value.description ?? null, passthrough.value.variants ?? [])) as DraftIssue[]
+    return productDraftIssues(buildDraft(passthrough.value.description ?? null)) as DraftIssue[]
   } catch {
     return serverIssues.value
   }
 })
 
 /** get-modify-save 的透传区（本编辑器不展示但草稿里有的字段）。 */
-const passthrough = ref<{ description: string | null; variants: Array<Record<string, unknown>> }>({ description: null, variants: [] })
+const passthrough = ref<{ description: string | null }>({ description: null })
 
 onMounted(async () => {
   await reload()
@@ -126,8 +123,6 @@ async function reload(): Promise<void> {
   }))
   passthrough.value = {
     description: data.draft.description ?? null,
-    // barcode 在表列里、schema 之外：原样带回到构建器
-    variants: (data.draft.variants as unknown as Array<Record<string, unknown>>).map(variant => ({ barcode: (variant as { barcode?: string | null }).barcode ?? null }))
   }
   serverIssues.value = data.issues ?? []
   loadError.value = ''
@@ -218,7 +213,7 @@ async function localizeAll(): Promise<void> {
 // ---- 规格行 ----
 function addVariant(): void {
   if (variants.value.length >= 200) { ws.toast('规格最多 200 行', 'error'); return }
-  variants.value.push({ specText: '', priceYuan: '', stockText: '', skuCode: '' })
+  variants.value.push({ specText: '', priceYuan: '', stockText: '', skuCode: '', barcodeText: '' })
 }
 function removeVariant(index: number): void {
   variants.value.splice(index, 1)
@@ -231,8 +226,7 @@ async function save(): Promise<void> {
     const current = await window.shopilot.products.library.get(props.productId)
     if (!current.ok) { ws.toast('保存失败：' + current.error.message, 'error'); return }
     const fetched = (current.data as { draft: Record<string, unknown> }).draft
-    const passthroughVariants = (fetched.variants as Array<Record<string, unknown>>).map(variant => ({ barcode: (variant as { barcode?: string | null }).barcode ?? null }))
-    const draft = buildDraft((fetched.description as string | null) ?? null, passthroughVariants)
+    const draft = buildDraft((fetched.description as string | null) ?? null)
     const result = await window.shopilot.products.library.save({
       productId: props.productId, draft
     })

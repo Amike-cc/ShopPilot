@@ -167,5 +167,8 @@ describe('导出落盘（主进程 handler 的防呆，C6）', () => {
   it('写盘失败写 failure 审计并如实报错（不再只回 INTERNAL_ERROR、不留痕）', () => {
     expect(HANDLER).toContain("writeAudit('invoice.export', 'failure'")
     expect(HANDLER).toMatch(/写入文件失败/)
+    // 审计 request_id 会在界面展示，不能把 EACCES/ENOENT 携带的绝对路径写进去。
+    expect(HANDLER).toContain('errorCode: String(writeErr?.code ||')
+    expect(HANDLER).not.toContain('error: String(writeErr?.message')
   })
 })

@@ -306,7 +306,7 @@
               <div v-if="!inviteLatest" class="browser-panel-empty invite-live-empty" data-test="invite-live-empty">本店铺还没有邀约运行，点“开始邀约”后这里会实时显示进度。</div>
               <template v-else>
                 <div class="invite-live-stuck" data-test="invite-live-stuck">{{ inviteStuckText(inviteLatest) }}</div>
-                <div class="step-row" v-for="(step, index) in (inviteLatest.steps || [])" :key="`${inviteLatest.id}-${index}`"><span class="s-ico">{{ inviteStepIcon(inviteLatest, index) }}</span><div class="v-info"><div class="row-main">第 {{ index + 1 }} 步 · {{ inviteStepLabel(step) }}</div><div class="row-sub">{{ inviteStepInput(step) }}</div></div></div>
+                <div class="step-row" v-for="(step, index) in (inviteLatest.steps || [])" :key="`${inviteLatest.id}-${index}`"><span class="s-ico">{{ inviteStepIcon(inviteLatest, toStepIndex(index)) }}</span><div class="v-info"><div class="row-main">第 {{ toStepIndex(index) + 1 }} 步 · {{ inviteStepLabel(step) }}</div><div class="row-sub">{{ inviteStepInput(step) }}</div></div></div>
                 <div class="tc-btns" v-if="inviteRunId(inviteLatest)"><button v-if="inviteActive(inviteLatest)" type="button" class="mini-btn" data-test="invite-live-stop" @click="stopInvite(inviteLatest)"><img class="button-icon" :src="browserStopIcon" alt="" />停止</button><button type="button" class="mini-btn" @click="ws.refreshTasks()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button></div>
                 <div v-if="inviteLiveMessage(inviteLatest)" class="row-sub invite-message">{{ inviteLiveMessage(inviteLatest) }}</div>
                 <div ref="inviteLiveLogEl" class="log-box invite-live-log" data-test="invite-live-log"><div v-if="!inviteLogs(inviteLatest).length" class="log-line">等待运行输出…开始邀约后，这里的日志会实时滚动，卡住时看停在最后几行。</div><div v-for="(log, index) in inviteLogs(inviteLatest)" :key="`${inviteRunId(inviteLatest)}-${index}`" class="log-line">{{ inviteLogText(log) }}</div></div>
@@ -1352,6 +1352,10 @@ function inviteStepIcon(task: any, index: number) {
   if (current == null && index === 0 && inviteActive(task)) return '⏳'
   if (current === index && inviteActive(task)) return '⏳'
   return '○'
+}
+function toStepIndex(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0
 }
 function inviteStepLabel(step: any) { return ({ waitMs: '等待页面状态', navigate: '打开平台页面', click: '点击页面元素', input: '填写页面内容', screenshot: '保存页面截图', readText: '读取页面信息' } as Record<string, string>)[step?.type] || step?.type || '任务步骤' }
 function inviteStepInput(step: any) {

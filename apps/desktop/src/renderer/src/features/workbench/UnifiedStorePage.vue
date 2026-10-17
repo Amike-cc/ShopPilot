@@ -7,8 +7,8 @@
         <p>统一管理店铺、平台、登录态和本地浏览器工作区。</p>
       </div>
       <div class="unified-page-actions">
-        <button type="button" class="unified-button ghost" @click="refresh"><img class="button-art" :src="refreshGenIcon" alt="" />刷新</button>
-        <button type="button" class="unified-button primary" @click="openCreate"><img class="button-art" :src="addIcon" alt="" />添加店铺</button>
+        <button type="button" class="unified-button ghost" :disabled="!bridgeAvailable" @click="refresh"><img class="button-art" :src="refreshGenIcon" alt="" />刷新</button>
+        <button type="button" class="unified-button primary" :disabled="!bridgeAvailable" @click="openCreate"><img class="button-art" :src="addIcon" alt="" />添加店铺</button>
       </div>
     </header>
 
@@ -21,11 +21,12 @@
       </select>
       <div class="unified-segment" role="tablist" aria-label="店铺视图">
         <button type="button" :class="{ active: view === 'active' }" @click="view = 'active'">在用店铺</button>
-        <button type="button" :class="{ active: view === 'trash' }" @click="view = 'trash'; void ws.refreshTrash()">回收站 <span>{{ ws.trashStores.length }}</span></button>
+        <button type="button" :disabled="!bridgeAvailable" :class="{ active: view === 'trash' }" @click="showTrash">回收站 <span>{{ ws.trashStores.length }}</span></button>
       </div>
     </div>
 
-    <div v-if="state === 'loading'" class="unified-state"><span class="loader"></span>正在读取店铺…</div>
+    <div v-if="!bridgeAvailable" class="unified-alert error" role="alert">原生桥接不可用（纯渲染预览模式）：店铺数据无法加载</div>
+    <div v-else-if="state === 'loading'" class="unified-state"><span class="loader"></span>正在读取店铺…</div>
     <div v-else-if="view === 'trash'" class="unified-card-grid">
       <article v-for="store in ws.trashStores" :key="store.id" class="unified-store-card">
         <div class="unified-store-card-head"><PlatformIcon :name="store.platform" :size="34" /><div><strong>{{ store.name }}</strong><small>{{ store.platform }} · 已归档</small></div></div>
@@ -88,6 +89,7 @@ const creating = ref(false)
 const createError = ref('')
 // P1-7（2026-10-15 审查）：无 preload（纯渲染调试模式）时不再整页 TypeError 白屏，
 // 平台目录退化为空数组，页面以禁用态渲染。
+const bridgeAvailable = typeof window !== 'undefined' && !!window.shopilot
 const platformDefs = (window.shopilot?.platforms || []) as Array<{ name: string; adminUrl: string }>
 const form = ref({ name: '', platform: platformDefs[0]?.name || '拼多多', adminUrl: platformDefs[0]?.adminUrl || '', tags: '', notes: '', licenseName: '', licenseNo: '' })
 const platforms = computed(() => [...new Set(ws.stores.map(store => store.platform))].sort((a, b) => a.localeCompare(b, 'zh-CN')))
@@ -101,9 +103,15 @@ function shortUrl(value: string) { try { return new URL(value).host } catch { re
 function statusLabel(value: string) { return storeStatusLabel(value) }
 function statusClass(value: string) { return value === 'online' ? 'online' : ['needs_login', 'proxy_error'].includes(value) ? 'warning' : 'offline' }
 function openCreate() { createError.value = ''; createOpen.value = true }
-function refresh() { state.value = 'loading'; void ws.refreshStores().then(() => { state.value = 'ready' }).catch(error => { state.value = 'error'; errorMessage.value = error instanceof Error ? error.message : String(error) }) }
+function showTrash() { view.value = 'trash'; if (bridgeAvailable) void ws.refreshTrash() }
+function refresh() {
+  if (!bridgeAvailable) return
+  state.value = 'loading'
+  void ws.refreshStores().then(() => { state.value = 'ready' }).catch(error => { state.value = 'error'; errorMessage.value = error instanceof Error ? error.message : String(error) })
+}
 function onPlatformChange() { const platform = platformDefs.find(item => item.name === form.value.platform); if (platform && (!form.value.adminUrl || form.value.adminUrl === platformDefs[0]?.adminUrl)) form.value.adminUrl = platform.adminUrl }
 async function submitCreate() {
+  if (!bridgeAvailable) return
   creating.value = true; createError.value = ''
   const response = await ws.createStore({ ...form.value, name: form.value.name.trim(), adminUrl: form.value.adminUrl.trim(), tags: form.value.tags.split(',').map(item => item.trim()).filter(Boolean) })
   creating.value = false
@@ -116,7 +124,7 @@ async function remove(store: StoreRow) { if (window.confirm(`确认将「${store
 async function restore(id: string) { await ws.restoreStore(id) }
 async function purge(store: StoreRow) { if (window.confirm(`彻底删除「${store.name}」后不可恢复，确认继续？`)) await ws.purgeStore(store.id) }
 watch(() => form.value.platform, onPlatformChange)
-onMounted(() => { refresh(); void ws.refreshTrash() })
+onMounted(() => { if (bridgeAvailable) { refresh(); void ws.refreshTrash() } else state.value = 'ready' })
 </script>
 
 <style scoped>

@@ -1,3 +1,27 @@
+# ShopPilot 0.4.74 变更说明（全量复审问题修复与发布加固）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收。
+
+## 本次更新
+
+- 修复本地商品编辑器清空规格条码后仍被旧值透传恢复的问题；新增规格行会正确携带条码字段，保存、实时校验和重新加载保持一致。
+- 补齐本地商品媒体的受控路径、SHA-256 和失败原因类型，避免编辑器与主进程草稿结构漂移。
+- 修复统一工作台在纯渲染预览模式下注册不存在的 preload 事件、调用不存在 IPC 的问题；店铺/任务入口在桥接不可用时显示明确降级状态并禁用原生操作，数据采集卸载后停止轮询和写回。
+- 修复邀约实时步骤索引的模板类型收窄问题，避免异常索引导致错误步骤状态展示。
+- 发票导出失败审计仅记录安全错误码，错误提示不再泄露绝对路径、用户名或 Node 原始错误文本。
+- 更新并锁定 `brace-expansion`、`builder-util-runtime`、`source-map-js` 的安全版本，清理已修复的过期高危豁免条目。
+
+## 验证
+
+- `pnpm typecheck`、`pnpm exec vue-tsc --noEmit`：通过。
+- `pnpm test -- --run`：145 个测试文件、1547 项通过。
+- `pnpm run lint`：0 errors（仓库存量 1145 条 warnings）。
+- `node tools/ci/audit-gate.mjs`：通过（critical=0、high=1 为已批准且未到期豁免、moderate=2）。
+- `pnpm run build`、`pnpm run dist:dir`：通过；Electron 44.7.2 / ABI 149 下打包态 `better-sqlite3` 建表、读写、关闭通过。
+- 打包态 CDP：Agent bridge、缓存维护、WebView 店铺首次打开/关店重开 URL 恢复、客服同店 Cookie 共享/跨店隔离/导航拦截均通过。
+
+---
+
 # ShopPilot 0.4.73 变更说明（审查问题修复与发布加固）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收。

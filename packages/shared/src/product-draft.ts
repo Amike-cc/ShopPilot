@@ -30,6 +30,12 @@ export interface ProductDraftMedia {
   /** 本地化状态（'localized' 才算真的在本地） */
   state?: 'pending' | 'localized' | 'failed' | 'blocked' | 'missing'
   remoteUrl?: string | null
+  /** 本地媒体根目录下的受控相对路径（只由主进程生成）。 */
+  localPath?: string | null
+  /** 内容 SHA-256，用于去重和稳定渲染 key。 */
+  sha256?: string | null
+  /** 最近一次本地化失败的安全原因。 */
+  failReason?: string | null
 }
 
 export interface LocalProductDraft {

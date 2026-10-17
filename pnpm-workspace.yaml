@@ -15,27 +15,15 @@ allowBuilds:
   electron-winstaller: false
   esbuild: true
   vue-demi: true
-# 安全修复（pnpm ≥10.6 起 overrides 放在本文件，不再读 package.json 的 pnpm 字段）：
-# 历史背景：electron-builder 24 在 pnpm 布局下会扁平化依赖树，把根目录那份旧版
-# builder-util-runtime（9.2.4，含 CVE-2026-54673 跨域重定向泄露 PRIVATE-TOKEN / Authorization）
-# 复制进安装包，导致运行时加载到漏洞版本。此处强制全树统一到 9.7.0（修复版）。
-# 2026-10-15 升级到 electron-builder 26.15.3 后复核：electron-updater 6.8.9 与
-# app-builder-lib 26.15.3 都精确依赖 9.7.0，override 变为冗余但无害（防御第三方传递依赖）。
+# 依赖安全覆盖写在根 package.json 的 pnpm.overrides 中：pnpm 10.34 会把它们写入
+# pnpm-lock.yaml 并在安装时真正重解析；仅写在 workspace 配置时旧锁文件可能被错误地
+# 判定为 up to date，导致已修复版本没有落到安装目录。
 minimumReleaseAgeExclude:
   - electron-vite@6.0.0
-overrides:
-  builder-util-runtime: 9.7.0
-  # P0-2 收尾（2026-10-15 审查）：清理升级后仍残留的传递依赖高危项。
-  # brace-expansion <1.1.20 / <2.1.6 有嵌套大括号 DoS（GHSA-qhr7-859c-m2p7、GHSA-6j4f-fj2g-mc7p），
-  # 来自 eslint8 的 minimatch 链；1.x/2.x API 不同，按主版本分线锁到各自修复版。
-  'brace-expansion@^1.0.0': 1.1.20
-  'brace-expansion@^2.0.0': 2.1.6
-  # source-map-js <1.2.2 事件循环 DoS（GHSA-68fv-2mgg-jv7q），锁到修复版（1.x 语义兼容）
-  source-map-js: 1.2.2
 
 # electron-builder 打包时是**按 node_modules 文件系统扁平化收集**生产依赖的（electron-builder 24
 # 时代实测：即使 pnpm-lock.yaml 已全树解析为 9.7.0，它仍从 node_modules 根目录那份实体目录抄走了
-# 旧版本）。显式让 pnpm 把 builder-util-runtime 公开提升到根目录并保持与 overrides 一致；
+# 旧版本）。显式让 pnpm 把 builder-util-runtime 公开提升到根目录并保持与 package overrides 一致；
 # 打包态由 tools/ci/packaged-native-smoke.js（与人工解包抽查）兜底验证。
 publicHoistPattern:
   - builder-util-runtime

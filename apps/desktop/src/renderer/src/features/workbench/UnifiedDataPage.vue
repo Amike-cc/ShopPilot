@@ -746,6 +746,9 @@ const entityCollecting = ref(false)
  */
 const entityProgress = ref<{ total: number; done: number; waiting: string[] } | null>(null)
 const entityReport = ref<any[]>([])
+// 页面切换时让正在等待任务结果的采集流程尽快收尾，避免卸载后的旧流程继续轮询、
+// 再把结果写回已经不存在的组件状态。
+let entityCollectGeneration = 0
 const manual = reactive({ storeId: '', metric: 'biz.orders', value: null as number | null })
 const tabs: Array<{ key: DataMode; label: string }> = [{ key: 'analytics', label: '经营分析' }, { key: 'orders', label: '订单明细' }, { key: 'invoices', label: '发票中心' }]
 const title = computed(() => props.mode === 'orders' ? '订单管理' : props.mode === 'invoices' ? '发票中心' : '数据分析')
@@ -1753,6 +1756,7 @@ async function ensureEntityCollectTask(store: any, steps: any[]): Promise<string
  * **不猜选择器**，它们的店铺会在结果里以 unsupported + 原因如实列出。
  */
 async function collectStoreEntities() {
+  const generation = ++entityCollectGeneration
   const supported = ws.stores.filter(store => !!entityProfileFor(store.platform))
   entityCollecting.value = true
   entityReport.value = []
@@ -1766,6 +1770,7 @@ async function collectStoreEntities() {
     // 回一句"没有需要新填的主体"，而那句结论其实来自上一次的旧快照（比报错更危险）。
     const startFailures = new Map<string, string>()
     for (const store of supported) {
+      if (generation !== entityCollectGeneration) return
       if (!ws.openStoreIds.includes(store.id)) {
         // 引擎不静默拉起店铺浏览器（§4.4）：用户点这个按钮就是要采这几家 → 显式打开。
         // 注意 browser.open 是**返回 {ok:false}** 而不是抛异常，必须看返回值。
@@ -1786,6 +1791,7 @@ async function collectStoreEntities() {
       runIds.push(runId)
       runStore.set(runId, store.name)
     }
+    if (generation !== entityCollectGeneration) return
     await ws.refreshTasks()
     /**
      * 等待：**逐店各算各的超时**，不是一个总时限。
@@ -1803,6 +1809,7 @@ async function collectStoreEntities() {
       entityProgress.value = { total: runIds.length, done: 0, waiting: [...runStore.values()] }
       for (;;) {
         await new Promise(resolve => setTimeout(resolve, 3000))
+        if (generation !== entityCollectGeneration) return
         const list = await window.shopilot.task.list()
         const all = (list.ok ? (list.data as any[]) : [])
         for (const id of [...pending]) {
@@ -1825,9 +1832,11 @@ async function collectStoreEntities() {
         if (!pending.size) break
       }
     }
+    if (generation !== entityCollectGeneration) return
     // 写回：空则填、不一致不覆盖（判定在主进程，界面只如实展示结果）
     const applied = await window.shopilot.overview.entityApply()
     if (!applied.ok) { ws.toast('写回主体信息失败：' + applied.error.message, 'error'); return }
+    if (generation !== entityCollectGeneration) return
     const appliedRows = ((applied.data as any)?.rows || []) as any[]
     // 没跑起来的店：把原因钉在它自己那一行上（每店一行，不加重复行）
     entityReport.value = appliedRows.map(row => startFailures.has(row.storeId)
@@ -1996,8 +2005,16 @@ async function exportInvoices(): Promise<boolean> {
 }
 function onTaskProgress(event: any) { if (event?.phase === 'finished' || event?.phase === 'failed') void load() }
 watch(() => props.mode, () => { void load() })
-onMounted(() => { window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress); void load(); void ws.refreshTasks() })
-onBeforeUnmount(() => { window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress) })
+onMounted(() => {
+  if (!window.shopilot) return
+  window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress)
+  void load()
+  void ws.refreshTasks()
+})
+onBeforeUnmount(() => {
+  entityCollectGeneration++
+  window.shopilot?.off?.(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress)
+})
 </script>
 
 <style scoped>

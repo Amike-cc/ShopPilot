@@ -1,12 +1,17 @@
 {
   "name": "shopilot",
-  "version": "0.4.73",
+  "version": "0.4.74",
   "description": "ShopPilot - 电商店铺浏览器工作台",
   "private": true,
   "packageManager": "pnpm@10.34.7",
   "pnpm": {
     "overrides": {
-      "http-cache-semantics": "4.3.0"
+      "http-cache-semantics": "4.3.0",
+      "builder-util-runtime": "9.7.0",
+      "brace-expansion@^1.1.7": "1.1.21",
+      "brace-expansion@^2.0.1": "2.1.7",
+      "brace-expansion@^2.0.2": "2.1.7",
+      "source-map-js": "1.2.2"
     }
   },
   "main": "apps/desktop/out/main/index.js",

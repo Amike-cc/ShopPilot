@@ -368,9 +368,10 @@ export function registerProfileAndMiscHandlers(): void {
       } catch (writeErr: any) {
         // 写盘失败以前只回错误、不留审计——失败的导出尝试同样要可查（C6）
         writeAudit('invoice.export', 'failure', {
-          requestId: JSON.stringify({ rows: dataRows.length, scope: licenseKey || 'all', stage: 'write', error: String(writeErr?.message || writeErr).slice(0, 200) })
+          // request_id 会在审计中心展示；不要把 Node 的绝对路径/用户名写进可见审计记录。
+          requestId: JSON.stringify({ rows: dataRows.length, scope: licenseKey || 'all', stage: 'write', errorCode: String(writeErr?.code || 'WRITE_FAILED').slice(0, 40) })
         })
-        return error(ERROR_CODES.INTERNAL_ERROR.code, `写入文件失败：${String(writeErr?.message || writeErr)}`, requestId)
+        return error(ERROR_CODES.INTERNAL_ERROR.code, '写入文件失败，请检查保存位置和文件权限后重试', requestId)
       }
       // B2：把"待开票 / 无需操作"两个数都写进审计与提示——文件名与界面合计都叫"待开票"，
       // 而 CSV 里同时含已提交的流水（pending:false），只说总数会让人对不上账。

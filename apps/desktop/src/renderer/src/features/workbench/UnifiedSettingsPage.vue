@@ -1474,6 +1474,8 @@ watch(squareDraft, () => { entryValidationError.value = '' }, { deep: true })
 watch(() => props.initialTab, value => { if (value) selectTab(value) })
 
 onMounted(() => {
+  // 纯渲染预览没有 preload；保持页面可见，但不要在挂载阶段直接调用不存在的桥接。
+  if (!window.shopilot) return
   window.shopilot.on(EVENT_CHANNELS.UPDATE_STATUS_CHANGED, onUpdateStatus)
   window.shopilot.on(EVENT_CHANNELS.UPDATE_PROGRESS, onUpdateStatus)
   void loadPlatformUrls()
@@ -1487,8 +1489,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (savedMessageTimer) clearTimeout(savedMessageTimer)
-  window.shopilot.off(EVENT_CHANNELS.UPDATE_STATUS_CHANGED, onUpdateStatus)
-  window.shopilot.off(EVENT_CHANNELS.UPDATE_PROGRESS, onUpdateStatus)
+  window.shopilot?.off?.(EVENT_CHANNELS.UPDATE_STATUS_CHANGED, onUpdateStatus)
+  window.shopilot?.off?.(EVENT_CHANNELS.UPDATE_PROGRESS, onUpdateStatus)
 })
 </script>
 

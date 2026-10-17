@@ -1,6 +1,7 @@
 <template>
   <section :class="['unified-page unified-task-page', { workbench: props.overlay, 'task-overlay-page': props.overlay, 'picker-mode': picking }]" data-test="unified-tasks-page">
-    <header class="unified-page-head"><div><span class="dashboard-eyebrow">WORKSPACE / TASKS</span><h1>AI 任务中心</h1><p>任务定义、运行状态、进度和人工确认都在同一工作区管理。</p></div><div class="unified-page-actions"><button type="button" class="unified-button ghost" @click="ws.refreshTasks()"><img class="button-art" :src="refreshGenIcon" alt="" />刷新</button><button type="button" class="unified-button primary" data-test="task-new" :disabled="!ws.stores.length" @click="openCreate"><img class="button-art" :src="taskRunIcon" alt="" />新建自定义任务</button></div></header>
+    <header class="unified-page-head"><div><span class="dashboard-eyebrow">WORKSPACE / TASKS</span><h1>AI 任务中心</h1><p>任务定义、运行状态、进度和人工确认都在同一工作区管理。</p></div><div class="unified-page-actions"><button type="button" class="unified-button ghost" :disabled="!bridgeAvailable" @click="refreshTasks"><img class="button-art" :src="refreshGenIcon" alt="" />刷新</button><button type="button" class="unified-button primary" data-test="task-new" :disabled="!bridgeAvailable || !ws.stores.length" @click="openCreate"><img class="button-art" :src="taskRunIcon" alt="" />新建自定义任务</button></div></header>
+    <div v-if="!bridgeAvailable" class="unified-alert error" role="alert">原生桥接不可用（纯渲染预览模式）：任务功能无法加载</div>
     <div class="task-summary-grid"><div class="task-summary"><span>全部任务</span><strong>{{ visibleTasks.length }}</strong></div><div class="task-summary"><span>运行中</span><strong>{{ activeTasks }}</strong></div><div class="task-summary"><span>等待确认</span><strong>{{ waitingTasks }}</strong></div><div class="task-summary"><span>已完成</span><strong>{{ completedTasks }}</strong></div></div>
     <div class="unified-toolbar-card"><label class="unified-search"><img :src="searchIcon" alt="" /><input v-model="query" type="search" placeholder="搜索任务名称…" /></label><select v-model="storeFilter" aria-label="任务店铺筛选"><option value="">全部店铺</option><option v-for="store in ws.stores" :key="store.id" :value="store.id">{{ store.name }}</option></select><select v-model="statusFilter" aria-label="任务状态筛选"><option value="">全部状态</option><option value="running">运行中</option><option value="queued">排队中</option><option value="waiting_confirmation">等待确认</option><option value="succeeded">已完成</option><option value="failed">执行失败</option><option value="cancelled">已取消</option></select></div>
     <div v-if="!filteredTasks.length" class="unified-empty"><img class="task-empty-art" :src="taskEmptyIcon" alt="" /><strong>暂无匹配任务</strong><span>创建任务后，进度与执行结果会由 TaskRunner 实时回传。</span></div>
@@ -34,6 +35,7 @@ import workspaceOpenIcon from '../../assets/generated/ui-icons/workspace-open-ge
 const emit = defineEmits<{ 'open-store': [storeId: string]; close: []; 'picking-change': [value: boolean] }>()
 const props = defineProps<{ autoCreate?: boolean; overlay?: boolean }>()
 const ws = useWorkspaceStore()
+const bridgeAvailable = typeof window !== 'undefined' && !!window.shopilot
 const query = ref('')
 const storeFilter = ref('')
 const statusFilter = ref('')
@@ -68,6 +70,12 @@ function taskStatusClass(task: any) { return `status-${effectiveStatus(task)}` }
 function taskProgress(task: any) { const run = task.latestRun; if (!run) return 0; const live = run.id ? ws.runLive[run.id] : null; if ((live?.status || run.status) === 'succeeded') return 100; const step = live?.stepIndex ?? run.currentStep; return task.steps?.length && step != null ? Math.min(99, Math.max(0, Math.round(((step + 1) / task.steps.length) * 100))) : 0 }
 function latestRunTime(task: any) { const at = task.latestRun?.finishedAt || task.latestRun?.finished_at || task.latestRun?.startedAt || task.latestRun?.started_at; return at ? new Date(at).toLocaleString('zh-CN') : '尚未运行' }
 function storeName(id?: string) { return ws.stores.find(store => store.id === id)?.name || (id ? '店铺已删除' : '全部店铺') }
+function requireBridge(): boolean {
+  if (bridgeAvailable) return true
+  ws.toast('原生桥接不可用（纯渲染预览模式），任务功能暂不可用', 'error')
+  return false
+}
+function refreshTasks(): void { if (requireBridge()) void ws.refreshTasks() }
 function nextFrame(): Promise<void> {
   return new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
 }
@@ -95,6 +103,7 @@ async function waitForStorePageReady(storeId: string, timeoutMs = 10000): Promis
   }
 }
 async function runTask(task: any) {
+  if (!requireBridge()) return
   if (task.storeScope) {
     if (ws.displayedStoreId !== task.storeScope) emit('open-store', task.storeScope)
     const ready = await waitForStorePageReady(task.storeScope)
@@ -106,11 +115,12 @@ async function runTask(task: any) {
   const result = await window.shopilot.task.run(task.id, task.storeScope)
   if (!result.ok) ws.toast('运行失败：' + result.error.message, 'error'); else await ws.refreshTasks()
 }
-async function pauseTask(task: any) { const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.pause(id); if (!result.ok) ws.toast('暂停失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
-async function resumeTask(task: any) { const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.resume(id); if (!result.ok) ws.toast('继续失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
-async function cancelTask(task: any) { const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.cancel(id); if (!result.ok) ws.toast('取消失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
-async function confirmTask(task: any, approved: boolean) { const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.confirm(id, approved); if (!result.ok) ws.toast('确认失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
+async function pauseTask(task: any) { if (!requireBridge()) return; const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.pause(id); if (!result.ok) ws.toast('暂停失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
+async function resumeTask(task: any) { if (!requireBridge()) return; const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.resume(id); if (!result.ok) ws.toast('继续失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
+async function cancelTask(task: any) { if (!requireBridge()) return; const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.cancel(id); if (!result.ok) ws.toast('取消失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
+async function confirmTask(task: any, approved: boolean) { if (!requireBridge()) return; const id = task.latestRun?.id; if (!id) return; const result = await window.shopilot.task.confirm(id, approved); if (!result.ok) ws.toast('确认失败：' + result.error.message, 'error'); else await ws.refreshTasks() }
 async function deleteTask(task: any) {
+  if (!requireBridge()) return
   // B2（2026-10-15 审查）：运行中的任务删除会先协作取消并**等它真正停下**（主进程有界等待），
   // 确认框要把这个行为说清楚，避免用户以为"删除=立刻消失"而实际还要等几秒。
   const text = isActive(task)
@@ -131,6 +141,7 @@ function setPicking(value: boolean) {
 }
 function closeCreate() { if (picking.value) return; createOpen.value = false; if (props.overlay) emit('close') }
 async function pickElement(mode: PickMode): Promise<ElementPickResult> {
+  if (!requireBridge()) return { ok: false, reason: 'BRIDGE_UNAVAILABLE' } as ElementPickResult
   if (!draftStore.value) return { ok: false, error: '请先选择店铺' } as unknown as ElementPickResult
   if (ws.displayedStoreId !== draftStore.value) await ws.showStore(draftStore.value)
   if (props.overlay) {
@@ -178,7 +189,7 @@ async function syncOverlay() {
   // 店铺页面现在是 Renderer DOM 里的 <webview>，弹窗靠 CSS 层级盖在上面即可；
   // 这里不再摘除/隐藏页面（旧的"原生视图摘挂"会让页面状态与登录流程一起丢）。
 }
-async function submitTask() { if (!canSubmit.value) return; submitting.value = true; const result = await window.shopilot.task.create({ name: draftName.value.trim() || `自定义任务 · ${new Date().toLocaleString('zh-CN')}`, storeScope: draftStore.value, steps: toEngineSteps(draftSteps.value), schedule: draftEveryMin.value ? { everyMs: Number(draftEveryMin.value) * 60000 } : null }); submitting.value = false; if (!result.ok) { ws.toast('创建失败：' + result.error.message, 'error'); return } createOpen.value = false; ws.toast('任务已创建', 'success'); await ws.refreshTasks(); if (props.overlay) emit('close') }
+async function submitTask() { if (!requireBridge() || !canSubmit.value) return; submitting.value = true; const result = await window.shopilot.task.create({ name: draftName.value.trim() || `自定义任务 · ${new Date().toLocaleString('zh-CN')}`, storeScope: draftStore.value, steps: toEngineSteps(draftSteps.value), schedule: draftEveryMin.value ? { everyMs: Number(draftEveryMin.value) * 60000 } : null }); submitting.value = false; if (!result.ok) { ws.toast('创建失败：' + result.error.message, 'error'); return } createOpen.value = false; ws.toast('任务已创建', 'success'); await ws.refreshTasks(); if (props.overlay) emit('close') }
 watch(() => [props.overlay, createOpen.value], () => { void syncOverlay() }, { immediate: true })
 onBeforeUnmount(() => {
   // 弹层在拾取途中被卸载时复位布局状态；宿主页面本身不动（它是 DOM <webview>，不靠这里隐藏）。
@@ -187,7 +198,7 @@ onBeforeUnmount(() => {
     emit('picking-change', false)
   }
 })
-onMounted(() => { void ws.refreshTasks() })
+onMounted(() => { if (bridgeAvailable) void ws.refreshTasks() })
 watch(() => props.autoCreate, value => { if (value) openCreate() }, { immediate: true })
 </script>
 
