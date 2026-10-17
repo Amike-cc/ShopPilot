@@ -222,25 +222,29 @@ interface ExtensionItem {
 
 ---
 
-## 10. 文件改动清单（预估）
+## 10. 文件改动清单（实际）
 
 ### 新增
-- `apps/desktop/src/main/services/extension-manager.ts`：目录扫描、导入复制、启用表、Session 加载/卸载、重载。
+- `apps/desktop/src/main/services/extension-manager.ts`：目录扫描、导入复制、启用表、Session 加载/卸载、重载、打开目录解析。
 - `apps/desktop/src/main/services/extension-manifest.ts`：纯函数校验（结构/权限/注入范围/大小/符号链接）。
-- `apps/desktop/src/main/ipc/extension-handlers.ts`：6 个 IPC + 审计。
-- `tests/unit/extension-manifest.test.ts`：校验矩阵。
-- `tests/unit/extension-scope.test.ts`：master/enabled/会话映射。
-- `tools/acceptance/extensions-cdp-verify.js`：fixture 扩展端到端。
+- `apps/desktop/src/main/ipc/extension-handlers.ts`：7 个 IPC（含 `openDir`）+ 审计 + 路径边界。
+- `packages/shared/src/contracts/extensions.ts`、`packages/shared/src/schemas/extension.ts`：Renderer 可见契约与入参 schema。
+- `tests/unit/extension-manifest.test.ts`：校验矩阵（14 项）。
+- `tests/unit/extension-template.test.ts`：模板必须能通过校验、引用的脚本存在、不含受限权限（3 项）。
+- `tools/acceptance/extensions-cdp-verify.js`：15 项端到端（含模板导入全链路、目录入口、路径不泄露）。
 - `tests/fixtures/extensions/dom-marker/`：`manifest.json` + `content.js`（写 `data-shopilot-fixture`）。
+- `docs/extension-template/`：可直接导入的自研插件模板（manifest / content.js / content.css / README）。
 
 ### 修改
-- `packages/shared/src/contracts/ipc.ts`：6 个频道 + `ExtensionItem` 类型。
+- `packages/shared/src/contracts/ipc.ts`：7 个频道。
 - `apps/desktop/src/preload/index.ts` + `env.d.ts`：`window.shopilot.extensions.*`。
-- `apps/desktop/src/main/browser/session-manager.ts`：`configureSession` 尾部应用扩展。
-- `apps/desktop/src/main/browser/window-manager.ts`：启用/停用/重载后重载已打开标签页（复用现有 `reload`）。
-- `apps/desktop/src/renderer/src/features/workbench/UnifiedSettingsPage.vue`：新页签 + 列表 UI。
+- `apps/desktop/src/main/browser/session-manager.ts`：`configureSession` 尾部应用扩展（失败只记录，不阻断开店）。
+- `apps/desktop/src/main/ipc/extension-handlers.ts`：启用/停用/重载/删除后重载已打开店铺页。
+- `apps/desktop/src/main/services/audit-logger.ts`：`extension.*` 审计动作。
+- `apps/desktop/src/renderer/src/features/workbench/UnifiedSettingsPage.vue`：第 6 页签 + 列表/开关/目录/重载/删除。
+- `apps/desktop/src/renderer/src/features/workbench/DashboardView.vue`：设置页签白名单加 `extensions`。
 - `tools/acceptance/settings-cdp-verify.js`、`m1-cdp-verify.js`：6 页签契约与无横溢断言。
-- `docs/DEVELOPMENT_SPEC.md` / `docs/RELEASE_NOTES.md`：能力边界说明。
+- `README.md`：能力、验收命令与已知边界。
 
 ---
 
@@ -253,16 +257,22 @@ interface ExtensionItem {
 4. 符号链接/超过 20MB/超过 2000 文件拒绝。
 5. master 关闭时 `enabledIds` 不生效；启用列表只影响目标 Session。
 
-### 11.2 真机（CDP）
-前置：把 fixture 扩展预复制到临时 `userData/extensions/fixture/`（避免为测试开后门 IPC）。
+### 11.2 真机（CDP）—— `extensions-cdp-verify.js` 15/15 通过
 
-1. 启动应用 → 打开本地测试店铺 → 页面出现 `data-shopilot-fixture="1"`。
-2. `profile:verify` 的 UA/语言/时区/屏幕仍为 `verified`。
-3. 设置里关闭该扩展 → 已开标签页自动重载 → 标记消失；`session.extensions.getAllExtensions()` 为空。
-4. 重新启用 → 重载 → 标记恢复。
-5. 导入一个含 `nativeMessaging` 的清单 → 被拒，错误码 `EXTENSION_PERMISSION_BLOCKED`，目录未落盘。
-6. 删除扩展 → 管理目录不存在，列表回到空状态。
-7. 总开关关闭 → 所有店铺重载后均无标记。
+前置：临时 `userData/extensions/` 预置合法 fixture（`ext_fix00001`）与非法 fixture（`ext_bad00001`，申请 `nativeMessaging`）。
+
+1. 列表识别合法/非法清单，总开关默认关闭。
+2. 开启总开关 + 启用合法扩展 → 状态 `enabled`。
+3. 打开店铺 → content script 注入（`data-shopilot-fixture="1"`）。
+4. 加载扩展后 `profile:verify` 的 UA/语言/时区/屏幕仍为 `verified`。
+5. 停用 → 已开页面重载 → 标记消失；重新启用 → 标记恢复。
+6. 关闭总开关 → 卸载并重载 → 标记消失。
+7. 删除非法扩展 → 目录清理、列表只剩合法项。
+8. 打开不存在的扩展目录 → `EXTENSION_NOT_FOUND`，回包不含盘符路径。
+9. 扩展页签存在「打开扩展目录」（根目录 + 单扩展）入口。
+10. **导入自研模板（真实全链路：校验 → 复制 → 入列表）**，默认未启用。
+11. 启用模板 → 店铺页出现 `#__shopilot_my_extension__` 徽章且样式生效（宽度 > 0、未溢出视口）。
+12. 删除模板 → 管理目录与列表同步清理。
 
 ### 11.3 回归
 - `m1-runner`（浏览器/布局/会话）、`sec-runner`（会话包/应用锁）、`settings-cdp-verify`（页签契约）必须全绿。
@@ -270,22 +280,42 @@ interface ExtensionItem {
 
 ---
 
-## 12. 分期与工作量
+## 12. 分期与实施状态
 
-| 阶段 | 内容 | 预估 |
+| 阶段 | 内容 | 状态 |
 |---|---|---|
-| P0 | manifest 校验 + 管理目录 + Session 加载/卸载 + IPC + 单测 | 1 天 |
-| P1 | 设置页新页签 + 列表/开关/删除 + fixture 真机验收 | 0.5–1 天 |
-| P2 | 真实扩展兼容性记录、webRequest 冲突提示、清单哈希/完整性 | 1 天 |
+| P0 | manifest 校验 + 管理目录 + Session 加载/卸载 + IPC + 单测 | ✅ 已实施（含 6 个 IPC + 审计 + 路径边界） |
+| P1 | 设置页新页签 + 列表/开关/删除 + fixture 真机验收 | ✅ 已实施（第 6 页签；验收 15/15） |
+| P1.5 | **自研插件工作流**：打开扩展目录（根/单个）+ 模板 + 导入全链路验收 | ✅ 已实施（`docs/extension-template/`、`extensions:openDir`） |
+| P2 | 真实扩展兼容性记录、webRequest 冲突提示、清单哈希/完整性 | ⬜ 未做（需要具体目标扩展才能逐项实测） |
 
 风险缓冲：Electron 扩展 API 的行为差异（尤其 MV3 service worker）需要按目标扩展实测，不能只靠单测。
 
+### 12.1 实际实现与设计的差异
+
+| 设计 | 实际 | 原因 |
+|---|---|---|
+| 6 个 IPC | 7 个（多 `extensions:openDir`） | 自研插件必须能编辑应用内副本，否则「导入=复制」会让用户改原目录后重载无效 |
+| 导入路径只来自 `dialog.showOpenDialog` | 增加 `SHOPILOT_TEST_EXTENSION_IMPORT_DIR`（仅 `SHOPILOT_ACCEPTANCE=1` 生效） | 打包版无法驱动原生对话框；钩子只替代“选目录”，复制的校验/边界完全一致 |
+| 未规划插件模板 | 增加 `docs/extension-template/`（manifest + content.js + content.css + README） | 用户目标是“自己制作插件”，模板决定第一次导入能否成功 |
+| P2 才做每店作用域 | 仍是全局总开关 + 启用列表 | 与设计一致，未扩到每店 |
+
+### 12.2 自研插件的工作流（已实现）
+
+1. 复制 `docs/extension-template/` 到自己目录，改 `name` / `version` / `matches`；
+2. 设置中心 → 浏览器扩展 → 开总开关 → 「导入扩展文件夹」选中该目录；
+3. 列表里「启用」→ 打开/刷新店铺页 → 页面右下角出现徽章；
+4. 改代码：点该行「目录」打开**应用内副本**（不是原目录），编辑后点「重载」，刷新店铺页生效；
+5. 迭代期间想保留版本管理，就改完重新导入一次并删掉旧条目（slug 是随机生成，不做原地覆盖）。
+
+已知限制：没有给店铺页开 DevTools 的入口，调试靠页面内可见反馈（模板演示了把状态写进固定容器）。
+
 ---
 
-## 13. 待产品确认的问题
+## 13. 待产品确认的问题（已按默认值实施，仍可调整）
 
-1. **目标扩展是什么**：广告拦截 / 翻译 / 比价 / ERP 插件？不同目标决定 MV3 兼容性和 `webRequest` 是否必须。
-2. **作用域**：全局启用，还是“每店可选”？本文按全局 + 总开关设计，每店作用域留作 P2。
-3. **客服页面是否也加载**：本文按“是”（同一店铺 Session），若担心客服页被扩展干扰可关闭。
-4. **是否接受 `world:"MAIN"`**：本文 MVP 拒绝；若目标扩展必须主世界，需要单独设计指纹优先级与冲突检测。
-5. **是否要做清单哈希/签名**：本文 P2 可选项；不做则信任边界=“用户导入的本地代码”。
+1. **目标扩展是什么**：广告拦截 / 翻译 / 比价 / ERP 插件？当前按“页面内脚本”设计，`webRequest` 允许声明但会影响指纹一致性。
+2. **作用域**：已按全局总开关 + 启用列表实现；每店作用域留作 P2。
+3. **客服页面是否也加载**：已按“是”（同一店铺 Session）实现。
+4. **是否接受 `world:"MAIN"`**：仍拒绝；如目标扩展必须主世界，需要单独设计指纹优先级与冲突检测。
+5. **是否要做清单哈希/签名**：未做；当前信任边界=“用户导入的本地代码”（导入时会复制并校验结构/权限/大小）。

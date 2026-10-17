@@ -109,20 +109,20 @@
 |---|---|
 | `pnpm typecheck` | **0 错误** |
 | `pnpm lint` | **0 error**（1152 warning，历史存量） |
-| `pnpm test` | **147 文件 / 1569 用例全过**（含扩展清单边界回归） |
+| `pnpm test` | **148 文件 / 1572 用例全过**（含扩展清单边界回归） |
 | `pnpm build` + `electron-builder --dir` | 成功 |
 | `m1-runner`（工作台全链路） | **108/108** |
 | `m2-runner`（代理/指纹） | 两阶段 **PASS** |
 | `m3-runner`（任务引擎） | **114/114** |
 | `sec-runner`（会话/应用锁） | **44/44** |
-| `settings-cdp-verify` | **46/46** |
+| `settings-cdp-verify` | **47/47** |
 | `products-redesign-cdp-verify` | **44/44** |
 | `agent-cdp-runner` | **PASS（11 项）** |
 | `dashboard-apps-cdp-verify`（新增） | **10/10** |
 | `m4-runner`（安装/升级/卸载） | **13/13** |
 | `pnpm audit --prod` | 0 漏洞 |
 
-> 说明：真机套件在本机偶发被宿主注入的 Chromium 断点打断（`renderer gone exitCode=-2147483645`，同时 Network/Audio 崩溃）。同一命令清掉残留 `ShopPilot.exe` 后复跑即 108/108、46/46、44/44；这不是代码回归，详见 §5。
+> 说明：真机套件在本机偶发被宿主注入的 Chromium 断点打断（`renderer gone exitCode=-2147483645`，同时 Network/Audio 崩溃）。同一命令清掉残留 `ShopPilot.exe` 后复跑即 108/108、47/47、44/44；这不是代码回归，详见 §5。
 
 ---
 

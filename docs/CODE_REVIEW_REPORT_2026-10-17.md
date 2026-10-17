@@ -17,7 +17,7 @@
 | 依赖配置 | 通过 | `pnpm@10.34.7` 锁定；`better-sqlite3` 走 prebuilds、显式禁用编译符合 CI 现实；`pnpm audit --prod` 0 漏洞 |
 | 文件完整性 | 通过 | `tsc` + `vue-tsc` 均 0 错误；所有资源/组件引用可解析；构建产物完整 |
 | 逻辑一致性 | 通过（已修 2 处产品缺陷） | 244 个 IPC 通道：无未定义引用、无孤儿通道；主进程处理器 192 个静态注册 + Agent 域动态注册/统一禁用 |
-| 单元测试 | 通过 | 147 个测试文件 / **1569** 个用例全绿 |
+| 单元测试 | 通过 | 148 个测试文件 / **1572** 个用例全绿 |
 | 打包版验收 | 通过 | M1 108/108、M2 阶段 1 30/30 + 指纹字段实测、M3 114/114、SEC 44/44、M4 13/13、更新 16/16、自定义任务 54/54、邀约实时日志 16/16 |
 
 ---
@@ -53,13 +53,13 @@
 |---|---|---|
 | `pnpm typecheck` | 全量 TS（含 `.vue` 由 `vue-tsc` 单独验证） | **0 错误** |
 | `pnpm lint` | 全量 ESLint | **0 error**（1152 warning） |
-| `pnpm test` | 147 文件 / 1569 用例 | **1569/1569** |
+| `pnpm test` | 148 文件 / 1572 用例 | **1572/1572** |
 | `pnpm build` + `electron-builder --dir` | 主/预加载/渲染 + 打包 | **成功** |
 | `tools/acceptance/m1-runner.js` | 店铺 CRUD / webview / 隔离 / 下载 / 标签 / 环境 / 审计 / 回收站 / 布局收缩 / UI 冒烟 | **108/108** |
 | `tools/acceptance/m2-runner.js` | 代理 407 / 代理体检 / 备份 / 指纹 12 字段实测 | **35/35**（两阶段 PASS） |
 | `tools/acceptance/m3-runner.js` | 任务引擎 / 调度 / 门禁 / 邀约面板 / 任务 UI | **114/114** |
 | `tools/acceptance/sec-runner.js` | 会话包导出导入 / Cookie 查看器 / 应用锁 / 空闲锁定 / 代理巡检 / 审计 | **44/44** |
-| `tools/acceptance/settings-cdp-verify.js` | 6 页签 / 平台入口 / 三套 AI / 应用锁 / 备份恢复 / 自动采集 / 更新偏好 / 无横溢 | **46/46** |
+| `tools/acceptance/settings-cdp-verify.js` | 6 页签 / 平台入口 / 三套 AI / 应用锁 / 备份恢复 / 自动采集 / 更新偏好 / 无横溢 | **47/47** |
 | `tools/acceptance/invoice-license-local-verify.js` | 营业执照分账 / 按主体视图 / 筛选 / 精简 UI / DB 迁移 | **51/51** |
 | `tools/acceptance/products-redesign-cdp-verify.js` | 三 Tab / 空态 / 分页 / 搜索 / 新建编辑 / 复制 / 归档 / 批量改价打标 / CSV 导入导出 | **44/44** |
 | `tools/acceptance/agent-cdp-runner.js` | Agent 纯文本边界 / 旧操作通道拒绝 / Key 不落 DOM/日志 | **11/11** |
@@ -103,7 +103,7 @@
 - **修复**：
   - `password-dialog.ts:94-110`：打包态仅在 `SHOPILOT_ACCEPTANCE=1` 时启用钩子（仍要求 `SHOPILOT_TEST_PASSWORD` / `SHOPILOT_TEST_AUTOCONFIRM` 同时在场），首次启用写 warn 日志留痕。
   - `sec-runner.js`、`settings-cdp-verify.js`、`artifacts/run-with-app.cjs` 显式注入 `SHOPILOT_ACCEPTANCE=1`。
-- **验证**：SEC **44/44**；设置 **46/46**。
+- **验证**：SEC **44/44**；设置 **47/47**。
 
 ### BUG-4（P2，验收基础设施）M3 用 `location.reload()` 后立刻求值，CDP 永不返回
 
@@ -118,7 +118,7 @@
 - **现象**：`settings-cdp-verify.js` 等待 `127.0.0.1:9238/json/version` 超时，0 项执行。
 - **根因**：其他验收脚本已迁移到 `app-launch.js`（默认打包版），这两个仍硬编码 `node_modules/electron/dist/electron.exe`；本机宿主对源码 Electron 子进程有拦截，DevToolsActivePort 不生成。
 - **修复**：两脚本改用 `resolveApp/appArgs`（`settings-cdp-verify.js` 顶部与启动处、`invoice-license-local-verify.js` 顶部与启动处），并修正设置脚本里 `SHOPPILOT_TEST_AUTOCONFIRM` 的拼写（少一个 `O`）。
-- **验证**：设置 **46/46**、发票 **51/51**。
+- **验证**：设置 **47/47**、发票 **51/51**。
 
 ### BUG-6（P2，验收基础设施）商品验收依赖真实库残留数据，隔离库必失败
 
@@ -138,13 +138,13 @@
 - **现象**：打包版冷启动时 `平台入口页同屏两组地址` 读到 `rows:0, groups:[false,false]`。
 - **根因**：`openSettings()` 点入口后固定等 500ms 再点页签；设置页异步挂载（读取 settings + 渲染 5 个页签）可能超过 1s。
 - **修复**（`settings-cdp-verify.js:143-160`）：改为有界轮询入口/弹层/目标页签/目标面板，最多 4s。
-- **验证**：连续多轮 **46/46**。
+- **验证**：连续多轮 **47/47**。
 
 ### BUG-8（P3，验收基础设施）关于页断言写死“开发环境”，打包版必红
 
 - **现象**：打包版下初始文案是“可以检查更新”、检查结果是真实网络/配置结果，断言 `/开发环境/` 失败。
 - **修复**：断言放宽为“开发环境 | 可以检查更新 | 免安装”，检查更新结果接受“开发环境 | 已是最新 | 失败 | 检查 | 免安装 | 更新配置”；用例名改为“真实运行环境结果”。
-- **验证**：设置 **46/46**。
+- **验证**：设置 **47/47**。
 
 ### BUG-9（P1，产品运行时）切店同步关闭 DOM `<webview>` 导致 guest 渲染进程崩溃
 
@@ -161,7 +161,7 @@
 ### 浏览器扩展 MVP（受控实施）
 - 新增主进程目录管理、manifest/权限/host 范围校验、符号链接/文件数/总大小限制、按店铺 Session 加载与运行时卸载；设置中心提供总开关、启停、重载、删除和失败原因。
 - 渲染层只传应用生成的 `ext_` slug，导入路径只能来自主进程目录选择框；所有变更写审计，已开店铺页面在扩展状态变化后重载。
-- 验证：147 个测试文件 / 1569 项通过；扩展清单边界单测覆盖 MV2 host pattern、可选 host、受限权限、MAIN world、file/ftp 范围；真实第三方扩展兼容性和人工桌面验收仍为 `UNTESTED`，因此维持 `INTERNAL_BUILD`。
+- 验证：148 个测试文件 / 1572 项通过；浏览器扩展清单/模板单测覆盖 MV2 host pattern、可选 host、受限权限、MAIN world、file/ftp 范围；真实第三方扩展兼容性和人工桌面验收仍为 `UNTESTED`，因此维持 `INTERNAL_BUILD`。
 
 ---
 

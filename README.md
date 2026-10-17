@@ -9,7 +9,7 @@
 **版本**: v0.4.75 · **构建标签**: `INTERNAL_BUILD`（未做代码签名，§21.5）
 **里程碑**: M0 技术验证 ✅ · M1 工作台核心 ✅ · M2 环境/代理/备份 ✅ · M3 任务辅助 ✅ · M4 发布工程 ✅ · 自动更新（§21）✅
 **界面**: 2026-09-29 按设计稿复刻完成（深色左栏 248px + 深色「销售概览」hero 卡 + 浅色内容区：页头面包屑/时钟/通知/头像、六项 KPI 带涨跌、双序列趋势图、四宫格快捷操作，右栏平台同步/AI 助手/待办任务；工作台内嵌页面与其余页面同步浅色化）
-**验收**: Vitest 147 个文件 / 1569 项通过；M1 108/108（含真实 DOM `<webview>`、重载重注册和跨店隔离）；M2 阶段 1 30/30、阶段 2 指纹字段实测通过；M3 114/114；安全 44/44；M4 13/13（解包、安装、升级、卸载）；自定义任务 54/54；达人邀约实时日志 16/16；Agent 域与打包 smoke 通过。未做代码签名，仍需真实平台登录和人工逐项桌面验收；其余历史结果见 `docs/RELEASE_NOTES.md`，本版清单见 `release/release.json`。
+**验收**: Vitest 148 个文件 / 1572 项通过；M1 108/108（含真实 DOM `<webview>`、重载重注册和跨店隔离）；M2 阶段 1 30/30、阶段 2 指纹字段实测通过；M3 114/114；安全 44/44；设置中心 47/47（6 页签）；浏览器扩展 15/15；商品管理 44/44；发票中心 51/51；M4 13/13（解包、安装、升级、卸载）；自定义任务 54/54；达人邀约实时日志 16/16；Agent 域与打包 smoke 通过。未做代码签名，仍需真实平台登录和人工逐项桌面验收；其余历史结果见 `docs/RELEASE_NOTES.md`，本版清单见 `release/release.json`。
 
 ## 文档索引
 
@@ -20,6 +20,8 @@
 | [AGENT_PROGRESS.md](./docs/AGENT_PROGRESS.md) | Agent 历史实施记录、当前模式与验收状态 |
 | [FUNCTIONAL_SPEC.md](./docs/FUNCTIONAL_SPEC.md) | 功能规格（MVP 9 项功能集） |
 | [task-rpa-roadmap.md](./docs/task-rpa-roadmap.md) | 任务功能自研 RPA 方案与路线图 |
+| [browser-extensions-design-2026-10-17.md](./docs/browser-extensions-design-2026-10-17.md) | 浏览器扩展（本地解包插件）设计、安全边界与验收 |
+| [extension-template/](./docs/extension-template/) | 自研插件模板（可直接导入，含说明与常见失败对照） |
 | [STATUS_REPORT.md](./docs/STATUS_REPORT.md) | 开发状态与验收明细（含已知边界如实声明） |
 | [RELEASE_NOTES.md](./docs/RELEASE_NOTES.md) | 版本变更说明与回滚方式 |
 | [INSTALL.md](./docs/INSTALL.md) | 受限环境依赖安装说明 |
@@ -31,6 +33,7 @@
 
 - **店铺隔离浏览**：一店一 `persist:store_<id>` session（Cookie/localStorage/缓存/下载互不可见）；标签页由**主窗口 DOM 里的真实 `<webview>`** 承载——页面真的嵌在工作台内部，HTML 弹层/抽屉/右键菜单/拾取遮罩靠 CSS 层级盖在页面上，切标签或切店铺只切可见性（页面状态不丢），关闭重开恢复标签，固定/重排/独立窗口。每个 guest 关闭 Node 集成、隔离上下文并剥掉 preload，远程店铺页面拿不到工作台的 preload bridge；guest 未注册完成前页面工具按"未就绪"等待或如实失败。
 - **环境指纹**：UA/UA-CH 成对改写、时区（CDP）、navigator/screen/WebGL 主世界注入，`profile:verify` 实测回填 verified/unverified；一键复制环境配置到其他店铺。
+- **浏览器扩展（本地解包，实验性，默认关闭）**：设置中心「浏览器扩展」页签导入含 `manifest.json` 的**文件夹**（不支持 Chrome 商店与 `.crx`），按店铺 Session 独立加载，扩展的 `chrome.storage` 也按店隔离。权限黑名单（nativeMessaging/debugger/cookies/proxy/downloads/identity 等）与 `world:"MAIN"` 直接拒绝；只允许 http(s) 注入；符号链接、超大目录、路径穿越在复制阶段拦截。自己写插件可直接用 `docs/extension-template/`：导入后点「目录」打开应用内副本编辑，点「重载」生效。
 - **代理管理**：创建/批量导入/体检（延迟+状态）/绑定即时生效/周期巡检；407 认证经 safeStorage（DPAPI）注入；红线：不可用时**不自动切换、不静默降级**。
 - **任务辅助**：17 种白名单步骤（导航/等待/读文本/读表格/截图/草稿填充/人工确认 + 点击/按文本点击/批量点击/写入/AI 生成 + 镜像标签页/受信任输入/等可见文本/确保行数），状态机+失败恢复+定时调度；人工确认门禁任何面板可见；截图工件 SHA-256 入库。**副作用步骤**（点击/写入/AI 生成）不可从失败恢复重试，且承载"提交"语义的步骤前必须有人工确认门禁。
 - **达人邀约（抖店 / 微信小店 / 快手小店，平台流程相互独立）**：
@@ -111,6 +114,9 @@ node tools/acceptance/m1-runner.js        # 工作台验收
 node tools/acceptance/m2-runner.js stage1 # 代理/备份；stage2 指纹注入
 node tools/acceptance/m3-runner.js        # 任务引擎验收
 node tools/acceptance/sec-runner.js       # 安全能力验收
+node tools/acceptance/settings-cdp-verify.js      # 设置中心 6 页签验收
+node tools/acceptance/extensions-cdp-verify.js    # 浏览器扩展（导入/注入/隔离/卸载/自研模板）
+node tools/acceptance/products-redesign-cdp-verify.js # 商品管理验收（需先启动带 CDP 的实例）
 node tools/acceptance/m4-runner.js        # 发布工程验收（含 NSIS 安装/升级/卸载）
 pwsh -File tools/acceptance/run-acceptance.ps1 # 以上全部串行 + 自定义任务本地验收 + 打包 + 清单
 ```
@@ -122,5 +128,6 @@ pwsh -File tools/acceptance/run-acceptance.ps1 # 以上全部串行 + 自定义�
 - 未做代码签名：`INTERNAL_BUILD`；自动更新仅 SHA-512 哈希校验、无签名校验。v0.4.75 的安装包与清单按本次构建重新生成，线上 GitHub Release 由发布脚本幂等更新。
 - 会话导出包仅含 Cookie + 环境配置（不含 localStorage/IndexedDB）；跨机登录态需重登或经加密包导入（DPAPI 边界）。
 - 代理不可用不自动切换；任务引擎全局串行（并发=1）；跨进程原地恢复不支持。
+- 浏览器扩展只支持**本地解包目录**（需含 `manifest.json`），不支持 Chrome 应用商店与 `.crx`；Electron 只实现部分 Chrome 扩展 API，`chrome.action` 弹窗、`webRequest` 阻断等能力不完整；扩展与指纹注入可能互相覆盖，`profile:verify` 会如实报「未验证」。
 - 备份跨机恢复的登录态路径需在第二台真机人工复核；设计稿像素级人工核对待做。
 - 本版自动验收使用打包版 Electron + CDP/本地仿真，未替代真实平台登录、真实商品/订单副作用和人工逐项 Windows 桌面验收；这些边界仍保持 `INTERNAL_BUILD`。

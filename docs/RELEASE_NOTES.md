@@ -18,12 +18,12 @@
 ## 验证
 
 - `pnpm typecheck`、`pnpm exec vue-tsc --noEmit`：通过。
-- `pnpm test -- --run`：147 个测试文件、1569 项通过。
+- `pnpm test -- --run`：148 个测试文件、1572 项通过。
 - `pnpm run lint`：0 errors（仓库存量 1152 条 warnings）。
 - `node tools/ci/audit-gate.mjs`：通过（critical=0、high=1 为已批准且未到期豁免、moderate=2）。
 - `pnpm run build`、`pnpm run dist:dir`：通过；Electron 44.7.2 / ABI 149 下打包态 `better-sqlite3` 建表、读写、关闭通过。
 - 打包态 CDP：Agent bridge、缓存维护、WebView 店铺首次打开/关店重开 URL 恢复、客服同店 Cookie 共享/跨店隔离/导航拦截均通过。
-- 打包版全量验收：M1 108/108、M2 阶段 1 30/30 + 阶段 2 指纹字段实测通过、M3 114/114、安全 44/44、M4 13/13、自定义任务 54/54、邀约实时日志 16/16、更新链路 16/16；结果清单见 `release/release.json`。
+- 打包版全量验收：M1 108/108、M2 阶段 1 30/30 + 阶段 2 指纹字段实测通过、M3 114/114、安全 44/44、设置中心 47/47、浏览器扩展 15/15、商品管理 44/44、发票中心 51/51、M4 13/13、自定义任务 54/54、邀约实时日志 16/16、更新链路 16/16；结果清单见 `release/release.json`。
 
 ---
 
