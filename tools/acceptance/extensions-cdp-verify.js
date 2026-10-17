@@ -114,7 +114,9 @@ async function main() {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1',
-      SHOPILOT_DISABLE_CDP_FP: '1', SHOPILOT_ACCEPTANCE: '1'
+      SHOPILOT_DISABLE_CDP_FP: '1', SHOPILOT_ACCEPTANCE: '1',
+      // 打包版无法驱动原生目录选择框：只在验收态用它指定源目录
+      SHOPILOT_TEST_EXTENSION_IMPORT_DIR: path.join(ROOT, 'docs/extension-template')
     }
   })
   let appLog = ''
@@ -204,7 +206,7 @@ async function main() {
     // 这里不断言真的弹出资源管理器（会干扰后续步骤），只验证路径边界与入口存在。
     const openBad = await ui.eval(`return await window.shopilot.extensions.openDir('ext_zzzzzzzz')`)
     check('打开不存在的扩展目录 → 如实报 EXTENSION_NOT_FOUND（不暴露路径）',
-      openBad.ok === false && openBad.error?.code === 'EXTENSION_NOT_FOUND' && !/[A-Za-z]:\\\\/.test(JSON.stringify(openBad)),
+      openBad.ok === false && openBad.error?.code === 'EXTENSION_NOT_FOUND' && !/[A-Za-z]:\\/.test(JSON.stringify(openBad)),
       JSON.stringify(openBad.error))
 
     const settingsUi = await ui.eval(`
@@ -221,6 +223,36 @@ async function main() {
     check('扩展页签提供「打开扩展目录」入口（根目录 + 单个扩展）',
       settingsUi.pane === true && settingsUi.openRoot === true && settingsUi.openRow === true,
       JSON.stringify(settingsUi))
+
+    // 「自己制作插件」全链路：模板 → 导入校验 → 复制入管理目录 → 启用 → 页面注入 → 删除。
+    const imported = await ui.eval(`return await window.shopilot.extensions.import()`)
+    const importedItem = imported.ok && imported.data ? imported.data.item : null
+    check('导入自研插件模板（校验 → 复制 → 入列表，默认未启用）',
+      imported.ok === true && !!importedItem && importedItem.name === '我的首个店铺插件' &&
+        importedItem.status === 'disabled' && importedItem.enabled === false,
+      JSON.stringify(importedItem
+        ? { id: importedItem.id, name: importedItem.name, status: importedItem.status }
+        : imported.error))
+
+    if (importedItem) {
+      await ui.eval(`return await window.shopilot.extensions.setMaster(true)`)
+      await ui.eval(`return await window.shopilot.extensions.setEnabled(${JSON.stringify(importedItem.id)}, true)`)
+      await sleep(2500)
+      page.close()
+      page = await findStorePage()
+      const badge = page
+        ? await page.eval(`const el = document.querySelector('#__shopilot_my_extension__ .shopilot-ext-badge'); return { present: !!el, text: el ? el.textContent : null, styled: el ? getComputedStyle(el).position === 'static' || true : false }`)
+        : { present: false }
+      check('自研插件模板注入生效（右下角徽章可见）',
+        badge.present === true && /插件已注入/.test(String(badge.text)),
+        JSON.stringify(badge))
+
+      const removedTemplate = await ui.eval(`return await window.shopilot.extensions.remove(${JSON.stringify(importedItem.id)})`)
+      check('删除自研插件模板 → 目录与列表清理',
+        removedTemplate.ok === true && !fs.existsSync(path.join(extRoot, importedItem.id)) &&
+          removedTemplate.data.items.every(item => item.id !== importedItem.id),
+        JSON.stringify({ count: removedTemplate.data?.items?.length }))
+    }
   } finally {
     try { page?.close() } catch { /* ignore */ }
     try { ui?.close() } catch { /* ignore */ }
