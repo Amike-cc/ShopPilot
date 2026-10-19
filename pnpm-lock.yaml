@@ -60,8 +60,8 @@ importers:
         specifier: 9.22.0
         version: 9.22.0(eslint@8.57.0)
       happy-dom:
-        specifier: 20.14.6
-        version: 20.14.6
+        specifier: 21.0.3
+        version: 21.0.3
       pinia:
         specifier: 2.3.1
         version: 2.3.1(typescript@5.9.3)(vue@3.5.44(typescript@5.9.3))
@@ -76,7 +76,7 @@ importers:
         version: 7.3.7(@types/node@22.20.5)(jiti@2.7.0)
       vitest:
         specifier: 5.0.4
-        version: 5.0.4(@types/node@22.20.5)(happy-dom@20.14.6)(vite@7.3.7(@types/node@22.20.5)(jiti@2.7.0))
+        version: 5.0.4(@types/node@22.20.5)(happy-dom@21.0.3)(vite@7.3.7(@types/node@22.20.5)(jiti@2.7.0))
       vue:
         specifier: 3.5.44
         version: 3.5.44(typescript@5.9.3)
@@ -1523,8 +1523,8 @@ packages:
   graphemer@1.4.0:
     resolution: {integrity: sha512-EtKwoO6kxCL9WO5xipiHTZlSzBm7WLT627TqC/uVRd0HKmq8NXyebnNYxDoBi7wt8eTWrUrKXCOVaFq9x1kgag==}
 
-  happy-dom@20.14.6:
-    resolution: {integrity: sha512-5DDsf4QmEIlRL6NkCv/fxSjYHHkZceL/IaYQdJc2h3G7DRTEai++VTjbfL0LB9geW2VrA3+vrjF3Efx+OTtX0Q==}
+  happy-dom@21.0.3:
+    resolution: {integrity: sha512-PesNgu5BnIEmAwzKGewB3K1ORFeznFZJ4JrRz89ea1wkHnxskdpzX9sN/+zb4KO6k8oSMhyJSj/cwXAFrYBBNA==}
     engines: {node: '>=20.0.0'}
 
   has-flag@4.0.0:
@@ -4035,7 +4035,7 @@ snapshots:
 
   graphemer@1.4.0: {}
 
-  happy-dom@20.14.6:
+  happy-dom@21.0.3:
     dependencies:
       '@types/node': 22.20.5
       '@types/whatwg-mimetype': 3.0.2
@@ -4761,7 +4761,7 @@ snapshots:
       fsevents: 2.3.3
       jiti: 2.7.0
 
-  vitest@5.0.4(@types/node@22.20.5)(happy-dom@20.14.6)(vite@7.3.7(@types/node@22.20.5)(jiti@2.7.0)):
+  vitest@5.0.4(@types/node@22.20.5)(happy-dom@21.0.3)(vite@7.3.7(@types/node@22.20.5)(jiti@2.7.0)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.0.4(vite@7.3.7(@types/node@22.20.5)(jiti@2.7.0))
@@ -4779,7 +4779,7 @@ snapshots:
       why-is-node-running: 3.2.1
     optionalDependencies:
       '@types/node': 22.20.5
-      happy-dom: 20.14.6
+      happy-dom: 21.0.3
     transitivePeerDependencies:
       - msw
 
