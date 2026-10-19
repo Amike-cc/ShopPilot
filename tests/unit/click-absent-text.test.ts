@@ -33,7 +33,7 @@ class FakeEl {
 }
 
 beforeAll(() => {
-  ;(globalThis as any).getComputedStyle = () => ({ display: 'block', visibility: 'visible', opacity: '1' })
+  (globalThis as any).getComputedStyle = () => ({ display: 'block', visibility: 'visible', opacity: '1' })
 })
 
 /** 复刻 findTextTarget 里的缺席扫描（与 task-runner 同构） */

@@ -1,0 +1,2763 @@
+/**
+ * 步骤执行器：execStep 按步骤类型分派（全部预定义，无任意代码路径）。
+ * 2026-10-19 P1 重构：由 task-runner.ts 等价搬迁（switch 原样保留）。
+ */
+
+import { matchesTextToken } from '@shared/text-match'
+import { app } from 'electron'
+import { createHash } from 'crypto'
+import { mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import { redactAgentText } from '@shared/agent-privacy'
+import { canRetryStepInPlace } from '@shared/agent-step-effects'
+import { TABLE_ROW_CLEAN_FN } from '@shared/constants/invoice'
+import { readApiResponse, readScalarValues } from './api-reader'
+import type { TaskStepDef, StepResultKind, TaskConfirmationEvent } from '@shared/schemas/task'
+import * as TaskStore from './task-store'
+import { DEFAULT_STEP_TIMEOUT } from './task-store'
+import { writeAudit } from '../services/audit-logger'
+import { logMain } from '../services/logger'
+import { generateInviteScript } from '../services/ai-client'
+import { recordInviteBatch } from '../services/invite-records'
+import { classifyInviteBlockNotice } from '@shared/invite-notices'
+import { getTabWebContents, emitToRenderer, getStoreTabs, activateTab, closeTab, waitForTabWebContents } from '../browser/window-manager'
+import { ENUM_DEEP_FN, PICK_SORT_FN, SCOPE_FN, VISIBLE_JS, assertCheckedAfterClick, assertViewMounted, assertWriteApplied, detectSessionStall, findTextTarget, followOpenedTab, guardSignals, isInternalRunTab, jsClickByTextFallback, performHitClick, pollUntil, readAlreadyInvitedEvidence, readBlockingNotice, readFieldValue, realClick, trustedWrite, waitForSelector, wcOrThrow, withDeadline, withTimeout } from './task-step-dom'
+import { classifyError, emitProgress, transition } from './task-runner-lifecycle'
+import { cancelSig, runTabByStore } from './task-runner-registry'
+import type { RunHandle } from './task-runner-registry'
+
+// ---------- 步骤执行器（全部预定义，无任意代码路径） ----------
+
+// kind 与 store 侧 insertStepResult 的联合一致：副作用步骤返回 executed 并带明细
+// （executed 也是"已成功"的凭据，succeededStepIndexes 只按 step_index 去重）
+interface StepOutput { kind: StepResultKind | 'confirm' | 'executed'; payload: unknown; artifact?: { path: string; sha256: string } }
+
+/**
+ * 步骤执行上下文：loop 内嵌套步骤会拿到当前轮次（1 起）。
+ * 用途：clickByText 的 nth:'round' —— 微信广场每轮点"第 N 条详情"，
+ * 否则每轮都点第一位达人，会对同一个人重复发邀约。
+ */
+interface StepContext { round?: number; path?: string }
+
+
+export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepContext = {}): Promise<StepOutput | null> {
+  const input = step.input as any
+  switch (step.type) {
+    case 'navigate': {
+      if (!/^https?:\/\//i.test(String(input.url))) throw new Error('NAVIGATION_BLOCKED: 仅允许 http/https')
+      // wc 必须**在这一步现取**：切页/重挂载后渲染层会换一个新 guest，旧句柄上的 loadURL
+      // 与后续等待都作用在一个已经卸载的页面上（2026-10-03 真机定位：导航"成功"、页面却不动）。
+      const wc = wcOrThrow(run)
+      await withTimeout(async () => {
+        guardSignals(run)
+        try {
+          await wc.loadURL(String(input.url))
+        } catch (e: any) {
+          // 重定向引起的 ERR_ABORTED 属正常导航链
+          if (!/ERR_ABORTED/.test(String(e?.message))) throw e
+        }
+      }, run, step.timeoutMs, 'navigate')
+      await pollUntil(run, () => !wcOrThrow(run).isLoading(), Math.max(step.timeoutMs, 5000), 'navigate 加载完成')
+      return null
+    }
+    case 'waitForPage': {
+      const wc = wcOrThrow(run)
+      if (input.urlIncludes) {
+        const want = String(input.urlIncludes)
+        try {
+          await pollUntil(run, () => String(wc.getURL()).includes(want), step.timeoutMs, 'waitForPage')
+        } catch (e: any) {
+          // 登录跳转要说清楚：被重定向到登录页时，URL 永远不会变成目标地址，
+          // 直接报"超过 45000ms"会让人以为是页面慢/改版（实测快手未登录踩过）。
+          // 这是用户能自己解决的一件事，错误信息必须指出它。
+          const cur = (() => { try { return String(wcOrThrow(run).getURL()) } catch { return '' } })()
+          if (/login|passport|signin|sso/i.test(cur)) {
+            throw new Error(`TASK_LOGIN_REQUIRED: 等待「${want}」超时——页面被重定向到登录页（${cur.slice(0, 120)}），该店铺登录态已失效，请重新登录后重试`)
+          }
+          throw e
+        }
+      } else {
+        await pollUntil(run, () => !wc.isLoading(), step.timeoutMs, 'waitForPage 加载完成')
+      }
+      return null
+    }
+    case 'waitForSelector': {
+      const wc = wcOrThrow(run)
+      try {
+        await waitForSelector(wc, String(input.selector), run, step.timeoutMs, !!input.deep)
+      } catch (e: any) {
+        // code/hint：档案可以给这一步指定**有意义的错误码**（见 schema 注释）——
+        // 快手"抽屉没开"就是"这一批一位都没发出去"，必须能与"页面卡了"区分开。
+        const code = input.code ? String(input.code) : ''
+        if (code) throw new Error(`${code}: ${String(input.hint || '等待元素超时')}（选择器 ${String(input.selector)}）`)
+        throw e
+      }
+      return null
+    }
+    case 'readText': {
+      const wc = wcOrThrow(run)
+      const deep = !!input.deep
+      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, deep)
+      const findEl = deep
+        ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().find(el => { try { return el.matches(${JSON.stringify(String(input.selector))}) } catch { return false } }) || null })()`
+        : `(document.querySelector(${JSON.stringify(String(input.selector))}))`
+      const rawText = await wc.executeJavaScript(`(() => {
+        const el = ${findEl};
+        if (!el) return null;
+        // 表单控件读 value：textarea 的 textContent 是"默认值"，用 setInput/aiGenerate 写入后并不会变，
+        // 照 innerText||textContent 读会拿到空串（实测），留档就失真了
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') return String(el.value ?? '').trim().slice(0, 100000);
+        return String(el.innerText || el.textContent || '').trim().slice(0, 100000);
+      })()`)
+      const text = input.privacyRedact === true ? redactAgentText(rawText, 2000) : rawText
+      if (text == null) throw new Error(`TASK_SELECTOR_CHANGED: 未找到元素 ${String(input.selector)}`)
+      if (input.metric) {
+        const num = parseFloat(String(text).replace(/[^\d.-]/g, ''))
+        TaskStore.insertSnapshot(run.storeId, String(input.metric), Number.isFinite(num) ? num : text, run.runId)
+      }
+      return { kind: 'text', payload: { text, metric: input.metric || null } }
+    }
+    case 'readTable': {
+      const wc = wcOrThrow(run)
+      /**
+       * unthrottle：读表期间**挂调试器 + 强制焦点模拟**，把渲染从"后台节流"里拉出来。
+       *
+       * 为什么需要（2026-10-14 实测抖店发票页）：那页是独立微前端，采集时**渲染被节流饿死**——
+       * 挂上 CDP 调试器的场景 45 秒就出表（1 张表 / 160 行），不挂调试器的采集任务
+       * 等满 90 秒仍然 0 个 `<table>`（整轮 106 秒后报 `TASK_SELECTOR_CHANGED: 超时未出现元素 table`）。
+       * 应用自己的 `setBackgroundThrottling(false)`（taskAwakeStores 那条路）对普通表格够用，
+       * 对这个微前端不够——它比静态表格更依赖渲染/定时器走完初始化。
+       *
+       * 注意：这会**让外部 CDP 探针暂时连不上**这个 webview（一个 target 只能挂一个调试器），
+       * 所以读完就摘掉。调试器纪律与 api-reader / network-observer 一致：
+       * 别人先挂的会话**绝不 detach**；焦点模拟是我们加的副作用，读完必须关掉
+       * （复用别人的常驻会话时 detach 清不掉它，要显式 disable，2026-10-15 审查发现）。
+       */
+      const unthrottle = input.unthrottle === true
+      let releaseUnthrottle: (() => void) | null = null
+      if (unthrottle) {
+        try {
+          const dbg = wc.debugger as unknown as {
+            isAttached(): boolean
+            attach(v?: string): void
+            detach(): void
+            sendCommand(m: string, p?: Record<string, unknown>): Promise<unknown>
+          }
+          const attachedByUs = !dbg.isAttached()
+          if (attachedByUs) dbg.attach('1.3')
+          // 让页面以为自己是聚焦的：被判定为后台/失焦时 Chromium 会暂停渲染与定时器
+          await dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined)
+          releaseUnthrottle = () => {
+            try {
+              if (attachedByUs) {
+                // 自己挂的会话：detach 即清掉本会话的全部覆盖（含焦点模拟）
+                if (dbg.isAttached()) dbg.detach()
+              } else {
+                // 复用别人的会话：detach 轮不到我们；但焦点模拟是我们开的，必须显式关掉，
+                // 否则这个页面在应用生命周期内永远以为自己有焦点（后台节流被整个关死）
+                void dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => undefined)
+              }
+            } catch { /* 窗口可能已关 */ }
+          }
+        } catch (error) {
+          // 挂不上不该让采集失败：退化成原来的行为，由超时如实报错
+          logMain('warn', `readTable unthrottle 失败（继续按原样读）：${String((error as Error)?.message || error).slice(0, 160)}`)
+        }
+      }
+      try {
+      const deepTable = !!input.deep
+      const emptyOkEarly = input.emptyOk === true
+      if (emptyOkEarly) {
+        // 允许空的读取：给页面一段**有界**的时间把表渲染出来，但等不到也不报错
+        // （交给下面的 emptyOk 落 0 条）。不能用 waitForSelector——它会一直等到步骤超时，
+        // 每个空方向白等 30s（微信/抖店各有一个空方向，实测很可观）。
+        const until = Date.now() + Math.min(step.timeoutMs, 12000)
+        for (;;) {
+          const found = await wc.executeJavaScript(deepTable
+            ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().some(el => { try { return el.matches(${JSON.stringify(String(input.selector))}) } catch { return false } }) })()`
+            : `!!document.querySelector(${JSON.stringify(String(input.selector))})`).catch(() => false)
+          if (found || Date.now() >= until) break
+          await new Promise(r => setTimeout(r, 300))
+        }
+      } else {
+        await waitForSelector(wc, String(input.selector), run, step.timeoutMs, deepTable)
+      }
+      const findTable = deepTable
+        ? `(() => { ${ENUM_DEEP_FN} return __enumDeep().filter(el => { try { return el.matches(${JSON.stringify(String(input.selector))}) } catch { return false } }) })()`
+        : `(Array.from(document.querySelectorAll(${JSON.stringify(String(input.selector))})))`
+      // pickByHeader：页面上常有多张表（实测微信发票中心有 2 张日历表 + 1 张数据表），
+      // 取第一张会读到日历。给了表头文案就挑**含该文案的那一张**，挑不到如实失败。
+      //
+      // mergeHeaderTable：表头与数据**分属两个 <table>** 的页面（实测拼多多订单开票：
+      // table[0] 只有表头行、table[1] 才是数据行）。此时把含表头的那张与**紧随其后的表**合并，
+      // 否则只能读到一行表头、数据行数为 0（实测踩过）。
+      const pick = input.pickByHeader ? String(input.pickByHeader) : ''
+      const mergeHeader = !!input.mergeHeaderTable
+      // expectHeaders：读到的表头必须包含这些列名（发票中心按方向校验用）。
+      // 页内切方向没生效时，这里会读到上一个方向的表 —— 必须如实失败，
+      // 而不是把上一个方向的数据当成本方向的上报（那是最危险的静默错误）。
+      const expectHeaders: string[] = Array.isArray(input.expectHeaders) ? input.expectHeaders.map(String) : []
+      // rejectHeaders：读到含这些列名的表**不采信**，按"该方向没数据"处理。
+      // 用途：切页签失败时页面上留着上一个方向的表，而该方向自己恰好没有表
+      // （实测微信「给买家开票」整页无表）——不挡掉就会把上一个方向的数据当成它的上报，
+      // 界面里出现两份一模一样、却挂不同方向名的记录。与 emptyOk 配套：这是"不是我的表"，不是报错。
+      const rejectHeaders: string[] = Array.isArray(input.rejectHeaders) ? input.rejectHeaders.map(String) : []
+      // emptyOk：该方向**本来就可能没有数据**（实测微信「给买家开票」整页没有账单表、
+      // 抖店「给消费者开票」结构未验）——此时"挑不到表"不是页面改版，而是"这个方向就是空的"。
+      // 没有它就会把一个正常的空方向报成 TASK_SELECTOR_CHANGED，让整轮采集失败。
+      // 给了它就落一条空快照（如实 0 条），界面显示"0 条"而不是"采集失败"。
+      const emptyOk = input.emptyOk === true
+      /**
+       * @param why 为什么这次是空的（给界面看的原因）
+       * @param expected 这次空是不是**预期内**的。**必须显式传**，不设默认值——
+       *   以前默认 true，"页签没切成功读到了邻居的表"这类可疑空也被静默掉，界面说谎。
+       *
+       * `emptyOk` 有两种来源，语义完全不同，以前共用一条标记导致界面说谎：
+       *   · **预期内**：档案声明该方向本来就没有数据表（`measuredRows === 0`，
+       *     实测微信「给买家开票」整页无表、抖店「达人给我开票」无表）→ 不是异常；
+       *   · **这次没读到**：页签没切成功 / 页面结构对不上 → 要如实报警"下面是上次的数据"。
+       * 读取侧（shared/invoice-snapshot.ts）按 `expected` 分开处理：
+       * 预期内的空不进 `emptyNote`，也就不会渲染成「本次没读到」、不会让店铺落进「有问题」筛选。
+       */
+      const emptyResult = (why: string, expected: boolean) => {
+        if (input.metric) {
+          /**
+           * 空方向要**留痕**（否则界面上这个方向没有采集时间，看起来像"从没抓过"），
+           * 但绝不能写成权威空结果。
+           *
+           * 为什么（2026-10-14 审查 A2）：以前这里写 `[]`，而读取侧是"每店每指标取最新一条"——
+           * 页签没切成功 / 读到别的方向的表 时，这条 `[]` 就把上一次真采到的行**无声盖掉**了：
+           * 界面归零、采集时间却是最新的、这一轮还报 succeeded，看不出任何异常。
+           * 现在写一条带原因的标记：读取侧（shared/invoice-snapshot.ts）见到标记就继续用上一份
+           * 数组快照，并把"这次没读到 + 原因 + 时刻"如实显示出来。
+           */
+          TaskStore.insertSnapshot(
+            run.storeId, String(input.metric),
+            { empty: true, why, at: Date.now(), expected },
+            run.runId
+          )
+        }
+        return { kind: 'table' as const, payload: { rows: [], rowCount: 0, metric: input.metric || null, empty: why } }
+      }
+      const rows = await wc.executeJavaScript(`(() => {
+        ${TABLE_ROW_CLEAN_FN}
+        const tables = ${findTable};
+        if (!tables || !tables.length) return null;
+        let target = tables[0];
+        let body = null;
+        if (${JSON.stringify(pick)}) {
+          const i = tables.findIndex(t => String(t.innerText || '').includes(${JSON.stringify(pick)}));
+          if (i < 0) return 'PICK_MISS';
+          target = tables[i];
+          // 表头表自身没有数据行（只有 thead 那一行）→ 数据在下一张表里
+          if (${mergeHeader} && tables[i + 1]) {
+            const own = target.querySelectorAll('tr').length;
+            if (own <= 1) body = tables[i + 1];
+          }
+        }
+        // Agent 摘要模式只读表头与行数，绝不读取任何订单/客户单元格文本。
+        if (${input.headersOnly === true}) {
+          const tableRows = Array.from(target.querySelectorAll('tr'));
+          const headerRow = target.querySelector('thead tr') || tableRows[0] || null;
+          const headers = headerRow ? Array.from(headerRow.querySelectorAll('th,td')).map(cell => String(cell.innerText || '').trim().slice(0, 100)) : [];
+          const bodyRows = body ? body.querySelectorAll('tr').length : tableRows.length - (headerRow ? 1 : 0);
+          return { __agentSummary: true, headers, rowCount: Math.max(0, bodyRows) };
+        }
+        const grab = (t) => Array.from(t.querySelectorAll('tr')).map(tr =>
+          Array.from(tr.children).map(c => String(c.innerText || '').trim().slice(0, 500)));
+        // 表头词表：**<thead> 里每一行**的表头文案都要收进来。合并表头（colspan）的表有两行表头
+        // （实测抖店涉税信息报送页：第一行「销售货物取得的收入」跨 3 列，第二行才是
+        // 「收入总额/退款总额/收入净额」）——只拿第一行当词表，tbody 里那行重复表头
+        // 11 格只命中 5 个（45%），过不了 60% 阈值，会被当成一条真实数据。
+        const headerVocabulary = (t) => t ? Array.from(t.querySelectorAll('thead tr'))
+          .flatMap(tr => Array.from(tr.children).map(c => String(c.innerText || '').trim()))
+          .filter(Boolean) : [];
+        const out = grab(target);
+        // 表头校验：在表头行（前 3 行里挑）中找期望列名
+        const EXPECT = ${JSON.stringify(expectHeaders)};
+        const REJECT = ${JSON.stringify(rejectHeaders)};
+        if (EXPECT.length || REJECT.length) {
+          const headText = out.slice(0, 3).map(r => r.join('\\u0000')).join('\\u0000');
+          // REJECT：这张表带着**别的方向**的特征列 → 不是本方向的表（切页签没生效）。
+          // 优先于 EXPECT 判定：本方向可能压根没有自己的列名可期待（空方向）。
+          const foreign = REJECT.filter(h => headText.includes(h));
+          if (foreign.length) return 'FOREIGN_TABLE:' + foreign.join('、');
+          const missing = EXPECT.filter(h => !headText.includes(h));
+          if (missing.length) return 'HEAD_MISS:' + missing.join('、');
+        }
+        if (body) out.push(...grab(body));
+        // 清洗"不是数据的数据行"（重复表头行 / 「暂无数据」占位行）——实现见
+        // shared/constants/invoice.ts 的 TABLE_ROW_CLEAN_FN（与单测共用同一份源码）。
+        // 词表用 thead 的全部表头行（合并表头的表有两行）；mergeHeaderTable 时把数据表的也并上。
+        const vocabulary = headerVocabulary(target).concat(body ? headerVocabulary(body) : []);
+        const cleaned = __cleanRows(out, vocabulary);
+        return cleaned.map(r => r.map(c => String(c).slice(0, 500))).slice(0, 2000);
+      })()`)
+      if (typeof rows === 'string' && rows.startsWith('FOREIGN_TABLE:')) {
+        // 读到的是别的方向的表：**更可能是页内切页签没生效**（本方向真无表时通常走 PICK_MISS/!rows，
+        // 页面上还留着别的方向的表）。emptyOk 只让它不整轮失败，但必须按"本次没读到"报警
+        // （expected=false）——静默会把上一次的数据当成本次结果，那正是 2026-10-14 修掉的旧毛病。
+        if (emptyOk) return emptyResult(`页面上是另一方向（含「${rows.slice('FOREIGN_TABLE:'.length)}」列）的表，本方向没有自己的数据`, false)
+        throw new Error(`TASK_SELECTOR_CHANGED: 读到的表格属于别的开票方向（含「${rows.slice('FOREIGN_TABLE:'.length)}」列）——页内切页签没生效`)
+      }
+      if (rows === 'PICK_MISS') {
+        // 预期内：档案声明该方向本来就可能没有表（实测微信「给买家开票」整页无表）
+        if (emptyOk) return emptyResult(`页面上没有表头含「${pick}」的表格`, true)
+        throw new Error(`TASK_SELECTOR_CHANGED: 页面上没有表头含「${pick}」的表格（发票页可能改版或未加载完）`)
+      }
+      if (typeof rows === 'string' && rows.startsWith('HEAD_MISS:')) {
+        // "表头缺列"= 页内切页签可能没生效、或平台改版——属于**可疑空**，必须报警，不能静默
+        if (emptyOk) return emptyResult(`表头缺少期望列「${rows.slice('HEAD_MISS:'.length)}」`, false)
+        throw new Error(`TASK_SELECTOR_CHANGED: 表格表头缺少期望列「${rows.slice('HEAD_MISS:'.length)}」——页内切页签可能没生效，或平台改版`)
+      }
+      if (!rows) {
+        // 预期内：档案声明该方向本来就可能没有表
+        if (emptyOk) return emptyResult('页面上没有该选择器的表格', true)
+        throw new Error(`TASK_SELECTOR_CHANGED: 未找到表格 ${String(input.selector)}`)
+      }
+      if (input.headersOnly === true && rows.__agentSummary === true) {
+        const rowCount = Number(rows.rowCount) || 0
+        const headers = Array.isArray(rows.headers) ? rows.headers.map((x: unknown) => redactAgentText(x, 100)) : []
+        if (input.metric) TaskStore.insertSnapshot(run.storeId, String(input.metric), rowCount, run.runId)
+        return { kind: 'table', payload: { headers, rowCount, metric: input.metric || null, summaryOnly: true } }
+      }
+      // expectColumnCount：**按列序映射**（columns）的方向必须校验数据行宽度。
+      // 表头文案校验（expectHeaders）只查"列名还在不在"，平台**插一列/删一列**时它照样通过，
+      // 而按列序映射会整体错位——错位后 requireFields 可能把全部行当空 → 静默 0 条。
+      // 所以档案给了列序映射就把"每行几格"钉死（2026-10-15 审查 M6）。
+      // 只查 rows[1..]（第 0 行是表头，合并表头下它本来就可能比数据行窄）；
+      // **过半不符才判失败**——允许个别宽度不同的行（实测抖店季度行下面挂着"结算明细…"
+      // 展开行，它不是报送期记录，读取侧会按 requireFields 挡掉）；平台插列/删列会让
+      // 所有数据行一起错位，必然过半 → 如实失败。
+      if (Number.isFinite(Number(input.expectColumnCount)) && Number(input.expectColumnCount) > 0 && Array.isArray(rows)) {
+        const expectedCount = Number(input.expectColumnCount)
+        const tableDataRows = (rows as unknown[][]).slice(1)
+        const bad = tableDataRows.filter(r => !Array.isArray(r) || r.length !== expectedCount)
+        if (tableDataRows.length > 0 && bad.length * 2 > tableDataRows.length) {
+          throw new Error(
+            `TASK_SELECTOR_CHANGED: ${bad.length}/${tableDataRows.length} 行宽度与档案不符（期望 ${expectedCount} 格，实测 ` +
+            `${Array.isArray(bad[0]) ? (bad[0] as unknown[]).length : '非数组'} 格）——平台可能加了/删了列，` +
+            `按列序映射会整体错位，已中止以免把错位的数据当上报`
+          )
+        }
+      }
+      if (input.metric) {
+        // keepRows：把整表行数组落快照（发票中心要展示"待开票信息"的内容，不只是一个行数）；
+        // 默认仍只落行数，保持既有行为不变（概览页/环境面板看的是"采集到几行"）
+        TaskStore.insertSnapshot(
+          run.storeId, String(input.metric),
+          input.keepRows ? rows : rows.length,
+          run.runId
+        )
+      }
+      return { kind: 'table', payload: { rows, rowCount: rows.length, metric: input.metric || null } }
+      } finally {
+        // 读完就摘掉调试器：一个 target 只能挂一个，留着会让外部探针连不上
+        releaseUnthrottle?.()
+      }
+    }
+    /**
+     * 读**接口响应**（实现与理由见 main/tasks/api-reader.ts 的文件头）。
+     *
+     * 只在页面渲染不出表格、数据只存在于响应体时用（实测微信小店涉税账单：
+     * micro-app 微前端只渲染出外壳、0 个 `<table>`，而 listQuarterTax 是有数据的）。
+     *
+     * 返回的行结构与 readTable **完全同构**（row[0] = 字段 key 当表头，rows[1..] = 数据），
+     * 所以主进程的映射 / 快照 / 界面 / 按主体统计一行都不用改。
+     *
+     * 三条"如实"边界：
+     *  · **抓不到 ≠ 没有数据**：登录过期、功能未开通、页面没发请求都会超时——
+     *    一律如实失败，绝不当成"这家这季度是 0 元"（那是最危险的静默错误）。
+     *  · 抓到了但**行数为 0**：档案以 `emptyOk` 声明"本来就可能没有"（实测微信小店该季度
+     *    还没生成）时是**预期内空**，落 expected 标记、读取侧继续用上一份数据；
+     *    没声明 emptyOk 时按"本次没读到"记（读取侧如实提示），绝不当成"0 条就是没有数据"。
+     *  · 抓到了行、但关键列**全被 requireFields 挡掉**：要么字段映射失效（接口改名）、
+     *    要么这条记录本来就没有这些信息——不能当成功，也不能当成"没有数据"（见下面的报错）。
+     */
+    case 'readApi': {
+      const wc = wcOrThrow(run)
+      const input = step.input as {
+        urlMarker?: unknown
+        rowsPath?: unknown
+        fields?: unknown
+        metric?: unknown
+        reload?: unknown
+        maxBytes?: unknown
+        requireFields?: unknown
+        scalars?: unknown
+        emptyOk?: unknown
+      }
+      const rawFields = Array.isArray(input.fields) ? input.fields : []
+      const fields = rawFields
+        .filter((f): f is { key: string; path: string; as?: string } =>
+          !!f && typeof f === 'object' && typeof (f as { key?: unknown }).key === 'string' &&
+          typeof (f as { path?: unknown }).path === 'string')
+        .map(f => ({
+          key: f.key,
+          path: f.path,
+          as: (f.as === 'cents' || f.as === 'epochQuarter' ? f.as : 'text') as 'text' | 'cents' | 'epochQuarter'
+        }))
+      if (!input.urlMarker || !fields.length) {
+        throw new Error('TASK_SELECTOR_CHANGED: readApi 缺少 urlMarker 或字段映射，无法读接口响应')
+      }
+      const metric = input.metric ? String(input.metric) : null
+      const budget = Math.max(2000, Math.min(step.timeoutMs || 30_000, 60_000))
+      const requireFields = Array.isArray(input.requireFields) ? input.requireFields.map(String) : []
+      // emptyOk：档案声明"这个方向本来就可能没有记录"（实测微信小店涉税账单，该季度还没生成
+      // 是正常空）。以前这个输入**没有任何人消费**——空标记不带 expected，读取侧把正常空当
+      // "本次没读到"报警，与档案声明相悖（2026-10-15 审查发现）。
+      const emptyOk = input.emptyOk === true
+      const result = await readApiResponse(wc, {
+        urlMarker: String(input.urlMarker),
+        rowsPath: String(input.rowsPath ?? ''),
+        fields,
+        timeoutMs: budget,
+        reload: input.reload !== false,
+        // 一次加载里同一接口可能被请求多次、且不是每次都带全字段 → 让它挑关键列有值的那次
+        requireFields,
+        maxBytes: Math.max(
+          16 * 1024,
+          Math.min(typeof input.maxBytes === 'number' && input.maxBytes > 0 ? input.maxBytes : 512 * 1024, 2 * 1024 * 1024)
+        )
+      })
+      if (!result.ok) {
+        throw new Error(`TASK_SELECTOR_CHANGED: ${result.why || '读接口响应失败'}`)
+      }
+      const header = Array.isArray(result.rows[0]) ? result.rows[0] : fields.map(f => f.key)
+      const keyIndex = new Map(header.map((k, i) => [k, i]))
+      const dataRows = result.rows.slice(1)
+      const kept = requireFields.length
+        ? dataRows.filter(row => requireFields.every(k => {
+            const i = keyIndex.get(k)
+            return i != null && String(row[i] ?? '').trim() !== ''
+          }))
+        : dataRows
+      const emptyResult = (why: string) => {
+        if (metric) TaskStore.insertSnapshot(run.storeId, metric, { empty: true, why, at: Date.now(), expected: emptyOk }, run.runId)
+        return { kind: 'table' as const, payload: { rows: [], rowCount: 0, metric, empty: why } }
+      }
+      if (!dataRows.length) {
+        return emptyResult(`接口有响应但没有任何记录（${result.requestUrl || String(input.urlMarker)}）`)
+      }
+      if (!kept.length) {
+        // 把每次抓到的响应的体检结果一起报出来：字段映射"看着对、跑起来全空"时，
+        // 光看报错分不清是"路径写错了"还是"抓到的是另一次响应"，有这份清单一眼就能看出来。
+        // 两种可能都要说清（2026-10-15 审查 M7）：接口字段改名，**或**这条记录本来就没有
+        // 这些信息（如个人店铺没有营业执照）——不能当成功，也不能当成"这家没有数据"。
+        const candidateSummary = (result.candidates || [])
+          .map(c => `${c.bytes}B[${c.satisfied ? '✓' : '✗'}] ${c.topKeys.slice(0, 8).join(',')}`)
+          .join(' | ')
+        throw new Error(
+          `TASK_SELECTOR_CHANGED: 接口返回了 ${dataRows.length} 条记录，但关键列「${requireFields.join('、')}」全为空——` +
+          `要么字段映射已失效（接口字段改名/结构变了，按体检结果核对映射路径），` +
+          `要么这条记录本来就没有这些信息（如个人店铺没有营业执照）。不能当成"这家没有数据"（${String(input.urlMarker)}）` +
+          (candidateSummary ? `。抓到的响应：${candidateSummary}` : '')
+        )
+      }
+      const rows = [header, ...kept]
+      if (metric) TaskStore.insertSnapshot(run.storeId, metric, rows, run.runId)
+      /**
+       * scalars：把响应里的**单值**写成标量快照（`metricKey → 取值路径`）。
+       * 用途：主体信息（`entity.name` / `entity.no`）这类"一条对象就是全部内容"的接口——
+       * 直接接上既有的主体信息通路，不用为它改一套新的读取/写回逻辑。
+       * 取不到就**不写**（宁可让下游看到"没有新快照"，也不写一个空串把上次的值盖掉）。
+       */
+      if (input.scalars && typeof input.scalars === 'object') {
+        const spec = Object.fromEntries(
+          Object.entries(input.scalars as Record<string, unknown>)
+            .filter(([, v]) => typeof v === 'string' && v)
+            .map(([k, v]) => [k, String(v)])
+        )
+        if (Object.keys(spec).length) {
+          const values = readScalarValues(result.rawRows || [], spec)
+          for (const [key, value] of Object.entries(values)) {
+            if (value) TaskStore.insertSnapshot(run.storeId, key, value, run.runId)
+          }
+        }
+      }
+      return { kind: 'table', payload: { rows, rowCount: kept.length, metric } }
+    }
+    /**
+     * 读**重复卡片列表**（只读）。
+     *
+     * 什么时候用：页面把"一张账单一张卡"渲染成一串 div、**没有 `<table>`**，
+     * 而卡片类名普遍带构建哈希（实测拼多多 `BusItem_topTitle__3bA_R`）→ 不能写死选择器。
+     *
+     * 与 readLabelValue 的区别：那个只取**最短的那一个**匹配（`cands[0]`），读不了列表；
+     * 这个以 anchor 标签定位**每一张卡**，再在卡内按标签取值，每张卡读成一行。
+     *
+     * 返回结构与 readTable / readApi **完全同构**（row[0] = 字段 key 当表头），
+     * 所以主进程的映射 / 快照 / 界面都不用改。
+     */
+    case 'readCards': {
+      const wc = wcOrThrow(run)
+      const anchor = String(input.anchor || '')
+      const rawFields = (Array.isArray(input.fields) ? input.fields : []) as Array<{ key?: unknown; label?: unknown }>
+      const fields = rawFields
+        .filter((f): f is { key: string; label: string } =>
+          !!f && typeof f === 'object' &&
+          typeof f.key === 'string' &&
+          typeof f.label === 'string')
+        .map(f => ({ key: f.key, label: f.label }))
+      if (!anchor || !fields.length) {
+        throw new Error('TASK_SELECTOR_CHANGED: readCards 缺少 anchor 或字段定义')
+      }
+      const metric = input.metric ? String(input.metric) : null
+      const maxLen = input.maxValueLen == null ? 60 : Number(input.maxValueLen)
+      const maxCards = Math.max(1, Math.min(Number(input.maxCards) || 200, 500))
+      const deep = input.deep === true
+      const emptyOk = input.emptyOk === true
+      const emptyResult = (why: string) => {
+        // expected: true —— 两处空路径都由 emptyOk 把关（档案已声明该方向可能没有卡片），
+        // 属于"预期内的空"；读取侧据此不渲染成「本次没读到」。见 readTable 的同名说明。
+        if (metric) TaskStore.insertSnapshot(run.storeId, metric, { empty: true, why, at: Date.now(), expected: true }, run.runId)
+        return { kind: 'table' as const, payload: { rows: [], rowCount: 0, metric, empty: why } }
+      }
+      const rows = await wc.executeJavaScript(`(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${VISIBLE_JS}
+        const ANCHOR = ${JSON.stringify(anchor)};
+        const FIELDS = ${JSON.stringify(fields)};
+        const MAX = ${maxLen};
+        const MAXCARDS = ${maxCards};
+        const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+        const own = el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+        // 1) 卡片锚点：自有文本恰好等于 anchor 的**可见**元素（一张卡一个）
+        const anchors = [];
+        for (const el of scope) { if (own(el) === ANCHOR && __visible(el)) anchors.push(el); }
+        // 2) 卡内取值：与 readLabelValue 同一套算法，但**限定在这张卡的子树里**
+        const valueIn = (card, label) => {
+          const cands = [];
+          for (const el of card.querySelectorAll('*')) {
+            if (!own(el).includes(label)) continue;
+            if (!__visible(el)) continue;
+            cands.push({ el, len: own(el).length });
+          }
+          if (!cands.length) return '';
+          cands.sort((a, b) => a.len - b.len);
+          let node = cands[0].el;
+          for (let i = 0; i < 6 && node && node !== card; i++) {
+            const txt = String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (txt.length > label.length) {
+              const v = txt.replace(label, '').trim();
+              if (v && v.length <= MAX) return v;
+              return '';   // 过长 = 爬到容器层级了，宁可留空也不塞一坨文本进去
+            }
+            node = node.parentElement;
+          }
+          return '';
+        };
+        const out = [FIELDS.map(f => f.key)];
+        for (const a of anchors.slice(0, MAXCARDS)) {
+          // 向上找**同时含有全部字段标签**的最近祖先 = 这张卡的本体
+          let card = a;
+          for (let i = 0; i < 8 && card && card !== document.body; i++) {
+            const txt = String(card.innerText || card.textContent || '');
+            if (FIELDS.every(f => txt.includes(f.label))) break;
+            card = card.parentElement;
+          }
+          if (!card || card === document.body) continue;
+          out.push(FIELDS.map(f => valueIn(card, f.label)));
+        }
+        return out;
+      })()`)
+      if (!Array.isArray(rows) || !rows.length) {
+        if (emptyOk) return emptyResult('页面上没有找到卡片锚点')
+        throw new Error(`TASK_SELECTOR_CHANGED: 找不到卡片锚点「${anchor}」——页面可能改版或还没加载完`)
+      }
+      const header = rows[0] as string[]
+      const dataRows = (rows.slice(1) as string[][])
+      if (!dataRows.length) {
+        if (emptyOk) return emptyResult(`页面上有「${anchor}」标签但没有可读的卡片`)
+        throw new Error(`TASK_SELECTOR_CHANGED: 找到「${anchor}」标签但读不出卡片内容`)
+      }
+      const out = [header, ...dataRows]
+      if (metric) TaskStore.insertSnapshot(run.storeId, metric, input.keepRows ? out : dataRows.length, run.runId)
+      return { kind: 'table', payload: { rows: out, rowCount: dataRows.length, metric } }
+    }
+    case 'screenshot': {
+      const wc = wcOrThrow(run)
+      /**
+       * 截图是**留档**，不是动作：它绝不该有能力把已经跑完的批次打挂。
+       *
+       * 真机实测（2026-10-03 11:08 连发 3 位）：第 1 轮的邀约**已经真实发出**（平台侧可查），
+       * 末尾这次 `capturePage()` 在窗口被遮挡/最小化时挂住（Chromium 对不可见窗口不产帧），
+       * 20s 超时把整单判成 failed —— 已发出的邀约白费、连发也断在这里。
+       *
+       * 所以改成"尽力而为"：超时/空图都只记一条 warn 并返回 null，run 继续跑下一轮。
+       * 超时上限压到 8s：留档不值得每轮多等 20s；窗口正常时 capturePage 是毫秒级的。
+       */
+      const budget = Math.min(step.timeoutMs || 20_000, 8_000)
+      try {
+        const image = await withTimeout(() => wc.capturePage(), run, budget, 'screenshot')
+        const buf = image.toPNG()
+        if (buf.length < 100) {
+          // 视口未渲染时 capturePage 返回空图：不落 0 字节工件，也不因此失败
+          logMain('warn', `[task] 截图留档跳过（视口未渲染，空图） run=${run.runId} step=${ctx.path ?? '-'}`)
+          return null
+        }
+        const dir = join(app.getPath('userData'), 'stores', run.storeId, 'artifacts')
+        mkdirSync(dir, { recursive: true })
+        // 步骤定位：顶层步骤用 step.index；**循环内的嵌套步骤没有 index**（此前直接拼出
+        // "stepundefined.png"，多个轮次的截图同名互相覆盖、也看不出是哪一步）。
+        // 回退用 ctx.path（循环里传的是 `父下标.子下标`）并带上轮次，既唯一又能定位。
+        const stepTag = typeof step.index === 'number'
+          ? String(step.index)
+          : `${ctx.path ?? 'nested'}${ctx.round ? `r${ctx.round}` : ''}`
+        const path = join(dir, `${run.runId}_step${stepTag}.png`)
+        writeFileSync(path, buf)
+        const sha256 = createHash('sha256').update(buf).digest('hex')
+        return { kind: 'screenshot', payload: null, artifact: { path, sha256 } }
+      } catch (e: any) {
+        logMain('warn', `[task] 截图留档失败（不影响流程） run=${run.runId} step=${ctx.path ?? '-'}：${String(e?.message || e).slice(0, 160)}`)
+        return null
+      }
+    }
+    case 'fillDraft': {
+      const wc = wcOrThrow(run)
+      // 草稿填充同样先等元素出现：SPA 未渲染时单发 querySelector 会立刻报 SELECTOR_CHANGED（flaky）
+      const deadline = Date.now() + step.timeoutMs
+      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, false, deadline)
+      guardSignals(run)
+      const okFilled = await withDeadline(() => wc.executeJavaScript(`(() => {
+        const el = document.querySelector(${JSON.stringify(String(input.selector))});
+        if (!el) return false;
+        const text = ${JSON.stringify(String(input.text ?? ''))};
+        if (el.isContentEditable) { el.textContent = text; }
+        else {
+          const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(el, text); else el.value = text;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()`), run, deadline, 'fillDraft')
+      if (!okFilled) throw new Error(`TASK_SELECTOR_CHANGED: 未找到填充目标 ${String(input.selector)}`)
+      // 写后回读（同 setInput）：草稿填充静默失效时，必须在这一步就失败，
+      // 而不是等平台在发送时以"未填写"拦截（那时前面几轮可能已经真发出去了）
+      const appliedText = await readFieldValue(wc, String(input.selector))
+      assertWriteApplied(appliedText, String(input.text ?? ''), 'fillDraft')
+      // §4.5：payload 只存摘要与长度，绝不存表单完整值
+      return { kind: 'text', payload: { filled: true, selector: String(input.selector), length: String(input.text ?? '').length } }
+    }
+    case 'waitForUserConfirmation': {
+      const message = String(input.message || '请确认继续')
+      transition(run, 'waiting_confirmation', `等待人工确认：${message}`)
+      emitToRenderer(EVENT_CHANNELS.TASK_CONFIRMATION_REQUIRED, {
+        runId: run.runId, taskId: run.taskId, storeId: run.storeId, stepIndex: step.index, message
+      } satisfies TaskConfirmationEvent)
+
+      const answer = await new Promise<'approve' | 'deny' | 'cancel' | 'timeout'>((resolve) => {
+        let done = false
+        let timeoutTimer: NodeJS.Timeout | null = null
+        let sigTimer: NodeJS.Timeout | null = null
+        const finish = (a: 'approve' | 'deny' | 'cancel' | 'timeout') => {
+          if (done) return
+          done = true
+          // 先到先得：无论是用户回答还是超时，立刻清掉另一个定时器。
+          // 不清理会让"提前确认"的运行一直挂着一个最长 step.timeoutMs 的定时器，
+          // 闭包持有整个运行句柄直到超时（P1-10，2026-10-15 审查）。
+          if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null }
+          if (sigTimer) { clearInterval(sigTimer); sigTimer = null }
+          resolve(a)
+        }
+        run.pendingConfirm = finish
+        timeoutTimer = setTimeout(() => finish('timeout'), step.timeoutMs)
+        sigTimer = setInterval(() => {
+          // 暂停不打断门禁：确认/拒绝是用户必须做出的决定，仅响应取消
+          if (run.cancelRequested) finish('cancel')
+        }, 250)
+      })
+      run.pendingConfirm = null
+
+      if (answer === 'timeout') throw new Error(`TASK_CONFIRMATION_REQUIRED: 确认超时（${Math.round(step.timeoutMs / 60000)} 分钟）`)
+      if (answer === 'cancel') throw cancelSig()
+      if (answer === 'deny') { run.deniedByConfirm = true; return { kind: 'confirm', payload: { approved: false, message } } }
+      transition(run, 'running', '用户确认通过')
+      return { kind: 'confirm', payload: { approved: true, message } }
+    }
+    // ---------- 副作用步骤（点击/写入）：固定注入脚本 + Zod 校验参数，仍无任意代码入口 ----------
+    case 'click': {
+      const wc = wcOrThrow(run)
+      const sel = String(input.selector)
+      // 等待与执行共享一个步骤时限：最坏耗时 1× timeout，而非 2×
+      const deadline = Date.now() + step.timeoutMs
+      await waitForSelector(wc, sel, run, step.timeoutMs, false, deadline)
+      guardSignals(run)
+      // mode:'real'：按选择器发**受信任鼠标点击**。
+      // 用途：目标没有稳定文案、只有合成 click 不响应的控件——实测抖店抽屉「主营」级联的
+      // 触发器（`.auxo-cascader-multiple-wrapper`）：合成 click 打不开下拉，真实鼠标才展开；
+      // 而且它的文案会随平台记住的上次填写变化（「请下拉选择」→「个护家清/家清纸品」），
+      // 按文案找第二轮就会失效，只能按选择器定位。
+      if (input.mode === 'real') {
+        await assertViewMounted(wc, `click ${sel}`)
+        const point = await withDeadline(() => wc.executeJavaScript(`(() => {
+          const el = document.querySelector(${JSON.stringify(sel)});
+          if (!el) return { ok: false, reason: 'NOT_FOUND' };
+          let dis = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
+          let p = el.parentElement;
+          for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
+            if (/disabled/i.test(String(p.className || ''))) dis = true;
+          }
+          if (dis) return { ok: false, reason: 'DISABLED' };
+          el.scrollIntoView({ block: 'center' });
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) return { ok: false, reason: 'INVISIBLE' };
+          return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+        })()`), run, deadline, 'click')
+        if (!point || !point.ok) {
+          throw new Error(point && point.reason === 'DISABLED'
+            ? `TASK_TARGET_DISABLED: 目标为禁用态，平台不允许该操作 ${sel}`
+            : `TASK_SELECTOR_CHANGED: 未找到可点击元素 ${sel}`)
+        }
+        guardSignals(run)
+        realClick(wc, point.x, point.y)
+        guardSignals(run)
+        return { kind: 'executed', payload: { action: 'click', selector: sel, mode: 'real', x: point.x, y: point.y } }
+      }
+      const res = await withDeadline(() => wc.executeJavaScript(`(() => {
+        const el = document.querySelector(${JSON.stringify(sel)});
+        if (!el) return { ok: false, reason: 'NOT_FOUND' };
+        let dis = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
+        let p = el.parentElement;
+        for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
+          if (/disabled/i.test(String(p.className || ''))) dis = true;
+        }
+        if (dis) return { ok: false, reason: 'DISABLED' };
+        const target = el.closest('button, a, label, [role="button"]') || el;
+        target.click();
+        return { ok: true, text: String(target.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40) };
+      })()`), run, deadline, 'click')
+      if (!res || !res.ok) throw new Error(res && res.reason === 'DISABLED'
+        ? `TASK_TARGET_DISABLED: 目标为禁用态，平台不允许该操作 ${sel}`
+        : `TASK_SELECTOR_CHANGED: 未找到可点击元素 ${sel}`)
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'click', selector: sel, clickedText: res.text || null } }
+    }
+    case 'hover': {
+      // 悬停展开多列级联菜单的下一列（**不点击**）。实测抖店「主推类目」：点一级 chip 只有第一列，
+      // 二级项悬停才渲染第三列；直接点二级只应用两级并收起弹层，所以三级必须"先悬停再点"。
+      //
+      // 用 JS 派发指针事件而不是受信任鼠标移动：级联列靠 mouseover/mouseenter 触发（React 的
+      // onMouseEnter 由根节点上的 mouseover 派生），实测派发即可开列；不依赖窗口是否在前台，
+      // 也不受"下一列可能落在视口外"影响（真机实测弹层会自动左翻，但列的位置要等开列后才知道）。
+      // 目标定位与 clickByText 同一套两级匹配（自有文本 → 规范化 innerText），保证"点得到就能悬得到"。
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      const deep = !!input.deep
+      const exact = !!input.exact
+      const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
+      const result = await withTimeout(() => wc.executeJavaScript(`(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${VISIBLE_JS}
+        ${SCOPE_FN}
+        ${PICK_SORT_FN}
+        const needle = ${JSON.stringify(needle)};
+        const exact = ${!!exact};
+        const within = ${JSON.stringify(within || null)};
+        const roots = within ? __scopeRoots(within) : null;
+        if (within && !roots) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
+        const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+        const cands = [];
+        const narrowNeedle = __narrow(needle);
+        for (const el of scope) {
+          const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+          if (exact ? __narrow(own) !== narrowNeedle : !own.includes(needle)) continue;
+          if (!__inScope(roots, el)) continue;
+          if (!__visible(el)) continue;
+          cands.push({ el, len: own.length });
+        }
+        if (!cands.length && narrowNeedle) {
+          const pool = [];
+          if (roots) for (const r of roots) { pool.push(r); for (const c of r.querySelectorAll('*')) pool.push(c) }
+          else for (const el of scope) pool.push(el);
+          for (const c of pool) {
+            const tag = c.tagName;
+            if (!(tag === 'LI' || tag === 'BUTTON' || tag === 'A' || tag === 'LABEL' || tag === 'SPAN' ||
+                  (c.getAttribute && (c.getAttribute('role') === 'menuitem' || c.getAttribute('role') === 'button')))) continue;
+            if (!__visible(c)) continue;
+            if (__narrow(c.innerText) !== narrowNeedle) continue;
+            cands.push({ el: c, len: narrowNeedle.length, viaText: true });
+          }
+        }
+        if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
+        cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
+        const hit = cands[0].el;
+        // 开列证据：悬停前后"可见的候选条目"数量（级联菜单项/选项这类小元素），
+        // 数量变多说明下一列真的渲染出来了；没变也如实记录，让后面的点击步骤去报错。
+        const countVisibleItems = () => {
+          let n = 0;
+          const rootsNow = roots || [document];
+          for (const r of rootsNow) {
+            for (const e of r.querySelectorAll('li, [role=menuitem], [class*="menu-item"], [class*="option"]')) {
+              if (__visible(e)) n++;
+            }
+          }
+          return n;
+        };
+        const before = countVisibleItems();
+        const rect = hit.getBoundingClientRect();
+        const opts = { bubbles: true, cancelable: true, view: window, clientX: Math.round(rect.left + rect.width / 2), clientY: Math.round(rect.top + rect.height / 2) };
+        for (const t of ['pointerover', 'mouseover', 'mouseenter', 'mousemove']) {
+          try {
+            const Ctor = (t.indexOf('pointer') === 0 && typeof PointerEvent === 'function') ? PointerEvent : MouseEvent;
+            hit.dispatchEvent(new Ctor(t, opts));
+          } catch { /* 个别环境无 PointerEvent，退回 MouseEvent 即可 */ }
+        }
+        return { ok: true, before };
+      })()`).then(async (r: any) => {
+        if (!r || !r.ok) return r
+        // 等下一列渲染出来（平台是同步渲染，给一小段稳定期；拿可见条目数当判据，最多等 2.4s）
+        const deadline = Date.now() + 2400
+        let after = r.before
+        for (;;) {
+          await new Promise(res => setTimeout(res, 300))
+          after = await wc.executeJavaScript(`(() => {
+            ${VISIBLE_JS}
+            const within = ${JSON.stringify(within || null)};
+            ${SCOPE_FN}
+            const roots = within ? (__scopeRoots(within) || []) : [];
+            let n = 0;
+            for (const r of (roots.length ? roots : [document])) {
+              for (const e of r.querySelectorAll('li, [role=menuitem], [class*="menu-item"], [class*="option"]')) {
+                if (__visible(e)) n++;
+              }
+            }
+            return n;
+          })()`).catch(() => after)
+          if (typeof after === 'number' && after > r.before) break
+          if (Date.now() >= deadline) break
+        }
+        return { ok: true, hoveredText: needle, visibleItemsBefore: r.before, visibleItemsAfter: after, expanded: after > r.before }
+      }), run, step.timeoutMs, `悬停「${needle}」`)
+      guardSignals(run)
+      if (!result || !result.ok) {
+        if (result && result.reason === 'SCOPE_NOT_FOUND') {
+          throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${needle}」的限定范围（${JSON.stringify(within)}）`)
+        }
+        throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的可悬停元素`)
+      }
+      return {
+        kind: 'executed',
+        payload: {
+          action: 'hover',
+          text: result.hoveredText,
+          visibleItemsBefore: result.visibleItemsBefore,
+          visibleItemsAfter: result.visibleItemsAfter,
+          expanded: result.expanded
+        }
+      }
+    }
+    case 'pressKey': {
+      // 只支持 Escape：收起页面上残留的下拉浮层/弹层。
+      // 实测快手：选完「带货类目」后级联下拉仍然展开着，把后面要点的按钮盖住，
+      // 于是「确 认」点不中（受信任鼠标点在浮层上）。按一下 Esc 收起它即可。
+      // 白名单只有 Escape（Zod 已限），不存在"通用键盘输入"的口子。
+      const wc = wcOrThrow(run)
+      const key = String(input.key)
+      if (key !== 'Escape') throw new Error(`TASK_INVALID_STEP: pressKey 仅支持 Escape（收到 ${key}）`)
+      // 发到页面（受信任键盘事件），让页面的浮层自己收起来
+      wc.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+      wc.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+      await new Promise(r => setTimeout(r, 400))
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'pressKey', key } }
+    }
+    case 'clickIfPresent': {
+      // 条件点击：平台**可能**弹二次确认框时用它。
+      //
+      // 为什么不硬等：没实测到该平台一定有确认框时，硬等一个不存在的元素 = 白等超时（还会
+      // 把一次成功的发送报成失败）。为什么也不能假设没有：真弹了而没人点，发送就没发出去，
+      // 而"点了发送按钮"很容易被误当成"已经发出去了"。
+      // 所以：在给定窗口内轮询，出现就点；超时未出现就按"没有确认框"跳过，
+      // 并把 clicked 如实记进步骤结果（事后能查出到底走没走确认流程）。
+      const needle = String(input.text)
+      const deep = !!input.deep
+      const nearText = input.nearText ? String(input.nearText) : ''
+      const waitMs = input.waitMs == null ? 8000 : Number(input.waitMs)
+      const until = Date.now() + waitMs
+      guardSignals(run)
+      let clicked = false
+      let viaInfo = ''
+      for (;;) {
+        guardSignals(run)
+        let hit: Awaited<ReturnType<typeof findTextTarget>> | null = null
+        if (nearText) {
+          // 精确模式：判断"这个候选按钮的祖先链里是否含锚点文案"。
+          //
+          // 为什么不先找锚点再往上取浮层：实测快手那个警告框和商品弹窗**共享外层容器**
+          // （往上找只会找到同时包含两者的那个 wrap），在它里面找「确认」仍旧会命中下层弹窗的按钮。
+          // 按"祖先链包含锚点"筛选才是精确的：警告框的按钮在警告框里，下层弹窗的按钮不在。
+          const near = await wcOrThrow(run).executeJavaScript(`(() => {
+            ${deep ? ENUM_DEEP_FN : ''}
+            ${VISIBLE_JS}
+            const needle = ${JSON.stringify(needle)};
+            const exact = ${!!input.exact};
+            const anchor = ${JSON.stringify(nearText)};
+            const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+            const ownOf = (el) => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            const narrow = (s) => String(s == null ? '' : s).replace(/\\s+/g, '');
+            const hits = [];
+            for (const el of scope) {
+              // 候选：可点元素，文案匹配（自有文本或规范化 innerText——平台把按钮文案拆进子 span）
+              const tag = el.tagName;
+              if (!(tag === 'BUTTON' || tag === 'A' || tag === 'LABEL' ||
+                    (el.getAttribute && el.getAttribute('role') === 'button'))) continue;
+              if (!__visible(el)) continue;
+              const okText = ownOf(el).includes(needle) || narrow(el.innerText) === narrow(needle);
+              if (!okText) continue;
+              // 祖先链里必须有锚点文案（即：这个按钮属于那个警告框）
+              let has = false;
+              for (let n = el; n && n !== document.body; n = n.parentElement) {
+                if (String(n.innerText || '').includes(anchor)) { has = true; break }
+              }
+              if (!has) continue;
+              const r = el.getBoundingClientRect();
+              hits.push({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), text: String(el.innerText || '').replace(/\\s+/g, '').slice(0, 20) });
+            }
+            return hits.length ? JSON.stringify(hits[0]) : null;
+          })()`).catch(() => null)
+          if (near) {
+            try { hit = { ok: true, x: JSON.parse(near).x, y: JSON.parse(near).y, clickedText: JSON.parse(near).text } } catch { hit = null }
+          }
+        } else {
+          hit = await findTextTarget(wcOrThrow(run), run, needle, deep, Math.min(6000, waitMs), 'clickIfPresent')
+        }
+        if (hit && hit.ok) {
+          performHitClick(wcOrThrow(run), hit)
+          clicked = true
+          viaInfo = hit.clickedText || ''
+          break
+        }
+        if (hit && hit.reason === 'DISABLED') {
+          // 确认框在但按钮禁用：这不算"没有确认框"，如实失败（点不动就别假装发成功了）
+          throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态，确认框无法确认`)
+        }
+        if (hit && (hit.reason === 'VIEW_DETACHED' || hit.reason === 'COVERED' || hit.reason === 'OUT_OF_VIEWPORT')) {
+          // "找得到但点不了"（视图被摘除/被遮挡/在视口外）**不等于"没有确认框"**：
+          // 以前这些 reason 被忽略、轮询到超时后如实记成 clicked:false，于是快手那条
+          // 「继续发送邀约」确认框会被静默当成"没弹框"——接着 waitForGone 超时，
+          // 报出的原因与真实根因不符（2026-09-28 审查确认）。这里如实抛出。
+          throw new Error(`TASK_TARGET_DISABLED: 「${needle}」存在于页面上但当前不可点击（${hit.reason}），确认框无法确认`)
+        }
+        if (Date.now() >= until) break
+        await new Promise(r => setTimeout(r, 300))
+      }
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'clickIfPresent', text: needle, nearText: nearText || null, clicked, clickedText: viaInfo || null, waitedMs: waitMs } }
+    }
+    case 'clickByText': {
+      // 平台页面没有稳定选择器，只能按"元素自身的直接文本"点；
+      // 取文本最短的命中项（最具体的那个），再向上找可点击祖先。
+      // deep = ShadowRoot 穿透；mode:'real' = 定位后发受信任鼠标点击
+      // （微信对框架托管的按钮/复选框，合成 click() 不生效或点到隐藏克隆上，实测必须真实输入）。
+      // 轮询式：SPA 的筛选区/按钮常在导航完成后才渲染（抖店广场实测踩过：单发点击必然撞空），
+      // 在步骤超时内每 300ms 重找一次；找到即点，禁用态立即如实失败。
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      const deep = !!input.deep
+      const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
+      // 找不到目标时的错误码（默认 TASK_SELECTOR_CHANGED）；批量循环里用它区分"页面改版"与"没有下一个候选"
+      const missingCode = input.missingCode ? String(input.missingCode) : 'TASK_SELECTOR_CHANGED'
+      // 禁用态的错误码（默认 TASK_TARGET_DISABLED）：翻页按钮在最后一页会置灰——
+      // 那不是"平台限制操作"，而是"没有更多了"，用 disabledCode 让它如实收工
+      const disabledCode = input.disabledCode ? String(input.disabledCode) : 'TASK_TARGET_DISABLED'
+      // 目标不存在时的"替代文案"判据与它对应的错误码（见 StepInput.absentText）：
+      // 命中即**立刻**失败，不等到超时——"这位对象天生不可用"与"页面还没渲染出来"处置相反。
+      const absentTexts = input.absentText ? [String(input.absentText)] : []
+      const absentCode = input.absentCode ? String(input.absentCode) : missingCode
+      // nth:'round' —— 循环里每轮取"第 N 条"（N = 当前轮次）
+      // nth:'unvisited' —— 取"第一条本次运行还没点过的"（微信广场每次加载都洗牌，"第几条"不可靠）
+      const roundIdx = input.nth === 'round' ? Math.max(0, (ctx.round ?? 1) - 1) : undefined
+      const unvisited = input.nth === 'unvisited'
+      // 去重命名空间：同一步骤在每次运行时独立记忆（不跨运行，避免恢复执行时的历史干扰）
+      const dedupNs = unvisited ? `${run.runId}:${ctx.path ?? String(step.index ?? 0)}` : ''
+      const pick = (roundIdx != null || unvisited)
+        ? { roundIdx, visited: unvisited ? Array.from(run.visitedRows) : [], dedupNs }
+        : undefined
+      guardSignals(run)
+      // allowJsWhenDetached：视图未挂载时降级为 JS 点击（不是"被遮挡"）。
+      // 只有**纯页内状态切换**的点击才该开它——切页签就是典型：点了之后页面自己重渲染，
+      // 不依赖浏览器输入管线。而依赖框架真实输入的按钮（微信邀约表单）绝不能开，
+      // 开了会静默点空、后面步骤再以"写入未生效"失败，根因反而更难查。
+      const allowJsWhenDetached = input.allowJsWhenDetached === true
+      /**
+       * 7 天内已邀过的不再重复邀约（用户要求）：
+       *   · skipTexts：本地台账里的昵称清单，点「详情」前就把这些行剔掉（不花详情页访问）；
+       *   · recordRowText：把这一行的达人昵称回传，供本轮成功发出后写入台账。
+       */
+      const skipTexts = Array.isArray(input.skipTexts) ? (input.skipTexts as string[]).map(String).filter(Boolean) : []
+      const recordRowText = input.recordRowText === true
+      /**
+       * onlyIfVisible：只有这段文案可见时才点（条件性收尾，见 StepInput.onlyIfVisible）。
+       * 不可见 → 本步**什么都不做**（不算失败）：面板已经收起时再点一次会把面板点开、盖住列表。
+       */
+      const onlyIfVisible = input.onlyIfVisible as { text: string; deep?: boolean; within?: { selector?: string; text?: string; climb?: number } } | undefined
+      if (onlyIfVisible?.text) {
+        const visible = await wc.executeJavaScript(`(() => {
+          ${onlyIfVisible.deep ? ENUM_DEEP_FN : ''}
+          ${VISIBLE_JS}
+          ${SCOPE_FN}
+          const needle = ${JSON.stringify(String(onlyIfVisible.text))};
+          const withinCfg = ${JSON.stringify(onlyIfVisible.within || null)};
+          const roots = withinCfg ? __scopeRoots(withinCfg, ${onlyIfVisible.deep ? 'true' : 'false'}) : null;
+          if (withinCfg && !roots) return false;
+          const scope = ${onlyIfVisible.deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+          for (const el of scope) {
+            if (roots && !roots.some(r => r.contains(el))) continue;
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (own.includes(needle) && __visible(el)) return true;
+          }
+          return false;
+        })()`).catch(() => false) as boolean
+        if (!visible) {
+          guardSignals(run)
+          return { kind: 'executed', payload: { action: 'clickByText', skipped: 'not-visible', text: needle } }
+        }
+      }
+      /**
+       * openVia：目标一开始不可见时，先点一次开关（见 StepInput.openVia）。
+       * 只在前 2.5s 内找不到才点，且**只点一次**；之后照常按整步超时轮询。
+       */
+      const openVia = input.openVia as { text: string; exact?: boolean; deep?: boolean } | undefined
+      if (openVia?.text && input.mode !== 'real') {
+        const early = await findTextTarget(wc, run, needle, deep, 2500, 'clickByText openVia 预探', within, pick, allowJsWhenDetached, absentTexts, !!input.exact, input.skipIfChecked === true, skipTexts, recordRowText)
+        if (!early.ok) {
+          const toggle = await findTextTarget(wc, run, String(openVia.text), !!openVia.deep, step.timeoutMs, 'clickByText openVia', within, undefined, false, undefined, !!openVia.exact, false)
+          if (toggle.ok && toggle.skipped !== 'checked') {
+            performHitClick(wc, toggle)
+            logMain('info', `[task] 「${needle}」不可见，已点开开关「${openVia.text}」再重试 run=${run.runId}`)
+            await new Promise(r => setTimeout(r, 500))
+          }
+        }
+      }
+      const deadline = Date.now() + step.timeoutMs
+      let sawScopeMiss = false
+      let sawCoveredBy: string | null = null
+      let sawOutsideBy: string | null = null
+      let hit: Awaited<ReturnType<typeof findTextTarget>> | null = null
+      if (input.mode === 'real') {
+        for (;;) {
+          guardSignals(run)
+          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, pick, allowJsWhenDetached, absentTexts, !!input.exact, input.skipIfChecked === true, skipTexts, recordRowText)
+          if (hit.ok) break
+          if (hit.reason === 'DISABLED') {
+            // 把平台给的禁用原因一并报出来（读到了就带，读不到退回默认文案）
+            const why = hit.disabledReason ? `——平台提示「${hit.disabledReason}」` : (disabledCode === 'TASK_TARGET_DISABLED' ? '（平台限制该操作）' : '')
+            throw new Error(`${disabledCode}: 「${needle}」当前为禁用态${why}`)
+          }
+          // ABSENT：页面明确写着"这件事做不了"（如微信详情页「暂未到达合作门槛」）。
+          // 立刻如实报出，**不等到超时**——它不是"页面慢"，是这位对象本身不可用；
+          // 等下去只会白耗几十秒，还会把"该换下一位"耗成"疑似平台整体异常"。
+          if (hit.reason === 'ABSENT') {
+            throw new Error(`${absentCode}: 页面上没有「${needle}」，而是写着「${hit.absentText}」——这一位不满足平台的合作条件，跳过换下一位`)
+          }
+          // 视口塌陷且步骤没允许降级：立刻如实失败，别白等到超时
+          // （此时 elementFromPoint 恒为 null，再轮询一万次也还是 null）
+          if (hit.reason === 'VIEW_DETACHED') {
+            throw new Error(`TASK_VIEW_DETACHED: 点「${needle}」需要真实落点，但页面视口塌陷（${hit.coveredBy}）——店铺 webview 可能尚未注册或被移出文档，请重新打开店铺页面后重试`)
+          }
+          // ALL_VISITED：列表已渲染、候选都在，只是本页每一条都已处理过 → 立刻交给上层翻页，
+          // 不必空等到超时（实测每个"本页取尽"都白等 30s，几十轮下来很可观）
+          if (hit.reason === 'ALL_VISITED') {
+            throw new Error(`${missingCode}: 当前页的候选都已处理过（没有新的「${needle}」可点）`)
+          }
+          // SCOPE_NOT_FOUND 不能立即失败：导航刚完成时筛选区往往还没渲染出来
+          // （实测真店"点开始邀约"就折在这里——第一步点类目时 .quick-filter-button-enums 还不存在）。
+          // 与"没找到元素"一样在超时内轮询等待，超时仍没有才算真的找不到。
+          sawScopeMiss = sawScopeMiss || hit.reason === 'SCOPE_NOT_FOUND'
+          // COVERED：目标被别的浮层压住（窄窗口下平台布局重叠，实测踩过）→ 超时内轮询等它露出来
+          if (hit.reason === 'COVERED') sawCoveredBy = hit.coveredBy || 'unknown'
+          // OUT_OF_VIEWPORT：元素整块在视口外。**与"被遮挡"分开报**——实测快手级联弹层
+          // 因为 rAF 被节流而停在 -9999,-9999 时就是这一种；报成"遮挡/窗口太窄"会把人引偏。
+          if (hit.reason === 'OUT_OF_VIEWPORT') sawOutsideBy = hit.coveredBy || '元素在视口外'
+          if (Date.now() >= deadline) {
+            if (sawOutsideBy) {
+              throw new Error(`TASK_TARGET_OUT_OF_VIEWPORT: 「${needle}」的位置在视口外（${sawOutsideBy}）——多为平台弹层依赖 rAF 定位但页面被节流（窗口被遮挡/最小化）或弹层未展开；可先让店铺窗口处于前台再重试`)
+            }
+            if (sawCoveredBy) {
+              throw new Error(`TASK_TARGET_COVERED: 「${needle}」被「${sawCoveredBy}」遮挡，点不到——请把店铺窗口拉宽一些让页面不再重叠后重试`)
+            }
+            if (sawScopeMiss) {
+              throw new Error(`TASK_SELECTOR_CHANGED: 超时内未出现「${needle}」的限定范围（${JSON.stringify(within)}）`)
+            }
+            throw new Error(`${missingCode}: 页面上找不到文案为「${needle}」的可点击元素`)
+          }
+          await new Promise(r => setTimeout(r, 300))
+        }
+        guardSignals(run)
+        const follow = input.followTab as { urlIncludes?: string; closeOld?: boolean } | undefined
+        const beforeTabIds = follow ? new Set(getStoreTabs(run.storeId).map(t => t.id)) : null
+        if (unvisited && hit.rowKey) run.visitedRows.add(hit.rowKey)
+        // 记下"这一轮点的是谁"：本轮真正发出邀约后写入台账（7 天内不再重复邀约）
+        if (recordRowText && hit.rowNickname) {
+          run.pendingCreatorNickname = hit.rowNickname
+          // 台账跳过是"用户要的行为"，必须看得见：日志里说清"选了谁、跳过了几位已邀的"
+          if (skipTexts.length) {
+            logMain('info', `[invite] 选中达人「${hit.rowNickname}」（本页已跳过近 7 天已邀的 ${hit.skippedInvited || 0} 位）`)
+          }
+        }
+        // skipIfChecked 命中时**不点**：那份 hit 里没有坐标（没走遮挡采样），
+        // 硬发受信任鼠标会带着 undefined 坐标下去（Electron 直接抛 "Invalid event object"）。
+        if (hit.skipped !== 'checked') performHitClick(wc, hit)
+        guardSignals(run)
+        if (follow && beforeTabIds) {
+          const openedId = await followOpenedTab(run, beforeTabIds, follow.urlIncludes, step.timeoutMs)
+          if (openedId) {
+            const oldTabId = run.tabId
+            run.tabId = openedId
+            runTabByStore.set(run.storeId, openedId)
+            try { activateTab(run.storeId, openedId) } catch { /* 视图未挂载不阻塞流程 */ }
+            /**
+             * 跟到新标签页之后**必须等它的 guest 注册**再往下走（2026-10-03 真机实测抓到）。
+             *
+             * `followOpenedTab` 只等到"标签页出现"，而迁移到 DOM `<webview>` 之后，新标签页的
+             * webview 要等渲染层挂载 → did-attach → 主进程登记，才拿得到 WebContents。
+             * 不等就会在紧接着的 `waitForPage` 上炸：
+             * `BROWSER_NOT_READY: 标签页页面尚未就绪`（本次实测：微信广场点「详情」→
+             * window.open 新标签页 → 第 1 轮子步骤 4/18 waitForPage）。
+             * 判据与任务开跑/useTab 两处完全一致。
+             */
+            await waitForTabWebContents(run.storeId, openedId, 20_000).catch((e: any) => {
+              throw new Error(`BROWSER_NOT_READY: 跟到新标签页后页面未就绪（${String(e?.message || e).replace(/^BROWSER_NOT_READY:\s*/, '')}）`)
+            })
+            if (follow.closeOld !== false && oldTabId && oldTabId !== openedId) {
+              // 旧运行标签页用完即关：否则"每个候选一个标签页"（几十轮后窗口爆炸）
+              try { closeTab(run.storeId, oldTabId) } catch { /* 已关闭/未挂载都无妨 */ }
+            }
+          }
+          // 没等到新标签页不当失败：也可能这次是原地跳转，交给后面的 waitForPage 判定
+        }
+        // waitUrl：点击后应当发生**同标签页跳转**（SPA pushState）。按钮可能早早就在 DOM 里
+        // 但事件尚未挂上，点早了会被丢弃——固定 sleep 不可靠（微信实测 3s 失败 / 4s 成功）。
+        // 这里轮询地址是否变化；没变则**重新定位再点一次**。
+        //
+        // ⚠ 默认 attempts = 1（不重发点击）：重发点击会**真的再点一次**，只对"点击不生效时再点
+        // 也不产生第二次提交"的导航触发类安全（如微信「邀请带货」跳表单页，它自己在档案里显式
+        // 声明 attempts:4）。若某步其实会提交（发送/确认/支付），默认重发就是静默重复提交——
+        // 所以改成"必须显式声明"才重试，未声明时宁可如实报 TASK_TIMEOUT 让人重跑。
+        const waitUrl = input.waitUrl as { includes: string; attempts?: number } | undefined
+        if (waitUrl) {
+          const attempts = Number(waitUrl.attempts) > 0 ? Number(waitUrl.attempts) : 1
+          let done = false
+          /**
+           * 边点边收**平台正在显示的提示**：toast 只闪几秒，等到 4 次点击全失败再读就没了。
+           * 这是"为什么点不动"的唯一权威答案（真机教训：只报一句超时，什么线索都没留下）。
+           */
+          let lastNotice: string | null = null
+          for (let att = 1; att <= attempts && !done; att++) {
+            const until = Date.now() + Math.max(4000, Math.floor(step.timeoutMs / attempts))
+            for (;;) {
+              guardSignals(run)
+              const cur = (() => { try { return wcOrThrow(run).getURL() } catch { return '' } })()
+              if (cur.includes(waitUrl.includes)) { done = true; break }
+              if (Date.now() >= until) break
+              await new Promise(r => setTimeout(r, 300))
+            }
+            if (done) break
+            const seen = await readBlockingNotice(wcOrThrow(run)).catch(() => null)
+            if (seen) lastNotice = seen
+            // 还没跳 → 再点一次（重新定位，避免元素重排后坐标失效）
+            guardSignals(run)
+            const again = await findTextTarget(wcOrThrow(run), run, needle, deep, step.timeoutMs, 'clickByText waitUrl', within, pick, allowJsWhenDetached, undefined, !!input.exact, input.skipIfChecked === true)
+            if (again.ok && again.skipped !== 'checked') { performHitClick(wcOrThrow(run), again) }
+          }
+          if (!done) {
+            /**
+             * 点不动时按**平台原话**分流（2026-10-04 加，见 classifyInviteBlockNotice）：
+             *   · 已邀约 → 换下一位（advance）；
+             *   · 邀请机会用完 → TASK_QUOTA_EXCEEDED（在 stopOn 里）→ 干净收工；
+             *   · 操作过于频繁 → 退避后重试同一位（restart）；
+             *   · 认不出来 → 如实超时，但**带上平台原话**，不再让人猜。
+             */
+            const notice = lastNotice || await readAlreadyInvitedEvidence(wcOrThrow(run)).catch(() => null)
+            const kind = classifyInviteBlockNotice(notice)
+            if (kind === 'already-invited') {
+              throw new Error(`${disabledCode}: 点「${needle}」没有跳到表单页，且页面上写着「${notice}」——这一位 7 天内已经邀过，跳过换下一位`)
+            }
+            if (kind === 'quota-exhausted') {
+              throw new Error(`TASK_QUOTA_EXCEEDED: 点「${needle}」没有跳到表单页，平台提示「${notice}」——邀请机会已用完，干净收工（不要继续白跑）`)
+            }
+            if (kind === 'throttled') {
+              throw new Error(`TASK_DAREN_PAGE_UNOPENABLE: 点「${needle}」没有跳到表单页，平台提示「${notice}」——疑似限流，退避后重试这一位`)
+            }
+            throw new Error(`TASK_TIMEOUT: 点击「${needle}」${attempts} 次后地址仍未变为含「${waitUrl.includes}」的页面${notice ? `（平台提示「${notice}」）` : '（页面上没有可读到的提示）'}`)
+          }
+        }
+        // verifyActive：点完页签后校验它**真的选中了**。
+        //
+        // 为什么要这一步：页签切换唯一可靠的证据是"它变成选中态"，而平台常有一批表头完全相同的
+        // 页签（实测快手发票页「处理中」与「处理记录」表头一模一样）。切页签静默失败时，
+        // 读回来的是**上一个页签**的数据——表头校验（expectHeaders）对这种情况完全无能为力，
+        // 于是「处理中」会显示成「处理记录」的 3 条，而且看不出来。
+        // 有了它，切不动就如实失败，绝不把邻居的数据当成本页签的。
+        const verifyActive = input.verifyActive as { selector: string; classIncludes: string; text?: string; deep?: boolean } | undefined
+        if (verifyActive) {
+          const wantText = verifyActive.text ? String(verifyActive.text) : needle
+          /**
+           * 校验不过就**重新定位再点一次**（最多 3 次）。
+           *
+           * 为什么（2026-10-14 真机定位）：坐标是"点击那一刻的排版"下算出来的，而坐标算完到事件发出
+           * 之间页面还会继续排版——实测快手发票页的页签横条会因为上方内容加载整体上移 ~123px，
+           * 于是点击落在页签下方 123px 处，什么也没点到。表现为**同一个任务、同一份步骤**
+           * 时好时坏（当天 3 次失败 / 2 次成功）。
+           *
+           * 为什么重试是安全的：带 verifyActive 的点击目标是**选择类控件**（页签、筛选 chip），
+           * 重复点同一个是幂等的（不会重复提交任何东西）；真正会提交的动作走的是 waitUrl 那条路，
+           * 那里默认 attempts=1、必须显式声明才重发。这里也保留"三次都不行就如实失败"，
+           * 不把"点不动"糊成成功。
+           */
+          const verifyAttempts = 3
+          const perAttemptMs = Math.min(Math.max(Math.floor(step.timeoutMs / verifyAttempts), 4000), 8000)
+          let active = false
+          let lastSeen = ''
+          let lastRetry = ''
+          for (let att = 1; att <= verifyAttempts && !active; att++) {
+            if (att > 1) {
+              /**
+               * 重新定位再点。第 2 次仍用受信任鼠标（重新取坐标），第 3 次改用 JS 兜底：
+               * 页面在这几秒里可能一直在排版（实测快手页签横条跳 ~123px），只重试真点击会次次落空。
+               * 两条路都只对**选择类控件**幂等重放，且成败仍由 verifyActive 判定。
+               */
+              guardSignals(run)
+              if (att === 2) {
+                const again = await findTextTarget(
+                  wcOrThrow(run), run, needle, deep, step.timeoutMs, 'clickByText verifyActive 重试',
+                  within, pick, allowJsWhenDetached, undefined, !!input.exact, input.skipIfChecked === true
+                ).catch(() => ({ ok: false } as { ok: boolean; skipped?: string }))
+                if (again.ok && again.skipped !== 'checked') performHitClick(wcOrThrow(run), again as Parameters<typeof performHitClick>[1])
+                else lastRetry = '重试定位失败'
+              } else {
+                lastRetry = await jsClickByTextFallback(wcOrThrow(run), needle, deep, within)
+              }
+              await new Promise(r => setTimeout(r, 500))
+            }
+            const until = Date.now() + perAttemptMs
+            for (;;) {
+              guardSignals(run)
+              const st = await wcOrThrow(run).executeJavaScript(`(() => {
+                ${verifyActive.deep ? ENUM_DEEP_FN : ''}
+                const sel = ${JSON.stringify(String(verifyActive.selector))};
+                const want = ${JSON.stringify(wantText)};
+                const cls = ${JSON.stringify(String(verifyActive.classIncludes))};
+                // deep：微信小店的页签在 micro-app 的 ShadowRoot 里（document 级查不到）
+                const pool = ${verifyActive.deep ? '__enumDeep().filter(el => { try { return el.matches(sel) } catch { return false } })' : 'document.querySelectorAll(sel)'};
+                const seen = [];
+                for (const el of pool) {
+                  const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+                  const has = String(el.className || '').includes(cls);
+                  seen.push(t.slice(0, 20) + (has ? '(选中)' : ''));
+                  if (t === want && has) return JSON.stringify({ ok: true, seen });
+                }
+                return JSON.stringify({ ok: false, seen });
+              })()`).catch(() => JSON.stringify({ ok: false, seen: [] }))
+              const parsed = (() => { try { return JSON.parse(String(st)) } catch { return { ok: false, seen: [] } } })()
+              lastSeen = (parsed.seen || []).join(' / ')
+              if (parsed.ok) { active = true; break }
+              if (Date.now() >= until) break
+              await new Promise(r => setTimeout(r, 300))
+            }
+          }
+          if (!active) {
+            throw new Error(`TASK_TAB_NOT_ACTIVE: 点了「${wantText}」（含重试共 ${verifyAttempts} 次${lastRetry ? `，${lastRetry}` : ''}）但它没有变成选中态（${verifyActive.selector} 上未见 ${verifyActive.classIncludes}）——页签可能没切成功，已中止以免把上一个页签的数据当成本页签的。当前页签：${lastSeen}`)
+          }
+        }
+        // verifyChecked：点完（或本来就勾着而跳过）校验它**真的处于勾选态**——
+        // 有些平台把"筛选生效没有"只表达在勾选态上，见 assertCheckedAfterClick 的说明。
+        if (input.verifyChecked === true) {
+          await assertCheckedAfterClick(wc, run, {
+            needle, deep, exact: !!input.exact, within,
+            timeoutMs: step.timeoutMs,
+            code: input.verifyCode ? String(input.verifyCode) : 'TASK_FILTER_NOT_APPLIED'
+          })
+        }
+        return {
+          kind: 'executed',
+          payload: {
+            action: 'clickByText', matched: needle, clickedText: hit.clickedText,
+            candidates: hit.candidates, mode: 'real',
+            // 视图当时没挂载 → 只能降级为 JS 点击。如实记下来：这种点击对
+            // "未接收合成事件"的框架按钮可能不生效，排查时一眼能看出走了哪条路。
+            transport: hit.transport ?? 'trusted-mouse',
+            // 已勾选而跳过（skipIfChecked）：如实记录"这一项本来就选着"，重复运行时不动作
+            ...(hit.skipped === 'checked' ? { skipped: 'checked' } : {}),
+            ...(verifyActive ? { verifiedActive: true } : {}),
+            ...(input.verifyChecked === true ? { verifiedChecked: true } : {}),
+            ...(hit.rowKey ? { picked: hit.picked ?? 'best', rowKey: hit.rowKey } : {}),
+            ...(follow ? { followedTab: run.tabId } : {})
+          }
+        }
+      }
+      for (;;) {
+        guardSignals(run)
+        const res = await withTimeout(() => wc.executeJavaScript(`(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${SCOPE_FN}
+        ${PICK_SORT_FN}
+        const needle = ${JSON.stringify(needle)};
+        const exact = ${!!input.exact};
+        const narrowNeedle = __narrow(needle);
+        const within = ${JSON.stringify(within || null)};
+        const roots = within ? __scopeRoots(within, ${deep ? 'true' : 'false'}) : null;
+        if (within && !roots) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
+        const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+        const cands = [];
+        for (const el of scope) {
+          const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+          if (exact ? __narrow(own) !== narrowNeedle : !own.includes(needle)) continue;
+          if (!__inScope(roots, el)) continue;
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) continue;
+          cands.push({ el, len: own.length });
+        }
+        // 兜底：规范化 innerText（文案被拆进子 span 的平台，如快手「确 认」）。
+        // 与 mode:'real' 分支同一套规则，保证两条路径行为一致。
+        if (!cands.length) {
+          const nw = narrowNeedle;
+          const pool = [];
+          if (roots) for (const rt of roots) { pool.push(rt); for (const c of rt.querySelectorAll('*')) pool.push(c) }
+          else for (const el of scope) pool.push(el);
+          for (const c of pool) {
+            const tag = c.tagName;
+            if (!(tag === 'BUTTON' || tag === 'A' || tag === 'LABEL' || tag === 'SPAN' ||
+                  (c.getAttribute && c.getAttribute('role') === 'button'))) continue;
+            const r = c.getBoundingClientRect();
+            if (!(r.width > 0 && r.height > 0)) continue;
+            if (__narrow(c.innerText) !== nw) continue;
+            cands.push({ el: c, len: nw.length, viaText: true });
+          }
+        }
+        if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
+        cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
+        const hit = cands[0].el;
+        let dis = hit.disabled === true || hit.getAttribute('aria-disabled') === 'true';
+        let p = hit.parentElement;
+        for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
+          if (/disabled/i.test(String(p.className || ''))) dis = true;
+        }
+        if (dis) return { ok: false, reason: 'DISABLED' };
+        if (${input.skipIfChecked === true ? 'true' : 'false'}) {
+          const cb = (hit.querySelector && hit.querySelector('input[type=checkbox]')) ||
+            (hit.closest && hit.closest('label') ? hit.closest('label').querySelector('input[type=checkbox]') : null);
+          if (cb && cb.checked) {
+            return { ok: true, skipped: 'checked', clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length };
+          }
+        }
+        const target = hit.closest('button, a, label, [role="button"], [class*="btn"]') || hit;
+        target.click();
+        return { ok: true, matched: needle, clickedText: String(target.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length };
+      })()`), run, Math.min(step.timeoutMs, 10000), 'clickByText')
+        if (res && res.ok) {
+          guardSignals(run)
+          // verifyChecked：点完校验它**真的处于勾选态**（见 assertCheckedAfterClick 的说明）。
+          // 与 mode:'real' 分支同一套判据，保证两条点击路径行为一致。
+          if (input.verifyChecked === true) {
+            await assertCheckedAfterClick(wcOrThrow(run), run, {
+              needle, deep, exact: !!input.exact, within,
+              timeoutMs: step.timeoutMs,
+              code: input.verifyCode ? String(input.verifyCode) : 'TASK_FILTER_NOT_APPLIED'
+            })
+          }
+          return {
+            kind: 'executed',
+            payload: {
+              action: 'clickByText', matched: needle, clickedText: res.clickedText, candidates: res.candidates,
+              ...(res.skipped === 'checked' ? { skipped: 'checked' } : {}),
+              ...(input.verifyChecked === true ? { verifiedChecked: true } : {})
+            }
+          }
+        }
+        if (res && res.reason === 'DISABLED') {
+          throw new Error(`TASK_TARGET_DISABLED: 「${needle}」当前为禁用态（平台限制该操作）`)
+        }
+        // SCOPE_NOT_FOUND 同样轮询等待（导航刚完成时筛选区可能还没渲染，见 mode:'real' 分支的说明）
+        sawScopeMiss = sawScopeMiss || (res && res.reason === 'SCOPE_NOT_FOUND')
+        if (Date.now() >= deadline) {
+          if (sawScopeMiss) {
+            throw new Error(`TASK_SELECTOR_CHANGED: 超时内未出现「${needle}」的限定范围（${JSON.stringify(within)}）`)
+          }
+          throw new Error(`${missingCode}: 页面上找不到文案为「${needle}」的可点击元素`)
+        }
+        await new Promise(r => setTimeout(r, 300))
+      }
+    }
+    case 'loop': {
+      // 批次循环（复合作步骤）：把一轮完整动作重复执行到"该停了"为止。
+      // 用途：抖店达人邀约——一轮 = 进广场 → 选类目/等级 → 勾 40 位 → 批量邀约 → 确认发送，
+      // 循环到**邀约额度用完**（确认发送变禁用 → TASK_QUOTA_EXCEEDED）或**可选达人不足 40**
+      // （TASK_SELECTION_SHORTFALL）为止——这两种都算**正常收尾**（stopOn 命中即干净停止，run 仍成功）。
+      // 其它错误照常向上抛，run 如实失败（绝不吞错、也绝不把"跑了一半"报成成功）。
+      //
+      // 说明：本步骤不套 withTimeout——单轮耗时由嵌套步骤各自的超时约束，整体时长由 maxRounds 封顶；
+      // 嵌套步骤不单独落库（只发进度事件），整轮的汇总写进本步骤的 payload，界面/日志能看明白跑到第几轮。
+      const nestedRaw = Array.isArray(input.steps) ? input.steps : []
+      // 运行时兜底补超时：早于创建侧修复建的任务，嵌套步骤可能没有 timeoutMs
+      // （undefined → withTimeout(NaN)，真店实测报「clickByText 超过 NaNms」）
+      const nested = (nestedRaw as TaskStepDef[]).map(c => ({
+        ...c,
+        timeoutMs: Number(c?.timeoutMs) > 0 ? Number(c.timeoutMs) : (DEFAULT_STEP_TIMEOUT[c.type] ?? 15000)
+      }))
+      if (!nested.length) throw new Error('TASK_INVALID_STEP: loop 缺少 steps')
+      const maxRounds = Number(input.maxRounds)
+      const stopOn: string[] = Array.isArray(input.stopOn) ? input.stopOn.map(String) : []
+      // onCode：命中错误码先跑恢复步骤、再重试本轮同一个子步骤（实测场景：微信广场"本页达人都已
+      // 邀约过" → 点「下一页」→ 重试取人）。与 stopOn 的区别：stopOn 是收工，onCode 是换个条件继续。
+      const onCodeRaw = Array.isArray(input.onCode) ? input.onCode : []
+      const onCode = onCodeRaw.map((o: any) => ({
+        code: String(o?.code || ''),
+        limit: Number(o?.limit) > 0 ? Number(o.limit) : 3,
+        restart: o?.restart === true,
+        // advance=true：重开本轮，但**保留**本轮的"已访问"记录 —— 即"跳过这一位、换下一位"。
+        // 与 restart 的差别就在这条记录：restart 回滚它是为了**重试同一位**（限流恢复后能补上）；
+        // 而"这位天生不可邀约"重试多少次都一样，回滚记录会让引擎原地打转直到耗尽次数后整单失败。
+        advance: o?.advance === true,
+        steps: (Array.isArray(o?.steps) ? o.steps : []).map((c: any) => ({
+          ...c,
+          timeoutMs: Number(c?.timeoutMs) > 0 ? Number(c.timeoutMs) : (DEFAULT_STEP_TIMEOUT[c?.type] ?? 15000)
+        })) as TaskStepDef[]
+      })).filter((o: any) => o.code && o.steps.length)
+      const loopLabel = input.label ? String(input.label) : `${nested.length} 步`
+      const parentIndex = run.steps.indexOf(step)
+      const summary: any[] = []
+      let completedRounds = 0
+      let stopReason: string | null = null
+      /** restart 规则的**连续**跳过计数（跨轮累计，成功一轮清零）——用来识别"平台整体不可用" */
+      let skipStreak = 0
+      let skippedTotal = 0
+      let lastArtifact: { path: string; sha256: string } | undefined
+      roundLoop: for (let round = 1; round <= maxRounds; round++) {
+        guardSignals(run)
+        const startedAt = Date.now()
+        // 每一轮从空名单开始：上一轮失败/换人时，绝不能让旧名单混进本轮的成功记账
+        run.pendingInvitedNames = []
+        run.pendingCreatorNickname = null
+        let childIdx = 0
+        let childType = ''
+        let recovered = 0
+        const recoveryLog: string[] = []
+        // 每个子步骤本轮内已重试的次数（只在"该子步骤声明了 retryLimit 且没命中 onCode 规则"时用）
+        const childRetries = new Map<number, number>()
+        // 本轮新记下的"已访问"行：**一轮整体成功才提交**。
+        // 若本轮中途回退重做（如达人详情页打不开），把这些行回滚掉——
+        // 否则那位达人会被永久记成"已邀约过"，限流恢复后也不会再被选中（等于凭空漏掉一位）。
+        const visitedSnapshot = new Set(run.visitedRows)
+        try {
+          for (childIdx = 0; childIdx < nested.length; childIdx++) {
+            for (;;) {
+              const child = nested[childIdx]
+              childType = child.type
+              if (!childRetries.has(childIdx)) childRetries.set(childIdx, 0)
+              guardSignals(run)
+              emitProgress(run, { phase: 'started', stepIndex: parentIndex, stepType: child.type, message: `第 ${round}/${maxRounds} 轮 · ${loopLabel}` })
+              let out: StepOutput | null = null
+              try {
+                out = await execStep(run, child, { round, path: `${parentIndex}.${childIdx}` })
+              } catch (ce: any) {
+                if (ce?.name === 'CancelSignal' || ce?.name === 'PauseSignal') throw ce
+                const hitRule = onCode.find((o: any) => o.code === classifyError(ce))
+                // 嵌套步骤的 retryLimit：外层的"整步重试"只作用于顶层步骤，循环体内的子步骤
+                // 拿不到它。于是子步骤的**瞬态失败**（典型：AI 生成话术超时）会直接把整批打掉——
+                // 真机实测：微信逐位邀约跑到第 25 轮时 aiGenerate 超时 30s，前 24 位已真实发出，
+                // 整单却报 failed。这里补上：子步骤声明了 retryLimit 就在 onCode 规则之前先重试它。
+                if (!hitRule && childRetries.get(childIdx)! < (canRetryStepInPlace(child.type, child.retryLimit, child.input) ? (child.retryLimit as number) : 0)) {
+                  childRetries.set(childIdx, childRetries.get(childIdx)! + 1)
+                  const n = childRetries.get(childIdx)!
+                  emitProgress(run, { phase: 'retry', stepIndex: parentIndex, stepType: child.type, message: `第 ${round} 轮子步骤重试（第 ${n}/${child.retryLimit} 次）：${String(ce?.message || ce).slice(0, 120)}` })
+                  recoveryLog.push(`第 ${round} 轮「${child.type}」瞬态失败，重试第 ${n} 次：${String(ce?.message || ce).slice(0, 80)}`)
+                  continue
+                }
+                if (!hitRule) throw ce
+                // restart/advance 规则：重开本轮（limit 是"连续跳过上限"）
+                // 非 restart 规则：重试当前子步骤（limit 是"本轮恢复次数上限"）
+                const reopen = hitRule.restart || hitRule.advance
+                const overLimit = reopen ? skipStreak >= hitRule.limit : recovered >= hitRule.limit
+                if (overLimit) {
+                  // advance（这一位不满足平台合作条件，换下一位）连续撞满上限 → **干净收尾**，不算失败。
+                  // 理由：触发它的判据是平台自己写明的"不可邀约"文案（如「暂未到达合作门槛」），
+                  // 那是确定性的信号、不是渲染故障——连续这么多位都不可邀约，只能说明这组筛选下
+                  // 确实没有更多能邀约的人了，那就该像"额度用完"一样停下并如实说明。
+                  // 报成失败会把前面已经真实发出的邀约一起说成"失败"，反而失真。
+                  if (hitRule.advance) {
+                    stopReason = hitRule.code
+                    summary.push({
+                      round, ok: false, stop: hitRule.code, ms: Date.now() - startedAt,
+                      message: `连续 ${skipStreak} 位都不满足平台的合作条件（累计跳过 ${skippedTotal} 位），没有更多可邀约的人，按预期收尾`.slice(0, 240),
+                      ...(recoveryLog.length ? { recovered: recoveryLog } : {})
+                    })
+                    emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮按预期停止：连续 ${skipStreak} 位不可邀约` })
+                    break roundLoop
+                  }
+                  // restart（详情页打不开）撞满上限才按故障处理：它更可能是平台整体不可用，
+                  // 静默跳过所有人是不可接受的，必须如实失败。
+                  throw new Error(`连续 ${skipStreak} 轮命中 ${hitRule.code}（累计跳过 ${skippedTotal} 位），疑似平台整体异常，停止以免静默跳过所有人：${String(ce?.message || ce)}`)
+                }
+                if (reopen) skipStreak++
+                recovered++
+                recoveryLog.push(`第 ${round} 轮「${child.type}」命中 ${hitRule.code} → ${hitRule.advance ? '跳过这一位并重开本轮' : hitRule.restart ? '跳过并重开本轮' : '执行恢复步骤'}（第 ${recovered} 次）`)
+                emitProgress(run, {
+                  phase: 'retry', stepIndex: parentIndex, stepType: child.type,
+                  message: `第 ${round} 轮命中 ${hitRule.code} → ${reopen ? `${hitRule.advance ? '换下一位' : '本轮回退重做'}（连续 ${skipStreak}/${hitRule.limit}）` : `恢复后重试（第 ${recovered}/${hitRule.limit} 次）`}`
+                })
+                for (const rs of hitRule.steps) {
+                  guardSignals(run)
+                  try {
+                    const rout = await execStep(run, rs, { round })
+                    if (rout?.artifact) lastArtifact = rout.artifact
+                  } catch (re: any) {
+                    if (re?.name === 'CancelSignal' || re?.name === 'PauseSignal') throw re
+                    // 恢复步骤自己失败：若是"预期收工"的码（如末页「下一页」置灰 → SELECTION_SHORTFALL），
+                    // 就按收敛尾；否则如实抛出（绝不把恢复失败吞成"继续跑"）
+                    const rcode = classifyError(re)
+                    if (stopOn.includes(rcode)) {
+                      stopReason = rcode
+                      summary.push({
+                        round, ok: false, stop: rcode, ms: Date.now() - startedAt,
+                        message: `恢复步骤（${rs.type}）失败，按预期收尾：${String(re?.message || re)}`.slice(0, 240),
+                        ...(recoveryLog.length ? { recovered: recoveryLog } : {})
+                      })
+                      emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮按预期停止：${rcode}` })
+                      break roundLoop
+                    }
+                    throw re
+                  }
+                }
+                if (reopen) {
+                  // 重开本轮：把子步骤游标退回起点。
+                  //  - restart（如详情页限流打不开）：**回滚**本轮的"已访问"记录 ——
+                  //    重试时还会选中同一位达人（限流恢复后能补上，不会凭空漏人）；
+                  //  - advance（这位不满足平台合作条件）：**保留**记录 —— 重开就是为了换下一位，
+                  //    回滚等于原地重试同一个人，永远走不出去。
+                  skippedTotal++
+                  if (hitRule.restart) run.visitedRows = new Set(visitedSnapshot)
+                  childIdx = -1
+                  break
+                }
+                continue // 恢复完成 → 重试本轮同一个子步骤
+              }
+              if (out?.artifact) lastArtifact = out.artifact
+              break
+            }
+            if (run.deniedByConfirm) break
+          }
+          if (run.deniedByConfirm) break
+          completedRounds = round
+          skipStreak = 0 // 成功一轮 → 连续跳过计数清零（只有"连续"失败才判定平台整体异常）
+          /**
+           * 这一轮真的发出去了 → 写逐人记录（用户要求：7 天内不再重复邀约）。
+           *
+           * 批量流：names = clickAll 回传的**完整勾选名单**（此前只回传 8 个 samples，
+           * 且 recordInvite 只认辅助流字段，导致抖店/快手台账基本为空）。
+           * 辅助流：names = 本轮点「详情」回传的昵称，finderUsername 从详情页地址里取。
+           * 写记录失败**不影响**这一轮的结果（recordInviteBatch 内部已兜住并记 error 日志）。
+           */
+          const invitedNames = [...run.pendingInvitedNames]
+          if (!invitedNames.length && run.pendingCreatorNickname) invitedNames.push(run.pendingCreatorNickname)
+          if (invitedNames.length) {
+            const tabUrl = (() => { try { return String(getTabWebContents(run.storeId, run.tabId || '')?.getURL() || '') } catch { return '' } })()
+            const username = invitedNames.length === 1
+              ? (tabUrl.match(/[?&]finderUsername=([^&]+)/) || [])[1] || null
+              : null
+            recordInviteBatch({
+              storeId: run.storeId,
+              platform: String((step.input as any)?.platform || ''),
+              names: invitedNames,
+              finderUsername: username ? decodeURIComponent(username) : null,
+              taskId: run.taskId,
+              runId: run.runId,
+              campaignId: run.campaignId,
+              invitedAt: startedAt,
+              status: 'sent'
+            })
+          }
+          run.pendingInvitedNames = []
+          run.pendingCreatorNickname = null
+          summary.push({ round, ok: true, ms: Date.now() - startedAt, ...(recoveryLog.length ? { recovered: recoveryLog } : {}) })
+          emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮完成` })
+        } catch (e: any) {
+          // 取消/暂停信号照常向上抛（由外层统一处理状态迁移）
+          if (e?.name === 'CancelSignal' || e?.name === 'PauseSignal') throw e
+          const code = classifyError(e)
+          if (stopOn.includes(code)) {
+            stopReason = code
+            run.lastStopReason = code
+            summary.push({ round, ok: false, stop: code, message: String(e?.message || e).slice(0, 240), ms: Date.now() - startedAt, ...(recoveryLog.length ? { recovered: recoveryLog } : {}) })
+            emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮按预期停止：${code}` })
+            break
+          }
+          // 其他错误照常失败，但把"第几轮、哪个子步骤"带进消息——否则只看到子步骤报错，不知道跑到哪了
+          //
+          // 失败前**先把这一轮的进度落库**：loop 的 payload（完成轮数、跳过记录）此前只在整步
+          // 成功时才写入，于是"跑完 24 轮、第 25 轮失败"这种情况，24 位已真实发出的战绩在界面上
+          // 完全看不到（面板的"成功邀约 N 位 · 跳过 N 位"那一行取的就是这份 payload）。
+          // 最需要看到计数的场景恰恰是失败收尾，所以这里必须补上。
+          try {
+            TaskStore.insertStepResult(run.runId, parentIndex, 'executed', {
+              action: 'loop', label: loopLabel, maxRounds,
+              completedRounds,
+              stopReason: code,
+              failedRound: round, failedChild: `${childIdx + 1}/${nested.length} ${childType}`,
+              rounds: summary
+            })
+          } catch { /* 落库失败不掩盖原始错误 */ }
+          throw new Error(`LOOP_ROUND_FAILED: 第 ${round}/${maxRounds} 轮（子步骤 ${childIdx + 1}/${nested.length} ${childType}）失败：${String(e?.message || e)}`)
+        }
+      }
+      run.lastCompletedRounds = completedRounds
+      guardSignals(run)
+      return {
+        kind: 'executed',
+        payload: {
+          action: 'loop',
+          label: loopLabel,
+          maxRounds,
+          completedRounds,
+          stopReason,
+          stopOn,
+          ...(onCode.length ? { onCode: onCode.map((o: any) => o.code) } : {}),
+          rounds: summary
+        },
+        artifact: lastArtifact
+      }
+    }
+    case 'clickAll': {
+      // 批量点击并跳过不可用项：达人选人时"已发过消息"的行复选框是 disabled，必须跳过而不是硬点；
+      // 同时受平台单次上限约束（max 已由 Zod 限到 40）。点击之间留间隔，避免与框架重渲染打架。
+      //
+      // 2026-09-13 真店实测修三个问题（抖店达人广场"要勾 40 位却只勾中 1 位/勾不满"）：
+      //  ① **轮询等待表格渲染**：此步骤原为单发——筛选后表格尚未排完版时行高为 0，会被判"不可见"
+      //     全部跳过（实测 15 项里 14 项被跳过、只点中 1 项）。现在每轮先等到有"可点的新行"再点；
+      //  ② **滚动续选**（input.scroll=true）：广场列表是虚拟滚动（.auxo-table-body，无分页），
+      //     一屏只渲染 ~19 行，装不下 40 位；点完当前窗口向下滚动、等新行渲染再继续。
+      //     注意容器带 `scroll-behavior: smooth`，赋完 scrollTop 立刻读回还是旧值，必须强制
+      //     auto 并等位置落定——否则"有没有滚动"恒判 false，续选一轮就退出（实测踩过）；
+      //  ③ **勾选数必须与页面自认一致**：虚拟列表会回收行节点，某些行"表格模型已选中但复选框
+      //     渲染还没同步"，照 DOM 的 checked 判断就会把已选行点反选（实测点 40 次、页面只认 35）。
+      //     现在按行的 data-row-key 去重（同一行只碰一次），每点一次回读页面自己的
+      //     「已选择 N 位达人」，没让计数增加就再点一次纠正；并把页面计数当作权威值，
+      //     勾不满就在发送前如实失败（TASK_SELECTION_SHORTFALL），绝不按错的位数发出去。
+      const wc = wcOrThrow(run)
+      const sel = input.selector ? String(input.selector) : ''
+      const txt = input.text ? String(input.text) : ''
+      const max = Number(input.max)
+      const scroll = !!input.scroll
+      const maxRounds = input.maxRounds == null ? 25 : Number(input.maxRounds)
+      const deadline = Date.now() + step.timeoutMs
+      // 页面自己的权威计数（抖店广场：「已选择 N 位达人」）。
+      // counterIncludes：**限定计数文案必须包含这段字**，用于同一页面上存在多个计数时的消歧义。
+      // 实测踩到：快手商品弹窗里也在勾选，而页面上达人选人区仍写着「已选2条」——
+      // 计数读到那个，progress() 恒为 0，于是"勾中 0 位"的误报（其实商品勾上了）。
+      // 不给 counterIncludes 时只认抖店那种明确写成「已选择N位达人」的计数。
+      const counterIncludes = input.counterIncludes ? String(input.counterIncludes) : ''
+      /** 台账里"近 7 天已邀过"的昵称：勾选时跳过这些行（平台会静默剔除他们） */
+      const skipTexts = Array.isArray(input.skipTexts) ? (input.skipTexts as string[]).map(String).filter(Boolean).slice(0, 500) : []
+      const counterPats = counterIncludes
+        ? `[/\\u5df2\\u9009\\u62e9\\s*(\\d+)\\s*\\u4f4d\\u8fbe\\u4eba/, /\\u5df2\\u9009\\s*(\\d+)\\s*\\u6761/, /\\u5df2\\u9009\\s*(\\d+)\\s*\\u4f4d/]`
+        : `[/\\u5df2\\u9009\\u62e9\\s*(\\d+)\\s*\\u4f4d\\u8fbe\\u4eba/]`
+      const counterExpr = `(() => {
+        const pats = ${counterPats};
+        const must = ${JSON.stringify(counterIncludes)};
+        for (const el of document.querySelectorAll('div,span,p,b,strong,em')) {
+          const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+          if (t.length > 40) continue;
+          if (must && !t.includes(must)) continue;
+          for (const re of pats) {
+            const m = re.exec(t);
+            if (m) return Number(m[1]);
+          }
+        }
+        return null;
+      })()`
+      const initialSelected: number | null = await wc.executeJavaScript(counterExpr).catch(() => null)
+      let pageSelected: number | null = initialSelected
+      let counterKnown = typeof initialSelected === 'number'
+      const seenKeys: string[] = []
+      const batchExpr = (seen: string[], limit: number) => `(async () => {
+        const SEL = ${JSON.stringify(sel)}, TXT = ${JSON.stringify(txt)}, LIMIT = ${limit};
+        const SKIP = ${JSON.stringify(input.skipSelector ? String(input.skipSelector) : '')};
+        const MUST = ${JSON.stringify(counterIncludes)};
+        const SKIPT = ${JSON.stringify(skipTexts)};
+        const seen = new Set(${JSON.stringify(seen)});
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const read = () => { try {
+          const pats = ${counterPats};
+          for (const el of document.querySelectorAll('div,span,p,b,strong,em')) {
+            const t = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+            if (t.length > 40) continue;
+            if (MUST && !t.includes(MUST)) continue;
+            for (const re of pats) {
+              const m = re.exec(t);
+              if (m) return Number(m[1]);
+            }
+          }
+          return null;
+        } catch { return null } };
+        let els = [];
+        if (SEL) els = Array.from(document.querySelectorAll(SEL));
+        else {
+          for (const el of document.querySelectorAll('*')) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (own.includes(TXT)) els.push(el);
+          }
+        }
+        const clicked = [], seenNew = [];
+        let skippedDisabled = 0, skippedInvisible = 0, skippedChecked = 0, retried = 0, corrected = 0, skippedBySelector = 0, skippedInvited = 0;
+        for (const el of els) {
+          if (clicked.length >= LIMIT) break;
+          // skipSelector：表头"全选"这类不算候选（点它会全选，不是"勾 N 个"）
+          if (SKIP) { try { if (el.matches(SKIP) || el.closest(SKIP)) { skippedBySelector++; continue } } catch {} }
+          const row = el.closest('tr') || el.parentElement;
+          // skipTexts：台账里"近 7 天已邀过"的达人直接跳过（平台会静默剔除他们，不如我们自己剔）
+          if (SKIPT.length) {
+            const rowText = String((row || el).innerText || '').replace(/\\s+/g, ' ');
+            if (SKIPT.some(t => rowText.includes(t))) { skippedInvited++; continue }
+          }
+          // 行 key 是去重的锚：虚拟列表重渲染后同一行只点一次，避免把已选行点反选
+          const key = (row && row.getAttribute && row.getAttribute('data-row-key')) ||
+            String((row || el).innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
+          if (!key) continue;
+          if (seen.has(key)) { skippedChecked++; continue }
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) { skippedInvisible++; continue }
+          let dis = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
+          let p = el.parentElement;
+          for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) {
+            if (/disabled/i.test(String(p.className || ''))) dis = true;
+          }
+          if (dis) { skippedDisabled++; continue }
+          seen.add(key); seenNew.push(key);
+          const label = el.closest('label, [class*="checkbox"]') || el;
+          // 每次点击都读取页面自己的计数：虚拟列表/框架重渲染可能让某次点击
+          // 静默失效或把已选项反选。若跳过中间校验，后续步骤可能带着少选的
+          // 达人/商品继续提交，造成任务结果与用户要求不一致。
+          const before = read();
+          label.click();
+          await sleep(240);
+          let after = read();
+          let didRetry = false;
+          // 页面计数没涨 = 这次没选上（或被反选）→ 再点一次纠正，然后如实记录结果
+          if (before != null && after != null && after <= before) {
+            didRetry = true; retried++;
+            label.click();
+            await sleep(240);
+            after = read();
+            if (after != null && after > before) corrected++;
+          }
+          clicked.push({
+            key: key.slice(0, 40),
+            name: String((row || el).innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 24),
+            delta: (before != null && after != null) ? after - before : null,
+            retried: didRetry
+          });
+        }
+        return { ok: true, clicked, seenNew, skippedDisabled, skippedInvisible, skippedChecked, skippedBySelector, skippedInvited, retried, corrected, total: els.length, pageSelected: read() };
+      })()`
+      // 滚动：从首个目标元素向上找可滚动祖先，向下滚一屏的 95%。
+      // 必须先强制 scroll-behavior:auto，否则 smooth 动画期间读到的是旧 scrollTop，"滚没滚"永远判 false。
+      const scrollExpr = `(async () => {
+        const SEL = ${JSON.stringify(sel)}, TXT = ${JSON.stringify(txt)};
+        let first = null;
+        if (SEL) first = document.querySelector(SEL);
+        else {
+          for (const el of document.querySelectorAll('*')) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (own.includes(TXT)) { first = el; break }
+          }
+        }
+        let box = null;
+        if (first) {
+          let node = first;
+          while (node && node !== document.body) {
+            if (node.scrollHeight > node.clientHeight + 20 && node.clientHeight > 120) { box = node; break }
+            node = node.parentElement;
+          }
+        }
+        if (!box) box = document.querySelector('.auxo-table-body, [class*="table-body"]');
+        if (!box) return { moved: false, reason: 'NO_SCROLLER' };
+        const before = Math.round(box.scrollTop);
+        const maxTop = Math.max(0, box.scrollHeight - box.clientHeight);
+        box.style.scrollBehavior = 'auto';
+        // 2026-09-17 优化：动态滚动步长（1.2 屏而非固定 0.95 屏），减少滚动轮次
+        // 距离底部较远时滚动更多，接近底部时自动收敛，避免滚动过头
+        const remaining = maxTop - before;
+        const stepRatio = remaining > box.clientHeight * 2 ? 1.2 : 0.95;
+        const target = Math.min(maxTop, before + Math.floor(box.clientHeight * stepRatio));
+        box.scrollTop = target;
+        let settle = -1;
+        // 2026-09-17 优化：从 20 次减少到 10 次检测（仍有 1 秒等待），节省 ~0.8 秒/轮
+        for (let i = 0; i < 10; i++) {
+          await new Promise(r => setTimeout(r, 100));
+          const now = Math.round(box.scrollTop);
+          if (Math.abs(now - target) <= 2) { settle = now; break }
+          if (now === settle) break
+          settle = now;
+        }
+        const at = Math.round(box.scrollTop);
+        return { moved: at > before + 5, before, scrollTop: at, maxTop: Math.round(maxTop), scrollHeight: box.scrollHeight, clientHeight: box.clientHeight, atBottom: at >= maxTop - 3 };
+      })()`
+      const probeExpr = (seen: string[]) => `(() => {
+        const SEL = ${JSON.stringify(sel)}, TXT = ${JSON.stringify(txt)};
+        const seen = new Set(${JSON.stringify(seen)});
+        let els = [];
+        if (SEL) els = Array.from(document.querySelectorAll(SEL));
+        else {
+          for (const el of document.querySelectorAll('*')) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (own.includes(TXT)) els.push(el);
+          }
+        }
+        let vis = 0, usable = 0;
+        for (const el of els) {
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) continue;
+          vis++;
+          const row = el.closest('tr') || el.parentElement;
+          const key = (row && row.getAttribute && row.getAttribute('data-row-key')) ||
+            String((row || el).innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
+          let dis = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
+          let p = el.parentElement;
+          for (let i = 0; i < 3 && p && !dis; i++, p = p.parentElement) if (/disabled/i.test(String(p.className || ''))) dis = true;
+          if (!dis && !seen.has(key)) usable++;
+        }
+        return { total: els.length, vis, usable };
+      })()`
+
+      let totalClicked = 0, skippedDisabled = 0, skippedInvisible = 0, skippedChecked = 0, retried = 0, corrected = 0
+      const samples: string[] = []
+      /** 完整勾选名单（去重后最多 200）：达人邀约批量流据此逐人记账，不再只留 8 个样本 */
+      const clickedNames: string[] = []
+      let rounds = 0, scrolled = 0, stalls = 0
+      let lastScrollHeight = 0
+      let exhausted = false
+      /** 权威进度：页面有计数就信页面，没有才退回数自己的点击数 */
+      const progress = () => (counterKnown ? (pageSelected ?? 0) - (initialSelected ?? 0) : totalClicked)
+      for (let round = 0; round < maxRounds; round++) {
+        guardSignals(run)
+        rounds++
+        // 等表格把行渲染出来：出现"可点的新行"就开工；可见数稳定且没有新行则不再空等
+        let lastVisible = -1
+        for (;;) {
+          guardSignals(run)
+          const probe: any = await wc.executeJavaScript(probeExpr(seenKeys)).catch(() => ({ total: 0, vis: 0, usable: 0 }))
+          if (probe.usable > 0) break
+          if (Date.now() >= deadline) break
+          if (probe.vis === lastVisible && probe.vis > 0) break
+          lastVisible = probe.vis
+          await new Promise(r => setTimeout(r, 300))
+        }
+        // 单轮点击数严格等于"还差几位"：曾给 +5 余量，结果一批勾了 45 位而不是 40 位
+        // （用户要求"一次勾 40 位"，多勾就是发错数量）；纠偏重试不额外计数，不需要余量
+        const limit = Math.max(1, max - progress())
+        const res: any = await withTimeout(() => wc.executeJavaScript(batchExpr(seenKeys, limit)), run, step.timeoutMs, 'clickAll')
+        if (!res || !res.ok) throw new Error(`TASK_SELECTOR_CHANGED: 批量点击未执行（${sel || txt}）`)
+        seenKeys.push(...(res.seenNew || []))
+        totalClicked += (res.clicked || []).length
+        skippedDisabled = Math.max(skippedDisabled, res.skippedDisabled)
+        skippedInvisible = Math.max(skippedInvisible, res.skippedInvisible)
+        skippedChecked += res.skippedChecked || 0
+        retried += res.retried || 0
+        corrected += res.corrected || 0
+        for (const c of res.clicked || []) {
+          if (samples.length < 8) samples.push(c.name)
+          const name = String(c?.name || '').replace(/\s+/g, ' ').trim()
+          if (name && !clickedNames.includes(name) && clickedNames.length < 200) clickedNames.push(name)
+        }
+        if (typeof res.pageSelected === 'number') { pageSelected = res.pageSelected; counterKnown = true }
+        if (progress() >= max) break
+        if (Date.now() >= deadline) break
+        if (!scroll) { exhausted = true; break }
+        const sc: any = await wc.executeJavaScript(scrollExpr).catch(() => ({ moved: false }))
+        if (!sc || !sc.moved) {
+          // 不一定真到底：虚拟列表/懒加载会在滚到底后再追加内容。等一会儿看高度有没有长，
+          // 长了说明还有货、继续；连着几次都不长才算池子真的完了（不空转、也不早退）。
+          await new Promise(r => setTimeout(r, 1500))
+          const h: number = await wc.executeJavaScript(`(() => { const b = document.querySelector('.auxo-table-body, [class*="table-body"]'); return b ? b.scrollHeight : 0 })()`).catch(() => 0)
+          const grew = h > lastScrollHeight + 50
+          lastScrollHeight = Math.max(lastScrollHeight, h)
+          if (!grew) { stalls++; if (stalls >= 3) { exhausted = true; break } } else stalls = 0
+          const after: any = await wc.executeJavaScript(probeExpr(seenKeys)).catch(() => ({ usable: 0 }))
+          if (!after || after.usable === 0) { exhausted = true; break }
+          continue
+        }
+        scrolled++
+        lastScrollHeight = Math.max(lastScrollHeight, Number(sc.scrollHeight) || 0)
+        await new Promise(r => setTimeout(r, 700)) // 等虚拟列表把新行渲染出来
+      }
+      guardSignals(run)
+      const selected = progress()
+      if (totalClicked === 0 && selected <= 0) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 没有可用的目标（可见 ${skippedInvisible} 项不可见、${skippedDisabled} 项禁用，共 ${rounds} 轮）`)
+      }
+      // 带滚动续选的达人批量流程要求严格凑满一批，否则不能进入发送门禁；
+      // 普通 clickAll 表示“最多点击 max 个”，列表只有较少可用项时应返回实际点击数，
+      // 让后续步骤自行决定是否满足业务条件（例如通用页面上的 3 个可用项 / max=10）。
+      if (scroll && selected < max) {
+        throw new Error(`TASK_SELECTION_SHORTFALL: 本次只勾中 ${selected} 位（要求 ${max} 位；${exhausted ? '当前筛选下的可选达人已全部勾完' : '扫描未完成'}，其中 ${skippedDisabled} 位已邀约/禁用）。请减少本批数量或调整筛选项后重试`)
+      }
+      /**
+       * 只有达人邀约任务才把完整名单交给轮末记账。
+       * 普通 clickAll（商品/通用页面）沿用原语义，不产生邀请记录。
+       */
+      if (run.taskKind === 'creator_invite' && input.recordNames === true && clickedNames.length) {
+        run.pendingInvitedNames = [...clickedNames]
+      }
+      return { kind: 'executed', payload: { action: 'clickAll', target: sel || txt, clicked: totalClicked, pageSelected, initialSelected, selected, skippedDisabled, skippedInvisible, skippedChecked, retried, corrected, rounds, scrolled, requested: max, exhausted, samples, clickedNames: clickedNames.slice(0, 200) } }
+    }
+    case 'setInput': {
+      const wc = wcOrThrow(run)
+      const sel = String(input.selector)
+      // 等待与执行共享一个步骤时限（同 click）
+      const deadline = Date.now() + step.timeoutMs
+      await waitForSelector(wc, sel, run, step.timeoutMs, false, deadline)
+      guardSignals(run)
+      // 受控组件必须用原生 value setter + 派发 input 事件，直接赋 .value 不会更新框架状态
+      const okFilled = await withDeadline(() => wc.executeJavaScript(`(() => {
+        const el = document.querySelector(${JSON.stringify(sel)});
+        if (!el) return false;
+        const text = ${JSON.stringify(String(input.text ?? ''))};
+        if (el.isContentEditable) { el.textContent = text; }
+        else {
+          const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(el, text); else el.value = text;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()`), run, deadline, 'setInput')
+      if (!okFilled) throw new Error(`TASK_SELECTOR_CHANGED: 未找到输入目标 ${sel}`)
+      guardSignals(run)
+      // **写后回读**：脚本返回 true 只代表"setter 没抛异常"，不代表框架接了值。
+      // 不回读时"写入静默失效"要等跑到发送那一步才以平台拦截的形式暴露（前面几轮可能已真发出去）。
+      const appliedText = await readFieldValue(wc, sel)
+      assertWriteApplied(appliedText, String(input.text ?? ''), 'setInput')
+      guardSignals(run)
+      // §4.5：payload 只存摘要与长度，绝不存写入的完整文本
+      return { kind: 'executed', payload: { action: 'setInput', selector: sel, length: String(input.text ?? '').length } }
+    }
+    case 'aiGenerate': {
+      // 从页面读"商品信息" → 主进程调大模型生成话术 → 写回页面输入框（受控组件方式）
+      // 未配置 AI / 接口不可用时如实失败（AI_NOT_CONFIGURED 等），绝不静默跳过或写假话术
+      const wc = wcOrThrow(run)
+      const srcSel = input.sourceSelector ? String(input.sourceSelector) : ''
+      const sel = String(input.selector)
+      const deep = !!input.deep
+      if (srcSel) await waitForSelector(wc, srcSel, run, step.timeoutMs, deep)
+      guardSignals(run)
+      // srcSel 留空 = 平台的"商品区"定位不到稳定选择器时的如实降级：从写入目标（话术框）向上
+      // 找最近的固定定位浮层（邀约抽屉），只读抽屉文本；找不到就报 AI_EMPTY_SOURCE，
+      // 绝不把整页噪音（达人列表、菜单）当商品信息喂给模型
+      const src = await withTimeout(() => wc.executeJavaScript(`(() => {
+        const clean = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${srcSel
+          ? `const el = ${deep
+            ? `__enumDeep().find(e => { try { return e.matches(${JSON.stringify(srcSel)}) } catch { return false } }) || null`
+            : `document.querySelector(${JSON.stringify(srcSel)})`};
+             return el ? { how: 'selector', text: clean(el.innerText || el.textContent).slice(0, 2000) } : { how: 'none', text: '' };`
+          : `let node = document.querySelector(${JSON.stringify(sel)});
+             while (node && node !== document.body) {
+               const cs = getComputedStyle(node);
+               if (cs.position === 'fixed') {
+                 const r = node.getBoundingClientRect();
+                 if (r.width >= innerWidth * 0.2 && r.height >= innerHeight * 0.2) {
+                   const t = clean(node.innerText || node.textContent).slice(0, 2000);
+                   if (t) return { how: 'drawer', text: t };
+                 }
+               }
+               node = node.parentElement;
+             }
+             return { how: 'none', text: '' };`}
+      })()`), run, step.timeoutMs, 'aiGenerate 读取商品信息')
+      if (!src || src.how === 'none') {
+        throw new Error(srcSel
+          ? `TASK_SELECTOR_CHANGED: 未找到商品信息来源 ${srcSel}`
+          : 'AI_EMPTY_SOURCE: 未能在邀约抽屉里读到商品信息（话术框所在的浮层没找到）')
+      }
+      const goods = String(src.text || '')
+      if (!goods) throw new Error(`AI_EMPTY_SOURCE: 商品信息来源文本为空（${srcSel || 'drawer'}）`)
+      guardSignals(run)
+
+      let generated: { script: string; model: string; sourceChars: number }
+      try {
+        generated = await withTimeout(
+          () => generateInviteScript({
+            goodsText: goods,
+            maxLen: Number(input.maxLen),
+            instruction: input.instruction ? String(input.instruction) : undefined
+          }),
+          run, step.timeoutMs, 'aiGenerate 调用大模型'
+        )
+        writeAudit('ai.generate', 'success', { storeId: run.storeId, requestId: run.runId })
+      } catch (e: any) {
+        writeAudit('ai.generate', 'failure', { storeId: run.storeId, requestId: run.runId })
+        throw e
+      }
+      guardSignals(run)
+
+      // deep（微信小店）= 受信任输入写入（微信表单不吃合成 input 事件）；否则保持受控组件 JS 写入
+      if (deep) {
+        await trustedWrite(wc, run, sel, true, generated.script, step.timeoutMs, 'aiGenerate 写入')
+        // §4.5：payload 只存摘要（模型名/长度/来源字符数/前 40 字预览）；
+        // 完整话术由紧随其后的 readText 步骤落库，便于事后审计"到底发了什么"
+        return {
+          kind: 'executed',
+          payload: {
+            action: 'aiGenerate', model: generated.model, length: generated.script.length,
+            sourceChars: generated.sourceChars, sourceHow: src.how,
+            sourceSelector: srcSel || null, preview: generated.script.slice(0, 40), writeMode: 'trusted'
+          }
+        }
+      }
+      const okWrote = await withTimeout(() => wc.executeJavaScript(`(() => {
+        const el = document.querySelector(${JSON.stringify(sel)});
+        if (!el) return false;
+        const text = ${JSON.stringify(generated.script)};
+        if (el.isContentEditable) { el.textContent = text; }
+        else {
+          const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) setter.call(el, text); else el.value = text;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()`), run, step.timeoutMs, 'aiGenerate 写入')
+      if (!okWrote) throw new Error(`TASK_SELECTOR_CHANGED: 未找到写入目标 ${sel}`)
+      guardSignals(run)
+      // 写后回读：模型生成了话术但"没写进输入框"（只读态/框架重置）必须当场失败，
+      // 否则会带着空话术一路跑到发送（平台侧被拦截，或更糟——发出没有话术的邀约）
+      const appliedScript = await readFieldValue(wc, sel)
+      assertWriteApplied(appliedScript, generated.script, 'aiGenerate 写入')
+      // §4.5：payload 只存摘要（模型名/长度/来源字符数/前 40 字预览）；
+      // 完整话术由紧随其后的 readText 步骤落库，便于事后审计"到底发了什么"
+      return {
+        kind: 'executed',
+        payload: {
+          action: 'aiGenerate', model: generated.model, length: generated.script.length,
+          sourceChars: generated.sourceChars, sourceHow: src.how,
+          sourceSelector: srcSel || null, preview: generated.script.slice(0, 40)
+        }
+      }
+    }
+    // ---------- 微信小店（assist-form 流程） ----------
+    case 'mirrorTabUrl': {
+      // 人工已在店铺浏览器进到某达人的邀约表单页（URL 含 urlIncludes）；
+      // 引擎把运行标签页导航到同一 URL——列表 DOM 拿不到 finderUsername，选人必须人工完成。
+      const marker = String(input.urlIncludes)
+      guardSignals(run)
+      const others = getStoreTabs(run.storeId).filter(t => t.id !== run.tabId)
+      let mirrored: string | null = null
+      for (const t of others) {
+        const live = getTabWebContents(run.storeId, t.id)
+        const u = live && !live.isDestroyed() ? live.getURL() : t.url
+        if (u.includes(marker)) { mirrored = u; break }
+      }
+      if (!mirrored) {
+        throw new Error(`TASK_INVITE_PAGE_NOT_OPEN: 店铺浏览器里没有已打开且 URL 含「${marker}」的页面——请先手动进到达人的邀约表单页，再运行任务`)
+      }
+      const target = mirrored
+      const wc = wcOrThrow(run)
+      await withTimeout(async () => {
+        guardSignals(run)
+        try {
+          await wc.loadURL(target)
+        } catch (e: any) {
+          if (!/ERR_ABORTED/.test(String(e?.message))) throw e
+        }
+      }, run, step.timeoutMs, 'mirrorTabUrl')
+      await pollUntil(run, () => !wcOrThrow(run).isLoading(), Math.max(step.timeoutMs, 5000), 'mirrorTabUrl 加载完成')
+      // 运行标签页带到前台：门禁阶段用户核对的就是这一页
+      // （采集专用页除外：它不需要用户核对，切前台只会把用户正在看的页顶掉）
+      try { if (!isInternalRunTab(run)) activateTab(run.storeId, run.tabId!) } catch { /* 标签页已消失等情况不阻塞流程 */ }
+      // §4.5：payload 只存 origin+path——query 里有 finderUsername 等 token，不落库
+      let originPath = target
+      try { const u = new URL(target); originPath = u.origin + u.pathname } catch { /* 保底原样 */ }
+      return { kind: 'executed', payload: { action: 'mirrorTabUrl', url: originPath } }
+    }
+    case 'useTab': {
+      // 切到"已经打开的某个标签页"上继续（不导航、不重载）：微信邀约逐轮换人时必须回到
+      // 那个一直活着的广场页——重载会重置分页与筛选（平台翻页是内部状态，URL 不变）。
+      const tabIdWant = input.tabId ? String(input.tabId) : null
+      const pathWant = input.path ? String(input.path) : null
+      const incWant = input.urlIncludes ? String(input.urlIncludes) : null
+      guardSignals(run)
+      const candidates = getStoreTabs(run.storeId).map(t => {
+        const wc = getTabWebContents(run.storeId, t.id)
+        const live = wc && !wc.isDestroyed() ? wc.getURL() : ''
+        return { id: t.id, url: live || String(t.url || '') }
+      })
+      const matchOf = (c: { id: string; url: string }) => {
+        if (tabIdWant) return c.id === tabIdWant
+        let u: URL
+        try { u = new URL(c.url) } catch { return false }
+        if (pathWant) return u.pathname === pathWant || u.pathname.endsWith(pathWant)
+        return c.url.includes(incWant!)
+      }
+      /**
+       * 选哪个标签页（顺序即优先级，2026-10-03 真机实测后收紧）：
+       *   ① 本次运行**已经选定过的**那个（按同一判据记住）——它才是带着本次筛选的广场页；
+       *   ② 当前运行标签页（若它本身满足判据）——首轮的情况：开头的筛选就应用在它身上；
+       *   ③ 页面上第一个满足判据的标签页（兜底：比如运行标签页被用户关掉了）。
+       * 只有 ③ 才需要真的"切"（并关掉旧运行标签页）；①② 是**就地留下**，
+       * 既不会把带着筛选的页面关掉，也不会因为切页重挂 webview 而白等一次注册。
+       */
+      const key = tabIdWant || pathWant || incWant || ''
+      const remembered = run.useTabPick && run.useTabPick.key === key
+        ? candidates.find(c => c.id === run.useTabPick!.tabId && matchOf(c))
+        : undefined
+      const current = run.tabId ? candidates.find(c => c.id === run.tabId && matchOf(c)) : undefined
+      const target = remembered || current || candidates.find(matchOf)
+      if (!target) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 店铺里没有已打开且地址${pathWant ? `为 ${pathWant}` : `含 ${incWant}`} 的标签页（useTab 只切换、不新建）`)
+      }
+      const keepInPlace = target === remembered || target === current
+      run.useTabPick = { key, tabId: target.id }
+      const oldTabId = run.tabId
+      run.tabId = target.id
+      // tabId 精确绑定属于 Agent 当前页上下文；不要把普通用户标签永久登记为任务运行标签。
+      if (!tabIdWant) runTabByStore.set(run.storeId, target.id)
+      // §4.5：payload 只存 origin+path（query 里可能含 token）
+      let shown = target.url
+      try { const u = new URL(target.url); shown = u.origin + u.pathname } catch { /* 保底原样 */ }
+      try { activateTab(run.storeId, target.id) } catch { /* 标签页已消失不阻塞流程 */ }
+      /**
+       * 切过去之后**必须等 guest 注册**再来。
+       *
+       * 为什么（2026-10-03 真机实测抓到）：迁移到 DOM `<webview>` 之后，只有**活动标签页**的
+       * webview 挂在文档上，非活动标签的 guest 会被移除、需要时再挂载并重新注册。
+       * 而 useTab 以前切完就走，下一步的 `wcOrThrow` 立刻报
+       * `BROWSER_NOT_READY: 标签页页面尚未就绪`——真机路径上这一条**必中**：
+       * 用户在面板点「打开达人广场」后店铺里已有一个广场标签页，点「开始邀约」时引擎
+       * 又新建了运行标签页，首轮 useTab 按"地址匹配的第一个标签页"切回用户那个老广场页，
+       * 于是首轮就折在这里（本次实测：第 1 轮、子步骤 2/19）。
+       * 判据与任务开跑时那次等待完全一致，给 20s（切页远比冷启动快）。
+       */
+      await waitForTabWebContents(run.storeId, target.id, 20_000).catch((e: any) => {
+        throw new Error(`BROWSER_NOT_READY: 切到「${shown}」后页面未就绪（${String(e?.message || e).replace(/^BROWSER_NOT_READY:\s*/, '')}）`)
+      })
+      // 关掉"用完的旧标签页"：判据只看 **oldTabId 与 target 不同**（=真的发生了切换）。
+      // 就地留下时 oldTabId === target.id，天然不会关；而从详情/表单页切回广场时必须关掉它，
+      // 否则每轮攒一个 finder-detail（原实现的注释就是这么写的，别按 keepInPlace 去跳）。
+      if (input.closeCurrent !== false && oldTabId && oldTabId !== target.id) {
+        // 详情/邀约表单页用完即关：否则每轮留一个标签页（实测一轮下来攒了 7 个 finder-detail）
+        try { closeTab(run.storeId, oldTabId) } catch { /* 已关闭/未挂载都无妨 */ }
+      }
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'useTab', tabId: target.id, url: shown, ...(keepInPlace ? { keptInPlace: true } : {}) } }
+    }
+    case 'typeText': {
+      // 受信任文本写入（见 trustedWrite 注释）：点击聚焦 → Ctrl+A → Delete → insertText → 回读校验
+      const wc = wcOrThrow(run)
+      // 等待与写入共享一个步骤时限（同 click；写入至少保留 1s 预算，避免等待耗尽后立刻超时）
+      const deadline = Date.now() + step.timeoutMs
+      await waitForSelector(wc, String(input.selector), run, step.timeoutMs, !!input.deep, deadline)
+      await trustedWrite(wc, run, String(input.selector), !!input.deep, String(input.text ?? ''), Math.max(deadline - Date.now(), 1000), 'typeText')
+      // §4.5：payload 只存摘要与长度，不存写入的完整文本
+      return { kind: 'executed', payload: { action: 'typeText', selector: String(input.selector), length: String(input.text ?? '').length } }
+    }
+    case 'waitForText': {
+      // 等「可见元素的自有文本」包含 text。waitForSelector 只查存在性，而微信的弹窗
+      // 节点常预渲染在 DOM 里（隐藏态也查得到），必须以可见文本为准。
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      const deep = !!input.deep
+      const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
+      await withTimeout(async () => {
+        for (;;) {
+          guardSignals(run)
+          const found = await wc.executeJavaScript(`(() => {
+            ${deep ? ENUM_DEEP_FN : ''}
+            ${VISIBLE_JS}
+            ${SCOPE_FN}
+            ${PICK_SORT_FN}
+            const needle = ${JSON.stringify(needle)};
+            const exact = ${!!input.exact};
+            const inputToken = ${!!input.token};
+            const matchesTextToken = ${matchesTextToken.toString()};
+            const within = ${JSON.stringify(within || null)};
+            const roots = within ? __scopeRoots(within, ${deep ? 'true' : 'false'}) : null;
+            if (within && !roots) return false;
+            const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+            for (const el of scope) {
+              const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+              if (inputToken ? !matchesTextToken(own, needle) : exact ? own !== needle : !own.includes(needle)) continue;
+              if (!__inScope(roots, el)) continue;
+              if (__visible(el)) return true;
+            }
+            // 兜底：文案被拆进子 span 时（实测快手「已选1个 个护家清: 清空」整行都是子元素，
+            // 没有任何元素的**自有文本**是「个护家清」）——按规范化 innerText 再找一遍。
+            // 仍然限定"整段文本不能比要找的长太多"，避免把大容器（凑巧含该词）当成命中。
+            const nw = __narrow(needle);
+            for (const el of scope) {
+              if (!__inScope(roots, el)) continue;
+              if (!__visible(el)) continue;
+              const it = __narrow(el.innerText);
+              if (inputToken ? !matchesTextToken(el.innerText, needle) : exact ? it !== nw : !it.includes(nw)) continue;
+              if (it.length > nw.length + 12) continue;
+              return true;
+            }
+            return false;
+          })()`).catch(() => false)
+          if (found) return
+          await new Promise(r => setTimeout(r, 300))
+        }
+      }, run, step.timeoutMs, `等待文本「${needle}」`).catch(async (e: any) => {
+        /**
+         * 超时前先看是不是"登录态没拿到"（2026-10-04 真机：快手分销后台的页面**地址是对的**
+         * ——`/zone/daren-match/daren-square-pro`——但正文只有「正在获取用户信息，请稍后…」，
+         * 一直不渲染筛选区）。这种状态旧写法只报"等待文本超时"，看日志的人会以为页面改版/卡了。
+         */
+        const stall = await detectSessionStall(wcOrThrow(run)).catch(() => null)
+        if (stall) throw new Error(`TASK_LOGIN_REQUIRED: ${stall}（等待文本「${needle}」超时）——该店铺登录态已失效，请重新登录后重试`)
+        throw e
+      })
+      guardSignals(run)
+      return null
+    }
+    case 'ensureRows': {
+      // 确保"页面可见行数"≥ min：已有则原样不动（payload 报 added:0）；
+      // 没有才点 addText 入口 → 等弹窗复选框 → 勾选未选项（≤max，真实点击）→
+      // 点 confirmText → 复核行数。自适应在于避免对"已有商品"的页面重复添加。
+      const wc = wcOrThrow(run)
+      // 勾选/确认都是坐标点击，视图没挂载时全落空 → 先如实查挂载状态
+      await assertViewMounted(wc, 'ensureRows 勾选')
+      const deep = !!input.deep
+      const min = input.min == null ? 1 : Number(input.min)
+      const max = Number(input.max)
+      // 弹窗式（给了 confirmClosesSelector）：**不能**用"行是否已存在"做提前返回。
+      // 实测快手：商品弹窗的表格节点常驻 DOM（关闭后仍有尺寸），于是 present ≥ min 成立、
+      // 步骤静默返回 added:0——看着"成功"，实际一个商品都没选，最后被平台的
+      // 「请选择商品」拦下（真机踩到：run 报 succeeded 但抽屉里是 0/100）。
+      const modalMode = !!input.confirmClosesSelector
+      // 可见性判据（行数/复选框共用）：**必须与视口有交集**。
+      // 实测快手：商品弹窗虽未打开，它的节点已经预渲染在 DOM 里且有尺寸——
+      // 只判"有尺寸"会把隐藏弹窗里的行/复选框也数进来，于是步骤误以为"已经就有行"、
+      // 甚至去点视口外的复选框（点了个寂寞），最后被平台拦下（真机踩到）。
+      const inViewJs = `
+        const __inView = (el) => {
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return false;
+          if (r.bottom <= 0 || r.right <= 0 || r.top >= innerHeight || r.left >= innerWidth) return false;
+          for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+            const cs = getComputedStyle(n);
+            if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+          }
+          return true;
+        };
+      `
+      const countRowsExpr = `(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${inViewJs}
+        const sel = ${JSON.stringify(String(input.rowsSelector))};
+        let n = 0;
+        for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+          try { if (!el.matches(sel)) continue } catch { continue }
+          if (!__inView(el)) continue;
+          n++;
+        }
+        return n;
+      })()`
+      guardSignals(run)
+      let present = await withTimeout(() => wc.executeJavaScript(countRowsExpr).catch(() => 0), run, step.timeoutMs, 'ensureRows 计数')
+      if (present >= min && !modalMode) {
+        return { kind: 'executed', payload: { action: 'ensureRows', present, added: 0 } }
+      }
+      const addHit = await findTextTarget(wc, run, String(input.addText), deep, step.timeoutMs, 'ensureRows 打开添加入口')
+      if (!addHit.ok) throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${String(input.addText)}」入口（${addHit.reason}）`)
+      realClick(wc, addHit.x!, addHit.y!)
+      await new Promise(r => setTimeout(r, 600))
+      guardSignals(run)
+      await waitForSelector(wc, String(input.checkboxSelector), run, step.timeoutMs, deep)
+      const boxes = await withTimeout(() => wc.executeJavaScript(`(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${inViewJs}
+        const sel = ${JSON.stringify(String(input.checkboxSelector))};
+        const out = [];
+        for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+          try { if (!el.matches(sel)) continue } catch { continue }
+          // 必须真在视口里：否则会去点"预渲染但没显示"的弹窗里的复选框（点了个寂寞）。
+          // 不把 opacity:0 当不可见：平台普遍把原生 checkbox 做成透明、上面盖一个自绘方块
+          // （实测快手：input 是 16×16 但 opacity=0，真正能点的是外面那层 label）。
+          if (!__inView(el)) continue;
+          const input = el.querySelector('input[type=checkbox]');
+          out.push({ x: Math.round(el.getBoundingClientRect().left + el.getBoundingClientRect().width / 2), y: Math.round(el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2), checked: input ? !!input.checked : false });
+        }
+        return out;
+      })()`), run, step.timeoutMs, 'ensureRows 找复选框')
+      let added = 0
+      let alreadyChecked = 0
+      for (const b of boxes) {
+        if (b.checked) { alreadyChecked++; continue }
+        if (added >= max) break
+        guardSignals(run)
+        realClick(wc, b.x, b.y)
+        added++
+        await new Promise(r => setTimeout(r, 200))
+      }
+      // 弹窗式：本次没新勾但**已有勾选**也算就绪（重复执行/平台预勾选），不该报错
+      if (added === 0 && !(modalMode && alreadyChecked > 0)) {
+        throw new Error('TASK_SELECTOR_CHANGED: 没有可勾选的行（弹窗内没有未选中项）——请人工确认平台是否还有可添加内容')
+      }
+      const confirmHit = await findTextTarget(wc, run, String(input.confirmText), deep, step.timeoutMs, 'ensureRows 确认')
+      if (!confirmHit.ok) throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${String(input.confirmText)}」确认按钮（${confirmHit.reason}）`)
+      realClick(wc, confirmHit.x!, confirmHit.y!)
+      await new Promise(r => setTimeout(r, 800))
+      guardSignals(run)
+      // 结果校验二选一（都是"确认真的生效"的正证据）：
+      //  默认按行数复核——列表式的抽屉（抖店/微信）确认后行会出现在同一页面上；
+      //  confirmClosesSelector——**弹窗式**的选择器（实测快手「选择商品」）确认后弹窗会关闭，
+      //  此时行数不在当前页面上了，按行数复核必然读到 0 并误报失败。
+      //  等它消失 = 确认被平台接受，比"行数不为 0"更直接。
+      const closes = input.confirmClosesSelector ? String(input.confirmClosesSelector) : ''
+      if (closes) {
+        const until = Date.now() + Math.max(5000, Math.min(step.timeoutMs, 20000))
+        let gone = false
+        for (;;) {
+          guardSignals(run)
+          // 判据是"**所有**匹配的元素都真的看不见了"，两处都要算：
+          //  ① 平台常保留一个隐藏的弹窗节点（display:none）——只查第一个匹配会读到残留节点；
+          //  ② 抽屉/弹窗常靠 **transform 滑出视口** 来"关闭"，子节点自身的 rect 依然非零，
+          //     只测子节点会永远判定"还开着"（实测快手商品弹窗就折在这里）。
+          // 所以：沿祖先链查 display/visibility，并要求元素矩形与视口有交集。
+          const still = await wc.executeJavaScript(`(() => {
+            const els = [...document.querySelectorAll(${JSON.stringify(closes)})];
+            if (!els.length) return false;
+            const hiddenByAncestor = (el) => {
+              for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+                const cs = getComputedStyle(n);
+                if (cs.display === 'none' || cs.visibility === 'hidden') return true;
+              }
+              return false;
+            };
+            for (const el of els) {
+              if (hiddenByAncestor(el)) continue;
+              const r = el.getBoundingClientRect();
+              if (r.width <= 0 || r.height <= 0) continue;
+              // 与视口有交集才算"还看得见"（滑出视口的弹窗不算）
+              const inView = r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+              if (inView) return true;
+            }
+            return false;
+          })()`).catch(() => false)
+          if (!still) { gone = true; break }
+          if (Date.now() >= until) break
+          await new Promise(r => setTimeout(r, 300))
+        }
+        if (!gone) {
+          throw new Error(`TASK_SELECTOR_CHANGED: 点「${String(input.confirmText)}」后 ${closes} 仍可见——确认可能没被接受`)
+        }
+        return { kind: 'executed', payload: { action: 'ensureRows', added, verifiedBy: 'dialogClosed' } }
+      }
+      present = await withTimeout(() => wc.executeJavaScript(countRowsExpr).catch(() => 0), run, step.timeoutMs, 'ensureRows 复核')
+      if (present < min) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 确认后页面仍未见 ${min} 行（当前 ${present}）——请人工确认内容是否添加成功`)
+      }
+      return { kind: 'executed', payload: { action: 'ensureRows', present, added } }
+    }
+    case 'ensureRowsById': {
+      // 按商品ID在邀约商品弹窗中逐项搜索并勾选（微信小店流程：用户指定ID，系统代填）。
+      // 与 ensureRows 不同：不是"勾前N个未选项"，而是"找到匹配 ID 的行并勾上"。
+      const wc = wcOrThrow(run)
+      // 同上：这一步全靠坐标点击（入口/搜索框/复选框），视图没挂载就全落空
+      await assertViewMounted(wc, 'ensureRowsById 勾选')
+      const deep = !!input.deep
+      const ids = Array.isArray(input.productIds) ? input.productIds.map(String) : []
+      if (!ids.length) throw new Error('TASK_INVALID_STEP: ensureRowsById 缺少 productIds')
+      const addHit = await findTextTarget(wc, run, String(input.addText), deep, step.timeoutMs, 'ensureRowsById 打开添加入口')
+      if (!addHit.ok) throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${String(input.addText)}」入口（${addHit.reason}）`)
+      realClick(wc, addHit.x!, addHit.y!)
+      await new Promise(r => setTimeout(r, 600))
+      guardSignals(run)
+      await waitForSelector(wc, String(input.checkboxSelector), run, step.timeoutMs, deep)
+      const boxes = await withTimeout(() => wc.executeJavaScript(`(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        ${VISIBLE_JS}
+        const sel = ${JSON.stringify(String(input.checkboxSelector))};
+        const ids = ${JSON.stringify(ids)};
+        const out = [];
+        for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+          try { if (!el.matches(sel)) continue } catch { continue }
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) continue;
+          const cs = getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+          // 商品 ID 在行内的其它单元格里，不在复选框自身上——必须按"所在行"的文本匹配
+          // （实测：只看复选框 innerText 会永远匹配不到）
+          const row = el.closest('tr') || el.parentElement || el;
+          const rowText = String(row.innerText || '');
+          if (!ids.some(id => rowText.includes(id))) continue;
+          const input = el.querySelector('input[type=checkbox]');
+          out.push({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), checked: input ? !!input.checked : false, text: rowText.slice(0, 40) });
+        }
+        return out;
+      })()`), run, step.timeoutMs, 'ensureRowsById 搜索匹配行')
+      if (!boxes.length) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 弹窗中未找到匹配商品ID「${ids.join(', ')}」的行——请确认商品ID正确且已上架`)
+      }
+      let added = 0
+      for (const b of boxes) {
+        if (b.checked) continue
+        guardSignals(run)
+        realClick(wc, b.x, b.y)
+        added++
+        await new Promise(r => setTimeout(r, 200))
+      }
+      const confirmHit = await findTextTarget(wc, run, String(input.confirmText), deep, step.timeoutMs, 'ensureRowsById 确认')
+      if (!confirmHit.ok) throw new Error(`TASK_SELECTOR_CHANGED: 找不到「${String(input.confirmText)}」确认按钮（${confirmHit.reason}）`)
+      realClick(wc, confirmHit.x!, confirmHit.y!)
+      await new Promise(r => setTimeout(r, 800))
+      guardSignals(run)
+      const countRowsExpr = `(() => {
+        ${deep ? ENUM_DEEP_FN : ''}
+        const sel = ${JSON.stringify(String(input.rowsSelector))};
+        let n = 0;
+        for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+          try { if (!el.matches(sel)) continue } catch { continue }
+          const r = el.getBoundingClientRect();
+          if (!(r.width > 0 && r.height > 0)) continue;
+          n++;
+        }
+        return n;
+      })()`
+      const present = await withTimeout(() => wc.executeJavaScript(countRowsExpr).catch(() => 0), run, step.timeoutMs, 'ensureRowsById 复核')
+      return { kind: 'executed', payload: { action: 'ensureRowsById', requested: ids.length, added, present } }
+    }
+    case 'requireTextAbsent': {
+      // 文案缺席断言（读型）：页面上**不该出现**这段文案；出现则按 code 如实失败。
+      //
+      // 为什么必须有这一步（2026-09-15 快手真机）：点「发送邀请」后平台可能弹
+      // 「部分邀约发送失败 —— 近7天有未处理/被拒绝的邀约单，暂不能发送新的邀约单」，
+      // 并且**故意把邀约抽屉留着**（设计上让你调整后重试）。于是"抽屉没关"这件事
+      // 既可能是失败、也可能只是平台还在处理，光靠 waitForGone 根本区分不出来——
+      // 一次**一条都没发出去**的整批，会被记成"等到超时"，甚至可能被误判成成功。
+      // 这段失败文案是平台自己给的确定性判据，读到就如实报错。
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      const deep = !!input.deep
+      const code = input.code ? String(input.code) : 'TASK_TEXT_PRESENT'
+      const hint = input.hint ? String(input.hint) : ''
+      const waitMs = input.waitMs == null ? 5000 : Number(input.waitMs)
+      const until = Date.now() + waitMs
+      let seen: string | null = null
+      for (;;) {
+        guardSignals(run)
+        // 只在**可见**元素里找：平台常把弹窗节点预渲染在 DOM 里（隐藏态也查得到），
+        // 按存在性判断会把"历史弹窗残留"误当成"这次真的失败了"。
+        seen = await wc.executeJavaScript(`(() => {
+          ${deep ? ENUM_DEEP_FN : ''}
+          const needle = ${JSON.stringify(needle)};
+          const narrow = (s) => String(s == null ? '' : s).replace(/\\s+/g, '');
+          const nw = narrow(needle);
+          for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+            const r = el.getBoundingClientRect();
+            if (!(r.width > 0 && r.height > 0)) continue;
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            const it = narrow(el.innerText);
+            // 只认"本身就在说这句话"的元素（同 ABSENT_FN 的收紧逻辑）：
+            // 不收紧的话任何祖先都会因"后代里有这句话"而命中。
+            if (own.includes(needle) && it.length <= nw.length + 24) return it.slice(0, 120);
+            if (nw && it.includes(nw) && it.length <= nw.length + 24) return it.slice(0, 120);
+          }
+          return null;
+        })()`).catch(() => null)
+        if (seen) break
+        if (Date.now() >= until) break
+        await new Promise(r => setTimeout(r, 300))
+      }
+      guardSignals(run)
+      if (seen) {
+        throw new Error(`${code}: 页面上出现了「${needle}」——${hint || '平台已明确拒绝，本次提交没有成功'}（原文：${seen}）`)
+      }
+      return { kind: 'executed', payload: { action: 'requireTextAbsent', text: needle, present: false, waitedMs: waitMs } }
+    }
+    case 'requireQuota': {
+      // 额度预检（读型）：可见元素自有文本含 textIncludes → 提取第一个数字 → ≥ min 放行。
+      // 微信小店「今日剩余N次邀请机会」是平台唯一明示的额度口径；optional=true 时平台
+      // 不展示额度文案也算通过（payload 如实记录），绝不猜测、不虚构额度。
+      const wc = wcOrThrow(run)
+      const marker = String(input.textIncludes)
+      const min = Number(input.min)
+      const deep = !!input.deep
+      const optional = !!input.optional
+      const deadline = Date.now() + step.timeoutMs
+      let found: string | null = null
+      // 只在**带数字**的文案上收手：额度文案常常先渲染成占位（实测快手抽屉的
+      // 「今日剩余条发送邀请机会」——数字是随后异步填进去的），若拿到第一条含标记的文案就
+      // 判定"没有数字"，会把"还没渲染完"误报成"额度不足"（真机彩排踩到）。
+      // 所以命中无数字时继续轮询到超时，超时才如实报错。
+      let sawWithoutNumber: string | null = null
+      for (;;) {
+        guardSignals(run)
+        found = await wc.executeJavaScript(`(() => {
+          ${deep ? ENUM_DEEP_FN : ''}
+          const marker = ${JSON.stringify(marker)};
+          let firstAny = null;
+          for (const el of ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'}) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (!own.includes(marker)) continue;
+            const r = el.getBoundingClientRect();
+            if (!(r.width > 0 && r.height > 0)) continue;
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+            // **优先返回带数字的那条**：实测快手把数字放在子元素里，父节点的文本节点拼起来是
+            // 「今日剩余条发送邀请机会」（没有数字）——按文档序取第一条会拿到它，
+            // 于是"额度 100"被误判成"读不到数字"（真机彩排踩到）。
+            if (/\\d/.test(own)) return own;
+            if (firstAny == null) firstAny = own;
+          }
+          return firstAny;
+        })()`).catch(() => null)
+        if (found != null) {
+          if (/\d/.test(found)) break
+          sawWithoutNumber = found
+        }
+        if (Date.now() >= deadline) break
+        await new Promise(r => setTimeout(r, 300))
+      }
+      guardSignals(run)
+      if (found == null || !/\d/.test(found)) {
+        // 一直只看到"没有数字"的文案 → **读不到额度**，不是"额度不足"。
+        // 这里必须用不在 loop stopOn 里的码：此前借用 TASK_QUOTA_EXCEEDED，而它在邀约循环的
+        // stopOn 里＝按预期成功收尾，于是"页面没渲染完/改版导致读不到额度"会变成
+        // "任务报成功、一位都没发出去"（2026-09-28 审查确认的静默假成功）。
+        if (sawWithoutNumber != null) {
+          throw new Error(`TASK_QUOTA_UNREADABLE: 额度文案「${sawWithoutNumber.slice(0, 60)}」里始终没有可识别的数字（等到超时）——无法确认可邀约额度，按失败处理（不当作额度用尽）`)
+        }
+        if (optional) return { kind: 'executed', payload: { action: 'requireQuota', present: false, min } }
+        throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到含「${marker}」的额度文案（平台可能已改版）`)
+      }
+      const m = /\d+/.exec(found)
+      const quota = m ? parseInt(m[0], 10) : NaN
+      if (!Number.isFinite(quota)) {
+        throw new Error(`TASK_QUOTA_UNREADABLE: 额度文案「${found.slice(0, 60)}」里没有可识别的数字，无法确认可邀约额度，按失败处理`)
+      }
+      if (input.metric) {
+        TaskStore.insertSnapshot(run.storeId, String(input.metric), quota, run.runId)
+      }
+      if (quota < min) {
+        // 错误码可配：断言额度用默认（stopOn 里，= 正常收尾）；
+        // 断言别的东西（如已选商品数）必须用不在 stopOn 里的码，否则会静默"按预期收工"
+        const code = input.code ? String(input.code) : 'TASK_QUOTA_EXCEEDED'
+        throw new Error(`${code}: 数值不足——页面显示「${found.slice(0, 60)}」（需要 ≥ ${min}）${input.hint ? '。' + String(input.hint) : '，本次邀约已按你的要求在发送前中止'}`)
+      }
+      return { kind: 'executed', payload: { action: 'requireQuota', present: true, quota, min, text: found.slice(0, 60) } }
+    }
+    case 'requireEnabled': {
+      // 可用性预检（读型）：找文案为 text 的可见按钮，禁用态如实失败。
+      // 抖店不在页面展示剩余邀约额度数字；额度用尽/平台限制的表现是「确认发送」变禁用——
+      // 在打开抽屉后、填话术与门禁之前先校验，额度不足时快速如实失败，不浪费一轮人工确认。
+      const wc = wcOrThrow(run)
+      const needle = String(input.text)
+      const deep = !!input.deep
+      const hint = input.hint ? String(input.hint) : ''
+      const deadline = Date.now() + step.timeoutMs
+      for (;;) {
+        guardSignals(run)
+        const hit = await findTextTarget(wc, run, needle, deep, Math.min(step.timeoutMs, 10000), 'requireEnabled')
+        if (hit.ok) {
+          return { kind: 'executed', payload: { action: 'requireEnabled', text: needle, clickedText: hit.clickedText, candidates: hit.candidates, enabled: true } }
+        }
+        if (hit.reason === 'DISABLED') {
+          // 禁用态本身**不说明原因**：可能额度用尽，也可能必填未填/未登录/风控。
+          // 此前一律当额度用尽，而该码在邀约循环的 stopOn 里＝按预期成功收尾
+          // → "按钮因别的原因被禁用"变成"任务报成功、0 位邀约发出"（2026-09-28 审查确认）。
+          // 现在只认档案里**声明过**的额度文案（引擎读得到按钮旁的 tooltip/popover 说明时比对），
+          // 否则如实失败——宁可让用户看到失败，也不能给一个假成功。
+          const why = String((hit as any).disabledReason || '')
+          const quotaWords = Array.isArray(input.quotaDisabledIncludes)
+            ? (input.quotaDisabledIncludes as unknown[]).map(x => String(x)).filter(Boolean)
+            : []
+          // 判定"禁用=额度用尽"的两条路，都必须由**步骤/档案显式给出**：
+          //  ① 读到了平台说明且与登记文案相符（更精确）；
+          //  ② 平台档案声明"本按钮禁用即额度用尽"（实测校准，如抖店「确认发送」）。
+          const meansQuota = (quotaWords.length > 0 && quotaWords.some(w => why.includes(w)))
+            || input.disabledMeansQuota === true
+          if (meansQuota) {
+            throw new Error(`TASK_QUOTA_EXCEEDED: 「${needle}」当前为禁用态${why ? `，平台说明「${why.slice(0, 80)}」` : '（平台档案声明此禁用即额度用尽）'}——本次邀约在发送前中止`)
+          }
+          throw new Error(
+            `TASK_TARGET_DISABLED_UNCERTAIN: 「${needle}」当前为禁用态，` +
+            `${why ? `平台说明「${why.slice(0, 80)}」` : '且读不到平台说明（按钮旁没有 tooltip/popover）'}——` +
+            `无法确认是额度用尽还是别的限制，未按"按预期收尾"处理，请人工确认后重跑。` +
+            `若这是本平台额度用尽时的表现，请在本步登记 quotaDisabledIncludes（平台文案）或 disabledMeansQuota（档案声明）${hint ? `（${hint}）` : ''}`
+          )
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`TASK_SELECTOR_CHANGED: 页面上找不到文案为「${needle}」的按钮（${hint || '平台可能已改版'}）`)
+        }
+        await new Promise(r => setTimeout(r, 300))
+      }
+    }
+    case 'readLabelValue': {
+      // 按标签文案读指标值：找可见元素（自有文本 === label）→ 向上找最近"文本比 label 只多一小段"
+      // 的祖先 → 多出来的那段就是值。卡片类名普遍带构建哈希（快手 kpro-data / 微信 weui 实测），
+      // 以文案为锚才能在平台改版时"要么读对、要么如实报错"，而不是读到别的数字。
+      const wc = wcOrThrow(run)
+      const label = String(input.label)
+      const deep = !!input.deep
+      const maxLen = input.maxValueLen == null ? 40 : Number(input.maxValueLen)
+      // absentOk：页面上**没有这一行**算通过（不是错误），与 readTable 的 emptyOk 同一思路。
+      // 只豁免 NOT_FOUND——标签在、值取不到的 NO_VALUE_SIBLING/VALUE_TOO_LONG 仍然如实失败。
+      const absentOk = input.absentOk === true
+      const deadline = Date.now() + step.timeoutMs
+      let res: any = null
+      for (;;) {
+        guardSignals(run)
+        res = await wc.executeJavaScript(`(() => {
+          ${deep ? ENUM_DEEP_FN : ''}
+          ${VISIBLE_JS}
+          const label = ${JSON.stringify(label)};
+          const MAX = ${maxLen};
+          const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
+          const cands = [];
+          for (const el of scope) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (!own.includes(label)) continue;
+            if (!__visible(el)) continue;
+            cands.push({ el, len: own.length });
+          }
+          if (!cands.length) return { ok: false, reason: 'NOT_FOUND' };
+          cands.sort((a, b) => (a.len - b.len) || (__clickableScore(a.el) - __clickableScore(b.el)));
+          let node = cands[0].el;
+          // 向上找"比标签只多出一小段文本"的最近祖先（= 指标卡片本体）
+          for (let i = 0; i < 6 && node && node !== document.body; i++) {
+            const txt = String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (txt.length > label.length) {
+              const value = txt.replace(label, '').trim();
+              if (value && value.length <= MAX) return { ok: true, value, cardText: txt.slice(0, 60) };
+              if (value && value.length > MAX) return { ok: false, reason: 'VALUE_TOO_LONG', cardText: txt.slice(0, 80) };
+            }
+            node = node.parentElement;
+          }
+          return { ok: false, reason: 'NO_VALUE_SIBLING' };
+        })()`).catch(() => ({ ok: false, reason: 'ERR' }))
+        if (res && res.ok) break
+        if (absentOk && res && res.reason === 'NOT_FOUND') break   // 没有这一行 → 正常收尾（见下）
+        if (Date.now() >= deadline) {
+          throw new Error(res && res.reason === 'VALUE_TOO_LONG'
+            ? `TASK_SELECTOR_CHANGED: 「${label}」向上找到的容器文本过长（${String(res.cardText).slice(0, 60)}）——页面结构已改，未取到单值`
+            : `TASK_SELECTOR_CHANGED: 页面上读不到「${label}」对应的值（${res && res.reason}）`)
+        }
+        await new Promise(r => setTimeout(r, 300))
+      }
+      guardSignals(run)
+      if (absentOk && (!res || !res.ok)) {
+        // 如实记录"页面上没有这一行"，且**不写快照**：不写就没有值，下游据此报"没读到"，
+        // 绝不会被当成"读到了空字符串"而覆盖掉用户已填的内容。
+        return {
+          kind: 'text',
+          payload: {
+            absent: true, label, reason: res?.reason || null, metric: input.metric || null,
+            note: `页面上没有「${label}」这一行（该主体类型没有这项，或尚未登记执照）`
+          }
+        }
+      }
+      // 卡片文本常带"较上期/比上周 X%"等对比噪音（实测快手指标卡）：只取开头的"数字（可带货币
+      // 符号与万/亿）"作为指标值，其余丢弃——绝不把对比数字当成指标值。
+      const raw = String(res.value)
+      // allowText：该标签的值**本来就不是数字**（实测发票中心的「收票主体」是公司名、
+      // 「账单日期」是"2026年05/06/07/08月"）——不加这个开关，数值抽取会把"2026年…"截成
+      // "2026"、把公司名直接判成"不是数值"而失败（实测拼多多给平台开票踩过）。
+      if (input.allowText === true) {
+        const text = raw.replace(/\s+/g, ' ').trim().slice(0, maxLen)
+        if (!text) throw new Error(`TASK_SELECTOR_CHANGED: 「${label}」旁没读到内容（${res.reason || 'EMPTY'}）`)
+        if (input.metric) TaskStore.insertSnapshot(run.storeId, String(input.metric), text, run.runId)
+        return { kind: 'text', payload: { text, rawText: raw.slice(0, 60), label, cardText: res.cardText, metric: input.metric || null } }
+      }
+      const m = /^[¥￥$€]?\s*[\d,]+(?:\.\d+)?\s*(?:万|亿)?/.exec(raw)
+      // 作为"指标"落库时必须真的取到数字：取不到如实失败，绝不把 "(退款时间)" 这类文字当指标值存进数据中心
+      if (input.metric && !m) {
+        throw new Error(`TASK_SELECTOR_CHANGED: 「${label}」旁取到的不是数值（${raw.slice(0, 40)}）——页面结构或文案已变，未落库`)
+      }
+      const shownRaw = (m ? m[0] : raw).replace(/\s+/g, '').slice(0, 40)
+      const shown = input.privacyRedact === true ? redactAgentText(shownRaw, 40) : shownRaw
+      let num = parseFloat(shown.replace(/[^\d.]/g, ''))
+      if (Number.isFinite(num) && shown.includes('亿')) num *= 1e8
+      else if (Number.isFinite(num) && shown.includes('万')) num *= 1e4
+      if (input.metric) {
+        TaskStore.insertSnapshot(run.storeId, String(input.metric), Number.isFinite(num) ? num : shown, run.runId)
+      }
+      return {
+        kind: 'text',
+        payload: {
+          text: shown,
+          rawText: input.privacyRedact === true ? redactAgentText(raw, 60) : raw.slice(0, 60),
+          label: input.privacyRedact === true ? redactAgentText(label, 60) : label,
+          cardText: input.privacyRedact === true ? redactAgentText(res.cardText, 80) : res.cardText,
+          metric: input.metric || null
+        }
+      }
+    }
+    case 'waitMs': {
+      // 显式等待：SPA 按新周期/筛选重新取数时，数值是原地刷新（元素早就在），
+      // 任何"等元素出现"的判据都会立刻命中旧值——只能显式等。分段 sleep 以支持暂停/取消。
+      const total = Number(input.ms)
+      const deadline = Date.now() + total
+      while (Date.now() < deadline) {
+        guardSignals(run)
+        await new Promise(r => setTimeout(r, Math.min(300, Math.max(50, deadline - Date.now()))))
+      }
+      guardSignals(run)
+      return { kind: 'executed', payload: { action: 'waitMs', ms: total } }
+    }
+    case 'waitForGone': {
+      // 等元素消失或不可见（提交类动作的结果校验）：抽屉没关就说明提交没被平台接受，
+      // 如实失败——绝不以"点过了"代替"发出去了"。
+      //
+      // 两种判据二选一：
+      //   · selector：等元素消失/不可见（原有能力）；
+      //   · text：等"可见文案消失"（2026-10-03 加）。微信发送邀约后的确认弹窗是平台通用组件，
+      //     没有稳定选择器，只能按文案等它关掉——真机实测：只校验"商品行消失"会**早于弹窗关闭**
+      //     就通过（第 3 轮截图抓到弹窗仍在提交动画中），所以补上这一条。
+      const wc = wcOrThrow(run)
+      const sel = input.selector ? String(input.selector) : ''
+      const needle = input.text ? String(input.text) : ''
+      const deep = !!input.deep
+      const goneExpr = needle
+        ? `(() => {
+            ${ENUM_DEEP_FN}
+            ${VISIBLE_JS}
+            const needle = ${JSON.stringify(needle)};
+            const all = __enumDeep();
+            for (const el of all) {
+              const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+              if (!own.includes(needle)) continue;
+              if (__visible(el)) return false;   // 还在：没消失
+            }
+            // 兜底：文案被拆进子 span（与 waitForText 同一口径）
+            for (const el of all) {
+              if (!__visible(el)) continue;
+              const it = String(el.innerText || '');
+              if (it.includes(needle) && it.length <= needle.length + 40) return false;
+            }
+            return true;
+          })()`
+        : `(() => {
+            ${deep ? ENUM_DEEP_FN : ''}
+            ${VISIBLE_JS}
+            const el = ${deep
+              ? `__enumDeep().find(e => { try { return e.matches(${JSON.stringify(sel)}) } catch { return false } }) || null`
+              : `document.querySelector(${JSON.stringify(sel)})`};
+            if (!el) return true;
+            return !__visible(el);
+          })()`
+      const what = needle ? `文案消失 ${needle}` : `元素消失 ${sel}`
+      await withTimeout(async () => {
+        for (;;) {
+          guardSignals(run)
+          const gone = await wc.executeJavaScript(goneExpr).catch(() => false)
+          if (gone) return
+          await new Promise(r => setTimeout(r, 300))
+        }
+      }, run, step.timeoutMs, `等待${what}`)
+      guardSignals(run)
+      return { kind: 'executed', payload: needle ? { action: 'waitForGone', text: needle } : { action: 'waitForGone', selector: sel } }
+    }
+    default:
+      throw new Error(`TASK_INVALID_STEP: 未知步骤类型 ${String(step.type)}`)
+  }
+}

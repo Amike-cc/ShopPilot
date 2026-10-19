@@ -13,12 +13,12 @@
  *   5) 总开关关闭 → 所有已加载扩展卸载、标记消失
  *   6) 非法扩展删除 → 管理目录被清理、列表回到 1 条
  */
-const { spawn } = require('child_process')
+const { spawn, execFileSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
 const http = require('http')
-const { resolveApp, appArgs } = require('./app-launch')
+const { resolveApp, appArgs, childEnv } = require('./app-launch')
 
 const ROOT = path.resolve(__dirname, '../..')
 const PORT = Number(process.env.SHOPILOT_EXTENSION_CDP_PORT || 9370)
@@ -112,12 +112,14 @@ async function main() {
   const appInfo = resolveApp(ROOT)
   const child = spawn(appInfo.executable, appArgs(ROOT, appInfo, { port: PORT, userData }), {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env, NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1',
+    // childEnv 会剥掉宿主继承来的 ELECTRON_RUN_AS_NODE：否则被测 exe 退化成纯 Node，
+    // 把 --remote-debugging-port 当非法选项退出，表现成「CDP 未就绪」（本轮实测踩过）
+    env: childEnv({
+      NODE_ENV: 'production', ELECTRON_ENABLE_LOGGING: '1',
       SHOPILOT_DISABLE_CDP_FP: '1', SHOPILOT_ACCEPTANCE: '1',
       // 打包版无法驱动原生目录选择框：只在验收态用它指定源目录
       SHOPILOT_TEST_EXTENSION_IMPORT_DIR: path.join(ROOT, 'docs/extension-template')
-    }
+    })
   })
   let appLog = ''
   child.stdout.on('data', d => { appLog += d.toString() })
@@ -258,7 +260,12 @@ async function main() {
     try { ui?.close() } catch { /* ignore */ }
     try { child.kill('SIGTERM') } catch { /* ignore */ }
     await sleep(1000)
-    try { require('child_process').execSync('taskkill /IM ShopPilot.exe /T /F', { stdio: 'ignore' }) } catch { /* ignore */ }
+    // 只结束自己 spawn 的那棵进程树：全局 `taskkill /IM ShopPilot.exe /T /F` 会把**并发跑着的
+    // 其它验收套件**连根杀掉（2026-10-18 实测过一次：某个套件运行中被别的运行掐死）。
+    // 上一轮残留的清理统一收敛到 run-acceptance.ps1 开头的 Kill-ShopPilot，这里不做全局清理。
+    if (child.pid) {
+      try { execFileSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 进程已退出 */ }
+    }
     site.close()
   }
 

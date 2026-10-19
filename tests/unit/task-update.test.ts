@@ -54,7 +54,8 @@ function createSchema(db: SqliteDb): void {
   db.exec(`
     CREATE TABLE tasks (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, store_scope TEXT, status TEXT NOT NULL,
-      schedule_json TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_fired_at INTEGER
+      schedule_json TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_fired_at INTEGER,
+      kind TEXT NOT NULL DEFAULT 'custom', source TEXT NOT NULL DEFAULT 'manual', campaign_id TEXT
     );
     CREATE TABLE task_steps (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, step_index INTEGER NOT NULL, type TEXT NOT NULL,

@@ -21,10 +21,11 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import douyinIcon from '../assets/platforms/generated/douyin.png'
-import kuaishouIcon from '../assets/platforms/generated/kuaishou.png'
-import pinduoduoIcon from '../assets/platforms/generated/pinduoduo.png'
-import wechatIcon from '../assets/platforms/generated/wechat.png'
+// 平台方形图标：1254×1254 的同一张图，WebP（q88）比原 PNG 小约 84%，像素尺寸与 alpha 通道不变。
+import douyinIcon from '../assets/platforms/generated/douyin.webp'
+import kuaishouIcon from '../assets/platforms/generated/kuaishou.webp'
+import pinduoduoIcon from '../assets/platforms/generated/pinduoduo.webp'
+import wechatIcon from '../assets/platforms/generated/wechat.webp'
 
 const props = withDefaults(defineProps<{ name?: string; size?: number }>(), {
   name: '',

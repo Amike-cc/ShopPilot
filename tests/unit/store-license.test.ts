@@ -193,7 +193,8 @@ describe('按开票主体筛行（发票中心筛选与导出共用）', () => {
     expect(licenseScopeLabel(rows, NO_LICENSE_KEY)).toBe('未填写营业执照')
     expect(licenseScopeLabel(rows, '')).toBe('')
     // 兜底：连值都取不到时用 key 本身，绝不回落成"全部主体"
-    expect(licenseScopeLabel([{ storeId: 'x', licenseName: null, licenseNo: null }], 'some-key')).toBe('some-key')
+    // （licenseScopeLabel 只读执照字段，传 storeId 属于契约外的多余属性）
+    expect(licenseScopeLabel([{ licenseName: null, licenseNo: null }], 'some-key')).toBe('some-key')
   })
 })
 

@@ -43,12 +43,9 @@ const main = async () => {
   const cdp = new CDP(target.webSocketDebuggerUrl)
   const t0 = Date.now()
   const started = await cdp.eval(`
-    // 先把界面切到发票中心（应用刚重启时不在这一页）
-    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('数据分析'))
+    // 先把界面切到独立发票中心页面（应用刚重启时不在这一页）
+    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('发票中心'))
     if (nav) nav.click()
-    await new Promise(r => setTimeout(r, 1500))
-    const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(i => (i.textContent || '').includes('发票中心'))
-    if (tab) tab.click()
     await new Promise(r => setTimeout(r, 3500))
     const btn = document.querySelector('[data-test="invoice-collect"]')
     if (!btn) throw new Error('采集按钮不在屏上（先切到发票中心）')

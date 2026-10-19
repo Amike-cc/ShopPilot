@@ -1,0 +1,15 @@
+{
+  // 测试专用类型检查配置：根 tsconfig.json 的 include 只覆盖 apps/packages 的 src，
+  // tests/** 的类型错误会被隐藏，所以单开一份配置把测试纳入门禁（tools/ci/verify.ps1）。
+  // 只做类型检查（noEmit），编译产物仍由 vitest/esbuild 负责。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  // 除 tests/** 外还要带上渲染层的 *.vue 模块声明（shims-vue.d.ts）：
+  // 有的测试会直接 import SFC（如 customer-service-mobile-drawer.test.ts），
+  // 否则 tsc 会报 TS2307 找不到模块。
+  "include": ["tests/**/*.ts", "apps/desktop/src/renderer/src/shims-vue.d.ts"],
+  "exclude": ["node_modules", "dist", "out"]
+}

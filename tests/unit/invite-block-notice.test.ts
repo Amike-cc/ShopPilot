@@ -38,9 +38,19 @@ describe('邀约被拦时的提示分类', () => {
   })
 
   it('分类口径只有一份（引擎侧 re-export，不重复实现正则）', () => {
-    const runner = readFileSync(resolve('apps/desktop/src/main/tasks/task-runner.ts'), 'utf8')
+    // 2026-10-19 P1 重构：引擎已从 task-runner.ts 拆成 tasks/ 下多个内聚模块，
+    // 源码级断言改为扫描整个引擎模块集合（re-export 与分类调用都搬到了 task-step-dom.ts）；断言语义不变。
+    const runner = [
+      'task-runner.ts',
+      'task-runner-registry.ts',
+      'task-runner-lifecycle.ts',
+      'task-runner-control.ts',
+      'task-runner-execute.ts',
+      'task-step-dom.ts',
+      'task-step-executor.ts'
+    ].map(f => readFileSync(resolve('apps/desktop/src/main/tasks', f), 'utf8')).join('\n')
     // 引擎必须从 shared 引入，而不是自己再写一遍正则
-    expect(runner).toMatch(/import \{ classifyInviteBlockNotice, matchSessionStall \} from '@shared\/invite-notices'/)
+    expect(runner).toMatch(/import \{[^}]*classifyInviteBlockNotice[^}]*matchSessionStall[^}]*\} from '@shared\/invite-notices'/)
     // 分类用到的关键词不许在引擎里再出现一份（否则两边会漂移）
     expect(runner).not.toMatch(/已邀请过该达人\|已经邀请过该达人/)
   })

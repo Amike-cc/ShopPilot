@@ -4,7 +4,7 @@
  * 与 invoice-center-v1 的分工：
  *   · v1 的 capture-implemented.mjs 自己起隔离实例（种数据）；verify-live.mjs 连已开实例。
  *   · 本脚本连已开实例（默认 CDP 9250），一次做完两件事：
- *       ① 验证精简版形态（三页签渲染 / 默认按主体 / 概览一行 / 筛选折叠 / 明细收起 / 窄屏无横向溢出）；
+ *       ① 验证独立发票页面的精简版形态（默认按主体 / 概览一行 / 筛选折叠 / 明细收起 / 窄屏无横向溢出）；
  *       ② 覆盖式重拍本目录 01-desktop.png（1600×1000@2）与 02-mobile.png（414×896@2）——图随时可从真机再生。
  *
  * 用法：node assets/design/invoice-center-v2/capture-live.mjs [CDP端口]
@@ -76,12 +76,6 @@ function check(name, ok, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'} - ${name}${detail ? ' :: ' + detail : ''}`)
 }
 
-const clickTab = (ui, label) => ui.eval(`
-  const hit = [...document.querySelectorAll('.unified-route-tabs button')].find(el => (el.textContent || '').includes(${JSON.stringify(label)}))
-  if (hit) hit.click()
-  return !!hit
-`)
-
 async function main() {
   const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()
   const target = targets.find(t => t.type === 'page' && t.url.includes('/renderer/index.html'))
@@ -94,31 +88,25 @@ async function main() {
     const locked = await ui.eval(`return !!document.querySelector('.lock-overlay')`)
     if (locked) { console.log('NOTE - 应用处于锁屏状态，先解锁再运行本脚本'); return }
 
-    // 进「数据分析」（工作台的数据页）；不在工作台时先点一个店铺卡进去
+    // 进独立「发票中心」页面；不在工作台时先点一个店铺卡进去
     await ui.eval(`
-      const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('数据分析'))
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('发票中心'))
       if (nav) nav.click()
       return true
     `)
     await sleep(1200)
-    let tabs = await ui.eval(`return !!document.querySelector('.unified-route-tabs')`)
-    if (!tabs) {
+    let invoiceReady = await ui.eval(`return !!document.querySelector('[data-test="invoice-license-bar"]')`)
+    if (!invoiceReady) {
       await ui.eval(`const c = document.querySelector('[data-test="store-card"]'); if (c) c.click(); return true`)
       await sleep(2500)
       await ui.eval(`
-        const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('数据分析'))
+        const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('发票中心'))
         if (nav) nav.click()
         return true
       `)
     }
-    await until(() => ui.eval(`return !!document.querySelector('.unified-route-tabs')`), 12000, 'route tabs')
-
-    // 0) 跨页签渲染：本轮改动动过页头与各模式守卫（v-if="mode !== 'invoices'"），三个页签都必须能渲染
-    for (const [label, testId] of [['经营分析', 'unified-analytics-page'], ['订单明细', 'unified-orders-page'], ['发票中心', 'unified-invoices-page']]) {
-      await clickTab(ui, label)
-      const ok = await until(async () => ui.eval(`return !!document.querySelector('[data-test="${testId}"]')`), 10000, testId).catch(() => false)
-      check(`页签「${label}」渲染正常（${testId}）`, !!ok)
-    }
+    await until(() => ui.eval(`return !!document.querySelector('[data-test="invoice-license-bar"]')`), 12000, 'invoice center')
+    check('独立侧栏「发票中心」页面渲染正常', true)
 
     // 1) 默认视图 = 按主体（分组层级：主体 → 下属店铺）
     const groupCount = await until(() => ui.eval(`return document.querySelectorAll('[data-test^="invoice-subject-group-"]').length`), 15000, 'subject groups').catch(() => 0)

@@ -1,5 +1,5 @@
 <template>
-  <section :class="['unified-page unified-data-page', { 'invoice-center-page': mode === 'invoices' }]" :data-test="`unified-${mode}-page`">
+  <section :class="['unified-page unified-data-page', { 'invoice-center-page': mode === 'invoices', 'tax-report-page': mode === 'tax' }]" :data-test="`unified-${mode}-page`">
     <header class="unified-page-head">
       <div><span class="dashboard-eyebrow">WORKSPACE / DATA</span><h1>{{ title }}</h1><p>{{ subtitle }}</p></div>
       <div class="unified-page-actions"><button v-if="mode !== 'invoices'" type="button" class="unified-button ghost" :disabled="loading" @click="load"><img class="button-icon" :src="dataSyncSheetIcon" alt="" />{{ loading ? '读取中…' : '刷新数据' }}</button><template v-if="mode === 'invoices'">
@@ -11,11 +11,10 @@
           <button type="button" class="unified-button primary" data-test="invoice-collect" :disabled="collecting || entityCollecting" @click="collectInvoices"><img class="button-icon" :src="invoiceIcon" alt="" />{{ collecting ? '创建任务中…' : '采集发票数据' }}</button>
         </template></div>
     </header>
-    <div class="unified-route-tabs" role="tablist" aria-label="数据页面"><button v-for="tab in tabs" :key="tab.key" type="button" :class="{ active: mode === tab.key }" @click="emit('change-mode', tab.key)">{{ tab.label }}</button></div>
     <div v-if="errorMessage" class="unified-alert error" role="alert">{{ errorMessage }} <button type="button" @click="load"><img class="button-icon" :src="dataRetryIcon" alt="" />重试</button></div>
     <div v-if="loading" class="unified-state"><span class="loader"></span>正在读取本机数据…</div>
     <template v-else>
-      <div v-if="mode !== 'orders' && mode !== 'invoices'" class="unified-stat-grid">
+      <div v-if="mode === 'analytics'" class="unified-stat-grid">
         <article v-for="card in totalCards" :key="card.label" class="unified-stat-card"><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></article>
       </div>
 
@@ -26,9 +25,8 @@
 
       <SalesMetricsMonitorCard v-if="mode === 'analytics'" @open-store="emit('open-store', $event)" />
 
-      <section v-else-if="mode === 'orders'" class="unified-card"><div class="unified-card-head"><div><h2>订单明细</h2><span>来自最近一次订单整表快照，不伪造实时数据</span></div><button type="button" class="unified-button primary" :disabled="collecting" @click="collectOrders"><img class="button-icon" :src="dataOrdersSheetIcon" alt="" />{{ collecting ? '创建任务中…' : '采集订单明细' }}</button></div><div v-if="orderStores.length" class="order-store-list"><article v-for="store in orderStores" :key="store.storeId" class="order-store-block"><div class="order-store-head"><div><strong>{{ store.storeName }}</strong><span>{{ store.platform }} · {{ store.supported ? '已登记页面档案' : '尚未实测' }}</span></div><span>{{ store.rows?.length || 0 }} 行</span></div><div v-if="store.error" class="unified-alert error">最近一次采集失败：{{ store.error.message || store.error.code }}</div><div v-if="store.rows?.length" class="unified-table-wrap"><table class="unified-table"><thead><tr><th v-for="column in store.columns || []" :key="column.key">{{ column.label }}</th></tr></thead><tbody><tr v-for="(row,index) in store.rows.slice(0, 30)" :key="index"><td v-for="column in store.columns || []" :key="column.key">{{ row.cells?.[column.key] || '—' }}</td></tr></tbody></table></div><div v-else class="unified-empty compact">{{ store.supported ? '暂无订单快照' : '该平台订单页面尚未实测，系统不会猜测选择器' }}</div></article></div><div v-else class="unified-empty">暂无订单数据。点击“采集订单明细”后，任务结果会回到这里。</div></section>
 
-      <template v-else>
+      <template v-else-if="mode === 'invoices'">
         <div class="inv-shell">
           <!-- ============ 左栏：开票主体分账 ============
                发票按营业执照开，不按平台账号开；同一个执照下常挂好几家店，
@@ -417,6 +415,68 @@
           </div>
         </section>
 
+
+
+        <!-- 平台覆盖与金额口径：锚点都来自真机实测并登记实测日期，改版时如实报错而不是显示错数据。 -->
+        <section class="inv-cover" data-test="invoice-coverage">
+          <div class="unified-card-head">
+            <div><h2>平台覆盖与金额口径</h2><span>所有锚点都来自真机实测并登记实测日期；平台改版时如实报错，而不是显示错数据。</span></div>
+          </div>
+          <div class="inv-cover-grid">
+            <div class="inv-cover-plats">
+              <div v-for="item in invoicePlatformCoverage" :key="item.platform" class="inv-cover-plat" :data-test="'invoice-coverage-' + item.platform">
+                <div class="inv-cover-plat-head">
+                  <b>{{ item.platform }}</b>
+                  <em :class="{ on: item.measured }">{{ item.measured ? '已实测' : '未实测' }}</em>
+                </div>
+                <div class="inv-cover-plat-body">{{ item.note }}</div>
+              </div>
+            </div>
+            <ul class="inv-cover-list">
+              <li><b>待开票 ≠ 全部记录。</b>各平台把「已提交 / 已审核通过」的流水放在同一个发票页，它们照常展示，但<b>不计入</b>待开票条数与可开金额。</li>
+              <li><b>金额口径按平台各自页面为准。</b>含税 / 不含税、阈值金额与账单金额各不相同，界面不做跨平台换算。</li>
+              <li><b>解析不出就不计入。</b>合计只累加整串就是金额的单元格，并单独标出未解析条数。</li>
+              <li><b>只读。</b>软件只打开平台的发票页把清单读回来；开发票、上传发票仍由你在平台页面上完成。</li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- 导出确认：把「导出范围 / 行数 / 金额」写在屏上再落盘。
+             导出是分主体做的——用户在屏上点了某家公司，拿到的不该是别家的单号与税号。 -->
+        <div v-if="exportConfirm.open" class="inv-modal-mask" data-test="invoice-export-confirm" @click.self="exportConfirm.open = false">
+          <div class="inv-modal" role="dialog" aria-modal="true" aria-label="导出待开票清单">
+            <div class="inv-modal-head">
+              <h3>导出待开票清单</h3>
+              <p>只导出「待开票」的行；无需操作的历史流水不会进这份表。文件只落在本机，不上传。</p>
+            </div>
+            <div class="inv-modal-body">
+              <div class="inv-modal-row"><span>导出范围</span><b data-test="invoice-export-scope">{{ exportConfirm.scopeLabel }}</b></div>
+              <div class="inv-modal-row"><span>待开票行数</span><b data-test="invoice-export-rows">{{ exportConfirm.pendingRows }} 条</b></div>
+              <div class="inv-modal-row"><span>可开金额</span><b class="inv-modal-amount">{{ exportConfirm.amountText }}</b></div>
+              <div v-if="exportConfirm.unparsed" class="inv-modal-row"><span>提醒</span><b class="inv-modal-warn">{{ exportConfirm.unparsed }} 条金额无法解析，CSV 里保留原始文本、不写成 0</b></div>
+              <div class="inv-modal-row"><span>列</span><b class="inv-modal-cols">{{ invoiceCsvColumns }}</b></div>
+            </div>
+            <div class="inv-modal-foot">
+              <button type="button" class="unified-button ghost" data-test="invoice-export-cancel" @click="exportConfirm.open = false">取消</button>
+              <button type="button" class="unified-button primary" data-test="invoice-export-do" :disabled="exporting" @click="confirmExportInvoices">{{ exporting ? '导出中…' : '导出 CSV' }}</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 主体名称候选：填过的 + 平台读回来的，补录时直接选，不用手打（此前 list 指向的 datalist 只存在于已废弃的旧弹窗里） -->
+        <datalist id="store-license-names">
+          <option v-for="name in licenseNameOptions" :key="name" :value="name" />
+        </datalist>
+          </div><!-- /inv-main -->
+        </div><!-- /inv-shell -->
+        <!-- 移动端（<768）常驻操作条：桌面隐藏，窄屏固定在滚动容器底部——采集/导出是最高频动作，
+             滚动中也够得着；按钮热区 ≥ 40px（视觉）+ 容器 padding 补足 44px 触控面。 -->
+        <div class="inv-mobile-actions">
+          <button type="button" class="unified-button primary" :disabled="collecting || entityCollecting" @click="collectInvoices">{{ collecting ? '创建任务中…' : '采集发票数据' }}</button>
+          <button type="button" class="unified-button" :disabled="!invoiceRows.length" :title="exportScopeTitle" @click="openExportConfirm">导出</button>
+        </div>
+      </template>
+      <template v-else-if="mode === 'tax'">
         <!-- ==================== 涉税信息报送 ====================
              平台按《互联网平台企业涉税信息报送规定》**按季度**向税务机关报送的经营数据。
              ⚠ 平台自己写了这份数据"不得作为税务申报…使用"——那句提示必须与数据**同屏**（见 tax-disclaimer），
@@ -615,65 +675,6 @@
           </div>
           </template>
         </section>
-
-        <!-- 平台覆盖与金额口径：锚点都来自真机实测并登记实测日期，改版时如实报错而不是显示错数据。 -->
-        <section class="inv-cover" data-test="invoice-coverage">
-          <div class="unified-card-head">
-            <div><h2>平台覆盖与金额口径</h2><span>所有锚点都来自真机实测并登记实测日期；平台改版时如实报错，而不是显示错数据。</span></div>
-          </div>
-          <div class="inv-cover-grid">
-            <div class="inv-cover-plats">
-              <div v-for="item in invoicePlatformCoverage" :key="item.platform" class="inv-cover-plat" :data-test="'invoice-coverage-' + item.platform">
-                <div class="inv-cover-plat-head">
-                  <b>{{ item.platform }}</b>
-                  <em :class="{ on: item.measured }">{{ item.measured ? '已实测' : '未实测' }}</em>
-                </div>
-                <div class="inv-cover-plat-body">{{ item.note }}</div>
-              </div>
-            </div>
-            <ul class="inv-cover-list">
-              <li><b>待开票 ≠ 全部记录。</b>各平台把「已提交 / 已审核通过」的流水放在同一个发票页，它们照常展示，但<b>不计入</b>待开票条数与可开金额。</li>
-              <li><b>金额口径按平台各自页面为准。</b>含税 / 不含税、阈值金额与账单金额各不相同，界面不做跨平台换算。</li>
-              <li><b>解析不出就不计入。</b>合计只累加整串就是金额的单元格，并单独标出未解析条数。</li>
-              <li><b>只读。</b>软件只打开平台的发票页把清单读回来；开发票、上传发票仍由你在平台页面上完成。</li>
-            </ul>
-          </div>
-        </section>
-
-        <!-- 导出确认：把「导出范围 / 行数 / 金额」写在屏上再落盘。
-             导出是分主体做的——用户在屏上点了某家公司，拿到的不该是别家的单号与税号。 -->
-        <div v-if="exportConfirm.open" class="inv-modal-mask" data-test="invoice-export-confirm" @click.self="exportConfirm.open = false">
-          <div class="inv-modal" role="dialog" aria-modal="true" aria-label="导出待开票清单">
-            <div class="inv-modal-head">
-              <h3>导出待开票清单</h3>
-              <p>只导出「待开票」的行；无需操作的历史流水不会进这份表。文件只落在本机，不上传。</p>
-            </div>
-            <div class="inv-modal-body">
-              <div class="inv-modal-row"><span>导出范围</span><b data-test="invoice-export-scope">{{ exportConfirm.scopeLabel }}</b></div>
-              <div class="inv-modal-row"><span>待开票行数</span><b data-test="invoice-export-rows">{{ exportConfirm.pendingRows }} 条</b></div>
-              <div class="inv-modal-row"><span>可开金额</span><b class="inv-modal-amount">{{ exportConfirm.amountText }}</b></div>
-              <div v-if="exportConfirm.unparsed" class="inv-modal-row"><span>提醒</span><b class="inv-modal-warn">{{ exportConfirm.unparsed }} 条金额无法解析，CSV 里保留原始文本、不写成 0</b></div>
-              <div class="inv-modal-row"><span>列</span><b class="inv-modal-cols">{{ invoiceCsvColumns }}</b></div>
-            </div>
-            <div class="inv-modal-foot">
-              <button type="button" class="unified-button ghost" data-test="invoice-export-cancel" @click="exportConfirm.open = false">取消</button>
-              <button type="button" class="unified-button primary" data-test="invoice-export-do" :disabled="exporting" @click="confirmExportInvoices">{{ exporting ? '导出中…' : '导出 CSV' }}</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 主体名称候选：填过的 + 平台读回来的，补录时直接选，不用手打（此前 list 指向的 datalist 只存在于已废弃的旧弹窗里） -->
-        <datalist id="store-license-names">
-          <option v-for="name in licenseNameOptions" :key="name" :value="name" />
-        </datalist>
-          </div><!-- /inv-main -->
-        </div><!-- /inv-shell -->
-        <!-- 移动端（<768）常驻操作条：桌面隐藏，窄屏固定在滚动容器底部——采集/导出是最高频动作，
-             滚动中也够得着；按钮热区 ≥ 40px（视觉）+ 容器 padding 补足 44px 触控面。 -->
-        <div class="inv-mobile-actions">
-          <button type="button" class="unified-button primary" :disabled="collecting || entityCollecting" @click="collectInvoices">{{ collecting ? '创建任务中…' : '采集发票数据' }}</button>
-          <button type="button" class="unified-button" :disabled="!invoiceRows.length" :title="exportScopeTitle" @click="openExportConfirm">导出</button>
-        </div>
       </template>
 
       <section v-if="mode === 'analytics'" class="unified-card manual-card"><div class="unified-card-head"><div><h2>手动录入指标</h2><span>仅用于平台反抓取导致无法自动读取的数字，来源会标注为手动</span></div></div><div class="manual-form"><select v-model="manual.storeId" aria-label="店铺"><option value="">选择店铺</option><option v-for="store in ws.stores" :key="store.id" :value="store.id">{{ store.name }}</option></select><select v-model="manual.metric" aria-label="指标"><option v-for="metric in bizMetrics" :key="metric.key" :value="metric.key">{{ metric.label }}</option></select><input v-model.number="manual.value" type="number" min="0" placeholder="数值" /><button type="button" class="unified-button ghost" :disabled="!manualReady" @click="saveManual"> <img class="button-icon" :src="dataManualEntrySheetIcon" alt="" />录入</button></div></section>
@@ -682,37 +683,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useWorkspaceStore } from '../../stores/workspace'
-import { EVENT_CHANNELS } from '@shared/contracts/ipc'
-import { BIZ_METRICS, businessProfileFor } from '@shared/constants/business'
-import type { BusinessProfile } from '@shared/constants/business'
-import { buildBusinessCollectSteps } from '@shared/business-steps'
-import { ordersProfileFor } from '@shared/constants/orders'
-import type { OrdersProfile } from '@shared/constants/orders'
-import { buildOrdersCollectSteps } from '@shared/orders-steps'
-import { invoiceProfileFor, INVOICE_TASK_PREFIX, isPendingSection } from '@shared/constants/invoice'
-import type { InvoiceProfile } from '@shared/constants/invoice'
-import { TAX_SUPPORTED_PLATFORMS, TAX_TASK_PREFIX, taxProfileFor } from '@shared/constants/tax'
-import type { TaxProfile } from '@shared/constants/tax'
-import { AUTO_COLLECTION_SETTING, parseAutoCollectionEnabled, pickLatestCollectTask } from '@shared/constants/collection'
-import { taxAmountText, taxIncomeFromCells, taxPeriodNetOf } from '@shared/tax-income'
-import { buildTaxCollectSteps } from '@shared/tax-steps'
-import {
-  UNKNOWN_TAX_SUBJECT_KEY, UNKNOWN_TAX_SUBJECT_LABEL,
-  groupTaxPeriodsBySubject, taxSubjectTotals
-} from '@shared/tax-subject'
-import { findPlatform } from '@shared/constants/platforms'
-import { buildInvoiceCollectSteps } from '@shared/invoice-steps'
-import { entityProfileFor, entityUnsupportedNote, ENTITY_SUPPORTED_PLATFORMS } from '@shared/constants/entity'
-import { buildEntityCollectSteps } from '@shared/entity-steps'
-import { NO_LICENSE_KEY, entityVerdictText, groupStoresByLicense, normalizeLicenseName } from '@shared/store-license'
-import { invoiceAmountText, parseInvoiceAmount } from '@shared/invoice-amount'
+import { isPendingSection } from '@shared/constants/invoice'
+import { taxAmountText } from '@shared/tax-income'
+import { UNKNOWN_TAX_SUBJECT_LABEL } from '@shared/tax-subject'
+import { NO_LICENSE_KEY } from '@shared/store-license'
 import SalesMetricsMonitorCard from './SalesMetricsMonitorCard.vue'
 import invoiceIcon from '../../assets/generated/ui-icons/invoice-gen.png'
 import dataRetryIcon from '../../assets/generated/ui-icons/data-retry-gen.png'
 import dataAnalyticsSheetIcon from '../../assets/generated/ui-icons/data-analytics-sheet-gen.png'
-import dataOrdersSheetIcon from '../../assets/generated/ui-icons/data-orders-sheet-gen.png'
 import dataSyncSheetIcon from '../../assets/generated/ui-icons/data-sync-sheet-gen.png'
 import dataExportSheetIcon from '../../assets/generated/ui-icons/data-export-sheet-gen.png'
 import dataInvoiceScheduleSheetIcon from '../../assets/generated/ui-icons/data-invoice-schedule-sheet-gen.png'
@@ -721,1304 +701,140 @@ import dataLicenseEditSheetIcon from '../../assets/generated/ui-icons/data-licen
 import dataLicenseSaveSheetIcon from '../../assets/generated/ui-icons/data-license-save-sheet-gen.png'
 import dataLicenseCancelSheetIcon from '../../assets/generated/ui-icons/data-license-cancel-sheet-gen.png'
 import dataManualEntrySheetIcon from '../../assets/generated/ui-icons/data-manual-entry-sheet-gen.png'
+import { useInvoiceDetail } from './use-invoice-detail'
+import { useTaxLicense } from './use-tax-license'
+import { useDataCollection } from './use-data-collection'
 
-type DataMode = 'analytics' | 'orders' | 'invoices'
+type DataMode = 'analytics' | 'invoices' | 'tax'
 const props = defineProps<{ mode: DataMode }>()
-const emit = defineEmits<{ 'change-mode': [mode: DataMode]; 'open-store': [storeId: string] }>()
+const emit = defineEmits<{ 'open-store': [storeId: string] }>()
 const ws = useWorkspaceStore()
-const loading = ref(false)
-const collecting = ref(false)
-const errorMessage = ref('')
-const dataCenter = ref<any | null>(null)
-const orderData = ref<any | null>(null)
-const invoiceData = ref<any | null>(null)
-/** 涉税信息报送（平台按季度报送给税务机关的经营数据；随数据一起带回平台自己的用途限制） */
-const taxData = ref<any | null>(null)
-const taxCollecting = ref(false)
-/** 「获取主体营业执照」：采集进行中 + 逐店结果（填了哪些、哪不一致、哪些平台取不了，全部照实展示） */
-const entityCollecting = ref(false)
-/**
- * 采集进度（跑的时候就要显示）。
- *
- * 为什么需要：一次采集要开店铺浏览器 + 建任务 + 跑任务 + 轮询，冷启动实测要 1 分多钟，
- * 而结果面板与 toast 都是**全部跑完才出现**——中途只有按钮文案变成「获取中…」，
- * 看起来就是"点了没反应"。这里把"共几家 / 已完成几家 / 还在等哪几家"实时显示出来。
- */
-const entityProgress = ref<{ total: number; done: number; waiting: string[] } | null>(null)
-const entityReport = ref<any[]>([])
-// 页面切换时让正在等待任务结果的采集流程尽快收尾，避免卸载后的旧流程继续轮询、
-// 再把结果写回已经不存在的组件状态。
-let entityCollectGeneration = 0
-const manual = reactive({ storeId: '', metric: 'biz.orders', value: null as number | null })
-const tabs: Array<{ key: DataMode; label: string }> = [{ key: 'analytics', label: '经营分析' }, { key: 'orders', label: '订单明细' }, { key: 'invoices', label: '发票中心' }]
-const title = computed(() => props.mode === 'orders' ? '订单管理' : props.mode === 'invoices' ? '发票中心' : '数据分析')
-const subtitle = computed(() => props.mode === 'orders' ? '按店铺查看已采集的订单整表快照。' : props.mode === 'invoices' ? '开票与申报资料统一管理。' : '销售额、订单和经营指标均来自本机快照。')
-const bizMetrics = BIZ_METRICS
-const totalCards = computed(() => { const t = dataCenter.value?.totals || {}; return [{ label: '店铺', value: t.stores ?? '—', note: `${t.online ?? 0} 家在线` }, { label: '平台', value: t.platforms ?? '—', note: '已配置的平台' }, { label: '指标快照', value: t.snapshots ?? '—', note: '本机采集记录' }, { label: '任务', value: t.tasks ?? '—', note: '任务定义总数' }] })
-const snapshotRows = computed<any[]>(() => dataCenter.value?.snapshots || [])
-const orderStores = computed<any[]>(() => orderData.value?.stores || [])
-const invoiceRows = computed<any[]>(() => invoiceData.value?.rows || [])
-/**
- * 每行补上「无需操作」条数。
- *
- * 各平台把「处理中 / 处理记录」这类**已提交、商家无需再操作**的流水放在同一个发票页，
- * 它们照常展示，但绝不能计入"待开票条数/可开金额"——计入就是虚高（主进程给的 `count`
- * 已经是按 pending 过滤过的；这里再把历史条数单独算出来，好让界面把两个数都说清楚）。
- */
-const invoiceAllRows = computed<any[]>(() => invoiceRows.value.map((row: any) => ({
-  ...row,
-  historyCount: (row.sections || []).reduce((n: number, sec: any) => n + (isPendingSection(sec) ? 0 : (sec.items?.length || 0)), 0)
-})))
-
-/** 选中的开票主体（不存在的 key 自动退回"全部"，避免卡在一个空列表里退不出来） */
-const invoiceLicense = ref('')
-type InvoiceStatusFilter = 'all' | 'pending' | 'processed' | 'error'
-const invoiceStatusFilter = ref<InvoiceStatusFilter>('all')
-const invoicePlatformFilter = ref('')
-const invoiceQuery = ref('')
-const invoicePeriodFilter = ref('all')
-const licenseEditingId = ref('')
-const licenseDraft = reactive({ name: '', no: '' })
-const licenseSaving = ref(false)
-const licenseEditError = ref('')
-/**
- * 视图：按主体分组（**默认**，申报与交代账看它；组下店铺行可点击进入店铺详情）
- * / 按店铺列表（排查视图；每个店铺的「方向明细」点开才渲染）。
- *
- * 2026-10-15 精简：默认从「按店铺」改为「按主体」——打开先看"票压在哪个主体"，店铺列表是二级视角。
- */
-const invoiceView = ref<'stores' | 'summary'>('summary')
-/**
- * 「按主体」视图里**被收起**的主体组（默认全部展开）。
- *
- * 为什么默认展开：这个视图的第一眼就该回答"谁手下有哪些店"——如果默认收起来，
- * 用户看到的还是一行行主体，跟旧平表没区别，"层级关系"要再点一次才出现。
- * 家数多的组也不怕：最多一家店一行，屏上就那几行。
- */
-const collapsedSubjects = ref<Set<string>>(new Set())
-function isSubjectCollapsed(key: string): boolean { return collapsedSubjects.value.has(key) }
-function toggleSubjectGroup(key: string): void {
-  const next = new Set(collapsedSubjects.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  collapsedSubjects.value = next
-}
-/** 「按店铺」视图里展开了「方向明细」的店铺（默认收起——明细点开才渲染，不占首屏） */
-const expandedStoreDirs = ref<Set<string>>(new Set())
-function isStoreDirsOpen(storeId: string): boolean { return expandedStoreDirs.value.has(storeId) }
-function toggleStoreDirs(storeId: string): void {
-  const next = new Set(expandedStoreDirs.value)
-  if (next.has(storeId)) next.delete(storeId)
-  else next.add(storeId)
-  expandedStoreDirs.value = next
-}
-/** 行内排序：默认「按平台顺序」——与主进程给的顺序一致，不擅自重排 */
-const invoiceSort = ref<'none' | 'amountDesc' | 'amountAsc'>('none')
-/**
- * 工具栏「筛选」面板开合（2026-10-15 精简）：常态只显示搜索与「筛选 · N」，
- * 点开才展开 状态 / 平台 / 采集时间 / 排序 四个下拉；生效中的筛选项数量标在按钮上。
- */
-const filtersOpen = ref(false)
-const activeFilterCount = computed(() => {
-  let count = 0
-  if (invoiceStatusFilter.value !== 'all') count++
-  if (invoicePlatformFilter.value) count++
-  if (invoicePeriodFilter.value !== 'all') count++
-  if (invoiceSort.value !== 'none') count++
-  return count
-})
-/** 导出确认浮层：先把"导哪一户、几行、多少钱"写在屏上，再去调主进程（见 openExportConfirm） */
-const exporting = ref(false)
-const exportConfirm = reactive({ open: false, scopeLabel: '全部主体', pendingRows: 0, amountText: '—', unparsed: 0 })
-
-const licenseGroups = computed(() => groupStoresByLicense(ws.stores.map(store => ({
-  id: store.id, licenseName: store.licenseName ?? null, licenseNo: store.licenseNo ?? null
-}))))
-
-/**
- * 每个开票主体的待开票条数与金额。
- *
- * 金额用**未按主体筛选**的那一份行来算：胶囊之间要能横向比较，若在筛选后的结果上算，
- * 点开一个主体，别的主体数字全变 0。解析不出的金额**不计入**合计，但条数照数、并标出未解析条数。
- */
-const licenseSummary = computed(() => {
-  const items = licenseGroups.value.groups.map(group => ({
-    ...group, pendingCount: 0, amount: 0, unparsed: 0, stores: 0, amountText: ''
-  }))
-  const byKey = new Map(items.map(item => [item.key, item]))
-  for (const row of invoiceAllRows.value) {
-    const hit = byKey.get(licenseGroups.value.keyByStore.get(row.storeId) || '')
-    if (!hit) continue
-    if ((row.sections || []).some((sec: any) => isPendingSection(sec) && (sec.items?.length || 0) > 0)) hit.stores++
-    for (const sec of row.sections || []) {
-      if (!isPendingSection(sec)) continue
-      for (const item of sec.items || []) {
-        hit.pendingCount++
-        const amount = parseInvoiceAmount(item.cells?.amount)
-        if (amount == null) hit.unparsed++
-        else hit.amount += amount
-      }
-    }
-  }
-  // P1-2：hasAny 的语义是"**解析出了**金额"（进过 amount 累加），不是"合计 > 0"。
-  // 用 `amount > 0` 会把两种真实情况误显示成「—」：退款/冲正把净额抵成负数、或整批都是 0.00。
-  const parsedAny = items.some(item => item.pendingCount > item.unparsed)
-  const withText = items.map(item => ({ ...item, amountText: invoiceAmountText(item.amount, item.pendingCount > item.unparsed) }))
-  return {
-    items: withText,
-    storeCount: ws.stores.length,
-    pendingCount: withText.reduce((sum, item) => sum + item.pendingCount, 0),
-    amountText: invoiceAmountText(withText.reduce((sum, item) => sum + item.amount, 0), parsedAny)
-  }
-})
-
-const activeLicense = computed(() => (
-  invoiceLicense.value && licenseSummary.value.items.some(item => item.key === invoiceLicense.value)
-    ? invoiceLicense.value
-    : ''
-))
-
-/** 页面上列出的店铺先按营业执照筛一道（用统一归属表，见 shared/store-license.ts）。 */
-const subjectInvoiceRows = computed<any[]>(() => (
-  activeLicense.value
-    ? invoiceAllRows.value.filter(row => licenseGroups.value.keyByStore.get(row.storeId) === activeLicense.value)
-    : invoiceAllRows.value
-))
-
-function rowHasPending(row: any): boolean {
-  return (row.sections || []).some((section: any) => isPendingSection(section) && (section.items?.length || 0) > 0)
-}
-function rowHasProcessed(row: any): boolean {
-  return Number(row.historyCount || 0) > 0
-}
-function rowHasIssue(row: any): boolean {
-  return !!(row.loginRequired || row.lastFail || row.supported === false || (row.sections || []).some((section: any) => section.emptyNote))
-}
-function invoiceStatusMatches(row: any): boolean {
-  if (invoiceStatusFilter.value === 'all') return true
-  if (invoiceStatusFilter.value === 'pending') return rowHasPending(row)
-  if (invoiceStatusFilter.value === 'processed') return rowHasProcessed(row)
-  return rowHasIssue(row)
-}
-function invoiceQueryMatches(row: any): boolean {
-  const query = invoiceQuery.value.trim().toLowerCase()
-  if (!query) return true
-  return JSON.stringify(row).toLowerCase().includes(query)
-}
-function invoicePeriodMatches(row: any): boolean {
-  if (invoicePeriodFilter.value === 'all') return true
-  const days = Number(invoicePeriodFilter.value)
-  const capturedAt = Number(row.capturedAt || 0)
-  return capturedAt > 0 && capturedAt >= Date.now() - days * 86400000
-}
-
-/** 页面列表同时支持主体、平台、状态、时间和文本筛选；顶部指标仍保持主体口径，避免搜索一行就改变总额。 */
-const visibleInvoiceRows = computed<any[]>(() => {
-  const rows = subjectInvoiceRows.value.filter(row => {
-    const platformOk = !invoicePlatformFilter.value || row.platform === invoicePlatformFilter.value
-    return platformOk && invoiceStatusMatches(row) && invoiceQueryMatches(row) && invoicePeriodMatches(row)
-  })
-  if (invoiceSort.value === 'none') return rows
-  return [...rows].sort((a, b) => {
-    const keyA = invoiceRowSortKey(a)
-    const keyB = invoiceRowSortKey(b)
-    if (keyA == null && keyB == null) return 0
-    if (keyA == null) return 1
-    if (keyB == null) return -1
-    return invoiceSort.value === 'amountDesc' ? keyB - keyA : keyA - keyB
-  })
-})
-
-/** 顶部合计：跟着当前筛选走（"合计"是这一屏的数字；胶囊上的横向比较才是不跟筛选走的那一份） */
-const invoiceTotal = computed(() => {
-  let count = 0
-  let amount = 0
-  let unparsed = 0
-  let historical = 0
-  let stores = 0
-  for (const row of subjectInvoiceRows.value) {
-    let storePending = 0
-    for (const sec of row.sections || []) {
-      if (!isPendingSection(sec)) { historical += sec.items?.length || 0; continue }
-      for (const item of sec.items || []) {
-        count++
-        storePending++
-        const value = parseInvoiceAmount(item.cells?.amount)
-        if (value == null) unparsed++
-        else amount += value
-      }
-    }
-    if (storePending > 0) stores++
-  }
-  // P1-2：hasAny = 至少解析出过一条金额（count - unparsed > 0），而不是"合计 > 0"——
-  // 否则"这批票全是 0.00"或"退款把净额抵成负数"都会显示成「—」，把真实数字藏起来。
-  return { count, amountText: invoiceAmountText(amount, count - unparsed > 0), stores, historical, unparsed }
-})
-
-/**
- * 不受主体筛选影响的全局口径（只用于 KPI 第 1 张卡的交叉印证：
- * 「当前主体 N 条 · 全部主体共 M 条」——否则点了某个公司就再也看不到总数）。
- */
-const invoiceGrandTotal = computed(() => {
-  let count = 0
-  let amount = 0
-  let unparsed = 0
-  for (const row of invoiceAllRows.value) {
-    for (const section of row.sections || []) {
-      if (!isPendingSection(section)) continue
-      for (const item of section.items || []) {
-        count++
-        const value = parseInvoiceAmount(item?.cells?.amount)
-        if (value == null) unparsed++
-        else amount += value
-      }
-    }
-  }
-  return { count, amountText: invoiceAmountText(amount, count - unparsed > 0) }
-})
-
-/**
- * 采集覆盖情况：这批数字是什么时候的、覆盖了几家、哪几家根本没读到。
- *
- * 为什么单列 `notCollected` 且排除登录态失效：登录失效已经单独一个 chip，
- * 两个数重叠会让「1 家登录态失效」看起来像「1 家登录态失效 + 1 家采不到」= 2 家。
- */
-const invoiceCoverage = computed(() => {
-  const rows = invoiceAllRows.value
-  const captured = rows.filter(row => Number(row.capturedAt || 0) > 0)
-  return {
-    total: rows.length,
-    ok: captured.length,
-    loginRequired: rows.filter(row => !!row.loginRequired).length,
-    notCollected: rows.filter(row => !row.loginRequired && (!!row.lastFail || row.supported === false)).length,
-    lastAt: captured.reduce((max, row) => Math.max(max, Number(row.capturedAt) || 0), 0)
-  }
-})
-
-/** 还没填营业执照的店铺（状态条上给一条"去补录"的路；不填就申报时按主体分不开） */
-const unlicensedPending = computed(() => {
-  const item = licenseSummary.value.items.find(entry => entry.key === NO_LICENSE_KEY)
-  return { stores: item?.storeCount || 0, pendingCount: item?.pendingCount || 0 }
-})
-
-/** 主体胶囊上的占比条：该主体在「待开票条数」里的份额（申报时一眼看出票压在哪个公司名下） */
-function licenseShare(count: number): string {
-  const total = licenseSummary.value.pendingCount || 0
-  if (!total || !count) return '0%'
-  return `${Math.max(2, Math.round(count / total * 100))}%`
-}
-
-/**
- * 承诺/到期时间 → 逾期或临期。
- *
- * 各平台写法不同（`2026-09-04`、`2026年09月04日`、`逾期 40 天`），**能算就算，算不出就不标**——
- * 宁可少标一个临期，也不猜一个日期出来（猜错会让商家去催一个根本没到期的单子）。
- */
-function invoiceDeadlineState(value: unknown): { kind: 'late' | 'soon'; days: number } | null {
-  const raw = String(value ?? '').trim()
-  if (!raw || raw === '—' || raw === '-' || raw === '--') return null
-  /**
-   * 「预计」类是**预测**日期，没有承诺含义 → 一律不判逾期。
-   *
-   * 2026-10-15 审查 BUG：实测快手「阈值生效时间」写成 `2026-06-10(预计)`，曾被映射到 deadline，
-   * 于是"过去的日期 = 已逾期"把一批正常账单算成假的已逾期（实测 5 条）。
-   * 档案侧的错映射已修（不再映射 deadline），这里再兜一道：任何带"预计"的值都不参与逾期判定。
-   */
-  if (/预计/.test(raw)) return null
-  const matched = /(\d{4})\s*[-/年]\s*(\d{1,2})\s*[-/月]\s*(\d{1,2})/.exec(raw)
-  if (matched) {
-    const at = new Date(Number(matched[1]), Number(matched[2]) - 1, Number(matched[3])).getTime()
-    if (Number.isFinite(at)) {
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-      const days = Math.round((at - today.getTime()) / 86400000)
-      if (days < 0) return { kind: 'late', days: -days }
-      if (days <= 3) return { kind: 'soon', days }
-      return null
-    }
-  }
-  // 文字形态的逾期：实测拼多多/抖店混用两种写法——「已逾期 236 天」「已超时 21天36分钟07秒」
-  // （只认「逾期」会把抖店那条真超时的漏掉，KPI 反而少报）。
-  const late = /(?:逾期|已超时|超时)\s*(\d+)\s*天/.exec(raw)
-  return late ? { kind: 'late', days: Number(late[1]) } : null
-}
-
-/** 时间风险（只算**待办**方向：无需操作的历史流水没有承诺期，不该报成逾期） */
-const invoiceRisk = computed(() => {
-  let late = 0
-  let soon = 0
-  for (const row of subjectInvoiceRows.value) {
-    for (const section of row.sections || []) {
-      if (!isPendingSection(section)) continue
-      for (const item of section.items || []) {
-        const state = invoiceDeadlineState(item?.cells?.deadline)
-        if (!state) continue
-        if (state.kind === 'late') late++
-        else soon++
-      }
-    }
-  }
-  return { late, soon }
-})
-
-/** 当前口径的名字（工具条上写死"口径：…"，避免用户对着数字猜这是谁家的） */
-const invoiceScopeLabel = computed(() => {
-  if (!activeLicense.value) return '全部主体'
-  if (activeLicense.value === NO_LICENSE_KEY) return '未填写营业执照'
-  const item = licenseSummary.value.items.find(entry => entry.key === activeLicense.value)
-  return item?.label || item?.no || '当前主体'
-})
-
-/** 平台品牌色（用于店铺行前的圆点；取不到就退回中性灰，不猜颜色） */
-function platformColor(name: unknown): string {
-  return findPlatform(String(name || ''))?.color || '#98a2b3'
-}
-
-/** 工具条「平台」下拉的候选：只列当前数据里真实出现过的平台 */
-const invoicePlatformOptions = computed<string[]>(() => {
-  const names = new Set<string>()
-  for (const row of invoiceRows.value) {
-    const name = String(row.platform || '').trim()
-    if (name) names.add(name)
-  }
-  return [...names]
-})
-
-/** 单个方向的金额与"解析出过金额没有"（无需操作的方向金额要置灰，因为它不进合计） */
-function sectionAmount(section: any): { text: string; parsed: boolean } {
-  let total = 0
-  let parsed = 0
-  for (const item of section?.items || []) {
-    const value = parseInvoiceAmount(item?.cells?.amount)
-    if (value == null) continue
-    total += value
-    parsed++
-  }
-  return { text: invoiceAmountText(total, parsed > 0), parsed: parsed > 0 }
-}
-
-/**
- * 「按主体」分组的行模型：一个主体一组，组下挂该主体的**全部店铺**（店铺行可点击进入店铺详情）。
- *
- * 三条纪律：
- *   · 归属用 licenseGroups.keyByStore 这**一张**归属表（见 shared/store-license.ts 文件头——
- *     不能各店各算一遍 licenseKeyOf，否则"胶囊写 2 家、组里只有 1 家"）；同一执照下的多家店
- *     自动并到一块，没填执照的单独一组固定排最后（排序规则在 shared 的 groupStoresByLicense 里）。
- *   · **不许静默丢行**：行对应的店铺若暂时不在 ws.stores（刷新时序），兜底归入「未填写」组里显示，
- *     而不是像旧实现那样 `|| ''` + continue 无声吞掉（那会让"店里有票、屏上没店"变成无痕迹的假象）。
- *   · 数字口径与 KPI / 胶囊 / 导出完全一致（待开票条数与金额来自 licenseSummary）。
- *     「金额占比」的分母必须是**金额**，不是条数（2026-10-15 审查 BUG，实测按条数会把结论看反）；
- *     总额 ≤ 0（整批退款冲正、或全是 0 元）时不给比例：分母没有意义，条只能画最小宽度。
- *
- * 口径跟随左侧选中的主体（选了 A 就只汇总 A）——与 KPI 一致，避免两处数字对不上。
- */
-const invoiceSubjectGroups = computed(() => {
-  const groups = licenseSummary.value.items
-  const totalAmount = groups.reduce((sum, group) => sum + group.amount, 0)
-  const shareOf = (amount: number): { width: string; pct: number | null } => {
-    if (!Number.isFinite(totalAmount) || totalAmount <= 0) return { width: '2%', pct: null }
-    const pct = amount / totalAmount * 100
-    return { width: `${Math.max(2, Math.min(100, Math.round(pct)))}%`, pct }
-  }
-  // 行 → 组：每行必须落到一个组里（兜底 NO_LICENSE_KEY，见上方说明），组内保持载荷顺序（不擅自重排）
-  const rowsByKey = new Map<string, any[]>()
-  for (const row of invoiceAllRows.value) {
-    const key = licenseGroups.value.keyByStore.get(row.storeId) || NO_LICENSE_KEY
-    const list = rowsByKey.get(key) || []
-    list.push(row)
-    rowsByKey.set(key, list)
-  }
-  return groups
-    .filter(group => !activeLicense.value || group.key === activeLicense.value)
-    .map(group => {
-      const share = shareOf(group.amount)
-      const label = group.label || '未填写营业执照'
-      const groupRows = rowsByKey.get(group.key) || []
-      const stores = groupRows.map((row: any) => ({
-        storeId: String(row.storeId),
-        storeName: String(row.storeName || row.storeId),
-        platform: String(row.platform || ''),
-        count: Number(row.count || 0),
-        amountText: invoiceRowAmountText(row),
-        capturedAt: Number(row.capturedAt) || null,
-        loginRequired: !!row.loginRequired,
-        lastFailed: !!row.lastFail,
-        failTitle: row.lastFail
-          ? `最近一次采集失败${row.lastFail.at ? `（${formatTime(Number(row.lastFail.at))}）` : ''}：${row.lastFail.message || row.lastFail.code || '未知原因'}`
-          : '',
-        supported: row.supported !== false,
-        unsupportedReason: String(row.unsupportedReason || ''),
-        // 「本次没读到」如实上屏（与按店铺视图同一条规矩：不能把上一次的数据静默当成本次结果）
-        emptyNote: (row.sections || [])
-          .filter((sec: any) => !!sec.emptyNote)
-          .map((sec: any) => `「${sec.name}」${sec.emptyNote}`)
-          .join('；'),
-        needsLicense: !row.licenseName && !row.licenseNo
-      }))
-      return {
-        key: group.key,
-        label,
-        no: group.no || '',
-        // 家数以**列出来的店铺行**为准：屏上"N 家"与下面实际有几行必须对得上
-        storeCount: stores.length,
-        pendingCount: group.pendingCount,
-        amountText: group.amountText,
-        unparsed: group.unparsed,
-        historyCount: groupRows.reduce((sum: number, row: any) => sum + Number(row.historyCount || 0), 0),
-        share: share.width,
-        shareText: share.pct == null ? '占比 —' : `占比 ${share.pct >= 10 ? Math.round(share.pct) : share.pct.toFixed(1)}%`,
-        // 条上没有数字，把确切比例挂到 title 上——否则用户只能看个大概长短
-        shareTitle: share.pct == null
-          ? `${label}：本口径下可开金额合计不大于 0，算不出占比`
-          : `${label}：可开金额 ${group.amountText}，占本口径 ${share.pct.toFixed(1)}%（按金额，不是按条数）`,
-        stores
-      }
-    })
-})
-
-/** 平台覆盖：哪个平台登记了真机实测档案、有几个开票方向（没档案的如实说明，不给假锚点） */
-const invoicePlatformCoverage = computed(() => {
-  const names = new Set<string>()
-  for (const store of ws.stores) names.add(String(store.platform || ''))
-  for (const row of invoiceRows.value) names.add(String(row.platform || ''))
-  return [...names].filter(Boolean).map(platform => {
-    const profile = invoiceProfileFor(platform)
-    return {
-      platform,
-      measured: !!profile,
-      note: profile
-        ? `${profile.sections.length} 个开票方向 · 实测日期 ${profile.measuredAt}`
-        : '尚未实测到可读取的发票页——不登记假锚点，界面如实说明而不是拿猜的选择器去试'
-    }
-  })
-})
-
-/** 导出 CSV 的列（照着主进程给的统一列拼，列名不在这里硬编码） */
-const invoiceCsvColumns = computed(() => {
-  const labels = ((invoiceData.value?.columns || []) as Array<{ label?: string }>).map(col => String(col.label || '')).filter(Boolean)
-  return [...labels, '店铺', '营业执照', '统一社会信用代码', '是否待办'].join(' · ')
-})
-
-/** 行内排序：按"该店待开票金额"；一条金额都解析不出的店排在最后，而不是当 0 排在最前 */
-function invoiceRowSortKey(row: any): number | null {
-  const { total, parsed } = invoiceRowAmount(row)
-  return parsed ? total : null
-}
-
-/* ==================== 涉税信息报送（平台按季度报送给税务机关的经营数据） ==================== */
-
-/**
- * 平台自己写的用途限制。**必须与数据同屏显示**。
- * 快手该页原文：数据"不得作为税务申报、财务审计、监管备案等任何用途使用"。
- * 把这份数据摆到发票中心（用户拿它做申报的地方）却不带这句话，等于应用在替平台背书——
- * 而平台恰恰说了不能用。所以它随接口一起回来，界面如实展示。
- */
-const taxDisclaimer = computed(() => String(taxData.value?.disclaimer || ''))
-/** 报送依据（同页原文），用来交代这份数据到底是什么 */
-const taxBasis = computed(() => String(taxData.value?.basis || ''))
-const taxRows = computed<any[]>(() => taxData.value?.rows || [])
-/** 已实测可采集涉税报送的平台（说明文案里如实列出，未实测的照实说不支持） */
-const taxSupportedPlatforms = TAX_SUPPORTED_PLATFORMS
-/**
- * 涉税数据的看法：**按主体** / 按店铺。
- *
- * 默认按主体：平台按季度报送的是"你这个纳税人"的收入，同一家公司在几家店的数据
- * 在税务机关眼里是**同一个主体的一份收入**；按店铺列，用户得自己拿计算器加。
- */
-const taxView = ref<'subject' | 'stores'>('subject')
-/** 展开查看某主体的逐期明细（空 = 都收起） */
-const taxExpandedSubject = ref('')
-
-/**
- * 按主体归组的报送数据（归组规则与金额口径在 shared/tax-subject.ts，有 19 条单测）。
- * 入参里的 licenseName/licenseNo 来自主进程，用来核对"平台报的主体"与"你填的执照"。
- */
-const taxSubjectGroups = computed(() => groupTaxPeriodsBySubject(taxRows.value as any))
-const taxSubjectTotal = computed(() => taxSubjectTotals(taxSubjectGroups.value))
-
-/** 主体显示名（读不到主体信息时给一个明确的桶名，而不是空着） */
-function taxSubjectLabel(group: any): string {
-  return group?.label || (group?.key === UNKNOWN_TAX_SUBJECT_KEY ? UNKNOWN_TAX_SUBJECT_LABEL : '（未读到主体名称）')
-}
-
-/**
- * 平台报送主体 vs 店铺营业执照。
- *
- * 为什么单独做这一句：申报是按主体报的，而"平台报的是哪家公司"与"你执照里填的是哪家公司"
- * 不一致时，报出去就是错的主体——这件事必须在申报前被看见，而不是等税务比对出异常。
- */
-function taxLicenseVerdictText(group: any): { text: string; tone: 'ok' | 'warn' | 'err' } {
-  if (!group) return { text: '', tone: 'warn' }
-  // 主体是**从店铺营业执照推来的**（平台页面没给主体信息，实测抖店就是这种）→
-  // 必须说清来源。写成"与执照一致"是循环论证：那个主体本来就是拿执照填的。
-  if (group.subjectSource === 'license') return { text: '主体取自店铺营业执照（平台页面未给主体）', tone: 'warn' }
-  // 走到这里只有一种可能：页面没给主体、店里也没填营业执照（填了就会标 license）。
-  // 所以直接给可执行的下一步，而不是一句"没有可核对的主体信息"。
-  if (group.subjectSource === 'unknown') return { text: '平台页面未给主体，且店铺未填营业执照 —— 补填后即可归入主体', tone: 'warn' }
-  if (group.licenseVerdict === 'mismatch') {
-    return { text: `与执照不一致：${group.mismatchedStores.join('、')}`, tone: 'err' }
-  }
-  if (group.licenseVerdict === 'store-empty') {
-    return { text: `还没填营业执照：${group.unlicensedStores.join('、')}`, tone: 'warn' }
-  }
-  if (group.licenseVerdict === 'match') return { text: '与已填执照一致', tone: 'ok' }
-  return { text: '没有可核对的主体信息', tone: 'warn' }
-}
-
-function taxCellOf(row: any, key: string): string {
-  return String(row?.cells?.[key] ?? '')
-}
-/** 货物口径的三段：快手是"一格三段式文本"、抖店是"三列分开"——统一走 taxIncomeFromCells 适配 */
-function taxGoods(row: any) { return taxIncomeFromCells(row?.cells, 'goods') }
-/** 服务口径的三段（同上） */
-function taxService(row: any) { return taxIncomeFromCells(row?.cells, 'service') }
-/**
- * 该报送期的申报口径净额：**平台给了「收入净额合计」就用它的**（实测抖店有这一列），
- * 没给才用 货物净额 + 服务净额（实测快手）。任一段缺失且平台也没给 → null（宁可显示「—」）
- */
-function taxRowNet(row: any): number | null { return taxPeriodNetOf(row?.cells, taxGoods(row), taxService(row)) }
-/**
- * 平台给的三段是否自洽（`金额 − 退款 = 净额`）。false = 平台自己的数对不上——
- * 申报前正是要被看见的那种事，所以单独标出来而不是替它圆过去。
- */
-function taxRowReconciles(row: any): boolean | null {
-  const goods = taxGoods(row); const service = taxService(row)
-  if (goods.reconciles === false || service.reconciles === false) return false
-  if (goods.reconciles === null && service.reconciles === null) return null
-  return true
-}
-/** 某店的报送期汇总：期数 + 能算出来的净额合计（解析不出的期**不计入**并单独计数） */
-function taxStoreSummary(storeRow: any) {
-  let periods = 0; let net = 0; let netParsed = 0; let unparsed = 0
-  for (const section of storeRow?.sections || []) {
-    for (const item of section.items || []) {
-      periods++
-      const value = taxRowNet(item)
-      if (value == null) unparsed++
-      else { net += value; netParsed++ }
-    }
-  }
-  return { periods, netParsed, unparsed, netText: taxAmountText(netParsed ? Math.round(net * 100) / 100 : null) }
-}
-/** 该店**有数据**的报送方向（没数据的整段不渲染，避免一大片空表） */
-function taxSectionsWithItems(storeRow: any): any[] {
-  return (storeRow?.sections || []).filter((section: any) => (section.items?.length || 0) > 0)
-}
-/**
- * 该店**本次没读到**的报送方向（采集侧 expected=false 的空标记，读取侧带出来的 emptyNote）。
- *
- * 为什么必须有它（2026-10-15 审查 H2）：发票分区对"本次没读到但有旧数据"会标红提示
- * （inv-sec-empty），涉税分区此前漏了——"本次没读到"时界面把**上一次的数据连旧时间一起**
- * 当当前结果显示，用户以为读到了。这里逐方向如实列出。
- */
-function taxEmptyNotes(storeRow: any): Array<{ metricKey: string; name: string; emptyNote: string; emptyAt: number | null }> {
-  return (storeRow?.sections || [])
-    .filter((section: any) => !!section.emptyNote)
-    .map((section: any) => ({
-      metricKey: String(section.metricKey || ''),
-      name: String(section.name || '涉税信息报送'),
-      emptyNote: String(section.emptyNote),
-      emptyAt: section.emptyAt || null
-    }))
-}
-
-/**
- * 打开行内补录时，**从 `ws.stores` 取最新值**，不用一次性 IPC 载荷里的旧值。
- *
- * 为什么：这一行如果刚从行内保存过（或刚被「获取主体营业执照」写过），载荷里的 row 还是旧的。
- * 按旧 row 回填会把编辑框填成旧的空值——用户看着"没填上"再点一次保存，就把刚落库的主体清空了
- * （空串在 schema 里合法）。旧实现刻意避开过这一点（见已废弃弹窗的注释）。
- */
-function openLicenseEditor(row: any) {
-  const fresh = ws.stores.find(item => item.id === row.storeId)
-  licenseEditingId.value = row.storeId
-  // 店铺在 ws.stores 里就以它为准（哪怕它是空的）——否则"清空执照 + 载荷还是旧值"时，
-  // 回填会把已清空的旧主体塞回输入框，再点一次保存就等于把清空撤销了
-  licenseDraft.name = fresh ? (fresh.licenseName || '') : (row.licenseName || '')
-  licenseDraft.no = fresh ? (fresh.licenseNo || '') : (row.licenseNo || '')
-  licenseEditError.value = ''
-}
-
-/** 只重取发票载荷（不整页 loading、不重置滚动位置）：行内改完主体、取完主体后用 */
-async function reloadInvoiceData() {
-  const res = await window.shopilot.overview.invoiceCenter()
-  if (res.ok) invoiceData.value = res.data
-}
-
-/** 只重取涉税报送载荷（同上：采集完刷新，但不整页 loading） */
-async function reloadTaxData() {
-  const res = await window.shopilot.overview.taxReport()
-  if (res.ok) taxData.value = res.data
-}
-
-async function saveLicense(row: any) {
-  licenseSaving.value = true
-  licenseEditError.value = ''
-  const result = await ws.setStoreLicense(row.storeId, licenseDraft.name.trim(), licenseDraft.no.trim())
-  licenseSaving.value = false
-  if (!result.ok) { licenseEditError.value = result.message || '保存失败'; return }
-  licenseEditingId.value = ''
-  // 保存成功后只重取发票载荷：行上的主体标签与「营业执照」胶囊都跟着刷新，而又不会把整页
-  // 换成"正在读取本机数据…"（那会丢掉滚动位置）。
-  await reloadInvoiceData()
-  ws.toast('营业执照已保存', 'success')
-}
-
-/**
- * 「按主体」分组视图里正在编辑的店铺属于哪个组（编辑器挂在那一组下面）。
- * 兜底 NO_LICENSE_KEY 与行分桶同口径——绝不出现"编辑框开了、但不在任何组里"。
- */
-const licenseEditingGroupKey = computed(() => (
-  licenseEditingId.value ? (licenseGroups.value.keyByStore.get(licenseEditingId.value) || NO_LICENSE_KEY) : ''
-))
-
-/** 分组视图的「保存」：没有行对象，按正在编辑的 storeId 找回那一行，走同一套 saveLicense 纪律 */
-async function saveLicenseInGroup(): Promise<void> {
-  const row = invoiceAllRows.value.find(item => item.storeId === licenseEditingId.value)
-  if (!row) return
-  await saveLicense(row)
-}
-
-/** 未填写组的「去补录」：先展开该组（收起来了就看不见编辑器），再打开第一家未填执照店铺的行内编辑器 */
-function startFillLicense(group: any): void {
-  if (isSubjectCollapsed(group.key)) toggleSubjectGroup(group.key)
-  const first = (group.stores || []).find((row: any) => row.needsLicense) || group.stores?.[0]
-  if (first) openLicenseEditor(first)
-}
-
-/** 店铺名（结果面板里按 storeId 反查；取不到就退回主进程给的名字） */
-function storeNameOf(storeId: string): string {
-  return ws.stores.find(store => store.id === storeId)?.name || storeId
-}
-
-/**
- * 「平台读到的主体」与「已填主体」的对照结论——规则在 shared（compareStoreEntity/entityVerdictText，有单测）：
- * 平台没读到的字段说"未比对"，店里空着而平台读到的是"可补录"，只有真比过的字段才配说"一致"。
- */
-function entityVerdict(row: any): string {
-  return entityVerdictText(row, row.entity)
-}
-
-/** 「获取主体营业执照」结果里每行的一句话（照实说：填了什么、哪不一致、为什么取不了） */
-function entityReportText(r: any): string {
-  const written = r.written || {}
-  // 平台值是哪次读的：写回可能用的是**旧快照**（这次没采到），不说清时间就会被当成"刚读到的"
-  const readAt = r.entity?.capturedAt ? `（平台值读于 ${formatTime(r.entity.capturedAt)}）` : ''
-  if (r.status === 'fill') {
-    const parts: string[] = []
-    if (written.licenseName) parts.push(`名称「${written.licenseName}」`)
-    if (written.licenseNo) parts.push(`统一社会信用代码「${written.licenseNo}」`)
-    return `已填入 ${parts.join(' + ')}${readAt}`
-  }
-  if (r.status === 'same') {
-    // 「一致」只留给**比过的**字段：平台只读到一项时，另一项明说没比对
-    const readName = !!r.entity?.name
-    const readNo = !!r.entity?.no
-    if (readName && readNo) return `平台读到的主体与已填一致，未改动${readAt}`
-    const read = readName ? '名称' : '信用代码'
-    const notRead = readName ? '信用代码' : '名称'
-    return `平台读到的${read}与已填一致，未改动${readAt}；${notRead}平台没读到，未比对`
-  }
-  if (r.status === 'start-failed') return `这次没能开始采集：${r.note || '未知原因'}——结果里的结论来自上一次采集`
-  if (r.status === 'conflict') {
-    return '平台读到的与你已填的不一致——没有覆盖你的填写，请自己核对：' +
-      (r.conflicts || []).map((c: any) => `${c.field === 'licenseName' ? '名称' : '信用代码'}：已填「${c.existing}」／平台「${c.fetched}」`).join('；')
-  }
-  if (r.status === 'nothing') {
-    if (!(r.rejected || []).length) return '平台页面上没读到主体信息——该店可能是个人店铺（本来没有营业执照），也可能页面已改版；没有写入任何值'
-    return '平台给的值不可用（未写入）：' + (r.rejected || []).map((x: any) => `${x.field === 'licenseName' ? '名称' : '信用代码'} ${x.raw}——${x.why}`).join('；')
-  }
-  if (r.status === 'no-data') return r.note || '还没有采到该店的主体信息'
-  if (r.status === 'unsupported') return '该平台暂不能自动获取：' + (r.note || entityUnsupportedNote(r.platform))
-  return String(r.status)
-}
-
-/** 已实测主体信息页的平台（按钮 tooltip 里如实写出来，免得用户以为"某家没处理"） */
-const entitySupportedPlatforms = ENTITY_SUPPORTED_PLATFORMS
-
-/** 补录主体时的名称候选：已填过的 + 平台读回来的（都去重、去空） */
-const licenseNameOptions = computed<string[]>(() => {
-  const names = new Set<string>()
-  for (const store of ws.stores) {
-    const name = normalizeLicenseName(store.licenseName)
-    if (name) names.add(name)
-  }
-  for (const row of invoiceAllRows.value) {
-    const name = normalizeLicenseName(row.entity?.name)
-    if (name) names.add(name)
-  }
-  return [...names]
-})
-
-/**
- * 跳转该店的「开票地址」。地址口径（与采集口径一致，宁缺毋滥）：
- *   ① 有实测档案的平台 → 档案里的发票页（就是采集读的那一页，如 store.weixin.qq.com/shop/bill/home）；
- *   ② 没档案的平台 → 退回该店自己的后台地址，并在 tooltip 里如实写明"尚未实测到发票页"；
- *   ③ 两者都没有 → 返回空串，按钮置灰（不猜地址）。
- */
-function invoiceOpenUrl(row: any): string {
-  return String(row?.pageUrl || row?.adminUrl || '')
-}
-function invoiceOpenLabel(row: any): string {
-  if (row?.pageUrl) return '打开开票页'
-  return row?.adminUrl ? '打开后台' : '无地址'
-}
-function invoiceOpenTitle(row: any): string {
-  const url = invoiceOpenUrl(row)
-  if (!url) return '这家店既没有实测的发票页，也没有后台地址——先在店铺页补一个后台地址'
-  return row?.pageUrl
-    ? `在该店浏览器里打开开票页：${url}`
-    : `该平台尚未实测到可读取的发票页，改为打开后台首页：${url}`
-}
-
-/**
- * 打开开票页：确保店铺浏览器已打开并显示 → 切到该店浏览器页 → **新标签页**直达开票地址。
- *
- * 为什么新开标签页而不是覆盖当前页：用户可能正在那家店里做事（刚提交完发票、正在填表），
- * 覆盖掉就把他的上下文弄丢了；新标签页用完随手关即可。
- */
-async function openInvoicePage(row: any) {
-  const url = invoiceOpenUrl(row)
-  if (!url) { ws.toast('这家店没有可跳转的地址（该平台尚未实测到发票页）', 'info'); return }
-  // 先自己把店铺开起来（await 得到结果），再让父组件切页——emit 不返回 Promise，不能反过来依赖它
-  if (!ws.openStoreIds.includes(row.storeId) || ws.displayedStoreId !== row.storeId) {
-    await ws.openStore(row.storeId)
-  }
-  emit('open-store', row.storeId)
-  await ws.newTab(url)
-  ws.toast(`已打开「${row.storeName}」的开票页`, 'success')
-}
-
-/** 去登录：打开该店的**后台首页**（登录态失效时用户在后台扫码/登录，不是在发票页上） */
-async function openStoreAdmin(row: any) {
-  const url = String(row?.adminUrl || row?.pageUrl || '')
-  if (!url) { ws.toast('这家店没有可打开的后台地址', 'info'); return }
-  if (!ws.openStoreIds.includes(row.storeId) || ws.displayedStoreId !== row.storeId) {
-    await ws.openStore(row.storeId)
-  }
-  emit('open-store', row.storeId)
-  await ws.newTab(url)
-  ws.toast(`已打开「${row.storeName}」的后台，登录后回发票中心点「采集发票数据」`, 'success')
-}
-
-/**
- * 点击「按主体」分组里的店铺行 → 进入该店的**店铺详情**（工作台里的该店浏览器视图）。
- *
- * 与「打开开票页 / 去登录」同一套纪律：先自己把店铺开起来（await 得到结果），再 emit 让父组件
- * 切页——emit 不返回 Promise，不能反过来依赖它。已打开且正在显示的店不重复打开（openStore 幂等）。
- */
-async function openStoreDetail(row: any) {
-  if (!ws.openStoreIds.includes(row.storeId) || ws.displayedStoreId !== row.storeId) {
-    await ws.openStore(row.storeId)
-  }
-  emit('open-store', row.storeId)
-}
-
-/**
- * A1：明细表的列与取值。
- *
- * 为什么列要**按方向动态裁**：payload 的统一列有 8 列（INVOICE_COLUMNS + 其他信息），
- * 但每个平台只填其中几列（抖店 4 列、拼多多 15 列），全摊出来是一大片"—"。
- * 这里只保留"这个方向至少有一条非空值"的列，外加有值时的「其他信息」（未映射列）。
- */
-const openSections = ref<Record<string, boolean>>({})
-function sectionKey(section: any): string { return String(section?.metricKey || section?.name || '') }
-function isSectionOpen(section: any): boolean { return !!openSections.value[sectionKey(section)] }
-function toggleSection(section: any) {
-  const key = sectionKey(section)
-  openSections.value = { ...openSections.value, [key]: !openSections.value[key] }
-}
-/** 该店当前展开的方向（用于渲染明细区块） */
-function openDetailSections(row: any): any[] {
-  return (row?.sections || []).filter((section: any) => (section.items?.length || 0) > 0 && isSectionOpen(section))
-}
-function sectionColumns(section: any): Array<{ key: string; label: string }> {
-  const columns = (invoiceData.value?.columns || []) as Array<{ key: string; label: string }>
-  const items = (section?.items || []) as any[]
-  const used = columns.filter(col => items.some(item => String(item?.cells?.[col.key] ?? '').trim() !== ''))
-  const hasExtras = items.some(item => (item?.extras || []).length > 0)
-  const out = used.map(col => ({ key: col.key, label: col.label }))
-  if (hasExtras) out.push({ key: '__extras', label: '其他信息' })
-  return out
-}
-function detailCell(item: any, key: string): string {
-  if (key === '__extras') return (item?.extras || []).map((x: any) => `${x.label}：${x.value}`).join('；')
-  return String(item?.cells?.[key] ?? '')
-}
-function invoiceRowAmount(row: any): { total: number; parsed: number; text: string } {
-  let total = 0
-  let parsed = 0
-  for (const section of row?.sections || []) {
-    if (!isPendingSection(section)) continue
-    for (const item of section.items || []) {
-      const amount = parseInvoiceAmount(item.cells?.amount)
-      if (amount == null) continue
-      total += amount
-      parsed++
-    }
-  }
-  return { total, parsed, text: invoiceAmountText(total, parsed > 0) }
-}
-function invoiceRowAmountText(row: any): string {
-  return invoiceRowAmount(row).text
-}
-const metricRows = computed(() => {
-  const rows = new Map<string, any>()
-  for (const store of ws.stores) rows.set(store.id, { storeId: store.id, storeName: store.name, platform: store.platform, values: {}, manual: {}, lastAt: 0 })
-  for (const snapshot of snapshotRows.value) { const row = rows.get(snapshot.storeId); if (!row || !String(snapshot.metric).startsWith('biz.')) continue; row.values[snapshot.metric] = snapshot.value; row.manual[snapshot.metric] = !!snapshot.manual; row.lastAt = Math.max(row.lastAt, Number(snapshot.capturedAt) || 0) }
-  return [...rows.values()]
-})
-const manualReady = computed(() => !!manual.storeId && manual.value != null && Number.isFinite(Number(manual.value)) && Number(manual.value) >= 0)
-function displayValue(value: unknown) { return value == null || value === '' ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value) }
-function formatTime(value: number) { return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
-function formatValue(value: unknown, key: string) { const number = typeof value === 'number' ? value : Number(value); if (!Number.isFinite(number)) return '—'; return key.includes('gmv') || key.includes('Amount') ? `¥ ${number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}` : number.toLocaleString('zh-CN') }
-async function load() {
-  // P1-7（2026-10-15 审查）：无 preload（纯渲染调试模式）时给出降级提示，而不是 TypeError 白屏
-  if (!window.shopilot) {
-    errorMessage.value = '原生桥接不可用（纯渲染模式）：数据中心无法加载'
-    return
-  }
-  loading.value = true
-  errorMessage.value = ''
-  try {
-    const responses = await Promise.all([
-      window.shopilot.overview.datacenter(),
-      window.shopilot.overview.orders(),
-      window.shopilot.overview.invoiceCenter(),
-      window.shopilot.overview.taxReport(),
-      window.shopilot.settings.get(AUTO_COLLECTION_SETTING)
-    ])
-    if (!responses[0].ok) throw new Error(responses[0].error.message)
-    dataCenter.value = responses[0].data
-    // B3：单个通道失败**不能**退化成空列表——发票中心读取失败与"确实没采过"在屏上必须能分辨
-    const failed: string[] = []
-    if (!responses[1].ok) failed.push(`订单快照读取失败：${responses[1].error.message}`)
-    if (!responses[2].ok) failed.push(`发票数据读取失败：${responses[2].error.message}`)
-    if (!responses[3].ok) failed.push(`涉税报送数据读取失败：${responses[3].error.message}`)
-    orderData.value = responses[1].ok ? responses[1].data : null
-    invoiceData.value = responses[2].ok ? responses[2].data : null
-    taxData.value = responses[3].ok ? responses[3].data : null
-    /**
-     * 自动采集总开关（`collection.autoEnabled`，主进程 fail-closed 读它）。
-     *
-     * 为什么界面上要单独读它：任务上挂着 `everyMs` **不等于**会自动跑——总开关关着时
-     * 调度器直接 return（scheduler.ts 的 isAutoCollectionEnabled 分支）。只看任务周期就会
-     * 把"挂着但永远不会触发"显示成"已启用"（2026-10-15 审查确认的假状态）。
-     * 读失败按**关**处理；解析用 shared 的 `parseAutoCollectionEnabled`——它兼容历史值
-     * （1 / "true" / "1"），以前这里手写 `=== true`，存量值会让屏上显示"总开关是关的"
-     * 而主进程实际在跑（与上面同一类假状态，2026-10-15 审查 M3）。
-     */
-    autoCollectionOn.value = responses[4]?.ok ? parseAutoCollectionEnabled(responses[4].data?.value) : false
-    if (failed.length) errorMessage.value = failed.join('；')
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : String(error)
-  } finally { loading.value = false }
-}
-/** 发票自动采集周期：3 小时（用户要求「发票中心三个小时更新一次」） */
-const INVOICE_SCHEDULE_MS = 3 * 60 * 60 * 1000
-/**
- * 自动采集总开关是否打开。**默认 false**（与主进程 fail-closed 同口径）：
- * 读不到就按"不会自动跑"显示，绝不乐观地告诉用户"已在自动更新"。
- * 键与解析都用 shared/constants/collection 的导出（单一事实来源，以前手抄字面量会漂移）。
- */
-const autoCollectionOn = ref(false)
-// INVOICE_TASK_PREFIX 来自 @shared/constants/invoice（单一事实来源）：
-// 这里用它**认领**同一个采集任务，任务中心/概览那边用同一条规则把它**排除**在任务之外。
-
-type CollectKind = 'business' | 'orders' | 'invoice' | 'tax'
-
-/** 该平台在这个采集域下的档案（没有 = 抓不了；界面按域分别如实说明，不混成一句"暂不支持"） */
-function collectProfileOf(kind: CollectKind, platform: string): any {
-  if (kind === 'business') return businessProfileFor(platform)
-  if (kind === 'orders') return ordersProfileFor(platform)
-  if (kind === 'tax') return taxProfileFor(platform)
-  return invoiceProfileFor(platform)
-}
-
-/** 该采集域的步骤构造（每域一份；档案形状不同，各自有单测） */
-function collectStepsOf(kind: CollectKind, profile: any): any[] {
-  if (kind === 'business') return buildBusinessCollectSteps(profile as BusinessProfile)
-  if (kind === 'orders') return buildOrdersCollectSteps(profile as OrdersProfile)
-  if (kind === 'tax') return buildTaxCollectSteps(profile as TaxProfile)
-  return buildInvoiceCollectSteps(profile as InvoiceProfile)
-}
-
-/** 采集任务名（带前缀的域便于复用时按前缀认领同一个任务） */
-function collectTaskName(kind: CollectKind, storeName: string) {
-  if (kind === 'business') return `经营指标采集 · ${storeName}`
-  if (kind === 'orders') return `订单明细采集 · ${storeName}`
-  if (kind === 'tax') return `${TAX_TASK_PREFIX}${storeName}`
-  return `${INVOICE_TASK_PREFIX}${storeName}`
-}
-
-/**
- * 复用已有任务，而不是每点一次就新建一个。
- *
- * 原实现每次点「采集」都 task.create 一个新任务——实测点两轮就留下
- * 「发票采集 · 抖店」「发票采集 · 抖店 · 2026/9/15」一串同名任务：任务中心越堆越多，
- * 而定时更新只能挂在其中一个上（挂错就等于没挂）。这里按"店铺 + 名称前缀"认领一个，
- * 把步骤与周期一起更新到它身上。
- *
- * 认领口径与开关/状态条**必须一致**：统一走 shared 的 `pickLatestCollectTask`
- * （取 `updatedAt` 最新）——以前认领按 updatedAt、开关按列表序，库里若有历史重复
- * 任务，改周期的和跑数据的可能不是同一个（2026-10-15 审查 C3）。
- *
- * 返回值带 `updateWarning`：任务正有未结束的运行 → 含 steps 的更新会被主进程拒
- * （TASK_BAD_STATE，task-store.updateTask）；此时**去掉 steps 重试**（name/schedule
- * 在运行中本就允许改），两次都失败才把原因交给调用方如实展示——不能一边宣称
- * "每 3 小时自动更新"，一边实际什么都没写上（2026-10-15 审查 C2）。
- */
-async function ensureCollectTask(kind: CollectKind, store: any, steps: any[], schedule: unknown): Promise<{ taskId: string; updateWarning: string | null }> {
-  const name = collectTaskName(kind, store.name)
-  const listed = await window.shopilot.task.list()
-  const existing = pickLatestCollectTask(listed.ok ? (listed.data as any[]) : [], store.id, collectTaskName(kind, ''))
-  if (existing) {
-    const updated = await window.shopilot.task.update({ taskId: existing.id, name, steps, schedule })
-    if (updated.ok) return { taskId: String(existing.id), updateWarning: null }
-    // 含 steps 的更新被拒（多为正有未结束的运行）→ 不带 steps 重试：name/schedule 在运行中允许改，
-    // 重试成功则周期确实挂上了，toast 才不是假话；仍失败才把原因带走如实展示。
-    const retried = await window.shopilot.task.update({ taskId: existing.id, name, schedule })
-    return { taskId: String(existing.id), updateWarning: retried.ok ? null : String(retried.error?.message || '配置更新被拒') }
-  }
-  const created = await window.shopilot.task.create({ name, storeScope: store.id, steps, schedule })
-  return { taskId: created.ok ? String((created.data as any).id) : '', updateWarning: null }
-}
-
-async function createCollectionTasks(kind: CollectKind) {
-  const supported = ws.stores.filter(store => !!collectProfileOf(kind, store.platform))
-  if (!supported.length) { ws.toast('当前没有已实测的可采集平台，系统不会猜测页面选择器', 'info'); return }
-  collecting.value = true
-  let created = 0
-  /** 任务配置没能写上的店（原因只记第一条）：toast 必须如实说，不能宣称"已挂上周期"（C2） */
-  const stuck: string[] = []
-  let stuckWhy = ''
-  try {
-    for (const store of supported) {
-      const profile = collectProfileOf(kind, store.platform)
-      if (!profile) continue
-      if (!ws.openStoreIds.includes(store.id)) await window.shopilot.browser.open(store.id)
-      const steps = collectStepsOf(kind, profile)
-      // 只有发票采集挂周期（每 3 小时）：经营指标已有自己的 10 分钟调度器，给任务再挂一次
-      // 会变成两套调度各跑一遍；涉税报送**按季度**更新，3 小时一轮没有意义，保持手动采集。
-      const schedule = kind === 'invoice' ? { everyMs: INVOICE_SCHEDULE_MS, backgroundOpen: true } : undefined
-      const claimed = await ensureCollectTask(kind, store, steps, schedule)
-      if (!claimed.taskId) continue
-      if (claimed.updateWarning) { stuck.push(store.name); stuckWhy = stuckWhy || claimed.updateWarning }
-      const run = await window.shopilot.task.run(claimed.taskId)
-      if (run.ok) created++
-    }
-    await ws.refreshTasks()
-    /**
-     * 只有**总开关确实打开**时才敢说"会自动更新"。
-     *
-     * 任务上挂了 `everyMs` ≠ 会自动跑：总开关关着时调度器直接 return（scheduler.ts）。
-     * 以前这里无条件写"发票每 3 小时自动更新一次"——实测总开关是 false，这句是假话，
-     * 用户会以为数据在自动刷新（2026-10-15 审查确认）。
-     */
-    const suffix = kind === 'invoice'
-      ? (autoCollectionOn.value
-          ? '；发票每 3 小时自动更新一次'
-          : '；注意：自动采集总开关是关的，这批任务不会自动跑——要自动更新请点上方「开启每 3 小时自动更新」')
-      : kind === 'tax' ? '；报送数据按季度更新，下一季再采一次即可' : ''
-    // 配置没写上的店必须在同一条 toast 里点名（C2）：否则用户会以为周期已挂、或在任务中心找不到原因
-    const stuckNote = stuck.length
-      ? `；注意：${stuck.length} 家（${stuck.join('、')}）的任务配置未能更新（${stuckWhy}），本次先按原配置执行`
-      : ''
-    ws.toast(created ? `已启动 ${created} 个采集任务${suffix}${stuckNote}` : `采集任务未能启动，请查看任务中心${stuckNote}`, created ? 'success' : 'error')
-  } finally { collecting.value = false }
-}
-
-/** 主体采集任务名前缀（与发票采集同样"认领同一个"，免得任务中心堆一串同名任务） */
-const ENTITY_TASK_PREFIX = '主体信息采集 ·'
-
-async function ensureEntityCollectTask(store: any, steps: any[]): Promise<string> {
-  const name = `${ENTITY_TASK_PREFIX}${store.name}`
-  const listed = await window.shopilot.task.list()
-  const existing = pickLatestCollectTask(listed.ok ? (listed.data as any[]) : [], store.id, ENTITY_TASK_PREFIX)
-  if (existing) {
-    // 任务正有未结束的运行 → 步骤改不了（主进程会拒），去掉 steps 重试一次把名字写上，
-    // 仍用它跑一次：步骤由档案推导，本来就不随点击变化（与 C2 同一处置）
-    const updated = await window.shopilot.task.update({ taskId: existing.id, name, steps })
-    if (!updated.ok) await window.shopilot.task.update({ taskId: existing.id, name })
-    return String(existing.id)
-  }
-  const created = await window.shopilot.task.create({ name, storeScope: store.id, steps })
-  return created.ok ? String((created.data as any).id) : ''
-}
-
-/**
- * 「获取主体营业执照」：去平台后台把**本店自己的主体**读回来，再按主进程的判定写进店铺。
- *
- * 两步分开（都复用既有机制）：
- *  1. 采集：只对**已实测主体信息页**的平台建只读采集任务（navigate → readLabelValue×N → 快照 entity.name/no）；
- *  2. 写回：`overview.entityApply()` 按快照决定写不写——**空则填；与已填不一致不覆盖**，两边都报出来（错一个公司就是错票）。
- * 未实测的平台（微信小店：主体卡是 display:none 且代码掩码；抖店/拼多多：当时登录态过期，没测到页）
- * **不猜选择器**，它们的店铺会在结果里以 unsupported + 原因如实列出。
- */
-async function collectStoreEntities() {
-  const generation = ++entityCollectGeneration
-  const supported = ws.stores.filter(store => !!entityProfileFor(store.platform))
-  entityCollecting.value = true
-  entityReport.value = []
-  try {
-    // 说明：即使一家都没有已实测的平台，也**仍然走一遍写回**——结果面板会把每家"为什么取不了"写清楚，
-    // 而不是让用户对着一句"没有需要新填的主体"猜（最终提示见函数末尾）。
-    const runIds: string[] = []
-    /** runId → 店名：等待时要说清"还在等哪一家"，而不是只报一个数字 */
-    const runStore = new Map<string, string>()
-    // 逐店记"这次没能开始采集"的原因：不记的话，一家都没跑起来时界面会安安静静地
-    // 回一句"没有需要新填的主体"，而那句结论其实来自上一次的旧快照（比报错更危险）。
-    const startFailures = new Map<string, string>()
-    for (const store of supported) {
-      if (generation !== entityCollectGeneration) return
-      if (!ws.openStoreIds.includes(store.id)) {
-        // 引擎不静默拉起店铺浏览器（§4.4）：用户点这个按钮就是要采这几家 → 显式打开。
-        // 注意 browser.open 是**返回 {ok:false}** 而不是抛异常，必须看返回值。
-        const opened = await window.shopilot.browser.open(store.id)
-        if (!opened.ok) {
-          startFailures.set(store.id, `店铺浏览器没能打开（${opened.error?.message || '未知原因'}）——采集要等页面就绪`)
-          continue
-        }
-      }
-      const taskId = await ensureEntityCollectTask(store, buildEntityCollectSteps(entityProfileFor(store.platform)!) as any[])
-      if (!taskId) { startFailures.set(store.id, '采集任务没能创建（可去任务中心看原因）'); continue }
-      const run = await window.shopilot.task.run(taskId)
-      const runId = run.ok ? String((run.data as any)?.runId || '') : ''
-      if (!runId) {
-        startFailures.set(store.id, `采集任务没能启动（${run.ok ? '没有返回运行 id' : run.error?.message || '未知原因'}）`)
-        continue
-      }
-      runIds.push(runId)
-      runStore.set(runId, store.name)
-    }
-    if (generation !== entityCollectGeneration) return
-    await ws.refreshTasks()
-    /**
-     * 等待：**逐店各算各的超时**，不是一个总时限。
-     *
-     * 以前是一个固定 150 秒的总 deadline：只要有一家卡住（浏览器没开起来、任务排在别人后面），
-     * 其余几家早就跑完了也要陪着等到 150 秒，用户看到的是一分多钟的"获取中…"。
-     * 现在每家自己计时，超时就把它标成"未按时跑完"从等待集合里摘掉，其余的正常收尾。
-     */
-    const perStoreMs = 60000
-    const timedOutNames: string[] = []
-    let timedOut = false
-    if (runIds.length) {
-      const pending = new Set(runIds)
-      const firstSeenPending = new Map<string, number>()
-      entityProgress.value = { total: runIds.length, done: 0, waiting: [...runStore.values()] }
-      for (;;) {
-        await new Promise(resolve => setTimeout(resolve, 3000))
-        if (generation !== entityCollectGeneration) return
-        const list = await window.shopilot.task.list()
-        const all = (list.ok ? (list.data as any[]) : [])
-        for (const id of [...pending]) {
-          const task = all.find(item => item.latestRun?.id === id)
-          const status = task?.latestRun?.status
-          if (status && ['succeeded', 'failed', 'cancelled'].includes(status)) { pending.delete(id); continue }
-          if (!firstSeenPending.has(id)) firstSeenPending.set(id, Date.now())
-          if (Date.now() - (firstSeenPending.get(id) as number) > perStoreMs) {
-            pending.delete(id)
-            timedOut = true
-            const name = runStore.get(id)
-            if (name) timedOutNames.push(name)
-          }
-        }
-        entityProgress.value = {
-          total: runIds.length,
-          done: runIds.length - pending.size,
-          waiting: [...pending].map(id => runStore.get(id) || '店铺')
-        }
-        if (!pending.size) break
-      }
-    }
-    if (generation !== entityCollectGeneration) return
-    // 写回：空则填、不一致不覆盖（判定在主进程，界面只如实展示结果）
-    const applied = await window.shopilot.overview.entityApply()
-    if (!applied.ok) { ws.toast('写回主体信息失败：' + applied.error.message, 'error'); return }
-    if (generation !== entityCollectGeneration) return
-    const appliedRows = ((applied.data as any)?.rows || []) as any[]
-    // 没跑起来的店：把原因钉在它自己那一行上（每店一行，不加重复行）
-    entityReport.value = appliedRows.map(row => startFailures.has(row.storeId)
-      ? { ...row, status: 'start-failed', note: startFailures.get(row.storeId) }
-      : row)
-    const filled = Number((applied.data as any)?.filled || 0)
-    // 超时也要如实说，而且要**说是哪家**：否则"采集完成"会把还在排队/跑着的店铺当成已采集
-    const lateNote = timedOut ? `（${timedOutNames.join('、')} 未在 1 分钟内跑完，结果可能不全；稍后可再点一次）` : ''
-    const toastText = !supported.length
-      ? '当前没有已实测主体信息页的平台——不会去猜选择器（每家的原因见下方结果）'
-      : startFailures.size
-        ? `${startFailures.size} 家没能开始采集，结果里的结论来自上一次采集（详见下方结果）`
-        : filled
-          ? `已按平台读到的主体填入 ${filled} 家店铺的营业执照`
-          : '没有需要新填的主体（详见下方结果）'
-    ws.toast(toastText + lateNote, startFailures.size ? 'error' : (filled ? 'success' : 'info'))
-    await Promise.all([ws.refreshStores(), reloadInvoiceData()])
-  } finally {
-    entityCollecting.value = false
-    entityProgress.value = null
-  }
-}
-function collectBusiness() { return createCollectionTasks('business') }
-function collectOrders() { return createCollectionTasks('orders') }
-function collectInvoices() { return createCollectionTasks('invoice') }
-/**
- * 采集涉税报送数据。
- *
- * 采集完**重新取一次**报送数据（`reloadTaxData`）：否则用户点完按钮，屏上还是"还没采集"，
- * 得手动刷新才能看到——"点了没反应"是这类只读采集最容易让人误判的地方。
- */
-async function collectTaxReport() {
-  if (taxCollecting.value) return
-  taxCollecting.value = true
-  try {
-    await createCollectionTasks('tax')
-    await reloadTaxData()
-  } finally { taxCollecting.value = false }
-}
-
-/** 发票自动更新现状（逐店一条：哪几家挂着周期、上次什么时候触发） */
-const invoiceSchedule = computed(() => {
-  const supported = ws.stores.filter(store => !!invoiceProfileFor(store.platform))
-  // 认领口径与采集、开关统一（shared.pickLatestCollectTask，取 updatedAt 最新）——口径不一致时
-  // 状态条看的是 A 任务、开关改的是 B 任务，用户会看到"开了自动更新但数据不动"（C3）
-  const tasks = supported.map(store => pickLatestCollectTask(ws.tasks, store.id, INVOICE_TASK_PREFIX))
-  const scheduled = tasks.filter(task => Number((task?.schedule as any)?.everyMs || 0) === INVOICE_SCHEDULE_MS)
-  const fired = scheduled.map(task => Number((task as any)?.lastFiredAt || 0)).filter(value => value > 0)
-  /**
-   * `enabled` 只说明"任务上挂没挂 3 小时周期"；**能不能真的自动跑还要看总开关**。
-   * 两者都满足才算"自动更新生效"——只看前者会在总开关关着时显示成"已启用"
-   * （实测：总开关 false、4 家全挂着周期，界面写着「已启用 4/4 家」而调度器一次都不会触发）。
-   */
-  const autoEnabled = autoCollectionOn.value
-  return {
-    total: supported.length,
-    enabled: scheduled.length,
-    /** 挂着周期**且**总开关打开 = 真的会自动更新 */
-    active: scheduled.length > 0 && autoEnabled,
-    autoEnabled,
-    lastFiredAt: fired.length ? Math.max(...fired) : 0
-  }
-})
-
-/** 一键开关自动更新：给每家的发票任务挂上/摘掉 3 小时周期 */
-async function toggleInvoiceSchedule(enabled: boolean) {
-  collecting.value = true
-  try {
-    /**
-     * 打开时必须**连总开关一起打开**：只挂任务周期、总开关还关着的话，
-     * 调度器根本不会触发（scheduler.ts 的 isAutoCollectionEnabled 分支直接 return），
-     * 用户点了"开启"却发现数据永远不更新——这正是 2026-10-15 审查确认的假状态。
-     */
-    if (enabled) {
-      const setResult = await window.shopilot.settings.set(AUTO_COLLECTION_SETTING, true)
-      if (!setResult?.ok) {
-        ws.toast('打开自动采集总开关失败：' + (setResult?.error?.message || '未知原因'), 'error')
-        return
-      }
-      autoCollectionOn.value = true
-    }
-    let changed = 0
-    for (const store of ws.stores.filter(item => !!invoiceProfileFor(item.platform))) {
-      // 与采集认领用同一个口径（C3）：开关改的必须正是任务中心跑的那一个
-      const task = pickLatestCollectTask(ws.tasks, store.id, INVOICE_TASK_PREFIX)
-      if (!task) continue
-      const result = await window.shopilot.task.update({ taskId: task.id, schedule: enabled ? { everyMs: INVOICE_SCHEDULE_MS, backgroundOpen: true } : null })
-      if (result.ok) changed++
-    }
-    await ws.refreshTasks()
-    if (!changed) {
-      // 一家都没挂上（还没有发票任务）→ 把刚打开的总开关退回去，别留下"开着但不干活"的状态
-      if (enabled) {
-        await window.shopilot.settings.set(AUTO_COLLECTION_SETTING, false)
-        autoCollectionOn.value = false
-      }
-      ws.toast('还没有发票采集任务——先点一次「采集发票数据」', 'info')
-      return
-    }
-    ws.toast(enabled
-      ? `已开启每 3 小时自动更新（${changed} 家，总开关已一并打开）`
-      : `已关闭这 ${changed} 家的自动更新（自动采集总开关保持原样）`, 'success')
-  } finally { collecting.value = false }
-}
-async function saveManual() { if (!manualReady.value) return; const result = await window.shopilot.overview.manualMetric(manual.storeId, manual.metric, Number(manual.value)); if (!result.ok) { ws.toast('录入失败：' + result.error.message, 'error'); return } ws.toast('已录入手动指标', 'success'); manual.value = null; await load() }
-/**
- * 导出**跟随屏上的营业执照筛选**（申报是分主体做的，导出的表也就该按主体分开）。
- *
- * 为什么要跟：用户在屏上点了某个主体，看到的条数/金额只剩这个主体的，导出却给全部主体——
- * 文件自带「营业执照 / 统一社会信用代码」两列，把 A 公司的清单交给 A 的代账时就会带出别家的单号与税号。
- * 主进程按同一个 key 用共享的归属规则（shared/store-license.groupStoresByLicense）再筛一遍，
- * 不信任渲染层传店铺 id。
- */
-const exportScope = computed(() => {
-  const key = activeLicense.value
-  if (!key) return null
-  const item = licenseSummary.value.items.find(entry => entry.key === key)
-  return { key, label: item?.label || (key === NO_LICENSE_KEY ? '未填写营业执照' : '') }
-})
-const exportScopeLabel = computed(() => (exportScope.value ? '导出该主体 CSV' : '导出待开票 CSV'))
-const exportScopeTitle = computed(() => (exportScope.value
-  ? `只导出当前选中的主体「${exportScope.value.label || '未填写营业执照'}」的待开票记录；点「全部」可导出所有主体`
-  : '导出全部主体的待开票记录；先在「营业执照」里点一个主体，可只导出该主体'))
-/**
- * 打开导出确认浮层：把「导哪一户、几行、多少钱」写在屏上再落盘。
- *
- * 为什么加这一步：导出是**分主体**做的（申报就是按主体报）。用户在屏上点了某家公司，
- * 拿到的不该是别家的单号与税号——范围写在按钮上还不够，落盘前再确认一次。
- */
-function openExportConfirm() {
-  const scope = exportScope.value
-  const item = scope ? licenseSummary.value.items.find(entry => entry.key === scope.key) : null
-  exportConfirm.scopeLabel = scope ? (scope.label || '未填写营业执照') : '全部主体'
-  exportConfirm.pendingRows = item ? item.pendingCount : licenseSummary.value.pendingCount
-  exportConfirm.amountText = item ? item.amountText : licenseSummary.value.amountText
-  exportConfirm.unparsed = item ? item.unparsed : licenseSummary.value.items.reduce((sum, entry) => sum + entry.unparsed, 0)
-  exportConfirm.open = true
-}
-
-/** 汇总表里点「导出该主体」：先切到那个主体，再走同一套确认流程 */
-function exportSubject(key: string) {
-  invoiceLicense.value = key
-  openExportConfirm()
-}
-
-async function confirmExportInvoices() {
-  if (exporting.value) return
-  exporting.value = true
-  try {
-    if (await exportInvoices()) exportConfirm.open = false
-  } finally {
-    exporting.value = false
-  }
-}
-
-async function exportInvoices(): Promise<boolean> {
-  const result = await window.shopilot.overview.invoiceExport(exportScope.value ? { licenseKey: exportScope.value.key } : {})
-  if (!result.ok) { ws.toast('导出失败：' + result.error.message, 'error'); return false }
-  if (result.data?.canceled) return false
-  // 导出里既有"待开票"也有"无需操作"（已提交/已通过）的行，两个数都报出来，免得与屏上合计对不上
-  const rows = Number(result.data.rows || 0)
-  const pending = Number(result.data.pendingRows ?? rows)
-  const suffix = pending === rows ? '' : `（其中待开票 ${pending} 条、无需操作 ${rows - pending} 条）`
-  ws.toast(`已导出 ${rows} 条记录${suffix}（${result.data.scopeLabel || '全部主体'}）`, 'success')
-  return true
-}
-function onTaskProgress(event: any) { if (event?.phase === 'finished' || event?.phase === 'failed') void load() }
-watch(() => props.mode, () => { void load() })
-onMounted(() => {
-  if (!window.shopilot) return
-  window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress)
-  void load()
-  void ws.refreshTasks()
-})
-onBeforeUnmount(() => {
-  entityCollectGeneration++
-  window.shopilot?.off?.(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress)
-})
+// ---------- 发票明细 / 涉税与证照 / 采集与导出（状态机见 use-*.ts）----------
+// 页面只保留模板与 props；三块域逻辑各自成 composable，模板变量由下面解构提供。
+const page = useInvoiceDetail({ props, emit })
+const {
+  loading,
+  collecting,
+  errorMessage,
+  invoiceData,
+  taxData,
+  taxCollecting,
+  entityCollecting,
+  entityProgress,
+  entityReport,
+  manual,
+  subtitle,
+  bizMetrics,
+  totalCards,
+  snapshotRows,
+  invoiceRows,
+  invoiceLicense,
+  invoiceStatusFilter,
+  invoicePlatformFilter,
+  invoiceQuery,
+  invoicePeriodFilter,
+  licenseEditingId,
+  licenseDraft,
+  licenseSaving,
+  licenseEditError,
+  invoiceView,
+  isSubjectCollapsed,
+  toggleSubjectGroup,
+  isStoreDirsOpen,
+  toggleStoreDirs,
+  invoiceSort,
+  filtersOpen,
+  activeFilterCount,
+  exporting,
+  exportConfirm,
+  licenseSummary,
+  activeLicense,
+  subjectInvoiceRows,
+  visibleInvoiceRows,
+  invoiceTotal,
+  invoiceGrandTotal,
+  invoiceCoverage,
+  unlicensedPending,
+  licenseShare,
+  invoiceRisk,
+  invoiceScopeLabel,
+  platformColor,
+  invoicePlatformOptions,
+  invoiceOpenUrl,
+  invoiceOpenLabel,
+  invoiceOpenTitle,
+  openInvoicePage,
+  openStoreAdmin,
+  openStoreDetail,
+  sectionKey,
+  isSectionOpen,
+  toggleSection,
+  openDetailSections,
+  sectionColumns,
+  detailCell,
+  invoiceRowAmountText,
+  metricRows,
+  manualReady,
+  displayValue,
+  formatTime,
+  formatValue,
+  exportScopeLabel,
+  exportScopeTitle,
+  openExportConfirm,
+} = page
+const tax = useTaxLicense(page)
+const {
+  sectionAmount,
+  invoiceSubjectGroups,
+  invoicePlatformCoverage,
+  invoiceCsvColumns,
+  taxDisclaimer,
+  taxBasis,
+  taxRows,
+  taxSupportedPlatforms,
+  taxView,
+  taxExpandedSubject,
+  taxSubjectGroups,
+  taxSubjectTotal,
+  taxSubjectLabel,
+  taxLicenseVerdictText,
+  taxCellOf,
+  taxGoods,
+  taxService,
+  taxRowNet,
+  taxRowReconciles,
+  taxStoreSummary,
+  taxSectionsWithItems,
+  taxEmptyNotes,
+  openLicenseEditor,
+  saveLicense,
+  licenseEditingGroupKey,
+  saveLicenseInGroup,
+  startFillLicense,
+  storeNameOf,
+  entityVerdict,
+  entityReportText,
+  entitySupportedPlatforms,
+  licenseNameOptions,
+} = tax
+const collection = useDataCollection(page, tax, { props })
+const {
+  load,
+  collectStoreEntities,
+  collectBusiness,
+  collectInvoices,
+  collectTaxReport,
+  invoiceSchedule,
+  toggleInvoiceSchedule,
+  saveManual,
+  exportSubject,
+  confirmExportInvoices,
+} = collection
+const title = computed(() => props.mode === 'invoices' ? '发票中心' : props.mode === 'tax' ? '涉税信息' : '数据分析')
 </script>
 
 <style scoped>
-.unified-page{min-width:0;min-height:0;height:100%;overflow:auto;padding:22px 24px 32px;color:var(--dash-text)}.unified-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:16px}.unified-page-head h1{margin:5px 0 7px;font-size:25px}.unified-page-head p{margin:0;color:var(--dash-text-muted);font-size:12px}.unified-page-actions{display:flex;gap:8px}.button-icon{width:15px;height:15px;object-fit:contain;vertical-align:-3px;margin-right:5px}.unified-button{min-height:32px;padding:0 13px;border:1px solid var(--dash-border);border-radius:9px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer}.unified-button:hover,.unified-button:focus-visible{border-color:rgba(151,120,255,.7);color:var(--dash-text);outline:none}.unified-button.primary{border-color:#5b3df5;background:#6d4aff;color:#ffffff}.unified-button:disabled{opacity:.55;cursor:not-allowed}.unified-route-tabs{display:flex;gap:5px;margin-bottom:15px;padding:4px;border:1px solid var(--dash-border);border-radius:10px;background:#ecedee}.unified-route-tabs button{height:30px;padding:0 14px;border:0;border-radius:7px;background:transparent;color:var(--dash-text-muted);cursor:pointer}.unified-route-tabs button.active{background:rgba(113,78,231,.36);color:#4c1d95}.unified-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.unified-stat-card{display:flex;flex-direction:column;gap:6px;padding:14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.unified-stat-card span,.unified-stat-card small{color:var(--dash-text-muted);font-size:11px}.unified-stat-card strong{font-size:25px}.unified-data-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr);gap:12px}.unified-card{min-width:0;padding:16px;border:1px solid var(--dash-border);border-radius:13px;background:#ffffff}.unified-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.unified-card-head h2{margin:0 0 5px;font-size:16px}.unified-card-head span{color:var(--dash-text-muted);font-size:11px}.unified-table-wrap{overflow:auto}.unified-table{width:100%;border-collapse:collapse;font-size:11px}.unified-table th,.unified-table td{padding:10px 9px;border-bottom:1px solid rgba(111,137,177,.12);text-align:left;white-space:nowrap}.unified-table th{color:var(--dash-text-muted);font-weight:500}.unified-table td{color:var(--dash-text-soft)}.unified-table em{display:inline-block;margin-left:4px;padding:2px 4px;border-radius:4px;background:rgba(242,165,87,.15);color:#b54708;font-size:9px;font-style:normal}.unified-empty,.unified-state{display:flex;min-height:180px;align-items:center;justify-content:center;gap:10px;flex-direction:column;color:var(--dash-text-muted);border:1px dashed var(--dash-border);border-radius:11px}.unified-empty.compact{min-height:90px}.unified-alert{padding:10px 12px;margin-bottom:12px;border-radius:9px;font-size:12px}.unified-alert.error{border:1px solid rgba(239,99,119,.35);background:rgba(117,37,58,.2);color:#b42318}.unified-alert button{margin-left:8px;border:0;background:transparent;color:#fff;text-decoration:underline;cursor:pointer}.snapshot-list{display:flex;flex-direction:column;gap:8px}.snapshot-row{display:flex;justify-content:space-between;gap:10px;padding:10px;border-radius:8px;background:#f7f9fd}.snapshot-row strong,.snapshot-row small{display:block}.snapshot-row small{margin-top:4px;color:var(--dash-text-muted);font-size:10px}.snapshot-row>span{color:#5b3df5;font-size:12px}.dc-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.dc-card{padding:13px 14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.dc-num{color:var(--dash-text);font-size:24px;font-weight:700;letter-spacing:-.02em}.dc-label{margin-top:4px;color:var(--dash-text-muted);font-size:11px}.inv-lic-bar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:12px}.inv-lic-title{color:var(--dash-text-muted);font-size:11.5px}.inv-lic-chip{display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:0 11px;border:1px solid var(--dash-border);border-radius:999px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer;font-size:11.5px}.inv-lic-chip i{color:var(--dash-text-muted);font-style:normal}.inv-lic-chip.on{border-color:rgba(124,92,255,.6);background:rgba(124,92,255,.12);color:#5b3df5}.inv-lic-chip.on i{color:#5b3df5}.inv-lic-chip.none{border-style:dashed}.inv-row-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.inv-row-head b{color:var(--dash-text);font-size:13px}.inv-row-sub{color:var(--dash-text-muted);font-size:10.5px}.inv-count{margin-left:auto;color:var(--dash-text-soft);font-size:11.5px}.inv-lic-tag{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 9px;border:1px solid rgba(124,92,255,.35);border-radius:999px;background:rgba(124,92,255,.1);color:#5b3df5;cursor:pointer;font-size:10.5px}.inv-lic-tag em{color:var(--dash-text-muted);font-style:normal}.inv-lic-tag.none{border-style:dashed;border-color:var(--dash-border);background:transparent;color:var(--dash-text-muted)}.inv-open-page{min-height:24px;padding:0 10px;font-size:10.5px;white-space:nowrap}.inv-lic-edit{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px;padding:9px;border:1px dashed var(--dash-border);border-radius:10px}.inv-lic-edit input{height:32px;min-width:200px;flex:1 1 220px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.inv-lic-err{color:#b42318;font-size:11px}.inv-schedule-dot{width:7px;height:7px;border-radius:50%;background:#98a2b3}.inv-schedule-dot.on{background:#12b76a}.invoice-section em{margin-left:4px;padding:1px 5px;border-radius:6px;background:#fff4e5;color:#b54708;font-size:9.5px;font-style:normal}.order-store-list,.invoice-list{display:flex;flex-direction:column;gap:12px}.order-store-block,.invoice-row{padding:13px;border:1px solid var(--dash-border);border-radius:10px;background:rgba(8,16,31,.45)}.order-store-head,.invoice-row-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.order-store-head strong,.invoice-row-head strong{display:block}.order-store-head span,.invoice-row-head span{display:block;margin-top:4px;color:var(--dash-text-muted);font-size:10px}.invoice-sections{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}.invoice-section{display:flex;flex-direction:column;gap:5px;padding:10px;border-radius:8px;background:#ededef}.invoice-section span{color:var(--dash-text-muted);font-size:10px}.manual-card{margin-top:12px}.manual-form{display:flex;flex-wrap:wrap;gap:8px}.manual-form select,.manual-form input{height:34px;min-width:160px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.loader{width:18px;height:18px;border:2px solid rgba(163,143,255,.2);border-top-color:#7c5cff;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.unified-page{min-width:0;min-height:0;height:100%;overflow:auto;padding:22px 24px 32px;color:var(--dash-text)}.unified-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:16px}.unified-page-head h1{margin:5px 0 7px;font-size:25px}.unified-page-head p{margin:0;color:var(--dash-text-muted);font-size:12px}.unified-page-actions{display:flex;gap:8px}.button-icon{width:15px;height:15px;object-fit:contain;vertical-align:-3px;margin-right:5px}.unified-button{min-height:32px;padding:0 13px;border:1px solid var(--dash-border);border-radius:9px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer}.unified-button:hover,.unified-button:focus-visible{border-color:rgba(151,120,255,.7);color:var(--dash-text);outline:none}.unified-button.primary{border-color:#5b3df5;background:#6d4aff;color:#ffffff}.unified-button:disabled{opacity:.55;cursor:not-allowed}.unified-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}.unified-stat-card{display:flex;flex-direction:column;gap:6px;padding:14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.unified-stat-card span,.unified-stat-card small{color:var(--dash-text-muted);font-size:11px}.unified-stat-card strong{font-size:25px}.unified-data-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr);gap:12px}.unified-card{min-width:0;padding:16px;border:1px solid var(--dash-border);border-radius:13px;background:#ffffff}.unified-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}.unified-card-head h2{margin:0 0 5px;font-size:16px}.unified-card-head span{color:var(--dash-text-muted);font-size:11px}.unified-table-wrap{overflow:auto}.unified-table{width:100%;border-collapse:collapse;font-size:11px}.unified-table th,.unified-table td{padding:10px 9px;border-bottom:1px solid rgba(111,137,177,.12);text-align:left;white-space:nowrap}.unified-table th{color:var(--dash-text-muted);font-weight:500}.unified-table td{color:var(--dash-text-soft)}.unified-table em{display:inline-block;margin-left:4px;padding:2px 4px;border-radius:4px;background:rgba(242,165,87,.15);color:#b54708;font-size:9px;font-style:normal}.unified-empty,.unified-state{display:flex;min-height:180px;align-items:center;justify-content:center;gap:10px;flex-direction:column;color:var(--dash-text-muted);border:1px dashed var(--dash-border);border-radius:11px}.unified-empty.compact{min-height:90px}.unified-alert{padding:10px 12px;margin-bottom:12px;border-radius:9px;font-size:12px}.unified-alert.error{border:1px solid rgba(239,99,119,.35);background:rgba(117,37,58,.2);color:#b42318}.unified-alert button{margin-left:8px;border:0;background:transparent;color:#fff;text-decoration:underline;cursor:pointer}.snapshot-list{display:flex;flex-direction:column;gap:8px}.snapshot-row{display:flex;justify-content:space-between;gap:10px;padding:10px;border-radius:8px;background:#f7f9fd}.snapshot-row strong,.snapshot-row small{display:block}.snapshot-row small{margin-top:4px;color:var(--dash-text-muted);font-size:10px}.snapshot-row>span{color:#5b3df5;font-size:12px}.dc-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.dc-card{padding:13px 14px;border:1px solid var(--dash-border);border-radius:12px;background:#ffffff}.dc-num{color:var(--dash-text);font-size:24px;font-weight:700;letter-spacing:-.02em}.dc-label{margin-top:4px;color:var(--dash-text-muted);font-size:11px}.inv-lic-bar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-bottom:12px}.inv-lic-title{color:var(--dash-text-muted);font-size:11.5px}.inv-lic-chip{display:inline-flex;align-items:center;gap:5px;min-height:30px;padding:0 11px;border:1px solid var(--dash-border);border-radius:999px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer;font-size:11.5px}.inv-lic-chip i{color:var(--dash-text-muted);font-style:normal}.inv-lic-chip.on{border-color:rgba(124,92,255,.6);background:rgba(124,92,255,.12);color:#5b3df5}.inv-lic-chip.on i{color:#5b3df5}.inv-lic-chip.none{border-style:dashed}.inv-row-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.inv-row-head b{color:var(--dash-text);font-size:13px}.inv-row-sub{color:var(--dash-text-muted);font-size:10.5px}.inv-count{margin-left:auto;color:var(--dash-text-soft);font-size:11.5px}.inv-lic-tag{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 9px;border:1px solid rgba(124,92,255,.35);border-radius:999px;background:rgba(124,92,255,.1);color:#5b3df5;cursor:pointer;font-size:10.5px}.inv-lic-tag em{color:var(--dash-text-muted);font-style:normal}.inv-lic-tag.none{border-style:dashed;border-color:var(--dash-border);background:transparent;color:var(--dash-text-muted)}.inv-open-page{min-height:24px;padding:0 10px;font-size:10.5px;white-space:nowrap}.inv-lic-edit{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:9px;padding:9px;border:1px dashed var(--dash-border);border-radius:10px}.inv-lic-edit input{height:32px;min-width:200px;flex:1 1 220px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.inv-lic-err{color:#b42318;font-size:11px}.inv-schedule-dot{width:7px;height:7px;border-radius:50%;background:#98a2b3}.inv-schedule-dot.on{background:#12b76a}.invoice-section em{margin-left:4px;padding:1px 5px;border-radius:6px;background:#fff4e5;color:#b54708;font-size:9.5px;font-style:normal}.invoice-list{display:flex;flex-direction:column;gap:12px}.invoice-row{padding:13px;border:1px solid var(--dash-border);border-radius:10px;background:rgba(8,16,31,.45)}.invoice-row-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.invoice-row-head strong{display:block}.invoice-row-head span{display:block;margin-top:4px;color:var(--dash-text-muted);font-size:10px}.invoice-sections{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}.invoice-section{display:flex;flex-direction:column;gap:5px;padding:10px;border-radius:8px;background:#ededef}.invoice-section span{color:var(--dash-text-muted);font-size:10px}.manual-card{margin-top:12px}.manual-form{display:flex;flex-wrap:wrap;gap:8px}.manual-form select,.manual-form input{height:34px;min-width:160px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft)}.loader{width:18px;height:18px;border:2px solid rgba(163,143,255,.2);border-top-color:#7c5cff;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:980px){.unified-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.unified-data-grid{grid-template-columns:1fr}}
 /* 发票中心：主体（申报要用的那一列）与「获取主体营业执照」结果 */
 .inv-head-actions{display:flex;gap:8px;flex-wrap:wrap}

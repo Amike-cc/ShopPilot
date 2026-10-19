@@ -9,6 +9,8 @@ import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { PLATFORM_CATALOG } from '@shared/constants/platforms'
 import type { TabInfo } from '../env'
 import { initCustomerMessageSound, playCustomerMessageBeep } from '../features/customer-service/customer-message-sound'
+// 店铺分组的输入口径（trim / 折叠空白 / 空→null / 字符白名单）与店铺页共用同一个纯模块
+import { normalizeGroupName } from '../features/stores/store-group'
 
 /**
  * 「其他」平台筛选项的哨兵值：内置平台目录之外的自定义平台聚合成一个 chip
@@ -117,7 +119,7 @@ export const useWorkspaceStore = defineStore('workspace', {
      *  否则 A 店的加载结束会把 B 店的转圈清掉 */
     loadingTabs: [] as string[],
     /** 右栏 */
-    rightPanel: 'bookmarks' as 'bookmarks' | 'downloads' | 'env' | 'tasks',
+    rightPanel: 'invite' as 'bookmarks' | 'downloads' | 'env' | 'invite',
     bookmarks: [] as any[],
     bookmarksStoreId: null as string | null,
     downloads: [] as any[],
@@ -225,6 +227,16 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
         if ((payload.tabs || []).length === 0) {
           this.openStoreIds = this.openStoreIds.filter(id => id !== payload.storeId)
+          delete this.tabsByStore[payload.storeId]
+          delete this.activeTabIdByStore[payload.storeId]
+          if (this.displayedStoreId === payload.storeId) {
+            this.displayedStoreId = null
+            this.downloads = []
+            this.downloadsStoreId = null
+            this.bookmarks = []
+            this.bookmarksStoreId = null
+            void window.shopilot.browser.display(null)
+          }
         }
       })
       // 主进程单方面切换了"当前显示哪家店"（采集任务批量开店铺、Agent 逐店动作都会走
@@ -520,12 +532,48 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async activateTab(tabId: string) {
       if (!this.displayedStoreId) return
-      await window.shopilot.browser.tab.activate(this.displayedStoreId, tabId)
+      const res = await window.shopilot.browser.tab.activate(this.displayedStoreId, tabId)
+      if (!res.ok) this.toast('切换标签页失败: ' + res.error.message, 'error')
     },
 
     async closeTab(tabId: string) {
       if (!this.displayedStoreId) return
-      await window.shopilot.browser.tab.close(this.displayedStoreId, tabId)
+      const res = await window.shopilot.browser.tab.close(this.displayedStoreId, tabId)
+      if (!res.ok) this.toast('关闭标签页失败: ' + res.error.message, 'error')
+    },
+
+    /** 批量关闭标签页：结果由调用方决定怎么提示（数量/保留固定/无可关闭） */
+    async closeTabs(input: { mode: 'ids' | 'others' | 'all', tabIds?: string[], keepTabId?: string, includePinned?: boolean }) {
+      if (!this.displayedStoreId) return null
+      // tabIds 展开成纯数组：调用方可能直接传 reactive 数组（Proxy 过不了 IPC 结构化克隆）
+      const res = await window.shopilot.browser.tab.closeMany({
+        storeId: this.displayedStoreId,
+        mode: input.mode,
+        tabIds: input.tabIds ? [...input.tabIds] : undefined,
+        keepTabId: input.keepTabId,
+        includePinned: input.includePinned
+      })
+      if (!res.ok) {
+        this.toast('关闭标签页失败: ' + res.error.message, 'error')
+        return null
+      }
+      return res.data as { closed: number, skippedPinned: number, remaining: number, nothingToClose: boolean }
+    },
+
+    /** 固定 / 取消固定标签页：一键关闭会跳过固定标签，标签栏上的固定标记也来自这里 */
+    async setTabPinned(tabId: string, pinned: boolean) {
+      if (!this.displayedStoreId) return
+      const res = await window.shopilot.browser.tab.setPinned(this.displayedStoreId, tabId, pinned)
+      if (!res.ok) this.toast('固定标签页失败: ' + res.error.message, 'error')
+    },
+
+    /** 标签页重排：按传入顺序写 orderIndex（未传入的由主进程排在后面） */
+    async reorderTabs(orderedTabIds: string[]) {
+      if (!this.displayedStoreId) return
+      // orderedTabIds 展开成纯数组：调用方拿到的是 reactive 数组（Proxy 过不了 IPC 结构化克隆），
+      // 与 closeTabs 的 tabIds 同理
+      const res = await window.shopilot.browser.tab.reorder(this.displayedStoreId, [...orderedTabIds])
+      if (!res.ok) this.toast('标签页排序失败: ' + res.error.message, 'error')
     },
 
     async navigate(url: string) {
@@ -538,7 +586,8 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async tabControl(action: 'back' | 'forward' | 'reload') {
       if (!this.displayedStoreId || !this.activeTab) return
-      await window.shopilot.browser.tab.control(this.displayedStoreId, this.activeTab.id, action)
+      const res = await window.shopilot.browser.tab.control(this.displayedStoreId, this.activeTab.id, action)
+      if (!res.ok) this.toast('浏览器操作失败: ' + res.error.message, 'error')
     },
 
     async createStore(input: any) {
@@ -566,6 +615,24 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
       await this.refreshStores()
       return { ok: true }
+    },
+
+    /**
+     * 设置 / 清除店铺分组（null / 空串 = 取消分组）。
+     * 主进程 `store:setGroup` 全链路已齐全，这里只补渲染层入口：先按纯模块的规则规范化再过 IPC，
+     * 成功后**就地**改这一行（沿用 STORE_STATUS_CHANGED 的写法），不整表重载——
+     * 分组是低频小改动，重载会把搜索词、滚动位置和别的店铺状态一起抖掉。
+     */
+    async setStoreGroup(storeId: string, groupName: string | null): Promise<boolean> {
+      const normalized = normalizeGroupName(groupName)
+      const res = await window.shopilot.store.setGroup(storeId, normalized)
+      if (!res.ok) {
+        this.toast('保存店铺分组失败: ' + res.error.message, 'error')
+        return false
+      }
+      const index = this.stores.findIndex(store => store.id === storeId)
+      if (index >= 0) this.stores[index] = { ...this.stores[index], groupName: normalized }
+      return true
     },
 
     async archiveStore(storeId: string) {

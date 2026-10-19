@@ -15,7 +15,10 @@ import { resolve } from 'node:path'
 
 const read = (p: string) => readFileSync(resolve(p), 'utf8')
 
-const WINDOW_MANAGER = read('apps/desktop/src/main/browser/window-manager.ts')
+// 2026-10-19 P1 重构：window-manager.ts 已拆成 browser/ 下多个内聚模块，
+// 源码级断言（不是 import 调用）改为扫描整个模块集合；断言语义不变。
+const WM_FILES = ['window-manager.ts', 'window-state.ts', 'window-browser-core.ts', 'window-capture.ts', 'window-diagnostics.ts']
+const WINDOW_MANAGER = WM_FILES.map(f => read(`apps/desktop/src/main/browser/${f}`)).join('\n')
 const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue')
 const WORKSPACE = read('apps/desktop/src/renderer/src/stores/workspace.ts')
 const METRICS_SERVICE = read('apps/desktop/src/main/sales-metrics/sales-metrics-collection-service.ts')

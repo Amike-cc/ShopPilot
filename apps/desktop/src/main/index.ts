@@ -22,7 +22,6 @@ import { registerBookmarkAndDownloadHandlers } from './ipc/bookmark-download-han
 import { registerProfileAndMiscHandlers } from './ipc/profile-misc-handlers'
 import { registerProxyAndBackupHandlers } from './ipc/proxy-backup-handlers'
 import { registerPlatformHandlers } from './ipc/platform-handlers'
-import { registerOrderHandlers } from './ipc/order-handlers'
 import { registerSalesMetricsHandlers } from './ipc/sales-metrics-handlers'
 import { registerProductHandlers } from './ipc/product-handlers'
 import { backfillProductStatusesIfNeeded } from './products/product-library-service'
@@ -441,7 +440,7 @@ function createWindow(): void {
     logMain('warn', 'main window: close 事件（窗口即将关闭）')
   })
 
-  // §8.2 主窗口作为店铺浏览器的宿主（WebContentsView 内嵌）
+  // §8.2 主窗口作为店铺浏览器的宿主（店铺页 = 渲染层 DOM <webview>，guest 注册后绑定到本窗口）
   setBrowserHostWindow(mainWindow)
 
   // §22 renderer 控制台错误进主日志（截断防噪音；脱敏由 logger 统一处理）
@@ -540,7 +539,6 @@ async function initialize(): Promise<void> {
     registerProfileAndMiscHandlers()
     registerProxyAndBackupHandlers()
     registerPlatformHandlers()
-    registerOrderHandlers()
     registerSalesMetricsHandlers()
   registerProductHandlers()
     registerTaskHandlers()

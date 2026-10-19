@@ -10,6 +10,13 @@ export default defineConfig({
     // 它的部分叶子依赖（tiny-typed-emitter / lodash.escaperegexp / lodash.isequal），
     // 导致打包态主进程 require 即崩（asar 内 MODULE_NOT_FOUND，dev 态符号链接正常）。
     plugins: [externalizeDepsPlugin({ exclude: ['electron-updater'] })],
+    // 验收测试钩子构建开关（2026-10-19 审查整改）：生产构建默认 false，把
+    // 「自动确认 / 替代密码对话框 / 扩展目录注入 / 记忆故障注入」等钩子的总门禁关死；
+    // 只有 `pnpm run dist:acceptance`（SHOPILOT_BUILD_ACCEPTANCE=1）才注入 true。
+    // 详见 packages/shared/src/acceptance-gate.ts 与 docs/ACCEPTANCE_HOOKS.md。
+    define: {
+      __SHOPILOT_ACCEPTANCE_BUILD__: JSON.stringify(process.env.SHOPILOT_BUILD_ACCEPTANCE === '1')
+    },
     resolve: {
       alias: {
         '@shared': resolve('packages/shared/src')

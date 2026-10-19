@@ -1,10 +1,9 @@
 <template>
-  <section :class="['dashboard-shell welcome', { 'picker-mode': taskPicking && activePage === 'browser', 'image-studio-shell': activePage === 'image-studio', 'workspace-hidden': !props.active }]" data-test="dashboard-home">
-    <aside class="dashboard-sidebar sidebar" :class="{ collapsed: leftSidebarCollapsed }" data-test="sidebar" aria-label="ShopPilot 主导航">
-      <div v-if="leftSidebarCollapsed" class="sidebar-rail">
+  <section :class="['dashboard-shell welcome', { 'image-studio-shell': activePage === 'image-studio', 'workspace-hidden': !props.active, 'mobile-nav-open': mobileNavOpen }]" data-test="dashboard-home">
+    <aside class="dashboard-sidebar sidebar" :class="{ collapsed: leftSidebarCollapsed, 'mobile-open': mobileNavOpen }" data-test="sidebar" aria-label="ShopPilot 主导航">
+      <div v-if="leftSidebarCollapsed && !mobileNavOpen" class="sidebar-rail">
         <button type="button" class="rail-btn" data-test="sidebar-expand" title="展开左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(true)"><img :src="forwardIcon" alt="" /></button>
         <button type="button" class="rail-btn btn-new" data-test="rail-new" title="添加店铺" @click="openStoreCreate"><img :src="addIcon" alt="" /></button>
-        <button type="button" class="rail-btn" data-test="rail-tasks" title="任务中心" @click="openTasks(false)"><img :src="utilityTasksIcon" alt="" /></button>
         <button type="button" class="rail-btn" data-test="rail-trash" title="回收站" @click="openTrash">
           <img :src="utilityTrashIcon" alt="" />
           <span v-if="ws.trashStores.length" class="rail-badge" data-test="rail-trash-badge"></span>
@@ -29,6 +28,7 @@
             :key="item.label"
             type="button"
             :class="['dashboard-nav-item', { active: activeNav === item.label }]"
+            :data-test="`nav-${item.key}`"
             :aria-current="activeNav === item.label ? 'page' : undefined"
             @click="handleNav(item)"
           >
@@ -112,8 +112,28 @@
       </template>
     </aside>
 
+    <button
+      v-if="mobileNavOpen"
+      type="button"
+      class="mobile-sidebar-backdrop"
+      data-test="mobile-sidebar-backdrop"
+      aria-label="关闭导航菜单"
+      @click="mobileNavOpen = false"
+    ></button>
+
     <main class="dashboard-main">
       <header class="dashboard-toolbar">
+        <button
+          type="button"
+          class="mobile-nav-toggle"
+          data-test="mobile-nav-toggle"
+          :aria-expanded="mobileNavOpen"
+          :aria-label="mobileNavOpen ? '关闭导航菜单' : '打开导航菜单'"
+          title="导航菜单"
+          @click="toggleMobileNav"
+        >
+          <span></span><span></span><span></span>
+        </button>
         <div class="toolbar-crumb" aria-label="当前位置">
           <span class="crumb-root">工作台</span>
           <span class="crumb-sep" aria-hidden="true">/</span>
@@ -163,13 +183,13 @@
             </button>
             <div v-if="notificationOpen" class="notification-center" data-test="notification-center" role="dialog" aria-label="通知中心">
               <header><strong>通知</strong><span>{{ notificationCount }} 条</span></header>
-              <div v-if="!notifications.length" class="notification-empty" data-test="notification-empty">暂无通知：进行中的任务、待确认任务、24 小时内的失败任务与客服未读会出现在这里。</div>
+              <div v-if="!notifications.length" class="notification-empty" data-test="notification-empty">暂无通知：达人邀约状态与客服未读会出现在这里。</div>
               <button v-for="item in notifications" :key="item.id" type="button" class="notification-item" :class="'tone-' + item.tone" :data-test="'notification-item-' + item.id" @click="runNotification(item)">
                 <strong>{{ item.title }}</strong><span>{{ item.detail }}</span>
               </button>
             </div>
           </div>
-          <button type="button" class="toolbar-icon-button" title="帮助（Ctrl+K 打开命令面板）" @click="showNotice('按 Ctrl+K 打开命令面板；店铺、任务与设置入口在左栏与各页面内')"><img :src="helpIcon" alt="" /></button>
+          <button type="button" class="toolbar-icon-button" title="帮助（Ctrl+K 打开命令面板）" @click="showNotice('按 Ctrl+K 打开命令面板；店铺与设置入口在左栏与各页面内')"><img :src="helpIcon" alt="" /></button>
           <span class="toolbar-avatar" aria-hidden="true" title="ShopPilot Pro">SP</span>
         </div>
       </header>
@@ -184,166 +204,35 @@
         data-test="dashboard-browser-host"
       >
         <DashboardBrowserSurface
-          :picker-mode="taskPicking"
           :active="browserHostActive"
-          @open-tasks="openTasks"
           @open-settings="openSettingsTab"
         />
       </div>
-      <UnifiedTaskPage
-        v-if="activePage === 'browser' && taskOverlay"
-        :auto-create="taskAutoCreate"
-        :overlay="true"
-        @picking-change="setTaskPicking"
-        @close="closeTaskOverlay"
-        @open-store="openStoreFromPage"
-      />
-      <UnifiedStorePage v-else-if="activePage === 'stores'" @open-store="openStoreFromPage" />
-      <UnifiedDataPage v-else-if="activePage === 'analytics'" mode="analytics" @change-mode="changeDataPage" @open-store="openStoreFromPage" />
-      <UnifiedDataPage v-else-if="activePage === 'orders'" mode="orders" @change-mode="changeDataPage" @open-store="openStoreFromPage" />
-      <UnifiedDataPage v-else-if="activePage === 'invoices'" mode="invoices" @change-mode="changeDataPage" @open-store="openStoreFromPage" />
-      <UnifiedTaskPage v-else-if="activePage === 'tasks'" :auto-create="taskAutoCreate" @open-store="openStoreFromPage" />
+      <!-- 页面链与 guest 宿主**并存**：宿主由 CSS（.dashboard-browser-host:not(.active)）
+           移出布局流隐藏（guest 保活），只有 browserHostActive 时才接管主区域。
+           曾经把页面链写成宿主后面的 v-else-if，导致"有店铺打开时所有页面都不渲染"
+           （2026-10-19 集成验收实报）。 -->
+      <template v-if="!browserHostActive">
+      <UnifiedStorePage v-if="activePage === 'stores'" @open-store="openStoreFromPage" />
+      <UnifiedDataPage v-else-if="activePage === 'analytics'" mode="analytics" @open-store="openStoreFromPage" />
+      <UnifiedDataPage v-else-if="activePage === 'invoices'" mode="invoices" @open-store="openStoreFromPage" />
+      <UnifiedDataPage v-else-if="activePage === 'tax'" mode="tax" @open-store="openStoreFromPage" />
       <UnifiedSettingsPage v-else-if="activePage === 'settings'" :initial-tab="settingsTab" @close="closeSettings" />
       <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" @busy-change="imageStudioBusy = $event" />
       <ProductManagementPage v-else-if="activePage === 'products'" @navigate="navigateTo" @open-store="openStoreFromPage" />
-      <UnifiedAppsPage v-else-if="activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-assistant="openAssistant" />
-      <div v-else-if="activePage === 'overview'" class="overview-page">
-        <div v-if="dataState === 'error'" class="dashboard-error" role="alert">
-          <img class="state-icon" :src="errorIcon" alt="" />
-          <span>{{ dataError || '首页数据暂时无法读取' }}</span>
-          <button type="button" @click="loadDashboardData"><img class="inline-action-icon" :src="dashboardRetryIcon" alt="" />重试</button>
-        </div>
-
-        <div class="ov-grid">
-          <div class="ov-col-main">
-            <section id="sales-trend" class="ov-card ov-card-dark">
-              <div class="ov-card-head">
-                <div class="ov-card-title">
-                  <div class="ov-title-row">
-                    <h2>销售概览</h2>
-                    <button type="button" class="ov-refresh" data-test="overview-refresh" :disabled="collectState.running || dataState === 'loading'" @click="refreshData">
-                      <img class="refresh-icon" :src="refreshIcon" alt="" />{{ refreshLabel }}
-                    </button>
-                  </div>
-                  <span>核心经营指标</span>
-                </div>
-                <div class="ov-card-tools">
-                  <div class="period-tabs" role="tablist" aria-label="统计范围">
-                    <button v-for="periodOption in periodOptions" :key="periodOption.key" type="button" :class="{ active: period === periodOption.key }" @click="period = periodOption.key">{{ periodOption.label }}</button>
-                  </div>
-                  <select v-model="selectedPlatform" class="platform-select" aria-label="平台筛选">
-                    <option value="all">全部平台</option>
-                    <option v-for="platform in platformOptions" :key="platform" :value="platform">{{ platform }}</option>
-                  </select>
-                </div>
-              </div>
-
-              <div class="ov-kpis">
-                <div v-for="kpi in kpiRow" :key="kpi.key" :class="['ov-kpi', `tone-${kpi.tone}`]" :title="kpi.hint">
-                  <span class="kpi-label">{{ kpi.label }}</span>
-                  <strong class="kpi-value" :class="{ placeholder: kpi.value === '—' }">{{ kpi.value }}</strong>
-                  <span v-if="kpi.delta !== null" :class="['kpi-delta', deltaClass(kpi)]"><img class="delta-icon" :src="kpi.delta >= 0 ? trendUpIcon : trendDownIcon" alt="" /> {{ Math.abs(kpi.delta).toFixed(1) }}%</span>
-                  <span v-else class="kpi-delta muted">{{ kpi.note }}</span>
-                </div>
-              </div>
-
-              <div class="trend-chart-wrap">
-                <div v-if="snapshotState === 'loading' || collectedState === 'loading'" class="section-state chart-state"><span class="loader"></span> 正在读取趋势数据…</div>
-                <div v-else-if="snapshotState === 'error' && collectedState === 'error'" class="section-state chart-state error-state">趋势数据读取失败 <button type="button" @click="loadSnapshots(); loadCollectedMetrics()"><img class="inline-action-icon" :src="dashboardRetryIcon" alt="" />重试</button></div>
-                <div v-else-if="!trendPlot.length" class="section-state chart-state"><img class="dashboard-state-art analytics-state-art" :src="emptyAnalyticsArt" alt="暂无趋势数据" /><strong>暂无可用趋势数据</strong><span>{{ trendEmptyHint }}</span></div>
-                <template v-else>
-                  <svg class="trend-chart" viewBox="0 0 900 260" role="img" aria-label="销售额和订单数趋势图" @mouseleave="hoveredPoint = null">
-                    <defs>
-                      <linearGradient id="gmv-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#8b6cff" stop-opacity=".38" /><stop offset="1" stop-color="#8b6cff" stop-opacity="0" /></linearGradient>
-                    </defs>
-                    <g class="chart-grid">
-                      <template v-for="tick in chartYAxis" :key="tick.value">
-                        <line x1="62" :y1="tick.y" x2="874" :y2="tick.y" />
-                        <text class="chart-y-label" x="48" :y="tick.y + 4" text-anchor="end">{{ tick.label }}</text>
-                      </template>
-                      <line v-for="point in trendPlot" :key="`v-${point.key}`" class="chart-grid-v" :x1="point.x" y1="18" :x2="point.x" y2="216" />
-                    </g>
-                    <path v-if="gmvAreaPath" :d="gmvAreaPath" class="chart-area gmv-area" />
-                    <path v-if="orderPath" :d="orderPath" class="chart-line order-line" />
-                    <path v-if="gmvPath" :d="gmvPath" class="chart-line gmv-line" />
-                    <g v-for="point in trendPlot" :key="point.key">
-                      <text class="chart-x-label" :x="point.x" y="244" text-anchor="middle">{{ point.label }}</text>
-                      <circle v-if="point.gmvY !== null" class="chart-point gmv-point" :cx="point.x" :cy="point.gmvY" r="3.5" @mouseenter="hoveredPoint = point" />
-                      <circle v-if="point.ordersY !== null" class="chart-point order-point" :cx="point.x" :cy="point.ordersY" r="3" @mouseenter="hoveredPoint = point" />
-                    </g>
-                    <line v-if="hoveredPoint" class="chart-guide" :x1="hoveredPoint.x" y1="14" :x2="hoveredPoint.x" y2="216" />
-                    <circle v-if="hoveredPoint && hoveredPoint.gmvY !== null" class="chart-hover-dot gmv" :cx="hoveredPoint.x" :cy="hoveredPoint.gmvY" r="4.5" />
-                    <circle v-if="hoveredPoint && hoveredPoint.ordersY !== null" class="chart-hover-dot orders" :cx="hoveredPoint.x" :cy="hoveredPoint.ordersY" r="4.5" />
-                  </svg>
-                  <div v-if="hoveredPoint" class="trend-tooltip" :style="tooltipStyle">
-                    <strong>{{ hoveredPoint.fullLabel }}</strong>
-                    <span v-if="hoveredPoint.gmv !== null"><i class="tooltip-dot gmv"></i>销售额 <b>{{ formatNumber(hoveredPoint.gmv) }}</b></span>
-                    <span v-if="hoveredPoint.orders !== null"><i class="tooltip-dot orders"></i>订单数 <b>{{ formatNumber(hoveredPoint.orders) }}</b></span>
-                  </div>
-                  <div class="chart-legend">
-                    <span><i class="legend-dot gmv"></i>销售额</span>
-                    <span><i class="legend-dot orders"></i>订单数</span>
-                  </div>
-                </template>
-              </div>
-              <p class="ov-card-caption">{{ trendCaption }}</p>
-            </section>
-
-            <section id="quick-start" class="ov-card">
-              <div class="ov-card-head"><div class="ov-card-title"><h2>快捷操作</h2><span>常用能力一键直达</span></div></div>
-              <div class="shortcut-grid">
-                <article v-for="tile in quickActions" :key="tile.key" :class="['shortcut-tile', `tone-${tile.tone}`, { disabled: !tile.available }]" :data-test="'quick-action-' + tile.key">
-                  <span class="tile-icon" aria-hidden="true"><img :src="tile.icon" alt="" /></span>
-                  <div class="tile-copy"><strong>{{ tile.label }}</strong><small>{{ tile.description }}</small></div>
-                  <button type="button" class="tile-action" :data-test="'quick-action-btn-' + tile.key" :disabled="!tile.available" @click="handleQuickAction(tile)"><template v-if="tile.available">{{ tile.actionLabel }} <img class="inline-action-icon" :src="forwardIcon" alt="" /></template><template v-else>待接入</template></button>
-                </article>
-              </div>
-            </section>
-          </div>
-
-          <aside class="ov-col-rail">
-            <section id="platform-sync" class="ov-card ov-sync">
-              <div class="ov-card-head">
-                <div class="ov-card-title"><h2>平台同步状态</h2></div>
-                <span class="ov-pill success">{{ platformOnlineSummary }}</span>
-              </div>
-              <div v-if="!platformSyncRows.length" class="ov-empty"><img class="dashboard-state-art compact-state-art" :src="emptyStoreArt" alt="暂无店铺连接" /><span>暂无店铺连接</span></div>
-              <div v-for="row in platformSyncRows" :key="row.name" class="sync-row">
-                <PlatformIcon :name="row.name" :size="34" />
-                <div class="sync-copy"><strong>{{ row.name }}</strong><span>{{ row.count }} 家店铺</span></div>
-                <div class="sync-meta"><span :class="['sync-dot', row.state]"></span><strong>{{ row.stateLabel }}</strong><small>{{ row.lastSync }}</small></div>
-              </div>
-              <button type="button" class="ov-link" @click="navigateTo('stores')">管理店铺 <img class="inline-action-icon" :src="forwardIcon" alt="" /></button>
-            </section>
-
-            <section id="ai-assistant" class="ov-card ov-ai">
-              <div class="ov-ai-glow" aria-hidden="true"></div>
-              <div class="ov-ai-copy">
-                <h2><img class="ai-heading-icon" :src="recommendIcon" alt="" /> AI 电商助手</h2>
-                <p>创作、优化、分析，一站完成</p>
-                <button type="button" class="ov-ai-button" @click="openAssistant">开始对话 <img class="inline-action-icon" :src="forwardIcon" alt="" /></button>
-              </div>
-            </section>
-
-            <section id="ai-tasks" class="ov-card ov-todo">
-              <div class="ov-card-head">
-                <div class="ov-card-title"><h2>待办任务</h2></div>
-                <span class="ov-pill info">{{ pendingTasks.length }} 项待处理</span>
-                <button type="button" class="ov-link inline" @click="navigateTo('tasks')">查看全部 <img class="inline-action-icon" :src="forwardIcon" alt="" /></button>
-              </div>
-              <div v-if="taskState === 'loading'" class="ov-empty"><span class="loader"></span> 正在读取任务…</div>
-              <div v-else-if="!pendingTasks.length" class="ov-empty"><img class="dashboard-state-art compact-state-art" :src="emptyTasksArt" alt="暂无待办" /><span>暂无待办：没有需要人工处理的任务或待开发票店铺</span></div>
-              <ul v-else class="todo-list">
-                <li v-for="item in pendingTasks" :key="item.id" class="todo-item" :class="{ clickable: item.kind === 'invoice' }" :role="item.kind === 'invoice' ? 'button' : undefined" :tabindex="item.kind === 'invoice' ? 0 : undefined" @click="item.kind === 'invoice' && navigateTo('invoices')" @keydown.enter="item.kind === 'invoice' && navigateTo('invoices')">
-                  <span class="todo-check" aria-hidden="true"></span>
-                  <span class="todo-title" :title="item.name">{{ item.name }}</span>
-                  <span :class="['todo-chip', item.tone]">{{ item.badge }}</span>
-                </li>
-              </ul>
-            </section>
-          </aside>
-        </div>
-      </div>
+      <CreatorInvitePage v-else-if="activePage === 'creator-invite'" @open-config="openCreatorInvite" @open-store="openStoreFromPage" @navigate="handleInviteNavigate" />
+      <UnifiedAppsPage v-else-if="activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-assistant="openAssistant" @open-invite="openCreatorInvite" />
+      <DashboardOverviewPage
+        v-else-if="activePage === 'overview'"
+        :invoice-todo-state="invoiceTodoState"
+        :pending-invoices="pendingInvoices"
+        @navigate="navigateTo"
+        @open-invoices="navigateTo('invoices')"
+        @open-assistant="openAssistant"
+        @notice="showNotice"
+        @refresh-invoice-todo="loadInvoiceTodo"
+      />
+      </template>
     </main>
 
     <div v-if="storeContext.open && storeContext.store" class="dashboard-context-menu" data-test="store-ctx" :style="{ left: `${storeContext.x}px`, top: `${storeContext.y}px` }" @click.stop>
@@ -375,10 +264,10 @@
       </section>
     </div>
 
-    <div v-if="confirmDialog.open" class="dashboard-overlay" data-test="confirm-dialog" @click.self="confirmDialog.open = false">
+    <div v-if="confirmDialog.open" class="dashboard-overlay" data-test="confirm-dialog" @click.self="dismissConfirmDialog">
       <section class="dashboard-dialog" role="dialog" aria-modal="true" aria-label="确认操作">
         <h2>{{ confirmDialog.title }}</h2><p class="dashboard-dialog-note">{{ confirmDialog.message }}</p>
-        <div class="dashboard-dialog-actions"><button type="button" class="unified-button" @click="confirmDialog.open = false">取消</button><button type="button" class="unified-button danger" data-test="confirm-ok" @click="runConfirmDialog">确认</button></div>
+        <div class="dashboard-dialog-actions"><button type="button" class="unified-button" @click="dismissConfirmDialog">取消</button><button type="button" class="unified-button danger" data-test="confirm-ok" @click="runConfirmDialog">确认</button></div>
       </section>
     </div>
 
@@ -414,7 +303,7 @@
 
     <div v-if="commandOpen" class="command-backdrop" @click.self="commandOpen = false">
       <section class="command-palette" role="dialog" aria-modal="true" aria-label="全局搜索">
-        <div class="command-search"><img class="command-search-icon" :src="observeIcon" alt="" /><input ref="commandInput" v-model="globalQuery" autofocus placeholder="搜索功能、店铺或任务…" @keydown.esc="commandOpen = false" /></div>
+        <div class="command-search"><img class="command-search-icon" :src="observeIcon" alt="" /><input ref="commandInput" v-model="globalQuery" autofocus placeholder="搜索功能、店铺或达人邀约…" @keydown.esc="commandOpen = false" /></div>
         <div v-if="commandResults.length" class="command-results"><button v-for="result in commandResults" :key="result.key" type="button" @click="runCommand(result)"><span class="command-result-icon"><img :src="result.icon" alt="" /></span><span><strong>{{ result.label }}</strong><small>{{ result.description }}</small></span><kbd>↵</kbd></button></div>
         <div v-else class="command-empty">没有匹配的功能或店铺</div>
       </section>
@@ -428,17 +317,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import AgentDock from '../agent/AgentDock.vue'
 import DashboardBrowserSurface from './DashboardBrowserSurface.vue'
-import UnifiedImageStudioPage from './UnifiedImageStudioPage.vue'
-import UnifiedAppsPage from './UnifiedAppsPage.vue'
-import ProductManagementPage from '../products/ProductManagementPage.vue'
-import UnifiedDataPage from './UnifiedDataPage.vue'
-import UnifiedSettingsPage from './UnifiedSettingsPage.vue'
-import UnifiedStorePage from './UnifiedStorePage.vue'
-import UnifiedTaskPage from './UnifiedTaskPage.vue'
+// 首屏按需加载：这些页面级重资产（图片工作台的图片资源、数据中心/设置/商品/邀约）只在用户真正
+// 切到对应页签时才拉取对应 chunk，首屏 JS 不再把它们打进来。组件名与 props/emits 用法不变。
+const UnifiedStorePage = defineAsyncComponent(() => import('./UnifiedStorePage.vue'))
+const UnifiedDataPage = defineAsyncComponent(() => import('./UnifiedDataPage.vue'))
+const UnifiedSettingsPage = defineAsyncComponent(() => import('./UnifiedSettingsPage.vue'))
+const UnifiedImageStudioPage = defineAsyncComponent(() => import('./UnifiedImageStudioPage.vue'))
+const ProductManagementPage = defineAsyncComponent(() => import('../products/ProductManagementPage.vue'))
+const CreatorInvitePage = defineAsyncComponent(() => import('../invite/CreatorInvitePage.vue'))
+const UnifiedAppsPage = defineAsyncComponent(() => import('./UnifiedAppsPage.vue'))
+import DashboardOverviewPage from './components/DashboardOverviewPage.vue'
+import { waitForWorkspaceReady } from './use-dashboard-overview'
 import { buildWorkbenchNotifications, type WorkbenchNotificationItem } from './notification-center'
 import { useAgentStore } from '../../stores/agent'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
@@ -447,29 +340,21 @@ import productsIcon from '../../assets/icons/nav-products.svg'
 import storeIcon from '../../assets/icons/nav-store.svg'
 import aiIcon from '../../assets/icons/nav-ai.svg'
 import analyticsIcon from '../../assets/icons/nav-analytics.svg'
+import invoicesIcon from '../../assets/icons/app-invoices.svg'
+import taxIcon from '../../assets/icons/app-tax.svg'
 import appsIcon from '../../assets/icons/nav-apps.svg'
 import settingsIcon from '../../assets/icons/nav-settings.svg'
 import utilityTrashIcon from '../../assets/icons/utility-trash.svg'
-import utilityTasksIcon from '../../assets/icons/browser-tasks.svg'
 import notificationIcon from '../../assets/icons/utility-notifications.svg'
 import brandMark from '../../assets/generated/shopilot-logo-generated.png'
-import ordersIcon from '../../assets/icons/app-orders.svg'
-import tasksIcon from '../../assets/icons/app-tasks.svg'
-import invoicesIcon from '../../assets/icons/app-invoices.svg'
 import dateIcon from '../../assets/generated/ui-icons/date.png'
 import helpIcon from '../../assets/generated/ui-icons/help.png'
-import refreshIcon from '../../assets/generated/ui-icons/refresh.png'
-import errorIcon from '../../assets/generated/ui-icons/error.png'
 import addIcon from '../../assets/generated/ui-icons/add.png'
 import openIcon from '../../assets/generated/ui-icons/open.png'
-import recommendIcon from '../../assets/generated/ui-icons/recommend.png'
 import observeIcon from '../../assets/generated/ui-icons/observe.png'
 import forwardIcon from '../../assets/generated/ui-icons/forward-gen.png'
 import backIcon from '../../assets/generated/ui-icons/back-gen.png'
-import trendUpIcon from '../../assets/generated/ui-icons/trend-up-gen.png'
-import trendDownIcon from '../../assets/generated/ui-icons/trend-down-gen.png'
 import caretDownIcon from '../../assets/generated/ui-icons/caret-down-gen.png'
-import dashboardRetryIcon from '../../assets/generated/ui-icons/dashboard-retry-gen.png'
 import dashboardBrowserIcon from '../../assets/generated/ui-icons/dashboard-browser-window-gen.png'
 import dashboardExternalIcon from '../../assets/generated/ui-icons/dashboard-external-window-gen.png'
 import dashboardRenameIcon from '../../assets/generated/ui-icons/dashboard-rename-gen.png'
@@ -478,26 +363,10 @@ import dashboardTrashIcon from '../../assets/generated/ui-icons/dashboard-trash-
 import dashboardRestoreIcon from '../../assets/generated/ui-icons/dashboard-restore-gen.png'
 import dashboardPurgeIcon from '../../assets/generated/ui-icons/dashboard-purge-gen.png'
 import emptyStoreArt from '../../assets/ui/dashboard/empty-store.png'
-import emptyTasksArt from '../../assets/ui/dashboard/empty-tasks.png'
-import emptyAnalyticsArt from '../../assets/ui/dashboard/empty-analytics.png'
-import type { SalesMetrics, SalesMetricsPlanView } from '@shared/contracts/sales-metrics'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
-import { isBackgroundCollectTask } from '@shared/constants/collection'
 import { storeStatusLabel } from '@shared/enums/store-status'
 
 type LoadState = 'loading' | 'ready' | 'empty' | 'error'
-type PeriodKey = 'today' | 'yesterday' | '7d' | '30d' | 'custom'
-
-interface SnapshotRow {
-  id: string
-  metric: string
-  value: unknown
-  sourceRunId?: string | null
-  capturedAt: number
-  storeId: string
-  storeName: string
-  platform: string
-}
 
 const emit = defineEmits<{
   'open-store': [storeId: string]
@@ -508,28 +377,28 @@ const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true }
 const ws = useWorkspaceStore()
 const agent = useAgentStore()
 const navItems = [
-  { label: '经营总览', glyph: '⌂', icon: homeIcon },
-  { label: '商品管理', glyph: '◈', icon: productsIcon },
-  // 订单管理不在侧栏（设计稿只有 经营总览/商品管理/店铺管理 三项）：
-  // 页面本身保留，入口是命令面板（Ctrl+K → 最近订单）与「数据分析 → 订单明细」。
-  { label: '店铺管理', glyph: '▣', icon: storeIcon },
-  { label: 'AI 创作', glyph: '✦', icon: aiIcon },
-  { label: '数据分析', glyph: '◫', icon: analyticsIcon },
-  { label: '应用中心', glyph: '⊞', icon: appsIcon }
+  { key: 'overview', label: '经营总览', glyph: '⌂', icon: homeIcon },
+  { key: 'products', label: '商品管理', glyph: '◈', icon: productsIcon },
+  { key: 'stores', label: '店铺管理', glyph: '▣', icon: storeIcon },
+  { key: 'ai', label: 'AI 创作', glyph: '✦', icon: aiIcon },
+  { key: 'analytics', label: '数据分析', glyph: '◫', icon: analyticsIcon },
+  { key: 'invoices', label: '发票中心', glyph: '▤', icon: invoicesIcon },
+  { key: 'tax', label: '涉税信息', glyph: '税', icon: taxIcon },
+  { key: 'apps', label: '应用中心', glyph: '⊞', icon: appsIcon }
 ]
 const activeNav = ref('经营总览')
-/** 侧栏导航分组（设计稿：主功能区三项 + 「智能运营」三项；设置单独落在左下角） */
+/** 侧栏导航分组（主功能区三项 + 「智能运营」四项；设置单独落在左下角） */
 const navGroups = computed(() => [
   { key: 'main', title: '', items: navItems.filter(item => ['经营总览', '商品管理', '店铺管理'].includes(item.label)) },
-  { key: 'smart', title: '智能运营', items: navItems.filter(item => ['AI 创作', '数据分析', '应用中心'].includes(item.label)) }
+  { key: 'smart', title: '智能运营', items: navItems.filter(item => ['AI 创作', '数据分析', '发票中心', '涉税信息', '应用中心'].includes(item.label)) }
 ])
 /** 左下角「设置」入口（设计稿放在侧栏底部，不在主分组里；仍用 .dashboard-nav-item 语义保证高亮与跳转一致） */
 const settingsNav = { label: '设置中心', glyph: '⚙', icon: settingsIcon }
 /** 顶栏面包屑右侧的当前页名（与导航标签同源，不另造一套文案） */
 const PAGE_TITLES: Record<string, string> = {
-  overview: '经营总览', browser: '店铺工作台', products: '商品管理', orders: '订单管理', stores: '店铺管理',
-  ai: 'AI 创作', analytics: '数据分析', invoices: '发票中心', apps: '应用中心', settings: '设置中心',
-  tasks: '任务中心', 'image-studio': '图片工作台'
+  overview: '经营总览', browser: '店铺工作台', products: '商品管理', stores: '店铺管理',
+  ai: 'AI 创作', analytics: '数据分析', invoices: '发票中心', tax: '涉税信息', apps: '应用中心', settings: '设置中心',
+  'image-studio': '图片工作台', 'creator-invite': '达人邀约'
 }
 const pageTitle = computed(() => PAGE_TITLES[activePage.value] || '经营总览')
 /**
@@ -547,7 +416,7 @@ function tickClock() {
   const pad = (n: number) => String(n).padStart(2, '0')
   nowLabel.value = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
-type DashboardPage = 'overview' | 'browser' | 'products' | 'orders' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'tasks' | 'invoices' | 'image-studio'
+type DashboardPage = 'overview' | 'browser' | 'products' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'image-studio' | 'creator-invite'
 type SettingsTab = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'
 const activePage = ref<DashboardPage>('overview')
 /** 生图请求仍在运行时保留图片工作台，避免卸载页面丢失返回结果。 */
@@ -555,15 +424,10 @@ const imageStudioBusy = ref(false)
 const settingsReturnPage = ref<DashboardPage>('overview')
 const settingsReturnStoreId = ref<string | null>(null)
 const settingsTab = ref<SettingsTab>('entry')
-const taskAutoCreate = ref(false)
-const taskOverlay = ref(false)
-const taskPicking = ref(false)
 /** 有店铺处于打开状态 → guest 宿主常驻（页面状态不因切页丢失）。 */
 const browserHostMounted = computed(() => ws.openStoreIds.length > 0)
 /** 宿主是否真的显示给用户：在浏览器页且确实显示着某家店铺。 */
 const browserHostActive = computed(() => props.active && activePage.value === 'browser' && !!ws.displayedStoreId)
-/** 采集数据的定时刷新只在总览页有意义（别的页面不显示这些卡片，白刷就是白耗） */
-const isOnOverview = computed(() => activePage.value === 'overview')
 const storeContext = reactive({ open: false, x: 0, y: 0, store: null as StoreRow | null })
 const renameDialog = reactive({ open: false, value: '' })
 const copyConfigDialog = reactive({ open: false, sourceId: '', sourceName: '', targets: [] as string[] })
@@ -573,50 +437,28 @@ const createStoreError = ref('')
 const createStoreBusy = ref(false)
 const availablePlatforms = (((window as Window & { shopilot?: Window['shopilot'] }).shopilot?.platforms || []) as Array<{ name: string; adminUrl: string }>)
 const leftSidebarCollapsed = ref(false)
+/** 窄屏时把完整导航作为抽屉打开；桌面宽度下按钮与状态不会参与布局。 */
+const mobileNavOpen = ref(false)
+function toggleMobileNav() {
+  mobileNavOpen.value = !mobileNavOpen.value
+  // 侧栏收起偏好只适合桌面常驻布局；移动抽屉打开时必须恢复内容，否则只会显示空轨道。
+  if (mobileNavOpen.value && leftSidebarCollapsed.value) leftSidebarCollapsed.value = false
+}
 const hasNativeBridge = typeof window !== 'undefined' && !!(window as Window & { shopilot?: Window['shopilot'] }).shopilot
 const globalQuery = ref('')
 const commandOpen = ref(false)
 const commandInput = ref<HTMLInputElement | null>(null)
 const notice = ref('')
-// 默认口径 = 今日（用户要求，2026-10-02）。这里**不持久化**：每次打开都回到今日，
-// 用户手动切到别的口径只影响当次会话（与左栏收起状态不同，那是持久化的）。
-const period = ref<PeriodKey>('today')
-const selectedPlatform = ref('all')
-const dataState = ref<LoadState>('loading')
-const dataError = ref('')
-const taskState = ref<LoadState>('loading')
+const invoiceTodoState = ref<LoadState>('loading')
 const invoiceTodoRows = ref<Array<{ storeId: string; storeName: string; count: number }>>([])
-const snapshotState = ref<LoadState>('loading')
-const snapshotPartial = ref(false)
-const snapshots = ref<SnapshotRow[]>([])
-const hoveredPoint = ref<any | null>(null)
 let noticeTimer: number | undefined
-let loadingSnapshots = false
-let stopStoreWatch: (() => void) | null = null
 
-// 周期页签顺序：今日(默认) / 昨日 / 近 7 天 / 近 30 天 / 自定义日期
-// （设计稿里默认是"近 7 天"，2026-10-02 用户要求改成"今日"）
-const periodOptions: Array<{ key: PeriodKey; label: string }> = [
-  { key: 'today', label: '今日' }, { key: 'yesterday', label: '昨日' }, { key: '7d', label: '近 7 天' },
-  { key: '30d', label: '近 30 天' }, { key: 'custom', label: '自定义日期' }
-]
-const quickActions = [
-  { key: 'image', label: 'AI 生成商品图', description: '一键生成专业商品图', icon: aiIcon, tone: 'purple', available: true, actionLabel: '立即创作' },
-  { key: 'publish', label: '批量发布商品', description: '高效上架多平台商品', icon: ordersIcon, tone: 'blue', available: true, actionLabel: '去发布' },
-  { key: 'dedupe', label: '短视频去重', description: '检测相似视频内容', icon: tasksIcon, tone: 'teal', available: false, actionLabel: '待接入' },
-  { key: 'interference', label: '影像级干扰', description: '智能处理商品图片', icon: invoicesIcon, tone: 'rose', available: false, actionLabel: '待接入' }
-]
 
-const platformOptions = computed(() => [...new Set(snapshots.value.map(item => item.platform))].sort((a, b) => a.localeCompare(b, 'zh-CN')))
-/**
- * 顶栏通知中心（2026-10-17）：只聚合界面已有的真实状态——进行中/待确认/24h 内失败的任务
- * 与客服未读。没有数据时显示「暂无通知」，不再弹「暂未接入独立页面」。
- */
+/** 顶栏通知中心只聚合仍有用户页面的达人邀约状态与客服未读。 */
 const notificationOpen = ref(false)
-/** 任务状态以 runLive 的实时值为准（latestRun 可能停在列表加载那一刻）；
- *  后台采集任务（发票/涉税）不进通知中心——与概览任务卡/红点同一口径。 */
+/** 运行状态以 runLive 的实时值为准（latestRun 可能停在列表加载那一刻）。 */
 const notificationTasks = computed(() => (ws.tasks as any[])
-  .filter(task => !isBackgroundCollectTask(task))
+  .filter(task => task?.kind === 'creator_invite' || String(task?.name || '').trim().startsWith('达人邀约 ·'))
   .map(task => {
     const run = task?.latestRun
     const live = run?.id ? ws.runLive?.[run.id]?.status : null
@@ -630,565 +472,46 @@ const notificationCount = computed(() => notifications.value.length)
 function runNotification(item: WorkbenchNotificationItem) {
   notificationOpen.value = false
   if (item.target === 'customer-service') emit('open-customer-service')
-  else openTasks()
+  else navigateTo('creator-invite')
 }
 const otherStoreOptions = computed(() => ws.stores.filter(store => store.id !== storeContext.store?.id))
 const canOpenStandalone = computed(() => !!storeContext.store && ws.displayedStoreId === storeContext.store.id && !!ws.activeTab)
 
-const numeric = (value: unknown): number | null => {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string') {
-    const parsed = Number(value.replace(/[￥¥,\s]/g, ''))
-    return Number.isFinite(parsed) ? parsed : null
-  }
-  return null
-}
-const formatNumber = (value: number | null) => value === null ? '—' : new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value)
-const formatTime = (value: number | null | undefined) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '尚未同步'
-
-/** 任务快照（store_snapshots）里的指标合计：自动采集缺该字段时的兜底来源 */
-function metricAggregate(metric: string, platform = 'all') {
-  const rows = snapshots.value.filter(row => row.metric === metric && (platform === 'all' || row.platform === platform))
-  const latest = rows.reduce((sum, row) => sum + (numeric(row.value) || 0), 0)
-  return rows.length && rows.some(row => numeric(row.value) !== null) ? latest : null
-}
-
-// ---------- 自动采集的经营指标（每 10 分钟一次，落 sales_metrics） ----------
-// 经营总览过去只读 store_snapshots，而那张表只由「带 metric 的任务步骤」和手动录入写入：
-// 自动采集跑得再勤，页面上的数字也不动（2026-09-28 用户实报"数据还是没有正常更新到软件"，
-// 实测卡片显示的是 9/13 的旧快照值）。现在卡片与趋势优先用采集数据，规则如下：
-//   · 只在**同一口径**（periodType）内相加：今日累计 / 近 7 天滚动 / 近 30 天滚动不能混加；
-//   · 采集数据缺失时才回落到任务快照，并在卡片上标明来源（数字必须能说清"从哪来、什么时候"）；
-//   · 订单数取 paidOrderCount（平台页面上的"成交订单"），无值时如实显示"该口径未提供"。
-type CollectedPeriodType = 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS'
-const PERIOD_TO_TYPE: Record<PeriodKey, CollectedPeriodType> = { today: 'TODAY', yesterday: 'YESTERDAY', '7d': 'LAST_7_DAYS', '30d': 'LAST_30_DAYS', custom: 'LAST_30_DAYS' }
-const PERIOD_CAPTION: Record<PeriodKey, string> = { today: '今日累计', yesterday: '昨日', '7d': '近 7 天滚动', '30d': '近 30 天滚动', custom: '近 30 天滚动' }
-
-interface CollectedStore { storeId: string; storeName: string; platform: string; plan: SalesMetricsPlanView; series: SalesMetrics[] }
-const collectedStores = ref<CollectedStore[]>([])
-const collectedState = ref<LoadState>('loading')
-const collectedFetchedAt = ref<number | null>(null)
-
-/** 相对时间：让"数据有多新"一眼可见（采集是最多 10 分钟一轮） */
-function relativeTime(ts: number | null | undefined): string {
-  if (!ts) return '尚未采集'
-  const diff = Date.now() - ts
-  if (diff < 60_000) return '刚刚'
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)} 小时前`
-  return `${Math.floor(diff / 86400_000)} 天前`
-}
-
-async function loadCollectedMetrics() {
-  collectedState.value = 'loading'
-  try {
-    await waitForWorkspace()
-    const periodType = PERIOD_TO_TYPE[period.value]
-    // 计划列表带每店的采集状态/原因（拼多多=来源未验证就是从这里来的），一次调用即可
-    const plansRes = await window.shopilot.salesMetrics.plans()
-    const plans = (plansRes.ok ? (plansRes.data?.items || []) : []) as SalesMetricsPlanView[]
-    const settled = await Promise.allSettled(plans.map(async plan => {
-      const listRes = await window.shopilot.salesMetrics.list({ storeId: plan.storeId, periodType, pageSize: 120 })
-      const series = (listRes.ok ? (listRes.data?.items || []) : []) as SalesMetrics[]
-      return { storeId: plan.storeId, storeName: plan.storeName, platform: plan.platform, plan, series } as CollectedStore
-    }))
-    collectedStores.value = settled.filter((r): r is PromiseFulfilledResult<CollectedStore> => r.status === 'fulfilled').map(r => r.value)
-    collectedFetchedAt.value = Date.now()
-    collectedState.value = collectedStores.value.some(row => row.series.length) ? 'ready' : 'empty'
-  } catch {
-    collectedState.value = 'error'
-  }
-}
-
-const collectedRows = computed(() => collectedStores.value.filter(row => selectedPlatform.value === 'all' || row.platform === selectedPlatform.value))
-/** 每店在该口径下的最新一条（列表按 period_end/collected_at 倒序） */
-const collectedLatest = computed(() => collectedRows.value
-  .map(row => ({ row, metric: row.series[0] as SalesMetrics | undefined }))
-  .filter((item): item is { row: CollectedStore; metric: SalesMetrics } => !!item.metric))
-
-function collectedSum(pick: (metric: SalesMetrics) => number | null, scale = 1): { value: number | null; covered: number; total: number; partial: boolean } {
-  const rows = collectedLatest.value
-  let sum = 0
-  let covered = 0
-  let partial = false
-  for (const item of rows) {
-    const raw = pick(item.metric)
-    if (raw === null || raw === undefined) { partial = true; continue }
-    sum += raw * scale
-    covered++
-  }
-  return { value: covered ? sum : null, covered, total: collectedRows.value.length, partial }
-}
-/**
- * 与"上一个采集日"比：采集是按天原地更新，同一天多次采集之间比没有意义（差值为 0 会被误读成"没变化"）。
- * 因此每店只找**日历日不同**的上一条；没有跨天数据就返回 null，卡片改显示采集覆盖度说明。
- */
-function collectedDelta(pick: (metric: SalesMetrics) => number | null, scale = 1): number | null {
-  const dayKeyOf = (ts: number) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}` }
-  let current = 0
-  let previous = 0
-  let hasCurrent = false
-  let hasPrevious = false
-  for (const row of collectedRows.value) {
-    const newest = row.series[0]
-    if (!newest) continue
-    const newestDay = dayKeyOf(newest.collectedAt)
-    const older = row.series.find(metric => dayKeyOf(metric.collectedAt) !== newestDay)
-    const cur = pick(newest)
-    const prev = older ? pick(older) : null
-    if (cur !== null) { current += cur * scale; hasCurrent = true }
-    if (prev !== null) { previous += prev * scale; hasPrevious = true }
-  }
-  if (!hasCurrent || !hasPrevious || previous === 0) return null
-  return ((current - previous) / Math.abs(previous)) * 100
-}
-function collectedNote(stat: { covered: number; total: number; partial: boolean }): string {
-  if (!stat.total) return '尚无采集计划'
-  if (!stat.covered) return `${PERIOD_CAPTION[period.value]}未采集到该字段`
-  return `${stat.covered}/${stat.total} 家 · ${relativeTime(collectedFreshestAt.value)}${stat.partial ? ' · 部分字段' : ''}`
-}
-const collectedFreshestAt = computed(() => {
-  const times = collectedLatest.value.map(item => item.metric.collectedAt).filter((ts): ts is number => Number.isFinite(ts))
-  return times.length ? Math.max(...times) : null
-})
-const collectedMoney = computed(() => collectedSum(m => m.grossSalesAmountMinor, 0.01))
-const collectedOrders = computed(() => collectedSum(m => m.paidOrderCount))
-
-const legacyOrders = computed(() => metricAggregate('biz.orders'))
-const legacyGmv = computed(() => metricAggregate('biz.gmv'))
-
-/**
- * 销售概览 KPI 行（设计稿的六项）。
- *
- * 数据规则与页面其余部分一致：**优先自动采集**，采集缺该字段时回落到任务快照并标注来源。
- * 「投放花费」只有抖店（「投放消耗」）与拼多多（「推广花费」）有可读来源，其余平台留空并如实标注；
- * 「投产比 ROI」只拿**同一批既报了成交额又报了投放花费的店铺**相除——不把没有花费来源的店铺的
- * 成交额算进分子，否则 ROI 会凭空变好（分母缺项而分子齐全，是这类指标最常见的造假方式）。
- */
-interface KpiRowItem { key: string; label: string; tone: string; value: string; delta: number | null; note: string; hint: string; inverse?: boolean }
-const formatMoneyCompact = (value: number | null) => value === null ? '—' : `¥ ${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value)}`
-const collectedRefundAmount = computed(() => collectedSum(m => m.refundAmountMinor, 0.01))
-const collectedRefundOrders = computed(() => collectedSum(m => m.refundOrderCount))
-const collectedAdSpend = computed(() => collectedSum(m => m.adSpendMinor, 0.01))
-/** 投产比只用"有花费也有成交额"的店铺，分子分母同源 */
-const collectedRoi = computed(() => {
-  let gross = 0
-  let spend = 0
-  let covered = 0
-  for (const item of collectedLatest.value) {
-    const gmv = item.metric.grossSalesAmountMinor
-    const adSpend = item.metric.adSpendMinor
-    if (gmv == null || adSpend == null) continue
-    gross += gmv
-    spend += adSpend
-    covered++
-  }
-  return { value: covered && spend > 0 ? gross / spend : null, covered, total: collectedRows.value.length }
-})
-const legacyRefundAmount = computed(() => metricAggregate('biz.refundAmount'))
-const legacyRefundOrders = computed(() => metricAggregate('biz.refundOrders'))
-
-const kpiRow = computed<KpiRowItem[]>(() => {
-  const build = (
-    key: string, label: string, tone: string,
-    stat: { value: number | null; covered: number; total: number; partial: boolean },
-    legacy: number | null, formatter: (value: number | null) => string,
-    delta: number | null, hint: string, inverse = false
-  ): KpiRowItem => {
-    const fromCollected = stat.value !== null
-    return {
-      key, label, tone,
-      value: formatter(fromCollected ? stat.value : legacy),
-      delta: fromCollected ? delta : null,
-      note: fromCollected ? collectedNote(stat) : (legacy !== null ? '任务快照' : '未采集'),
-      hint: `${hint}｜${fromCollected ? `自动采集 ${stat.covered}/${stat.total} 家店铺有值` : '自动采集暂无数据'}`,
-      inverse
-    }
-  }
-  return [
-    build('gmv', '销售金额', 'purple', collectedMoney.value, legacyGmv.value, formatMoneyCompact,
-      collectedDelta(m => m.grossSalesAmountMinor, 0.01), `销售额（${PERIOD_CAPTION[period.value]}，成交金额）`),
-    build('orders', '订单数', 'blue', collectedOrders.value, legacyOrders.value, formatNumber,
-      collectedDelta(m => m.paidOrderCount), `成交订单数（${PERIOD_CAPTION[period.value]}）`),
-    build('refundAmount', '退款金额', 'red', collectedRefundAmount.value, legacyRefundAmount.value, formatMoneyCompact,
-      collectedDelta(m => m.refundAmountMinor, 0.01), '退款金额（退款日口径）', true),
-    build('refundOrders', '退款订单', 'amber', collectedRefundOrders.value, legacyRefundOrders.value, formatNumber,
-      collectedDelta(m => m.refundOrderCount), '成交退款订单数', true),
-    // 投放花费与 ROI 都不做跨日涨跌配色：花费涨不等于好、跌也不等于坏，给数字配上红绿
-    // 等于替用户下判断。这里只报数值与覆盖度。
-    build('adSpend', '投放花费', 'yellow', collectedAdSpend.value, null, formatMoneyCompact,
-      null, '投放花费（平台口径：抖店「投放消耗」、拼多多「推广花费」；快手/微信没有可读来源）'),
-    buildRoi()
-  ]
-})
-function buildRoi(): KpiRowItem {
-  const roi = collectedRoi.value
-  const value = roi.covered > 0 ? roi.value : null
-  return {
-    key: 'roi',
-    label: '投产比 ROI',
-    tone: 'green',
-    value: value === null ? '—' : value.toFixed(2),
-    delta: null,
-    note: value === null
-      ? (roi.total ? `${PERIOD_CAPTION[period.value]}缺投放花费` : '尚无采集计划')
-      : `${roi.covered}/${roi.total} 家（有花费也有成交额）`,
-    hint: '投产比 ROI = 成交金额 ÷ 投放花费，只用**同时**报了这两个字段的店铺计算（分子分母同源，不拿没有花费来源的店铺的成交额充分子）'
-  }
-}
-function deltaClass(kpi: KpiRowItem): string {
-  if (kpi.delta === null) return 'muted'
-  const good = kpi.inverse ? kpi.delta < 0 : kpi.delta >= 0
-  return good ? 'up' : 'down'
-}
-
-/**
- * 趋势图的时间窗。
- *
- * 口径=今日时**放宽到 7 天**（2026-10-02 默认口径改成今日后暴露的问题）：采集每天只落一条
- * （原地更新、跨天才连成线），1 天窗口永远只画得出一个点，趋势图等于没有。
- * 口径本身不变——只画"今日累计"这一种行，所以这条线表示的是**每天的当日总额**，趋势成立。
- * 其余口径维持原窗口（昨日 1 天 / 近 7 天 7 天 / 近 30 天与自定义 30 天）。
- */
-const trendWindowStart = computed(() => {
-  const days = period.value === 'yesterday' ? 1 : period.value === '30d' || period.value === 'custom' ? 30 : 7
-  return Date.now() - days * 86400000
-})
-/**
- * 自动采集的按天曲线：每店每天取"当天最后一条"（采集是原地更新，一天一条，跨天才连成线）。
- * 只取选中口径的行——今日累计与近 7 天滚动不能画在同一根线上。
- */
-const collectedTrendPoints = computed(() => {
-  const groups = new Map<string, { key: string; timestamp: number; label: string; fullLabel: string; gmv: number | null; orders: number | null }>()
-  const windowStart = trendWindowStart.value
-  for (const row of collectedRows.value) {
-    const lastOfDay = new Map<string, SalesMetrics>()
-    for (const metric of row.series) {
-      if (metric.collectedAt < windowStart) continue
-      const when = new Date(metric.collectedAt)
-      const dayKey = `${when.getFullYear()}-${when.getMonth() + 1}-${when.getDate()}`
-      const kept = lastOfDay.get(dayKey)
-      if (!kept || metric.collectedAt > kept.collectedAt) lastOfDay.set(dayKey, metric)
-    }
-    for (const metric of lastOfDay.values()) {
-      const when = new Date(metric.collectedAt)
-      const key = `${when.getFullYear()}-${when.getMonth() + 1}-${when.getDate()}`
-      const item = groups.get(key) || { key, timestamp: new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime(), label: `${when.getMonth() + 1}/${when.getDate()}`, fullLabel: when.toLocaleDateString('zh-CN'), gmv: null, orders: null }
-      if (metric.grossSalesAmountMinor !== null) item.gmv = (item.gmv || 0) + metric.grossSalesAmountMinor / 100
-      if (metric.paidOrderCount !== null) item.orders = (item.orders || 0) + metric.paidOrderCount
-      groups.set(key, item)
-    }
-  }
-  return [...groups.values()].sort((a, b) => a.timestamp - b.timestamp)
-})
-const snapshotTrendPoints = computed(() => {
-  const groups = new Map<string, { key: string; timestamp: number; label: string; fullLabel: string; gmv: number | null; orders: number | null }>()
-  const relevant = snapshots.value.filter(row => row.capturedAt >= trendWindowStart.value && (selectedPlatform.value === 'all' || row.platform === selectedPlatform.value))
-  for (const row of relevant) {
-    if (row.metric !== 'biz.gmv' && row.metric !== 'biz.orders') continue
-    const date = new Date(row.capturedAt)
-    const key = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
-    const item = groups.get(key) || { key, timestamp: new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime(), label: `${date.getMonth() + 1}/${date.getDate()}`, fullLabel: date.toLocaleDateString('zh-CN'), gmv: null, orders: null }
-    const value = numeric(row.value)
-    if (value !== null) item[row.metric === 'biz.gmv' ? 'gmv' : 'orders'] = (item[row.metric === 'biz.gmv' ? 'gmv' : 'orders'] || 0) + value
-    groups.set(key, item)
-  }
-  return [...groups.values()].sort((a, b) => a.timestamp - b.timestamp)
-})
-/** 采集数据优先；没有该口径的采集点时才回落到任务指标快照（并如实标注来源） */
-const trendSource = computed<'collected' | 'snapshot' | 'none'>(() => collectedTrendPoints.value.length ? 'collected' : (snapshotTrendPoints.value.length ? 'snapshot' : 'none'))
-const trendPoints = computed(() => trendSource.value === 'collected' ? collectedTrendPoints.value : snapshotTrendPoints.value)
-const collectedUnverifiedPlatforms = computed(() => [...new Set(collectedRows.value
-  // 从未采到过任何数据 + 最近一次明确报"来源未验证" → 才是真的未验证；
-  // 采到过数据的平台不在这里出现（否则会拿历史状态盖住已经到手的数据）
-  .filter(row => row.plan.lastSuccessAt == null
-    && (row.plan.lastReasonCode === 'DATA_SOURCE_NOT_VERIFIED' || row.plan.lastStatus === 'DATA_SOURCE_NOT_VERIFIED'))
-  .map(row => row.platform))])
-const trendCaption = computed(() => {
-  if (trendSource.value === 'collected') {
-    const covered = collectedRows.value.filter(row => row.series.length).length
-    const unverified = collectedUnverifiedPlatforms.value
-    return `${PERIOD_CAPTION[period.value]} · 自动采集 ${covered}/${collectedRows.value.length} 家 · ${relativeTime(collectedFreshestAt.value)}${unverified.length ? ` · ${unverified.join('、')}数据源未验证` : ''}`
-  }
-  if (trendSource.value === 'snapshot') return `${snapshotPartial.value ? '部分店铺读取失败 · ' : ''}来自任务指标快照（自动采集在该口径下暂无数据）`
-  return snapshotPartial.value ? '部分店铺读取失败，其余快照仍展示' : '仅展示已采集的经营快照'
-})
-const trendEmptyHint = computed(() => {
-  const unverified = collectedUnverifiedPlatforms.value
-  const base = `自动采集每 10 分钟一次，可在「数据分析」查看采集状态；当前口径（${PERIOD_CAPTION[period.value]}）还没有采到数据`
-  return unverified.length ? `${base}。${unverified.join('、')}：数据源未验证` : base
-})
-// 图表几何：viewBox 900×260（左侧留 y 轴刻度，底部留日期标签）
-const CHART = { left: 62, right: 874, top: 18, bottom: 216 }
-/**
- * 以 0 为基线做纵向映射（0 → 画布底部，最大值 → 顶部）。
- *
- * 为什么不用 min-max 拉伸：只有两天数据时，min-max 会把「118.70 → 108.90」这种小幅回落
- * 拉成贯穿整个画布的断崖，看上去像数据崩了（实测踩过）。金额与件数都是非负量，从 0 起画
- * 既符合直觉（设计稿的 0/10万/20万… 也是从 0 起），也让差异如实呈现。
- */
-const toY = (value: number | null, values: number[]) => {
-  if (value === null || !values.length) return null
-  const max = Math.max(...values, 0) || 1
-  return CHART.bottom - (value / max) * (CHART.bottom - CHART.top)
-}
-const trendPlot = computed(() => {
-  const points = trendPoints.value
-  const gmvValues = points.map(point => point.gmv).filter((value): value is number => value !== null)
-  const orderValues = points.map(point => point.orders).filter((value): value is number => value !== null)
-  const span = CHART.right - CHART.left
-  return points.map((point, index) => ({
-    ...point,
-    x: points.length <= 1 ? (CHART.left + CHART.right) / 2 : CHART.left + (index / (points.length - 1)) * span,
-    gmvY: toY(point.gmv, gmvValues),
-    ordersY: toY(point.orders, orderValues)
-  }))
-})
-const pathFor = (key: 'gmvY' | 'ordersY') => trendPlot.value.filter(point => point[key] !== null).map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point[key]}`).join(' ')
-const gmvPath = computed(() => pathFor('gmvY'))
-const orderPath = computed(() => pathFor('ordersY'))
-const areaFor = (path: string) => path ? `${path} L ${CHART.right} ${CHART.bottom} L ${CHART.left} ${CHART.bottom} Z` : ''
-const gmvAreaPath = computed(() => areaFor(gmvPath.value))
-const tooltipStyle = computed(() => hoveredPoint.value ? { left: `${Math.min(80, Math.max(8, (hoveredPoint.value.x / 900) * 100))}%` } : {})
-/** Y 轴刻度按销售额取整成 4 档（1/2/2.5/5×10ⁿ），与设计稿的「0/10万/20万…」同一读法 */
-function niceStep(raw: number): number {
-  const base = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1))))
-  const n = Math.max(raw / base, 1)
-  const mult = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10
-  return mult * base
-}
-function formatAxisMoney(value: number): string {
-  if (!value) return '0'
-  if (value >= 10000) return `${(value / 10000).toLocaleString('zh-CN', { maximumFractionDigits: 1 })}万`
-  return value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })
-}
-const chartYAxis = computed(() => {
-  const values = trendPlot.value.map(point => point.gmv).filter((value): value is number => value !== null)
-  const step = niceStep((values.length ? Math.max(...values) : 1) / 4)
-  return Array.from({ length: 5 }, (_, index) => ({
-    value: step * index,
-    // index 0 → 画布底部（值 0），index 4 → 顶部（值 4×step）：与 toY 的方向一致
-    y: CHART.bottom - (index / 4) * (CHART.bottom - CHART.top),
-    label: formatAxisMoney(step * index)
-  }))
-})
-
-/** 平台在线汇总（设计稿右上角的「N / M 在线」胶囊） */
-const platformOnlineSummary = computed(() => {
-  const rows = platformSyncRows.value
-  return `${rows.filter(row => row.state === 'online').length} / ${rows.length} 在线`
-})
-/**
- * 待办任务（设计稿右栏第三张卡）：只列**需要人工处理**的任务，以及发票中心已采到
- * 待开票记录的店铺。排队中/进行中的自动任务不会占用待办名额。
- * **后台自动采集任务不算待办**（用户口径：后台刷新不计入任务）——发票采集是每 3 小时、
- * 涉税报送采集是按季度的后台刷新，采集失败时该去发票中心/涉税分区看，不该在这里显示成「较紧急」。
- */
-type PendingTaskItem = { id: string; name: string; badge: string; tone: string; kind: 'task' | 'invoice' }
-const pendingTasks = computed((): PendingTaskItem[] => {
-  const taskItems: PendingTaskItem[] = ws.tasks
-    .filter((task: any) => !isBackgroundCollectTask(task))
-    .map((task: any) => {
-      const run = task.latestRun
-      const status = run?.id ? (ws.runLive[run.id]?.status || run.status) : run?.status
-      return { id: task.id as string, name: String(task.name || '未命名任务'), status: String(status || ''), kind: 'task' as const }
-    })
-    .filter(item => ['waiting_confirmation', 'failed', 'paused'].includes(item.status))
-    .map(item => ({
-      id: item.id,
-      name: item.name,
-      badge: item.status === 'waiting_confirmation' ? '待确认' : item.status === 'failed' ? '较紧急' : item.status === 'paused' ? '已暂停' : '进行中',
-      tone: ['waiting_confirmation', 'failed'].includes(item.status) ? 'urgent' : 'info',
-      kind: item.kind
-    }))
-  const invoiceItems: PendingTaskItem[] = invoiceTodoRows.value.map(row => ({
+type PendingInvoiceItem = { id: string; name: string; badge: string; tone: string }
+const pendingInvoices = computed((): PendingInvoiceItem[] => invoiceTodoRows.value.map(row => ({
     id: `invoice:${row.storeId}`,
     name: `${row.storeName} · 待开发票`,
     badge: `${row.count} 条`,
-    tone: 'urgent',
-    kind: 'invoice'
-  }))
-  return [...taskItems, ...invoiceItems].slice(0, 3)
-})
+    tone: 'urgent'
+  })).slice(0, 3))
 
-const platformSyncRows = computed(() => {
-  // The renderer can also be opened by Vite for visual review without Electron's
-  // preload bridge. Keep the dashboard mounted in that mode; the desktop path
-  // still receives the configured platform list from preload as before.
-  const configuredPlatforms = ((window as Window & { shopilot?: Window['shopilot'] }).shopilot?.platforms || []) as Array<{ name: string }>
-  const names = [...new Set([...configuredPlatforms.map(platform => platform.name), ...ws.stores.map(store => store.platform)])]
-  return names.map(name => {
-    const stores = ws.stores.filter(store => store.platform === name)
-    // "最近同步"优先取**自动采集**的时间：那才是这个平台真正的同步动作。
-    // 用 plan.lastSuccessAt（最近一次成功采集，**不限口径**）—— 否则抖店只采"今日"、
-    // 用户选了"近 7 天"时就查不到采集数据，界面会退回显示 9 月的旧任务快照，看起来像"没在同步"。
-    const collectedTimes = collectedStores.value
-      .filter(row => row.platform === name)
-      .map(row => row.plan.lastSuccessAt ?? row.series[0]?.collectedAt ?? null)
-      .filter((ts): ts is number => Number.isFinite(ts as number))
-    const latestSnapshot = snapshots.value.filter(snapshot => snapshot.platform === name).sort((a, b) => b.capturedAt - a.capturedAt)[0]
-    const hasLoginIssue = stores.some(store => store.status === 'needs_login')
-    const hasOffline = stores.some(store => ['offline', 'proxy_error', 'incomplete'].includes(store.status))
-    const state = hasLoginIssue ? 'login' : hasOffline ? 'offline' : stores.length ? 'online' : 'empty'
-    // 来源未验证的平台：**只在这家平台一份数据都没有时**才这么说。
-    // 一旦采到过（lastSuccessAt 有值），"最近同步"就该显示真实时间——不能拿一个历史状态
-    // 盖住已经到手的数据（拼多多就是这么从"未验证"变成"有数据"的）。
-    const unverified = !collectedTimes.length && collectedStores.value.some(row => row.platform === name
-      && (row.plan.lastReasonCode === 'DATA_SOURCE_NOT_VERIFIED' || row.plan.lastStatus === 'DATA_SOURCE_NOT_VERIFIED'))
-    const lastSync = unverified
-      ? '数据源未验证'
-      : (collectedTimes.length
-        ? `自动采集 ${relativeTime(Math.max(...collectedTimes))}`
-        : (latestSnapshot ? `任务快照 ${formatTime(latestSnapshot.capturedAt)}` : '尚未同步'))
-    return { name, count: stores.length, state, stateLabel: state === 'login' ? '登录失效' : state === 'offline' ? '部分离线' : state === 'online' ? '正常运行' : '未连接', lastSync }
-  }).filter(row => row.count > 0 || ws.stores.length === 0)
-})
 
 function statusClass(status: string) { return status === 'online' ? 'online' : ['needs_login', 'proxy_error'].includes(status) ? 'warning' : 'offline' }
 // P2-2（2026-10-15 审查）：原先只判 online/needs_login/launching，proxy_error/archived/incomplete
 // 全部落「离线」——同一店铺在不同页显示互相矛盾的文案。统一走 shared 的单一映射。
 function statusLabel(status: string) { return storeStatusLabel(status) }
 
-async function waitForWorkspace() {
-  if (ws.ready) return
-  await new Promise<void>(resolve => {
-    const stop = watch(() => ws.ready, ready => { if (ready) { stop(); resolve() } })
-  })
-}
-async function loadDashboardData() {
-  dataState.value = 'loading'; dataError.value = ''
-  await Promise.all([loadTasks(), loadInvoiceTodo()])
-  try {
-    await waitForWorkspace()
-    await Promise.all([loadSnapshots(), loadCollectedMetrics()])
-    dataState.value = ws.stores.length || snapshots.value.length || collectedStores.value.length ? 'ready' : 'empty'
-  } catch (error: any) {
-    dataState.value = 'error'; dataError.value = error?.message || '概览数据读取失败'
-  }
-}
-
-/**
- * 「刷新数据」= **真的去采一轮**，不是重读本地库。
- *
- * 为什么必须去采：卡片上的数字来自每 10 分钟一次的自动采集，重读本地库只会把同一份旧数据
- * 再画一遍——用户按了按钮看到数字没变，会以为"采集坏了"。所以这里对**当前筛选范围内**的店铺
- * 逐个入队「立即采集」（走调度器：有运行记录、有并发上限、失败退避都在），等它们跑完再读库。
- *
- * 等待期间按钮显示进度（采集中 2/4），完成后弹一条汇总：成功的多少家、失败的分别是什么原因
- * （原因码直接来自运行记录，不编中文猜测）。
- */
-const collectState = reactive({ running: false, done: 0, total: 0 })
-const refreshLabel = computed(() => {
-  if (collectState.running) return `采集中 ${collectState.done}/${collectState.total}`
-  return dataState.value === 'loading' ? '读取中…' : '刷新数据'
-})
-const COLLECT_REASON_TEXT: Record<string, string> = {
-  QUEUED: '已入队',
-  ALREADY_RUNNING: '已在采集中',
-  PLAN_NOT_FOUND: '没有采集计划',
-  PLATFORM_PROFILE_NOT_MEASURED: '该平台未实测采集档案',
-  STORE_NOT_FOUND: '店铺不存在',
-  PAGE_NOT_READY: '店铺页面打不开',
-  PAGE_NOT_RENDERED: '页面没渲染出来',
-  PERIOD_NOT_APPLIED: '统计周期没切换成功',
-  PERIOD_CONTROL_NOT_FOUND: '找不到周期控件',
-  LOGIN_REQUIRED: '登录态已失效',
-  NETWORK_ERROR: '网络/加载失败',
-  SALES_METRICS_PARTIAL: '只采到部分指标',
-  NO_METRICS_FOUND: '页面当前没有数值',
-  COLLECTION_TIMEOUT: '超时',
-  CIRCUIT_OPEN: '连续失败已停机'
-}
-async function refreshData() {
-  if (collectState.running) return
-  await waitForWorkspace()
-  const targets = ws.stores.filter(store => selectedPlatform.value === 'all' || store.platform === selectedPlatform.value)
-  if (!targets.length) { await loadDashboardData(); return }
-
-  collectState.running = true
-  collectState.total = targets.length
-  collectState.done = 0
-  const pending = new Map(targets.map(store => [store.id, store.name]))
-  const failed: string[] = []
-  const finished = (payload: any) => {
-    const storeId = payload?.storeId
-    if (!pending.has(storeId)) return
-    pending.delete(storeId)
-    collectState.done = collectState.total - pending.size
-    if (payload.status !== 'SUCCEEDED' && payload.status !== 'PARTIAL') {
-      failed.push(`${pending.get(storeId) || storeId}：${COLLECT_REASON_TEXT[payload.reasonCode] || payload.reasonCode || payload.status}`)
-    }
-  }
-  window.shopilot.on(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, finished)
-  try {
-    for (const store of targets) {
-      const response = await window.shopilot.salesMetrics.planRunNow(store.id)
-      if (!response.ok || !(response.data as any)?.accepted) {
-        pending.delete(store.id)
-        collectState.done = collectState.total - pending.size
-        const reason = response.ok ? (response.data as any)?.reasonCode : response.error?.message
-        failed.push(`${store.name}：${COLLECT_REASON_TEXT[String(reason)] || reason || '未能入队'}`)
-      }
-    }
-    // 等入队的跑完：并发上限内四家店约一分钟；给 6 分钟上限以免页面卡住时按钮永远转圈。
-    const deadline = Date.now() + 6 * 60 * 1000
-    while (pending.size && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 700))
-    if (pending.size) for (const name of pending.values()) failed.push(`${name}：等待超时`)
-  } finally {
-    window.shopilot.off(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, finished)
-    collectState.running = false
-  }
-
-  await loadDashboardData()
-  const okCount = targets.length - failed.length
-  showNotice(failed.length
-    ? `已采集 ${okCount}/${targets.length} 家；${failed.join('；')}`
-    : `已按当前口径采集 ${okCount} 家店铺的最新数据`)
-}
-async function loadTasks() {
-  taskState.value = 'loading'
-  try { await waitForWorkspace(); await ws.refreshTasks(); taskState.value = ws.tasks.length ? 'ready' : 'empty' } catch { taskState.value = 'error' }
-}
 async function loadInvoiceTodo() {
+  invoiceTodoState.value = 'loading'
   try {
     const response = await window.shopilot.overview.invoiceCenter()
-    if (!response.ok) { invoiceTodoRows.value = []; return }
+    if (!response.ok) { invoiceTodoRows.value = []; invoiceTodoState.value = 'error'; return }
     invoiceTodoRows.value = ((response.data as any)?.rows || [])
       .map((row: any) => ({ storeId: String(row.storeId || ''), storeName: String(row.storeName || '未命名店铺'), count: Number(row.count) || 0 }))
       .filter((row: { storeId: string; count: number }) => row.storeId && row.count > 0)
+    invoiceTodoState.value = invoiceTodoRows.value.length ? 'ready' : 'empty'
   } catch {
     invoiceTodoRows.value = []
+    invoiceTodoState.value = 'error'
   }
-}
-async function loadSnapshots() {
-  if (loadingSnapshots) return
-  loadingSnapshots = true; snapshotState.value = 'loading'
-  try {
-    await waitForWorkspace()
-    const settled = await Promise.allSettled(ws.stores.map(async store => {
-      const response = await window.shopilot.snapshot.list(store.id, 60)
-      if (!response.ok) throw new Error(response.error.message)
-      return (response.data || []).map((item: any) => ({ ...item, storeId: store.id, storeName: store.name, platform: store.platform })) as SnapshotRow[]
-    }))
-    const succeeded = settled.filter((item): item is PromiseFulfilledResult<SnapshotRow[]> => item.status === 'fulfilled')
-    const failed = settled.filter(item => item.status === 'rejected')
-    snapshots.value = succeeded.flatMap(item => item.value)
-    snapshotPartial.value = succeeded.length > 0 && failed.length > 0
-    snapshotState.value = failed.length === settled.length && settled.length > 0 ? 'error' : snapshots.value.length ? 'ready' : 'empty'
-  } catch { snapshotState.value = 'error' } finally { loadingSnapshots = false }
 }
 function showNotice(message: string) { notice.value = message; if (noticeTimer) window.clearTimeout(noticeTimer); noticeTimer = window.setTimeout(() => { notice.value = '' }, 3600) }
-function handleQuickAction(action: any) {
-  if (action.key === 'image') { navigateTo('image-studio'); return }
-  // 批量发布已落地（商品管理内的预检/批量编排/人工确认），快捷入口不能再显示「待接入」。
-  if (action.key === 'publish') { navigateTo('products'); return }
-  if (!action.available) showNotice(`${action.label}：${action.description}`)
-}
 function handleNav(item: { label: string }) {
   const pageByLabel: Record<string, DashboardPage> = {
-    '经营总览': 'overview', '商品管理': 'products', '订单管理': 'orders', '店铺管理': 'stores',
-    'AI 创作': 'ai', '数据分析': 'analytics', '应用中心': 'apps', '设置中心': 'settings'
+    '经营总览': 'overview', '商品管理': 'products', '店铺管理': 'stores',
+    'AI 创作': 'ai', '数据分析': 'analytics', '发票中心': 'invoices', '涉税信息': 'tax', '应用中心': 'apps', '设置中心': 'settings'
   }
+  mobileNavOpen.value = false
   navigateTo(pageByLabel[item.label] || 'overview')
 }
 function preventBusyImageStudioExit() {
@@ -1199,6 +522,7 @@ function preventBusyImageStudioExit() {
 }
 function navigateTo(page: DashboardPage) {
   if (page !== 'image-studio' && preventBusyImageStudioExit()) return
+  mobileNavOpen.value = false
   // B4：回到经营总览时补一次发票待办——「待开发票」那几行只在挂载与"停在总览页时的任务终态事件"
   // 里刷新；从发票中心采集完再回来，数字会停在这一轮之前（看起来像"采集没生效"）。
   if (page === 'overview' && activePage.value !== 'overview') void loadInvoiceTodo()
@@ -1206,9 +530,6 @@ function navigateTo(page: DashboardPage) {
     settingsReturnPage.value = activePage.value
     settingsReturnStoreId.value = ws.displayedStoreId
   }
-  if (page !== 'tasks') taskAutoCreate.value = false
-  taskOverlay.value = false
-  taskPicking.value = false
   if (page === 'settings') {
     activePage.value = page
     activeNav.value = '设置中心'
@@ -1230,35 +551,23 @@ function navigateTo(page: DashboardPage) {
   activePage.value = page
   if (page === 'overview') activeNav.value = '经营总览'
   else if (page === 'products') activeNav.value = '商品管理'
-  else if (page === 'orders') activeNav.value = '订单管理'
   else if (page === 'stores') activeNav.value = '店铺管理'
   else if (page === 'ai') activeNav.value = 'AI 创作'
-  else if (page === 'analytics' || page === 'invoices') activeNav.value = '数据分析'
-  else if (page === 'apps') activeNav.value = '应用中心'
+  else if (page === 'analytics') activeNav.value = '数据分析'
+  else if (page === 'invoices') activeNav.value = '发票中心'
+  else if (page === 'tax') activeNav.value = '涉税信息'
+  else if (page === 'apps' || page === 'creator-invite') activeNav.value = '应用中心'
   else if (page === 'image-studio') activeNav.value = 'AI 创作'
 }
-function openTasks(create = false) {
-  if (create && activePage.value === 'browser' && ws.displayedStoreId) {
-    taskAutoCreate.value = true
-    taskOverlay.value = true
-    return
-  }
-  taskOverlay.value = false
-  taskPicking.value = false
-  taskAutoCreate.value = create
-  navigateTo('tasks')
+/** 达人邀约页内的返回/去店铺动作：页面只发语义，不在子组件里猜主路由。 */
+function handleInviteNavigate(page: string) {
+  if (page === 'apps' || page === 'stores') navigateTo(page)
 }
 /** 设置中心页签白名单：环境面板等入口只允许跳到已知页签，未知值回落到默认「平台入口」 */
 const SETTINGS_TABS: SettingsTab[] = ['entry', 'ai', 'security', 'extensions', 'maintenance', 'about']
 function openSettingsTab(tab?: string) {
   settingsTab.value = (SETTINGS_TABS as string[]).includes(tab || '') ? (tab as SettingsTab) : 'entry'
   navigateTo('settings')
-}
-function closeTaskOverlay() {
-  taskOverlay.value = false
-  taskPicking.value = false
-  taskAutoCreate.value = false
-  void window.shopilot.browser.setViewsObscured(false)
 }
 async function closeSettings() {
   const returnPage = settingsReturnPage.value
@@ -1276,12 +585,9 @@ async function closeSettings() {
   }
   navigateTo('overview')
 }
-function setTaskPicking(value: boolean) { taskPicking.value = value }
-function changeDataPage(page: 'analytics' | 'orders' | 'invoices') { navigateTo(page) }
 async function openStoreFromPage(storeId: string) {
   if (preventBusyImageStudioExit()) return
-  taskOverlay.value = false
-  taskPicking.value = false
+  mobileNavOpen.value = false
   // 从"设置页进入的店铺"不算设置页业务：把返回目标清掉，否则之后点关闭设置会把用户拽回旧状态
   settingsReturnPage.value = 'overview'
   settingsReturnStoreId.value = null
@@ -1293,9 +599,25 @@ async function openStoreFromPage(storeId: string) {
   if (ws.displayedStoreId !== storeId || !ws.openStoreIds.includes(storeId)) await ws.openStore(storeId)
   emit('open-store', storeId)
 }
+/**
+ * 达人邀约模块页的「新建邀约」入口：配置与真实发送仍在店铺浏览器的实测面板里，
+ * 必须带着具体店铺进去——否则面板只会显示"当前平台未接入"，用户会误判成功能不可用。
+ * 取店优先级：页面选中的店 → 正在显示的店 → 已打开的店 → 第一家店；一家都没有就先去店铺管理。
+ */
+async function openCreatorInvite(storeIdHint?: string): Promise<void> {
+  if (preventBusyImageStudioExit()) return
+  const storeId = storeIdHint || ws.displayedStoreId || ws.openStoreIds[0] || ws.stores[0]?.id
+  if (!storeId) {
+    navigateTo('stores')
+    return
+  }
+  await openStoreFromPage(storeId)
+}
+
 function setLeftSidebarOpen(open: boolean) {
   leftSidebarCollapsed.value = !open
-  void window.shopilot.settings.set('ui.leftSidebarCollapsed', !open)
+  const bridge = (window as Window & { shopilot?: Window['shopilot'] }).shopilot
+  if (bridge) void bridge.settings.set('ui.leftSidebarCollapsed', !open)
 }
 function openStoreCreate() {
   createStoreError.value = ''
@@ -1323,7 +645,10 @@ async function openTrash() {
 }
 function closeTrash() { ws.trashOpen = false }
 async function confirmPurge(store: StoreRow) {
-  if (window.confirm(`彻底删除「${store.name}」？此操作不可撤销，将清除其环境、下载记录与缓存。`)) await ws.purgeStore(store.id)
+  confirmDialog.title = '彻底删除店铺'
+  confirmDialog.message = `彻底删除「${store.name}」后不可恢复，将清除其环境、下载记录与缓存。`
+  confirmDialog.action = async () => { await ws.purgeStore(store.id) }
+  confirmDialog.open = true
 }
 function openStoreContext(store: StoreRow, event: MouseEvent) {
   storeContext.store = store
@@ -1404,17 +729,23 @@ async function runConfirmDialog() {
   confirmDialog.action = null
   if (action) await action()
 }
+function dismissConfirmDialog() {
+  confirmDialog.open = false
+  confirmDialog.action = null
+}
 async function syncStoreContextOcclusion() {
+  const bridge = (window as Window & { shopilot?: Window['shopilot'] }).shopilot
+  if (!bridge) return
   await nextTick()
   const menu = document.querySelector('[data-test="store-ctx"]') as HTMLElement | null
   const viewport = document.querySelector('[data-test="dashboard-browser-viewport"]') as HTMLElement | null
-  if (!menu || !viewport) { await window.shopilot.browser.setViewsObscured(false); return }
+  if (!menu || !viewport) { await bridge.browser.setViewsObscured(false); return }
   const m = menu.getBoundingClientRect(); const v = viewport.getBoundingClientRect()
   const sidebar = document.querySelector('.dashboard-sidebar')?.getBoundingClientRect()
   // 店铺列表位于固定左栏；右键点在左栏时菜单不会盖住原生店铺视图，即使浏览器布局尚未完成一次测量也不能误隐藏。
-  if (storeContext.x < (sidebar?.right || 268)) { await window.shopilot.browser.setViewsObscured(false); return }
+  if (storeContext.x < (sidebar?.right || 268)) { await bridge.browser.setViewsObscured(false); return }
   const overlap = !(m.right <= v.left || m.left >= v.right || m.bottom <= v.top || m.top >= v.bottom)
-  await window.shopilot.browser.setViewsObscured(overlap)
+  await bridge.browser.setViewsObscured(overlap)
 }
 async function openAssistant() {
   try { await agent.initialize(); agent.setDrawerOpen(true) } catch { showNotice('AI 助手暂时不可用，请检查模型配置') }
@@ -1424,9 +755,7 @@ const commandResults = computed(() => {
   const query = globalQuery.value.trim().toLowerCase()
   const results = [
     { key: 'home', icon: homeIcon, label: '经营总览', description: '回到经营总览', action: () => navigateTo('overview') },
-    { key: 'orders', icon: ordersIcon, label: '最近订单', description: '打开订单管理页面', action: () => navigateTo('orders') },
     { key: 'trend', icon: analyticsIcon, label: '销售趋势', description: '打开数据分析页面', action: () => navigateTo('analytics') },
-    { key: 'tasks', icon: tasksIcon, label: 'AI 任务中心', description: '查看真实任务运行状态', action: () => navigateTo('tasks') },
     { key: 'settings', icon: settingsIcon, label: '设置中心', description: '打开统一设置页面', action: () => navigateTo('settings') },
     ...ws.stores.map(store => ({ key: `store-${store.id}`, icon: storeIcon, label: store.name, description: `${store.platform} · 打开店铺浏览器`, action: () => openStoreFromPage(store.id) }))
   ]
@@ -1439,13 +768,14 @@ function onKeydown(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommandPalette() }
   if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'e') { event.preventDefault(); setLeftSidebarOpen(leftSidebarCollapsed.value); return }
   if (event.key === 'Escape') {
-    if (confirmDialog.open) { confirmDialog.open = false; event.preventDefault() }
+    if (confirmDialog.open) { dismissConfirmDialog(); event.preventDefault() }
     else if (renameDialog.open) { renameDialog.open = false; event.preventDefault() }
     else if (copyConfigDialog.open) { copyConfigDialog.open = false; event.preventDefault() }
     else if (notificationOpen.value) { notificationOpen.value = false; event.preventDefault() }
     else if (storeContext.open) { closeStoreContext(); event.preventDefault() }
     else if (agent.ui.drawerOpen) { agent.setDrawerOpen(false); event.preventDefault() }
     commandOpen.value = false
+    mobileNavOpen.value = false
   }
 }
 function onDocumentMouseDown(event: MouseEvent) {
@@ -1456,26 +786,14 @@ function onDocumentMouseDown(event: MouseEvent) {
   }
 }
 watch(() => [storeContext.open, storeContext.x, storeContext.y], () => { void syncStoreContextOcclusion() })
-watch(() => ws.trashOpen, open => { void window.shopilot.browser.setViewsObscured(!!open) })
-// 口径（今日/近 7 天/近 30 天）与平台筛选变了就重新取采集数据：
-// 不同口径的采集行不能混用（近 7 天滚动值当日增量相加会虚高），必须回主进程重查。
-watch([period, selectedPlatform], () => { if (isOnOverview.value) void loadCollectedMetrics() })
-// 采集每 10 分钟一轮：停在总览页时定时刷新一次，用户不用手动点"刷新数据"
-let collectedTimer: number | undefined
-function scheduleCollectedRefresh() {
-  if (collectedTimer) window.clearInterval(collectedTimer)
-  collectedTimer = window.setInterval(() => { if (isOnOverview.value && !document.hidden) void loadCollectedMetrics() }, 5 * 60 * 1000)
-}
-/**
- * 采集完成事件 → 立刻刷新总览。
- * 光靠定时器会滞后（采集 20:19 完成、界面可能 20:24 才更新），而这正是"数据没更新到软件"的观感来源。
- */
-function onCollectedRunFinished() {
-  if (isOnOverview.value) void loadCollectedMetrics()
-}
+watch(() => ws.trashOpen, open => {
+  const bridge = (window as Window & { shopilot?: Window['shopilot'] }).shopilot
+  if (bridge) void bridge.browser.setViewsObscured(!!open)
+})
 function onTaskProgress(event: any) {
-  if (isOnOverview.value && (event?.phase === 'finished' || event?.phase === 'failed')) {
-    void Promise.all([loadTasks(), loadInvoiceTodo()])
+  // 原 isOnOverview 的等价写法：容器仍然常驻，「待开发票」卡片只在总览页显示。
+  if (activePage.value === 'overview' && (event?.phase === 'finished' || event?.phase === 'failed')) {
+    void loadInvoiceTodo()
   }
 }
 // 主进程**单方面**显示店铺时（Agent 动作 / 开店后自动显示 → BROWSER_DISPLAY_CHANGED，
@@ -1490,13 +808,12 @@ watch([() => ws.displayedStoreId, () => ws.displaySource], ([storeId, source]) =
     if (preventBusyImageStudioExit()) {
       // 主进程的原生店铺视图覆盖在渲染层上；生成未结束时收起它，保留图片工作台。
       ws.displayedStoreId = null
-      void window.shopilot.browser.display(null)
+      const bridge = (window as Window & { shopilot?: Window['shopilot'] }).shopilot
+      if (bridge) void bridge.browser.display(null)
       return
     }
     activePage.value = 'browser'
     activeNav.value = '经营总览'
-    taskOverlay.value = false
-    taskPicking.value = false
   }
 })
 
@@ -1510,21 +827,19 @@ onMounted(async () => {
     clockTimer = window.setInterval(tickClock, 1000)
     return
   }
-  window.shopilot.on(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished)
   window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress)
   tickClock()
   clockTimer = window.setInterval(tickClock, 1000)
   // DashboardView 现在是应用的真实入口，必须自行完成工作区初始化，不能依赖旧 WorkbenchView 的生命周期。
   await ws.init()
-  await waitForWorkspace()
+  await waitForWorkspaceReady(ws)
   const savedSidebar = await window.shopilot.settings.get('ui.leftSidebarCollapsed')
   if (savedSidebar.ok && savedSidebar.data?.value === true) leftSidebarCollapsed.value = true
   if (ws.displayedStoreId) { activePage.value = 'browser'; activeNav.value = '经营总览' }
-  await loadDashboardData()
-  scheduleCollectedRefresh()
-  stopStoreWatch = watch(() => ws.stores.map(store => `${store.id}:${store.status}`).join('|'), () => { void loadSnapshots(); void loadCollectedMetrics() })
 })
-onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); document.removeEventListener('mousedown', onDocumentMouseDown); if (window.shopilot) { window.shopilot.off(EVENT_CHANNELS.SALES_METRICS_RUN_FINISHED, onCollectedRunFinished); window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress); void window.shopilot.browser.setViewsObscured(false) }; stopStoreWatch?.(); if (noticeTimer) window.clearTimeout(noticeTimer); if (collectedTimer) window.clearInterval(collectedTimer); if (clockTimer) window.clearInterval(clockTimer) })
+// 概览数据（快照/采集指标/趋势）的加载、定时刷新与采集完成监听都在子组件 + use-dashboard-overview 里，
+// 容器只在总览页事件（任务终态）时刷新「待开发票」卡片。
+onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); document.removeEventListener('mousedown', onDocumentMouseDown); if (window.shopilot) { window.shopilot.off(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress); void window.shopilot.browser.setViewsObscured(false) } if (noticeTimer) window.clearTimeout(noticeTimer); if (clockTimer) window.clearInterval(clockTimer) })
 </script>
 
 <style scoped>
@@ -1774,7 +1089,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .dashboard-error { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; padding: 10px 13px; border: 1px solid rgba(240, 68, 56, .28); border-radius: 12px; background: #fef3f2; color: #b42318; font-size: 12px; }
 .dashboard-error .state-icon { display: inline-flex; width: 22px; height: 22px; object-fit: contain; }
 .refresh-icon { width: 17px; height: 17px; object-fit: contain; }
-.btn-new img { width: 18px; height: 18px; object-fit: contain; }.store-action img { width: 16px; height: 16px; object-fit: contain; }.ai-heading-icon { width: 22px; height: 22px; object-fit: contain; vertical-align: -5px; }.command-search-icon { width: 20px; height: 20px; object-fit: contain; }
+.btn-new img { width: 18px; height: 18px; object-fit: contain; }.store-action img { width: 16px; height: 16px; object-fit: contain; }.command-search-icon { width: 20px; height: 20px; object-fit: contain; }
 .dashboard-error button, .error-state button { margin-left: auto; border: 0; background: transparent; color: #b42318; text-decoration: underline; cursor: pointer; }
 
 .ov-grid { display: grid; grid-template-columns: minmax(0, 1fr) 336px; gap: 16px; align-items: start; }
@@ -1903,7 +1218,8 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .tile-copy { grid-row: 1; grid-column: 2; display: flex; min-width: 0; flex-direction: column; gap: 5px; }
 .tile-copy strong { overflow: hidden; color: var(--dash-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .tile-copy small { overflow: hidden; color: var(--dash-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.inline-action-icon { width:14px;height:14px;object-fit:contain;vertical-align:-2px; }.tile-action { grid-row: 2; grid-column: 2; align-self: start; justify-self: start; min-height: 34px; padding: 0 15px; border: 0; border-radius: 10px; background: var(--brand-gradient); color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }
+.inline-action-icon { width:14px;height:14px;object-fit:contain;vertical-align:-2px; }
+.tile-action { grid-row: 2; grid-column: 2; align-self: start; justify-self: start; min-height: 34px; padding: 0 15px; border: 0; border-radius: 10px; background: var(--brand-gradient); color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }
 .tile-action:hover:not(:disabled), .tile-action:focus-visible { filter: brightness(1.05); outline: none; }
 .tile-action:disabled { background: #eef1f7; color: var(--dash-text-muted); cursor: not-allowed; font-weight: 500; }
 
@@ -1942,8 +1258,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .todo-chip { flex: 0 0 auto; padding: 3px 9px; border-radius: 8px; font-size: 11px; font-weight: 600; }
 .todo-chip.urgent { background: #fff4e5; color: #b54708; }
 .todo-chip.info { background: #eef4ff; color: #1d4ed8; }
-/* 待办任务卡不再放「新建任务」入口（用户要求）：新建任务的入口留在右侧任务面板里，
-   概览这张卡只做"看"，不放操作按钮，避免误点。 */
+/* 概览卡只展示待开发票状态，点击后进入发票中心核对。 */
 
 /* ---------------- 弹窗 / 菜单 / 提示 ---------------- */
 .dashboard-context-menu { position: fixed; z-index: 220; width: 252px; padding: 6px; border: 1px solid var(--dash-border-strong); border-radius: 14px; background: #fff; box-shadow: var(--shadow-pop); }
@@ -2003,6 +1318,12 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 .command-results kbd { color: var(--dash-text-muted); }
 .command-empty { padding: 28px; color: var(--dash-text-muted); text-align: center; font-size: 12px; }
 
+/* 窄屏导航：完整侧栏变成抽屉，保留店铺列表和设置入口，避免只剩无法识别的图标。 */
+.mobile-nav-toggle { display: none; width: 34px; height: 34px; flex: 0 0 34px; align-items: center; justify-content: center; flex-direction: column; gap: 4px; border: 1px solid var(--dash-border); border-radius: 9px; background: #fff; cursor: pointer; -webkit-app-region: no-drag; }
+.mobile-nav-toggle span { display: block; width: 15px; height: 1.5px; border-radius: 2px; background: var(--dash-text-soft); }
+.mobile-nav-toggle:hover, .mobile-nav-toggle:focus-visible { border-color: rgba(124, 92, 255, .55); outline: none; box-shadow: 0 0 0 3px rgba(124, 92, 255, .1); }
+.mobile-sidebar-backdrop { display: none; }
+
 /* ---------------- 响应式 ---------------- */
 @media (max-width: 1380px) {
   .dashboard-sidebar { width: 228px; min-width: 228px; }
@@ -2022,5 +1343,65 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
   .dashboard-sidebar-footer { padding: 8px; }
   .ov-card-head { flex-direction: column; align-items: flex-start; }
   .shortcut-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .dashboard-shell { position: relative; }
+  .dashboard-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 160; width: min(286px, 86vw); min-width: min(286px, 86vw); transform: translateX(-105%); transition: transform .2s ease; box-shadow: 18px 0 46px rgba(15, 23, 41, .25); }
+  .dashboard-shell.mobile-nav-open .dashboard-sidebar { transform: translateX(0); }
+  .dashboard-shell.mobile-nav-open .dashboard-sidebar.collapsed { width: min(286px, 86vw); min-width: min(286px, 86vw); }
+  .dashboard-shell.mobile-nav-open .dashboard-brand-copy { display: flex; }
+  .dashboard-shell.mobile-nav-open .nav-label { display: inline; }
+  .dashboard-shell.mobile-nav-open .nav-group-title { display: block; }
+  .dashboard-shell.mobile-nav-open .dashboard-store-area { display: flex; }
+  .dashboard-shell.mobile-nav-open .pro-copy { display: flex; }
+  .dashboard-shell.mobile-nav-open .pro-arrow { display: inline; }
+  .dashboard-shell.mobile-nav-open .dashboard-nav-item { justify-content: flex-start; padding: 0 12px; }
+  .dashboard-shell.mobile-nav-open .dashboard-store-area { display: flex; }
+  .dashboard-shell.mobile-nav-open .sidebar-rail { display: none; }
+  .mobile-sidebar-backdrop { position: fixed; inset: 0; z-index: 150; display: block; border: 0; background: rgba(15, 23, 41, .42); backdrop-filter: blur(2px); cursor: pointer; }
+  .dashboard-toolbar { height: 56px; flex-basis: 56px; gap: 8px; padding: 0 12px; }
+  .mobile-nav-toggle { display: inline-flex; }
+  .toolbar-crumb { min-width: 0; flex: 1 1 auto; gap: 4px; font-size: 12px; }
+  .crumb-root, .crumb-sep { display: none; }
+  .crumb-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .workspace-switcher { position: static; flex: 0 0 auto; max-width: 138px; overflow-x: auto; transform: none; scrollbar-width: none; }
+  .workspace-switcher::-webkit-scrollbar { display: none; }
+  .workspace-tab { min-height: 30px; padding: 0 8px; font-size: 11px; }
+  .toolbar-actions { flex: 0 0 auto; gap: 2px; }
+  .toolbar-datetime { display: none; }
+  .toolbar-icon-button { width: 32px; height: 32px; }
+  .toolbar-avatar { width: 30px; height: 30px; }
+  .notification-center { position: fixed; top: 60px; right: 10px; width: min(320px, calc(100vw - 20px)); }
+  .overview-page { padding: 14px 12px 24px; }
+  .ov-card { padding: 14px; border-radius: 14px; }
+  .ov-card-head { gap: 10px; }
+  .ov-card-tools { width: 100%; min-width: 0; flex-wrap: wrap; }
+  .period-tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .period-tabs::-webkit-scrollbar { display: none; }
+  .period-tabs button { min-width: 58px; padding: 0 9px; }
+  .platform-select { flex: 1 1 140px; min-width: 0; }
+  .ov-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px 9px; }
+  .ov-kpi { padding-left: 9px; }
+  .kpi-value { font-size: 20px; }
+  .dashboard-error { align-items: flex-start; flex-wrap: wrap; }
+  .dashboard-error button { margin-left: auto; }
+  .dashboard-dialog, .modal { width: min(100%, calc(100vw - 24px)); padding: 16px; }
+  .modal-mask, .dashboard-overlay { padding: 12px; }
+  .modal-actions, .dashboard-dialog-actions { flex-wrap: wrap; }
+  .modal-actions > *, .dashboard-dialog-actions > * { min-height: 40px; flex: 1 1 120px; }
+  .dashboard-toast-host { right: 12px; bottom: 12px; max-width: calc(100vw - 24px); }
+}
+@media (max-width: 480px) {
+  .dashboard-toolbar { gap: 6px; }
+  .workspace-switcher { max-width: 108px; }
+  .workspace-tab { padding: 0 7px; }
+  .workspace-tab > span:last-child { max-width: 58px; overflow: hidden; text-overflow: ellipsis; }
+  .toolbar-icon-button { width: 30px; }
+  .toolbar-avatar { display: none; }
+  .ov-kpis { gap: 11px 7px; }
+  .kpi-value { font-size: 18px; }
+  .ov-title-row { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .ov-refresh { width: 100%; justify-content: center; }
+  .shortcut-tile { padding: 12px; }
 }
 </style>

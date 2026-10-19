@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID }
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { getDatabase } from '../db/database'
+import { acceptanceHooksEnabled } from './acceptance-gate'
 import { writeAudit, auditRequestId } from './audit-logger'
 import { assertSingletonJobRow, getAgent, requireSingletonAgentId, AgentRuntimeError } from './agent-runtime'
 import { redactAgentText } from '@shared/agent-privacy'
@@ -187,9 +188,10 @@ function memoryRoot(): string {
 function hash(content: string): string { return createHash('sha256').update(content, 'utf8').digest('hex') }
 function tempPath(path: string): string { return `${path}.tmp-${process.pid}-${randomUUID()}` }
 /** Deterministic I/O faults are available only to the local acceptance
- * harness. They are never enabled by renderer input or normal app launches. */
+ * harness. They are never enabled by renderer input or normal app launches.
+ * 门禁见 services/acceptance-gate.ts：生产构建里该分支被剥离。 */
 function injectMemoryTestFault(stage: string): void {
-  if (process.env.SHOPILOT_ACCEPTANCE !== '1') return
+  if (!acceptanceHooksEnabled()) return
   const requested = String(process.env.SHOPILOT_MEMORY_TEST_FAULT || '')
   const aliases: Record<string, string[]> = {
     'atomic-before-rename': ['power-loss-before-rename'],

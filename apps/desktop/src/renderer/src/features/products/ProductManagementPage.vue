@@ -32,6 +32,7 @@ import PlatformIcon from '../../components/PlatformIcon.vue'
 import { useWorkspaceStore } from '../../stores/workspace'
 import ProductPager from '../products/ProductPager.vue'
 import ProductEditorDrawer from '../products/ProductEditorDrawer.vue'
+import { canUnmerge, unmergeConfirmText, unmergeErrorText } from './product-link-actions'
 import storeManageIcon from '../../assets/generated/ui-icons/app-store-gen.png'
 import syncIcon from '../../assets/generated/ui-icons/sync-gen.png'
 import productSyncIcon from '../../assets/generated/ui-icons/product-sync-sheet-gen.png'
@@ -958,6 +959,64 @@ async function cleanupOrphans(): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------- 解除归并（平台商品）
+
+/**
+ * 待确认的行（null = 没有待确认的解除操作）。
+ *
+ * 这里**故意不用 `window.confirm`**：它会同步阻塞渲染进程，CDP 验收点不动界面、
+ * 自动化也无法接管对话框。页面内的浮层同样有二次确认，但不阻塞。
+ */
+const unmergeTarget = ref<ProductRow | null>(null)
+const unmergeBusy = ref(false)
+/** 文案由纯逻辑模块生成（可单测）：如实说明"平台商品回到未归并、本地商品与台账不动" */
+const unmergeConfirmMessage = computed(() => unmergeConfirmText(unmergeTarget.value))
+
+/** 只有「已归并且 linkId 合法」的行才渲染入口（未归并的行没有可摘的东西） */
+function canUnmergeLink(row: ProductRow): boolean {
+  return canUnmerge(row)
+}
+
+function askUnmerge(row: ProductRow): void {
+  if (!canUnmerge(row)) { ws.toast('这条平台商品当前没有可解除的归并', 'error'); return }
+  unmergeTarget.value = row
+}
+
+function cancelUnmerge(): void {
+  if (unmergeBusy.value) return
+  unmergeTarget.value = null
+}
+
+async function confirmUnmerge(): Promise<void> {
+  const row = unmergeTarget.value
+  if (!row) return
+  const linkId = (row.linkId || '').trim()
+  if (!linkId) {
+    unmergeTarget.value = null
+    ws.toast('这条记录缺少 linkId，请刷新列表后重试', 'error')
+    return
+  }
+  unmergeBusy.value = true
+  try {
+    const result = await window.shopilot.products.library.unmerge({ linkId })
+    if (!result.ok) {
+      // 失败**不重拉列表**：当前筛选与分页原样留着，用户看到的还是刚才那一屏
+      ws.toast(unmergeErrorText(result.error), 'error')
+      unmergeTarget.value = null
+      return
+    }
+    unmergeTarget.value = null
+    ws.toast('已解除归并', 'success')
+    // 成功才重拉：复用页面既有的刷新函数，沿用 linkQuery 的筛选与分页
+    await loadLinks()
+  } catch (error) {
+    ws.toast(unmergeErrorText(error), 'error')
+    unmergeTarget.value = null
+  } finally {
+    unmergeBusy.value = false
+  }
+}
+
 onMounted(() => { void loadLinks(); void loadLocal() })
 </script>
 
@@ -1269,6 +1328,10 @@ onMounted(() => { void loadLinks(); void loadLocal() })
                 <td>{{ formatTime(row.collectedAt) }}</td>
                 <td class="product-actions">
                   <button type="button" class="unified-button ghost" v-if="row.productId" :disabled="busy" @click="switchTab('local')">在本地商品里管理</button>
+                  <!-- 解除归并：`products.list` 每行本就带 linkId/productId，此前渲染层没有入口（只能挂不能摘）。
+                       未归并或缺 linkId 的行不渲染（`canUnmerge` 判定），避免"点了没反应"的假按钮。 -->
+                  <button v-if="canUnmergeLink(row)" type="button" class="unified-button ghost"
+                          data-test="platform-unmerge" :disabled="busy || unmergeBusy" @click="askUnmerge(row)">解除归并</button>
                 </td>
               </tr>
             </tbody>
@@ -1467,6 +1530,18 @@ onMounted(() => { void loadLinks(); void loadLocal() })
       </div>
     </div>
 
+    <!-- 解除归并二次确认（页面内浮层，不用 window.confirm：会阻塞渲染进程、卡 CDP 验收） -->
+    <div v-if="unmergeTarget" class="product-confirm-mask" data-test="unmerge-confirm-mask" @click.self="cancelUnmerge">
+      <section class="product-confirm" role="dialog" aria-modal="true" aria-label="解除归并" data-test="unmerge-confirm">
+        <h3>解除归并</h3>
+        <p class="product-confirm-text" data-test="unmerge-confirm-text">{{ unmergeConfirmMessage }}</p>
+        <div class="product-confirm-actions">
+          <button type="button" class="unified-button ghost" data-test="unmerge-cancel" :disabled="unmergeBusy" @click="cancelUnmerge">取消</button>
+          <button type="button" class="unified-button primary" data-test="unmerge-ok" :disabled="unmergeBusy" @click="confirmUnmerge">{{ unmergeBusy ? '解除中…' : '确认解除' }}</button>
+        </div>
+      </section>
+    </div>
+
     <!-- 编辑抽屉（自加载；保存后刷新列表；归档态由列表行状态驱动只读） -->
     <ProductEditorDrawer v-if="editingId" :product-id="editingId" :status="editingStatus" @close="editingId = null" @saved="onEditorSaved" @unarchive="onEditorUnarchive" />
   </section>
@@ -1560,4 +1635,11 @@ onMounted(() => { void loadLinks(); void loadLocal() })
 .import-label{position:relative;overflow:hidden}
 .import-label input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}
 .import-label.disabled{opacity:.5}
+
+/* ---- 解除归并二次确认（页面内浮层，风格与本页其它卡片一致） ---- */
+.product-confirm-mask{position:fixed;inset:0;z-index:240;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,41,.38)}
+.product-confirm{width:min(520px,calc(100vw - 48px));max-height:min(560px,calc(100vh - 48px));overflow:auto;padding:20px;border:1px solid var(--dash-border);border-radius:18px;background:#fff;box-shadow:var(--shadow-pop)}
+.product-confirm h3{margin:0 0 10px;font-size:17px;color:var(--dash-text)}
+.product-confirm-text{margin:0;color:var(--dash-text);font-size:13px;line-height:1.7;white-space:pre-line}
+.product-confirm-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
 </style>

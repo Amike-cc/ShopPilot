@@ -50,8 +50,26 @@ async function waitFor(fn, timeoutMs = 90000) {
   throw new Error('timeout waiting for rollback condition')
 }
 
-function killStray() {
-  try { execFileSync('taskkill', ['/IM', 'ShopPilot.exe', '/T', '/F'], { stdio: 'ignore' }) } catch {}
+/**
+ * 本次临时安装目录里的 ShopPilot.exe —— NSIS 静默安装会按 runAfterFinish 自动拉起应用，
+ * 那个实例不是我们的直接子进程，所以只能按**安装路径**收敛（路径是本次运行独有的临时目录）。
+ */
+let installTarget = null
+
+/**
+ * 只结束"本次安装目录里"的 ShopPilot 进程。
+ * 不用 `taskkill /IM ShopPilot.exe /T /F`：那会把**并发跑着的其它验收套件**连根杀掉
+ * （2026-10-18 实测过一次：某个套件运行中被别的运行掐死）。
+ * 清理上一轮残留统一收敛到 run-acceptance.ps1 开头的 Kill-ShopPilot，脚本自己不做全局清理。
+ */
+function killStray(exe = installTarget) {
+  if (!exe) return
+  const escaped = String(exe).replace(/'/g, "''")
+  try {
+    execFileSync('powershell.exe', ['-NoProfile', '-Command',
+      `Get-Process -Name ShopPilot -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${escaped}' } | Stop-Process -Force -ErrorAction SilentlyContinue`
+    ], { stdio: 'ignore' })
+  } catch {}
 }
 
 function productVersion(exe) {
@@ -77,9 +95,10 @@ async function install(setup, installDir) {
   const child = spawn(setup, ['/S', `/D=${installDir}`], { detached: true, stdio: 'ignore' })
   child.unref()
   const exe = path.join(installDir, 'ShopPilot.exe')
+  installTarget = exe
   await waitForStableFile(exe)
   await sleep(1500)
-  killStray()
+  killStray(exe)
   return exe
 }
 
@@ -103,6 +122,7 @@ async function stop(context) {
     try { execFileSync('taskkill', ['/PID', String(context.child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch {}
   }
   await sleep(1200)
+  // 兜底：NSIS 自动拉起的实例可能还在（按本次安装路径收敛，不碰并发跑的其它套件）
   killStray()
 }
 

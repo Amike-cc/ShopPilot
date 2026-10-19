@@ -40,7 +40,7 @@
       <article v-for="store in filteredStores" :key="store.id" class="unified-store-card" :class="{ online: store.status === 'online' }">
         <div class="unified-store-card-head"><PlatformIcon :name="store.platform" :size="34" /><div><strong>{{ store.name }}</strong><small>{{ store.platform }} · {{ shortUrl(store.adminUrl) }}</small></div><span class="unified-status" :class="statusClass(store.status)"><i></i>{{ statusLabel(store.status) }}</span></div>
         <div class="unified-store-meta"><span>分组：{{ store.groupName || '未分组' }}</span><span>标签：{{ store.tags.length ? store.tags.join('、') : '—' }}</span></div>
-        <div class="unified-card-actions"><button type="button" class="unified-button primary" @click="emit('open-store', store.id)"><img class="button-art" :src="workspaceOpenIcon" alt="" />打开工作区</button><button type="button" class="unified-button ghost" @click="toggleArchive(store)"><img class="button-art" :src="archiveRestoreIcon" alt="" />{{ store.status === 'archived' ? '恢复使用' : '归档' }}</button><button type="button" class="unified-icon-button" title="移入回收站" @click="remove(store)"><img :src="storeTrashIcon" alt="" /></button></div>
+        <div class="unified-card-actions"><button type="button" class="unified-button primary" @click="emit('open-store', store.id)"><img class="button-art" :src="workspaceOpenIcon" alt="" />打开工作区</button><button type="button" class="unified-button ghost" data-test="store-group-open" :disabled="!bridgeAvailable" :title="`设置分组（当前：${store.groupName || '未分组'}）`" @click="openGroupEditor(store)"><img class="button-art" :src="groupEditIcon" alt="" />分组</button><button type="button" class="unified-button ghost" @click="toggleArchive(store)"><img class="button-art" :src="archiveRestoreIcon" alt="" />{{ store.status === 'archived' ? '恢复使用' : '归档' }}</button><button type="button" class="unified-icon-button" title="移入回收站" @click="remove(store)"><img :src="storeTrashIcon" alt="" /></button></div>
       </article>
     </div>
 
@@ -56,6 +56,17 @@
         <label>备注<textarea v-model="form.notes" rows="2"></textarea></label>
         <div v-if="createError" class="unified-alert error">{{ createError }}</div>
         <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" @click="createOpen = false"><img class="button-art" :src="storeCloseIcon" alt="" />取消</button><button type="submit" class="unified-button primary" :disabled="creating"><img class="button-art" :src="storeAddIcon" alt="" />{{ creating ? '创建中…' : '创建店铺' }}</button></div>
+      </form>
+    </div>
+
+    <div v-if="groupOpen" class="unified-overlay" @click.self="closeGroupEditor">
+      <form class="unified-dialog" data-test="store-group-dialog" @submit.prevent="submitGroup">
+        <div class="unified-dialog-head"><div><span class="dashboard-eyebrow">STORE GROUP</span><h2>设置分组</h2></div><button type="button" class="unified-icon-button" @click="closeGroupEditor"><img :src="closeIcon" alt="" /></button></div>
+        <p class="unified-muted">{{ groupEditingName }} · 当前分组：{{ groupEditingCurrent || '未分组' }}</p>
+        <label>分组名<input v-model="groupDraft" data-test="store-group-input" :maxlength="STORE_GROUP_MAX_LENGTH" list="store-group-options" placeholder="例如：华东区；留空保存 = 清除分组" /></label>
+        <datalist id="store-group-options"><option v-for="group in groupOptions" :key="group" :value="group"></option></datalist>
+        <div v-if="groupError" class="unified-alert error" role="alert">{{ groupError }}</div>
+        <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" data-test="store-group-clear" :disabled="groupSaving" @click="clearGroup">清除分组</button><button type="button" class="unified-button ghost" data-test="store-group-cancel" @click="closeGroupEditor"><img class="button-art" :src="storeCloseIcon" alt="" />取消</button><button type="submit" class="unified-button primary" data-test="store-group-save" :disabled="groupSaving || !bridgeAvailable"><img class="button-art" :src="groupEditIcon" alt="" />{{ groupSaving ? '保存中…' : '保存' }}</button></div>
       </form>
     </div>
   </section>
@@ -76,6 +87,9 @@ import storeTrashIcon from '../../assets/generated/ui-icons/store-trash-gen.png'
 import workspaceOpenIcon from '../../assets/generated/ui-icons/workspace-open-gen.png'
 import storeRetryIcon from '../../assets/generated/ui-icons/stores-retry-gen.png'
 import storeCloseIcon from '../../assets/generated/ui-icons/stores-close-gen.png'
+import groupEditIcon from '../../assets/generated/ui-icons/manual-edit-gen.png'
+// 分组输入口径（规范化 / 白名单校验 / 已有分组建议）统一走纯模块，见 features/stores/store-group.ts
+import { STORE_GROUP_MAX_LENGTH, listStoreGroups, validateGroupName } from '../stores/store-group'
 
 const emit = defineEmits<{ 'open-store': [storeId: string] }>()
 const ws = useWorkspaceStore()
@@ -123,6 +137,43 @@ async function toggleArchive(store: StoreRow) { if (store.status === 'archived')
 async function remove(store: StoreRow) { if (window.confirm(`确认将「${store.name}」移入回收站？`)) await ws.moveToTrash(store.id) }
 async function restore(id: string) { await ws.restoreStore(id) }
 async function purge(store: StoreRow) { if (window.confirm(`彻底删除「${store.name}」后不可恢复，确认继续？`)) await ws.purgeStore(store.id) }
+
+/**
+ * 分组编辑浮层：页内轻量输入，不用 window.confirm/prompt（那会阻塞渲染进程并卡 CDP）。
+ * 校验失败留在浮层里显示中文原因；成功/清除后关浮层并 toast。
+ */
+const groupOpen = ref(false)
+const groupEditingId = ref<string | null>(null)
+const groupEditingName = ref('')
+const groupEditingCurrent = ref<string | null>(null)
+const groupDraft = ref('')
+const groupError = ref('')
+const groupSaving = ref(false)
+const groupOptions = computed(() => listStoreGroups(ws.stores))
+
+function openGroupEditor(store: StoreRow) {
+  groupEditingId.value = store.id
+  groupEditingName.value = store.name
+  groupEditingCurrent.value = store.groupName ?? null
+  groupDraft.value = store.groupName || ''
+  groupError.value = ''
+  groupOpen.value = true
+}
+function closeGroupEditor() { groupOpen.value = false; groupEditingId.value = null; groupError.value = '' }
+async function submitGroup() {
+  if (!bridgeAvailable || !groupEditingId.value || groupSaving.value) return
+  const checked = validateGroupName(groupDraft.value)
+  if (!checked.ok) { groupError.value = checked.message; return }
+  groupError.value = ''
+  groupSaving.value = true
+  const ok = await ws.setStoreGroup(groupEditingId.value, checked.value)
+  groupSaving.value = false
+  if (!ok) { groupError.value = '保存分组失败，请重试（详情见提示）'; return }
+  ws.toast(checked.value ? `已归入分组「${checked.value}」` : '已清除分组', 'success')
+  closeGroupEditor()
+}
+/** 清除 = 用空值走同一条保存路径（validate 把空值归一成 null） */
+async function clearGroup() { groupDraft.value = ''; await submitGroup() }
 watch(() => form.value.platform, onPlatformChange)
 onMounted(() => { if (bridgeAvailable) { refresh(); void ws.refreshTrash() } else state.value = 'ready' })
 </script>

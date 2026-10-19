@@ -1,3 +1,55 @@
+# ShopPilot 0.5.0 变更说明（工程加固、性能/体积治理与两个真实缺陷修复）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
+
+## 本次更新
+
+### 1. 真实缺陷修复
+
+- 修复「店铺浏览器打开时无法进入经营总览及其它页面」：主内容区的页面链此前挂在浏览器宿主之后（v-else-if），宿主常驻时整条链被短路；现改为与宿主并存、由可见性条件决定谁接管主区域，guest 仍常驻保活（页面状态不丢）。
+- 修复「发票中心自动采集总开关永远显示关闭」：读取设置时数组下标越界（`responses[4]` → `responses[3]`），属历史遗留。
+
+### 2. 安装包与安装体积
+
+- `win-unpacked` 413.77 MB → 320.00 MB（−93.77 MB / −22.7%）；NSIS 安装包 135.24 MB → **109.89 MB**（−18.7%）。
+- Chromium locale 只保留 zh-CN/en-US（55 → 2 个文件）；删除 `LICENSES.chromium.html`（19.53 MB）；better-sqlite3 只保留 win32-x64 预编译并排除源码目录。
+
+### 3. 性能
+
+- 首屏入口 JS 1803.87 kB → 865.60 kB（−52%）：7 个页面级组件改为异步加载。
+- 4 个平台图标转 WebP（−83.9%）；清理 137 个未被引用的图标资源（−36.05 MB）。
+
+### 4. 工程门禁与安全
+
+- 测试纳入类型检查（新增 `typecheck:tests` 门禁，修复 107 条测试类型错误）；lint 以 `--max-warnings 1145` 封顶，CI 只许减不许增。
+- 打包态验收测试钩子改为三层门禁：**生产构建下任何运行期环境变量都无法开启**；验收需使用 `pnpm run dist:acceptance` 产出的验收构建（见 docs/ACCEPTANCE_HOOKS.md）。
+- CI 依赖审计增加超时并修掉「断网时 audit 假绿」；happy-dom 升级到 20.14.6（修复 1 critical + 3 high advisory）。
+- IPC 契约类型化：105 个通道 / 12 个域新增请求/响应类型，并新增契约一致性单测（含负向验证）。
+
+### 5. 代码结构
+
+- 主进程 `task-runner`（4299 行）与 `window-manager`（1988 行）拆为薄 facade + 内聚模块（字节级等价搬迁，导出与调用点不变）。
+- 渲染层 4 个巨型页面拆分（2084 / 2208 / 1771 / 2269 → 1401 / 1425 / 1005 / 1090 行）；店铺 webview 绑定收敛到单一适配层（ADR-001，为将来是否迁移 WebContentsView 保留选择权）。
+
+### 6. 发布与文档
+
+- 新增 `docs/ARCHITECTURE.md`（当前架构基准）、`docs/ACCEPTANCE_HOOKS.md`、`docs/RELEASE_SIGNING.md`、`docs/ADR-001-webview-vs-webcontentsview.md`、`docs/FIXES-2026-10-19.md`；修正 README 与历史规范中与实现不一致的描述。
+
+## 验证
+
+- `pnpm typecheck`、`pnpm typecheck:tests`、`pnpm lint:ci`：0 错误（lint warning 封顶 1145）。
+- `pnpm exec vitest run`：164 个测试文件 / 1782 项全部通过。
+- `pnpm build` + `electron-builder --win --x64 --dir`：通过；打包态 better-sqlite3 原生模块冒烟通过（ABI 149）。
+- 验收构建 CDP（打包版）：设置中心 47/47、标签页批量关闭 42/42、渲染层入口 16/16、工作台入口一致性 10/10。
+
+## 已知边界
+
+- 未做代码签名（INTERNAL_BUILD）；自动更新仅 SHA-512 校验、无签名校验。
+- 验收套件 `m1-runner` 中右栏面板相关锚点仍指向改版前的「任务」面板，需后续单独适配（既有改版遗留，非本版回归）。
+- `task-step-executor` / `window-browser-core` / `DashboardBrowserSurface` 仍有进一步结构拆分空间，需先补行为测试再动。
+
+---
+
 # ShopPilot 0.4.75 变更说明（全量复审问题修复与发布加固）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收。

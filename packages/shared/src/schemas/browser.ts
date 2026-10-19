@@ -14,6 +14,33 @@ export const browserRegisterWebviewSchema = z.object({
 export const browserTabCreateSchema = z.object({ storeId, url: url.optional() }).strict()
 export const browserTabInputSchema = z.object({ storeId, tabId }).strict()
 export const browserTabPinnedSchema = z.object({ storeId, tabId, pinned: z.boolean() }).strict()
+
+/**
+ * 批量关闭标签页。
+ *
+ * 三个模式都要在 **Main 侧按真实状态** 计算：
+ *   ids    —— 只关显式选中的（多选），固定标签也关（用户是明确点选的）
+ *   others —— 关掉除 keepTabId 之外的全部（默认保留固定标签）
+ *   all    —— 关掉全部（默认保留固定标签，"关到 0 个"必须显式 includePinned）
+ */
+export const browserTabsCloseManySchema = z.object({
+  storeId,
+  mode: z.enum(['ids', 'others', 'all']),
+  tabIds: z.array(tabId).min(1).max(200).optional(),
+  keepTabId: tabId.optional(),
+  /** 默认 false：一键操作跳过固定标签，避免把常驻页一起关掉 */
+  includePinned: z.boolean().optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.mode === 'ids' && !value.tabIds?.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '关闭选中时必须提供 tabIds' })
+  }
+  if (value.mode === 'others' && !value.keepTabId) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '关闭其他时必须提供保留的标签页' })
+  }
+  if (value.tabIds && new Set(value.tabIds).size !== value.tabIds.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: '标签页列表不能包含重复 ID' })
+  }
+})
 export const browserTabReorderSchema = z.object({
   storeId,
   orderedTabIds: z.array(tabId).max(1000).superRefine((ids, ctx) => {

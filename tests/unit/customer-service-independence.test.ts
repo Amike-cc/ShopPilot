@@ -34,7 +34,8 @@ describe('经营工作台与电商客服工作区边界', () => {
   it('经营浏览器只渲染经营标签，不接收客服模式分支', () => {
     expect(SURFACE).not.toContain('customer-service-mode')
     expect(SURFACE).not.toContain('isCustomerServiceTab')
-    expect(SURFACE).toContain('v-for="tab in ws.displayedTabs"')
+    // 标签循环只吃 ws.displayedTabs（index 用于 browser-tab-{n} 验收锚点）
+    expect(SURFACE).toContain('v-for="(tab, tabIndex) in ws.displayedTabs"')
     expect(DASHBOARD).toContain('data-test="workspace-tab-customer-service"')
   })
 
@@ -42,6 +43,7 @@ describe('经营工作台与电商客服工作区边界', () => {
     expect(DASHBOARD).not.toContain('EVENT_CHANNELS.AGENT_PANEL_OPEN')
     expect(DASHBOARD).toContain('if (!props.active) return\n  if ((event.ctrlKey || event.metaKey)')
     expect(DASHBOARD).toContain('if (!props.active) return\n  if (storeId && source === \'main\'')
+    expect(SURFACE).toContain('if (!props.active || !payload || payload.storeId !== ws.displayedStoreId) return')
   })
 
   it('没有可靠消息源时界面保持空值和未验证状态', () => {
@@ -131,7 +133,26 @@ describe('经营工作台与电商客服工作区边界', () => {
   it('客服工作区未打开时不会自动选店或导航到远程客服页面', () => {
     expect(SERVICE).toContain('if (!props.active) {')
     expect(SERVICE).toContain("selectedStoreId.value = ''")
-    expect(SERVICE).toContain('watch(() => props.active, active => { if (active) syncSelectedStore() })')
+    expect(SERVICE).toContain('watch(() => props.active, active => { mobileStoreRailOpen.value = false; if (active) syncSelectedStore() })')
+    expect(SERVICE).toContain('function onCustomerServiceKeydown(event: KeyboardEvent)')
+    expect(SERVICE).toContain("event.key !== 'Escape' || !mobileStoreRailOpen.value")
+    expect(SERVICE).toContain("window.addEventListener('keydown', onCustomerServiceKeydown)")
+    expect(SERVICE).toContain("window.removeEventListener('keydown', onCustomerServiceKeydown)")
+    expect(SERVICE).toContain("const bridge = (window as Window & { shopilot?: Window['shopilot'] }).shopilot")
+    expect(SERVICE).toContain('if (bridge) bridge.on(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, onStatusChanged)')
+    expect(SERVICE).toContain('if (bridge) bridge.off(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, onStatusChanged)')
+    expect(SERVICE).toContain('mobileStoreRailOpen.value = false\n  const state = ensureBrowserState(store)')
+  })
+
+  it('移动端店铺抽屉支持 Escape、遮罩和菜单按钮关闭，且监听生命周期完整', () => {
+    expect(SERVICE).toContain('data-test="customer-mobile-sidebar-backdrop"')
+    expect(SERVICE).toContain('@click="mobileStoreRailOpen = false"')
+    expect(SERVICE).toContain('@click="mobileStoreRailOpen = !mobileStoreRailOpen"')
+    expect(SERVICE).toMatch(/function onCustomerServiceKeydown\(event: KeyboardEvent\)[\s\S]*?if \(!props\.active \|\| event\.key !== 'Escape' \|\| !mobileStoreRailOpen\.value\) return[\s\S]*?event\.preventDefault\(\)[\s\S]*?mobileStoreRailOpen\.value = false/)
+    expect(SERVICE).toContain('window.addEventListener(\'keydown\', onCustomerServiceKeydown)')
+    expect(SERVICE).toContain('window.removeEventListener(\'keydown\', onCustomerServiceKeydown)')
+    expect(SERVICE).toMatch(/watch\(\(\) => props\.active, active => \{ mobileStoreRailOpen\.value = false;/)
+    expect(SERVICE).toMatch(/function selectStore\(storeId: string\): void \{[\s\S]*?mobileStoreRailOpen\.value = false/)
   })
 
   it('消息检查中的忙碌和错误状态绑定到对应店铺工作台', () => {

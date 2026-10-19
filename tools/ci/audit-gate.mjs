@@ -33,23 +33,62 @@ function loadAllowlist() {
   }
 }
 
+/** 单次 `pnpm audit` 的墙钟上限：registry 挂起（不报错也不返回）时不能无限占着 CI job。 */
+const AUDIT_TIMEOUT_MS = 120_000
+
 function runAudit() {
   const bin = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
   const res = spawnSync(bin, ['audit', '--json'], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    timeout: AUDIT_TIMEOUT_MS,
     shell: process.platform === 'win32'
   })
   const stdout = res.stdout || ''
-  try {
-    return JSON.parse(stdout)
-  } catch {
-    // pnpm audit 在发现漏洞时也会输出完整 JSON 到 stdout；解析失败说明是网络/执行错误
-    console.error('[audit-gate] 无法解析 pnpm audit 输出（网络或执行失败）')
-    console.error((res.stderr || stdout || '').slice(0, 2000))
+  const stderr = res.stderr || ''
+
+  // 先区分"没跑成"（网络/执行）与"跑成了且有未豁免漏洞"（下面的 ADVISORY 分支）：
+  // 两类都必须是退出码 1（绝不静默跳过），但日志标记不同，CI 上一眼能看出该找网络还是找依赖。
+  if (res.error) {
+    const timedOut = res.error.code === 'ETIMEDOUT' || res.signal === 'SIGTERM'
+    if (timedOut) {
+      console.error(`[audit-gate] FAILED (NETWORK/TRANSPORT)：pnpm audit 超过 ${AUDIT_TIMEOUT_MS / 1000}s 未返回（registry 挂起/网络不通），已终止`)
+    } else {
+      console.error(`[audit-gate] FAILED (NETWORK/TRANSPORT)：pnpm audit 无法执行：${res.error.code || ''} ${res.error.message}`)
+    }
+    if (stderr.trim() || stdout.trim()) console.error((stderr || stdout).slice(0, 2000))
     process.exit(1)
   }
+
+  let report
+  try {
+    report = JSON.parse(stdout)
+  } catch {
+    // pnpm audit 在发现漏洞时也会输出完整 JSON 到 stdout；解析失败说明是网络/执行错误
+    // （断网、代理 5xx、registry 限流、pnpm 自身报错），不是"发现了漏洞"。
+    console.error('[audit-gate] FAILED (NETWORK/TRANSPORT)：无法解析 pnpm audit 输出（网络或执行失败）')
+    console.error((stderr || stdout || '').slice(0, 2000))
+    process.exit(1)
+  }
+
+  // pnpm audit 执行失败时**也会输出合法 JSON**：{"error":{"code":"ECONNREFUSED",...}}（2026-10-19 实跑复现）。
+  // 旧写法直接 `report.advisories || {}`，于是"registry 不可达"会被当成"0 条漏洞"静默 PASS ——
+  // 正是本仓库明令禁止的假成功。下面把"没跑成"与"输出格式不认识"都明确归类为
+  // NETWORK/TRANSPORT 失败（退出码仍为 1，绝不静默跳过）。
+  if (report && typeof report === 'object' && report.error) {
+    console.error(
+      `[audit-gate] FAILED (NETWORK/TRANSPORT)：pnpm audit 返回错误：${report.error.code || ''} ${report.error.message || ''}`
+    )
+    process.exit(1)
+  }
+  if (!report || typeof report !== 'object' || typeof report.advisories !== 'object' || report.advisories === null) {
+    console.error('[audit-gate] FAILED (NETWORK/TRANSPORT)：pnpm audit 输出缺少 advisories 字段，无法判定（格式不认识或 audit 未真正执行）')
+    console.error(stdout.slice(0, 2000))
+    process.exit(1)
+  }
+
+  return report
 }
 
 function main() {
@@ -99,7 +138,7 @@ function main() {
     process.exit(0)
   }
 
-  console.error(`[audit-gate] FAIL：${blocking.length} 条 high/critical 未处理：`)
+  console.error(`[audit-gate] FAILED (ADVISORY)：${blocking.length} 条 high/critical 未处理：`)
   for (const adv of blocking) {
     console.error(
       `  · [${adv.severity}] ${adv.module_name} ${adv.vulnerable_versions} → 修复版本 ${adv.patched_versions}` +

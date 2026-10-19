@@ -173,7 +173,9 @@ describe('客服消息监控', () => {
 
   it('调度在首轮之后按完成时间等待，慢检查期间不会叠加新一轮', async () => {
     vi.useFakeTimers()
-    let finishFirst: (() => void) | null = null
+    // 不初始化成 null：初始化会让 TS 把类型收窄成 null，后面 Promise 回调里的赋值不可见，
+    // finishFirst?.() 会被判成对 never 的调用。留成未赋值的 `| undefined` 才符合"回调里才赋值"。
+    let finishFirst: (() => void) | undefined
     const firstRun = new Promise<void>(resolve => { finishFirst = resolve })
     const monitor = new CustomerMessageMonitor({
       now: () => 1_700_000_000_000,
@@ -209,7 +211,7 @@ describe('客服消息监控', () => {
   it('监控停止后迟到的页面结果不会写库或广播', async () => {
     mocks.inserted.length = 0
     mocks.emit.mockClear()
-    let releaseLoad: (() => void) | null = null
+    let releaseLoad: (() => void) | undefined
     const loadFinished = new Promise<void>(resolve => { releaseLoad = resolve })
     const wc = {
       isDestroyed: () => false,
@@ -235,7 +237,7 @@ describe('客服消息监控', () => {
   })
 
   it('店铺删除竞态不会把第二次请求误报为检查中', async () => {
-    let releasePage: (() => void) | null = null
+    let releasePage: (() => void) | undefined
     const pageReady = new Promise<void>(resolve => { releasePage = resolve })
     let alive = true
     mocks.getStore.mockImplementation((storeId: string) => alive ? { id: storeId, platform: '抖店' } : null)

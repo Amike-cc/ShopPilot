@@ -5,8 +5,8 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, EVENT_CHANNELS } from '@shared/contracts/ipc'
-import type { IPCResult } from '@shared/contracts/ipc'
+import { IPC_CHANNELS, EVENT_CHANNELS, createIpcInvoker } from '@shared/contracts/ipc'
+import type { IPCResult, IpcRequest } from '@shared/contracts/ipc'
 import { PLATFORM_CATALOG } from '@shared/constants/platforms'
 import type { AgentUiState } from '@shared/schemas/agent'
 
@@ -15,62 +15,75 @@ import type { AgentUiState } from '@shared/schemas/agent'
  */
 const eventListenerWrappers = new Map<string, Map<(...args: any[]) => void, (...args: any[]) => void>>()
 
+/**
+ * 类型化 invoke：通道 → 入参/返回值的约束来自 `@shared/contracts/ipc` 的 IpcContract。
+ *
+ * 运行时与 `ipcRenderer.invoke` 完全一致（同一函数、同样参数、同样 Promise），
+ * 只是把「通道 ↔ 请求/响应形状」的校验从人脑挪给 tsc：`window.shopilot` 的方法名、
+ * 通道字符串与返回信封都不变，改的是**调用点写错通道或写错入参时编译不过**。
+ * 尚未接入契约的通道（products / ai / proxy / …）继续走原来的 `ipcRenderer.invoke(...)`。
+ */
+const invoke = createIpcInvoker((channel, ...args) => ipcRenderer.invoke(channel, ...args))
+
 const api = {
-  // 店铺管理
+  // 店铺管理（契约域 store:*：返回值类型由 IpcContract 推导，不再逐方法手写泛型）
   store: {
-    list: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_LIST),
-    get: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_GET, { storeId }),
-    create: (input: any): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_CREATE, input),
-    update: (input: any): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_UPDATE, input),
-    archive: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_ARCHIVE, { storeId }),
-    restore: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_RESTORE, { storeId }),
-    deletePermanent: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_DELETE_PERMANENT, { storeId }),
-    reorder: (orderedStoreIds: string[]): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_REORDER, { orderedStoreIds }),
-    setGroup: (storeId: string, groupName: string | null): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_SET_GROUP, { storeId, groupName }),
-    trashList: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_TRASH_LIST),
-    purge: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.STORE_PURGE, { storeId })
+    list: () => invoke(IPC_CHANNELS.STORE_LIST),
+    get: (storeId: string) => invoke(IPC_CHANNELS.STORE_GET, { storeId }),
+    create: (input: IpcRequest<'store:create'>) => invoke(IPC_CHANNELS.STORE_CREATE, input),
+    update: (input: IpcRequest<'store:update'>) => invoke(IPC_CHANNELS.STORE_UPDATE, input),
+    archive: (storeId: string) => invoke(IPC_CHANNELS.STORE_ARCHIVE, { storeId }),
+    restore: (storeId: string) => invoke(IPC_CHANNELS.STORE_RESTORE, { storeId }),
+    deletePermanent: (storeId: string) => invoke(IPC_CHANNELS.STORE_DELETE_PERMANENT, { storeId }),
+    reorder: (orderedStoreIds: string[]) => invoke(IPC_CHANNELS.STORE_REORDER, { orderedStoreIds }),
+    setGroup: (storeId: string, groupName: string | null) => invoke(IPC_CHANNELS.STORE_SET_GROUP, { storeId, groupName }),
+    trashList: () => invoke(IPC_CHANNELS.STORE_TRASH_LIST),
+    purge: (storeId: string) => invoke(IPC_CHANNELS.STORE_PURGE, { storeId })
   },
   
-  // 浏览器
+  // 浏览器（契约域 browser:* / browser:tab:*）
   browser: {
-    open: (storeId: string, opts?: { display?: boolean }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_OPEN, { storeId, ...(opts || {}) }),
-    close: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLOSE, { storeId }),
-    display: (storeId: string | null): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_DISPLAY, { storeId }),
+    open: (storeId: string, opts?: { display?: boolean }) => invoke(IPC_CHANNELS.BROWSER_OPEN, { storeId, ...(opts || {}) }),
+    close: (storeId: string) => invoke(IPC_CHANNELS.BROWSER_CLOSE, { storeId }),
+    display: (storeId: string | null) => invoke(IPC_CHANNELS.BROWSER_DISPLAY, { storeId }),
     /** 注册标签页对应的 webview 内容，供主进程维护其挂载关系 */
-    registerWebview: (storeId: string, tabId: string, webContentsId: number): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.BROWSER_REGISTER_WEBVIEW, { storeId, tabId, webContentsId }),
+    registerWebview: (storeId: string, tabId: string, webContentsId: number) =>
+      invoke(IPC_CHANNELS.BROWSER_REGISTER_WEBVIEW, { storeId, tabId, webContentsId }),
     /** 上报浏览器内容区域边界，供已注册 webview 同步布局 */
-    setViewport: (bounds: { x: number, y: number, width: number, height: number }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SET_VIEWPORT, bounds),
-    partitionUsage: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PARTITION_USAGE),
-    partitionClean: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PARTITION_CLEAN, { storeId }),
+    setViewport: (bounds: { x: number, y: number, width: number, height: number }) => invoke(IPC_CHANNELS.BROWSER_SET_VIEWPORT, bounds),
+    partitionUsage: () => invoke(IPC_CHANNELS.BROWSER_PARTITION_USAGE),
+    partitionClean: (storeId: string) => invoke(IPC_CHANNELS.BROWSER_PARTITION_CLEAN, { storeId }),
     /** 弹层打开/关闭：暂时隐藏/恢复已注册 webview */
-    setViewsObscured: (obscured: boolean, reason: 'modal' | 'agent' = 'modal'): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, { obscured, reason }),
+    setViewsObscured: (obscured: boolean, reason: 'modal' | 'agent' = 'modal') => invoke(IPC_CHANNELS.BROWSER_SET_VIEWS_OBSCURED, { obscured, reason }),
     
     tab: {
-      create: (storeId: string, url?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_TAB_CREATE, { storeId, url }),
-      activate: (storeId: string, tabId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_TAB_ACTIVATE, { storeId, tabId }),
-      close: (storeId: string, tabId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_TAB_CLOSE, { storeId, tabId }),
-      reorder: (storeId: string, orderedTabIds: string[]): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_TAB_REORDER, { storeId, orderedTabIds }),
-      setPinned: (storeId: string, tabId: string, pinned: boolean): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_TAB_SET_PINNED, { storeId, tabId, pinned }),
-      list: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_TAB_LIST, { storeId }),
-      control: (storeId: string, tabId: string, action: 'back' | 'forward' | 'reload'): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_TAB_CONTROL, { storeId, tabId, action })
+      create: (storeId: string, url?: string) => invoke(IPC_CHANNELS.BROWSER_TAB_CREATE, { storeId, url }),
+      activate: (storeId: string, tabId: string) => invoke(IPC_CHANNELS.BROWSER_TAB_ACTIVATE, { storeId, tabId }),
+      close: (storeId: string, tabId: string) => invoke(IPC_CHANNELS.BROWSER_TAB_CLOSE, { storeId, tabId }),
+      /** 批量关闭：mode=ids（多选）/ others（关闭其他）/ all（关闭全部） */
+      closeMany: (input: { storeId: string, mode: 'ids' | 'others' | 'all', tabIds?: string[], keepTabId?: string, includePinned?: boolean }) =>
+        invoke(IPC_CHANNELS.BROWSER_TAB_CLOSE_MANY, input),
+      reorder: (storeId: string, orderedTabIds: string[]) => invoke(IPC_CHANNELS.BROWSER_TAB_REORDER, { storeId, orderedTabIds }),
+      setPinned: (storeId: string, tabId: string, pinned: boolean) => invoke(IPC_CHANNELS.BROWSER_TAB_SET_PINNED, { storeId, tabId, pinned }),
+      list: (storeId: string) => invoke(IPC_CHANNELS.BROWSER_TAB_LIST, { storeId }),
+      control: (storeId: string, tabId: string, action: 'back' | 'forward' | 'reload') => invoke(IPC_CHANNELS.BROWSER_TAB_CONTROL, { storeId, tabId, action })
     },
     
-    navigate: (storeId: string, tabId: string, url: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_NAVIGATE, { storeId, tabId, url }),
-    prepareInviteSquare: (storeId: string, input: any): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PREPARE_INVITE_SQUARE, { storeId, ...input }),
+    navigate: (storeId: string, tabId: string, url: string) => invoke(IPC_CHANNELS.BROWSER_NAVIGATE, { storeId, tabId, url }),
+    prepareInviteSquare: (storeId: string, input: Omit<IpcRequest<'browser:prepareInviteSquare'>, 'storeId'>) => invoke(IPC_CHANNELS.BROWSER_PREPARE_INVITE_SQUARE, { storeId, ...input }),
     /** 邀约台账：近 N 天已邀过的达人昵称（"7 天内不重复邀约"的判据来源） */
-    recentInviteHistory: (input: { storeId: string; days?: number; limit?: number }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.INVITE_RECENT_HISTORY, input),
-    clearData: (storeId: string, types: string[], origin?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLEAR_DATA, { storeId, types, origin }),
-    capture: (storeId: string, tabId: string, format: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CAPTURE, { storeId, tabId, format }),
+    recentInviteHistory: (input: { storeId: string; days?: number; limit?: number }) => invoke(IPC_CHANNELS.INVITE_RECENT_HISTORY, input),
+    clearData: (storeId: string, types: IpcRequest<'browser:clearData'>['types'], origin?: string) => invoke(IPC_CHANNELS.BROWSER_CLEAR_DATA, { storeId, types, origin }),
+    capture: (storeId: string, tabId: string, format: 'png' | 'jpeg') => invoke(IPC_CHANNELS.BROWSER_CAPTURE, { storeId, tabId, format }),
     /** 编排器「拾取元素」：picker-mode 下在店铺页面上点一下，取回锚点填进参数框 */
-    pickElement: (storeId: string, mode: 'selector' | 'text'): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.BROWSER_PICK_ELEMENT, { storeId, mode }),
-    openWindow: (storeId: string, tabId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_OPEN_WINDOW, { storeId, tabId }),
+    pickElement: (storeId: string, mode: 'selector' | 'text') =>
+      invoke(IPC_CHANNELS.BROWSER_PICK_ELEMENT, { storeId, mode }),
+    openWindow: (storeId: string, tabId: string) => invoke(IPC_CHANNELS.BROWSER_OPEN_WINDOW, { storeId, tabId }),
     /** 只读：当前显示的店铺与各已打开店铺的标签页（渲染层重载后补齐状态用） */
-    state: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_STATE),
-    memoryDiagnostics: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_MEMORY_DIAGNOSTICS),
+    state: () => invoke(IPC_CHANNELS.BROWSER_STATE),
+    memoryDiagnostics: () => invoke(IPC_CHANNELS.BROWSER_MEMORY_DIAGNOSTICS),
     /** 从店铺页面读真实店铺名（只读页面；返回建议值，改名仍走 store.update 由用户确认） */
-    readStoreName: (storeId: string, tabId?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BROWSER_READ_STORE_NAME, { storeId, tabId })
+    readStoreName: (storeId: string, tabId?: string) => invoke(IPC_CHANNELS.BROWSER_READ_STORE_NAME, { storeId, tabId })
   },
   
   // 书签
@@ -111,7 +124,6 @@ const api = {
     stats: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_STATS),
     /** 数据中心：所有店铺的汇总数据（只读） */
     datacenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_DATACENTER),
-    orders: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_ORDERS),
     /** 发票中心：各店铺的待开票信息（来自发票页 readTable 快照） */
     invoiceCenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_INVOICE_CENTER),
     /** 发票中心：把待开票清单导出为 CSV（弹保存框）。传 licenseKey = 只导出该开票主体的行（跟随屏上筛选） */
@@ -127,9 +139,10 @@ const api = {
     manualMetric: (storeId: string, metric: string, value: number): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_MANUAL_METRIC, { storeId, metric, value })
   },
+  // 设置（契约域 settings:*）
   settings: {
-    get: (key: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET, { key }),
-    set: (key: string, value: any): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET, { key, value })
+    get: (key: string) => invoke(IPC_CHANNELS.SETTINGS_GET, { key }),
+    set: (key: string, value: any) => invoke(IPC_CHANNELS.SETTINGS_SET, { key, value })
   },
   audit: {
     query: (filter?: any): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AUDIT_QUERY, { filter }),
@@ -139,26 +152,26 @@ const api = {
     export: (outputPath?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.DIAGNOSTICS_EXPORT, { outputPath })
   },
 
-  // 缓存清理与软件自检（设置中心「数据与维护」）——2026-10-16 新增
+  // 缓存清理与软件自检（设置中心「数据与维护」）——2026-10-16 新增（契约域 maintenance:*）
   maintenance: {
     /** 清除软件缓存：只清应用界面自己的缓存（默认会话），不动店铺数据与登录态 */
-    clearAppCache: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.MAINTENANCE_CLEAR_APP_CACHE),
+    clearAppCache: () => invoke(IPC_CHANNELS.MAINTENANCE_CLEAR_APP_CACHE),
     /** 清除浏览器缓存：所有店铺分区的网页缓存，Cookie 与站点存储保留 */
-    clearBrowserCache: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.MAINTENANCE_CLEAR_BROWSER_CACHE),
+    clearBrowserCache: () => invoke(IPC_CHANNELS.MAINTENANCE_CLEAR_BROWSER_CACHE),
     /** 诊断软件：只读自检，逐项返回事实与下一步 */
-    softwareDiagnostics: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.MAINTENANCE_SOFTWARE_DIAGNOSTICS)
+    softwareDiagnostics: () => invoke(IPC_CHANNELS.MAINTENANCE_SOFTWARE_DIAGNOSTICS)
   },
 
-  // 浏览器扩展（本地解包，实验性）：导入路径只能由主进程目录选择框产生
+  // 浏览器扩展（本地解包，实验性）：导入路径只能由主进程目录选择框产生（契约域 extensions:*）
   extensions: {
-    list: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_LIST),
-    import: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_IMPORT),
-    setEnabled: (id: string, enabled: boolean): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SET_ENABLED, { id, enabled }),
-    setMaster: (enabled: boolean): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SET_MASTER, { enabled }),
-    remove: (id: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_REMOVE, { id }),
-    reload: (id: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_RELOAD, { id }),
+    list: () => invoke(IPC_CHANNELS.EXTENSION_LIST),
+    import: () => invoke(IPC_CHANNELS.EXTENSION_IMPORT),
+    setEnabled: (id: string, enabled: boolean) => invoke(IPC_CHANNELS.EXTENSION_SET_ENABLED, { id, enabled }),
+    setMaster: (enabled: boolean) => invoke(IPC_CHANNELS.EXTENSION_SET_MASTER, { enabled }),
+    remove: (id: string) => invoke(IPC_CHANNELS.EXTENSION_REMOVE, { id }),
+    reload: (id: string) => invoke(IPC_CHANNELS.EXTENSION_RELOAD, { id }),
     /** 打开扩展目录（不带 id 打开管理根目录），方便自己写插件后直接编辑并重载 */
-    openDir: (id?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_OPEN_DIR, id ? { id } : {})
+    openDir: (id?: string) => invoke(IPC_CHANNELS.EXTENSION_OPEN_DIR, id ? { id } : {})
   },
 
   // 代理 - §6.3（渲染层可传明文凭据，Main 立即加密保管，绝不回显）
@@ -173,36 +186,20 @@ const api = {
     history: (proxyId: string, limit?: number): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.PROXY_HISTORY, { proxyId, limit })
   },
 
-  // 会话 - §6.3（导出/导入经主进程托管对话框；Cookie 查看器）
+  // 会话 - §6.3（导出/导入经主进程托管对话框；Cookie 查看器）—— 契约域 session:*
   session: {
-    status: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SESSION_STATUS, { storeId }),
-    checkLoginStatus: (storeId: string): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SESSION_CHECK_LOGIN_STATUS, { storeId }),
-    export: (storeId: string, outputPath?: string, validDays?: number): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SESSION_EXPORT, { storeId, outputPath, validDays }),
-    import: (storeId: string, filePath?: string, pickFile?: boolean): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SESSION_IMPORT, { storeId, filePath, pickFile }),
-    cookies: (storeId: string, search?: string): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SESSION_COOKIES, { storeId, search }),
-    deleteCookie: (storeId: string, name: string, domain: string, path: string, secure?: boolean): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SESSION_DELETE_COOKIE, { storeId, name, domain, path, secure }),
-    clearCookies: (storeId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SESSION_CLEAR_COOKIES, { storeId })
-  },
-
-  // 统一订单域：只暴露安全采集结果与分页查询，不暴露页面/Session/网络凭据。
-  orders: {
-    collect: (input: { storeId: string; maxPages?: number; maxOrders?: number; timeoutMs?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.ORDER_COLLECT, input),
-    list: (query: { storeId: string; status?: string; startDate?: number; endDate?: number; page?: number; pageSize?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.ORDER_LIST, query),
-    get: (storeId: string, orderId: string): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.ORDER_GET, { storeId, orderId }),
-    observation: {
-      start: (input: { storeId: string; timeoutMs?: number; maxResponses?: number }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.ORDER_OBSERVATION_START, input),
-      stop: (storeId: string): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.ORDER_OBSERVATION_STOP, { storeId })
-    }
+    status: (storeId: string) => invoke(IPC_CHANNELS.SESSION_STATUS, { storeId }),
+    checkLoginStatus: (storeId: string) =>
+      invoke(IPC_CHANNELS.SESSION_CHECK_LOGIN_STATUS, { storeId }),
+    export: (storeId: string, outputPath?: string, validDays?: number) =>
+      invoke(IPC_CHANNELS.SESSION_EXPORT, { storeId, outputPath, validDays }),
+    import: (storeId: string, filePath?: string, pickFile?: boolean) =>
+      invoke(IPC_CHANNELS.SESSION_IMPORT, { storeId, filePath, pickFile }),
+    cookies: (storeId: string, search?: string) =>
+      invoke(IPC_CHANNELS.SESSION_COOKIES, { storeId, search }),
+    deleteCookie: (storeId: string, name: string, domain: string, path: string, secure?: boolean) =>
+      invoke(IPC_CHANNELS.SESSION_DELETE_COOKIE, { storeId, name, domain, path, secure }),
+    clearCookies: (storeId: string) => invoke(IPC_CHANNELS.SESSION_CLEAR_COOKIES, { storeId })
   },
 
   // 商品管理：只暴露"同步（只读采集）+ 分页查询 + 台账"。
@@ -320,43 +317,45 @@ const api = {
   // 经营数据：只暴露安全的聚合结果和有限查询参数，不暴露 Session/请求凭据。
   // 计划管理只接受 storeId / 周期 / 分页 / 状态过滤——主进程用 Zod strict 再把一道关，
   // 多传一个字段直接判非法（不接受 SQL、URL、Session、WebContents 或任意脚本）。
+  // 入参形状直接取契约（= 主进程用于校验的 shared Zod schema 的输入侧），周期/排序/状态这些
+  // 枚举因此不会再被写成宽泛的 string。
   salesMetrics: {
-    collect: (input: { storeId: string; periodType?: string; periodStart?: number; periodEnd?: number; timeoutMs?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_COLLECT, input),
-    latest: (input: { storeId: string; periodType?: string }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_LATEST, input),
-    list: (input: { storeId: string; periodType?: string; periodStart?: number; periodEnd?: number; page?: number; pageSize?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_LIST, input),
-    products: (input: { storeId: string; periodType?: string; periodStart?: number; periodEnd?: number; page?: number; pageSize?: number; sort?: string; limit?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PRODUCTS, input),
-    topProducts: (input: { storeId: string; periodType?: string; page?: number; pageSize?: number; sort?: string; limit?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_TOP_PRODUCTS, input),
-    plans: (input: { storeId?: string; platform?: string } = {}): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_LIST, input),
-    planGet: (storeId: string): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_GET, { storeId }),
-    planUpdate: (input: { storeId: string; enabled?: boolean; intervalMs?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_UPDATE, input),
-    planPause: (storeId: string): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_PAUSE, { storeId }),
-    planResume: (storeId: string): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_RESUME, { storeId }),
+    collect: (input: IpcRequest<'salesMetrics:collect'>) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_COLLECT, input),
+    latest: (input: IpcRequest<'salesMetrics:latest'>) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_LATEST, input),
+    list: (input: IpcRequest<'salesMetrics:list'>) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_LIST, input),
+    products: (input: IpcRequest<'salesMetrics:products'>) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_PRODUCTS, input),
+    topProducts: (input: IpcRequest<'salesMetrics:topProducts'>) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_TOP_PRODUCTS, input),
+    plans: (input: IpcRequest<'salesMetrics:plan:list'> = {}) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_PLAN_LIST, input),
+    planGet: (storeId: string) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_PLAN_GET, { storeId }),
+    planUpdate: (input: IpcRequest<'salesMetrics:plan:update'>) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_PLAN_UPDATE, input),
+    planPause: (storeId: string) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_PLAN_PAUSE, { storeId }),
+    planResume: (storeId: string) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_PLAN_RESUME, { storeId }),
     /** 立即采集：只入队，结果通过 salesMetrics:runFinished 事件回报（依次能看到 RUNNING→终态）。 */
-    planRunNow: (storeId: string, periodType?: string): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_PLAN_RUN_NOW, { storeId, periodType }),
-    runs: (input: { storeId?: string; platform?: string; status?: string; page?: number; pageSize?: number } = {}): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_RUNS_LIST, input),
-    health: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SALES_METRICS_HEALTH)
+    planRunNow: (storeId: string, periodType?: IpcRequest<'salesMetrics:plan:runNow'>['periodType']) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_PLAN_RUN_NOW, { storeId, periodType }),
+    runs: (input: IpcRequest<'salesMetrics:runs:list'> = {}) =>
+      invoke(IPC_CHANNELS.SALES_METRICS_RUNS_LIST, input),
+    health: () => invoke(IPC_CHANNELS.SALES_METRICS_HEALTH)
   },
 
-  // 应用锁 - §6.5
+  // 应用锁 - §6.5（契约域 security:*）
   security: {
-    status: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SECURITY_STATUS),
-    setPassword: (password?: string, oldPassword?: string): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SECURITY_SET_PASSWORD, { password, oldPassword }),
-    removePassword: (credential?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SECURITY_REMOVE_PASSWORD, { credential }),
-    lock: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SECURITY_LOCK),
-    unlock: (credential: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SECURITY_UNLOCK, { credential })
+    status: () => invoke(IPC_CHANNELS.SECURITY_STATUS),
+    setPassword: (password?: string, oldPassword?: string) =>
+      invoke(IPC_CHANNELS.SECURITY_SET_PASSWORD, { password, oldPassword }),
+    removePassword: (credential?: string) => invoke(IPC_CHANNELS.SECURITY_REMOVE_PASSWORD, { credential }),
+    lock: () => invoke(IPC_CHANNELS.SECURITY_LOCK),
+    unlock: (credential: string) => invoke(IPC_CHANNELS.SECURITY_UNLOCK, { credential })
   },
 
   // 备份 - §6.5
@@ -367,18 +366,48 @@ const api = {
   },
 
   // 任务引擎 - §6.4（只能触发白名单动作，任意代码路径不存在）
+  /**
+   * 达人邀约 v2：批次 / 逐人记录 / 汇总。
+   * 启动仍由主进程创建 TaskRun；这里不暴露任何任意步骤执行入口。
+   */
+  invite: {
+    startCampaign: (input: IpcRequest<'invite:campaign:start'>) => invoke(IPC_CHANNELS.INVITE_CAMPAIGN_START, JSON.parse(JSON.stringify(input))),
+    campaigns: (input: { storeId?: string; limit?: number } = {}) => invoke(IPC_CHANNELS.INVITE_CAMPAIGN_LIST, input),
+    campaignDetail: (campaignId: string) => invoke(IPC_CHANNELS.INVITE_CAMPAIGN_DETAIL, { campaignId }),
+    records: (input: { storeId?: string; campaignId?: string; status?: string; limit?: number; offset?: number } = {}) => invoke(IPC_CHANNELS.INVITE_RECORDS_LIST, input),
+    updateRecordStatus: (input: { id: string; storeId: string; status: string; reason?: string }) => invoke(IPC_CHANNELS.INVITE_RECORDS_UPDATE_STATUS, input),
+    summary: (input: { storeId?: string } = {}) => invoke(IPC_CHANNELS.INVITE_RECORDS_SUMMARY, input),
+    quota: (input: { storeId: string }) => invoke(IPC_CHANNELS.INVITE_QUOTA_GET, input),
+    creators: {
+      list: (input: { storeId?: string; platform?: string; query?: string; blacklisted?: boolean; limit?: number } = {}) => invoke(IPC_CHANNELS.INVITE_CREATORS_LIST, input),
+      update: (input: IpcRequest<'invite:creators:update'>) => invoke(IPC_CHANNELS.INVITE_CREATORS_UPDATE, JSON.parse(JSON.stringify(input))),
+      blacklisted: (input: { storeId: string; platform: string }) => invoke(IPC_CHANNELS.INVITE_CREATORS_BLACKLIST, input)
+    },
+    scripts: {
+      list: (input: { storeId: string; platform?: string }) => invoke(IPC_CHANNELS.INVITE_SCRIPTS_LIST, input),
+      save: (input: IpcRequest<'invite:scripts:save'>) => invoke(IPC_CHANNELS.INVITE_SCRIPTS_SAVE, JSON.parse(JSON.stringify(input))),
+      remove: (input: { id: string; storeId: string }) => invoke(IPC_CHANNELS.INVITE_SCRIPTS_DELETE, input)
+    },
+    productSets: {
+      list: (input: { storeId: string; platform?: string }) => invoke(IPC_CHANNELS.INVITE_PRODUCT_SETS_LIST, input),
+      save: (input: IpcRequest<'invite:productSets:save'>) => invoke(IPC_CHANNELS.INVITE_PRODUCT_SETS_SAVE, JSON.parse(JSON.stringify(input))),
+      remove: (input: { id: string; storeId: string }) => invoke(IPC_CHANNELS.INVITE_PRODUCT_SETS_DELETE, input)
+    }
+  },
+
+  // 任务引擎（契约域 task:*）
   task: {
-    create: (input: any): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_CREATE, input),
-    list: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_LIST),
-    run: (taskId: string, storeId?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_RUN, { taskId, storeId }),
-    pause: (runId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_PAUSE, { runId }),
-    resume: (runId: string, mode?: 'continue' | 'retry'): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_RESUME, { runId, mode }),
-    cancel: (runId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_CANCEL, { runId }),
-    confirm: (runId: string, approved: boolean): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_CONFIRM, { runId, approved }),
-    results: (runId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_RESULTS, { runId }),
-    delete: (taskId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_DELETE, { taskId }),
-    update: (input: Record<string, unknown>): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_UPDATE, JSON.parse(JSON.stringify(input))),
-    fireScheduled: (taskId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.TASK_CREATE_FIRE, { taskId })
+    create: (input: IpcRequest<'task:create'>) => invoke(IPC_CHANNELS.TASK_CREATE, input),
+    list: () => invoke(IPC_CHANNELS.TASK_LIST),
+    run: (taskId: string, storeId?: string) => invoke(IPC_CHANNELS.TASK_RUN, { taskId, storeId }),
+    pause: (runId: string) => invoke(IPC_CHANNELS.TASK_PAUSE, { runId }),
+    resume: (runId: string, mode?: 'continue' | 'retry') => invoke(IPC_CHANNELS.TASK_RESUME, { runId, mode }),
+    cancel: (runId: string) => invoke(IPC_CHANNELS.TASK_CANCEL, { runId }),
+    confirm: (runId: string, approved: boolean) => invoke(IPC_CHANNELS.TASK_CONFIRM, { runId, approved }),
+    results: (runId: string) => invoke(IPC_CHANNELS.TASK_RESULTS, { runId }),
+    delete: (taskId: string) => invoke(IPC_CHANNELS.TASK_DELETE, { taskId }),
+    update: (input: IpcRequest<'task:update'>) => invoke(IPC_CHANNELS.TASK_UPDATE, JSON.parse(JSON.stringify(input))),
+    fireScheduled: (taskId: string) => invoke(IPC_CHANNELS.TASK_CREATE_FIRE, { taskId })
   },
 
   // Agent 只暴露普通文本对话与抽屉 UI 状态；软件/页面/任务操作不属于 Agent API。
@@ -393,19 +422,19 @@ const api = {
   // Agent 模型管理桥已随「Agent 模型」设置页一起下线：对话只走主 Agent 那条与「AI 配置」自动同步的
   // Profile（syncMainAgentProfileFromAiConfig），不再向渲染层暴露模型 Profile 管理接口。
 
-  // 店铺指标快照 - §5.11
+  // 店铺指标快照 - §5.11（契约域 snapshot:list）
   snapshot: {
-    list: (storeId: string, limit?: number): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.SNAPSHOT_LIST, { storeId, limit })
+    list: (storeId: string, limit?: number) => invoke(IPC_CHANNELS.SNAPSHOT_LIST, { storeId, limit })
   },
 
-  // 电商客服：独立的店铺消息监控摘要，不暴露平台页面、正文或会话凭据。
+  // 电商客服：独立的店铺消息监控摘要，不暴露平台页面、正文或会话凭据（契约域 customerService:*）
   customerService: {
-    prepare: (storeId: string): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.CUSTOMER_SERVICE_PREPARE, { storeId }),
-    list: (input: { storeId?: string; limit?: number } = {}): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.CUSTOMER_SERVICE_STATUS_LIST, input),
-    checkNow: (storeId: string): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.CUSTOMER_SERVICE_CHECK_NOW, { storeId })
+    prepare: (storeId: string) =>
+      invoke(IPC_CHANNELS.CUSTOMER_SERVICE_PREPARE, { storeId }),
+    list: (input: { storeId?: string; limit?: number } = {}) =>
+      invoke(IPC_CHANNELS.CUSTOMER_SERVICE_STATUS_LIST, input),
+    checkNow: (storeId: string) =>
+      invoke(IPC_CHANNELS.CUSTOMER_SERVICE_CHECK_NOW, { storeId })
   },
   
   // 窗口装饰 - §17（顶部融合标题栏：右上角原生窗口按钮 overlay 底色随 UI 状态切换）

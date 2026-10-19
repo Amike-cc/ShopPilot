@@ -7,8 +7,6 @@
 export * from './contracts/ipc'
 export * from './contracts/platform-adapter'
 export * from './contracts/shop-session'
-export * from './contracts/unified-order'
-export * from './contracts/pdd-order-observation'
 export * from './contracts/sales-metrics'
 export * from './contracts/platform-product'
 export * from './contracts/agent-software'
@@ -33,6 +31,12 @@ export * from './product-draft'
 export * from './invite-steps'
 // 邀约配置的存储键（按店铺独立保存）
 export * from './invite-config'
+// 达人邀约 v2：批次 / 逐人记录 / 汇总的共享契约
+export * from './invite-campaign'
+// 达人身份归一（用户名优先、昵称兜底；纯函数，主进程与单测共用）。
+// InviteIdentityLevel 已由 invite-campaign 的类型依赖占用，显式导出其余公开 API，避免根索引重复导出。
+export { inviteCreatorKey, normalizeInviteNickname } from './invite-identity'
+export type { InviteCreatorIdentity, InviteIdentityLevel } from './invite-identity'
 // 经营指标采集步骤构造
 export * from './business-steps'
 // 经营采集纯规则（状态归类 / 退避 / 新鲜度 / 口径 / 跨平台合计门禁）
@@ -43,7 +47,6 @@ export * from './sales-metrics-rules'
 export * from './schemas/store'
 export * from './schemas/task'
 export * from './schemas/shop-session'
-export * from './schemas/order'
 export * from './schemas/sales-metrics'
 export * from './schemas/product'
 export * from './schemas/customer-service'

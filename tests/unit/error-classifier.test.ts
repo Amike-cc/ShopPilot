@@ -18,7 +18,23 @@ import { classifyTaskError } from '../../apps/desktop/src/main/tasks/error-class
  *   ② loop 包装后的内层真实码（外壳码没信息，必须往下取）。
  */
 const ROOT = path.join(__dirname, '../..')
-const RUNNER_SRC = fs.readFileSync(path.join(ROOT, 'apps/desktop/src/main/tasks/task-runner.ts'), 'utf8')
+/**
+ * 引擎源码集合（2026-10-19 P1 重构）：task-runner.ts 已拆成 tasks/ 下多个内聚模块，
+ * 源码级断言（不是 import 调用）必须扫描**整个引擎模块集合**，否则会漏掉搬走的部分。
+ * 断言语义不变：仍然要求"引擎里每一个抛出的错误码，分类器都认识"。
+ */
+const ENGINE_FILES = [
+  'task-runner.ts',
+  'task-runner-registry.ts',
+  'task-runner-lifecycle.ts',
+  'task-runner-control.ts',
+  'task-runner-execute.ts',
+  'task-step-dom.ts',
+  'task-step-executor.ts'
+]
+const RUNNER_SRC = ENGINE_FILES
+  .map(f => fs.readFileSync(path.join(ROOT, 'apps/desktop/src/main/tasks', f), 'utf8'))
+  .join('\n')
 
 describe('任务错误码分类', () => {
   it('能识别引擎实际会抛出的错误码（含此前被吞成 INTERNAL_ERROR 的几个）', () => {

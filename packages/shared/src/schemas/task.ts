@@ -93,6 +93,19 @@ export const TASK_STEP_TYPES = [
 
 export type TaskStepType = (typeof TASK_STEP_TYPES)[number]
 
+/**
+ * 任务类型（显式列，2026-10-19 达人邀约 v2）。
+ *
+ * 此前面板/概览用 `name LIKE '达人邀约 ·%'` 判断类型——名称是展示字段，用户改名、
+ * 智能体建任务都会让统计失效。迁移 v33 已按旧前缀回填一次，此后写入必须显式带 kind。
+ */
+export const TASK_KINDS = ['custom', 'creator_invite'] as const
+export type TaskKind = (typeof TASK_KINDS)[number]
+
+/** 任务来源：人工/面板/智能体/批次。只用于展示与筛选，不参与执行。 */
+export const TASK_SOURCES = ['manual', 'panel', 'agent', 'campaign'] as const
+export type TaskSource = (typeof TASK_SOURCES)[number]
+
 /** 步骤结构化结果类型 - §5.10 */
 export const STEP_RESULT_KINDS = ['text', 'table', 'screenshot'] as const
 export type StepResultKind = (typeof STEP_RESULT_KINDS)[number]
@@ -119,6 +132,11 @@ export interface TaskCreateInput {
     retryLimit?: number
   }>
   schedule?: { everyMs: number } | null
+  /** 不传时由名称前缀推断（兼容旧调用方；新代码应显式传） */
+  kind?: TaskKind
+  source?: TaskSource
+  /** 达人邀约批次 ID（仅 kind=creator_invite 有意义） */
+  campaignId?: string | null
 }
 
 export interface TaskView {
@@ -130,6 +148,9 @@ export interface TaskView {
   lastFiredAt: number | null
   createdAt: number
   updatedAt: number
+  kind: TaskKind
+  source: TaskSource
+  campaignId: string | null
   steps: TaskStepDef[]
   latestRun: TaskRunView | null
 }

@@ -30,6 +30,8 @@ import {
   salesMetricsRunsQuerySchema
 } from '@shared/schemas/sales-metrics'
 import type { SalesMetrics } from '@shared/contracts/sales-metrics'
+import type { Store } from '@shared/schemas/store'
+import type { SalesMetricsRuntime } from '../../apps/desktop/src/main/sales-metrics/sales-metrics-collection-service'
 
 type SqliteCtor = new (path: string) => {
   exec(sql: string): void
@@ -411,7 +413,7 @@ describe('sales metrics · 并发与状态机', () => {
       periodStart: 1000, periodEnd: 2000,
       orderCount: 3, paidOrderCount: 2, salesQuantity: 2,
       grossSalesAmountMinor: 12345, paidSalesAmountMinor: 12345, refundAmountMinor: 0,
-      refundOrderCount: 0, refundQuantity: 0, netSalesAmountMinor: 12345,
+      refundOrderCount: 0, refundQuantity: 0, netSalesAmountMinor: 12345, adSpendMinor: null,
       collectedAt: NOW, sourceUpdatedAt: null, sourceType: 'DOM', adapterVersion: 'v1',
       metricDefinitionVersion: 'sales-metrics-1', dataStatus: 'REAL_VALUE', runId: 'run_1'
     }
@@ -433,6 +435,7 @@ describe('sales metrics · 并发与状态机', () => {
       id: 'm1', platform: '拼多多', storeId: 'store_a', periodType: 'TODAY', periodStart: 1000, periodEnd: 2000,
       orderCount: 1, paidOrderCount: 1, salesQuantity: 1, grossSalesAmountMinor: 500, paidSalesAmountMinor: 500,
       refundAmountMinor: 0, refundOrderCount: 0, refundQuantity: 0, netSalesAmountMinor: 500,
+      adSpendMinor: null,
       collectedAt: NOW, sourceUpdatedAt: null, sourceType: 'DOM', adapterVersion: 'v1',
       metricDefinitionVersion: 'sales-metrics-1', dataStatus: 'REAL_VALUE', runId: 'run_ok'
     })
@@ -480,7 +483,7 @@ describe('sales metrics · 真实 0 与 null', () => {
       id: 'm', platform: '拼多多', storeId: 'store_a', periodType: 'TODAY' as const, periodStart: 0, periodEnd: 0,
       orderCount: 0, paidOrderCount: null, salesQuantity: 3.7, grossSalesAmountMinor: -5,
       paidSalesAmountMinor: Number.NaN, refundAmountMinor: 0, refundOrderCount: null, refundQuantity: null,
-      netSalesAmountMinor: null, collectedAt: 0, sourceUpdatedAt: null, sourceType: 'NONE' as const,
+      netSalesAmountMinor: null, adSpendMinor: null, collectedAt: 0, sourceUpdatedAt: null, sourceType: 'NONE' as const,
       adapterVersion: null, metricDefinitionVersion: 'x', dataStatus: 'UNKNOWN' as const, runId: null
     }
     const metric = normalizeStoreMetric({
@@ -511,6 +514,7 @@ describe('sales metrics · 真实 0 与 null', () => {
         orderCount: null, paidOrderCount: null, salesQuantity: null,
         grossSalesAmountMinor: 1000, paidSalesAmountMinor: null, refundAmountMinor: null,
         refundOrderCount: null, refundQuantity: null, netSalesAmountMinor: null,
+        adSpendMinor: null,
         collectedAt: 0, sourceUpdatedAt: null, sourceType: 'NONE', adapterVersion: null,
         metricDefinitionVersion: 'x', dataStatus: 'UNKNOWN', runId: null
       },
@@ -625,7 +629,7 @@ describe('sales metrics · 周期边界与幂等', () => {
       periodStart: bounds.start, periodEnd: bounds.end,
       orderCount: null, paidOrderCount: 11, salesQuantity: null,
       grossSalesAmountMinor: 10890, paidSalesAmountMinor: null, refundAmountMinor: 0,
-      refundOrderCount: null, refundQuantity: null, netSalesAmountMinor: 10890,
+      refundOrderCount: null, refundQuantity: null, netSalesAmountMinor: 10890, adSpendMinor: null,
       sourceUpdatedAt: null, sourceType: 'DOM' as const, adapterVersion: 'wechat-shop-sales-v1',
       metricDefinitionVersion: 'sales-metrics-1', dataStatus: 'REAL_VALUE' as const, runId: 'run_1'
     }
@@ -674,7 +678,7 @@ describe('sales metrics · 脱敏证据', () => {
       id: 'm', platform: '拼多多', storeId: 'store_a', periodType: 'TODAY', periodStart: 1, periodEnd: 2,
       orderCount: 7, paidOrderCount: 6, salesQuantity: null, grossSalesAmountMinor: 12345,
       paidSalesAmountMinor: null, refundAmountMinor: null, refundOrderCount: null, refundQuantity: null,
-      netSalesAmountMinor: null, collectedAt: NOW, sourceUpdatedAt: null, sourceType: 'DOM',
+      netSalesAmountMinor: null, adSpendMinor: null, collectedAt: NOW, sourceUpdatedAt: null, sourceType: 'DOM',
       adapterVersion: 'v1', metricDefinitionVersion: 'sales-metrics-1', dataStatus: 'PARTIAL', runId: 'run_1'
     }
     const rows = evidenceRowsFor({
@@ -761,11 +765,32 @@ describe('sales metrics · IPC 契约', () => {
 
 describe('sales metrics · 采集服务门禁', () => {
   const SESSION = {} as never
-  function fakeStore(id: string, platform: string) { return { id, platform } as unknown as ReturnType<typeof buildStore> }
-  function buildStore() { return { id: '', platform: '', status: 'online' } }
+  /**
+   * 完整 Store 契约的测试店铺。
+   * 采集服务只读 id/platform/status，但返回残缺字面量会把"契约新增字段"这类漂移藏起来，
+   * 所以这里给全字段（字段值对断言无意义，只要求类型属实）。
+   */
+  function fakeStore(id: string, platform: string): Store {
+    return {
+      id, name: `${platform}测试店`, platform, adminUrl: 'https://example.com/',
+      status: 'online', avatarColor: '#000000', sortOrder: 0, groupName: null, externalCode: null,
+      owner: null, region: null, licenseName: null, licenseNo: null, tagsJson: '[]', notes: null,
+      lastActiveAt: null, createdAt: 0, updatedAt: 0, deletedAt: null
+    }
+  }
 
   function serviceWith(overrides: Partial<Parameters<typeof makeRuntime>[0]> = {}) {
     return new SalesMetricsCollectionService(makeRuntime(overrides))
+  }
+
+  /**
+   * makeRuntime 的返回类型：既满足采集服务的运行时契约，又保留测试要用的 spy 句柄
+   * （borrowCollectionPage 既要能被真实调用，又要能 toHaveBeenCalledTimes / mockImplementation）。
+   * 显式标注而不是靠推断：否则 getSessionStatus 返回字面量里的 status 会被拓宽成 string。
+   */
+  type TestRuntime = SalesMetricsRuntime & {
+    releaseStorePage: ReturnType<typeof vi.fn>
+    borrowCollectionPage: ReturnType<typeof vi.fn> & SalesMetricsRuntime['borrowCollectionPage']
   }
 
   function makeRuntime(options: {
@@ -776,7 +801,7 @@ describe('sales metrics · 采集服务门禁', () => {
     loginStatus?: string
     /** 模拟"采集自己准备专用页面后页面就绪"：借用成功后 waitForWebContents 才有值 */
     pageComesAfterOpen?: boolean
-  } = {}) {
+  } = {}): TestRuntime {
     const platform = options.platform || '拼多多'
     const page = {
       isDestroyed: () => false,
@@ -785,7 +810,7 @@ describe('sales metrics · 采集服务门禁', () => {
     } as unknown as WebContents
     const releaseStorePage = vi.fn()
     const webContents = options.hasPage === false && !options.pageComesAfterOpen ? null : page
-    const runtime = {
+    const runtime: TestRuntime = {
       getStore: () => fakeStore('store_a', platform),
       ensureSession: async () => SESSION,
       getSessionStatus: () => ({

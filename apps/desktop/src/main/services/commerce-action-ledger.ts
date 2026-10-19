@@ -19,12 +19,11 @@ export interface CommerceActionLedgerEntry {
 }
 
 const TRACKED = new Set([
-  'collectInvoices', 'collectBusiness', 'collectEntity', 'collectOrders',
-  'orderCollect', 'businessMetricsCollect', 'invoiceCollect', 'entityCollect',
+  'collectInvoices', 'collectBusiness', 'collectEntity',
+  'businessMetricsCollect', 'invoiceCollect', 'entityCollect',
   'businessMetricsCompare', 'commerceHealth', 'invoiceExport', 'entityApply',
   'contentDraft', 'contentReview', 'contentPublish', 'campaignPlan', 'couponPlan', 'adPlan', 'adConfirm', 'customerInbox', 'customerDraftReply', 'customerSendReply',
   'inventoryCollect', 'inventoryDiff', 'inventoryWriteback', 'skuCollect', 'skuDiff', 'skuWriteback',
-  'orderList', 'orderGet', 'fulfillmentPrepare', 'fulfillmentConfirm', 'fulfillmentVerify', 'afterSaleCollect', 'refundReview', 'refundConfirm', 'refundVerify',
   'productSync', 'productList', 'productLibraryList', 'productDetailCollect', 'productPublishPreflight', 'productPublishOpen', 'productPublishVerify', 'productPublishReadback', 'productPublishAccept', 'productPublishChecklist', 'productPublishBatchProgress'
 ])
 

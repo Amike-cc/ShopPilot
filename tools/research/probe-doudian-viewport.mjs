@@ -50,11 +50,8 @@ const main = async () => {
   const cdp = new CDP(app.webSocketDebuggerUrl)
 
   await cdp.eval(`
-    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('数据分析'))
+    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('发票中心'))
     if (nav) nav.click()
-    await new Promise(r => setTimeout(r, 1500))
-    const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(i => (i.textContent || '').includes('发票中心'))
-    if (tab) tab.click()
     await new Promise(r => setTimeout(r, 3500))
     const btn = document.querySelector('[data-test="invoice-collect"]')
     if (btn) btn.click()

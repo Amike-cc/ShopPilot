@@ -308,7 +308,7 @@ function assertAgentCanCreateJob(actor: AgentRecord, assigned: AgentRecord, inpu
   // 自治运营策略：非资金任务不需要审批；只有资金动作必须保留人工确认。
   //
   // 唯一例外：用户自己在对话里发起的**只读采集**（`moneyConfirmationSatisfied`）。
-  // 采集目标里常出现「退款金额」「订单明细」等词，会被资金文案规则误判；把它卡在等待确认里
+  // 采集目标里常出现「退款金额」等指标词，会被资金文案规则误判；把它卡在等待确认里
   // 只会让用户点了采集却什么也没发生。豁免只能由 Main 内部调用方显式传入——
   // `agentTaskDelegateSchema`/`agentJobCreateSchema` 都是 `.strict()`，渲染层塞不进这个字段。
   // （2026-09-26 审计 P0-2：此前这里是"先按要求确认、再用 Job 自己的 confirmationId 自批"，等于走过场。）

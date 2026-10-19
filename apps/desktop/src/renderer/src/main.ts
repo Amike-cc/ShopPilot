@@ -1,6 +1,6 @@
 /**
  * Vue 应用入口
- * 单工作台屏幕：内嵌 WebContentsView 需要固定视口区域，不使用多路由跳转。
+ * 单工作台屏幕：店铺页是固定视口区域里的 DOM `<webview>`，不使用多路由跳转。
  */
 
 import { createApp } from 'vue'

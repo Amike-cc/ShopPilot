@@ -1,0 +1,1306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>应用中心 · 高保真设计稿</title>
+<style>
+/* ============================================================
+   DESIGN TOKENS
+   ============================================================ */
+:root{
+  /* brand */
+  --brand:#6D4AFF; --brand-600:#5B3DF5; --brand-500:#7F5FFF;
+  --brand-100:#E9E3FF; --brand-50:#F3F0FF;
+  /* ink */
+  --ink-900:#0E1120; --ink-700:#2A2F45; --ink-500:#5B6275;
+  --ink-400:#8A90A3; --ink-300:#AEB3C2;
+  /* surface */
+  --line:#E7E9F2; --line-2:#F0F2F8; --canvas:#F6F7FB; --surface:#FFFFFF;
+  /* semantic */
+  --ok:#12B76A; --warn:#F79009; --danger:#F04438; --info:#2E90FA;
+  /* radius */
+  --r-xl:18px; --r-lg:14px; --r-md:10px; --r-sm:8px;
+  /* elevation */
+  --sh-1:0 1px 2px rgba(16,24,40,.04);
+  --sh-2:0 4px 10px -4px rgba(16,24,40,.10), 0 16px 32px -18px rgba(16,24,40,.28);
+  --font:"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:#EBEDF3; color:var(--ink-900); font-family:var(--font);
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  letter-spacing:-.006em; padding:34px 24px 72px;
+}
+button{font-family:inherit;letter-spacing:inherit}
+svg{display:block}
+
+/* ============================================================
+   STAGE / TOOLBAR
+   ============================================================ */
+.stage{width:1440px;margin:0 auto}
+.toolbar{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  margin-bottom:14px;padding:8px 8px 8px 16px;border-radius:12px;
+  background:rgba(255,255,255,.72);backdrop-filter:blur(10px);
+  border:1px solid rgba(255,255,255,.9);box-shadow:0 2px 10px rgba(16,24,40,.06);
+  position:sticky;top:12px;z-index:200;transition:opacity .18s,transform .18s;
+}
+body.chrome-hidden .toolbar{opacity:0;transform:translateY(-8px);pointer-events:none}
+.tb-title{font-size:12px;font-weight:600;color:var(--ink-700);display:flex;align-items:center;gap:8px}
+.tb-title i{width:7px;height:7px;border-radius:50%;background:var(--brand);box-shadow:0 0 0 3px var(--brand-50)}
+.tb-title em{font-style:normal;font-weight:500;color:var(--ink-400);font-size:11px}
+.tb-actions{display:flex;gap:6px;align-items:center}
+.tb-btn{
+  height:28px;padding:0 11px;border-radius:7px;border:1px solid var(--line);
+  background:#fff;color:var(--ink-500);font-size:11.5px;font-weight:600;cursor:pointer;
+  transition:all .14s;
+}
+.tb-btn:hover{border-color:#C9BDFF;color:var(--ink-900)}
+.tb-btn.on{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 2px 8px rgba(109,74,255,.35)}
+.tb-hint{font-size:10.5px;color:var(--ink-400);margin-left:6px}
+
+/* ============================================================
+   BOARD 1 — APP SHELL
+   ============================================================ */
+.board-label{
+  display:flex;align-items:baseline;gap:10px;margin:0 0 10px 4px;
+  font-size:10.5px;font-weight:700;letter-spacing:.10em;text-transform:uppercase;color:#8E93A6;
+}
+.board-label b{color:var(--ink-700);font-size:11px;letter-spacing:.06em}
+.board-wrap{
+  width:1440px;height:1220px;border-radius:20px;overflow:hidden;background:#fff;
+  box-shadow:0 40px 90px -50px rgba(16,24,40,.55), 0 2px 0 rgba(255,255,255,.6) inset, 0 0 0 1px rgba(16,24,40,.07);
+  margin-bottom:52px;
+}
+body.annotate .board-wrap{overflow:visible}
+
+.app-shell{display:grid;grid-template-columns:232px minmax(0,1fr);height:1220px;background:var(--canvas)}
+
+/* ---------- sidebar ---------- */
+.sidebar{
+  display:flex;flex-direction:column;height:100%;background:#FCFCFE;
+  border-right:1px solid var(--line);padding:16px 12px 12px;
+}
+.brand{display:flex;align-items:center;gap:9px;padding:4px 8px 14px}
+.brand-mark{
+  width:30px;height:30px;border-radius:9px;flex:0 0 auto;display:grid;place-items:center;
+  background:linear-gradient(150deg,#8A6BFF,#5B3DF5);color:#fff;
+  box-shadow:0 4px 12px -4px rgba(91,61,245,.6), inset 0 1px 0 rgba(255,255,255,.35);
+}
+.brand-mark svg{width:16px;height:16px}
+.brand-name{font-size:13.5px;font-weight:700;letter-spacing:-.01em}
+.brand-ver{
+  margin-left:auto;font-size:9.5px;font-weight:600;color:var(--ink-400);
+  border:1px solid var(--line);border-radius:5px;padding:1px 5px;background:#fff;
+}
+.nav-group{margin-bottom:12px}
+.nav-cap{
+  padding:0 10px 7px;font-size:9.5px;font-weight:700;letter-spacing:.10em;
+  text-transform:uppercase;color:var(--ink-300);
+}
+.nav-item{
+  position:relative;display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;
+  border-radius:8px;color:var(--ink-500);font-size:12.5px;font-weight:500;cursor:pointer;
+  transition:background .13s,color .13s;user-select:none;
+}
+.nav-item svg{width:17px;height:17px;flex:0 0 auto;opacity:.82}
+.nav-item:hover{background:#F2F2F9;color:var(--ink-700)}
+.nav-item.active{background:var(--brand-50);color:var(--brand-600);font-weight:600}
+.nav-item.active svg{opacity:1}
+.nav-item.active::before{
+  content:"";position:absolute;left:-12px;top:7px;bottom:7px;width:3px;
+  border-radius:0 3px 3px 0;background:var(--brand);
+}
+.nav-badge{
+  margin-left:auto;min-width:18px;height:17px;padding:0 5px;border-radius:6px;display:grid;place-items:center;
+  background:#EEEDF6;color:var(--ink-500);font-size:10px;font-weight:700;font-variant-numeric:tabular-nums;
+}
+.nav-item.active .nav-badge{background:#fff;color:var(--brand-600)}
+.nav-badge.warn{background:#FFF4E5;color:#B76E00}
+
+.sidebar-foot{margin-top:auto}
+.quota{
+  padding:11px 12px;border-radius:11px;border:1px solid var(--line);background:#fff;
+  box-shadow:var(--sh-1);margin-bottom:10px;
+}
+.quota-top{display:flex;justify-content:space-between;align-items:center;font-size:10.5px;color:var(--ink-400);margin-bottom:7px}
+.quota-top b{color:var(--ink-700);font-size:11px;font-variant-numeric:tabular-nums}
+.quota-bar{height:4px;border-radius:3px;background:#EDEFF6;overflow:hidden}
+.quota-bar i{display:block;height:100%;width:62%;border-radius:3px;background:linear-gradient(90deg,#8A6BFF,#6D4AFF)}
+.user{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:9px;cursor:pointer;transition:background .13s}
+.user:hover{background:#F2F2F9}
+.avatar{
+  width:28px;height:28px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;
+  background:linear-gradient(140deg,#FFD9A8,#FFB4C6);color:#8A4A1F;font-size:11px;font-weight:700;
+}
+.user-copy{min-width:0;line-height:1.35}
+.user-copy b{display:block;font-size:11.5px;font-weight:600}
+.user-copy span{display:block;font-size:10px;color:var(--ink-400)}
+
+/* ---------- main ---------- */
+.main{display:flex;flex-direction:column;min-width:0;height:100%;background:var(--canvas)}
+.topbar{
+  display:flex;align-items:center;gap:14px;height:56px;padding:0 24px;flex:0 0 auto;
+  border-bottom:1px solid var(--line);background:rgba(255,255,255,.86);backdrop-filter:blur(8px);
+}
+.crumb{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--ink-400)}
+.crumb b{color:var(--ink-700);font-weight:600}
+.crumb svg{width:12px;height:12px;opacity:.5}
+.top-search{
+  margin-left:auto;display:flex;align-items:center;gap:8px;width:250px;height:32px;padding:0 9px;
+  border-radius:8px;border:1px solid var(--line);background:#F7F8FC;color:var(--ink-400);font-size:11.5px;
+  cursor:pointer;transition:all .14s;
+}
+.top-search:hover{background:#fff;border-color:#D6D9E6}
+.top-search svg{width:14px;height:14px}
+.kbd{
+  margin-left:auto;display:inline-flex;align-items:center;gap:2px;padding:1px 5px;border-radius:4px;
+  border:1px solid var(--line);background:#fff;color:var(--ink-400);font-size:9.5px;font-weight:600;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;box-shadow:0 1px 0 var(--line);
+}
+.icon-btn{
+  width:30px;height:30px;border-radius:8px;border:1px solid transparent;background:transparent;
+  display:grid;place-items:center;color:var(--ink-400);cursor:pointer;transition:all .13s;position:relative;
+}
+.icon-btn:hover{background:#F2F3F9;color:var(--ink-700)}
+.icon-btn svg{width:16px;height:16px}
+.icon-btn .pip{
+  position:absolute;top:5px;right:6px;width:5px;height:5px;border-radius:50%;
+  background:var(--danger);box-shadow:0 0 0 2px #fff;
+}
+.divider-v{width:1px;height:20px;background:var(--line);margin:0 2px}
+
+.content{
+  flex:1;min-height:0;padding:18px 24px 24px;overflow-y:auto;overflow-x:hidden;
+  scrollbar-width:none;
+}
+.content::-webkit-scrollbar{width:0;height:0}
+
+/* ---------- page head ---------- */
+.page-head{display:flex;align-items:flex-start;gap:24px;margin-bottom:18px}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:6px;font-size:9.5px;font-weight:700;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--brand);
+}
+.eyebrow i{width:5px;height:5px;border-radius:1.5px;background:var(--brand)}
+.page-head h1{margin:7px 0 6px;font-size:26px;line-height:1.15;font-weight:700;letter-spacing:-.028em}
+.page-head p{margin:0;font-size:12px;line-height:1.6;color:var(--ink-500);max-width:520px}
+.head-actions{margin-left:auto;display:flex;gap:8px;padding-top:6px}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 13px;
+  border-radius:9px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--line);
+  background:#fff;color:var(--ink-700);transition:all .14s;white-space:nowrap;
+}
+.btn svg{width:14px;height:14px}
+.btn:hover{border-color:#D3D7E4;background:#FCFCFE;box-shadow:var(--sh-1)}
+.btn.primary{
+  border-color:var(--brand-600);background:linear-gradient(180deg,#7B5BFF,#6D4AFF);color:#fff;
+  box-shadow:0 1px 2px rgba(16,24,40,.08), 0 8px 18px -10px rgba(109,74,255,.9), inset 0 1px 0 rgba(255,255,255,.22);
+}
+.btn.primary:hover{background:linear-gradient(180deg,#8368FF,#5B3DF5)}
+.btn:active{transform:translateY(.5px)}
+
+/* ---------- filter bar ---------- */
+.filterbar{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.search{
+  display:flex;align-items:center;gap:8px;width:300px;height:36px;padding:0 10px;
+  border-radius:9px;border:1px solid var(--line);background:#fff;transition:all .15s;box-shadow:var(--sh-1);
+}
+.search:focus-within{border-color:#B6A3FF;box-shadow:0 0 0 3px rgba(109,74,255,.13)}
+.search svg{width:15px;height:15px;color:var(--ink-400);flex:0 0 auto}
+.search input{
+  flex:1;min-width:0;border:0;outline:0;background:transparent;font-family:inherit;
+  font-size:12px;color:var(--ink-900);letter-spacing:inherit;
+}
+.search input::placeholder{color:var(--ink-300)}
+.search .clear{
+  width:16px;height:16px;border-radius:50%;border:0;background:#E9EAF1;color:var(--ink-500);
+  display:none;place-items:center;cursor:pointer;padding:0;
+}
+.search.has-value .clear{display:grid}
+.search .clear svg{width:9px;height:9px}
+
+.chips{display:flex;gap:6px;align-items:center}
+.chip{
+  height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--line);background:#fff;
+  color:var(--ink-500);font-size:11.5px;font-weight:600;cursor:pointer;display:inline-flex;
+  align-items:center;gap:6px;transition:all .14s;white-space:nowrap;
+}
+.chip span{font-size:10px;font-weight:700;color:var(--ink-300);font-variant-numeric:tabular-nums}
+.chip:hover{border-color:#D3D7E4;color:var(--ink-700)}
+.chip.on{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 4px 12px -5px rgba(109,74,255,.75)}
+.chip.on span{color:rgba(255,255,255,.7)}
+
+.filter-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.select{
+  display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border-radius:8px;
+  border:1px solid var(--line);background:#fff;color:var(--ink-500);font-size:11.5px;font-weight:500;
+  cursor:pointer;transition:all .14s;
+}
+.select:hover{border-color:#D3D7E4;color:var(--ink-700)}
+.select svg{width:12px;height:12px;opacity:.6}
+.segmented{display:flex;padding:3px;border-radius:9px;background:#EDEFF6;gap:2px}
+.seg{
+  width:30px;height:26px;border-radius:7px;border:0;background:transparent;display:grid;place-items:center;
+  color:var(--ink-400);cursor:pointer;transition:all .14s;
+}
+.seg svg{width:14px;height:14px}
+.seg:hover{color:var(--ink-700)}
+.seg.on{background:#fff;color:var(--brand);box-shadow:0 1px 3px rgba(16,24,40,.12)}
+
+/* ---------- hero banner ---------- */
+.hero{
+  position:relative;display:flex;align-items:center;gap:18px;height:132px;padding:0 24px;
+  border-radius:var(--r-lg);overflow:hidden;margin-bottom:18px;
+  background:
+    radial-gradient(120% 180% at 88% 10%, rgba(255,255,255,.85) 0%, transparent 46%),
+    radial-gradient(90% 140% at 12% 90%, rgba(190,168,255,.85) 0%, transparent 55%),
+    linear-gradient(100deg,#F1ECFF 0%,#EDE7FF 42%,#F7F4FF 100%);
+  border:1px solid #E1D8FF;
+  box-shadow:0 1px 2px rgba(16,24,40,.03), inset 0 1px 0 #fff;
+}
+.hero::before{
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
+  background-image:linear-gradient(rgba(109,74,255,.075) 1px,transparent 1px),linear-gradient(90deg,rgba(109,74,255,.075) 1px,transparent 1px);
+  background-size:26px 26px;
+  mask-image:radial-gradient(120% 100% at 80% 0%,#000 0%,transparent 62%);
+  -webkit-mask-image:radial-gradient(120% 100% at 80% 0%,#000 0%,transparent 62%);
+}
+.hero-orb{
+  position:relative;z-index:1;width:64px;height:64px;flex:0 0 auto;border-radius:50%;display:grid;place-items:center;
+  background:radial-gradient(circle at 42% 34%,#fff,#F3EEFF 58%,#E4DAFF 100%);
+  border:1px solid #D9CCFF;
+  box-shadow:0 10px 26px -12px rgba(109,74,255,.85), inset 0 -6px 14px rgba(163,143,255,.28);
+}
+.hero-orb svg{width:28px;height:28px;color:var(--brand-600)}
+.hero-orb::before{
+  content:"";position:absolute;inset:-7px;border-radius:50%;
+  border:1px dashed rgba(109,74,255,.32);animation:spin 26s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hero-copy{position:relative;z-index:1;min-width:0;flex:1}
+.pill-live{
+  display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:999px;
+  background:rgba(18,183,106,.11);color:#0B7B4B;font-size:10px;font-weight:700;margin-bottom:7px;
+}
+.pill-live i{width:5px;height:5px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(18,183,106,.16)}
+.hero-copy h2{margin:0 0 5px;font-size:17px;font-weight:700;letter-spacing:-.02em;color:#231A4A}
+.hero-copy p{margin:0;font-size:11.5px;line-height:1.55;color:#5B5178;max-width:600px}
+.hero-actions{position:relative;z-index:1;display:flex;align-items:center;gap:8px;padding-left:6px}
+.hero-actions .btn.ghost{background:rgba(255,255,255,.72);border-color:rgba(255,255,255,.9);color:#4B3E78}
+.hero-meta{
+  position:relative;z-index:1;display:flex;flex-direction:column;gap:4px;padding-left:22px;margin-left:6px;
+  border-left:1px solid rgba(109,74,255,.16);font-size:10.5px;color:#6B5F92;
+}
+.hero-meta b{font-size:13px;color:#231A4A;font-variant-numeric:tabular-nums}
+
+/* ---------- section head ---------- */
+.section-head{display:flex;align-items:center;gap:9px;margin-bottom:12px}
+.section-head h2{margin:0;font-size:13.5px;font-weight:700;letter-spacing:-.01em}
+.count-pill{
+  height:18px;min-width:20px;padding:0 6px;border-radius:6px;background:#E9EAF2;color:var(--ink-500);
+  font-size:10px;font-weight:700;display:grid;place-items:center;font-variant-numeric:tabular-nums;
+}
+.section-head .link{
+  margin-left:auto;font-size:11px;font-weight:600;color:var(--ink-400);cursor:pointer;
+  display:inline-flex;align-items:center;gap:4px;transition:color .13s;
+}
+.section-head .link:hover{color:var(--brand-600)}
+.section-head .link svg{width:11px;height:11px}
+
+/* ---------- app grid ---------- */
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.app-card{
+  position:relative;display:flex;flex-direction:column;padding:15px;border-radius:var(--r-lg);
+  border:1px solid var(--line);background:#fff;cursor:pointer;
+  box-shadow:0 1px 2px rgba(16,24,40,.03);
+  transition:transform .16s cubic-bezier(.2,.7,.3,1), box-shadow .16s, border-color .16s, background .16s;
+}
+.app-card:hover{
+  transform:translateY(-2px);border-color:#D2C6FF;
+  box-shadow:0 6px 16px -8px rgba(16,24,40,.16), 0 20px 34px -26px rgba(109,74,255,.55);
+}
+.app-card:active{transform:translateY(-1px);box-shadow:0 2px 6px -2px rgba(16,24,40,.14)}
+.app-card:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.ac-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:9px}
+.ac-icon{
+  width:44px;height:44px;border-radius:12px;display:grid;place-items:center;flex:0 0 auto;
+  border:1px solid rgba(16,24,40,.05);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.85), 0 2px 6px -3px rgba(16,24,40,.2);
+  transition:transform .16s;
+}
+.app-card:hover .ac-icon{transform:scale(1.04)}
+.ac-icon svg{width:22px;height:22px}
+.t-violet{background:linear-gradient(150deg,#F1EBFF,#DFD3FF);color:#6141E8}
+.t-blue{background:linear-gradient(150deg,#EAF2FF,#D4E4FF);color:#1D6FE8}
+.t-cyan{background:linear-gradient(150deg,#E4F7FE,#C9EBFA);color:#0A8FBF}
+.t-orange{background:linear-gradient(150deg,#FFF2E5,#FFE1C6);color:#CE6D0C}
+.t-indigo{background:linear-gradient(150deg,#EAECFF,#D7DBFF);color:#4453D6}
+.t-green{background:linear-gradient(150deg,#E6F9F0,#CCEFDE);color:#0C9A6A}
+.t-pink{background:linear-gradient(150deg,#FFEBF5,#FFD5E8);color:#CE2F85}
+.t-slate{background:linear-gradient(150deg,#F0F3F9,#E1E7F1);color:#5A6478}
+
+.star{
+  width:26px;height:26px;border:0;border-radius:7px;background:transparent;display:grid;place-items:center;
+  color:var(--ink-300);cursor:pointer;opacity:.55;transition:all .14s;padding:0;
+}
+.app-card:hover .star{opacity:1}
+.star:hover{background:#F4F5FA;color:#B08A00}
+.star svg{width:15px;height:15px}
+.star.on{opacity:1;color:#F5B400}
+.star.on svg{fill:#F5B400;stroke:#F5B400}
+
+.ac-title{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.ac-title h3{margin:0;font-size:14.5px;font-weight:650;letter-spacing:-.015em;color:var(--ink-900)}
+.ver{
+  font-size:9px;font-weight:700;color:var(--ink-400);border:1px solid var(--line);
+  border-radius:4px;padding:0 4px;line-height:14px;font-variant-numeric:tabular-nums;background:#FBFBFE;
+}
+.tag-new{
+  font-size:9px;font-weight:700;color:#fff;background:linear-gradient(135deg,#8A6BFF,#6D4AFF);
+  border-radius:4px;padding:0 5px;line-height:14px;letter-spacing:.02em;
+}
+.tag-beta{
+  font-size:9px;font-weight:700;color:#B76E00;background:#FFF3E0;border:1px solid #FFE0B2;
+  border-radius:4px;padding:0 5px;line-height:13px;
+}
+.ac-desc{
+  margin:0;font-size:11.5px;line-height:1.55;color:var(--ink-500);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  min-height:35px;
+}
+.ac-foot{
+  display:flex;align-items:center;gap:6px;margin-top:auto;padding-top:10px;
+  font-size:10.5px;color:var(--ink-400);font-variant-numeric:tabular-nums;
+  border-top:1px solid var(--line-2);
+}
+.dot{width:5px;height:5px;border-radius:50%;flex:0 0 auto;background:var(--ink-300)}
+.dot.ok{background:var(--ok)}
+.dot.warn{background:var(--warn)}
+.dot.live{background:var(--ok);animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(18,183,106,.45)}50%{box-shadow:0 0 0 4px rgba(18,183,106,0)}}
+.ac-open{
+  margin-left:auto;display:inline-flex;align-items:center;gap:3px;color:var(--brand-600);font-weight:600;
+  opacity:0;transform:translateX(-3px);transition:all .16s;
+}
+.app-card:hover .ac-open{opacity:1;transform:none}
+.ac-open svg{width:11px;height:11px}
+
+/* ---------- list view ---------- */
+.grid.is-list{grid-template-columns:1fr;gap:8px}
+.grid.is-list .app-card{
+  flex-direction:row;align-items:center;gap:14px;padding:10px 16px;height:auto;min-height:66px;
+}
+.grid.is-list .ac-top{display:contents}
+.grid.is-list .ac-icon{width:38px;height:38px;border-radius:10px}
+.grid.is-list .ac-icon svg{width:19px;height:19px}
+.grid.is-list .app-card:hover .ac-icon{transform:none}
+.grid.is-list .ac-title{order:1;width:176px;flex:0 0 auto;margin:0}
+.grid.is-list .ac-desc{
+  order:2;flex:1;min-height:0;margin:0;-webkit-line-clamp:1;font-size:11.5px;
+}
+.grid.is-list .ac-foot{
+  order:3;margin:0;padding:0;border:0;width:196px;flex:0 0 auto;justify-content:flex-end;
+}
+.grid.is-list .star{order:9;flex:0 0 auto;opacity:.55;width:24px;height:24px}
+.grid.is-list .app-card:hover .star{opacity:1}
+.grid.is-list .app-card.disabled .ac-foot{width:196px}
+.grid.is-list .ac-open{opacity:0}
+.grid.is-list .app-card:hover .ac-open{opacity:1}
+
+/* disabled card */
+.app-card.disabled{
+  cursor:not-allowed;background:#FAFBFD;border-style:dashed;border-color:#DFE3EE;box-shadow:none;
+}
+.app-card.disabled:hover{transform:none;box-shadow:none;border-color:#DFE3EE}
+.app-card.disabled .ac-icon{filter:grayscale(1);opacity:.55}
+.app-card.disabled .ac-title h3{color:var(--ink-400)}
+.app-card.disabled .ac-desc{color:var(--ink-300)}
+.pill-off{
+  margin-left:auto;font-size:9.5px;font-weight:600;color:var(--ink-400);background:#EFF1F7;
+  border-radius:5px;padding:2px 6px;
+}
+
+/* ---------- footer strip ---------- */
+.strip{
+  display:flex;align-items:center;gap:10px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line);
+  font-size:11px;color:var(--ink-400);
+}
+.strip b{color:var(--ink-700);font-variant-numeric:tabular-nums}
+.strip .btn{height:28px;font-size:11px;padding:0 10px;margin-left:auto}
+
+/* ---------- empty state (inside grid area) ---------- */
+.empty{
+  grid-column:1/-1;display:none;flex-direction:column;align-items:center;justify-content:center;
+  padding:56px 20px;border:1px dashed #DDE1EE;border-radius:var(--r-lg);background:#FCFCFE;text-align:center;
+}
+.empty.show{display:flex}
+.empty-ico{
+  width:52px;height:52px;border-radius:14px;background:#F1F2F8;display:grid;place-items:center;
+  color:var(--ink-300);margin-bottom:12px;
+}
+.empty-ico svg{width:24px;height:24px}
+.empty h3{margin:0 0 5px;font-size:13px;font-weight:650}
+.empty p{margin:0 0 12px;font-size:11.5px;color:var(--ink-400)}
+
+/* ============================================================
+   BOARD 2 — STATES
+   ============================================================ */
+.board-2{width:1440px;margin-bottom:52px}
+.states{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;padding:26px;
+  background:#fff;border-radius:16px;box-shadow:0 20px 50px -34px rgba(16,24,40,.4), 0 0 0 1px rgba(16,24,40,.07);
+}
+.state-cell{display:flex;flex-direction:column;gap:9px}
+.state-cap{display:flex;align-items:center;gap:7px}
+.state-cap b{font-size:11px;font-weight:700;color:var(--ink-700)}
+.state-cap span{font-size:10px;color:var(--ink-400)}
+.state-cap em{
+  font-style:normal;margin-left:auto;font-size:9px;font-weight:700;letter-spacing:.05em;
+  color:#9AA0B2;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.mini{
+  display:flex;flex-direction:column;padding:12px;border-radius:11px;border:1px solid var(--line);
+  background:#fff;min-height:118px;box-shadow:0 1px 2px rgba(16,24,40,.03);
+}
+.mini .ac-icon{width:32px;height:32px;border-radius:9px}
+.mini .ac-icon svg{width:16px;height:16px}
+.mini-t{display:flex;align-items:center;gap:6px;margin:9px 0 4px}
+.mini-t h4{margin:0;font-size:12px;font-weight:650}
+.mini p{margin:0;font-size:10px;line-height:1.5;color:var(--ink-400);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini-foot{margin-top:auto;display:flex;align-items:center;gap:5px;font-size:9.5px;color:var(--ink-400)}
+
+/* state variants */
+.mini.hover{
+  transform:translateY(-2px);border-color:#D2C6FF;
+  box-shadow:0 6px 16px -8px rgba(16,24,40,.16), 0 20px 34px -26px rgba(109,74,255,.55);
+}
+.mini.hover .ac-open{opacity:1;transform:none}
+.mini.pressed{transform:translateY(0);background:#F4F3FC;border-color:#C9BCFF;box-shadow:inset 0 1px 3px rgba(109,74,255,.16)}
+.mini.focus{outline:2px solid var(--brand);outline-offset:2px}
+.mini.selected{border-color:#B6A3FF;background:#FBFAFF;box-shadow:0 0 0 1px #B6A3FF inset}
+.sel-check{
+  position:absolute;top:8px;right:8px;width:16px;height:16px;border-radius:50%;background:var(--brand);
+  display:grid;place-items:center;color:#fff;
+}
+.sel-check svg{width:9px;height:9px}
+.mini .pos{position:relative}
+
+.mini.running .ac-icon{animation:breathe 2.6s ease-in-out infinite}
+@keyframes breathe{0%,100%{box-shadow:0 0 0 0 rgba(18,183,106,0)}50%{box-shadow:0 0 0 5px rgba(18,183,106,.10)}}
+.progress{height:3px;border-radius:2px;background:#EDEFF6;overflow:hidden;margin-top:8px}
+.progress i{display:block;height:100%;width:64%;border-radius:2px;background:linear-gradient(90deg,#34D399,#12B76A);animation:slide 2.4s ease-in-out infinite}
+@keyframes slide{0%{width:12%}60%{width:78%}100%{width:88%}}
+
+.mini.off{background:#FAFBFD;border-style:dashed;border-color:#DFE3EE;box-shadow:none}
+.mini.off .ac-icon{filter:grayscale(1);opacity:.5}
+.mini.off h4{color:var(--ink-400)}
+.mini.off p{color:var(--ink-300)}
+
+.skel{border-radius:6px;background:linear-gradient(90deg,#EFF1F7 25%,#F7F8FC 37%,#EFF1F7 63%);background-size:400% 100%;animation:shimmer 1.4s ease infinite}
+@keyframes shimmer{0%{background-position:100% 50%}100%{background-position:0 50%}}
+.skel-ico{width:32px;height:32px;border-radius:9px}
+.skel-l1{width:64%;height:9px;margin-top:11px}
+.skel-l2{width:92%;height:7px;margin-top:8px}
+.skel-l3{width:48%;height:7px;margin-top:6px}
+
+.mini-empty{
+  grid-column:span 1;min-height:118px;border-radius:11px;border:1px dashed #DDE1EE;background:#FCFCFE;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;text-align:center;
+}
+.mini-empty svg{width:20px;height:20px;color:var(--ink-300)}
+.mini-empty b{font-size:11px;font-weight:600;color:var(--ink-500)}
+.mini-empty span{font-size:9.5px;color:var(--ink-400)}
+
+/* ============================================================
+   BOARD 3 — SPEC
+   ============================================================ */
+.spec{
+  width:1440px;display:grid;grid-template-columns:1.15fr 1fr;gap:18px;
+}
+.spec-card{
+  background:#fff;border-radius:16px;padding:22px 24px;
+  box-shadow:0 20px 50px -34px rgba(16,24,40,.35), 0 0 0 1px rgba(16,24,40,.07);
+}
+.spec-card h3{
+  margin:0 0 3px;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-700);
+}
+.spec-card .subt{margin:0 0 16px;font-size:11px;color:var(--ink-400)}
+.swatches{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+.sw{border-radius:10px;overflow:hidden;border:1px solid var(--line);background:#fff}
+.sw i{display:block;height:44px}
+.sw b{display:block;padding:6px 7px 1px;font-size:9.5px;font-weight:700;color:var(--ink-700)}
+.sw span{display:block;padding:0 7px 7px;font-size:8.5px;color:var(--ink-400);font-family:ui-monospace,Menlo,monospace}
+
+.type-row{display:flex;align-items:baseline;gap:14px;padding:9px 0;border-bottom:1px solid var(--line-2)}
+.type-row:last-child{border-bottom:0}
+.type-row .sample{flex:1;color:var(--ink-900);letter-spacing:-.02em}
+.type-row .meta{font-size:9.5px;color:var(--ink-400);font-family:ui-monospace,Menlo,monospace;white-space:nowrap}
+.t-h1{font-size:26px;font-weight:700}
+.t-h2{font-size:17px;font-weight:700}
+.t-h3{font-size:14.5px;font-weight:650}
+.t-b{font-size:12px;font-weight:500;color:var(--ink-500)}
+.t-cap{font-size:10.5px;font-weight:600;color:var(--ink-400);letter-spacing:.06em;text-transform:uppercase}
+.t-num{font-size:12px;font-variant-numeric:tabular-nums}
+
+.layer-list{display:flex;flex-direction:column;gap:0}
+.layer-row{
+  display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line-2);font-size:11.5px;
+}
+.layer-row:last-child{border-bottom:0}
+.layer-key{
+  width:34px;height:20px;border-radius:5px;display:grid;place-items:center;font-size:9.5px;font-weight:700;
+  background:var(--brand-50);color:var(--brand-600);font-family:ui-monospace,Menlo,monospace;flex:0 0 auto;
+}
+.layer-row b{font-weight:600;color:var(--ink-700);min-width:76px}
+.layer-row span{color:var(--ink-400);font-size:10.5px}
+.layer-row em{margin-left:auto;font-style:normal;font-size:10px;color:#9AA0B2;font-family:ui-monospace,Menlo,monospace}
+
+/* ============================================================
+   ANNOTATION LAYER
+   ============================================================ */
+[data-spec]{position:relative}
+body.annotate [data-spec]{outline:1px dashed rgba(109,74,255,.55);outline-offset:2px}
+body.annotate [data-no]::after{
+  content:attr(data-no);position:absolute;z-index:120;top:-7px;left:-7px;
+  width:16px;height:16px;border-radius:50%;display:grid;place-items:center;
+  background:#fff;color:var(--brand);border:1.5px solid var(--brand);
+  font-size:9px;font-weight:800;line-height:1;letter-spacing:0;font-family:var(--font);
+  box-shadow:0 2px 8px rgba(91,61,245,.35);
+}
+body.annotate .sidebar[data-no]::after{top:9px;left:9px;width:17px;height:17px}
+body.annotate .topbar[data-no]::after{top:auto;bottom:-8px;left:10px}
+body.annotate .app-shell{overflow:visible}
+body.night{background:#161A26}
+body.night .toolbar{background:rgba(30,34,48,.85);border-color:rgba(255,255,255,.08)}
+body.night .tb-title{color:#E6E8F0}
+body.night .tb-btn{background:#222838;border-color:#2E3548;color:#AEB4C6}
+body.night .board-label{color:#666E85}
+body.night .board-label b{color:#C9CEDD}
+body.night .tb-hint{color:#666E85}
+body.night .tb-title em{color:#666E85}
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <!-- ===== toolbar ===== -->
+  <div class="toolbar">
+    <div class="tb-title"><i></i>应用中心 · 高保真设计稿 <em>App Center / Desktop</em></div>
+    <div class="tb-actions">
+      <button class="tb-btn" id="btnAnno">标注</button>
+      <button class="tb-btn" id="btnNight">深色底</button>
+      <button class="tb-btn on" id="btnGrid">网格</button>
+      <button class="tb-btn" id="btnList">列表</button>
+      <span class="tb-hint">A 标注 / H 隐藏</span>
+    </div>
+  </div>
+
+  <!-- ===== board 1 : the screen ===== -->
+  <div class="board-label"><b>01 — 主界面</b><span>1440 × 1220 · 桌面端 · 浅色主题</span></div>
+  <div class="board-wrap">
+    <div class="app-shell">
+
+      <!-- ---------- sidebar ---------- -->
+      <aside class="sidebar" data-no="1" data-spec="侧栏 · 232px · 固定">
+        <div class="brand">
+          <span class="brand-mark">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3.5 9.5 5.2 4.5h13.6l1.7 5"/><path d="M4 9.5v9A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-9"/><path d="M9.5 20v-5.2h5V20"/>
+            </svg>
+          </span>
+          <span class="brand-name">ShopPilot</span>
+          <span class="brand-ver">v4.2</span>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-cap">工作区</div>
+          <div class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10.5 12 4l8 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19z"/><path d="M9.5 20.5v-6h5v6"/></svg>
+            <span>主页</span>
+          </div>
+          <div class="nav-item active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><path d="M17 13.5v7M13.5 17h7"/></svg>
+            <span>应用中心</span>
+            <span class="nav-badge">12</span>
+          </div>
+          <div class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9.5 5.2 5h13.6l1.7 4.5"/><path d="M4 9.5v9A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-9"/><path d="M9.5 20v-5.2h5V20"/></svg>
+            <span>店铺管理</span>
+          </div>
+          <div class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V4.5"/><path d="M4 19.5h16"/><rect x="7.5" y="11.5" width="3" height="5" rx="1"/><rect x="12.5" y="7.5" width="3" height="9" rx="1"/><rect x="17.5" y="9.5" width="3" height="7" rx="1"/></svg>
+            <span>数据分析</span>
+          </div>
+          <div class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8.5L18 7v13.5H6z"/><path d="M14.5 3.5V7H18"/><path d="M9 12h6M9 15.5h4"/></svg>
+            <span>订单管理</span>
+          </div>
+          <div class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8L18 7v6"/><path d="M6 3.5v17h5"/><circle cx="16" cy="16" r="4.2"/><path d="M14.6 16l1.1 1.2 2-2.3"/></svg>
+            <span>发票中心</span>
+            <span class="nav-badge warn">3</span>
+          </div>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-cap">自动化</div>
+          <div class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3 6 13.5h5L10 21l7.5-10.5h-5z"/></svg>
+            <span>AI 任务中心</span>
+            <span class="nav-badge">2</span>
+          </div>
+          <div class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 20.5 7.5v9L12 21 3.5 16.5v-9z"/><path d="M3.5 7.5 12 12l8.5-4.5"/><path d="M12 12v9"/></svg>
+            <span>商品管理</span>
+          </div>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-cap">系统</div>
+          <div class="nav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.6v2.3M12 19.1v2.3M4.1 4.1l1.7 1.7M18.2 18.2l1.7 1.7M2.6 12h2.3M19.1 12h2.3M4.1 19.9l1.7-1.7M18.2 5.8l1.7-1.7"/></svg>
+            <span>设置中心</span>
+          </div>
+        </div>
+
+        <div class="sidebar-foot">
+          <div class="quota">
+            <div class="quota-top"><span>本机存储</span><b>62%</b></div>
+            <div class="quota-bar"><i></i></div>
+          </div>
+          <div class="user">
+            <span class="avatar">陈</span>
+            <span class="user-copy"><b>陈嘉禾</b><span>主账号 · 管理员</span></span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ---------- main ---------- -->
+      <div class="main">
+
+        <!-- topbar -->
+        <div class="topbar" data-no="2" data-spec="全局顶栏 · 56px">
+          <div class="crumb">
+            <span>工作区</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+            <b>应用中心</b>
+          </div>
+          <div class="top-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+            <span>跳转页面或设置</span>
+            <span class="kbd">Ctrl K</span>
+          </div>
+          <button class="icon-btn" title="帮助">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.7.4-1.2 1-1.2 1.8v.4"/><path d="M12 17h.01"/></svg>
+          </button>
+          <button class="icon-btn" title="通知">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8.5a6 6 0 1 0-12 0c0 5-2 6.5-2 6.5h16s-2-1.5-2-6.5"/><path d="M10.3 19a2 2 0 0 0 3.4 0"/></svg>
+            <i class="pip"></i>
+          </button>
+          <div class="divider-v"></div>
+          <span class="avatar" style="width:26px;height:26px;font-size:10px">陈</span>
+        </div>
+
+        <div class="content">
+
+          <!-- page head -->
+          <div class="page-head" data-no="3" data-spec="页头 · 标题 26/700">
+            <div>
+              <span class="eyebrow"><i></i>WORKSPACE / APP CENTER</span>
+              <h1>应用中心</h1>
+              <p>从同一工作区进入店铺、数据、任务与系统工具；支持搜索、分类筛选与收藏。</p>
+            </div>
+            <div class="head-actions">
+              <button class="btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5V4"/><path d="m7.5 8.5 4.5-4.5 4.5 4.5"/><path d="M4.5 15v3A1.5 1.5 0 0 0 6 19.5h12a1.5 1.5 0 0 0 1.5-1.5v-3"/></svg>
+                导入应用
+              </button>
+              <button class="btn primary">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+                新建应用
+              </button>
+            </div>
+          </div>
+
+          <!-- filter bar -->
+          <div class="filterbar" data-no="4" data-spec="搜索 + 分类 + 排序 + 视图">
+            <label class="search" id="searchBox">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+              <input id="q" type="text" placeholder="搜索应用名称或功能…" autocomplete="off">
+              <button class="clear" id="clearQ" aria-label="清空">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+              </button>
+            </label>
+
+            <div class="chips" id="chips">
+              <button class="chip on" data-cat="all">全部 <span>12</span></button>
+              <button class="chip" data-cat="store">店铺运营 <span>3</span></button>
+              <button class="chip" data-cat="insight">数据洞察 <span>3</span></button>
+              <button class="chip" data-cat="create">内容创作 <span>2</span></button>
+              <button class="chip" data-cat="tool">任务与工具 <span>4</span></button>
+            </div>
+
+            <div class="filter-right">
+              <button class="select">
+                最近使用
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div class="segmented">
+                <button class="seg on" id="segGrid" title="网格视图">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/></svg>
+                </button>
+                <button class="seg" id="segList" title="列表视图">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- hero -->
+          <div class="hero" data-no="5" data-spec="推荐位 · 132px">
+            <span class="hero-orb">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2 13.9 9l5.8 1.9-5.8 1.9L12 18.6l-1.9-5.8L4.3 10.9 10.1 9z"/><path d="M18.6 15.6l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg>
+            </span>
+            <div class="hero-copy">
+              <span class="pill-live"><i></i>已接入</span>
+              <h2>AI 电商助手 · 纯文本对话</h2>
+              <p>可以讨论问题、整理思路或给出手动操作建议。它不会读取或操作店铺、网页、任务与软件数据，所有操作仍需你人工确认。</p>
+            </div>
+            <div class="hero-meta">
+              <b>3 个模型</b>
+              <span>文本 / 生图</span>
+            </div>
+            <div class="hero-actions">
+              <button class="btn ghost">使用说明</button>
+              <button class="btn primary">打开助手</button>
+            </div>
+          </div>
+
+          <!-- section head -->
+          <div class="section-head" data-no="6" data-spec="分组头 · 计数 + 次级入口">
+            <h2>全部应用</h2>
+            <span class="count-pill" id="resultCount">12</span>
+            <span class="link">管理分类
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+            </span>
+          </div>
+
+          <!-- grid -->
+          <div class="grid" id="grid" data-no="7" data-spec="网格 3 列 · gap 14">
+
+            <article class="app-card" data-cat="store" data-name="店铺管理 店铺 平台 登录 浏览器 工作区" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-violet">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9.5 5.2 5h13.6l1.7 4.5"/><path d="M4 9.5v9A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-9"/><path d="M9.5 20v-5.2h5V20"/></svg>
+                </span>
+                <button class="star on" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>店铺管理</h3><span class="ver">v4.2</span></div>
+              <p class="ac-desc">多平台店铺、登录态与本机浏览器工作区的集中托管，支持一键切换、环境隔离与登录态复用。</p>
+              <div class="ac-foot">
+                <i class="dot ok"></i>12 个店铺 · 在线
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card" data-cat="insight" data-name="数据分析 快照 指标 采集 看板" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-blue">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V4.5"/><path d="M4 19.5h16"/><rect x="7.5" y="11.5" width="3" height="5" rx="1"/><rect x="12.5" y="7.5" width="3" height="9" rx="1"/><rect x="17.5" y="9.5" width="3" height="7" rx="1"/></svg>
+                </span>
+                <button class="star" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>数据分析</h3></div>
+              <p class="ac-desc">真实快照与经营指标看板，采集入口、口径说明与趋势对比集中呈现，缺失项如实标注。</p>
+              <div class="ac-foot">
+                <i class="dot ok"></i>5 分钟前更新
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card" data-cat="store" data-name="订单管理 订单 采集 快照 平台" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-cyan">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8.5L18 7v13.5H6z"/><path d="M14.5 3.5V7H18"/><path d="M9 12h6M9 15.5h4"/></svg>
+                </span>
+                <button class="star" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>订单管理</h3></div>
+              <p class="ac-desc">已采集订单快照、平台支持矩阵与解析失败明细，不把「没读到」当作 0 处理。</p>
+              <div class="ac-foot">
+                <i class="dot live"></i>运行中 · 已采集 43 条
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card" data-cat="insight" data-name="发票中心 发票 开票 CSV 主体" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-orange">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8L18 7v6"/><path d="M6 3.5v17h5"/><circle cx="16" cy="16" r="4.2"/><path d="M14.6 16l1.1 1.2 2-2.3"/></svg>
+                </span>
+                <button class="star on" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>发票中心</h3></div>
+              <p class="ac-desc">待开票归集、主体视图与 CSV 导出，按店铺与状态双维度核对，支持按主体切换。</p>
+              <div class="ac-foot">
+                <i class="dot warn"></i>待确认 3 单
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card" data-cat="tool" data-name="商品管理 商品 批量 发布 回收站" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-green">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 20.5 7.5v9L12 21 3.5 16.5v-9z"/><path d="M3.5 7.5 12 12l8.5-4.5"/><path d="M12 12v9"/></svg>
+                </span>
+                <button class="star" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>商品管理</h3></div>
+              <p class="ac-desc">批量发布预检、状态推导、草稿与回收站，支持 CSV 导入导出与按状态批量操作。</p>
+              <div class="ac-foot">
+                <i class="dot ok"></i>1,284 个商品
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card" data-cat="tool" data-name="AI 任务中心 任务 自动化 进度 确认" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-indigo">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3 6 13.5h5L10 21l7.5-10.5h-5z"/></svg>
+                </span>
+                <button class="star" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>AI 任务中心</h3></div>
+              <p class="ac-desc">TaskRunner 任务编排、运行进度与人工确认节点，失败留痕并支持断点重跑。</p>
+              <div class="ac-foot">
+                <i class="dot live"></i>2 个任务运行中
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card" data-cat="create" data-name="AI 生成商品图 生图 模型 图片 创作" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-pink">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.6"/><circle cx="8.6" cy="9.8" r="1.5"/><path d="M4.5 16.8 9.8 12l3.6 3.2 2.8-2.4 4.3 4"/></svg>
+                </span>
+                <button class="star" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>AI 生成商品图</h3><span class="tag-beta">Beta</span></div>
+              <p class="ac-desc">模型选择、对话式生图与真实结果预览，支持多轮微调、参考图上传与批量导出。</p>
+              <div class="ac-foot">
+                <i class="dot ok"></i>3 个模型可用
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card" data-cat="create" data-name="智能客服 客服 会话 话术 回复" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-violet">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12.5a7 7 0 0 1-7 7H8.4L4.5 22.5v-6.4A7 7 0 0 1 8.6 4.5h3.9a7 7 0 0 1 7.5 8z"/><path d="M9 11h6M9 14.5h3.6"/></svg>
+                </span>
+                <button class="star" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>智能客服</h3><span class="tag-new">新</span></div>
+              <p class="ac-desc">会话工作台与快捷话术回复，仅生成建议文本，发送前必须由人工确认。</p>
+              <div class="ac-foot">
+                <i class="dot"></i>内测中 · 需申请
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card" data-cat="tool" data-name="竞品监控 竞品 价格 活动 追踪 快照" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-blue">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3"/><path d="M12 12 18 6"/></svg>
+                </span>
+                <button class="star" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>竞品监控</h3><span class="tag-new">新</span></div>
+              <p class="ac-desc">价格与活动追踪，每日快照对比并高亮异常波动，支持按店铺与类目分组。</p>
+              <div class="ac-foot">
+                <i class="dot ok"></i>4 个监控项
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card" data-cat="tool" data-name="浏览器扩展 扩展 插件 权限 导入" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-slate">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><path d="M17 13.5v7M13.5 17h7"/></svg>
+                </span>
+                <button class="star" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>浏览器扩展</h3></div>
+              <p class="ac-desc">本地扩展导入、MAIN world 与危险权限审计，拒绝商店与 .crx 安装，改目录需重载。</p>
+              <div class="ac-foot">
+                <i class="dot ok"></i>6 个已启用
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card" data-cat="insight" data-name="经营日报 日报 报表 导出 汇总" tabindex="0">
+              <div class="ac-top">
+                <span class="ac-icon t-orange">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="3.5" width="15" height="17" rx="2.2"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></svg>
+                </span>
+                <button class="star" aria-label="收藏">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="m12 3.6 2.6 5.4 5.9.8-4.3 4.1 1.1 5.9-5.3-2.9-5.3 2.9 1.1-5.9L3.5 9.8l5.9-.8z"/></svg>
+                </button>
+              </div>
+              <div class="ac-title"><h3>经营日报</h3></div>
+              <p class="ac-desc">按日汇总店铺指标并生成可导出报表，缺失项明确标注为「未读到」，不做补零。</p>
+              <div class="ac-foot">
+                <i class="dot"></i>每日 09:00 生成
+                <span class="ac-open">打开
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                </span>
+              </div>
+            </article>
+
+            <article class="app-card disabled" data-cat="tool" data-name="影像级干扰 影像 处理 图片 不可用" tabindex="-1">
+              <div class="ac-top">
+                <span class="ac-icon t-slate">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5 14 10"/><path d="m17.5 3.5 1.1 2.4 2.4 1.1-2.4 1.1-1.1 2.4-1.1-2.4L14 7l2.4-1.1z"/><path d="m8 7.5.8 1.7 1.7.8-1.7.8L8 12.5l-.8-1.7L5.5 10l1.7-.8z"/></svg>
+                </span>
+                <span class="pill-off">暂不可用</span>
+              </div>
+              <div class="ac-title"><h3>影像级干扰</h3></div>
+              <p class="ac-desc">当前版本未包含影像处理模块，接入后会在此处显示。</p>
+              <div class="ac-foot">
+                <i class="dot"></i>未安装
+              </div>
+            </article>
+
+            <!-- empty state -->
+            <div class="empty" id="empty">
+              <span class="empty-ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+              </span>
+              <h3>没有匹配的应用</h3>
+              <p>换个关键词，或清除分类筛选再试一次。</p>
+              <button class="btn" id="resetBtn">清除筛选</button>
+            </div>
+          </div>
+
+          <!-- strip -->
+          <div class="strip" data-no="8" data-spec="底部统计条">
+            已显示 <b id="shownCount">12</b> / 12 个应用 · 最近同步于 21:48
+            <button class="btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              添加第三方应用
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== board 2 : states ===== -->
+  <div class="board-label"><b>02 — 交互状态矩阵</b><span>8 种状态 · 直接对应实现类名</span></div>
+  <div class="board-2">
+    <div class="states">
+
+      <div class="state-cell">
+        <div class="state-cap"><b>默认</b><span>Default</span><em>.app-card</em></div>
+        <div class="mini">
+          <span class="ac-icon t-violet">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9.5 5.2 5h13.6l1.7 4.5"/><path d="M4 9.5v9A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-9"/><path d="M9.5 20v-5.2h5V20"/></svg>
+          </span>
+          <div class="mini-t"><h4>店铺管理</h4></div>
+          <p>12 个店铺 · 在线</p>
+          <div class="mini-foot"><i class="dot ok"></i>1px #E7E9F2 / shadow-1</div>
+        </div>
+      </div>
+
+      <div class="state-cell">
+        <div class="state-cap"><b>悬停</b><span>Hover</span><em>:hover</em></div>
+        <div class="mini hover">
+          <span class="ac-icon t-violet">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9.5 5.2 5h13.6l1.7 4.5"/><path d="M4 9.5v9A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-9"/><path d="M9.5 20v-5.2h5V20"/></svg>
+          </span>
+          <div class="mini-t"><h4>店铺管理</h4></div>
+          <p>12 个店铺 · 在线</p>
+          <div class="mini-foot"><i class="dot ok"></i>-2px / 紫边 / 箭头浮现</div>
+        </div>
+      </div>
+
+      <div class="state-cell">
+        <div class="state-cap"><b>按下</b><span>Pressed</span><em>:active</em></div>
+        <div class="mini pressed">
+          <span class="ac-icon t-violet">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9.5 5.2 5h13.6l1.7 4.5"/><path d="M4 9.5v9A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-9"/><path d="M9.5 20v-5.2h5V20"/></svg>
+          </span>
+          <div class="mini-t"><h4>店铺管理</h4></div>
+          <p>12 个店铺 · 在线</p>
+          <div class="mini-foot"><i class="dot ok"></i>回落到 0 / 内阴影 / #F4F3FC</div>
+        </div>
+      </div>
+
+      <div class="state-cell">
+        <div class="state-cap"><b>键盘聚焦</b><span>Focus</span><em>:focus-visible</em></div>
+        <div class="mini focus">
+          <span class="ac-icon t-violet">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9.5 5.2 5h13.6l1.7 4.5"/><path d="M4 9.5v9A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-9"/><path d="M9.5 20v-5.2h5V20"/></svg>
+          </span>
+          <div class="mini-t"><h4>店铺管理</h4></div>
+          <p>12 个店铺 · 在线</p>
+          <div class="mini-foot"><i class="dot ok"></i>2px #6D4AFF / offset 2</div>
+        </div>
+      </div>
+
+      <div class="state-cell">
+        <div class="state-cap"><b>运行中</b><span>Running</span><em>.is-live</em></div>
+        <div class="mini running">
+          <span class="ac-icon t-cyan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8.5L18 7v13.5H6z"/><path d="M14.5 3.5V7H18"/><path d="M9 12h6M9 15.5h4"/></svg>
+          </span>
+          <div class="mini-t"><h4>订单管理</h4></div>
+          <p>运行中 · 已采集 43 条</p>
+          <div class="progress"><i></i></div>
+        </div>
+      </div>
+
+      <div class="state-cell">
+        <div class="state-cap"><b>不可用</b><span>Disabled</span><em>.is-off</em></div>
+        <div class="mini off">
+          <span class="ac-icon t-slate">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5 14 10"/><path d="m17.5 3.5 1.1 2.4 2.4 1.1-2.4 1.1-1.1 2.4-1.1-2.4L14 7l2.4-1.1z"/></svg>
+          </span>
+          <div class="mini-t"><h4>影像级干扰</h4></div>
+          <p>未安装</p>
+          <div class="mini-foot"><i class="dot"></i>虚线边 / 灰阶 / 无 hover</div>
+        </div>
+      </div>
+
+      <div class="state-cell">
+        <div class="state-cap"><b>加载中</b><span>Loading</span><em>.is-loading</em></div>
+        <div class="mini">
+          <span class="skel skel-ico"></span>
+          <span class="skel skel-l1"></span>
+          <span class="skel skel-l2"></span>
+          <span class="skel skel-l3"></span>
+        </div>
+      </div>
+
+      <div class="state-cell">
+        <div class="state-cap"><b>空结果</b><span>Empty</span><em>.is-empty</em></div>
+        <div class="mini-empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+          <b>没有匹配的应用</b>
+          <span>清除筛选后重试</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ===== board 3 : spec ===== -->
+  <div class="board-label"><b>03 — 设计规格</b><span>色彩 / 字阶 / 层级</span></div>
+  <div class="spec">
+    <div class="spec-card">
+      <h3>Color tokens</h3>
+      <p class="subt">主色仅用于「当前状态 + 主行动」，大面积留给中性色。</p>
+      <div class="swatches">
+        <div class="sw"><i style="background:#6D4AFF"></i><b>Brand</b><span>#6D4AFF</span></div>
+        <div class="sw"><i style="background:#5B3DF5"></i><b>Brand 600</b><span>#5B3DF5</span></div>
+        <div class="sw"><i style="background:#F3F0FF"></i><b>Brand 50</b><span>#F3F0FF</span></div>
+        <div class="sw"><i style="background:#0E1120"></i><b>Ink 900</b><span>#0E1120</span></div>
+        <div class="sw"><i style="background:#5B6275"></i><b>Ink 500</b><span>#5B6275</span></div>
+        <div class="sw"><i style="background:#8A90A3"></i><b>Ink 400</b><span>#8A90A3</span></div>
+        <div class="sw"><i style="background:#E7E9F2"></i><b>Line</b><span>#E7E9F2</span></div>
+        <div class="sw"><i style="background:#F6F7FB"></i><b>Canvas</b><span>#F6F7FB</span></div>
+        <div class="sw"><i style="background:#FFFFFF"></i><b>Surface</b><span>#FFFFFF</span></div>
+        <div class="sw"><i style="background:#12B76A"></i><b>Success</b><span>#12B76A</span></div>
+        <div class="sw"><i style="background:#F79009"></i><b>Warning</b><span>#F79009</span></div>
+        <div class="sw"><i style="background:#F04438"></i><b>Danger</b><span>#F04438</span></div>
+      </div>
+
+      <h3 style="margin-top:22px">Type scale</h3>
+      <p class="subt">中文行高比英文宽 0.05–0.1，标题统一负字距。</p>
+      <div class="type-row"><span class="sample t-h1">应用中心</span><span class="meta">26 / 30 · 700 · -0.028em</span></div>
+      <div class="type-row"><span class="sample t-h2">AI 电商助手</span><span class="meta">17 / 24 · 700 · -0.02em</span></div>
+      <div class="type-row"><span class="sample t-h3">店铺管理</span><span class="meta">14.5 / 20 · 650</span></div>
+      <div class="type-row"><span class="sample t-b">多平台店铺、登录态与本机浏览器工作区托管。</span><span class="meta">11.5 / 18.6 · 400</span></div>
+      <div class="type-row"><span class="sample t-cap">WORKSPACE / APP CENTER</span><span class="meta">9.5 / 14 · 700 · 0.12em</span></div>
+      <div class="type-row"><span class="sample t-num">12 · 1,284 · 43</span><span class="meta">tabular-nums</span></div>
+    </div>
+
+    <div class="spec-card">
+      <h3>Layer &amp; rhythm</h3>
+      <p class="subt">信息层级由「块 → 组 → 卡 → 行」四级承载，不靠加大字号区分。</p>
+      <div class="layer-list">
+        <div class="layer-row"><span class="layer-key">L0</span><b>应用外壳</b><span>侧栏 232 + 顶栏 56，固定不滚</span><em>z 0</em></div>
+        <div class="layer-row"><span class="layer-key">L1</span><b>页头</b><span>标题 / 副标题 / 主次行动</span><em>z 0</em></div>
+        <div class="layer-row"><span class="layer-key">L2</span><b>筛选条</b><span>搜索 300 + chips + 排序 + 视图</span><em>z 10</em></div>
+        <div class="layer-row"><span class="layer-key">L3</span><b>推荐位</b><span>132 高，唯一渐变块，全局只此一处</span><em>z 0</em></div>
+        <div class="layer-row"><span class="layer-key">L4</span><b>卡片网格</b><span>3 列 / gap 14 / 卡内边距 16</span><em>z 20 on hover</em></div>
+        <div class="layer-row"><span class="layer-key">L5</span><b>浮层</b><span>下拉 / 抽屉 / 确认浮层</span><em>z 100–900</em></div>
+        <div class="layer-row"><span class="layer-key">L6</span><b>通知</b><span>Toast，右下，最多 3 条</span><em>z 1000</em></div>
+      </div>
+
+      <h3 style="margin-top:20px">Measure</h3>
+      <p class="subt">间距只用 4 的倍数；圆角三级，不混用。</p>
+      <div class="layer-list">
+        <div class="layer-row"><span class="layer-key">SP</span><b>间距</b><span>4 / 8 / 12 / 16 / 20 / 24 / 32</span><em>4pt grid</em></div>
+        <div class="layer-row"><span class="layer-key">R</span><b>圆角</b><span>卡片 14 · 控件 9 · 胶囊 999</span><em>radius</em></div>
+        <div class="layer-row"><span class="layer-key">IC</span><b>图标</b><span>卡片 44 / 行内 17 / 描边 1.7</span><em>24 grid</em></div>
+        <div class="layer-row"><span class="layer-key">SH</span><b>阴影</b><span>静置 1 层，悬停 2 层，色偏紫</span><em>elevation</em></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  var body = document.body;
+  var grid = document.getElementById('grid');
+  var cards = Array.prototype.slice.call(grid.querySelectorAll('.app-card'));
+  var empty = document.getElementById('empty');
+  var q = document.getElementById('q');
+  var searchBox = document.getElementById('searchBox');
+  var clearQ = document.getElementById('clearQ');
+  var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
+  var resultCount = document.getElementById('resultCount');
+  var shownCount = document.getElementById('shownCount');
+  var state = { cat: 'all', q: '' };
+
+  function apply(){
+    var shown = 0;
+    cards.forEach(function(card){
+      var catOk = state.cat === 'all' || card.dataset.cat === state.cat;
+      var hay = card.dataset.name || '';
+      var qOk = !state.q || hay.toLowerCase().indexOf(state.q) > -1;
+      var on = catOk && qOk;
+      card.style.display = on ? '' : 'none';
+      if (on) shown++;
+    });
+    resultCount.textContent = shown;
+    shownCount.textContent = shown;
+    empty.classList.toggle('show', shown === 0);
+  }
+
+  chips.forEach(function(chip){
+    chip.addEventListener('click', function(){
+      chips.forEach(function(c){ c.classList.remove('on'); });
+      chip.classList.add('on');
+      state.cat = chip.dataset.cat;
+      apply();
+    });
+  });
+
+  q.addEventListener('input', function(){
+    state.q = q.value.trim().toLowerCase();
+    searchBox.classList.toggle('has-value', q.value.length > 0);
+    apply();
+  });
+  clearQ.addEventListener('click', function(){
+    q.value = ''; state.q = '';
+    searchBox.classList.remove('has-value');
+    q.focus(); apply();
+  });
+  document.getElementById('resetBtn').addEventListener('click', function(){
+    q.value = ''; state.q = ''; state.cat = 'all';
+    searchBox.classList.remove('has-value');
+    chips.forEach(function(c){ c.classList.toggle('on', c.dataset.cat === 'all'); });
+    apply();
+  });
+
+  // stars
+  grid.addEventListener('click', function(e){
+    var star = e.target.closest('.star');
+    if (!star) return;
+    e.preventDefault(); e.stopPropagation();
+    star.classList.toggle('on');
+  });
+
+  // view switch
+  var segGrid = document.getElementById('segGrid');
+  var segList = document.getElementById('segList');
+  function setView(list){
+    segGrid.classList.toggle('on', !list);
+    segList.classList.toggle('on', list);
+    grid.classList.toggle('is-list', list);
+    document.getElementById('btnGrid').classList.toggle('on', !list);
+    document.getElementById('btnList').classList.toggle('on', list);
+  }
+  segGrid.addEventListener('click', function(){ setView(false); });
+  segList.addEventListener('click', function(){ setView(true); });
+  document.getElementById('btnGrid').addEventListener('click', function(){ setView(false); });
+  document.getElementById('btnList').addEventListener('click', function(){ setView(true); });
+
+  // annotation + chrome
+  var btnAnno = document.getElementById('btnAnno');
+  btnAnno.addEventListener('click', function(){
+    body.classList.toggle('annotate');
+    btnAnno.classList.toggle('on', body.classList.contains('annotate'));
+  });
+  document.getElementById('btnNight').addEventListener('click', function(){
+    body.classList.toggle('night');
+    this.classList.toggle('on', body.classList.contains('night'));
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.target.tagName === 'INPUT') { if (e.key === 'Escape') { q.value=''; state.q=''; searchBox.classList.remove('has-value'); apply(); } return; }
+    if (e.key === 'a' || e.key === 'A') btnAnno.click();
+    if (e.key === 'h' || e.key === 'H') body.classList.toggle('chrome-hidden');
+  });
+
+  // click feedback on card
+  grid.addEventListener('click', function(e){
+    var card = e.target.closest('.app-card');
+    if (!card || card.classList.contains('disabled') || e.target.closest('.star')) return;
+    card.animate(
+      [{ transform: 'translateY(-2px) scale(1)' }, { transform: 'translateY(-2px) scale(.995)' }, { transform: 'translateY(-2px) scale(1)' }],
+      { duration: 220, easing: 'ease-out' }
+    );
+  });
+
+  apply();
+})();
+</script>
+</body>
+</html>

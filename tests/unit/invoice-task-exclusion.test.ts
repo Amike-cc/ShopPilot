@@ -28,7 +28,12 @@ const read = (p: string) => readFileSync(resolve(p), 'utf8')
 const TASK_PAGE = read('apps/desktop/src/renderer/src/features/workbench/UnifiedTaskPage.vue')
 const DASHBOARD = read('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue')
 const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue')
-const DATA_PAGE = read('apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue')
+const DATA_PAGE = [
+  'apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-invoice-detail.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-tax-license.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-data-collection.ts',
+].map(p => readFileSync(resolve(p), 'utf8')).join('\n')
 const OVERVIEW_SERVICE = read('apps/desktop/src/main/services/overview-service.ts')
 const WORKSPACE = read('apps/desktop/src/renderer/src/stores/workspace.ts')
 
@@ -43,7 +48,7 @@ describe('发票采集任务的识别', () => {
   it('只认前缀，不误伤别的任务（尤其名字里带「发票」的普通任务）', () => {
     for (const name of [
       '经营指标采集 · 抖店',
-      '订单明细采集 · 抖店',
+      '商品同步 · 抖店',
       '达人邀约 · 抖店 · 智能体',
       '自定义任务 · 2026/9/30',
       '发票整理',      // 含「发票」但不是自动采集任务
@@ -67,7 +72,7 @@ describe('后台采集任务的统一判定（isBackgroundCollectTask）', () =>
   it('不误伤别的任务；空值一律 false', () => {
     for (const name of [
       '经营指标采集 · 抖店',
-      '订单明细采集 · 抖店',
+      '商品同步 · 抖店',
       '达人邀约 · 抖店 · 智能体',
       '自定义任务 · 2026/9/30',
       '涉税整理',      // 含「涉税」但不是自动采集任务
@@ -93,15 +98,17 @@ describe('后台采集不计入任务的各个口径', () => {
     expect(TASK_PAGE).toMatch(/visibleTasks = computed\(\(\) => ws\.tasks/)
   })
 
-  it('概览：待办任务卡与工具栏通知红点都不含后台采集任务', () => {
-    expect(DASHBOARD).toMatch(/pendingTasks = computed\([\s\S]{0,240}?isBackgroundCollectTask/)
-    // 2026-10-17：工具栏红点改由通知中心统一驱动（进行中/待确认/失败/客服未读）。
-    // 通知数据同样必须排除后台采集任务，否则发票/涉税采集会把红点一直点亮。
-    expect(DASHBOARD).toMatch(/notificationTasks = computed\([\s\S]{0,400}?isBackgroundCollectTask/)
+  it('概览只展示发票待办，通知红点只来自达人邀约与客服', () => {
+    expect(DASHBOARD).toContain('pendingInvoices = computed')
+    expect(DASHBOARD).toContain("navigateTo('invoices')")
+    expect(DASHBOARD).toMatch(/notificationTasks = computed\([\s\S]{0,400}?creator_invite/)
   })
 
-  it('浏览器右栏「任务中心 → 任务列表」同样排除（只取 6 条，不排就被挤出去）', () => {
-    expect(SURFACE).toMatch(/taskRows = computed\([\s\S]{0,240}?isBackgroundCollectTask/)
+  it('浏览器右栏不再暴露通用任务列表，达人邀约面板仍保留', () => {
+    expect(SURFACE).not.toContain('taskRows = computed')
+    expect(SURFACE).not.toContain('task-tab-tasks')
+    expect(SURFACE).not.toContain('task-new')
+    expect(SURFACE).toContain('data-test="invite-panel"')
   })
 
   it('主进程的任务总数用它排除，且前缀不再有第二处硬编码', () => {

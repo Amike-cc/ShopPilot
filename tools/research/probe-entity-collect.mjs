@@ -44,11 +44,8 @@ const main = async () => {
   const cdp = new CDP(target.webSocketDebuggerUrl)
 
   const open = await cdp.eval(`
-    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('数据分析'))
+    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('发票中心'))
     if (nav) nav.click()
-    await new Promise(r => setTimeout(r, 1500))
-    const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(i => (i.textContent || '').includes('发票中心'))
-    if (tab) tab.click()
     await new Promise(r => setTimeout(r, 3000))
     const btn = document.querySelector('[data-test="invoice-entity-collect"]')
     return btn ? { found: true, disabled: btn.disabled, text: btn.textContent.trim(), title: btn.getAttribute('title') } : { found: false }

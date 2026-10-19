@@ -53,10 +53,6 @@ import { INVITE_SQUARE_URLS_SETTING } from '@shared/constants/ai'
 import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig } from '@shared/invite-task'
 import { buildEntityCollectSteps } from '@shared/entity-steps'
 import { entityProfileFor } from '@shared/constants/entity'
-import { ordersProfileFor, type OrdersProfile } from '@shared/constants/orders'
-import { buildOrdersCollectSteps, mapOrdersRows, orderColumnLabel } from '@shared/orders-steps'
-import { OrderRepository } from '../orders/order-repository'
-import { orderLifecycleServiceFor } from '../orders/order-lifecycle-service'
 import { listBookmarks, createBookmark, deleteBookmark } from '../browser/bookmark-manager'
 import { listDownloads } from '../browser/download-manager'
 import {
@@ -116,8 +112,6 @@ export function collectionDispatchResult(actionType: AgentSoftwareAction['type']
     businessMetricsCollect: ['BUSINESS_JOB_DISPATCHED', '已派发经营指标采集 Job；指标来源和平台回读以 evidence 为准'],
     collectEntity: ['ENTITY_JOB_DISPATCHED', '已派发主体采集 Job；冲突字段保留并等待人工处理'],
     entityCollect: ['ENTITY_JOB_DISPATCHED', '已派发主体采集 Job；冲突字段保留并等待人工处理'],
-    collectOrders: ['ORDER_JOB_DISPATCHED', '已派发订单明细采集 Job；真实平台回读仍以 Job evidence 为准'],
-    orderCollect: ['ORDER_JOB_DISPATCHED', '已派发订单采集 Job；真实平台回读仍以 Job evidence 为准']
   }
   const [reasonCode, safeMessage] = labels[actionType] || ['DOMAIN_JOB_DISPATCHED', '已派发领域采集 Job；真实平台回读仍以 Job evidence 为准']
   if (jobs === 0) return { actionType, status: 'NOT_VERIFIED', reasonCode: 'NO_JOB_DISPATCHED', safeMessage: `${safeMessage}；当前没有可执行的已实测平台 Job`, summary: { stores, jobs }, evidence: { source: 'agent_jobs', capturedAt: Date.now(), counts: { jobs } } }
@@ -206,7 +200,7 @@ const AGENT_PAGE_TASK_RE = /(读取|点击|填写|截图|页面|网页|表格|�
  * 软件功能词：命中时优先交给智能体回合（对话 + 白名单软件操作），
  * 避免“读取任务详情/采集发票”这类软件指令被误当成页面任务去观察页面。
  */
-const AGENT_SOFTWARE_FEATURE_RE = /(发票|经营数据|主体信息|营业执照|备份|回收站|子agent|子智能体|员工|团队|岗位|job|任务|记忆|面板|店铺列表|下载|书签|达人|邀约|订单明细|商品同步|商品库|商品详情|商品发布|平台商品|库存|sku|售后|退款|发货|物流|优惠券|营销|客服|标签页|新标签|tab|导航|浏览器|刷新|后退|前进)/i
+const AGENT_SOFTWARE_FEATURE_RE = /(发票|经营数据|主体信息|营业执照|备份|回收站|子agent|子智能体|员工|团队|岗位|job|任务|记忆|面板|店铺列表|下载|书签|达人|邀约|商品同步|商品库|商品详情|商品发布|平台商品|库存|sku|退款|优惠券|营销|客服|标签页|新标签|tab|导航|浏览器|刷新|后退|前进)/i
 
 function looksLikePageTask(goal: string): boolean {
   if (AGENT_SOFTWARE_FEATURE_RE.test(goal)) return false
@@ -285,9 +279,8 @@ const SOFTWARE_ACTION_LABELS: Record<AgentSoftwareAction['type'], string> = {
   listDownloads: '查看下载列表', listBookmarks: '查看书签', createBookmark: '新建书签', deleteBookmark: '删除书签',
   listTools: '查看工具', listSkills: '查看技能', createSkill: '制作技能', runSkill: '运行技能', updateSkill: '更新技能', deleteSkill: '删除技能', createPlugin: '制作插件', listPlugins: '查看插件',
   runInvite: '发送达人邀约',
-  collectInvoices: '采集发票', collectBusiness: '采集经营数据', collectEntity: '采集主体信息', collectOrders: '采集订单明细', orderCollect: '采集统一订单', getOrderDetails: '查看订单明细',
+  collectInvoices: '采集发票', collectBusiness: '采集经营数据', collectEntity: '采集主体信息',
   inventoryCollect: '采集库存价格', inventoryDiff: '比较库存价格', inventoryWriteback: '写回库存价格', skuCollect: '采集 SKU', skuDiff: '比较 SKU', skuWriteback: '写回 SKU',
-  orderList: '查询订单', orderGet: '查看订单', fulfillmentPrepare: '准备发货', fulfillmentConfirm: '确认发货', fulfillmentVerify: '回读发货', afterSaleCollect: '采集售后', refundReview: '审核退款', refundConfirm: '确认退款', refundVerify: '回读退款',
   businessMetricsCollect: '采集经营指标', businessMetricsCompare: '比较经营指标', commerceHealth: '检查经营健康', invoiceCollect: '采集发票记录', invoiceExport: '导出发票', entityCollect: '采集经营主体', entityApply: '回填经营主体',
   contentDraft: '生成内容草稿', contentReview: '审核内容草稿', contentPublish: '发布内容', campaignPlan: '制定投放计划', couponPlan: '制定优惠券计划', adPlan: '制定广告计划', adConfirm: '确认广告投放', customerInbox: '查看客服收件箱', customerDraftReply: '生成客服草稿', customerSendReply: '发送客服回复',
   productSync: '同步商品', productList: '查看平台商品', productLibraryList: '查看本地商品库', productDetailCollect: '采集商品详情',
@@ -324,11 +317,10 @@ function describeSoftwareAction(action: AgentSoftwareAction): string {
   if (action.type === 'deleteSkill') return `${label}（${action.skillId}）`
   if (action.type === 'updateSkill') return `${label}（${action.skillId}${action.status ? ` → ${action.status}` : ''}）`
   if (action.type === 'runInvite') return `${label}${action.storeId ? `（${action.storeId}）` : ''}`
-  if (action.type === 'getOrderDetails') return `${label}${action.storeId ? `（${action.storeId}）` : ''}`
   if (action.type === 'searchMemory') return `${label}「${action.query}」`
   if (action.type === 'writeMemory') return `${label}「${action.title}」`
   if (action.type === 'createBackup') return `${label}${action.label ? `「${action.label}」` : ''}`
-  if (action.type === 'collectInvoices' || action.type === 'collectBusiness' || action.type === 'collectEntity' || action.type === 'collectOrders') return `${label}（${action.storeIds.length ? `${action.storeIds.length} 家店铺` : '全部支持店铺'}）`
+  if (action.type === 'collectInvoices' || action.type === 'collectBusiness' || action.type === 'collectEntity') return `${label}（${action.storeIds.length ? `${action.storeIds.length} 家店铺` : '全部支持店铺'}）`
   if (action.type === 'productSync') return `${label}（${action.storeIds.length ? `${action.storeIds.length} 家店铺` : '全部支持店铺'}）`
   if (action.type === 'productList' || action.type === 'productLibraryList') return `${label}${action.keyword ? `（关键词：${action.keyword}）` : ''}`
   if (action.type === 'productDetailCollect') return `${label}（${action.storeId} / ${action.platformProductId}）`
@@ -617,14 +609,6 @@ export function deleteAgentPluginByUser(raw: unknown): { id: string; name: strin
     console.error('[agent] deleteAgentPluginByUser failed:', error)
     softwareError('AGENT_PLUGIN_DELETE_FAILED', `删除插件失败：${String(error?.message || error).slice(0, 160)}`)
   }
-}
-
-/** 订单明细档案的实测覆盖（设置 `orders.profiles`，便于实测后即时登记而不必发版）。 */
-function readOrdersProfileOverrides(): Record<string, OrdersProfile> {
-  try {
-    const row = getDatabase().prepare('SELECT value_json FROM app_settings WHERE key=?').get('orders.profiles') as any
-    return row?.value_json ? parseJsonSafe<Record<string, OrdersProfile>>(row.value_json, {}) : {}
-  } catch { return {} }
 }
 
 /** 邀约配置：读本店铺的存档，回退到旧版按平台存档（与面板迁移口径一致）。 */
@@ -1020,43 +1004,9 @@ export async function generateAgentPlan(raw: unknown): Promise<
   // 多店任务：逐店打开、观察、规划并由 root-ceo 统一执行。
   const continuationRequested = /(继续|剩余|下一批|后面)/.test(normalizedGoal)
   const multiStoreGoal = looksLikeMultiStoreTask(goal) ? goal : resolveMultiStoreFollowUp(goal, history)
-  // 经营指标检查（订单/销量/销售额/退款）：走已实测的经营数据采集，而不是读页面标题。
+  // 经营指标检查（订单数/销量/销售额/退款）：走已实测的经营数据采集，而不是读页面标题。
   const explicitPageWords = /(当前页面|这个页面|本页|页面标题|表格|选择器)/.test(normalizedGoal)
-  // 逐条订单明细优先于经营指标：两者都含"订单"，但明细走订单页整表采集。
-  if (!explicitPageWords && /(订单明细|逐条订单|订单列表|每一条订单|订单数据|订单记录)/.test(normalizedGoal)) {
-    const readIntent = /(查看|看看|列出|有哪些|最近|显示|读取)/.test(normalizedGoal) && !/(采集|抓取|拉取|更新|同步)/.test(normalizedGoal)
-    if (readIntent) {
-      // 读型：直接读最近一次采集到的快照（只读、不派单、不打开页面）
-      const store = resolveStoreMention(goal, softwareContext)
-        || (softwareContext.displayedStoreId ? softwareContext.stores.find(item => item.id === softwareContext.displayedStoreId) || null : null)
-        || (softwareContext.stores.length === 1 ? softwareContext.stores[0] : null)
-      if (store) {
-        return {
-          kind: 'software',
-          plan: planFromActions([{ type: 'getOrderDetails', storeId: store.id }], goal),
-          context: softwareContext,
-          model: '内置订单明细查询器',
-          elapsedMs: 0,
-          requiresApproval: false
-        }
-      }
-      return { kind: 'chat', text: '要看哪家店的订单明细？先打开店铺或说出店名。', model: '内置订单明细查询器', elapsedMs: 0, executed: [], thoughts: ['订单明细是读型请求，但当前没有可定位的店铺。'], jobIds: [] }
-    }
-    const messages: string[] = []
-    const jobIds: string[] = []
-    const displayed = getDisplayedStoreId()
-    await dispatchCollectJobs('orders', displayed ? [displayed] : [], messages, jobIds)
-    return {
-      kind: 'chat',
-      text: messages.join('；') || '没有可采集订单明细的店铺。',
-      model: '内置订单明细调度器',
-      elapsedMs: 0,
-      executed: messages,
-      thoughts: ['用户要看逐条订单明细，走已实测订单页的整表采集（未实测的平台会如实说明）。'],
-      jobIds
-    }
-  }
-  if (!explicitPageWords && /(经营数据|订单|销量|销售额|退款|gmv|营业额|数据指标)/i.test(normalizedGoal)) {
+  if (!explicitPageWords && /(经营数据|订单数|销量|销售额|退款|gmv|营业额|数据指标)/i.test(normalizedGoal)) {
     const messages: string[] = []
     const jobIds: string[] = []
     const displayed = getDisplayedStoreId()
@@ -1548,15 +1498,15 @@ function validateSoftwareAction(action: AgentSoftwareAction): void {
   if (action.type === 'productPublishChecklist' && !getStore(action.storeId)) {
     softwareError('AGENT_STORE_NOT_AUTHORIZED', '发布补全清单目标店铺不存在或已移入回收站')
   }
-  if (['inventoryDiff', 'inventoryWriteback', 'skuDiff', 'skuWriteback', 'orderList', 'orderGet', 'fulfillmentPrepare', 'fulfillmentConfirm', 'fulfillmentVerify', 'refundReview', 'refundConfirm', 'refundVerify', 'businessMetricsCompare', 'invoiceExport', 'entityApply', 'campaignPlan', 'couponPlan', 'adPlan', 'adConfirm', 'customerInbox', 'customerDraftReply', 'customerSendReply'].includes(action.type)) {
+  if (['inventoryDiff', 'inventoryWriteback', 'skuDiff', 'skuWriteback', 'businessMetricsCompare', 'invoiceExport', 'entityApply', 'campaignPlan', 'couponPlan', 'adPlan', 'adConfirm', 'customerInbox', 'customerDraftReply', 'customerSendReply'].includes(action.type)) {
     const storeId = (action as { storeId: string }).storeId
     if (!getStore(storeId)) softwareError('AGENT_STORE_NOT_AUTHORIZED', '目标店铺不存在或已移入回收站')
   }
-  if (['inventoryCollect', 'skuCollect', 'afterSaleCollect', 'businessMetricsCollect', 'commerceHealth', 'invoiceCollect', 'entityCollect', 'orderCollect'].includes(action.type)) {
+  if (['inventoryCollect', 'skuCollect', 'businessMetricsCollect', 'commerceHealth', 'invoiceCollect', 'entityCollect'].includes(action.type)) {
     const storeIds = (action as { storeIds: string[] }).storeIds
     for (const storeId of storeIds) if (!getStore(storeId)) softwareError('AGENT_STORE_NOT_AUTHORIZED', '目标店铺不存在或已移入回收站')
   }
-  if ((action.type === 'runInvite' || action.type === 'getOrderDetails') && action.storeId) softwareStore(action.storeId)
+  if (action.type === 'runInvite' && action.storeId) softwareStore(action.storeId)
   if (action.type === 'restoreBackup' && !BackupManager.getBackup(action.backupId)) {
     softwareError('AGENT_BACKUP_NOT_FOUND', '目标备份不存在')
   }
@@ -1576,8 +1526,8 @@ function validateSoftwareAction(action: AgentSoftwareAction): void {
  * 只读采集属于“用户已确认的软件功能动作”：计划卡的确认即一次性消费 Job 的人工
  * 确认门禁，Main 在派单后立刻放行；其他路径创建的 Job 仍必须单独确认。
  */
-async function dispatchCollectJobs(kind: 'invoice' | 'business' | 'entity' | 'orders', storeIds: string[], messages: string[], jobIds: string[] = []): Promise<void> {
-  const label = kind === 'invoice' ? '发票采集' : kind === 'business' ? '经营数据采集' : kind === 'orders' ? '订单明细采集' : '主体信息采集'
+async function dispatchCollectJobs(kind: 'invoice' | 'business' | 'entity', storeIds: string[], messages: string[], jobIds: string[] = []): Promise<void> {
+  const label = kind === 'invoice' ? '发票采集' : kind === 'business' ? '经营数据采集' : '主体信息采集'
   const requested = storeIds.map(id => getStore(id)).filter((store): store is NonNullable<typeof store> => !!store)
   if (storeIds.length && !requested.length) {
     // 显式指定的店铺全部无效（已删除/回收站）：如实说明，而不是静默"未派发"。
@@ -1585,14 +1535,11 @@ async function dispatchCollectJobs(kind: 'invoice' | 'business' | 'entity' | 'or
     return
   }
   const stores = storeIds.length ? requested : listStores()
-  const ordersOverrides = readOrdersProfileOverrides()
   const profileOf = (platform: string) => kind === 'invoice'
     ? invoiceProfileFor(platform)
     : kind === 'business'
       ? businessProfileFor(platform)
-      : kind === 'orders'
-        ? ordersProfileFor(platform, ordersOverrides)
-        : entityProfileFor(platform)
+      : entityProfileFor(platform)
   const supported = stores.filter(store => profileOf(store.platform) !== null)
   if (!supported.length) {
     messages.push(`没有已实测${label}锚点的店铺，未派发任务`)
@@ -1606,9 +1553,7 @@ async function dispatchCollectJobs(kind: 'invoice' | 'business' | 'entity' | 'or
       ? buildInvoiceCollectSteps(invoiceProfileFor(store.platform)!)
       : kind === 'business'
         ? buildBusinessCollectSteps(businessProfileFor(store.platform)!)
-        : kind === 'orders'
-          ? buildOrdersCollectSteps(ordersProfileFor(store.platform, ordersOverrides) as OrdersProfile)
-          : buildEntityCollectSteps(entityProfileFor(store.platform)!)
+        : buildEntityCollectSteps(entityProfileFor(store.platform)!)
     const goal = `${label} · ${store.name}`
     const taskName = `${label} · ${store.platform} · 智能体`
     try {
@@ -1617,7 +1562,7 @@ async function dispatchCollectJobs(kind: 'invoice' | 'business' | 'entity' | 'or
         goal,
         storeId: store.id,
         // 口径（2026-09-26 审计 P0-2，用户定调方案 A）：采集是**用户自己**在对话里发起的只读动作，
-        // 即视为已确认。目标文案里的「退款金额/订单明细」等词会命中资金规则，若把它当资金动作，
+        // 即视为已确认。目标文案里的「退款金额」会命中资金规则，若把它当资金动作，
         // 只会出现"先要求确认、再由 Main 拿 Job 自己的 confirmationId 自批"这种走过场（已删除）。
         // userInitiatedCollect 是 Main 内部参数，渲染层传不进来（schema 是 strict 的）。
         requiresConfirmation: false,
@@ -1880,8 +1825,8 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
       case 'collectInvoices':
       case 'collectBusiness':
       case 'collectEntity':
-      case 'collectOrders': {
-        const kind = step.action.type === 'collectInvoices' ? 'invoice' : step.action.type === 'collectBusiness' ? 'business' : step.action.type === 'collectEntity' ? 'entity' : 'orders'
+      {
+        const kind = step.action.type === 'collectInvoices' ? 'invoice' : step.action.type === 'collectBusiness' ? 'business' : 'entity'
         const beforeJobs = jobIds.length
         await dispatchCollectJobs(kind, step.action.storeIds, messages, jobIds)
         const resultRecord = collectionDispatchResult(step.action.type, step.action.storeIds.length, jobIds.length - beforeJobs)
@@ -1889,17 +1834,6 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
         results.push(resultRecord)
         break
       }
-      case 'orderCollect':
-        {
-        const beforeJobs = jobIds.length
-        await dispatchCollectJobs('orders', step.action.storeIds, messages, jobIds)
-        {
-          const resultRecord = collectionDispatchResult(step.action.type, step.action.storeIds.length, jobIds.length - beforeJobs)
-          recordCommerceActionLedger(step.action, resultRecord)
-          results.push(resultRecord)
-        }
-        break
-        }
       case 'businessMetricsCollect':
         {
         const beforeJobs = jobIds.length
@@ -1933,32 +1867,6 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
         }
         break
         }
-      case 'getOrderDetails': {
-        const storeId = step.action.storeId || getDisplayedStoreId()
-        if (!storeId) softwareError('AGENT_STORE_NOT_OPEN', '请先打开要查看订单的店铺，或指出店铺名称')
-        const store = softwareStore(storeId)
-        const profile = ordersProfileFor(store.platform, readOrdersProfileOverrides())
-        if (!profile) softwareError('AGENT_ORDERS_UNSUPPORTED', `店铺「${store.name}」的平台（${store.platform}）尚未实测订单页`)
-        const snapshot = getDatabase().prepare("SELECT value_json, captured_at FROM store_snapshots WHERE store_id=? AND metric='orders.detail' ORDER BY rowid DESC LIMIT 1").get(store.id) as any
-        if (!snapshot?.value_json) {
-          messages.push(`店铺「${store.name}」还没有订单明细快照；先让我采集一次（“采集订单明细”），或到数据中心的「订单明细」区块手动采集`)
-          break
-        }
-        const mapped = mapOrdersRows(profile.columns, parseJsonSafe(snapshot.value_json, null))
-        if (!mapped.length) {
-          messages.push(`店铺「${store.name}」最近一次订单明细采集没有数据行（${new Date(Number(snapshot.captured_at)).toLocaleString()}）`)
-          break
-        }
-        const limit = Math.min(20, Math.max(1, Number(step.action.limit) || 5))
-        const shown = mapped.slice(0, limit)
-        // 买家列不进模型上下文（隐私红线）；其余列按统一标签拼行。
-        const lines = shown.map(item => profile.columns
-          .filter(column => column.key !== 'buyer')
-          .map(column => `${orderColumnLabel(column.key)}：${item.cells[column.key] || '—'}`)
-          .join('，'))
-        messages.push(`店铺「${store.name}」最近 ${shown.length} 条订单（共 ${mapped.length} 条，采集于 ${new Date(Number(snapshot.captured_at)).toLocaleString()}）：${lines.join('；')}`)
-        break
-      }
       // ── 库存/价格/SKU：读取本地快照并生成字段级差异；写回只记录人工提案 ──
       case 'inventoryCollect': {
         const result = inventorySkuServiceFor(getDatabase()).collect({ storeIds: step.action.storeIds, productIds: step.action.productIds })
@@ -2012,80 +1920,7 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
         results.push(resultRecord)
         break
       }
-      // ── 其余领域动作先走统一受控回执，避免把通用浏览器成功误报为领域完成 ──
-      case 'orderList': {
-        const result = new OrderRepository(getDatabase()).list({ storeId: step.action.storeId, status: step.action.status, page: step.action.page ?? 1, pageSize: step.action.pageSize ?? 20 })
-        messages.push(`订单台账：读取 ${result.orders.length}/${result.total} 条；买家隐私未进入模型上下文`)
-        const resultRecord: AgentSoftwareActionResult = { actionType: step.action.type, status: 'SUCCEEDED', reasonCode: 'LOCAL_ORDER_LEDGER', safeMessage: '已读取脱敏订单台账', summary: { total: result.total, returned: result.orders.length, page: result.page }, evidence: { source: 'orders', capturedAt: Date.now(), counts: { total: result.total, returned: result.orders.length } } }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'orderGet': {
-        const result = new OrderRepository(getDatabase()).getOrderById(step.action.storeId, step.action.orderId)
-        messages.push(result ? '已读取订单脱敏摘要' : '订单不存在或尚未采集')
-        const resultRecord: AgentSoftwareActionResult = { actionType: step.action.type, status: result ? 'SUCCEEDED' : 'FAILED', reasonCode: result ? 'LOCAL_ORDER_LEDGER' : 'ORDER_NOT_FOUND', safeMessage: result ? '已读取脱敏订单摘要' : '订单不存在或尚未采集', summary: { found: !!result, items: result?.items.length ?? 0 }, evidence: { source: 'orders', capturedAt: Date.now(), counts: { found: result ? 1 : 0 } } }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'fulfillmentPrepare': {
-        const result = orderLifecycleServiceFor(getDatabase()).prepareFulfillment(step.action.storeId, step.action.orderIds)
-        messages.push(`发货准备：${result.safeMessage}`)
-        const resultRecord = insightResultForAgent(result, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'fulfillmentConfirm': {
-        const result = orderLifecycleServiceFor(getDatabase()).confirmFulfillment(step.action.storeId, step.action.orderId, input.confirmed === true, step.action.confirmationId)
-        messages.push(`发货确认：${result.safeMessage}`)
-        const resultRecord = insightResultForAgent(result, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'fulfillmentVerify': {
-        const result = orderLifecycleServiceFor(getDatabase()).verifyFulfillment(step.action.storeId, step.action.orderId)
-        messages.push(`发货回读：${result.safeMessage}`)
-        const resultRecord = insightResultForAgent(result, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'afterSaleCollect': {
-        const targetStores = step.action.storeIds.length ? step.action.storeIds : listStores().map(store => store.id)
-        const result = orderLifecycleServiceFor(getDatabase()).collectAfterSales(targetStores)
-        messages.push(`售后采集：${result.safeMessage}`)
-        const resultRecord = insightResultForAgent(result, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'refundReview': {
-        const result = orderLifecycleServiceFor(getDatabase()).reviewRefund(step.action.storeId, step.action.orderId)
-        messages.push(`退款审核：${result.safeMessage}`)
-        const resultRecord = insightResultForAgent(result, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'refundConfirm': {
-        const result = orderLifecycleServiceFor(getDatabase()).confirmRefund({ storeId: step.action.storeId, orderId: step.action.orderId, amountMinor: step.action.amountMinor, confirmed: input.confirmed === true, confirmationId: step.action.confirmationId })
-        messages.push(`退款确认：${result.safeMessage}`)
-        const resultRecord = insightResultForAgent(result, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'refundVerify': {
-        const result = orderLifecycleServiceFor(getDatabase()).verifyRefund(step.action.storeId, step.action.orderId)
-        messages.push(`退款回读：${result.safeMessage}`)
-        const resultRecord = insightResultForAgent(result, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
+      // ── 其余领域动作先走统一受控回执，避免把通用浏览器成功误报为领域完成
       case 'businessMetricsCompare': {
         const result = commerceInsightServiceFor(getDatabase()).compare({ storeId: step.action.storeId, period: step.action.period })
         messages.push(`经营指标比较：${result.safeMessage}`)

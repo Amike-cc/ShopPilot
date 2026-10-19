@@ -101,7 +101,7 @@ export class SalesMetricsRepository {
     const candidate = this.db as unknown as { transaction?: (work: () => void) => () => void }
     if (typeof candidate.transaction === 'function') { candidate.transaction(fn)(); return }
     this.db.exec('BEGIN')
-    try { fn(); this.db.exec('COMMIT') } catch (error) { try { this.db.exec('ROLLBACK') } catch { /* noop */ }; throw error }
+    try { fn(); this.db.exec('COMMIT') } catch (error) { try { this.db.exec('ROLLBACK') } catch { /* noop */ } throw error }
   }
 
   upsertStoreMetrics(metric: SalesMetrics): { inserted: boolean; updated: boolean; rejected: 'OUT_OF_ORDER' | null } {

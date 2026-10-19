@@ -24,9 +24,16 @@ import { resolve } from 'node:path'
 const read = (p: string) => readFileSync(resolve(p), 'utf8')
 
 const MAIN_INDEX = read('apps/desktop/src/main/index.ts')
-const WINDOW_MANAGER = read('apps/desktop/src/main/browser/window-manager.ts')
+// 2026-10-19 P1 重构：window-manager.ts 已拆成 browser/ 下多个内聚模块，
+// 源码级断言（不是 import 调用）改为扫描整个模块集合；断言语义不变。
+const WM_FILES = ['window-manager.ts', 'window-state.ts', 'window-browser-core.ts', 'window-capture.ts', 'window-diagnostics.ts']
+const WINDOW_MANAGER = WM_FILES.map(f => read(`apps/desktop/src/main/browser/${f}`)).join('\n')
 const BROWSER_HANDLERS = read('apps/desktop/src/main/ipc/browser-handlers.ts')
-const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue')
+// 2026-10-19 task-10 拆分：页面 + webview 适配层 composable 一起扫描（断言一字未动，只改扫描范围）
+const SURFACE = [
+  'apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-store-webviews.ts'
+].map(read).join('\n')
 const DASHBOARD_VIEW = read('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue')
 const VITE_CONFIG = read('electron.vite.config.ts')
 

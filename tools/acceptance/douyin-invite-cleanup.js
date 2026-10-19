@@ -43,7 +43,7 @@ async function connect(part) {
   throw new Error('no target ' + part)
 }
 
-;(async () => {
+(async () => {
   freePort(PORT)
   const app = spawn(path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe'),
     ['.', `--remote-debugging-port=${PORT}`, '--no-sandbox'], { cwd: root, stdio: 'ignore', env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1' } })

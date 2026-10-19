@@ -15,7 +15,12 @@ import { resolve } from 'node:path'
  *   4. 未填写组固定最后（排序在 shared/store-license.ts，已有单测）且补录入口齐备。
  */
 
-const PAGE = readFileSync(resolve('apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue'), 'utf8')
+const PAGE = [
+  'apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-invoice-detail.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-tax-license.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-data-collection.ts',
+].map(p => readFileSync(resolve(p), 'utf8')).join('\n')
 
 describe('发票中心「按主体」分组视图', () => {
   it('分组模型：每行必落一组（keyByStore 单表 + 兜底 NO_LICENSE_KEY）', () => {

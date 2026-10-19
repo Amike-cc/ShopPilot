@@ -17,7 +17,12 @@ import { pickLatestCollectTask } from '@shared/constants/collection'
  */
 
 const read = (p: string) => readFileSync(resolve(p), 'utf8')
-const PAGE = read('apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue')
+const PAGE = [
+  'apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-invoice-detail.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-tax-license.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-data-collection.ts',
+].map(read).join('\n')
 
 describe('pickLatestCollectTask：认领"这家店的采集任务"的唯一口径', () => {
   const task = (id: string, storeScope: string, name: string, updatedAt: number) => ({ id, storeScope, name, updatedAt })
@@ -34,7 +39,7 @@ describe('pickLatestCollectTask：认领"这家店的采集任务"的唯一口�
     const list = [
       task('a', 's1', '发票采集 ·微信小店', 100),
       task('b', 's2', '发票采集 ·抖店', 500),          // 别的店
-      task('c', 's1', '订单明细采集 ·微信小店', 600),   // 别的前缀
+      task('c', 's1', '商品同步 ·微信小店', 600),   // 别的前缀
       task('d', 's1', '自定义任务 · 九月对账', 700)      // 用户自建（名字里没有采集前缀）
     ]
     expect(pickLatestCollectTask(list, 's1', '发票采集 ·')?.id).toBe('a')

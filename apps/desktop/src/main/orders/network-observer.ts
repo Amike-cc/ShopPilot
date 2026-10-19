@@ -1,12 +1,32 @@
 import type { WebContents } from 'electron'
-import type {
-  ObservationConfidence,
-  ObservationParseStatus,
-  ObservationValueType,
-  ObservationArrayShape,
-  ObservationFieldType,
-  PddOrderObservationFieldStructure
-} from '@shared/contracts/pdd-order-observation'
+
+type NetworkValueType = 'null' | 'boolean' | 'number' | 'string' | 'object' | 'array' | 'unknown'
+type NetworkParseStatus = 'JSON' | 'INVALID_JSON' | 'TRUNCATED'
+type NetworkConfidence = 'low' | 'medium' | 'high'
+
+interface NetworkArrayShape {
+  path: string
+  length: number
+  itemType: NetworkValueType
+}
+
+interface NetworkFieldType {
+  path: string
+  type: NetworkValueType
+}
+
+/** JSON 正文的结构摘要；不包含任何字段值。 */
+export interface NetworkFieldStructure {
+  parseStatus: NetworkParseStatus
+  topLevelKeys: string[]
+  nestedKeys: string[]
+  arrays: NetworkArrayShape[]
+  fieldTypes: NetworkFieldType[]
+  suspectedFields: string[]
+  candidate: boolean
+  confidence: NetworkConfidence
+  redactedFieldCount: number
+}
 
 /** Main 内部的请求/响应结构摘要；不会包含响应正文。 */
 export interface NetworkResponseObservation {
@@ -18,7 +38,7 @@ export interface NetworkResponseObservation {
   contentLength: number | null
   responseTimeMs: number | null
   isJson: boolean
-  body: PddOrderObservationFieldStructure | null
+  body: NetworkFieldStructure | null
 }
 
 export interface NetworkObservationOptions {
@@ -35,7 +55,7 @@ export interface NetworkObservationResult {
   finishedAt: number
   requestCount: number
   jsonResponseCount: number
-  candidateOrderInterfaceCount: number
+  candidateResponseCount: number
   observations: NetworkResponseObservation[]
   reasonCode: 'NETWORK_OBSERVED' | 'NETWORK_OBSERVER_UNAVAILABLE' | 'NETWORK_OBSERVER_TIMEOUT'
 }
@@ -149,7 +169,7 @@ function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY_EXACT_RE.test(key) || SENSITIVE_KEY_RE.test(key)
 }
 
-function valueType(value: unknown): ObservationValueType {
+function valueType(value: unknown): NetworkValueType {
   if (value === null) return 'null'
   if (Array.isArray(value)) return 'array'
   switch (typeof value) {
@@ -161,7 +181,7 @@ function valueType(value: unknown): ObservationValueType {
   }
 }
 
-function emptyStructure(parseStatus: ObservationParseStatus, redactedFieldCount = 0): PddOrderObservationFieldStructure {
+function emptyStructure(parseStatus: NetworkParseStatus, redactedFieldCount = 0): NetworkFieldStructure {
   return {
     parseStatus,
     topLevelKeys: [],
@@ -175,7 +195,7 @@ function emptyStructure(parseStatus: ObservationParseStatus, redactedFieldCount 
   }
 }
 
-function analyzeJsonBody(body: string, maxNodes = 1000): PddOrderObservationFieldStructure {
+function analyzeJsonBody(body: string, maxNodes = 1000): NetworkFieldStructure {
   let parsed: unknown
   try {
     parsed = JSON.parse(body)
@@ -185,8 +205,8 @@ function analyzeJsonBody(body: string, maxNodes = 1000): PddOrderObservationFiel
 
   const topLevelKeys: string[] = []
   const nestedKeys: string[] = []
-  const arrays: ObservationArrayShape[] = []
-  const fieldTypes: ObservationFieldType[] = []
+  const arrays: NetworkArrayShape[] = []
+  const fieldTypes: NetworkFieldType[] = []
   const suspectedFields = new Set<string>()
   let redactedFieldCount = 0
   let nodes = 0
@@ -229,7 +249,7 @@ function analyzeJsonBody(body: string, maxNodes = 1000): PddOrderObservationFiel
   const recordArrayCount = arrays.filter(item => item.itemType === 'object').length
   // candidate 只表示「值得人工查看的结构」，不表示订单接口；单个 order 字段不会触发候选。
   const candidate = recordArrayCount > 0 && suspectedFields.size >= 2
-  const confidence: ObservationConfidence = candidate && suspectedFields.size >= 4 ? 'medium' : 'low'
+  const confidence: NetworkConfidence = candidate && suspectedFields.size >= 4 ? 'medium' : 'low'
   return {
     parseStatus: 'JSON',
     topLevelKeys,
@@ -243,7 +263,7 @@ function analyzeJsonBody(body: string, maxNodes = 1000): PddOrderObservationFiel
   }
 }
 
-function parseBody(body: string, maxBodyBytes: number): PddOrderObservationFieldStructure {
+function parseBody(body: string, maxBodyBytes: number): NetworkFieldStructure {
   const bytes = Buffer.byteLength(body, 'utf8')
   if (bytes > maxBodyBytes) return emptyStructure('TRUNCATED')
   return analyzeJsonBody(body)
@@ -256,7 +276,7 @@ function emptyResult(reasonCode: NetworkObservationResult['reasonCode']): Networ
     finishedAt: now,
     requestCount: 0,
     jsonResponseCount: 0,
-    candidateOrderInterfaceCount: 0,
+    candidateResponseCount: 0,
     observations: [],
     reasonCode
   }
@@ -470,7 +490,7 @@ export class ElectronNetworkObserver implements NetworkObserver {
         finishedAt: Date.now(),
         requestCount: active.requestCount,
         jsonResponseCount: active.jsonResponseCount,
-        candidateOrderInterfaceCount: active.bodyCandidateCount,
+        candidateResponseCount: active.bodyCandidateCount,
         observations: active.observations.map(({ requestId: _requestId, receivedAt: _receivedAt, startedAtMonotonic: _startedAtMonotonic, ...safe }) => safe),
         reasonCode: forcedReason || (active.observations.length ? 'NETWORK_OBSERVED' : 'NETWORK_OBSERVER_TIMEOUT')
       }

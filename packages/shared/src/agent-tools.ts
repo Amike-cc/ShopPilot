@@ -50,24 +50,12 @@ export const AGENT_TOOL_CATALOG: readonly AgentToolSpec[] = [
   { type: 'collectInvoices', label: '采集发票', description: '按已实测锚点采集各店发票数据', example: '{"type":"collectInvoices","storeIds":[]}' },
   { type: 'collectBusiness', label: '采集经营数据', description: '采集订单/销量/销售额/退款指标', example: '{"type":"collectBusiness","storeIds":[]}' },
   { type: 'collectEntity', label: '采集主体信息', description: '采集店铺营业执照主体', example: '{"type":"collectEntity","storeIds":[]}' },
-  { type: 'collectOrders', label: '采集订单明细', description: '逐条读取订单列表整表（仅已实测订单页的平台；明细落在任务结果里）', example: '{"type":"collectOrders","storeIds":[]}' },
-  { type: 'orderCollect', label: '采集统一订单', description: '按增量游标读取统一订单台账；买家隐私不进入模型', example: '{"type":"orderCollect","storeIds":[]}' },
-  { type: 'getOrderDetails', label: '查看订单明细', description: '读取最近一次采集到的订单明细（只读；买家列不进入上下文）', example: '{"type":"getOrderDetails","storeId":"...","limit":5}' },
   { type: 'inventoryCollect', label: '采集库存价格', description: '读取本地已同步的平台库存与价格快照；未实测平台返回 NOT_VERIFIED', example: '{"type":"inventoryCollect","storeIds":[],"productIds":[]}' },
   { type: 'inventoryDiff', label: '比较库存价格', description: '按字段生成库存/价格 before-after 差异和幂等键', example: '{"type":"inventoryDiff","storeId":"...","changes":[{"productId":"...","stock":10,"priceMinor":1990}]}' },
   { type: 'inventoryWriteback', label: '写回库存价格', description: '生成库存/价格人工确认写回提案；平台适配器未验证时不会写平台', example: '{"type":"inventoryWriteback","storeId":"...","changes":[{"productId":"...","stock":10}]}' },
   { type: 'skuCollect', label: '采集 SKU', description: '读取本地已同步的平台 SKU 快照和规格组合', example: '{"type":"skuCollect","storeIds":[],"productIds":[]}' },
   { type: 'skuDiff', label: '比较 SKU', description: '按规格、价格、库存生成 SKU 字段级差异', example: '{"type":"skuDiff","storeId":"...","productId":"...","changes":[{"skuId":"...","spec":[]}]}' },
   { type: 'skuWriteback', label: '写回 SKU', description: '生成 SKU 人工确认写回提案；不把多规格降级成单规格', example: '{"type":"skuWriteback","storeId":"...","productId":"...","changes":[{"skuId":"...","spec":[]}]}' },
-  { type: 'orderList', label: '查询订单', description: '读取统一订单台账，不把买家隐私送入模型', example: '{"type":"orderList","storeId":"..."}' },
-  { type: 'orderGet', label: '查看订单', description: '读取单笔订单脱敏摘要', example: '{"type":"orderGet","storeId":"...","orderId":"..."}' },
-  { type: 'fulfillmentPrepare', label: '准备发货', description: '生成发货人工确认清单，不自动提交物流', example: '{"type":"fulfillmentPrepare","storeId":"...","orderIds":["..."]}' },
-  { type: 'fulfillmentConfirm', label: '确认发货', description: '发货提交需要人工确认；未实测平台返回 NOT_VERIFIED', example: '{"type":"fulfillmentConfirm","storeId":"...","orderId":"..."}' },
-  { type: 'fulfillmentVerify', label: '回读发货', description: '读取发货后的平台状态，未知时返回 UNKNOWN', example: '{"type":"fulfillmentVerify","storeId":"...","orderId":"..."}' },
-  { type: 'afterSaleCollect', label: '采集售后', description: '读取已实测平台售后摘要；未实测平台明确标记 NOT_VERIFIED', example: '{"type":"afterSaleCollect","storeIds":[]}' },
-  { type: 'refundReview', label: '审核退款', description: '读取退款审核信息，不自动批准退款', example: '{"type":"refundReview","storeId":"...","orderId":"..."}' },
-  { type: 'refundConfirm', label: '确认退款', description: '退款资金动作必须人工确认；需要明确退款金额，当前未执行平台写回', example: '{"type":"refundConfirm","storeId":"...","orderId":"...","amountMinor":1000}' },
-  { type: 'refundVerify', label: '回读退款', description: '读取退款结果；未知时返回 UNKNOWN', example: '{"type":"refundVerify","storeId":"...","orderId":"..."}' },
   { type: 'businessMetricsCollect', label: '采集经营指标', description: '读取有来源和周期的经营指标', example: '{"type":"businessMetricsCollect","storeIds":[]}' },
   { type: 'businessMetricsCompare', label: '比较经营指标', description: '比较同一店铺不同周期的真实指标，缺失不补零', example: '{"type":"businessMetricsCompare","storeId":"..."}' },
   { type: 'commerceHealth', label: '检查经营健康', description: '汇总店铺经营健康状态和缺失原因', example: '{"type":"commerceHealth","storeIds":[]}' },
@@ -158,7 +146,7 @@ export function toolApprovalRequired(type: string): boolean {
  * 只读采集：用户点过计划卡的确认即一次性消费了 Job 的人工确认门禁，
  * 因此它们虽然带副作用（派 Job）仍允许写进技能（§5.4）。
  */
-export const AGENT_SKILL_COLLECT_STEPS: readonly string[] = ['collectInvoices', 'collectBusiness', 'collectEntity', 'collectOrders']
+export const AGENT_SKILL_COLLECT_STEPS: readonly string[] = ['collectInvoices', 'collectBusiness', 'collectEntity']
 
 /**
  * 技能步骤资格：只有“自动执行类”工具能进技能。

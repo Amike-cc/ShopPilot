@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { AGENT_TOOL_CATALOG, buildToolWhitelistText, isSkillStepAllowed, listSkillStepTools, skillStepEligible, toolApprovalRequired } from '@shared/agent-tools'
 import { AGENT_CONFIRM_REQUIRED_ACTIONS, softwareActionHasSideEffect } from '@shared/agent-domain-rules'
 import { AGENT_SOFTWARE_ACTION_TYPES, agentPluginDeleteInputSchema, agentPluginUpdateInputSchema, agentSkillCreateInputSchema, agentSoftwareActionSchema, agentSkillSchema } from '@shared/schemas/agent'
-import { AGENT_TOOL_LABELS } from '@shared/agent-tool-labels'
 
 describe('Agent tool catalog', () => {
   it('covers every closed software action exactly once', () => {
@@ -40,7 +39,6 @@ describe('Agent tool catalog', () => {
     expect(parsed.success).toBe(true)
     expect(AGENT_CONFIRM_REQUIRED_ACTIONS.has('commerceLedgerList')).toBe(false)
     expect(softwareActionHasSideEffect('commerceLedgerList')).toBe(false)
-    expect(AGENT_TOOL_LABELS.commerceLedgerList).toBe('查看电商动作台账')
   })
 
   it('renders a whitelist prompt with approval markers and no script surface', () => {
@@ -63,7 +61,6 @@ describe('Agent tool catalog', () => {
     expect(skillStepEligible('listStores')).toBe(true)
     expect(skillStepEligible('listJobs')).toBe(true)
     expect(skillStepEligible('collectBusiness')).toBe(true)
-    expect(skillStepEligible('getOrderDetails')).toBe(true)
     expect(skillStepEligible('createTask')).toBe(false)
     expect(skillStepEligible('closeTab')).toBe(false)
     expect(skillStepEligible('deleteStorePermanent')).toBe(false)
@@ -134,7 +131,7 @@ describe('Agent tool catalog', () => {
       expect(softwareActionHasSideEffect(type), `${type} 在确认名单里就必须算副作用`).toBe(true)
     }
     // 只读动作两边都不在
-    for (const type of ['listStores', 'collectBusiness', 'collectOrders', 'overviewStats']) {
+    for (const type of ['listStores', 'collectBusiness', 'overviewStats']) {
       expect(softwareActionHasSideEffect(type), `${type} 不该算副作用`).toBe(false)
       expect(AGENT_CONFIRM_REQUIRED_ACTIONS.has(type), `${type} 不该要求确认`).toBe(false)
     }
@@ -170,14 +167,6 @@ describe('Agent tool catalog', () => {
     expect(agentPluginUpdateInputSchema.safeParse({ pluginId: 'plugin_1', skillNames: [] }).success).toBe(false)
   })
 
-  // 渲染层（计划卡）要动作中文名，但不能引 @shared/agent-tools（会连带 node:crypto，浏览器构建失败），
-  // 所以另有一份纯数据表。这条契约保证两份永远一致：漂移就会在这里失败。
-  it('browser-safe label table matches the catalog byte for byte', () => {
-    expect(Object.keys(AGENT_TOOL_LABELS).sort()).toEqual(AGENT_TOOL_CATALOG.map(tool => tool.type).sort())
-    for (const tool of AGENT_TOOL_CATALOG) {
-      expect(AGENT_TOOL_LABELS[tool.type], `${tool.type} 的中文名与目录不一致`).toBe(tool.label)
-    }
-  })
 })
 
 function hasEmptyLeaf(value: unknown): boolean {

@@ -28,6 +28,24 @@ vi.mock('electron', async () => {
 
 const NEW_CODES_NOT_IN_STOP_ON = ['TASK_QUOTA_UNREADABLE', 'TASK_TARGET_DISABLED_UNCERTAIN']
 
+/**
+ * 引擎源码集合（2026-10-19 P1 重构）：task-runner.ts 已拆成 tasks/ 下多个内聚模块，
+ * 源码级断言（不是 import 调用）必须扫描整个引擎模块集合，否则会漏掉搬走的部分。
+ * 断言语义不变：仍然钉住"这些码存在 / 这些分支存在 / 空语义不混用"。
+ */
+const ENGINE_FILES = [
+  'task-runner.ts',
+  'task-runner-registry.ts',
+  'task-runner-lifecycle.ts',
+  'task-runner-control.ts',
+  'task-runner-execute.ts',
+  'task-step-dom.ts',
+  'task-step-executor.ts'
+]
+const ENGINE_SRC = ENGINE_FILES
+  .map(f => readFileSync(resolve('apps/desktop/src/main/tasks', f), 'utf8'))
+  .join('\n')
+
 describe('额度/禁用语义边界', () => {
   it('两个新码必须被错误分类器认识（否则 run 的 error_code 会退化成 INTERNAL_ERROR）', () => {
     for (const code of NEW_CODES_NOT_IN_STOP_ON) {
@@ -58,19 +76,22 @@ describe('额度/禁用语义边界', () => {
   it('requireEnabled 的额度文案是**显式登记**的（默认不再把禁用一律当额度用尽）', () => {
     const schema = readFileSync(resolve('apps/desktop/src/main/tasks/task-step-schemas.ts'), 'utf8')
     expect(schema).toContain('quotaDisabledIncludes')
-    const runner = readFileSync(resolve('apps/desktop/src/main/tasks/task-runner.ts'), 'utf8')
+    const runner = ENGINE_SRC
     // 禁用分支必须同时存在"匹配登记文案 → QUOTA_EXCEEDED"与"否则 UNCERTAIN"两条路
     expect(runner).toContain('TASK_TARGET_DISABLED_UNCERTAIN')
     expect(runner).toMatch(/quotaDisabledIncludes/)
   })
 
   it('requireEnabled 的额度判定必须由**档案显式声明**，且抖店确有声明（否则日常额度用尽会报失败）', async () => {
-    const { inviteProfileFor } = await import('@shared/constants/invite')
+    const { inviteProfileFor, isBatchProfile } = await import('@shared/constants/invite')
     const douyin = inviteProfileFor('抖店')!
+    // 抖店/快手都是 batch-list 档案：收窄一次才能读到批量流专属的额度声明字段。
+    if (!isBatchProfile(douyin)) throw new Error('抖店应为 batch-list 档案')
     // 抖店实测：额度用尽 = 「确认发送」禁用且读不到浮层说明 → 只能靠档案级声明
     expect(douyin.quotaDisabledMeansExhausted).toBe(true)
     // 快手走 requireQuota（页面明示数字），不该也不需要这条声明
     const kuaishou = inviteProfileFor('快手小店')!
+    if (!isBatchProfile(kuaishou)) throw new Error('快手小店应为 batch-list 档案')
     expect(kuaishou.quotaDisabledMeansExhausted).toBeUndefined()
 
     // 构建出的步骤要把声明透传给引擎（否则档案声明了、引擎还是按"不确定"失败）
@@ -86,7 +107,7 @@ describe('额度/禁用语义边界', () => {
   })
 
   it('"额度读不到"与"额度不足"是两个不同的码（前者不在 stopOn 语义内）', () => {
-    const runner = readFileSync(resolve('apps/desktop/src/main/tasks/task-runner.ts'), 'utf8')
+    const runner = ENGINE_SRC
     // ① 读不到数字的两处必须用 UNREADABLE
     const unreadable = runner.match(/TASK_QUOTA_UNREADABLE/g) || []
     expect(unreadable.length).toBeGreaterThanOrEqual(2)
@@ -121,7 +142,7 @@ describe('下载文件名净化（平台的 Content-Disposition 不可信）', (
 })
 
 describe('"空"语义：预期内空与"本次没读到"必须分开（2026-10-15 审查 H2 修复）', () => {
-  const runner = readFileSync(resolve('apps/desktop/src/main/tasks/task-runner.ts'), 'utf8')
+  const runner = ENGINE_SRC
 
   it('readApi 必须消费档案的 emptyOk（以前这个输入没有任何人用）', () => {
     expect(runner).toMatch(/const emptyOk = input\.emptyOk === true/)

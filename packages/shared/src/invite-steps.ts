@@ -278,6 +278,11 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
       max: need,
       scroll: true,
       maxRounds: 40,
+      /**
+       * 只有「选达人」这一处 clickAll 回传逐人名单；
+       * 快手商品弹窗也用 clickAll（选商品），但**不是达人**——不能混进邀约记录。
+       */
+      recordNames: true,
       // 计数消歧义：快手达人选人区的计数写作「已选N条」（不是抖店的「已选择N位达人」）。
       // 不给这一段只认抖店写法；给了才启用宽松写法（见 clickAll 的 counterIncludes 说明）。
       counterIncludes: '已选',

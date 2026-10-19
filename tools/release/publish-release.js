@@ -90,7 +90,7 @@ async function api(url, token, opts = {}) {
   return data
 }
 
-;(async () => {
+(async () => {
   for (const a of ASSETS) {
     if (!fs.existsSync(path.join(REL_DIR, a.name))) throw new Error(`缺少产物 ${a.name}，请先 pnpm dist`)
   }

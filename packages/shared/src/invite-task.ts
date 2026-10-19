@@ -36,6 +36,8 @@ export interface InviteTaskConfigSnapshot {
   finderOtherFilters?: string[]
   /** 本次最多邀约几位（额度护栏，见 AssistInviteOptions.maxInvites） */
   maxInvites?: number
+  /** 店铺自设的日上限（0/缺省 = 不设上限，只统计今日已发与预留） */
+  dailyCap?: number
   /** 近 7 天已邀过的达人昵称（台账）：点「详情」时跳过这些行，不重复邀约 */
   recentlyInvited?: string[]
 }
@@ -44,6 +46,10 @@ export interface InviteTaskPayload {
   name: string
   storeScope: string
   steps: StepDraft[]
+  /** 显式任务类型：不再让统计依赖名称前缀 */
+  kind: 'creator_invite'
+  source?: 'panel' | 'campaign' | 'agent'
+  campaignId?: string
 }
 
 const text = (value: unknown, max: number): string => (typeof value === 'string' ? value.slice(0, max) : '')
@@ -85,6 +91,7 @@ export function normalizeInviteTaskConfig(flow: 'batch-list' | 'assist-form', sa
       batchPhone: text(record.batchPhone, 40),
       batchWechat: text(record.batchWechat, 80),
       batchProductCount: Number.isFinite(Number(record.batchProductCount)) ? Math.max(0, Math.round(Number(record.batchProductCount))) : 1,
+      dailyCap: Number.isFinite(Number(record.dailyCap)) ? Math.max(0, Math.round(Number(record.dailyCap))) : 0,
       /**
        * 近 7 天已邀过的达人昵称 → 勾选阶段跳过（批量流也要，2026-10-04 补）。
        *
@@ -112,6 +119,7 @@ export function normalizeInviteTaskConfig(flow: 'batch-list' | 'assist-form', sa
     // 额度护栏：老配置没有这个字段 → 用默认值（10），而不是"不限"。
     // 这里刻意用 normalizeMaxInvites 而不是原样透传：坏值（0/负数/超大）一律收敛到合法区间。
     maxInvites: record.maxInvites == null ? ASSIST_DEFAULT_MAX_INVITES : normalizeMaxInvites(record.maxInvites),
+    dailyCap: Number.isFinite(Number(record.dailyCap)) ? Math.max(0, Math.round(Number(record.dailyCap))) : 0,
     /**
      * 近 7 天已邀过的达人昵称（台账，由面板/调用方查好传进来）。
      * 这里只做**边界收口**（去空、限长 120、最多 500 条）：值本身是"列表里显示过的昵称"，
@@ -202,8 +210,8 @@ export function inviteTaskIssues(input: { profile: InviteProfile; config: Invite
 }
 
 /** 构造任务载荷：不完整返回 null（调用方先用 inviteTaskIssues 说明原因）。 */
-export function buildInviteTaskPayload(input: { profile: InviteProfile; storeId: string; squareUrl: string; config: InviteTaskConfigSnapshot }): InviteTaskPayload | null {
-  const { profile, storeId, squareUrl, config } = input
+export function buildInviteTaskPayload(input: { profile: InviteProfile; storeId: string; squareUrl: string; config: InviteTaskConfigSnapshot; source?: 'panel' | 'campaign' | 'agent'; campaignId?: string }): InviteTaskPayload | null {
+  const { profile, storeId, squareUrl, config, source, campaignId } = input
   if (!profile || !storeId) return null
   if (inviteTaskIssues({ profile, config }).length) return null
   if (profile.flow === 'batch-list') {
@@ -242,7 +250,7 @@ export function buildInviteTaskPayload(input: { profile: InviteProfile; storeId:
         ? config.category + (config.subcategory ? '/' + config.subcategory : '') + (config.subcategory && config.category3 ? '/' + config.category3 : '')
         : '全部'
     } · 最多 ${batch.count} 位`
-    return { name, storeScope: storeId, steps: buildInviteSteps(profile, { batch }, squareUrl) }
+    return { name, storeScope: storeId, steps: buildInviteSteps(profile, { batch }, squareUrl), kind: 'creator_invite', ...(source ? { source } : {}), ...(campaignId ? { campaignId } : {}) }
   }
   const assist: AssistInviteOptions = {
     contact: String(config.contact || '').trim(),
@@ -278,5 +286,5 @@ export function buildInviteTaskPayload(input: { profile: InviteProfile; storeId:
   ].filter(Boolean).join(' · ')
   // 任务名里带上"最多几位"：任务卡片/实时日志一眼能看到这一单的上限（额度护栏可见）
   const name = `达人邀约 · ${profile.platform} · 辅助填单 · ${assist.contact || '未命名'}${filterDesc ? ' · ' + filterDesc : ''} · 最多 ${assist.maxInvites} 位`.slice(0, 80)
-  return { name, storeScope: storeId, steps: buildInviteSteps(profile, { assist }, squareUrl) }
+  return { name, storeScope: storeId, steps: buildInviteSteps(profile, { assist }, squareUrl), kind: 'creator_invite', ...(source ? { source } : {}), ...(campaignId ? { campaignId } : {}) }
 }

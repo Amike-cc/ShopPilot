@@ -196,7 +196,7 @@ export class SalesMetricsLedger {
     const candidate = this.db as unknown as { transaction?: <R>(work: () => R) => () => R }
     if (typeof candidate.transaction === 'function') return (candidate.transaction as <R>(work: () => R) => () => R)(fn)()
     this.db.exec('BEGIN')
-    try { const result = fn(); this.db.exec('COMMIT'); return result } catch (error) { try { this.db.exec('ROLLBACK') } catch { /* noop */ } ; throw error }
+    try { const result = fn(); this.db.exec('COMMIT'); return result } catch (error) { try { this.db.exec('ROLLBACK') } catch { /* noop */ }  throw error }
   }
 
   /* ------------------------------------------------------------------ *

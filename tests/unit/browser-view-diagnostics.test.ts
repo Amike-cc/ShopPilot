@@ -27,9 +27,16 @@ import {
  */
 
 const read = (p: string) => readFileSync(resolve(p), 'utf8')
-const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue')
+// 2026-10-19 task-10 拆分：页面 + webview 适配层 composable 一起扫描（断言一字未动，只改扫描范围）
+const SURFACE = [
+  'apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-store-webviews.ts'
+].map(read).join('\n')
 const SETTINGS = read('apps/desktop/src/renderer/src/features/workbench/UnifiedSettingsPage.vue')
-const WINDOW_MANAGER = read('apps/desktop/src/main/browser/window-manager.ts')
+// 2026-10-19 P1 重构：window-manager.ts 已拆成 browser/ 下多个内聚模块，
+// 源码级断言（不是 import 调用）改为扫描整个模块集合；断言语义不变。
+const WM_FILES = ['window-manager.ts', 'window-state.ts', 'window-browser-core.ts', 'window-capture.ts', 'window-diagnostics.ts']
+const WINDOW_MANAGER = WM_FILES.map(f => read(`apps/desktop/src/main/browser/${f}`)).join('\n')
 
 describe('视图状态词表：两处诊断读同一份定义（V4）', () => {
   it('每个状态都有短标签与一句话，且不为空', () => {
@@ -326,5 +333,20 @@ describe('guest id 就绪等待：读不到 ≠ 失败（用户实报回归）',
     expect(fn![0]).toContain('clearIdleCloseTimer(storeId)')
     expect(fn![0]).toContain("DELETE FROM tabs WHERE store_id = ?")
     expect(fn![0]).not.toContain('saveTabs(storeId)')
+    const closeTab = WINDOW_MANAGER.match(/export function closeTab[\s\S]*?\n\}/)
+    expect(closeTab).toBeTruthy()
+    expect(closeTab![0]).toContain("const hasVisibleTabs = Array.from(state.tabs.values()).some(item => item.internal !== true)")
+    expect(closeTab![0]).toContain("const hasInternalTabs = Array.from(state.tabs.values()).some(item => item.internal === true)")
+    expect(closeTab![0]).toContain('if (!hasVisibleTabs && !hasInternalTabs)')
+    expect(closeTab![0]).toContain('closeStoreBrowser(storeId)')
+    expect(closeTab![0]).toMatch(/const next = Array\.from\(state\.tabs\.values\(\)\)[\s\S]*?filter\(item => item\.internal !== true\)/)
+    expect(WINDOW_MANAGER).toContain('const hasVisibleTabs = Array.from(existingState.tabs.values()).some(tab => tab.internal !== true)')
+    expect(WINDOW_MANAGER).toContain('if (!hasVisibleTabs)')
+    expect(WINDOW_MANAGER).toContain('createFreshStoreTab(storeId)')
+    const workspace = read('apps/desktop/src/renderer/src/stores/workspace.ts')
+    expect(workspace).toContain('delete this.tabsByStore[payload.storeId]')
+    expect(workspace).toContain('delete this.activeTabIdByStore[payload.storeId]')
+    expect(workspace).toContain('if (this.displayedStoreId === payload.storeId)')
+    expect(workspace).toContain('this.displayedStoreId = null')
   })
 })

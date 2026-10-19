@@ -117,10 +117,11 @@ describe('登录检测 → 店铺状态落库（默认运行时）', () => {
 describe('窗口开/关不得无证据写 offline（源码级约定）', () => {
   // 与 webview-embedding-boundary.test.ts 同一类断言：这条纪律没有任何运行时类型检查能发现，
   // 删掉守卫代码照样编译通过，但界面会退回"登录着的店铺一直显示离线"。
-  const WINDOW_MANAGER = readFileSync(
-    resolve('apps/desktop/src/main/browser/window-manager.ts'),
-    'utf8'
-  )
+  // 2026-10-19 P1 重构：window-manager.ts 已拆成 browser/ 下多个内聚模块，
+  // 源码级断言（不是 import 调用）改为扫描整个模块集合；断言语义不变。
+  const WINDOW_MANAGER = ['window-manager.ts', 'window-state.ts', 'window-browser-core.ts', 'window-capture.ts', 'window-diagnostics.ts']
+    .map(f => readFileSync(resolve('apps/desktop/src/main/browser', f), 'utf8'))
+    .join('\n')
 
   it('全文件只有一处 offline 写入，且必须带"从未确认过登录"（incomplete）守卫', () => {
     const writes = WINDOW_MANAGER.match(/updateStoreStatus\(storeId, StoreStatus\.OFFLINE\)/g) || []

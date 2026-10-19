@@ -1,20 +1,36 @@
 <template>
-  <section :class="['dashboard-browser-surface', { 'picker-mode': props.pickerMode }]" data-test="dashboard-browser-surface" aria-label="店铺浏览器">
+  <section class="dashboard-browser-surface" data-test="dashboard-browser-surface" aria-label="店铺浏览器">
     <div class="dashboard-browser-tabs" role="tablist" aria-label="店铺标签页">
       <button
-        v-for="tab in ws.displayedTabs"
+        v-for="(tab, tabIndex) in ws.displayedTabs"
         :key="tab.id"
         type="button"
-        :class="['dashboard-browser-tab', { active: ws.activeTab?.id === tab.id }]"
+        draggable="true"
+        :class="['dashboard-browser-tab', { active: ws.activeTab?.id === tab.id, 'multi-selected': isTabSelected(tab.id), pinned: tab.isPinned, dragging: dragTabId === tab.id }]"
         role="tab"
         :aria-selected="ws.activeTab?.id === tab.id"
-        @click="ws.activateTab(tab.id)"
+        :data-test="'browser-tab-' + tabIndex"
+        :data-tab-id="tab.id"
+        :title="tab.isPinned ? '已固定：一键关闭会保留' : (tab.title || tab.url)"
+        @click="onTabClick(tab, $event)"
+        @contextmenu.prevent.stop="openTabMenu(tab, $event)"
+        @dragstart="onTabDragStart(tab, $event)"
+        @dragover.prevent
+        @drop.prevent="onTabDrop(tab, $event)"
+        @dragend="onTabDragEnd"
       >
+        <span v-if="tab.isPinned" class="browser-tab-pin" aria-hidden="true">●</span>
         <span v-if="tab.loading" class="browser-tab-spinner" aria-hidden="true"></span>
         <span class="browser-tab-title" :title="tab.title || tab.url">{{ tab.title || '新标签页' }}</span>
         <span class="browser-tab-close" title="关闭标签页" @click.stop="ws.closeTab(tab.id)"><img :src="closeIcon" alt="" /></span>
       </button>
       <button type="button" class="dashboard-browser-tab-add" title="新标签页" @click="ws.newTab()"><img :src="addIcon" alt="" /></button>
+      <!-- 多选模式：只有真的选中了才出现，避免常驻占用标签栏宽度 -->
+      <div v-if="selectedTabIds.length" class="dashboard-tabs-batch" data-test="tabs-batch-bar">
+        <span class="tabs-batch-count" data-test="tabs-batch-count">已选 {{ selectedTabIds.length }} 个</span>
+        <button type="button" class="tabs-batch-close" data-test="tabs-batch-close" @click="requestCloseSelected">关闭选中</button>
+        <button type="button" class="tabs-batch-clear" data-test="tabs-batch-clear" @click="clearTabSelection">取消</button>
+      </div>
       <!-- 侧栏开关：原先在头部栏里（整条已按用户要求移除），只保留这一个动作挪到标签栏右端。
            用地址栏同一套图标（透明底），展开/收起靠翻转同一个箭头，避免引入第二个资源。 -->
       <button
@@ -160,7 +176,11 @@
           </div>
 
           <div class="env-sec" data-test="session-sec">
-            <div class="env-h">会话与 Cookie</div>
+            <div class="env-h">会话与 Cookie <button type="button" class="mini-btn env-action" data-test="session-check-login" :disabled="loginCheckBusy || !loginCheckReady" :title="loginCheckTitle" @click="checkLoginStatus">{{ loginCheckButtonText(loginCheckBusy) }}</button></div>
+            <!-- 主动检测结果：tone 决定颜色，label + detail 直接上屏；结构不认识时如实显示「未识别」 -->
+            <div v-if="loginCheckView" :class="['env-note', `login-check-${loginCheckView.tone}`]" data-test="session-check-login-result"><strong>{{ loginCheckView.label }}</strong> · {{ loginCheckView.detail }}</div>
+            <!-- 行内提示：检测失败的原因，或按钮为什么点不动（不用 alert / window.confirm） -->
+            <div v-if="loginCheckNote" class="env-note" data-test="session-check-login-note">{{ loginCheckNote }}</div>
             <div class="cf-btns"><button type="button" class="mini-btn" data-test="btn-export-session" :disabled="secBusy" @click="exportSession"><img class="button-icon" :src="sessionExportIcon" alt="" />导出加密会话包…</button><button type="button" class="mini-btn" data-test="btn-import-session" :disabled="secBusy" @click="importSession"><img class="button-icon" :src="sessionImportIcon" alt="" />导入会话包…</button></div>
             <div class="env-note">导出包经口令加密并带有效期；口令由主进程托管窗口采集，不经过界面脚本。</div>
             <input v-model="ckSearch" class="ck-search" placeholder="搜索 Cookie（名称/域）" @input="refreshCookies" />
@@ -188,15 +208,9 @@
           </div>
         </div>
 
-        <div v-else class="dashboard-browser-panel-body task-panel-body">
-          <div class="browser-panel-heading"><strong>任务中心</strong><span class="browser-panel-heading-actions"><button type="button" @click="ws.refreshTasks()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button><button type="button" data-test="task-new" @click="emit('open-tasks', true)"><img class="button-icon" :src="taskAddIcon" alt="" />新建任务</button></span></div>
-          <div class="task-subtabs" data-test="task-subtabs" role="tablist"><button type="button" :class="{ on: taskSubTab === 'tasks' }" data-test="task-tab-tasks" @click="taskSubTab = 'tasks'">任务列表</button><button type="button" :class="{ on: taskSubTab === 'invite' }" data-test="task-tab-invite" @click="taskSubTab = 'invite'">达人邀约</button><button type="button" class="pending" :class="{ on: taskSubTab === 'todo' }" data-test="task-tab-todo" @click="taskSubTab = 'todo'">待开发</button></div>
-          <template v-if="taskSubTab === 'tasks'">
-            <div v-if="!taskRows.length" class="browser-panel-empty">当前店铺暂无任务</div>
-            <article v-for="task in taskRows" :key="task.id" class="browser-task-row task-card" data-test="task-card"><div class="browser-task-copy"><strong :title="task.name">{{ task.name }}</strong><small>{{ taskStatus(task) }}</small><span class="browser-task-progress"><i :style="{ width: `${taskProgress(task)}%` }"></i></span></div><span class="browser-task-percent">{{ taskProgress(task) }}%</span><button type="button" class="mini-btn task-run-button" data-test="task-run" :disabled="taskActive(task)" @click="runTask(task)"><img class="button-icon" :src="taskActive(task) ? browserPauseIcon : browserStartIcon" alt="" />{{ taskActive(task) ? '运行中' : '运行' }}</button><button v-if="taskActive(task)" type="button" class="browser-panel-row-action" title="取消任务" @click="cancelTask(task)"><img :src="deleteIcon" alt="" /></button></article>
-            <button type="button" class="browser-panel-link" @click="emit('open-tasks', false)">打开完整任务中心 <span>›</span></button>
-          </template>
-          <section v-else-if="taskSubTab === 'invite'" class="invite-panel" data-test="invite-panel">
+        <div v-else class="dashboard-browser-panel-body invite-panel-body">
+          <div class="browser-panel-heading"><strong>达人邀约</strong><button type="button" @click="ws.refreshTasks()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button></div>
+          <section class="invite-panel" data-test="invite-panel">
             <div class="env-sec invite-config-sec">
               <div class="env-h">达人邀约 <span v-if="inviteProfile" class="row-sub">· {{ inviteProfile.platform }}</span><span v-else class="row-sub">· 当前平台未接入真实邀约流程</span></div>
               <template v-if="!inviteProfile">
@@ -290,6 +304,31 @@
                   </div>
                   <div class="env-note">广场筛选会在「开始邀约」时由任务引擎按顺序应用（点完会回读勾选态，没选上就如实失败）。</div>
                 </template>
+                <!-- 话术：仅对真的有话术框/辅助流的平台展示（抖店改版抽屉是结构化拼装，没有 textarea） -->
+                <div v-if="inviteProfile.flow !== 'batch-list' || !!inviteProfile.scriptSelector" class="invite-choice-group invite-script-group">
+                  <span>邀约话术<small> · 最多 {{ inviteProfile.scriptMaxLen }} 字</small></span>
+                  <div class="invite-script-row">
+                    <select v-model="inviteScriptId" data-test="invite-script-select" @change="applyInviteScript(inviteScriptId)">
+                      <option value="">从话术库选择…</option>
+                      <option v-for="script in inviteScripts" :key="script.id" :value="script.id">{{ script.name }}</option>
+                    </select>
+                    <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
+                      <input v-model="invite.scriptMode" type="radio" value="manual" data-test="invite-script-mode-manual" />手动
+                    </label>
+                    <label class="inv-chip" :class="{ on: invite.scriptMode === 'ai' }">
+                      <input v-model="invite.scriptMode" type="radio" value="ai" data-test="invite-script-mode-ai" />AI 生成
+                    </label>
+                  </div>
+                  <textarea
+                    v-model="invite.script"
+                    data-test="invite-script"
+                    rows="3"
+                    :maxlength="inviteProfile.scriptMaxLen"
+                    :readonly="invite.scriptMode === 'ai'"
+                    placeholder="手填话术，或选 AI 由运行时生成（AI 模式需先在设置中心配置 Key）"
+                  ></textarea>
+                  <div v-if="invite.scriptMode === 'ai' && !inviteAiConfigured" class="env-note invite-ai-hint">AI 未配置：开始按钮已禁用。请到「设置中心 → AI 配置」填 Key，或切回手动话术。</div>
+                </div>
                 <ul v-if="inviteMissingItems.length" class="invite-missing" data-test="invite-missing"><li v-for="item in inviteMissingItems" :key="item">{{ item }}</li></ul>
                 <div class="invite-start-row">
                   <button type="button" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="startInvite"><img class="button-icon" :src="browserStartIcon" alt="" />{{ inviteSubmitting ? '正在启动…' : '开始邀约' }}</button>
@@ -297,8 +336,14 @@
                     <input type="number" min="1" max="50" step="1" v-model.number="invite.maxInvites" data-test="invite-max-invites" />
                     位
                   </label>
+                  <label class="invite-max-invites" title="0 = 不设日上限；设置后同一天累计到此数会拒绝启动">日上限
+                    <input type="number" min="0" max="500" step="1" v-model.number="invite.dailyCap" data-test="invite-daily-cap" />
+                    位
+                  </label>
                   <span class="row-sub">{{ inviteReady ? `配置完整，最多发 ${invite.maxInvites} 位` : '补齐必填项后可开始' }}</span>
                   <span v-if="inviteRecentCount" class="row-sub" data-test="invite-recent-count">· 近 7 天已邀 {{ inviteRecentCount }} 位，会自动跳过</span>
+                  <span v-if="inviteBlacklistCount" class="row-sub" data-test="invite-blacklist-count">· 黑名单 {{ inviteBlacklistCount }} 位，会自动跳过</span>
+                  <span v-if="inviteQuota" class="row-sub" data-test="invite-quota">· 今日已发 {{ inviteQuota.used }}{{ inviteQuota.limit ? ` / ${inviteQuota.limit}` : '（未设日上限）' }}<template v-if="inviteQuota.reserved"> · 运行中预留 {{ inviteQuota.reserved }}</template></span>
                 </div>
               </template>
             </div>
@@ -312,9 +357,8 @@
                 <div ref="inviteLiveLogEl" class="log-box invite-live-log" data-test="invite-live-log"><div v-if="!inviteLogs(inviteLatest).length" class="log-line">等待运行输出…开始邀约后，这里的日志会实时滚动，卡住时看停在最后几行。</div><div v-for="(log, index) in inviteLogs(inviteLatest)" :key="`${inviteRunId(inviteLatest)}-${index}`" class="log-line">{{ inviteLogText(log) }}</div></div>
               </template>
             </div>
-            <div class="env-sec invite-unavailable"><div class="env-note">达人邀约配置与平台页面仍沿用真实任务、店铺配置和人工操作边界；未配置时不会伪造可发送结果。</div><button type="button" class="mini-btn" @click="emit('open-tasks', false)">打开完整任务配置</button></div>
+            <div class="env-sec invite-unavailable"><div class="env-note">达人邀约配置与平台页面仍沿用真实运行、店铺配置和人工操作边界；未配置时不会伪造可发送结果。</div></div>
           </section>
-          <section v-else class="todo-panel"><div class="browser-panel-empty"><strong>待开发能力</strong><span>该入口保留在统一任务中心，接入真实能力后开放。</span></div></section>
         </div>
       </aside>
 
@@ -322,6 +366,53 @@
         <button type="button" class="panel-rail-expand" data-test="panel-expand" title="展开侧栏" @click="setPanelOpen(true)"><img :src="panelExpandIcon" alt="" /></button>
         <button v-for="item in panelItems" :key="item.key" type="button" class="panel-rail-button" :class="{ on: panel === item.key }" :data-test="`rail-${item.key}`" :title="item.label" @click="openPanel(item.key)"><img :src="item.icon" alt="" /></button>
       </aside>
+    </div>
+
+    <!-- 标签页右键菜单：关闭 / 关闭其他 / 关闭全部（批量项会先弹二次确认） -->
+    <div
+      v-if="tabMenu.open"
+      class="tabs-context-menu"
+      data-test="tabs-context-menu"
+      role="menu"
+      :style="{ left: tabMenu.x + 'px', top: tabMenu.y + 'px' }"
+    >
+      <button type="button" role="menuitem" data-test="tabs-menu-close" @click="closeTabFromMenu">关闭标签页</button>
+      <button type="button" role="menuitem" data-test="tabs-menu-toggle-pin" :disabled="!menuTarget" @click="togglePinFromMenu">{{ pinMenuLabelText }}</button>
+      <button type="button" role="menuitem" data-test="tabs-menu-close-others" :disabled="!menuOtherCount && !menuOtherIncludesPinned" @click="requestCloseOthers()">
+        关闭其他标签页<span class="tabs-menu-count">{{ menuOtherIncludesPinned ? visibleTabs.length - 1 : menuOtherCount }}</span>
+      </button>
+      <button type="button" role="menuitem" data-test="tabs-menu-close-all" :disabled="!visibleTabs.length" @click="requestCloseAll()">
+        关闭全部标签页<span class="tabs-menu-count">{{ menuAllIncludesPinned ? visibleTabs.length : menuAllCount }}</span>
+      </button>
+      <template v-if="selectedTabIds.length > 1">
+        <div class="tabs-menu-sep"></div>
+        <button type="button" role="menuitem" data-test="tabs-menu-close-selected" @click="requestCloseSelected">
+          关闭选中的 {{ selectedTabIds.length }} 个
+        </button>
+      </template>
+    </div>
+
+    <!-- 批量关闭二次确认：不用 window.confirm，避免阻塞渲染进程与 CDP 会话 -->
+    <div v-if="pendingTabClose" class="tabs-confirm-mask" data-test="tabs-close-confirm" @click.self="cancelTabClose">
+      <div class="tabs-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="tabs-confirm-title">
+        <h3 id="tabs-confirm-title" data-test="tabs-close-title">{{ pendingTabClose.title }}</h3>
+        <p data-test="tabs-close-detail">{{ pendingTabClose.detail }}</p>
+        <div class="tabs-confirm-actions">
+          <button type="button" class="tabs-confirm-cancel" data-test="tabs-close-cancel" @click="cancelTabClose">取消</button>
+          <button type="button" class="tabs-confirm-ok" data-test="tabs-close-ok" @click="confirmTabClose">确认关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="pendingPanelConfirmation" class="tabs-confirm-mask" data-test="panel-confirm" @click.self="cancelPanelConfirmation">
+      <div class="tabs-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="panel-confirm-title">
+        <h3 id="panel-confirm-title">{{ pendingPanelConfirmation.title }}</h3>
+        <p>{{ pendingPanelConfirmation.detail }}</p>
+        <div class="tabs-confirm-actions">
+          <button type="button" class="tabs-confirm-cancel" data-test="panel-confirm-cancel" @click="cancelPanelConfirmation">取消</button>
+          <button type="button" class="tabs-confirm-ok" data-test="panel-confirm-ok" @click="confirmPanelConfirmation">确认</button>
+        </div>
+      </div>
     </div>
   </section>
 </template>
@@ -336,7 +427,7 @@ import homeIcon from '../../assets/icons/utility-home.svg'
 import bookmarksIcon from '../../assets/icons/browser-bookmarks.svg'
 import downloadsIcon from '../../assets/icons/browser-downloads.svg'
 import envIcon from '../../assets/icons/browser-env.svg'
-import tasksIcon from '../../assets/icons/browser-tasks.svg'
+import inviteIcon from '../../assets/icons/invite-creator.svg'
 import addIcon from '../../assets/generated/ui-icons/add.png'
 import closeIcon from '../../assets/generated/ui-icons/close.png'
 import deleteIcon from '../../assets/generated/ui-icons/delete-gen.png'
@@ -356,41 +447,98 @@ import panelToggleIcon from '../../assets/generated/ui-icons/chevron-right-gen.p
 import verifiedIcon from '../../assets/generated/ui-icons/browser-verified-gen.png'
 import unknownIcon from '../../assets/generated/ui-icons/browser-unknown-gen.png'
 import browserRefreshIcon from '../../assets/generated/ui-icons/browser-refresh-gen.png'
-import taskAddIcon from '../../assets/generated/ui-icons/browser-task-add-gen.png'
 import browserStartIcon from '../../assets/generated/ui-icons/browser-start-gen.png'
 import browserStopIcon from '../../assets/generated/ui-icons/browser-stop-gen.png'
-import browserPauseIcon from '../../assets/generated/ui-icons/browser-pause-gen.png'
 import { useWorkspaceStore } from '../../stores/workspace'
-import { inviteProfileFor, isBatchProfile, type CategoryNode } from '@shared/constants/invite'
-import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig, parseInviteProductIds } from '@shared/invite-task'
-import { inviteConfigKey, legacyInviteConfigKey } from '@shared/invite-config'
-import { isBackgroundCollectTask } from '@shared/constants/collection'
+import { isBatchProfile } from '@shared/constants/invite'
+import { buildInviteTaskPayload, parseInviteProductIds } from '@shared/invite-task'
+import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+// 标签栏「固定 / 拖拽重排」的纯逻辑（菜单文案、落点 → 新顺序）
+// 「主动检测登录状态」的纯逻辑（结果文案 / 按钮文案 / 按钮门控）
+import { canCheckLogin, describeLoginCheckResult, loginCheckBlockedReason, loginCheckButtonText, type LoginCheckView } from './session-login-state'
 // 视图诊断判据与词表（2026-10-16 审查第 8 条 / V4）：与主进程的 did-fail-load 监听、
 // 「视图体检」读同一份定义，避免两处各写一遍、各错一半
-import { BROWSER_VIEW_STATE_SENTENCE, classifyLoadFailure, readGuestWebContentsId } from '@shared/view-state'
+import { BROWSER_VIEW_STATE_SENTENCE, classifyLoadFailure } from '@shared/view-state'
 import { looksLikePlaceholderStoreName } from '@shared/store-name'
+import { useBrowserTabs } from './use-browser-tabs'
 
+import { useCreatorInvite } from './use-creator-invite'
+import { useStoreWebviews, type OpenWebviewEntry, type ViewDiagnostic } from './use-store-webviews'
 const emit = defineEmits<{
-  // 头部栏（含「返回经营总览」）已按用户要求整条移除；回经营总览走左栏导航，这里不再有该事件。
-  'open-tasks': [create?: boolean]
   // 环境面板的跳转入口：打开设置中心并落到指定页签（安全 / 数据与维护）
   'open-settings': [tab?: string]
 }>()
-const props = defineProps<{ pickerMode?: boolean; active?: boolean }>()
+const props = defineProps<{ active?: boolean }>()
 
 const ws = useWorkspaceStore()
-const urlDraft = ref('')
+// ---------- 标签栏状态机（多选 / 菜单 / 批量关闭 / 固定与拖拽 / 快捷键诊断）----------
+// 状态与事件接线全部在 use-browser-tabs.ts；这里只保留 onTabCloseRequested 这一个主进程事件入口。
+const {
+  urlDraft,
+  selectedTabIds,
+  tabMenu,
+  pendingTabClose,
+  pendingPanelConfirmation,
+  visibleTabs,
+  menuTarget,
+  menuOtherCount,
+  menuAllCount,
+  menuAllIncludesPinned,
+  menuOtherIncludesPinned,
+  pinMenuLabelText,
+  dragTabId,
+  isTabSelected,
+  clearTabSelection,
+  onTabClick,
+  openTabMenu,
+  closeTabMenu,
+  onTabMenuOutside,
+  requestCloseSelected,
+  requestCloseOthers,
+  requestCloseAll,
+  closeTabFromMenu,
+  togglePinFromMenu,
+  onTabDragStart,
+  onTabDrop,
+  onTabDragEnd,
+  cancelTabClose,
+  askPanelConfirmation,
+  cancelPanelConfirmation,
+  confirmPanelConfirmation,
+  confirmTabClose,
+  inputDiagnostic,
+  describeKeyboardEvent,
+  onBrowserKeyup,
+} = useBrowserTabs({
+  // 登录检测结果是按店铺算的：换店必须清掉，否则会把上一家的结论显示给下一家
+  resetLoginCheckState: () => {
+    loginCheckView.value = null
+    loginCheckError.value = ''
+    loginCheckNotifiedStore.value = null
+  }
+})
+function onTabCloseRequested(payload: { storeId?: string, tabId?: string, mode?: 'all' | 'others' }): void {
+  inputDiagnostic('ipc BROWSER_TAB_CLOSE_REQUESTED', {
+    payload,
+    active: props.active === true,
+    displayedStoreId: ws.displayedStoreId
+  })
+  if (!props.active || !payload || payload.storeId !== ws.displayedStoreId) return
+  if (payload.mode === 'all') requestCloseAll()
+  else if (payload.mode === 'others') requestCloseOthers(payload.tabId || undefined)
+}
+
 const store = computed(() => ws.stores.find(item => item.id === ws.displayedStoreId) || null)
 const platformHomeUrls = ref<Record<string, string>>({})
 const homeUrl = computed(() => store.value ? platformHomeUrls.value[store.value.platform] || store.value.adminUrl || '' : '')
-type PanelKey = 'bookmarks' | 'downloads' | 'env' | 'tasks'
-const panel = ref<PanelKey>('tasks')
+type PanelKey = 'bookmarks' | 'downloads' | 'env' | 'invite'
+const panel = ref<PanelKey>('invite')
 const panelOpen = ref(true)
 const panelItems: Array<{ key: PanelKey; label: string; icon: string }> = [
   { key: 'bookmarks', label: '收藏', icon: bookmarksIcon },
   { key: 'downloads', label: '下载', icon: downloadsIcon },
   { key: 'env', label: '环境', icon: envIcon },
-  { key: 'tasks', label: '任务', icon: tasksIcon }
+  { key: 'invite', label: '达人邀约', icon: inviteIcon }
 ]
 const sessionState = ref({ kind: 'loading', label: '读取中', detail: '正在读取店铺会话状态' })
 interface ProxyLite { id: string; type: string; host: string; port: number; label: string | null; status: string; hasCredential: boolean; lastLatencyMs: number | null }
@@ -419,25 +567,6 @@ const confirmations = computed(() => Object.values(ws.confirmations).filter(Bool
  * URL/标题/登录态由主进程数据库与持久化 partition 保留，重新切回再按 URL 恢复。
  * 这避免一个店铺的历史标签页数量直接线性放大 Chromium renderer 内存。
  */
-interface OpenWebviewEntry {
-  key: string
-  storeId: string
-  tabId: string
-  storeName: string
-  tabTitle: string
-  /** 采集专用页：挂隐藏 webview 给后台采集用，不进标签栏、不参与"未就绪"诊断 */
-  internal?: boolean
-}
-
-const webviewEls = new Map<string, any>()
-const webviewRefCallbacks = new Map<string, (element: unknown) => void>()
-/** 注册/加载失败的如实原因（key → 文案），成功即清除；界面据此显示诊断而不是空白页。 */
-const webviewFailures = reactive<Record<string, string>>({})
-const registeringKeys = new Set<string>()
-/** attach 看门狗（key → timer）：元素挂载后到点仍没注册成功，就把「正在连接…」升级为可操作的失败。 */
-const attachWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
-const ATTACH_TIMEOUT_MS = 30_000
-
 const openWebviews = computed<OpenWebviewEntry[]>(() => {
   const entries: OpenWebviewEntry[] = []
   for (const storeId of ws.openStoreIds) {
@@ -471,37 +600,22 @@ const openWebviews = computed<OpenWebviewEntry[]>(() => {
   return entries
 })
 
-function webviewAttached(item: OpenWebviewEntry): boolean {
-  const tab = (ws.tabsByStore[item.storeId] || []).find(row => row.id === item.tabId)
-  return tab?.guestAttached === true
-}
-
-/**
- * 标签页/店铺关掉后，这个 key 不会再回来：把它的 ref 闭包、看门狗、失败记录与在途登记一起回收
- * （2026-10-16 审查 P4-11）。元素登记表 webviewEls 由 Vue 的 ref 回调负责增减，这里不碰；
- * 过去 webviewRefCallbacks 只增不减，一次会话里开过的每个 storeId:tabId 都会永久留一个闭包。
- */
-watch(openWebviews, list => {
-  const alive = new Set(list.map(entry => entry.key))
-  for (const key of Array.from(webviewRefCallbacks.keys())) {
-    if (alive.has(key)) continue
-    webviewRefCallbacks.delete(key)
-    clearAttachWatchdog(key)
-    delete webviewFailures[key]
-    registeringKeys.delete(key)
-  }
-})
-
-/** 诊断条目（浮层一行）：失败态与「连接中」共用一份结构，失败才带动作按钮 */
-interface ViewDiagnostic {
-  key: string
-  storeId: string
-  tabId: string
-  storeName: string
-  failed: boolean
-  text: string
-}
-
+// ---------- webview 适配层（ADR-001：元素登记/attach/看门狗/诊断动作见 use-store-webviews.ts）----------
+// 组件只保留模板与布局；这里传入活动 guest 列表与诊断动作用到的面板入口。
+const webviews = useStoreWebviews({ openWebviews, selectPanel, refreshEnvironment, platformHomeUrls })
+const {
+  webviewFailures,
+  webviewAttached,
+  diagnosticsCollapsed,
+  webviewRefCallback,
+  handleWebviewAttach,
+  clearAttachWatchdog,
+  retryWebview,
+  handleWebviewDestroyed,
+  openProxyPanel,
+  reopenHome,
+  clearSiteData,
+} = webviews
 const webviewDiagnostics = computed<ViewDiagnostic[]>(() => openWebviews.value
   // 采集专用页不参与诊断：它是后台自己的页面，用户没让它出现，就不该在界面上闪"正在连接店铺页面…"
   // （它的状态在设置中心「视图体检」里可见）
@@ -535,102 +649,6 @@ const webviewDiagnostics = computed<ViewDiagnostic[]>(() => openWebviews.value
 const failedDiagnostics = computed(() => webviewDiagnostics.value.filter(diagnostic => diagnostic.failed))
 
 /** 浮层可收起（2026-10-16 审查 P3-10）：它是绝对定位、会盖住平台页面左下角 */
-const diagnosticsCollapsed = ref(false)
-
-function setWebviewRef(key: string, element: unknown): void {
-  if (element) {
-    webviewEls.set(key, element)
-    // 元素挂上后起看门狗：did-attach 若因 will-attach-webview 被拒等原因永不触发，
-    // 30 秒后把「正在连接…」升级为可操作的失败（2026-10-16 审查 P2-3）
-    startAttachWatchdog(key)
-  } else {
-    webviewEls.delete(key)
-    clearAttachWatchdog(key)
-  }
-}
-
-function webviewRefCallback(key: string): (element: unknown) => void {
-  const existing = webviewRefCallbacks.get(key)
-  if (existing) return existing
-  const callback = (element: unknown): void => setWebviewRef(key, element)
-  webviewRefCallbacks.set(key, callback)
-  return callback
-}
-
-async function handleWebviewAttach(item: OpenWebviewEntry): Promise<void> {
-  const key = item.key
-  if (registeringKeys.has(key)) return
-  // 已经挂上就什么都不用做：`dom-ready` 会为每次页面加载再触发一次本函数，
-  // 重复注册会让主进程重复挂监听器（window-open / 标题 / 导航拦截各多一份）。
-  if (webviewAttached(item)) return
-  const element = webviewEls.get(key)
-  if (!element) {
-    // 元素登记缺失不能静默返回（2026-10-16 审查 P2-4）——留下可见状态，重试按钮仍在
-    webviewFailures[key] = '视图元素缺失，未能注册页面'
-    return
-  }
-  clearAttachWatchdog(key)
-  // 先占位再 await：`did-attach` 与 `dom-ready` 可能几乎同时打进来，双开注册要挡住
-  registeringKeys.add(key)
-  try {
-    // `did-attach` 时刻 guest 常常还没把 webContentsId 暴露出来（2026-10-16 用户实报：
-    // 点侧栏卡片开店 → 面板已可见 → 元素走同步 attach 快路径 → 读到 0）。
-    // 这里必须有界等它，读不到才算失败；把"还没好"当失败会让页面永远停在"正在连接"。
-    const webContentsId = await readGuestWebContentsId(() => Number(element.getWebContentsId()))
-    if (!webContentsId) {
-      webviewFailures[key] = '页面进程标识不可读（guest 未就绪），请重试'
-      return
-    }
-    const result = await window.shopilot.browser.registerWebview(item.storeId, item.tabId, webContentsId)
-    if (!result.ok) {
-      webviewFailures[key] = result.error?.message || '注册失败'
-      return
-    }
-    delete webviewFailures[key]
-    const pendingUrl = String((result.data as { pendingUrl?: string } | null)?.pendingUrl || '')
-    let current = ''
-    try { current = String(element.getURL() || '') } catch { current = '' }
-    // 只有真正待导航的地址才加载：about:blank 也调用 loadURL 会把已恢复的页面重新载入一遍
-    if (pendingUrl && pendingUrl !== 'about:blank' && (!current || current === 'about:blank')) {
-      try { await element.loadURL(pendingUrl) } catch { /* 加载失败由 did-fail-load 如实呈现 */ }
-    }
-  } finally {
-    registeringKeys.delete(key)
-  }
-}
-
-function startAttachWatchdog(key: string): void {
-  clearAttachWatchdog(key)
-  attachWatchdogs.set(key, setTimeout(() => {
-    attachWatchdogs.delete(key)
-    // 只在「既没注册成功、也没失败」时升级为失败——若已成功，webviewFailures 已被清除，
-    // 这里不能把已就绪的页面误报成失败
-    if (!webviewFailures[key]) {
-      webviewFailures[key] = '超过 30 秒仍未就绪（可能被安全策略拦下，可重试或重新打开店铺）'
-    }
-  }, ATTACH_TIMEOUT_MS))
-}
-
-function clearAttachWatchdog(key: string): void {
-  const timer = attachWatchdogs.get(key)
-  if (timer) {
-    clearTimeout(timer)
-    attachWatchdogs.delete(key)
-  }
-}
-
-function retryWebview(key: string): void {
-  const item = openWebviews.value.find(entry => entry.key === key)
-  if (!item) return
-  // 先判后做（2026-10-16 审查 P2-4）：元素登记缺失时保留失败态 + 按钮，别把自救入口点掉
-  if (!webviewEls.get(key)) {
-    webviewFailures[key] = '视图元素已卸载，请切换标签页或重新打开店铺'
-    return
-  }
-  delete webviewFailures[key]
-  void handleWebviewAttach(item)
-}
-
 function clearWebviewError(item: OpenWebviewEntry): void {
   // 只有"已经真正挂上"的视图才配清失败态：未注册时 about:blank 加载完也会触发
   // did-finish-load，清掉注册失败的如实原因后界面退回"正在连接…"，
@@ -689,173 +707,59 @@ function handleWebviewFailure(item: OpenWebviewEntry, event: any): void {
   console.warn(`[webview-diagnostics] ${item.storeName}(${item.storeId.slice(0, 8)}/${item.tabId.slice(0, 8)}) ${message}`)
 }
 
-function handleWebviewDestroyed(item: OpenWebviewEntry): void {
-  delete webviewFailures[item.key]
-  clearAttachWatchdog(item.key)
-  // 不再 webviewEls.delete(item.key)（2026-10-16 审查 P2-5）：同一 key 的新元素
-  // 可能已挂上，旧元素的 destroyed 是异步派发的，删了会误删新登记。登记的增删
-  // 统一交给 Vue 的 ref 回调（挂载给元素 / 卸载给 null）。
-}
 
-// ---- 失败卡片的 4 个规范动作（§3.3 / §17.1：重试 / 检查代理 / 重新登录 / 清理站点数据）----
-//
-// 跨店红线（§3.3「跨店铺切换时显示确认提示，防止把操作发到错误店铺」）：
-// 诊断条目可能属于**后台店铺**（openWebviews 遍历所有已打开店铺），而右上环境面板、
-// ws.navigate 这些入口看的都是"当前显示的店铺"。所以每个动作都必须先把被诊断的店铺
-// 切到前台、再用它自己的 storeId/tabId 调 IPC——直接调 ws.navigate 会把**别的店**导航走。
-
-/** 动作前先把被诊断的店铺显示出来：环境面板与地址栏都跟着 displayedStoreId 走 */
-async function focusDiagnosedStore(storeId: string): Promise<void> {
-  if (ws.displayedStoreId === storeId) return
-  try { await ws.showStore(storeId) } catch { /* 显示失败不阻塞动作本身，下面各自如实报错 */ }
-}
-
-async function openProxyPanel(diagnostic: ViewDiagnostic): Promise<void> {
-  await focusDiagnosedStore(diagnostic.storeId)
-  // 切到右侧「环境」面板——代理绑定/测试入口都在那里（读的是当前显示的店铺）
-  selectPanel('env')
-  await refreshEnvironment()
-}
-
-async function reopenHome(diagnostic: ViewDiagnostic): Promise<void> {
-  const target = ws.stores.find(store => store.id === diagnostic.storeId)
-  const url = target ? (platformHomeUrls.value[target.platform] || target.adminUrl || '') : ''
-  if (!url) {
-    ws.toast('这家店铺还没有配置首页地址，请先在地址栏输入并打开', 'error')
-    return
-  }
-  await focusDiagnosedStore(diagnostic.storeId)
-  // 必须用被诊断店铺自己的 tabId：navigateTab 在没有 guest 时只记下待导航地址，
-  // 之后 registerWebview 会把它作为 pendingUrl 交给渲染层真正载入（window-manager.navigateTab）
-  const result = await window.shopilot.browser.navigate(diagnostic.storeId, diagnostic.tabId, url)
-  if (!result.ok) {
-    ws.toast('重新登录失败：' + (result.error?.message || '未知原因'), 'error')
-    return
-  }
-  retryWebview(diagnostic.key)
-}
-
-function clearSiteData(diagnostic: ViewDiagnostic): void {
-  // 清理「当前站点数据」：只清站点存储与缓存，**不动 Cookie**（登录态保留）。
-  // 类型白名单是 packages/shared/src/schemas/browser.ts 的 ['cookies','cache','localStorage','downloads']
-  // ——大小写敏感、最多 4 项；main 侧 'localStorage' 一项即覆盖 localstorage + indexeddb
-  // （window-manager.clearStoreData）。写成 'indexdb'/'cachestorage' 会被 schema 拒绝、永远报参数不合法。
-  void window.shopilot.browser.clearData(diagnostic.storeId, ['localStorage', 'cache'])
-    .then(result => {
-      if (result.ok) ws.toast(`已清理 ${diagnostic.storeName} 站点数据（登录态保留）`, 'success')
-      else ws.toast('清理失败：' + (result.error?.message || '未知原因'), 'error')
-    })
-    .catch(() => ws.toast('清理失败：请求异常', 'error'))
-}
-
-// 右侧「任务中心 → 任务列表」：后台自动采集任务不列（发票采集 + 涉税报送采集，用户口径：
-// 后台刷新不计入任务）。这里只取 6 条，不排除的话每 3 小时自动建的采集任务会把真正的任务挤出面板。
-const taskRows = computed(() => ws.tasks.filter((task: any) => !isBackgroundCollectTask(task) && (!task.storeScope || task.storeScope === ws.displayedStoreId)).slice(0, 6))
-const taskSubTab = ref<'tasks' | 'invite' | 'todo'>('tasks')
-const inviteLiveLogEl = ref<HTMLElement | null>(null)
-const squareUrls = ref<Record<string, string>>({})
-const dynamicCategoryTrees = ref<Record<string, CategoryNode[]>>({})
-const entryRoutes = ref<any[]>([])
-const displayedPlatformName = computed(() => store.value?.platform || '')
-const inviteProfile = computed(() => inviteProfileFor(store.value?.platform))
-const INVITE_CATEGORY_TREES_SETTING = 'invite.categoryTrees'
-const invite = reactive({
-  category: '', subcategory: '', category3: '', levels: [] as string[], count: 5,
-  script: '', scriptMode: 'manual' as 'manual' | 'ai', benefits: [] as string[], strengths: [] as string[],
-  mainCategory: '', extraFilters: {} as Record<string, string[]>, batchContact: '', batchPhone: '', batchWechat: '', batchProductCount: 1,
-  contact: '', wechat: '', phone: '', productIds: '', finderType: '全部带货者', finderCategories: [] as string[], finderSalesTiers: [] as string[], finderOtherFilters: [] as string[],
-  /**
-   * 额度护栏：本次最多邀约几位。
-   * 平台页面读不到「今日剩余 N 次邀请机会」（2026-10-02/03 两次真机实测都没有），
-   * 所以 `requireQuota` 拿不到数、`TASK_QUOTA_EXCEEDED` 实际不会触发——这个值是我们唯一能保证的上限。
-   */
-  maxInvites: 10
-})
-const inviteSaving = ref(false)
-const inviteSubmitting = ref(false)
-/** 近 7 天已邀过的达人数（开跑时查台账得到；用于面板提示"会自动跳过"） */
-const inviteRecentCount = ref(0)
-const inviteConfigLoaded = ref(false)
-let inviteConfigLoadSerial = 0
-let inviteConfigLoadedStoreId = ''
-let inviteSaveTimer: ReturnType<typeof setTimeout> | null = null
-function inviteCategoryTreeFor(profile: { platform: string; categoryTree?: readonly CategoryNode[] }): readonly CategoryNode[] {
-  const dynamic = dynamicCategoryTrees.value[profile.platform]
-  return Array.isArray(dynamic) && dynamic.length ? dynamic : (profile.categoryTree || [])
-}
-const inviteCategoryOptions = computed(() => inviteProfile.value && isBatchProfile(inviteProfile.value) ? inviteCategoryTreeFor(inviteProfile.value).map(item => item.name) : [])
-const inviteSubcategoryOptions = computed(() => {
-  const profile = inviteProfile.value
-  if (!profile || !isBatchProfile(profile) || !invite.category) return []
-  return inviteCategoryTreeFor(profile).find(item => item.name === invite.category)?.children || []
-})
-const inviteThirdCategoryOptions = computed(() => {
-  const profile = inviteProfile.value
-  if (!profile || !isBatchProfile(profile) || !invite.category || !invite.subcategory) return []
-  return inviteCategoryTreeFor(profile).find(item => item.name === invite.category)?.grandchildren?.find(item => item.name === invite.subcategory)?.children || []
-})
-const inviteMainCategoryPaths = computed(() => {
-  const profile = inviteProfile.value
-  if (!profile || !isBatchProfile(profile) || !profile.drawerForm?.mainCategory) return []
-  return inviteCategoryTreeFor(profile).flatMap(item => [item.name, ...item.children.map(child => `${item.name}/${child}`)])
-})
-const inviteMissingItems = computed(() => {
-  const profile = inviteProfile.value
-  if (!profile || !ws.displayedStoreId) return ['请先打开一个店铺']
-  return inviteTaskIssues({ profile, config: JSON.parse(JSON.stringify(invite)) })
-})
-/**
- * 广场筛选的界面辅助（仅 assist-form/微信小店用到）：
- * 类目 34 项在侧栏里太长，默认只铺一屏 + 搜索；销售总额档位的「不限」与具体档位互斥
- * （实测平台允许同时勾，但那等于"不限或某档"，语义含糊——面板按互斥处理，避免出现
- * 一个用户自己都读不懂的组合，运行时会如实按所选档位点击）。
- */
-const inviteCatQuery = ref('')
-const inviteCatsExpanded = ref(false)
-const inviteCategoryShown = computed(() => {
-  const profile = inviteProfile.value
-  if (!profile || isBatchProfile(profile)) return []
-  const all = profile.finderCategories as readonly string[]
-  const query = inviteCatQuery.value.trim()
-  if (query) return all.filter(c => c.includes(query))
-  if (inviteCatsExpanded.value) return [...all]
-  const chosen = all.filter(c => invite.finderCategories.includes(c))
-  const rest = all.filter(c => !invite.finderCategories.includes(c))
-  // 已选的排在前面（收起时也要能看到自己选了什么），最多铺 16 个
-  return [...chosen, ...rest].slice(0, 16)
-})
-const inviteCategoryHidden = computed(() => {
-  const profile = inviteProfile.value
-  if (!profile || isBatchProfile(profile)) return 0
-  return Math.max(0, profile.finderCategories.length - inviteCategoryShown.value.length)
-})
-/** 「带货销售总额」只在档案声明的那几个类型页签下存在（实测：微信只有「全部带货者」） */
-const inviteSalesTypeWarning = computed(() => {
-  const profile = inviteProfile.value
-  if (!profile || isBatchProfile(profile)) return ''
-  const types = profile.finderSalesTypes || []
-  if (!types.length || !types.includes(invite.finderType)) {
-    return `这一版广场上「${profile.finderSalesMetric}」只在「${types.join('、')}」下提供；当前类型「${invite.finderType}」没有这一维，选了的档位会点不到（开始邀约前会拦住）。`
-  }
-  return ''
-})
-function toggleSalesTier(tier: string) {
-  if (tier === '不限') {
-    invite.finderSalesTiers = invite.finderSalesTiers.includes('不限') ? [] : ['不限']
-    return
-  }
-  const rest = invite.finderSalesTiers.filter(item => item !== '不限')
-  invite.finderSalesTiers = rest.includes(tier) ? rest.filter(item => item !== tier) : [...rest, tier]
-}
-const inviteReady = computed(() => Boolean(inviteProfile.value && !inviteMissingItems.value.length && inviteConfigLoaded.value))
-const inviteTasks = computed(() => ws.tasks.filter((task: any) => String(task.name || '').startsWith('达人邀约 · ') && (!task.storeScope || task.storeScope === ws.displayedStoreId)))
-const inviteLatest = computed(() => {
-  const rows = [...inviteTasks.value]
-  const active = rows.filter(task => taskActive(task)).sort((a, b) => Number(b.latestRun?.startedAt || b.updatedAt || b.createdAt || 0) - Number(a.latestRun?.startedAt || a.updatedAt || a.createdAt || 0))
-  if (active[0]) return active[0]
-  return rows.sort((a, b) => Number(b.latestRun?.finishedAt || b.updatedAt || b.createdAt || 0) - Number(a.latestRun?.finishedAt || a.updatedAt || a.createdAt || 0))[0] || null
-})
-
+// ---------- 达人邀约（状态/IPC 读写/校验/任务进度映射见 use-creator-invite.ts）----------
+// 面板模板与验收锚点仍在本组件；这里只接线，域逻辑全部在 composable 里。
+const {
+  inviteLiveLogEl,
+  entryRoutes,
+  displayedPlatformName,
+  inviteProfile,
+  invite,
+  inviteSaving,
+  inviteQuota,
+  inviteScripts,
+  inviteScriptId,
+  inviteAiConfigured,
+  inviteSubmitting,
+  inviteRecentCount,
+  inviteBlacklistCount,
+  inviteCategoryOptions,
+  inviteSubcategoryOptions,
+  inviteThirdCategoryOptions,
+  inviteMainCategoryPaths,
+  inviteMissingItems,
+  inviteCatQuery,
+  inviteCatsExpanded,
+  inviteCategoryShown,
+  inviteCategoryHidden,
+  inviteSalesTypeWarning,
+  toggleSalesTier,
+  inviteReady,
+  inviteLatest,
+  refreshSquareUrls,
+  loadInviteCategoryTrees,
+  refreshEntryRoutes,
+  loadInviteQuota,
+  applyInviteScript,
+  loadInviteConfig,
+  inviteSnapshot,
+  saveInviteConfig,
+  inviteSquareUrl,
+  openInvitePage,
+  inviteRunId,
+  inviteStatus,
+  inviteActive,
+  inviteStuckText,
+  inviteStepIcon,
+  inviteStepLabel,
+  toStepIndex,
+  inviteStepInput,
+  inviteLiveMessage,
+  inviteLogs,
+  inviteLogText,
+  stopInvite,
+} = useCreatorInvite({ store })
 function normalizeUrl(value: string) {
   const trimmed = value.trim()
   if (!trimmed) return ''
@@ -876,40 +780,13 @@ async function refreshPlatformHomeUrls() {
   if (result.ok && result.data?.value && typeof result.data.value === 'object') platformHomeUrls.value = result.data.value
 }
 
-async function refreshSquareUrls() {
-  const result = await window.shopilot.settings.get('invite.squareUrls')
-  if (result.ok && result.data?.value && typeof result.data.value === 'object') squareUrls.value = result.data.value
-}
-
-async function loadInviteCategoryTrees() {
-  const result = await window.shopilot.settings.get(INVITE_CATEGORY_TREES_SETTING)
-  const value = result.ok ? result.data?.value : null
-  dynamicCategoryTrees.value = value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, CategoryNode[]>
-    : {}
-}
-
-async function saveInviteCategoryTree(platform: string, tree: CategoryNode[]) {
-  const next = { ...dynamicCategoryTrees.value, [platform]: tree }
-  const result = await window.shopilot.settings.set(INVITE_CATEGORY_TREES_SETTING, next)
-  if (result.ok) dynamicCategoryTrees.value = next
-}
-
-async function refreshEntryRoutes() {
-  const storeId = ws.displayedStoreId
-  if (!storeId) { entryRoutes.value = []; return }
-  const result = await window.shopilot.bookmark.entryRoutes(storeId)
-  if (ws.displayedStoreId !== storeId) return
-  entryRoutes.value = result.ok ? (result.data.routes || []) : []
-}
-
 function selectPanel(next: PanelKey) {
   panel.value = next
   if (next === 'bookmarks') void ws.refreshBookmarks()
   if (next === 'bookmarks') void refreshEntryRoutes()
   if (next === 'downloads') void ws.refreshDownloads()
   if (next === 'env') void refreshEnvironment()
-  if (next === 'tasks') void ws.refreshTasks()
+  if (next === 'invite') void ws.refreshTasks()
 }
 
 function togglePanel() {
@@ -926,7 +803,25 @@ async function setPanelOpen(next: boolean) {
 }
 function openPanel(next: PanelKey) { panel.value = next; void setPanelOpen(true); selectPanel(next) }
 function onBrowserKeydown(event: KeyboardEvent) {
-  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'b') { event.preventDefault(); togglePanel() }
+  inputDiagnostic('keydown', describeKeyboardEvent(event))
+  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'b') { event.preventDefault(); togglePanel(); return }
+  // Esc 逐层退出：确认框 → 右键菜单 → 多选
+  if (event.key === 'Escape') {
+    if (pendingPanelConfirmation.value) { event.preventDefault(); cancelPanelConfirmation(); return }
+    if (pendingTabClose.value) { event.preventDefault(); pendingTabClose.value = null; return }
+    if (tabMenu.open) { event.preventDefault(); closeTabMenu(); return }
+    if (selectedTabIds.value.length) { event.preventDefault(); clearTabSelection() }
+    return
+  }
+  if (!ws.displayedStoreId) return
+  if (!(event.ctrlKey || event.metaKey)) return
+  if (event.key.toLowerCase() !== 'w') return
+  event.preventDefault()
+  // Ctrl+Shift+W 关闭全部 / Ctrl+Alt+W 关闭其他（都先弹确认）；Ctrl+W 关当前页（与浏览器一致）
+  if (event.shiftKey) { requestCloseAll(); return }
+  if (event.altKey) { requestCloseOthers(ws.activeTab?.id); return }
+  if (ws.activeTab) void ws.closeTab(ws.activeTab.id)
+  else ws.toast('没有可关闭的标签页', 'info')
 }
 
 function shortUrl(value: string) {
@@ -941,6 +836,81 @@ function formatSize(value: number) {
 
 function downloadState(value: string) {
   return ({ completed: '已完成', in_progress: '下载中', cancelled: '已取消', interrupted: '中断' } as Record<string, string>)[value] || value || '未知状态'
+}
+
+// ---------- 主动检测登录状态（session.checkLoginStatus / SESSION_EXPIRED）----------
+// 会话区此前只有被动读数与导入导出；这里补上"主动查一次登录态"的入口，
+// 并接上主进程在确认"未登录/过期"时广播的 SESSION_EXPIRED（此前是一条死契约）。
+const loginCheckBusy = ref(false)
+const loginCheckView = ref<LoginCheckView | null>(null)
+const loginCheckError = ref('')
+/**
+ * 已经提示过"登录态不可用"的店铺：一次检测既会产生 IPC 返回、又会触发 SESSION_EXPIRED
+ * 事件，两条路各弹一次就是重复提示。登录态恢复正常或切换店铺时重置。
+ */
+const loginCheckNotifiedStore = ref<string | null>(null)
+
+/** 检测要读店铺页面：活动标签的 guest 已经 attach 才算页面可用 */
+const loginCheckPageAttached = computed(() => ws.activeTab?.guestAttached === true)
+const loginCheckGate = computed(() => ({ storeId: ws.displayedStoreId, pageAttached: loginCheckPageAttached.value, appLocked: ws.appLocked }))
+const loginCheckReady = computed(() => canCheckLogin(loginCheckGate.value))
+/** 按钮 title：被挡住时说明原因（可用时为空字符串，等于没有 tooltip） */
+const loginCheckTitle = computed(() => loginCheckBlockedReason(loginCheckGate.value))
+// 行内提示：IPC 失败优先，其次是"按钮为什么点不动"
+const loginCheckNote = computed(() => loginCheckError.value || loginCheckTitle.value)
+
+/** 同一家店的一次"登录态不可用"只提示一次（IPC 结果与事件共用这一道闸） */
+function notifyLoginExpired(storeId: string, text: string): void {
+  if (loginCheckNotifiedStore.value === storeId) return
+  loginCheckNotifiedStore.value = storeId
+  ws.toast(text, 'error')
+}
+
+async function checkLoginStatus(): Promise<void> {
+  const storeId = ws.displayedStoreId
+  if (!storeId || loginCheckBusy.value) return
+  const blocked = loginCheckBlockedReason({ storeId, pageAttached: loginCheckPageAttached.value, appLocked: ws.appLocked })
+  if (blocked) { loginCheckError.value = blocked; return }
+  loginCheckBusy.value = true
+  loginCheckError.value = ''
+  try {
+    const result = await window.shopilot.session.checkLoginStatus(storeId)
+    // 切店了就丢掉这次结果，避免把 A 店的结论写到 B 店的会话块上
+    if (ws.displayedStoreId !== storeId) return
+    if (!result.ok) {
+      // 失败不吞：主进程的错误消息原样上屏（行内提示，不弹 alert）
+      loginCheckView.value = null
+      loginCheckError.value = `检测失败：${result.error.message}`
+      return
+    }
+    const view = describeLoginCheckResult(result.data)
+    loginCheckView.value = view
+    if (view.expired) notifyLoginExpired(storeId, `${view.label}：${view.detail}`)
+    else loginCheckNotifiedStore.value = null // 登录态恢复：下次再过期要重新提示
+  } catch (error) {
+    loginCheckView.value = null
+    loginCheckError.value = `检测失败：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    loginCheckBusy.value = false
+  }
+}
+
+/** 主进程主动检测到"登录态不可用"时的广播（SESSION_EXPIRED）：只认当前显示的店铺 */
+function onSessionExpired(payload: { storeId?: string; reasonCode?: string; safeMessage?: string }): void {
+  if (!payload || payload.storeId !== ws.displayedStoreId) return
+  const reasonCode = payload.reasonCode || 'LOGIN_REQUIRED'
+  const safeMessage = payload.safeMessage || '主进程检测到该店铺登录态不可用'
+  // 事件只带安全摘要（没有完整 PlatformLoginResult），如实按"登录态不可用"上屏。
+  // 这里**不再回调** checkLoginStatus：检测本身就会发这个事件，回调会形成
+  // 事件 → 检测 → 事件 的循环，还会再打一次页面。
+  loginCheckView.value = {
+    tone: 'warning',
+    label: '登录态已失效',
+    detail: `${safeMessage}（${reasonCode}）— 请到店铺页面重新登录`,
+    expired: true
+  }
+  loginCheckError.value = ''
+  notifyLoginExpired(payload.storeId, `登录态已失效：${safeMessage}`)
 }
 
 async function refreshEnvironment() {
@@ -997,15 +967,20 @@ async function addProxy() {
 }
 
 async function removeProxy(id: string) {
-  if (!window.confirm('删除该代理？绑定它的店铺会回退直连。')) return
-  const result = await window.shopilot.proxy.delete(id)
-  if (!result.ok) { ws.toast(`删除失败：${result.error.message}`, 'error'); return }
-  if (proxyBindId.value === id) proxyBindId.value = ''
-  // 回落直连是**用户必须知道**的结果（真实 IP 会暴露给平台），不能只静默删掉
-  const unbound = Number((result.data as any)?.unboundStores || 0)
-  if (unbound > 0) ws.toast(`已删除代理：${unbound} 家店铺已回退直连（对面看到的是你的真实 IP），请重新绑定或确认可直连`, 'error')
-  else ws.toast('已删除代理', 'success')
-  void refreshEnvironment()
+  askPanelConfirmation({
+    title: '删除代理？',
+    detail: '绑定它的店铺会回退直连，平台将可能看到真实 IP。',
+    action: async () => {
+      const result = await window.shopilot.proxy.delete(id)
+      if (!result.ok) { ws.toast(`删除失败：${result.error.message}`, 'error'); return }
+      if (proxyBindId.value === id) proxyBindId.value = ''
+      // 回落直连是**用户必须知道**的结果（真实 IP 会暴露给平台），不能只静默删掉
+      const unbound = Number((result.data as any)?.unboundStores || 0)
+      if (unbound > 0) ws.toast(`已删除代理：${unbound} 家店铺已回退直连（对面看到的是你的真实 IP），请重新绑定或确认可直连`, 'error')
+      else ws.toast('已删除代理', 'success')
+      void refreshEnvironment()
+    }
+  })
 }
 
 async function verifyEnv() {
@@ -1074,11 +1049,17 @@ async function delCookie(cookie: any) {
 
 async function clearCookies() {
   const storeId = ws.displayedStoreId
-  if (!storeId || !window.confirm(`清空「${store.value?.name || storeId}」的全部 Cookie？该店铺的登录态将失效。`)) return
-  const result = await window.shopilot.session.clearCookies(storeId)
-  if (result.ok) ws.toast('Cookie 已清空', 'success')
-  else ws.toast(`清空失败：${result.error.message}`, 'error')
-  void refreshCookies()
+  if (!storeId) return
+  askPanelConfirmation({
+    title: '清空店铺 Cookie？',
+    detail: `「${store.value?.name || storeId}」的登录态将失效，需要重新登录。`,
+    action: async () => {
+      const result = await window.shopilot.session.clearCookies(storeId)
+      if (result.ok) ws.toast('Cookie 已清空', 'success')
+      else ws.toast(`清空失败：${result.error.message}`, 'error')
+      void refreshCookies()
+    }
+  })
 }
 
 /**
@@ -1089,169 +1070,6 @@ async function lockNow() {
   const result = await window.shopilot.security.lock()
   if (result.ok) await ws.refreshSecurity()
   else ws.toast(result.error.message, 'error')
-}
-
-function resetInviteDefaults() {
-  const profile = inviteProfile.value
-  invite.category = profile && isBatchProfile(profile) ? profile.categoryTree[2]?.name || profile.categoryTree[0]?.name || profile.categories[0] || '' : ''
-  invite.subcategory = ''; invite.category3 = ''
-  invite.levels = profile && isBatchProfile(profile) ? [...profile.levelsWithQuotaHint] : []
-  invite.count = profile && isBatchProfile(profile) ? Math.max(1, Math.min(5, profile.maxBatch)) : 1
-  invite.script = ''; invite.scriptMode = 'manual'; invite.benefits = []; invite.strengths = []; invite.mainCategory = ''
-  invite.extraFilters = {}; invite.batchContact = ''; invite.batchPhone = ''; invite.batchWechat = ''; invite.batchProductCount = 1
-  invite.contact = ''; invite.wechat = ''; invite.phone = ''; invite.productIds = ''; invite.finderType = '全部带货者'; invite.finderCategories = []; invite.finderSalesTiers = []; invite.finderOtherFilters = []; invite.maxInvites = 10
-  inviteCatQuery.value = ''; inviteCatsExpanded.value = false
-}
-
-async function readInviteSetting(key: string) {
-  const result = await window.shopilot.settings.get(key)
-  const value = result.ok ? result.data?.value : null
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
-}
-
-async function loadInviteConfig() {
-  const serial = ++inviteConfigLoadSerial
-  const profile = inviteProfile.value
-  const storeId = ws.displayedStoreId
-  inviteConfigLoaded.value = false
-  inviteConfigLoadedStoreId = ''
-  resetInviteDefaults()
-  if (!profile || !storeId) return
-  let saved = await readInviteSetting(inviteConfigKey(storeId))
-  if (serial !== inviteConfigLoadSerial || ws.displayedStoreId !== storeId) return
-  let fromLegacy = false
-  if (!saved) {
-    saved = await readInviteSetting(legacyInviteConfigKey(profile.platform))
-    fromLegacy = !!saved
-  }
-  if (serial !== inviteConfigLoadSerial || ws.displayedStoreId !== storeId) return
-  if (saved) Object.assign(invite, normalizeInviteTaskConfig(profile.flow, saved))
-  /**
-   * 商品ID 统一成"一行一个"的字符串再放进多行框：
-   * `normalizeInviteTaskConfig` 给的是数组（`['a','b']`），直接绑到 textarea 会被拼成 `a,b`——
-   * 能跑但不好核对（用户是按"一列 ID"粘贴进来的，理应一行一个显示）。状态类型也统一为 string。
-   */
-  invite.productIds = parseInviteProductIds(invite.productIds as any).join('\n')
-  // 档案实测清单之外的值（旧配置 / 平台改名后的遗留，如「汽车电动」→「汽摩电动」）不进界面：
-  // 面板只能提供实测过的选项，否则勾选列表里点不亮，运行到页面又必然找不到。
-  // （智能体/其它调用方塞进来的清单外值不受此影响：inviteTaskIssues 会把它们逐条报成缺项。）
-  if (!isBatchProfile(profile)) {
-    invite.finderCategories = invite.finderCategories.filter(c => profile.finderCategories.includes(c))
-    invite.finderSalesTiers = invite.finderSalesTiers.filter(t => (profile.finderSalesTiers || []).includes(t))
-    invite.finderOtherFilters = invite.finderOtherFilters.filter(f => profile.finderOtherFilters.includes(f))
-    if (!profile.finderTypes.includes(invite.finderType)) invite.finderType = profile.finderTypes[0] || '全部带货者'
-  }
-  if (serial !== inviteConfigLoadSerial || ws.displayedStoreId !== storeId) return
-  inviteConfigLoaded.value = true
-  inviteConfigLoadedStoreId = storeId
-  if (fromLegacy) {
-    // 旧版按平台配置只作为首次打开的初始值，随后固化为本店铺键，避免同平台店铺互相覆盖。
-    await window.shopilot.settings.set(inviteConfigKey(storeId), inviteSnapshot())
-  }
-}
-
-function inviteSnapshot() {
-  return JSON.parse(JSON.stringify({
-    category: invite.category, subcategory: invite.subcategory, category3: invite.category3, levels: invite.levels,
-    count: invite.count, script: invite.script, scriptMode: invite.scriptMode, benefits: invite.benefits, strengths: invite.strengths,
-    mainCategory: invite.mainCategory, extraFilters: invite.extraFilters, batchContact: invite.batchContact, batchPhone: invite.batchPhone,
-    batchWechat: invite.batchWechat, batchProductCount: invite.batchProductCount, contact: invite.contact, wechat: invite.wechat,
-    phone: invite.phone, productIds: invite.productIds, finderType: invite.finderType, finderCategories: invite.finderCategories,
-    finderSalesTiers: invite.finderSalesTiers, finderOtherFilters: invite.finderOtherFilters, maxInvites: invite.maxInvites
-  }))
-}
-
-async function saveInviteConfig() {
-  const storeId = ws.displayedStoreId
-  if (!storeId || !inviteProfile.value) return
-  inviteSaving.value = true
-  const result = await window.shopilot.settings.set(inviteConfigKey(storeId), inviteSnapshot())
-  inviteSaving.value = false
-  if (result.ok) ws.toast('达人邀约配置已保存到当前店铺', 'success')
-  else ws.toast(`保存邀约配置失败：${result.error.message}`, 'error')
-}
-
-watch(invite, () => {
-  const storeId = ws.displayedStoreId
-  if (!storeId || !inviteConfigLoaded.value || inviteConfigLoadedStoreId !== storeId) return
-  if (inviteSaveTimer) clearTimeout(inviteSaveTimer)
-  inviteSaveTimer = setTimeout(() => {
-    if (ws.displayedStoreId !== storeId || !inviteConfigLoaded.value || inviteConfigLoadedStoreId !== storeId) return
-    void window.shopilot.settings.set(inviteConfigKey(storeId), inviteSnapshot())
-  }, 500)
-}, { deep: true })
-
-function inviteSquareUrl() {
-  const profile = inviteProfile.value
-  return profile ? squareUrls.value[profile.platform] || profile.pageUrl : ''
-}
-
-async function openInvitePage() {
-  const url = inviteSquareUrl()
-  const profile = inviteProfile.value
-  if (!url || !profile) return
-  if (profile.platform === '抖店' && isBatchProfile(profile) && profile.categoryDepth === 3 && ws.displayedStoreId) {
-    try {
-      const result = await window.shopilot.browser.prepareInviteSquare(ws.displayedStoreId, { url, loadCategoryTree: true })
-      if (!result.ok) {
-        ws.toast(`打开达人广场/读取三级类目失败：${result.error.message}`, 'error')
-        return
-      }
-      const tree = (result.data as { categoryTree?: CategoryNode[] })?.categoryTree
-      if (tree?.length) {
-        await saveInviteCategoryTree(profile.platform, tree)
-        await loadInviteConfig()
-        ws.toast(`达人广场已打开，已读取 ${tree.length} 个一级类目的完整三级结构`, 'success')
-      } else {
-        ws.toast('达人广场已打开，但平台未返回三级类目', 'info')
-      }
-    } catch (error: any) {
-      ws.toast(`打开达人广场/读取三级类目失败：${String(error?.message || error)}`, 'error')
-    }
-    return
-  }
-  /**
-   * 微信小店（assist-form）：把面板上的广场筛选**真的应用上**再让用户看列表。
-   * 以前这里只是导航过去，用户得自己在页面上点一遍筛选；现在与任务引擎同一套选项
-   * （同样来自实测档案），逐项应用并**回读勾选态**，没生效的项如实报出来。
-   */
-  if (!isBatchProfile(profile)) {
-    const storeId = ws.displayedStoreId
-    if (!storeId) { ws.toast('请先打开一个店铺', 'info'); return }
-    const filters = {
-      finderType: invite.finderType,
-      categories: JSON.parse(JSON.stringify(invite.finderCategories)) as string[],
-      salesTiers: JSON.parse(JSON.stringify(invite.finderSalesTiers)) as string[],
-      otherFilters: JSON.parse(JSON.stringify(invite.finderOtherFilters)) as string[]
-    }
-    const total = filters.categories.length + filters.salesTiers.length + filters.otherFilters.length
-    try {
-      const result = await window.shopilot.browser.prepareInviteSquare(storeId, {
-        url, finderType: filters.finderType, categories: filters.categories, salesTiers: filters.salesTiers, otherFilters: filters.otherFilters
-      })
-      if (!result.ok) { ws.toast(`打开达人广场失败：${result.error.message}`, 'error'); return }
-      const data = result.data as { applied?: boolean, detailLinks?: number, finderType?: { ok: boolean, name: string, reason?: string }, categories?: Array<{ ok: boolean, name: string, reason?: string }>, salesTiers?: Array<{ ok: boolean, name: string, reason?: string }>, otherFilters?: Array<{ ok: boolean, name: string, reason?: string }> } | undefined
-      const bad = [
-        ...(data?.finderType && data.finderType.ok === false ? [`类型「${data.finderType.name}」${data.finderType.reason ? `（${data.finderType.reason}）` : ''}`] : []),
-        ...(data?.categories || []).filter(item => !item.ok).map(item => `类目「${item.name}」${item.reason ? `（${item.reason}）` : ''}`),
-        ...(data?.salesTiers || []).filter(item => !item.ok).map(item => `销售额「${item.name}」${item.reason ? `（${item.reason}）` : ''}`),
-        ...(data?.otherFilters || []).filter(item => !item.ok).map(item => `其他「${item.name}」${item.reason ? `（${item.reason}）` : ''}`)
-      ]
-      // 跑前自检：列表里一条可见「详情」都没有 → 微应用没挂载/平台改版/登录刚过期，
-      // 这时候点「开始邀约」会在第 1 轮才失败，不如现在就明说。
-      if (!bad.length && data?.detailLinks === 0) {
-        ws.toast('达人广场已打开，但列表里没有可见的「详情」入口——平台可能改版或页面还没就绪，建议先别开始邀约', 'error', 9000)
-        return
-      }
-      if (bad.length) ws.toast(`达人广场已打开，但有 ${bad.length} 项筛选没生效：${bad.join('、')}`, 'error', 8000)
-      else ws.toast(total ? `达人广场已打开，${total} 项筛选已生效（列表 ${data?.detailLinks ?? '?'} 位可点详情）` : `达人广场已打开（列表 ${data?.detailLinks ?? '?'} 位可点详情）`, 'success')
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      ws.toast(`打开达人广场失败：${message}`, 'error')
-    }
-    return
-  }
-  void ws.navigate(url)
 }
 
 async function startInvite() {
@@ -1272,101 +1090,60 @@ async function startInvite() {
         inviteRecentCount.value = recentlyInvited.length
       }
     } catch { /* 台账读不到不该拦住开跑：平台侧仍会拦重复邀约 */ }
+    /**
+     * 黑名单与 7 天台账走同一个 skipTexts 口径：在选人/点详情前直接跳过。
+     * 黑名单来自达人库（人工维护），平台侧没有这个概念；这里不合并进 inviteRecentCount，
+     * 避免把"黑名单"说成"近 7 天已邀"。
+     */
+    try {
+      const blacklist = await window.shopilot.invite.creators.blacklisted({ storeId, platform: inviteProfile.value.platform })
+      if (blacklist.ok) {
+        const names = (blacklist.data as { nicknames?: string[] })?.nicknames || []
+        inviteBlacklistCount.value = names.length
+        recentlyInvited = [...new Set([...recentlyInvited, ...names])]
+      }
+    } catch { /* 黑名单读不到不拦开跑；平台侧仍会拦重复邀约 */ }
     const payload = buildInviteTaskPayload({
       profile: inviteProfile.value,
       storeId,
       squareUrl: inviteSquareUrl(),
-      config: { ...inviteSnapshot(), recentlyInvited }
+      config: { ...inviteSnapshot(), recentlyInvited },
+      source: 'panel'
     })
     if (!payload) { ws.toast('邀约配置不完整，无法创建任务', 'error'); return }
-    const created = await window.shopilot.task.create(payload)
-    if (!created.ok) { ws.toast(`创建邀约任务失败：${created.error.message}`, 'error'); return }
-    const started = await window.shopilot.task.run(created.data.id)
-    if (!started.ok) { await ws.refreshTasks(); ws.toast(`邀约任务已创建但启动失败：${started.error.message}`, 'error'); return }
-    ws.toast(recentlyInvited.length
-      ? `邀约任务已启动：近 7 天已邀的 ${recentlyInvited.length} 位会自动跳过`
-      : '邀约任务已启动，进度和日志会实时显示在当前面板', 'success')
+    /**
+     * v2：任务与批次由主进程同一条路径创建（INVITE_CAMPAIGN_START）。
+     * 这样新模块页能按批次查看「目标/已发/跳过/停止原因」，而不是只能靠任务名前缀猜。
+     * 任务构造器仍是同一份 buildInviteTaskPayload，面板/智能体不会各写一套配置。
+     */
+    const targetCount = isBatchProfile(inviteProfile.value)
+      ? Math.max(1, Number(invite.count) || 1)
+      : Math.max(1, Number(invite.maxInvites) || 10)
+    const created = await window.shopilot.invite.startCampaign({
+      task: payload,
+      campaign: {
+        storeId,
+        targetCount,
+        filters: inviteSnapshot(),
+        scriptText: String(invite.script || ''),
+        productIds: parseInviteProductIds(invite.productIds as any),
+        createdBy: 'panel'
+      }
+    })
+    if (!created.ok) { ws.toast(`创建邀约批次失败：${created.error.message}`, 'error'); return }
+    const started = created.data as { waitingForStore?: boolean } | undefined
+    ws.toast(started?.waitingForStore
+      ? '邀约批次已创建；店铺浏览器未打开，运行会在打开店铺后开始'
+      : recentlyInvited.length
+        ? `邀约批次已启动：近 7 天已邀的 ${recentlyInvited.length} 位会自动跳过`
+        : '邀约批次已启动，进度和日志会实时显示在当前面板', 'success')
     await ws.refreshTasks()
+    void loadInviteQuota(storeId)
   } finally {
     inviteSubmitting.value = false
   }
 }
 
-function taskRun(task: any) {
-  return task.latestRun
-}
-
-function taskStatus(task: any) {
-  const run = taskRun(task)
-  const status = run?.id ? ws.runLive[run.id]?.status || run.status : run?.status
-  return ({ running: '正在运行', queued: '排队中', waiting_confirmation: '等待确认', paused: '已暂停', succeeded: '已完成', failed: '执行失败', cancelled: '已取消' } as Record<string, string>)[status || ''] || '尚未运行'
-}
-
-function taskActive(task: any) {
-  const run = taskRun(task)
-  const status = run?.id ? ws.runLive[run.id]?.status || run.status : run?.status
-  return ['queued', 'running', 'waiting_confirmation', 'paused'].includes(status)
-}
-
-function taskProgress(task: any) {
-  const run = taskRun(task)
-  if (!run) return 0
-  const live = run.id ? ws.runLive[run.id] : null
-  const status = live?.status || run.status
-  if (status === 'succeeded') return 100
-  const step = live?.stepIndex ?? run.currentStep
-  if (!task.steps?.length || step == null) return 0
-  return Math.min(99, Math.max(0, Math.round(((step + 1) / task.steps.length) * 100)))
-}
-
-function inviteRun(task: any) { return task?.latestRun }
-function inviteRunId(task: any) { return inviteRun(task)?.id || '' }
-function inviteStatus(task: any) {
-  const status = inviteRunId(task) ? ws.runLive[inviteRunId(task)]?.status || inviteRun(task)?.status : inviteRun(task)?.status
-  return ({ running: '正在运行', queued: '排队中', waiting_confirmation: '等待确认', paused: '已暂停', succeeded: '已完成', failed: '执行失败', cancelled: '已取消' } as Record<string, string>)[status || ''] || '尚未运行'
-}
-function inviteActive(task: any) {
-  const run = inviteRun(task)
-  const status = run?.id ? ws.runLive[run.id]?.status || run.status : run?.status
-  return ['queued', 'running', 'waiting_confirmation', 'paused'].includes(status)
-}
-function inviteStepIndex(task: any) {
-  const run = inviteRun(task)
-  return run?.id ? (ws.runLive[run.id]?.stepIndex ?? run.currentStep ?? null) : (run?.currentStep ?? null)
-}
-function inviteStuckText(task: any) {
-  const steps = task?.steps || []
-  const index = inviteStepIndex(task)
-  if (!inviteActive(task)) return `${inviteStatus(task)} · 共 ${steps.length} 步`
-  if (index == null) return `正在准备邀约 · 共 ${steps.length} 步`
-  const safeIndex = Math.min(Math.max(index, 0), Math.max(steps.length - 1, 0))
-  const message = inviteLiveMessage(task)
-  return `卡在第 ${safeIndex + 1}/${steps.length} 步${message ? `：${message}` : ''}`
-}
-function inviteStepIcon(task: any, index: number) {
-  const status = inviteRunId(task) ? ws.runLive[inviteRunId(task)]?.status || inviteRun(task)?.status : inviteRun(task)?.status
-  const current = inviteStepIndex(task)
-  if (status === 'succeeded') return '✅'
-  if (status === 'failed' && current === index) return '❌'
-  if (current != null && index < current) return '✅'
-  if (current == null && index === 0 && inviteActive(task)) return '⏳'
-  if (current === index && inviteActive(task)) return '⏳'
-  return '○'
-}
-function toStepIndex(value: unknown): number {
-  const parsed = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0
-}
-function inviteStepLabel(step: any) { return ({ waitMs: '等待页面状态', navigate: '打开平台页面', click: '点击页面元素', input: '填写页面内容', screenshot: '保存页面截图', readText: '读取页面信息' } as Record<string, string>)[step?.type] || step?.type || '任务步骤' }
-function inviteStepInput(step: any) {
-  const value = step?.input
-  if (!value) return '等待真实运行结果'
-  try { const text = JSON.stringify(value); return text.length > 90 ? `${text.slice(0, 87)}…` : text } catch { return '等待真实运行结果' }
-}
-function inviteLiveMessage(task: any) { const runId = inviteRunId(task); return runId ? String(ws.runLive[runId]?.message || '') : '' }
-function inviteLogs(task: any) { const runId = inviteRunId(task); return runId ? (ws.taskLogs[runId] || []) : [] }
-function inviteLogText(log: any) { return `[${new Date(log.at || Date.now()).toLocaleTimeString()}] ${log.message || log.phase || log.status || '任务状态已更新'}` }
-async function stopInvite(task: any) { const runId = inviteRunId(task); if (!runId) return; const result = await window.shopilot.task.cancel(runId); if (!result.ok) ws.toast(`停止邀约失败：${result.error.message}`, 'error'); await ws.refreshTasks() }
 
 async function removeBookmark(id: string) {
   const result = await window.shopilot.bookmark.delete(id)
@@ -1375,20 +1152,6 @@ async function removeBookmark(id: string) {
 
 function showInFolder(id: string) {
   void window.shopilot.download.showInFolder(id)
-}
-
-async function cancelTask(task: any) {
-  const runId = taskRun(task)?.id
-  if (!runId) return
-  const result = await window.shopilot.task.cancel(runId)
-  if (result.ok) await ws.refreshTasks()
-}
-
-async function runTask(task: any) {
-  if (taskActive(task)) return
-  const result = await window.shopilot.task.run(task.id, task.storeScope || undefined)
-  if (!result.ok) ws.toast(`运行任务失败：${result.error.message}`, 'error')
-  else await ws.refreshTasks()
 }
 
 async function confirmRun(runId: string, approved: boolean) {
@@ -1417,28 +1180,14 @@ watch(() => props.active, active => {
 watch(() => ws.proxyEpoch, () => { if (panel.value === 'env') void refreshEnvironment() })
 watch(() => ws.displayedStoreId, () => { verifyItems.value = []; void loadInviteConfig(); if (panel.value === 'env') void refreshEnvironment(); if (panel.value === 'bookmarks') void refreshEntryRoutes() })
 watch(() => panel.value, value => { if (value === 'env') void refreshEnvironment() })
-watch(() => invite.category, () => { if (invite.subcategory && !inviteSubcategoryOptions.value.includes(invite.subcategory)) invite.subcategory = ''; if (invite.category3 && !inviteThirdCategoryOptions.value.includes(invite.category3)) invite.category3 = '' })
-watch(() => invite.subcategory, () => { if (invite.category3 && !inviteThirdCategoryOptions.value.includes(invite.category3)) invite.category3 = '' })
-function clampInvitePicks(list: string[], max: number | undefined, label: string): string[] | null {
-  if (!max || list.length <= max) return null
-  ws.toast(`${label}最多选 ${max} 项：${list.slice(max).join('、')} 没选上`, 'info')
-  return list.slice(0, max)
-}
-watch(() => invite.benefits, value => {
-  const profile = inviteProfile.value
-  const clipped = clampInvitePicks(value, profile && isBatchProfile(profile) ? profile.benefitsMax : undefined, '权益')
-  if (clipped) invite.benefits = clipped
-}, { deep: true })
-watch(() => invite.strengths, value => {
-  const profile = inviteProfile.value
-  const clipped = clampInvitePicks(value, profile && isBatchProfile(profile) ? profile.strengths?.maxSelect : undefined, '核心优势')
-  if (clipped) invite.strengths = clipped
-}, { deep: true })
-
 onMounted(async () => {
   const saved = await window.shopilot.settings.get('ui.rightPanelCollapsed')
   if (saved.ok && saved.data?.value === true) panelOpen.value = false
   window.addEventListener('keydown', onBrowserKeydown)
+  window.addEventListener('keyup', onBrowserKeyup)
+  document.addEventListener('mousedown', onTabMenuOutside)
+  window.shopilot.on(EVENT_CHANNELS.BROWSER_TAB_CLOSE_REQUESTED, onTabCloseRequested)
+  window.shopilot.on(EVENT_CHANNELS.SESSION_EXPIRED, onSessionExpired)
   void ws.refreshTasks()
   void ws.refreshSecurity()
   void refreshPlatformHomeUrls()
@@ -1449,14 +1198,15 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  if (inviteSaveTimer) clearTimeout(inviteSaveTimer)
-  inviteSaveTimer = null
   // 看门狗与 ref 闭包一起清（2026-10-16 审查 P4-11）：否则卸载后定时器仍会跑，
   // 往已经没人看的 reactive 表里写失败态
-  for (const key of Array.from(attachWatchdogs.keys())) clearAttachWatchdog(key)
-  webviewEls.clear()
-  webviewRefCallbacks.clear()
+  webviews.dispose()
+  pendingPanelConfirmation.value = null
   window.removeEventListener('keydown', onBrowserKeydown)
+  window.removeEventListener('keyup', onBrowserKeyup)
+  document.removeEventListener('mousedown', onTabMenuOutside)
+  window.shopilot.off(EVENT_CHANNELS.BROWSER_TAB_CLOSE_REQUESTED, onTabCloseRequested)
+  window.shopilot.off(EVENT_CHANNELS.SESSION_EXPIRED, onSessionExpired)
 })
 </script>
 
@@ -1503,6 +1253,38 @@ onBeforeUnmount(() => {
 .browser-tab-close { display:grid;place-items:center;flex: 0 0 auto; color: var(--dash-text-muted); line-height: 1; }.browser-tab-close img { width:13px;height:13px;object-fit:contain; }
 .browser-tab-close:hover { color: #d92d20; }
 .browser-tab-spinner { width: 9px; height: 9px; flex: 0 0 auto; border: 1px solid rgba(150, 137, 255, .28); border-top-color: #b99aff; border-radius: 50%; animation: dashboard-browser-spin .8s linear infinite; }
+/* 固定标签：一键"关闭其他/全部"会跳过它，必须让用户在标签上就看得出来 */
+.browser-tab-pin { flex: 0 0 auto; font-size: 8px; line-height: 1; color: #8b5cf6; }
+.dashboard-browser-tab.multi-selected { border-color: #8b5cf6; background: #f1ebff; color: #4c1d95; }
+.dashboard-browser-tab.multi-selected.active { background: #ffffff; }
+/* 拖拽重排：被拖项淡出即可，落点按左右半在 JS 里算（见 tab-bar-actions.ts） */
+.dashboard-browser-tab.dragging { opacity: .55; }
+/* 多选工具条：只在真的选中时出现，避免常驻挤占标签宽度 */
+.dashboard-tabs-batch { display: flex; align-items: center; gap: 6px; margin-left: 6px; padding: 0 8px; height: 26px; align-self: center; border: 1px solid #d9ccff; border-radius: 999px; background: #f7f3ff; white-space: nowrap; }
+.tabs-batch-count { font-size: 11px; color: #5b21b6; }
+.tabs-batch-close, .tabs-batch-clear { padding: 0 8px; height: 20px; line-height: 20px; border: 1px solid transparent; border-radius: 999px; background: transparent; font-size: 11px; cursor: pointer; }
+.tabs-batch-close { color: #b42318; border-color: #f3c7c1; background: #fff5f3; }
+.tabs-batch-close:hover { background: #ffe7e2; }
+.tabs-batch-clear { color: #5b6472; }
+.tabs-batch-clear:hover { color: var(--dash-text); }
+/* 标签页右键菜单：fixed 定位（clientX/clientY 是视口坐标），层级压过 webview 容器 */
+.tabs-context-menu { position: fixed; z-index: 60; display: flex; flex-direction: column; min-width: 190px; padding: 4px; border: 1px solid var(--dash-border); border-radius: 10px; background: #ffffff; box-shadow: 0 12px 32px rgba(24, 39, 75, .18); }
+.tabs-context-menu button { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--dash-text); font-size: 12px; text-align: left; cursor: pointer; }
+.tabs-context-menu button:hover:not(:disabled) { background: #f2f4f8; }
+.tabs-context-menu button:disabled { color: #a7aebb; cursor: default; }
+.tabs-menu-count { min-width: 18px; padding: 0 5px; border-radius: 999px; background: #eef1f6; color: #5b6472; font-size: 10px; text-align: center; }
+.tabs-menu-sep { height: 1px; margin: 4px 6px; background: var(--dash-border); }
+/* 二次确认：自定义浮层而不是 window.confirm —— 原生对话框会阻塞渲染进程（连 CDP 求值一起卡住） */
+.tabs-confirm-mask { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; background: rgba(17, 24, 39, .38); }
+.tabs-confirm-card { width: min(420px, calc(100vw - 48px)); padding: 18px 20px; border-radius: 14px; background: #ffffff; box-shadow: 0 24px 60px rgba(17, 24, 39, .28); }
+.tabs-confirm-card h3 { margin: 0 0 8px; font-size: 15px; color: var(--dash-text); }
+.tabs-confirm-card p { margin: 0 0 16px; font-size: 12px; line-height: 1.7; color: #5b6472; }
+.tabs-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.tabs-confirm-actions button { min-width: 84px; height: 32px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+.tabs-confirm-cancel { border: 1px solid var(--dash-border); background: #ffffff; color: var(--dash-text); }
+.tabs-confirm-cancel:hover { background: #f4f6fb; }
+.tabs-confirm-ok { border: 1px solid #b42318; background: #d92d20; color: #ffffff; }
+.tabs-confirm-ok:hover { background: #b42318; }
 .dashboard-browser-tab-add { display:grid;place-items:center;width: 34px; min-width: 34px; height: 30px; align-self: center; }.dashboard-browser-tab-add img { width:16px;height:16px;object-fit:contain; }
 /* 侧栏开关：原先在头部栏，头部整条移除后挪到标签栏右端（margin-left:auto 保证永远贴在右端）。
    收起时把箭头翻转成"指向左"，语义与面板从右侧收/放一致 */
@@ -1590,6 +1372,11 @@ onBeforeUnmount(() => {
 .bind-row select { width: 100%; min-height: 30px; padding: 0 8px; font-size: 10px; }
 .env-note { margin-top: 7px; color: var(--dash-text-muted); font-size: 10px; line-height: 1.5; }
 .env-note.ok { color: #067647; }
+/* 登录检测结果的四种语体：success/warning/error 各有自己的颜色，info 沿用 muted */
+.env-note.login-check-success { color: #067647; }
+.env-note.login-check-warning { color: #b54708; }
+.env-note.login-check-error { color: #b42318; }
+.env-note.login-check-info { color: var(--dash-text-muted); }
 .proxy-item { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 7px 0; border-top: 1px solid rgba(111,137,177,.08); }
 .p-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #78849b; }.p-dot.proxy-ok { background: #20d19a; }.p-dot.proxy-error { background: #ef6a7b; }
 .p-info, .v-info { min-width: 0; flex: 1; }
@@ -1598,25 +1385,41 @@ onBeforeUnmount(() => {
 .row-del { display:grid;place-items:center; width: 21px; height: 23px; flex: 0 0 21px; border: 0; border-radius: 5px; background: transparent; color: #78849b; cursor: pointer; font-size: 15px; }.row-del img { width:14px;height:14px;object-fit:contain; }.row-del:hover, .row-del:focus-visible { background: rgba(217,45,32,.14); color: #d92d20; outline: none; }.row-del:disabled { cursor: default; opacity: .56; }
 .proxy-add { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }.proxy-add > input, .add-line input, .add-line select { min-height: 28px; padding: 0 7px; font-size: 9px; }.add-line { display: flex; gap: 6px; }.add-line select { width: 74px; min-width: 74px; flex: 0 0 74px; }.add-line .f-host { min-width: 60px; flex: 1 1 auto; }.add-line .f-port { width: 72px; min-width: 72px; flex: 0 0 72px; }.proxy-add > .mini-btn { align-self: flex-start; margin-top: 1px; }
 .verify-item { display: flex; align-items: center; gap: 7px; padding: 6px 0; }.verify-status-icon { width: 17px; height: 17px; flex: 0 0 17px; object-fit: contain; }.cf-btns { display: flex; flex-wrap: wrap; gap: 6px; }.cf-btns.wrap { gap: 6px; }.cf-btns .mini-btn { margin-top: 0; }.ck-search { width: 100%; min-height: 28px; margin-top: 7px; padding: 0 7px; font-size: 9px; }.cookie-count { margin: 5px 0; }.ck-item { padding: 5px 0; }.ck-flag { margin-left: 4px; padding: 1px 3px; border: 1px solid var(--dash-border); border-radius: 4px; color: var(--dash-text-muted); font-size: 8px; }.danger-btn { border-color: rgba(217,45,32,.35); color: #d92d20; }
-.browser-task-row { display: flex; align-items: center; gap: 7px; min-height: 54px; padding: 7px 3px; border-bottom: 1px solid rgba(111,137,177,.1); }
-.browser-task-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
-.browser-task-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dash-text-soft); font-size: 11px; }
-.browser-task-copy small { color: var(--dash-text-muted); font-size: 10px; }
-.browser-task-progress { height: 4px; overflow: hidden; border-radius: 4px; background: rgba(116, 132, 166, .2); }
-.browser-task-progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6563ff, #25baf1); }
-.browser-task-percent { flex: 0 0 31px; color: var(--dash-text-muted); font-size: 10px; text-align: right; }
 .browser-panel-link { width: 100%; margin-top: 12px; padding: 8px 0; border: 0; border-radius: 6px; background: rgba(124, 92, 255, .1); color: #5b3df5; font-size: 10px; cursor: pointer; }
 .browser-panel-link:hover, .browser-panel-link:focus-visible { background: rgba(124, 92, 255, .18); color: #4326d9; outline: none; }
-.task-subtabs { display: flex; gap: 4px; margin: 0 -2px 10px; padding: 3px; border-radius: 7px; background: #f2f4f8; }.task-subtabs button { flex: 1; min-height: 26px; border: 0; border-radius: 5px; background: transparent; color: var(--dash-text-muted); cursor: pointer; font-size: 9px; }.task-subtabs button:hover, .task-subtabs button:focus-visible { color: var(--dash-text); outline: none; }.task-subtabs button.on { background: rgba(117,83,235,.34); color: #4c1d95; }.task-subtabs button.pending { color: #8a5a12; }
-.invite-panel { min-width: 0; }.invite-config-sec { padding-bottom: 12px; }.invite-config-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 9px; }.invite-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }.invite-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: var(--dash-text-muted); font-size: 10px; }.invite-field input,.invite-field select,.invite-field textarea { min-width: 0; height: 29px; padding: 0 7px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); font-size: 10px; }.invite-field textarea { height: auto; min-height: 44px; padding: 6px 7px; line-height: 1.5; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }.invite-field input:focus,.invite-field select:focus,.invite-field textarea:focus { border-color: rgba(145,113,255,.78); outline: none; box-shadow: 0 0 0 2px rgba(145,113,255,.14); }.invite-choice-group { margin-top: 9px; color: var(--dash-text-muted); font-size: 10px; }.invite-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }.inv-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0 6px; border: 1px solid rgba(111,137,177,.22); border-radius: 999px; background: #f7f9fd; color: var(--dash-text-muted); cursor: pointer; font-size: 9px; }.inv-chip input { position: absolute; opacity: 0; pointer-events: none; }.inv-chip.on { border-color: rgba(135,102,246,.72); background: rgba(111,77,225,.18); color: #4c1d95; }.invite-missing { margin: 8px 0 0; padding: 7px 8px 7px 21px; border: 1px solid rgba(242,165,87,.2); border-radius: 7px; background: rgba(245,158,11,.12); color: #92400e; font-size: 9px; line-height: 1.5; }.invite-start-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; }.entry-routes-title { margin-left: 6px; }.entry-route { min-height: 42px; padding-left: 4px; }.invite-live-sec { padding: 3px 2px 12px; border-bottom: 0; }.invite-live-empty { min-height: 150px; padding: 12px; line-height: 1.6; }.invite-live-stuck { padding: 8px 9px; border: 1px solid rgba(242,165,87,.24); border-radius: 7px; background: rgba(245,158,11,.12); color: #92400e; font-size: 10px; line-height: 1.45; }.step-row { display: flex; align-items: flex-start; gap: 7px; padding: 7px 0 0 3px; }.s-ico { width: 17px; flex: 0 0 17px; text-align: center; font-size: 11px; }.tc-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }.invite-message { padding: 5px 0 2px; line-height: 1.5; white-space: normal; }.log-box { max-height: 210px; margin-top: 8px; padding: 7px 8px; overflow-y: auto; border: 1px solid var(--dash-border); border-radius: 7px; background: #f7f9fd; }.log-line { color: #4a5568; font-family: Consolas, monospace; font-size: 9px; line-height: 1.6; overflow-wrap: anywhere; }.invite-unavailable { padding: 10px 2px; border-bottom: 0; }.invite-unavailable .mini-btn { margin-top: 8px; }
+.invite-panel { min-width: 0; }.invite-config-sec { padding-bottom: 12px; }.invite-config-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 7px 0 9px; }.invite-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }.invite-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; color: var(--dash-text-muted); font-size: 10px; }.invite-field input,.invite-field select,.invite-field textarea { min-width: 0; height: 29px; padding: 0 7px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); font-size: 10px; }.invite-field textarea { height: auto; min-height: 44px; padding: 6px 7px; line-height: 1.5; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }.invite-field input:focus,.invite-field select:focus,.invite-field textarea:focus { border-color: rgba(145,113,255,.78); outline: none; box-shadow: 0 0 0 2px rgba(145,113,255,.14); }.invite-choice-group { margin-top: 9px; color: var(--dash-text-muted); font-size: 10px; }
+.invite-script-group textarea { width: 100%; box-sizing: border-box; min-height: 64px; margin-top: 6px; padding: 6px 7px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); font: inherit; font-size: 10px; line-height: 1.5; resize: vertical; }
+.invite-script-group textarea:focus { border-color: rgba(145,113,255,.78); outline: none; box-shadow: 0 0 0 2px rgba(145,113,255,.14); }
+.invite-script-group textarea[readonly] { background: #f7f8fa; color: var(--dash-text-muted); }
+.invite-script-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.invite-script-row select { min-width: 0; flex: 1; height: 26px; padding: 0 6px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); font: inherit; font-size: 9.5px; }
+.invite-ai-hint { margin-top: 5px; color: #b54708; }.invite-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }.inv-chip { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 0 6px; border: 1px solid rgba(111,137,177,.22); border-radius: 999px; background: #f7f9fd; color: var(--dash-text-muted); cursor: pointer; font-size: 9px; }.inv-chip input { position: absolute; opacity: 0; pointer-events: none; }.inv-chip.on { border-color: rgba(135,102,246,.72); background: rgba(111,77,225,.18); color: #4c1d95; }.invite-missing { margin: 8px 0 0; padding: 7px 8px 7px 21px; border: 1px solid rgba(242,165,87,.2); border-radius: 7px; background: rgba(245,158,11,.12); color: #92400e; font-size: 9px; line-height: 1.5; }.invite-start-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; }.entry-routes-title { margin-left: 6px; }.entry-route { min-height: 42px; padding-left: 4px; }.invite-live-sec { padding: 3px 2px 12px; border-bottom: 0; }.invite-live-empty { min-height: 150px; padding: 12px; line-height: 1.6; }.invite-live-stuck { padding: 8px 9px; border: 1px solid rgba(242,165,87,.24); border-radius: 7px; background: rgba(245,158,11,.12); color: #92400e; font-size: 10px; line-height: 1.45; }.step-row { display: flex; align-items: flex-start; gap: 7px; padding: 7px 0 0 3px; }.s-ico { width: 17px; flex: 0 0 17px; text-align: center; font-size: 11px; }.tc-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }.invite-message { padding: 5px 0 2px; line-height: 1.5; white-space: normal; }.log-box { max-height: 210px; margin-top: 8px; padding: 7px 8px; overflow-y: auto; border: 1px solid var(--dash-border); border-radius: 7px; background: #f7f9fd; }.log-line { color: #4a5568; font-family: Consolas, monospace; font-size: 9px; line-height: 1.6; overflow-wrap: anywhere; }.invite-unavailable { padding: 10px 2px; border-bottom: 0; }.invite-unavailable .mini-btn { margin-top: 8px; }
 @keyframes dashboard-browser-spin { to { transform: rotate(360deg); } }
 @media (max-width: 820px) {
   .dashboard-browser-surface { padding: 12px 14px 16px; }
   .dashboard-browser-hint { display: none; }
   .dashboard-browser-panel { width: 244px; min-width: 244px; }
+  .dashboard-browser-tab { min-width: 118px; max-width: 200px; }
 }
 @media (max-width: 680px) {
-  .dashboard-browser-body { flex-direction: column; overflow-y: auto; }
-  .dashboard-browser-main { min-height: 420px; flex: 1 1 420px; }
-  .dashboard-browser-panel { width: auto; min-width: 0; min-height: 230px; flex: 0 0 230px; }
+  .dashboard-browser-surface { gap: 8px; padding: 8px 9px 12px; }
+  .dashboard-browser-tabs { min-height: 38px; gap: 4px; padding-bottom: 2px; }
+  .dashboard-browser-tab { min-width: 112px; max-width: 180px; min-height: 34px; border-radius: 8px; }
+  .dashboard-browser-tab-add { width: 32px; min-width: 32px; }
+  .dashboard-browser-address { flex-wrap: wrap; min-height: 70px; padding: 6px; }
+  .dashboard-browser-address .dashboard-browser-url { order: 2; flex-basis: 100%; }
+  .dashboard-browser-body { flex-direction: column; overflow-y: auto; gap: 8px; }
+  .dashboard-browser-main { min-height: min(56vh, 430px); flex: 1 1 auto; }
+  .dashboard-browser-panel { width: auto; min-width: 0; min-height: 0; max-height: 42vh; flex: 0 0 auto; }
+  .dashboard-browser-panel-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); position: sticky; top: 0; z-index: 2; }
+  .dashboard-browser-panel-body { min-height: 0; max-height: calc(42vh - 46px); }
+  .dashboard-browser-surface.picker-mode .dashboard-browser-body { width: 100%; max-width: 100%; height: auto; flex-basis: auto; }
+}
+@media (max-width: 420px) {
+  .dashboard-browser-address { min-height: 104px; }
+  .dashboard-browser-address .browser-nav-button { width: 30px; height: 30px; }
+  .dashboard-browser-address .home-btn { margin-left: auto; }
+  .dashboard-browser-tabs { position: relative; margin-right: -2px; }
+  .dashboard-tabs-batch { position: absolute; right: 8px; top: 8px; z-index: 3; }
+  .dashboard-browser-panel-tabs button { font-size: 9px; }
 }</style>

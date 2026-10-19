@@ -62,7 +62,9 @@ function makeScope(roots: El[]) {
   }
   const fn = new Function('document', `${ENUM_DEEP_FN}\n${SCOPE_FN}; return { __scopeRoots, __inScope };`)(doc)
   return {
-    roots: (w: any, deep?: boolean) => fn.__scopeRoots(w, deep),
+    // 注入源码的 __scopeRoots 返回匹配到的容器数组，一个都没匹配到时为 null（调用方据此报 SCOPE_NOT_FOUND）。
+    // 显式标注：否则返回值是 any，回调参数会退化成隐式 any（noImplicitAny 报错）。
+    roots: (w: any, deep?: boolean): El[] | null => fn.__scopeRoots(w, deep),
     inScope: (rs: El[] | null, e: El) => fn.__inScope(rs, e)
   }
 }

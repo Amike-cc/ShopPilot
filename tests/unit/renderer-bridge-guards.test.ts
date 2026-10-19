@@ -21,7 +21,12 @@ describe('纯渲染预览的原生桥接边界', () => {
   })
 
   it('数据页卸载时移除事件并使主体采集轮询失效', () => {
-    const source = read('apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue')
+    const source = [
+  'apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-invoice-detail.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-tax-license.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-data-collection.ts',
+    ].map(p => readFileSync(resolve(p), 'utf8')).join('\n')
     expect(source).toContain('let entityCollectGeneration = 0')
     expect(source).toContain('entityCollectGeneration++')
     expect(source).toContain('window.shopilot?.off?.(EVENT_CHANNELS.TASK_PROGRESS')

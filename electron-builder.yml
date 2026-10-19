@@ -7,11 +7,37 @@ directories:
   output: release
   buildResources: build
 
+# 只保留中文/英文两份 Chromium locale 资源。默认会打进 55 个语言包（约 48 MB）——
+# 本应用界面只有中文，英文留作系统语言兜底；其余语言包只会让安装包变大。
+# 若将来界面需要更多语言，在这里补语言码即可（chromium 资源文件名 = 语言码 .pak）。
+electronLanguages:
+  - zh-CN
+  - en-US
+
+# 最高压缩：NSIS 安装包显著变小，代价是打包变慢（本机可接受）。
+compression: maximum
+
+# 打包后处理钩子：删除 LICENSES.chromium.html（约 19.5 MB）等随包冗余文件。
+# 脚本自身保证"文件不存在/删除失败都不阻断构建"（见 tools/release/after-pack.js）。
+afterPack: tools/release/after-pack.js
+
 # monorepo：main 指向 apps/desktop 构建产物
 files:
   - apps/desktop/out/**
   - apps/desktop/resources/**
   - package.json
+  # ---- 以下为体积瘦身规则（均为"!"排除）----
+  # 注意：app-builder-lib 的 getNodeModuleFileMatcher 只把 files 里的 "!" 规则应用到
+  # node_modules 收集（正向规则不参与），所以原生模块的裁剪必须写成"!"排除项。
+  # better-sqlite3 的 deps/ 是 SQLite C 源码（sqlite3.c 9.08 MB），只在源码编译时用；
+  # 运行期加载的是 prebuilds/*.node，故整目录排除。
+  - "!**/better-sqlite3/deps/**"
+  # 只保留 Windows x64 的 N-API 预编译二进制（其余平台/架构 7 个文件约 14.2 MB）。
+  # 注意 win32-x64.node 必须留下：better-sqlite3 的 lib/binding.js 运行期优先加载它。
+  - "!**/better-sqlite3/prebuilds/darwin-*.node"
+  - "!**/better-sqlite3/prebuilds/linux-*.node"
+  - "!**/better-sqlite3/prebuilds/linuxmusl-*.node"
+  - "!**/better-sqlite3/prebuilds/win32-arm64.node"
 
 asar: true
 # 离线构建：直接复用本地 electron 发行目录（免再下载 electron zip）
@@ -20,14 +46,50 @@ electronDist: node_modules/electron/dist
 extraResources:
   - from: build/icon.ico
     to: icon.ico
-# 原生模块必须解出 asar 才能被 require 加载
+# 原生模块必须解出 asar 才能被 require 加载。
+# 这里的通配仍然覆盖 better-sqlite3 整包，但 files 里已把 deps/ 与非 win32-x64 的
+# prebuilds 排除在打包之外（不进 asar 也就不进 asar.unpacked）；
+# 实际解包出来的就是 win32-x64.node + lib/ + build/ 与 bindings / file-uri-to-path。
 asarUnpack:
   - "**/node_modules/better-sqlite3/**"
   - "**/node_modules/bindings/**"
   - "**/node_modules/file-uri-to-path/**"
 
+# ---------------------------------------------------------------------------
+# 代码签名（当前未配置证书 → 产物为 INTERNAL_BUILD；详见 docs/RELEASE_SIGNING.md）
+#
+# forceCodeSigning 默认就是 false，这里显式写出，语义是"没证书也不要让打包失败"，
+# 避免有人误以为必须先把证书配好才能出包。切到"必须签名"时把它改成 true
+# （届时缺证书会直接构建失败，而不是悄悄出未签名包）。
+#
+# 【凭据一律只走环境变量，绝不写进本文件、绝不入库】
+# 1) 传统 PFX 证书（signtool.exe 路径）：
+#      CSC_LINK=file:///D:/keys/shopilot.pfx   （或 base64/证书内容；Windows 亦可用 WIN_CSC_LINK）
+#      CSC_KEY_PASSWORD=<证书口令>              （Windows 亦可用 WIN_CSC_KEY_PASSWORD）
+#    需要自定义哈希算法/时间戳时，用 electron-builder 26 的嵌套写法（不要用已废弃的顶层字段）：
+#      win:
+#        signtoolOptions:
+#          signingHashAlgorithms: [sha256]
+#          rfc3161TimeStampServer: http://timestamp.digicert.com
+#
+# 2) Azure Trusted Signing（electron-builder 26.15.3 已支持）：win.azureSignOptions
+#    与 win.signtoolOptions **互斥**，只配一个。认证走 Microsoft Entra ID 的环境变量
+#    （AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET，即 Azure Identity
+#    的 EnvironmentCredential），同样只在本机/CI 环境注入，不写进仓库。示例：
+#      win:
+#        azureSignOptions:
+#          publisherName: <证书上的发布者名称>
+#          endpoint: https://<region>.codesigning.azure.net
+#          certificateProfileName: <证书配置文件名称>
+#          codeSigningAccountName: <Trusted Signing 账户名>
+#          fileDigest: SHA256                  # 默认 SHA256
+#          timestampRfc3161: http://timestamp.acs.microsoft.com   # 默认值
+#          timestampDigest: SHA256             # 默认值
+# ---------------------------------------------------------------------------
 win:
   icon: build/icon.ico
+  # 未配置证书（CSC_LINK 等）时保持未签名构建；见上方签名说明与 docs/RELEASE_SIGNING.md
+  forceCodeSigning: false
   target:
     - target: nsis
       arch:

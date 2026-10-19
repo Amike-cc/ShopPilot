@@ -85,10 +85,8 @@ async function main() {
   const locked = await ui.eval(`return !!document.querySelector('.lock-overlay')`)
   if (locked) { console.log('NOTE - 应用处于锁屏状态，先解锁再验证'); return }
 
-  // 走界面进「数据分析 → 发票中心」
-  await ui.eval(`const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent||'').includes('数据分析')); if (nav) nav.click(); return true`)
-  await until(() => ui.eval(`return !!document.querySelector('.unified-route-tabs')`), 12000, 'route tabs')
-  await ui.eval(`const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(i => (i.textContent||'').includes('发票中心')); if (tab) tab.click(); return true`)
+  // 走界面进独立「发票中心」页面
+  await ui.eval(`const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent||'').includes('发票中心')); if (nav) nav.click(); return true`)
   await until(() => ui.eval(`return !!document.querySelector('[data-test="invoice-license-bar"]')`), 15000, 'invoice center')
 
   const snapshot = await ui.eval(`

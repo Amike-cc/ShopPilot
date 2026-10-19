@@ -35,7 +35,8 @@ const mocks = vi.hoisted(() => {
   const cancelCustomerServiceSessionRestore = vi.fn(async () => undefined)
   const cancelStoreSessionRestore = vi.fn(async () => undefined)
   const getStorePartition = vi.fn((storeId: string) => `persist:store_${storeId}`)
-  const getProxyAuthInjection = vi.fn(() => null)
+  // 返回类型与 browser/session-manager.getProxyAuthInjection 对齐（非 null 时是脱敏的代理注入记录）
+  const getProxyAuthInjection = vi.fn<() => { at: number; username: string; proxyId: string } | null>(() => null)
   const clearStoreSessionSnapshot = vi.fn()
   const fromPartition = vi.fn((partition: string) => {
     let value = partitions.get(partition)
@@ -189,7 +190,7 @@ describe('ShopSessionManager', () => {
 
   it('状态摘要不含 Session、partition、Cookie 或 Token 原文', async () => {
     await checkSessionHealth('store_a')
-    const summary = getSessionStatus('store_a') as Record<string, unknown>
+    const summary = getSessionStatus('store_a')
     const serialized = JSON.stringify(summary)
 
     expect(summary.status).toBe('READY')
@@ -204,7 +205,7 @@ describe('ShopSessionManager', () => {
   it('只回传代理认证是否已处理，不回传凭据身份或时间戳', async () => {
     mocks.getProxyAuthInjection.mockReturnValue({ at: Date.now(), username: 'alice', proxyId: 'proxy_a' })
     await checkSessionHealth('store_a')
-    const summary = getSessionStatus('store_a') as Record<string, unknown>
+    const summary = getSessionStatus('store_a')
     expect(summary.proxyAuthObserved).toBe(true)
     expect(summary).not.toHaveProperty('lastProxyAuth')
     expect(JSON.stringify(summary)).not.toContain('alice')

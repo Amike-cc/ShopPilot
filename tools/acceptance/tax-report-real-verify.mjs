@@ -1,5 +1,5 @@
 /**
- * 「涉税信息报送」**真机**验收：在正在运行的应用里点一次采集，看真实平台页的数据能不能落到界面上。
+ * 「涉税信息」**真机**验收：在正在运行的应用里点一次采集，看真实平台页的数据能不能落到界面上。
  *
  * 与 tools/acceptance/invoice-license-local-verify.js 的区别：那个用隔离库 + 造数据，
  * 这个**必须有一个登录态的快手小店**（平台页面要有真实数据），因此归为 real-verify。
@@ -74,11 +74,9 @@ async function main() {
   await ui.eval(`const until = Date.now() + 20000; while (!window.shopilot && Date.now() < until) await new Promise(r => setTimeout(r, 100)); return !!window.shopilot`)
   if (await ui.eval(`return !!document.querySelector('.lock-overlay')`)) throw new Error('应用处于锁屏状态，先解锁')
 
-  // 走界面进「数据分析 → 发票中心」
-  await ui.eval(`const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent||'').includes('数据分析')); if (nav) nav.click(); return true`)
-  await until(() => ui.eval(`return !!document.querySelector('.unified-route-tabs')`), 15000, 'route tabs')
-  await ui.eval(`const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(i => (i.textContent||'').includes('发票中心')); if (tab) tab.click(); return true`)
-  await until(() => ui.eval(`return !!document.querySelector('[data-test="invoice-license-bar"]')`), 20000, 'invoice center')
+  // 走界面进独立「涉税信息」页面；它与发票中心是两个侧栏页面。
+  await ui.eval(`const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent||'').includes('涉税信息')); if (!nav) throw new Error('没找到「涉税信息」侧栏入口'); nav.click(); return true`)
+  await until(() => ui.eval(`return !!document.querySelector('[data-test="unified-tax-page"]')`), 20000, 'tax page')
 
   /* ---- 1. 涉税分区的静态结构 ---- */
   // 默认视图是「按主体统计」；逐店的那些断言先切到「按店铺」（两个视图各测各的）
@@ -101,7 +99,7 @@ async function main() {
       rows
     }
   `)
-  check('发票中心里有「涉税信息报送」分区', staticInfo.section && staticInfo.collectBtn)
+  check('独立「涉税信息」页面渲染涉税报送模块', staticInfo.section && staticInfo.collectBtn)
   check('平台用途限制与数据同屏显示，且写明「不得作为税务申报」',
     staticInfo.disclaimer.includes('不得作为税务申报'), staticInfo.disclaimer.slice(0, 80))
   check('逐店列出（含未实测平台的如实说明）', staticInfo.rows.length > 0,

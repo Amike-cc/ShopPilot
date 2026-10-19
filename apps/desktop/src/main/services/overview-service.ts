@@ -549,8 +549,8 @@ export function overviewDatacenterSummary() {
     }
   }
 
-  // 邀约运行（任务名前缀「达人邀约 ·」）：状态分布 + 最近若干条
-  const inviteWhere = "t.name LIKE '达人邀约 ·%'"
+  // 邀约运行：用迁移 v33 的显式 kind（名称前缀只做展示，改名/智能体建任务不再影响统计）
+  const inviteWhere = "t.kind = 'creator_invite'"
   const inviteByStatus = db.prepare(`
     SELECT r.status, COUNT(*) c FROM task_runs r JOIN tasks t ON t.id = r.task_id
     WHERE ${inviteWhere} GROUP BY r.status

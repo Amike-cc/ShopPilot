@@ -121,12 +121,19 @@ export function createTask(input: TaskCreateInput): TaskView {
   const db = getDatabase()
   const now = Date.now()
   const taskId = newId('task')
+  /**
+   * 类型兜底：迁移 v33 之前的老调用方（智能体 delegate、旧任务导入）不传 kind。
+   * 只在 createTask 这一处按旧前缀推断，写入后即为显式列——之后改名不影响统计。
+   */
+  const kind = parsed.kind ?? (parsed.name.startsWith('达人邀约 ·') ? 'creator_invite' : 'custom')
+  const source = parsed.source ?? 'manual'
 
   db.transaction(() => {
     db.prepare(
-      'INSERT INTO tasks (id, name, store_scope, status, schedule_json, last_fired_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)'
+      'INSERT INTO tasks (id, name, store_scope, status, schedule_json, last_fired_at, created_at, updated_at, kind, source, campaign_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
     ).run(taskId, parsed.name, parsed.storeScope ?? null, 'active',
-      parsed.schedule ? JSON.stringify(parsed.schedule) : null, null, now, now)
+      parsed.schedule ? JSON.stringify(parsed.schedule) : null, null, now, now,
+      kind, source, parsed.campaignId ?? null)
 
     const insStep = db.prepare(
       'INSERT INTO task_steps (id, task_id, step_index, type, input_json, timeout_ms, retry_limit) VALUES (?,?,?,?,?,?,?)'
@@ -234,6 +241,9 @@ export function getTask(taskId: string): TaskView | null {
     schedule: safeJson(row.schedule_json, null),
     lastFiredAt: row.last_fired_at ?? null,
     createdAt: row.created_at, updatedAt: row.updated_at,
+    kind: row.kind === 'creator_invite' ? 'creator_invite' : 'custom',
+    source: ['manual', 'panel', 'agent', 'campaign'].includes(String(row.source)) ? row.source : 'manual',
+    campaignId: row.campaign_id ?? null,
     steps, latestRun: latest ? mapRunRow(latest) : null
   }
 }

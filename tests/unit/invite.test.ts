@@ -1,11 +1,13 @@
 ﻿import { describe, it, expect } from 'vitest'
 import {
   INVITE_PROFILES, INVITE_SUPPORTED_PLATFORMS, inviteProfileFor,
-  isBatchProfile, isAssistProfile
+  isBatchProfile, isAssistProfile,
+  type AssistInviteProfile, type BatchInviteProfile, type InviteProfile
 } from '../../packages/shared/src/constants/invite'
 import {
   buildInviteSteps, buildAssistSteps, buildBatchSteps,
-  hasRequiredBatchContacts, urlPathHint
+  hasRequiredBatchContacts, urlPathHint,
+  type BatchInviteOptions
 } from '../../packages/shared/src/invite-steps'
 import { stepInputSchemas, taskCreateSchema } from '../../apps/desktop/src/main/tasks/task-step-schemas'
 
@@ -152,8 +154,28 @@ describe('达人邀约平台档案', () => {
 
 // ---------- 步骤构造 ----------
 
-const WX = inviteProfileFor('微信小店')!
-const DD = inviteProfileFor('抖店')!
+/**
+ * 按平台名取档案并用共享 type guard 收窄。
+ *
+ * 为什么必须收窄：`inviteProfileFor()` 返回 `InviteProfile = BatchInviteProfile | AssistInviteProfile`，
+ * 两个分支的字段集不同（批量流有 maxBatch/categoryPopoverSelector，辅助流有 selectors 等）。
+ * 直接 `inviteProfileFor(x)!` 拿到的是联合类型，访问分支专属字段会编译不过；这里按 flow 收窄一次，
+ * 档案缺失/flow 对不上时立刻抛错（比在 30 处断言更早暴露问题）。
+ */
+function requireBatchProfile(platform: string): BatchInviteProfile {
+  const p = inviteProfileFor(platform)
+  if (!p || !isBatchProfile(p)) throw new Error(`${platform} 应为 batch-list 档案`)
+  return p
+}
+
+function requireAssistProfile(platform: string): AssistInviteProfile {
+  const p = inviteProfileFor(platform)
+  if (!p || !isAssistProfile(p)) throw new Error(`${platform} 应为 assist-form 档案`)
+  return p
+}
+
+const WX = requireAssistProfile('微信小店')
+const DD = requireBatchProfile('抖店')
 
 describe('微信小店（assist-form）步骤构造', () => {
   const SQUARE = 'https://store.weixin.qq.com/shop/findersquare/find'
@@ -719,7 +741,7 @@ describe('抖店（batch-list）步骤构造', () => {
 // ---------- 快手小店（batch-list 的第二个平台：差异全部走档案字段） ----------
 
 describe('快手小店（batch-list）步骤构造', () => {
-  const KS = inviteProfileFor('快手小店')!
+  const KS = requireBatchProfile('快手小店')
   const ksBuild = (over: Partial<Parameters<typeof buildBatchSteps>[1]> = {}) => buildBatchSteps(
     KS as any,
     {
@@ -998,7 +1020,9 @@ describe('快手小店（batch-list）步骤构造', () => {
  * 没检查"能不能被创建"。这道校验就是那次缺陷的回归网。
  */
 describe('生成的步骤必须能真的创建任务（形状与白名单一致）', () => {
-  const CASES: Array<[string, any, string]> = [
+  // 第三列是批量流选项（下面统一用 buildBatchSteps 构造），profile 理论上可为 null，
+  // 构造器自身会拒绝缺失档案；这里不用 any，让选项字面量也接受类型检查。
+  const CASES: Array<[string, InviteProfile | null, BatchInviteOptions]> = [
     [
       '抖店',
       inviteProfileFor('抖店'),

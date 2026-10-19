@@ -1646,6 +1646,230 @@ export const migrations: Migration[] = [
       `)
     },
     down: (db) => db.exec('DROP INDEX IF EXISTS idx_media_sha; CREATE UNIQUE INDEX IF NOT EXISTS idx_media_sha ON product_media(sha256) WHERE sha256 IS NOT NULL;')
+  },
+  {
+    version: 33,
+    name: 'creator_invite_records',
+    up: (db) => {
+      /**
+       * 达人邀约 v2（2026-10-19）：把「一次性任务」升级成「批次 + 逐人记录」。
+       *
+       * 关键修复：此前批量流（抖店/快手）一轮勾 40 位，但 `recordInvite` 只认
+       * `pendingCreatorNickname`，该字段只有微信辅助流的 clickByText 才会赋值——
+       * 批量流实际上没有写台账，7 天去重对抖店/快手基本失效。这里新增逐人记录表，
+       * 由引擎在批次发送成功后按实际勾选名单一次性写入。
+       *
+       * 为什么 tasks.kind 必须是显式列：面板/概览此前用 `name LIKE '达人邀约 ·%'`
+       * 判断类型，用户改名或智能体建任务后统计就失真。迁移时按旧前缀回填一次。
+       */
+      /**
+       * 旧库夹具（tests/unit/migrations.test.ts 的 v3 夹具）只造了 task_runs，
+       * 没有 tasks 表；真实 v3 库有。这里先判表存在，避免把一个测试夹具当成
+       * "生产库必然缺表"而让迁移整体失败。缺表时只跳过 tasks 相关列，
+       * 批次/记录表照常创建（它们不依赖 tasks 外键）。
+       */
+      const hasTasks = (() => {
+        try { return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get() } catch { return false }
+      })()
+      if (hasTasks) {
+        db.exec(`
+          ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'custom';
+          ALTER TABLE tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+          ALTER TABLE tasks ADD COLUMN campaign_id TEXT;
+          CREATE INDEX IF NOT EXISTS idx_tasks_kind ON tasks(kind, created_at DESC);
+          UPDATE tasks SET kind = 'creator_invite' WHERE name LIKE '达人邀约 ·%';
+        `)
+      }
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS invite_campaigns (
+          id TEXT PRIMARY KEY,
+          store_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          name TEXT NOT NULL,
+          status TEXT NOT NULL,
+          filters_json TEXT,
+          script_snapshot TEXT,
+          product_ids_json TEXT,
+          target_count INTEGER NOT NULL DEFAULT 0,
+          daily_cap INTEGER,
+          send_mode TEXT NOT NULL DEFAULT 'direct',
+          created_by TEXT NOT NULL DEFAULT 'panel',
+          task_id TEXT,
+          run_id TEXT,
+          created_at INTEGER NOT NULL,
+          started_at INTEGER,
+          finished_at INTEGER,
+          stats_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_invite_campaigns_store_time ON invite_campaigns(store_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_invite_campaigns_status ON invite_campaigns(status, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS invite_records (
+          id TEXT PRIMARY KEY,
+          campaign_id TEXT,
+          store_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          creator_key TEXT NOT NULL,
+          identity_level TEXT NOT NULL,
+          nickname TEXT NOT NULL,
+          finder_username TEXT,
+          avatar_url TEXT,
+          status TEXT NOT NULL,
+          status_source TEXT NOT NULL,
+          status_reason TEXT,
+          script_text TEXT,
+          product_ids_json TEXT,
+          task_id TEXT,
+          run_id TEXT,
+          invited_at INTEGER,
+          status_updated_at INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_invite_records_store_time ON invite_records(store_id, invited_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_invite_records_campaign ON invite_records(campaign_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_invite_records_creator ON invite_records(store_id, platform, creator_key, invited_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_invite_records_status ON invite_records(store_id, status, invited_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_invite_records_idem ON invite_records(run_id, creator_key, invited_at);
+
+        INSERT OR IGNORE INTO invite_records (
+          id, campaign_id, store_id, platform, creator_key, identity_level, nickname, finder_username,
+          status, status_source, task_id, run_id, invited_at, created_at, updated_at
+        )
+        SELECT
+          'rec_' || id,
+          NULL,
+          store_id,
+          COALESCE(NULLIF(platform, ''), 'unknown'),
+          CASE WHEN finder_username IS NOT NULL AND finder_username <> ''
+               THEN 'u:' || finder_username
+               ELSE 'n:' || lower(trim(nickname)) END,
+          CASE WHEN finder_username IS NOT NULL AND finder_username <> ''
+               THEN 'username' ELSE 'nickname' END,
+          nickname,
+          finder_username,
+          'sent',
+          'local',
+          task_id,
+          run_id,
+          invited_at,
+          invited_at,
+          invited_at
+        FROM invite_history
+        WHERE nickname IS NOT NULL AND trim(nickname) <> '';
+      `)
+    },
+    down: (db) => {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_invite_records_status;
+        DROP INDEX IF EXISTS idx_invite_records_creator;
+        DROP INDEX IF EXISTS idx_invite_records_campaign;
+        DROP INDEX IF EXISTS idx_invite_records_store_time;
+        DROP INDEX IF EXISTS idx_invite_records_idem;
+        DROP TABLE IF EXISTS invite_records;
+        DROP INDEX IF EXISTS idx_invite_campaigns_status;
+        DROP INDEX IF EXISTS idx_invite_campaigns_store_time;
+        DROP TABLE IF EXISTS invite_campaigns;
+        DROP INDEX IF EXISTS idx_tasks_kind;
+      `)
+      // 旧库夹具可能没有 tasks 表 / 列已不存在：逐条 try，不让回滚失败掩盖真实原因
+      for (const sql of ['ALTER TABLE tasks DROP COLUMN campaign_id', 'ALTER TABLE tasks DROP COLUMN source', 'ALTER TABLE tasks DROP COLUMN kind']) {
+        try { db.exec(sql) } catch { /* 表/列不存在 */ }
+      }
+    }
+  },
+  {
+    version: 34,
+    name: 'invite_creators_assets_events',
+    up: (db) => {
+      /**
+       * 达人库 / 话术库 / 商品集 / 邀约审计（2026-10-19，v2 P3/P4）。
+       *
+       * 达人库按「店铺 × 平台 × creator_key」唯一：同一达人在两家店可以有不同标签/黑名单，
+       * 不把 A 店的黑名单意外带到 B 店。creator_key 的口径由 shared/invite-identity.ts 统一。
+       */
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS creator_profiles (
+          id TEXT PRIMARY KEY,
+          store_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          creator_key TEXT NOT NULL,
+          identity_level TEXT NOT NULL,
+          nickname TEXT NOT NULL,
+          finder_username TEXT,
+          avatar_url TEXT,
+          categories_json TEXT,
+          level TEXT,
+          sales_tier TEXT,
+          follower_count INTEGER,
+          metrics_json TEXT,
+          tags_json TEXT,
+          note TEXT,
+          blacklisted INTEGER NOT NULL DEFAULT 0,
+          blacklist_reason TEXT,
+          last_status TEXT,
+          last_invited_at INTEGER,
+          invite_count INTEGER NOT NULL DEFAULT 0,
+          first_seen_at INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          UNIQUE(store_id, platform, creator_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_creator_profiles_store ON creator_profiles(store_id, platform, last_invited_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_creator_profiles_blacklist ON creator_profiles(store_id, platform, blacklisted);
+
+        CREATE TABLE IF NOT EXISTS invite_scripts (
+          id TEXT PRIMARY KEY,
+          store_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          name TEXT NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'manual',
+          template TEXT NOT NULL,
+          variables_json TEXT,
+          max_len INTEGER,
+          status TEXT NOT NULL DEFAULT 'active',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_invite_scripts_store ON invite_scripts(store_id, platform, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS invite_product_sets (
+          id TEXT PRIMARY KEY,
+          store_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          name TEXT NOT NULL,
+          product_ids_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_invite_product_sets_store ON invite_product_sets(store_id, platform, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS invite_events (
+          id TEXT PRIMARY KEY,
+          store_id TEXT,
+          campaign_id TEXT,
+          record_id TEXT,
+          run_id TEXT,
+          type TEXT NOT NULL,
+          payload_json TEXT,
+          at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_invite_events_store_time ON invite_events(store_id, at DESC);
+        CREATE INDEX IF NOT EXISTS idx_invite_events_campaign ON invite_events(campaign_id, at DESC);
+      `)
+    },
+    down: (db) => db.exec(`
+      DROP INDEX IF EXISTS idx_invite_events_campaign;
+      DROP INDEX IF EXISTS idx_invite_events_store_time;
+      DROP TABLE IF EXISTS invite_events;
+      DROP INDEX IF EXISTS idx_invite_product_sets_store;
+      DROP TABLE IF EXISTS invite_product_sets;
+      DROP INDEX IF EXISTS idx_invite_scripts_store;
+      DROP TABLE IF EXISTS invite_scripts;
+      DROP INDEX IF EXISTS idx_creator_profiles_blacklist;
+      DROP INDEX IF EXISTS idx_creator_profiles_store;
+      DROP TABLE IF EXISTS creator_profiles;
+    `)
   }
 ]
 

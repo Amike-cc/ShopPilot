@@ -43,19 +43,11 @@ export const PLATFORM_ADAPTER_ERROR_CODES = [
 
 export type PlatformAdapterErrorCode = typeof PLATFORM_ADAPTER_ERROR_CODES[number]
 
-import type {
-  OrderCollectionStatus,
-  OrderDataSource,
-  UnifiedOrder
-} from './unified-order'
-import type {
-  PddOrderObservationReport,
-  PddOrderObservationStartOptions
-} from './pdd-order-observation'
 
 /** 适配器能力只描述当前真实实现边界；未实现能力必须保持 false。 */
 export interface PlatformAdapterCapabilities {
   loginDetection: boolean
+  /** Legacy capability flag kept as false for compatibility with stored diagnostics; order management is removed. */
   orders: boolean
   salesMetrics: boolean
   productSalesMetrics: boolean
@@ -64,32 +56,6 @@ export interface PlatformAdapterCapabilities {
   refunds: boolean
   salesData: boolean
 }
-
-
-export interface PlatformOrderCollectionOptions {
-  maxPages: number
-  maxOrders: number
-  timeoutMs: number
-}
-
-/** 观察阶段只返回安全报告，不返回响应正文。 */
-export type PlatformOrderObservationOptions = PddOrderObservationStartOptions
-
-/** Adapter 返回给 Main Service 的订单采集结果，不包含 Cookie/Token/Header。 */
-export interface PlatformOrderCollectionResult {
-  status: Exclude<OrderCollectionStatus, 'ALREADY_RUNNING'>
-  source: OrderDataSource
-  orders: UnifiedOrder[]
-  fetchedCount: number
-  skippedCount: number
-  observedResponseCount: number
-  nextCursor: string | null
-  hasMore: boolean
-  reasonCode: string
-  safeMessage: string
-  observationReport?: PddOrderObservationReport
-}
-
 
 /**
  * 平台登录检测的安全结果。

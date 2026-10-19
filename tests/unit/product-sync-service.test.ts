@@ -23,8 +23,12 @@ const DatabaseSyncCtor = loadSqlite()
 const STORE_ID = 'store_wechat_test'
 const PLATFORM = '微信小店'
 
-/** 造一个"商品能力已实测"的假适配器：能力位为真 + 真的实现了 collectProducts。 */
-function fakeAdapter(result: PlatformProductCollectionResult | (() => Promise<PlatformProductCollectionResult>), capable = true) {
+/**
+ * 造一个"商品能力已实测"的假适配器：能力位为真 + 真的实现了 collectProducts。
+ * 采集函数允许同步或异步返回（服务内部统一 await），所以参数用宽签名——
+ * 之前写成"只接受 Promise"会让 `() => okResult(...)` 这种同步桩全部编译不过。
+ */
+function fakeAdapter(result: PlatformProductCollectionResult | (() => PlatformProductCollectionResult | Promise<PlatformProductCollectionResult>), capable = true) {
   return {
     adapterName: '微信小店SalesMetricsAdapter',
     adapterVersion: 'test-v1',
@@ -54,7 +58,7 @@ function product(id: string, title: string, price = 2990): PlatformProduct {
   }
 }
 
-function setupRuntime(overrides: Partial<ProductSyncRuntime> = {}): { runtime: ProductSyncRuntime; db: SqliteDb; repo: ProductRepository } {
+function setupRuntime(overrides: Partial<ProductSyncRuntime> = {}): { runtime: ProductSyncRuntime; db: SqliteDb; repo: ProductRepository; released: string[] } {
   const db = new DatabaseSyncCtor!(':memory:')
   // 全量迁移：拿到与生产一致的完整表结构（含 stores 与商品域）
   const shim = {

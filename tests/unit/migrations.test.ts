@@ -35,6 +35,16 @@ function loadSqlite(): SqliteCtor | null {
 const DatabaseSyncCtor = loadSqlite()
 const realDbIt = DatabaseSyncCtor ? it : it.skip
 
+/**
+ * 打开一个内存库。
+ * node:sqlite 缺失（Node < 22.5）时相关用例由 realDbIt 跳过、根本不会执行，
+ * 所以这里的抛错是"用例不该跑"的防御；用显式窄化而不是到处写非空断言。
+ */
+function openMemoryDb(): SqliteDb {
+  if (!DatabaseSyncCtor) throw new Error('node:sqlite 不可用（Node < 22.5）：该用例应被 realDbIt 跳过')
+  return new DatabaseSyncCtor(':memory:')
+}
+
 function apply(db: SqliteDb, version: number): void {
   const migration = migrations.find(m => m.version === version)
   if (!migration) throw new Error(`缺少 v${version} 迁移`)
@@ -71,7 +81,7 @@ function withTransactionShim(db: SqliteDb): SqliteDb & { transaction: (fn: (...a
 
 /** 复刻"已升到 v3 但还没跑 v4"的旧库：任务表存在，缺两个查询索引。 */
 function createLegacyV3Database(): SqliteDb {
-  const db = new DatabaseSyncCtor(':memory:')
+  const db = openMemoryDb()
   db.exec(`
     CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);
     CREATE TABLE task_runs (
@@ -152,7 +162,7 @@ describe('数据库迁移', () => {
   })
 
   realDbIt('v19 商品域建表：表/索引/关键约束都在，且可重复执行（真实 SQLite）', () => {
-    const db = new DatabaseSyncCtor(':memory:')
+    const db = openMemoryDb()
     apply(db, 19)
 
     const TABLES = [
@@ -177,7 +187,7 @@ describe('数据库迁移', () => {
   })
 
   realDbIt('v19 的两条核心不变式：平台商品唯一、已归并的本地商品在同店只允许一条（真实 SQLite）', () => {
-    const db = new DatabaseSyncCtor(':memory:')
+    const db = openMemoryDb()
     // 只跑 v19 时 stores 还不存在（它是更早的迁移建的）；这里补一张最小表，专注验证商品域的约束
     db.exec(`CREATE TABLE stores (id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, created_at INTEGER, updated_at INTEGER);`)
     apply(db, 19)
@@ -211,7 +221,7 @@ describe('数据库迁移', () => {
   })
 
   realDbIt('v19 可回滚：down 之后商品表全部消失，且不触碰其它域（真实 SQLite）', () => {
-    const db = new DatabaseSyncCtor(':memory:')
+    const db = openMemoryDb()
     apply(db, 12)          // 先建一个别的域的表，验证回滚不误伤
     apply(db, 19)
     const migration = migrations.find(m => m.version === 19)!
@@ -301,7 +311,7 @@ describe('数据库迁移', () => {
   })
 
   realDbIt('全新库按 v1→v4 顺序执行能建出索引且不重复建列（真实 SQLite）', () => {
-    const db = new DatabaseSyncCtor(':memory:')
+    const db = openMemoryDb()
     expect(() => {
       for (const migration of migrations) migration.up(db as MigrationDb)
     }).not.toThrow()
@@ -321,6 +331,41 @@ describe('数据库迁移', () => {
     expect(runColumns.filter(c => c === 'status_reason')).toHaveLength(1)
     const profileColumns = (db.prepare('PRAGMA table_info(agent_model_profiles)').all() as Array<{ name: string }>).map(c => c.name)
     expect(profileColumns.filter(c => c === 'pricing_json')).toHaveLength(1)
+
+    // v33：达人邀约 v2 的显式任务类型 + 批次/逐人记录表
+    const taskColumns = (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map(c => c.name)
+    expect(taskColumns).toEqual(expect.arrayContaining(['kind', 'source', 'campaign_id']))
+    const inviteTables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('invite_campaigns','invite_records','creator_profiles','invite_scripts','invite_product_sets','invite_events')").all() as Array<{ name: string }>).map(r => r.name)
+    expect(inviteTables.sort()).toEqual(['creator_profiles', 'invite_campaigns', 'invite_events', 'invite_product_sets', 'invite_records', 'invite_scripts'])
+    db.close()
+  })
+
+  realDbIt('v33 回填旧前缀任务，并把 invite_history 复制成逐人记录（真实 SQLite）', () => {
+    const db = openMemoryDb()
+    db.exec(`
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL);
+      CREATE TABLE invite_history (
+        id TEXT PRIMARY KEY, store_id TEXT NOT NULL, platform TEXT NOT NULL, nickname TEXT NOT NULL,
+        finder_username TEXT, task_id TEXT, run_id TEXT, invited_at INTEGER NOT NULL
+      );
+      INSERT INTO tasks (id, name, created_at) VALUES
+        ('t1', '达人邀约 · 抖店 · 美妆 · 最多 40 位', 1000),
+        ('t2', '普通采集任务', 2000);
+      INSERT INTO invite_history VALUES
+        ('inv_1', 's1', '抖店', '力哥', NULL, 't1', 'r1', 3000),
+        ('inv_2', 's1', '抖店', '九零后老母亲', 'finder_9', 't1', 'r1', 4000);
+    `)
+    apply(db, 33)
+
+    const kinds = db.prepare('SELECT id, kind FROM tasks ORDER BY id').all() as Array<{ id: string; kind: string }>
+    expect(kinds).toEqual([{ id: 't1', kind: 'creator_invite' }, { id: 't2', kind: 'custom' }])
+
+    const records = db.prepare('SELECT nickname, creator_key, identity_level, status, status_source FROM invite_records ORDER BY nickname').all() as Array<{ nickname: string; creator_key: string; identity_level: string; status: string; status_source: string }>
+    expect(records).toHaveLength(2)
+    expect(records).toEqual(expect.arrayContaining([
+      { nickname: '力哥', creator_key: 'n:力哥', identity_level: 'nickname', status: 'sent', status_source: 'local' },
+      { nickname: '九零后老母亲', creator_key: 'u:finder_9', identity_level: 'username', status: 'sent', status_source: 'local' }
+    ]))
     db.close()
   })
 

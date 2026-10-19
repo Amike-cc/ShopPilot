@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { UNIFIED_ORDER_STATUSES } from '../contracts/unified-order'
 
 /** Agent 只允许产出可以映射到 TaskRunner 白名单的受控步骤。 */
 export const AGENT_STEP_TYPES = [
@@ -70,24 +69,12 @@ export const AGENT_SOFTWARE_ACTION_TYPES = [
   'collectInvoices',
   'collectBusiness',
   'collectEntity',
-  'collectOrders',
-  'orderCollect',
-  'getOrderDetails',
   'inventoryCollect',
   'inventoryDiff',
   'inventoryWriteback',
   'skuCollect',
   'skuDiff',
   'skuWriteback',
-  'orderList',
-  'orderGet',
-  'fulfillmentPrepare',
-  'fulfillmentConfirm',
-  'fulfillmentVerify',
-  'afterSaleCollect',
-  'refundReview',
-  'refundConfirm',
-  'refundVerify',
   'businessMetricsCollect',
   'businessMetricsCompare',
   'commerceHealth',
@@ -476,10 +463,6 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('collectInvoices'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
   z.object({ type: z.literal('collectBusiness'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
   z.object({ type: z.literal('collectEntity'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
-  z.object({ type: z.literal('collectOrders'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
-  z.object({ type: z.literal('orderCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
-  /** 读取已采集的订单明细快照（只读；买家列不进上下文）。 */
-  z.object({ type: z.literal('getOrderDetails'), storeId: z.string().max(80).optional(), limit: z.number().int().min(1).max(20).optional() }).strict(),
   // ── 库存、价格与 SKU：先读取本地平台快照；写回只产生人工确认提案 ──
   z.object({ type: z.literal('inventoryCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]), productIds: z.array(z.string().trim().min(1).max(128)).max(200).default([]), includeSku: z.boolean().default(true) }).strict(),
   z.object({ type: z.literal('inventoryDiff'), storeId: agentStoreIdSchema, changes: z.array(z.object({ productId: z.string().trim().min(1).max(128), skuId: z.string().trim().max(128).nullable().optional(), stock: z.number().int().min(0).max(100000000).nullable().optional(), priceMinor: z.number().int().min(0).max(100000000).nullable().optional() }).strict()).min(1).max(500) }).strict(),
@@ -487,16 +470,6 @@ export const agentSoftwareActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('skuCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]), productIds: z.array(z.string().trim().min(1).max(128)).max(200).default([]) }).strict(),
   z.object({ type: z.literal('skuDiff'), storeId: agentStoreIdSchema, productId: z.string().trim().min(1).max(128), changes: z.array(z.object({ skuId: z.string().trim().min(1).max(128), spec: z.array(z.object({ name: z.string().trim().min(1).max(40), value: z.string().trim().max(80) }).strict()).max(12), stock: z.number().int().min(0).max(100000000).nullable().optional(), priceMinor: z.number().int().min(0).max(100000000).nullable().optional() }).strict()).min(1).max(500) }).strict(),
   z.object({ type: z.literal('skuWriteback'), storeId: agentStoreIdSchema, productId: z.string().trim().min(1).max(128), changes: z.array(z.object({ skuId: z.string().trim().min(1).max(128), spec: z.array(z.object({ name: z.string().trim().min(1).max(40), value: z.string().trim().max(80) }).strict()).max(12), stock: z.number().int().min(0).max(100000000).nullable().optional(), priceMinor: z.number().int().min(0).max(100000000).nullable().optional() }).strict()).min(1).max(500), confirmationId: z.string().trim().max(160).optional() }).strict(),
-  // ── 订单、履约、售后与退款：当前未开放平台写回，统一保留受控输入 ──
-  z.object({ type: z.literal('orderList'), storeId: agentStoreIdSchema, status: z.enum(UNIFIED_ORDER_STATUSES).optional(), page: z.number().int().min(1).max(10000).optional(), pageSize: z.number().int().min(1).max(200).optional() }).strict(),
-  z.object({ type: z.literal('orderGet'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128) }).strict(),
-  z.object({ type: z.literal('fulfillmentPrepare'), storeId: agentStoreIdSchema, orderIds: z.array(z.string().trim().min(1).max(128)).min(1).max(200) }).strict(),
-  z.object({ type: z.literal('fulfillmentConfirm'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128), confirmationId: z.string().trim().max(160).optional() }).strict(),
-  z.object({ type: z.literal('fulfillmentVerify'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128) }).strict(),
-  z.object({ type: z.literal('afterSaleCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
-  z.object({ type: z.literal('refundReview'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128) }).strict(),
-  z.object({ type: z.literal('refundConfirm'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128), amountMinor: z.number().int().min(1).max(100000000), confirmationId: z.string().trim().max(160).optional() }).strict(),
-  z.object({ type: z.literal('refundVerify'), storeId: agentStoreIdSchema, orderId: z.string().trim().min(1).max(128) }).strict(),
   // ── 经营、财务、主体、内容、广告、优惠券与客服 ──
   z.object({ type: z.literal('businessMetricsCollect'), storeIds: z.array(agentStoreIdSchema).max(50).default([]) }).strict(),
   z.object({ type: z.literal('businessMetricsCompare'), storeId: agentStoreIdSchema, period: z.string().trim().max(40).optional() }).strict(),

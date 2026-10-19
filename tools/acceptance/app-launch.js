@@ -39,4 +39,19 @@ function appArgs(root, app, { port, userData, extra = [] } = {}) {
   return args
 }
 
-module.exports = { resolveApp, appArgs }
+/**
+ * 启动被测应用要用的环境变量。
+ *
+ * 必须剥掉 `ELECTRON_RUN_AS_NODE`：从 DSH / Electron 宿主里 spawn 出来的子进程会继承它，
+ * Electron 于是退化成**纯 Node**，把 `--remote-debugging-port` / `--user-data-dir` 当成
+ * Node 的非法选项，打印 `bad option: ...` 后立刻退出（exit 9）——表现就是
+ * 「主窗口 CDP 未就绪」，而不是任何功能缺陷（2026-10-18 实测）。
+ * 只剥这一个变量：其余宿主变量（代理、locale 等）照旧透传。
+ */
+function childEnv(extra = {}) {
+  const env = { ...process.env, ...extra }
+  delete env.ELECTRON_RUN_AS_NODE
+  return env
+}
+
+module.exports = { resolveApp, appArgs, childEnv }

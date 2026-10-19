@@ -38,7 +38,8 @@ describe('commerce agent action ledger', () => {
     const db = new Ctor!(':memory:')
     const shim = { exec: (sql: string) => db.exec(sql), prepare: (sql: string) => db.prepare(sql), transaction: (fn: () => void) => () => { db.exec('BEGIN'); try { fn(); db.exec('COMMIT') } catch (e) { db.exec('ROLLBACK'); throw e } } }
     migrate(shim as never)
-    const action = { type: 'refundConfirm', orderId: 'order-1', amountMinor: 100 } as any
+    // 该回归只验证台账状态机；不绑定不存在的店铺，避免触发 stores 外键。
+    const action = { type: 'inventoryWriteback', changes: [{ productId: 'product-1', stock: 10 }] } as any
     const ledger = commerceActionLedgerFor(db as never)
     ledger.start(action)
     expect(ledger.list({ limit: 1 })[0]).toMatchObject({ status: 'running', sideEffectStarted: false })

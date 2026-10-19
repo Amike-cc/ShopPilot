@@ -1,6 +1,17 @@
 <template>
   <section :class="['customer-service-workspace', { 'workspace-hidden': !props.active }]" data-test="customer-service-workspace" aria-label="电商客服独立工作区">
     <header class="customer-service-toolbar">
+      <button
+        type="button"
+        class="customer-mobile-nav-toggle"
+        data-test="customer-mobile-nav-toggle"
+        :aria-expanded="mobileStoreRailOpen"
+        :aria-label="mobileStoreRailOpen ? '关闭客服店铺列表' : '打开客服店铺列表'"
+        title="店铺列表"
+        @click="mobileStoreRailOpen = !mobileStoreRailOpen"
+      >
+        <span></span><span></span><span></span>
+      </button>
       <div class="customer-service-brand"><span class="customer-service-brand-mark" aria-hidden="true">✦</span><div><strong>电商客服</strong><span>人工接待工作区</span></div></div>
       <div class="customer-service-mode"><span class="mode-dot" aria-hidden="true"></span><strong>电商客服</strong><span>登录与工作台同步</span></div>
       <!-- 新消息提示音开关（2026-10-16「实时检测店铺消息」）：可关，选择持久保存到 notify.customerSound -->
@@ -43,7 +54,8 @@
     </header>
 
     <div class="customer-service-body">
-      <aside class="customer-service-store-rail" aria-label="客服店铺列表">
+      <button v-if="mobileStoreRailOpen" type="button" class="customer-mobile-sidebar-backdrop" data-test="customer-mobile-sidebar-backdrop" aria-label="关闭客服店铺列表" @click="mobileStoreRailOpen = false"></button>
+      <aside :class="['customer-service-store-rail', { 'mobile-open': mobileStoreRailOpen }]" aria-label="客服店铺列表">
         <div class="store-rail-heading"><div><span class="section-eyebrow">CUSTOMER SERVICE</span><strong>平台客服</strong></div><span class="store-count">{{ ws.stores.length }}</span></div>
         <div v-if="!ws.ready" class="customer-service-rail-state" data-test="customer-service-loading-state"><span class="state-spinner" aria-hidden="true"></span><span>正在读取店铺…</span></div>
         <div v-else-if="!ws.stores.length" class="customer-service-rail-state" data-test="customer-service-empty-state"><span class="rail-empty-icon" aria-hidden="true">＋</span><strong>暂无店铺</strong><span>先在经营工作台添加店铺。</span></div>
@@ -113,6 +125,7 @@ const CUSTOMER_SERVICE_STORE_KEY = 'shopilot.customer-service-browser-store'
 const LEGACY_CUSTOMER_SERVICE_STORE_KEY = 'shopilot.customer-service-monitor-store'
 interface CustomerBrowserState { serviceUrl: string; url: string; title: string; loading: boolean; attached: boolean; prepared: boolean; navigationStarted: boolean; hasNavigated: boolean; failed: string; canGoBack: boolean; canGoForward: boolean }
 const selectedStoreId = ref('')
+const mobileStoreRailOpen = ref(false)
 const visitedStoreIds = ref<string[]>([])
 const browserStates = reactive<Record<string, CustomerBrowserState>>({})
 const webviewEls = new Map<string, any>()
@@ -170,12 +183,14 @@ function selectStore(storeId: string): void {
   const store = ws.stores.find(item => item.id === storeId)
   if (!store) return
   selectedStoreId.value = storeId
+  mobileStoreRailOpen.value = false
   const state = ensureBrowserState(store)
   if (!visitedStoreIds.value.includes(storeId)) visitedStoreIds.value = [...visitedStoreIds.value, storeId]
   try { localStorage.setItem(CUSTOMER_SERVICE_STORE_KEY, storeId) } catch { /* 当前会话仍可继续 */ }
   if (workspaceMounted && state.attached && !state.navigationStarted && serviceEntry(store)) kickPreparation(storeId)
 }
 function syncSelectedStore(): void {
+  mobileStoreRailOpen.value = false
   const ids = ws.stores.map(store => store.id)
   ws.stores.forEach(ensureBrowserState)
   // 店铺列表会在应用启动时先于客服工作区可见状态加载完成。隐藏工作区不能
@@ -210,7 +225,7 @@ function customerWebviewRefCallback(storeId: string): (element: unknown) => void
   webviewRefCallbacks.set(storeId, callback)
   return callback
 }
-function syncWebviewState(storeId: string): void { const state = browserStates[storeId]; const element = webviewEls.get(storeId); if (!state || !element) return; try { state.url = String(element.getURL() || state.url) } catch { /* 页面刚建立时可能尚未有 URL */ }; try { state.title = String(element.getTitle() || state.title) } catch { /* ignore */ }; try { state.canGoBack = !!element.canGoBack() } catch { state.canGoBack = false }; try { state.canGoForward = !!element.canGoForward() } catch { state.canGoForward = false } }
+function syncWebviewState(storeId: string): void { const state = browserStates[storeId]; const element = webviewEls.get(storeId); if (!state || !element) return; try { state.url = String(element.getURL() || state.url) } catch { /* 页面刚建立时可能尚未有 URL */ } try { state.title = String(element.getTitle() || state.title) } catch { /* ignore */ } try { state.canGoBack = !!element.canGoBack() } catch { state.canGoBack = false } try { state.canGoForward = !!element.canGoForward() } catch { state.canGoForward = false } }
 async function waitForWebviewElement(storeId: string, timeoutMs = 5_000, shouldContinue: () => boolean = () => true): Promise<any | null> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline && shouldContinue()) {
@@ -278,16 +293,16 @@ async function prepareCustomerService(storeId: string): Promise<void> {
 function handleWebviewAttach(storeId: string): void { const state = browserStates[storeId]; if (!state) return; state.attached = true; state.failed = ''; syncWebviewState(storeId); void prepareCustomerService(storeId) }
 function handleWebviewStart(storeId: string): void { const state = browserStates[storeId]; if (state) { state.loading = true; state.failed = '' } }
 function handleWebviewStop(storeId: string): void { const state = browserStates[storeId]; if (state) state.loading = false; syncWebviewState(storeId) }
-function handleWebviewFinish(storeId: string): void { const state = browserStates[storeId]; if (state) { state.loading = false; state.failed = '' }; syncWebviewState(storeId) }
+function handleWebviewFinish(storeId: string): void { const state = browserStates[storeId]; if (state) { state.loading = false; state.failed = '' } syncWebviewState(storeId) }
 function handleWebviewNavigate(storeId: string, event: any): void { const state = browserStates[storeId]; if (state && event?.url) state.url = String(event.url); syncWebviewState(storeId) }
 function handleWebviewTitle(storeId: string, event: any): void { const state = browserStates[storeId]; if (state && event?.title) state.title = String(event.title) }
 function handleWebviewFailure(storeId: string, event: any): void { if (Number(event?.errorCode) === -3) return; const state = browserStates[storeId]; if (!state) return; state.loading = false; state.failed = `加载失败（${event?.errorDescription || event?.errorCode || '未知原因'}）` }
-function handleWebviewDestroyed(storeId: string): void { bumpWebviewGeneration(storeId); const state = browserStates[storeId]; if (state) { state.attached = false; state.prepared = false; state.navigationStarted = false }; webviewEls.delete(storeId) }
+function handleWebviewDestroyed(storeId: string): void { bumpWebviewGeneration(storeId); const state = browserStates[storeId]; if (state) { state.attached = false; state.prepared = false; state.navigationStarted = false } webviewEls.delete(storeId) }
 function withActiveWebview(callback: (element: any) => void): void { const element = webviewEls.get(selectedStoreId.value); if (element) callback(element) }
 function goBack(): void { withActiveWebview(element => { try { if (element.canGoBack()) element.goBack() } catch { /* 页面尚未就绪 */ } }) }
 function goForward(): void { withActiveWebview(element => { try { if (element.canGoForward()) element.goForward() } catch { /* 页面尚未就绪 */ } }) }
-function reloadActive(): void { const state = activeState.value; if (!state?.navigationStarted) { void prepareCustomerService(selectedStoreId.value); return }; withActiveWebview(element => { try { element.reload() } catch { /* 页面尚未就绪 */ } }) }
-function retryActive(): void { const store = activeStore.value; if (!store) return; const state = ensureBrowserState(store); state.failed = ''; state.loading = true; if (!state.navigationStarted) { void prepareCustomerService(store.id); return }; const element = webviewEls.get(store.id); try { element?.reload() } catch { void prepareCustomerService(store.id) } }
+function reloadActive(): void { const state = activeState.value; if (!state?.navigationStarted) { void prepareCustomerService(selectedStoreId.value); return } withActiveWebview(element => { try { element.reload() } catch { /* 页面尚未就绪 */ } }) }
+function retryActive(): void { const store = activeStore.value; if (!store) return; const state = ensureBrowserState(store); state.failed = ''; state.loading = true; if (!state.navigationStarted) { void prepareCustomerService(store.id); return } const element = webviewEls.get(store.id); try { element?.reload() } catch { void prepareCustomerService(store.id) } }
 function storeStatus(storeId: string): CustomerMessageCheck | null { return statuses.value[storeId] || null }
 function isFresh(status: CustomerMessageCheck | null | undefined): boolean { return !!status && status.freshness !== 'STALE' && isCustomerMessageCheckFresh(status.capturedAt, freshnessNow.value) }
 function statusLabel(status: CustomerMessageStatus | CustomerMessageCheck | null | undefined): string { if (typeof status !== 'string' && status && !isFresh(status)) return '状态过期'; const value = typeof status === 'string' ? status : status?.status; if (value === 'CHECKING') return '检查中'; if (value === 'AVAILABLE') return '消息可读取'; if (value === 'LOGIN_REQUIRED') return '待登录'; if (value === 'PAGE_CHANGED') return '页面改版'; if (value === 'ERROR') return '检查失败'; if (value === 'NOT_VERIFIED') return '未验证'; return '未检查' }
@@ -295,19 +310,39 @@ function statusTone(status: CustomerMessageStatus | CustomerMessageCheck | null 
 function statusMessage(status: CustomerMessageCheck | null): string { if (status && !isFresh(status)) return '上次检查已超过实时窗口，等待新的平台证据'; return status?.message || '尚未执行客服消息检查' }
 function stopStatusTimers(): void { if (statusRefreshTimer) clearInterval(statusRefreshTimer); if (freshnessTimer) clearInterval(freshnessTimer); statusRefreshTimer = null; freshnessTimer = null }
 function startStatusTimers(): void { if (statusRefreshTimer) return; statusRefreshTimer = setInterval(() => { void refreshStatuses() }, 15_000); freshnessTimer = setInterval(() => { freshnessNow.value = Date.now() }, 15_000) }
-async function refreshStatuses(): Promise<void> { if (!ws.ready || !ws.stores.length) return; try { const result = await window.shopilot.customerService.list({ limit: 200 }); if (!result.ok) { statusListError.value = result.error.message; return }; statusListError.value = ''; const next: Record<string, CustomerMessageCheck> = {}; for (const item of (result.data?.items || []) as CustomerMessageCheck[]) next[item.storeId] = item; statuses.value = next } catch { statusListError.value = '读取客服消息状态失败' } }
+async function refreshStatuses(): Promise<void> { if (!ws.ready || !ws.stores.length) return; try { const result = await window.shopilot.customerService.list({ limit: 200 }); if (!result.ok) { statusListError.value = result.error.message; return } statusListError.value = ''; const next: Record<string, CustomerMessageCheck> = {}; for (const item of (result.data?.items || []) as CustomerMessageCheck[]) next[item.storeId] = item; statuses.value = next } catch { statusListError.value = '读取客服消息状态失败' } }
 function checkSelected(): void { const storeId = selectedStoreId.value; if (!storeId) return; void runStoreCheck(storeId) }
 function onStatusChanged(payload: unknown): void { const item = payload as CustomerMessageCheck | null; if (!item?.storeId || !item.status) return; statuses.value = { ...statuses.value, [item.storeId]: item } }
-function backToCommerce(): void { emit('back-commerce') }
+function backToCommerce(): void { mobileStoreRailOpen.value = false; emit('back-commerce') }
+function onCustomerServiceKeydown(event: KeyboardEvent): void {
+  if (!props.active || event.key !== 'Escape' || !mobileStoreRailOpen.value) return
+  event.preventDefault()
+  mobileStoreRailOpen.value = false
+}
 watch(() => ws.stores.map(store => `${store.id}:${store.platform}:${serviceEntry(store)}`).join('|'), syncSelectedStore, { immediate: true })
-watch(() => props.active, active => { if (active) syncSelectedStore() })
+watch(() => props.active, active => { mobileStoreRailOpen.value = false; if (active) syncSelectedStore() })
 watch(() => props.active, active => {
   if (!active) return
   void nextTick(() => { if (selectedStoreId.value) kickPreparation(selectedStoreId.value) })
 })
-watch(() => [props.active, ws.ready, ws.stores.length, ws.appLocked] as const, ([active, ready, count, locked]) => { if (!active || !ready || !count || locked) { stopStatusTimers(); return }; void refreshStatuses(); startStatusTimers() }, { immediate: true })
-onMounted(() => { workspaceMounted = true; void initCustomerMessageSound().then((enabled) => { soundEnabled.value = enabled }); window.shopilot.on(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, onStatusChanged); ws.stores.forEach(ensureBrowserState) })
-onBeforeUnmount(() => { workspaceMounted = false; ws.stores.forEach(store => bumpWebviewGeneration(store.id)); preparingStoreIds.clear(); stopStatusTimers(); window.shopilot.off(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, onStatusChanged) })
+watch(() => [props.active, ws.ready, ws.stores.length, ws.appLocked] as const, ([active, ready, count, locked]) => { if (!active || !ready || !count || locked) { stopStatusTimers(); return } void refreshStatuses(); startStatusTimers() }, { immediate: true })
+onMounted(() => {
+  workspaceMounted = true
+  void initCustomerMessageSound().then((enabled) => { soundEnabled.value = enabled })
+  window.addEventListener('keydown', onCustomerServiceKeydown)
+  const bridge = (window as Window & { shopilot?: Window['shopilot'] }).shopilot
+  if (bridge) bridge.on(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, onStatusChanged)
+  ws.stores.forEach(ensureBrowserState)
+})
+onBeforeUnmount(() => {
+  workspaceMounted = false
+  ws.stores.forEach(store => bumpWebviewGeneration(store.id))
+  preparingStoreIds.clear()
+  stopStatusTimers()
+  window.removeEventListener('keydown', onCustomerServiceKeydown)
+  const bridge = (window as Window & { shopilot?: Window['shopilot'] }).shopilot
+  if (bridge) bridge.off(EVENT_CHANNELS.CUSTOMER_SERVICE_STATUS_CHANGED, onStatusChanged)
+})
 </script>
 
 <style scoped>
@@ -321,6 +356,10 @@ onBeforeUnmount(() => { workspaceMounted = false; ws.stores.forEach(store => bum
   gap: 26px; padding: 0 148px 0 28px; border-bottom: 1px solid #e4e8f1; background: #fff;
   box-shadow: 0 2px 12px rgba(31, 41, 55, .04); -webkit-app-region: drag;
 }
+.customer-mobile-nav-toggle { display: none; width: 34px; height: 34px; flex: 0 0 34px; align-items: center; justify-content: center; flex-direction: column; gap: 4px; border: 1px solid #e1e5ed; border-radius: 9px; background: #fff; cursor: pointer; -webkit-app-region: no-drag; }
+.customer-mobile-nav-toggle span { display: block; width: 15px; height: 1.5px; border-radius: 2px; background: #586476; }
+.customer-mobile-nav-toggle:hover, .customer-mobile-nav-toggle:focus-visible { border-color: #bdb2ff; outline: none; box-shadow: 0 0 0 3px rgba(128, 101, 245, .1); }
+.customer-mobile-sidebar-backdrop { display: none; }
 .customer-service-brand { display: flex; min-width: 218px; align-items: center; gap: 11px; }
 .customer-service-brand-mark { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 11px; background: linear-gradient(135deg, #8c6bff, #5b3df5); color: #fff; font-size: 19px; }
 .customer-service-brand div { display: grid; gap: 2px; }
@@ -462,5 +501,38 @@ onBeforeUnmount(() => { workspaceMounted = false; ws.stores.forEach(store => bum
   .customer-service-main { padding: 20px 18px 22px; }
   .browser-heading h1 { font-size: 19px; }
   .customer-browser-footer > span:nth-child(2) { display: none; }
+}
+@media (max-width: 720px) {
+  .customer-service-toolbar { min-height: 56px; flex-basis: 56px; gap: 8px; padding: 0 12px; }
+  .customer-mobile-nav-toggle { display: inline-flex; }
+  .customer-service-brand { min-width: 0; flex: 1 1 auto; gap: 8px; }
+  .customer-service-brand-mark { width: 30px; height: 30px; border-radius: 9px; font-size: 15px; }
+  .customer-service-brand strong { font-size: 13px; }
+  .customer-service-brand div span, .customer-service-mode, .customer-service-live, .customer-service-back { display: none; }
+  .customer-service-toolbar .workspace-switcher { position: static; flex: 0 0 auto; max-width: 112px; overflow-x: auto; transform: none; scrollbar-width: none; }
+  .customer-service-toolbar .workspace-switcher::-webkit-scrollbar { display: none; }
+  .customer-service-toolbar .workspace-tab { padding: 0 7px; font-size: 11px; }
+  .customer-service-body { position: relative; }
+  .customer-service-store-rail { position: fixed; inset: 56px auto 0 0; z-index: 160; width: min(286px, 86vw); min-width: min(286px, 86vw); padding: 16px 12px; transform: translateX(-105%); transition: transform .2s ease; box-shadow: 18px 0 46px rgba(31, 41, 55, .22); }
+  .customer-service-store-rail.mobile-open { transform: translateX(0); }
+  .customer-mobile-sidebar-backdrop { position: fixed; inset: 56px 0 0; z-index: 150; display: block; border: 0; background: rgba(31, 41, 55, .38); backdrop-filter: blur(2px); cursor: pointer; }
+  .customer-service-main { padding: 14px 10px 16px; }
+  .browser-heading { min-height: auto; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .browser-heading h1 { font-size: 17px; }
+  .browser-heading-meta { padding-top: 0; }
+  .customer-browser-addressbar { flex-wrap: wrap; min-height: 92px; gap: 7px; padding: 7px; }
+  .customer-browser-url { order: 2; flex-basis: 100%; }
+  .customer-browser-load-state { margin-left: auto; }
+  .customer-browser-footer { min-height: 52px; flex-wrap: wrap; padding: 7px 9px; }
+  .footer-spacer { display: none; }
+  .footer-error { max-width: 100%; order: 3; flex-basis: 100%; }
+  .footer-refresh { margin-left: auto; }
+}
+@media (max-width: 420px) {
+  .customer-service-toolbar .workspace-switcher { max-width: 92px; }
+  .customer-service-toolbar .workspace-tab > span:last-child { max-width: 50px; overflow: hidden; text-overflow: ellipsis; }
+  .customer-browser-viewport { min-height: 260px; }
+  .customer-service-state { padding: 14px; }
+  .customer-service-state-card { padding: 26px 18px; }
 }
 </style>

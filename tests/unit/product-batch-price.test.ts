@@ -32,7 +32,7 @@ describe('applyBatchPrice：批量改价数学', () => {
 
   it('null 进 null 出：价格未取到的变体跳过（绝不当 0）', () => {
     expect(applyBatchPrice(null, { mode: 'percent', value: 10 })).toBeNull()
-    expect(applyBatchPrice(null, { mode: 'fixed', value: 5 }, 1)).toBeNull()
+    expect(applyBatchPrice(null, { mode: 'fixed', value: 5, floorMinor: 1 })).toBeNull()
   })
 
   it('上限常量与 §3.5 表格一致', () => {

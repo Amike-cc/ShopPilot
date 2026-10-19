@@ -8,8 +8,8 @@
  * （UnifiedDataPage.ensureCollectTask → shared.pickLatestCollectTask），不会再新增，本脚本清理历史积压。
  *
  * 规则（保守、可重复执行）：
- *   · 只处理 5 个采集类前缀（发票 / 涉税报送 / 主体信息 / 经营指标 / 订单明细——
- *     后两个前缀以源码 collectTaskName 为准，避免动到别的子系统建的任务）；
+ *   · 只处理 5 个仍在使用的采集类前缀（发票 / 涉税报送 / 主体信息 / 经营指标——
+ *     经营数据是旧版命名，仍保留用于清理历史积压；避免动到别的子系统建的任务）；
  *   · 每家店每类只保留 updated_at 最新的一个（与界面认领口径一致）；
  *   · 任务有未结束运行（queued / running / waiting_confirmation / paused）的**跳过不删**；
  *   · 默认 dry-run 只打印计划；--apply 才删除，删除前用 SQLite `VACUUM INTO`
@@ -28,7 +28,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 /**
- * 处理哪些前缀。前 5 个与源码一致（collectTaskName / INVOICE_TASK_PREFIX /
+ * 处理哪些前缀。前 4 个与源码一致（collectTaskName / INVOICE_TASK_PREFIX /
  * TAX_TASK_PREFIX / ENTITY_TASK_PREFIX）；最后一个 `经营数据采集 ·` 是**旧版命名**
  * （2026-09-13 那批带日期后缀的遗留；2026-10-15 全库 grep 确认无任何代码再引用它），
  * 同属"同名重复积压"，一并按同一规则清理。
@@ -38,7 +38,6 @@ const COLLECT_PREFIXES = [
   '涉税报送采集 ·',
   '主体信息采集 ·',
   '经营指标采集 ·',
-  '订单明细采集 ·',
   '经营数据采集 ·'
 ]
 

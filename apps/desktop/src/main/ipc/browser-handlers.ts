@@ -36,6 +36,7 @@ import {
   browserTabCreateSchema,
   browserTabInputSchema,
   browserTabPinnedSchema,
+  browserTabsCloseManySchema,
   browserTabReorderSchema,
   browserViewsObscuredSchema,
   browserViewportSchema
@@ -166,6 +167,21 @@ export function registerBrowserHandlers(): void {
     }
   })
   
+  // browser:tab:closeMany —— 批量关闭（多选 / 关闭其他 / 关闭全部）
+  handle(IPC_CHANNELS.BROWSER_TAB_CLOSE_MANY, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    const parsed = browserTabsCloseManySchema.safeParse(input)
+    if (!parsed.success) {
+      return error(ERROR_CODES.INVALID_ARGUMENT.code, parsed.error.issues[0]?.message || '批量关闭参数不合法', requestId)
+    }
+    try {
+      const result = WindowManager.closeTabs(parsed.data.storeId, parsed.data)
+      return success(result, requestId)
+    } catch (err: any) {
+      return browserError(err, requestId)
+    }
+  })
+
   // browser:tab:setPinned
   handle(IPC_CHANNELS.BROWSER_TAB_SET_PINNED, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, pinned: boolean }): Promise<IPCResult> => {
     const requestId = generateRequestId()

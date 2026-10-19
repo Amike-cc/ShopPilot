@@ -1,9 +1,14 @@
-# Acceptance pipeline: dist -> unit tests -> update chain -> M1/M2/M3/sec/M4 -> manifest
+# Acceptance pipeline: acceptance-dist -> unit tests -> update chain -> M1/M2/M3/sec/M4 -> manifest
+# NOTE: from 2026-10-19 the suites need an ACCEPTANCE build (test hooks compiled in);
+# `pnpm dist` is a production build and deliberately disables them (docs/ACCEPTANCE_HOOKS.md).
 # Usage: powershell -ExecutionPolicy Bypass -File tools\acceptance\run-acceptance.ps1
 # NOTE: ASCII-only on purpose - Windows PowerShell 5.1 parses BOM-less UTF-8 as ANSI.
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 Set-Location $repoRoot
 try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}
+# Electron-based acceptance steps must not inherit ELECTRON_RUN_AS_NODE from the host
+# (DSH/Electron parents export it; the app would degrade to plain Node and exit 9 before CDP opens).
+Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 $results = [ordered]@{}
 
 function Kill-ShopPilot {
@@ -51,8 +56,8 @@ function Run-Step($name, $cmd) {
   Write-Host "===== STEP ${name} EXIT=${code} ====="
 }
 
-Run-Step 'dist' 'pnpm.cmd dist'
-if ($results['dist'] -ne 0) { Write-Host 'DIST_FAILED - abort (suites need packaged output)'; exit 1 }
+Run-Step 'dist-acceptance' 'pnpm.cmd run dist:acceptance'
+if ($results['dist-acceptance'] -ne 0) { Write-Host 'DIST_FAILED - abort (suites need packaged output)'; exit 1 }
 if (-not (Test-Path 'release\latest.yml')) { Write-Host 'LATEST_YML_MISSING - abort (publish config not effective)'; exit 1 }
 Write-Host 'latest.yml OK:'
 Get-Content 'release\latest.yml' | ForEach-Object { Write-Host "  $_" }
@@ -66,6 +71,17 @@ Run-Step 'm2-stage1' 'node tools/acceptance/m2-runner.js stage1'
 Run-Step 'm2-stage2' 'node tools/acceptance/m2-runner.js stage2'
 Run-Step 'm3' 'node tools/acceptance/m3-runner.js'
 Run-Step 'sec' 'node tools/acceptance/sec-runner.js'
+# Tab batch close + pin/drag-reorder + in-page key forwarding + internal-tab lifecycle over CDP:
+# 42 assertions, ports 9380/9381 (override with SHOPILOT_TABS_CDP_PORT / SHOPILOT_TABS_SITE_PORT).
+# The script kills its own process tree only.
+Run-Step 'tabs-batch-close' 'node tools/acceptance/tabs-batch-close-cdp-verify.js'
+# Renderer entries that previously had backend+IPC but no UI: store grouping and AI product
+# analysis over CDP: 9 assertions, ports 9390/9391 (SHOPILOT_ENTRIES_CDP_PORT / _SITE_PORT).
+Run-Step 'renderer-entries' 'node tools/acceptance/renderer-entries-cdp-verify.js'
+# AI product analysis SUCCESS path against a local OpenAI-compatible stub (no real key, no cost):
+# config -> image studio -> analyze, 11 assertions, CDP port 9394 / stub port 9392.
+# SHOPILOT_ANALYSIS_NEGATIVE=1 must go red (guards against vacuous passes).
+Run-Step 'image-analysis' 'node tools/acceptance/image-analysis-cdp-verify.js'
 Run-Step 'm4-full' 'node tools/acceptance/m4-runner.js'
 Run-Step 'custom-local' 'node tools/acceptance/custom-task-local-verify.js'
 Run-Step 'invite-live-log' 'node tools/acceptance/invite-live-log-verify.js'
@@ -77,6 +93,25 @@ Run-Step 'agent-memory-resilience' 'node tools/acceptance/agent-memory-resilienc
 Run-Step 'packaged-agent-smoke' 'node tools/acceptance/packaged-agent-smoke.js'
 Run-Step 'manifest' 'node tools/release/release-manifest.js'
 Kill-ShopPilot
+
+# Housekeeping: every CDP suite creates its own %TEMP%\shopilot-* userData dir and nothing
+# reclaims it (measured 2026-10-18: 852 dirs / ~9.8 GB accumulated since 2026-09-11).
+# Prune only entries older than a day so the runs from today stay available for inspection.
+$tempStale = Get-ChildItem -Path $env:TEMP -Directory -Filter 'shopilot-*' -ErrorAction SilentlyContinue |
+  Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) }
+if ($tempStale) {
+  $pruned = 0
+  $freed = 0
+  foreach ($dir in $tempStale) {
+    try {
+      $size = (Get-ChildItem -Path $dir.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+      Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction Stop
+      $pruned++
+      if ($size) { $freed += $size }
+    } catch { }
+  }
+  Write-Host ("TEMP_PRUNED dirs={0} freed={1:N1}MB" -f $pruned, ($freed / 1MB))
+}
 
 Write-Host ""
 Write-Host "===== SUMMARY ====="

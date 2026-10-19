@@ -83,8 +83,8 @@ describe('拼多多经营数据档案', () => {
     const src = readFileSync(resolve('apps/desktop/src/main/platform-adapters/pdd-adapter.ts'), 'utf8')
     expect(src).toContain('extends SalesMetricsDomAdapter')
     expect(src).toContain('businessProfileFor(platform.name)')
-    // 订单能力保留（网络观察），商品级能力不再声称已支持
-    expect(src).toContain('orders: true')
+    // 订单明细/观察已下线；适配器只保留经营指标路径
+    expect(src).not.toContain('orders: true')
     expect(src).toContain('productSalesMetrics: false')
     // 旧路线（自实现 collectSalesMetrics + 恒失败、恒返回"未验证"的证据自检）必须已经移除
     expect(src).not.toContain('async collectSalesMetrics(')

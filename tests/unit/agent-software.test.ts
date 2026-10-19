@@ -57,18 +57,10 @@ describe('Agent software scope', () => {
     expect(agentSoftwareActionSchema.safeParse({ type: 'createBookmark', storeId: 's', title: 'x' }).success).toBe(false)
   })
 
-  it('uses closed order status and requires explicit refund amount', () => {
-    expect(agentSoftwareActionSchema.safeParse({ type: 'orderList', storeId: 'store_a', status: 'MAGIC_STATUS' }).success).toBe(false)
-    expect(agentSoftwareActionSchema.safeParse({ type: 'refundConfirm', storeId: 'store_a', orderId: 'order_1' }).success).toBe(false)
-    expect(agentSoftwareActionSchema.safeParse({ type: 'refundConfirm', storeId: 'store_a', orderId: 'order_1', amountMinor: 500 }).success).toBe(true)
-    expect(AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS.has('fulfillmentPrepare')).toBe(true)
-    for (const type of ['fulfillmentConfirm', 'refundConfirm']) expect(AGENT_CONFIRM_REQUIRED_ACTIONS.has(type)).toBe(true)
-  })
-
   it('keeps every commerce confirmation action inside the side-effect boundary', () => {
     const commerceConfirmationActions = [
       'productPublishOpen', 'productPublishAccept', 'inventoryWriteback', 'skuWriteback',
-      'fulfillmentConfirm', 'refundConfirm', 'entityApply', 'applyEntity',
+      'entityApply', 'applyEntity',
       'contentPublish', 'adConfirm', 'customerSendReply'
     ]
     for (const type of commerceConfirmationActions) {

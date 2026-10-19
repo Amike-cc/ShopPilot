@@ -4,7 +4,8 @@ import { findPlatform } from '@shared/constants/platforms'
 import { businessProfileFor } from '@shared/constants/business'
 import { hasProductProfile } from '@shared/constants/product'
 import { StoreStatus } from '@shared/enums/store-status'
-import type { PlatformLoginResult } from '@shared/contracts/platform-adapter'
+import type { PlatformAdapterCapabilities, PlatformLoginResult } from '@shared/contracts/platform-adapter'
+import type { ShopSessionStatusSummary } from '@shared/contracts/shop-session'
 import type { Store } from '@shared/schemas/store'
 import type { PlatformAdapter, PlatformAdapterContext } from '../../apps/desktop/src/main/platform-adapters/platform-adapter'
 import {
@@ -51,7 +52,9 @@ function readyRuntime(
   return {
     getStore: vi.fn(() => ({ id: 'store_a', platform: adapter.platform } as unknown as Store)),
     ensureSession: vi.fn(async () => ({}) as unknown as Session),
-    getSessionStatus: vi.fn(() => ({
+    // 显式标注返回类型：否则对象字面量里的 'READY' 会被拓宽成 string，
+    // 对不上 ShopSessionStatusCode 联合（这是本次 typecheck:tests 暴露出来的真问题）。
+    getSessionStatus: vi.fn((_storeId: string): ShopSessionStatusSummary => ({
       storeId: 'store_a', status: 'READY', sessionPresent: true, sessionReady: true,
       healthy: true, loginStatus: 'UNKNOWN', platform: adapter.platform,
       lastCheckedAt: Date.now(), loginCheckedAt: null, loginReasonCode: null,
@@ -67,14 +70,20 @@ function readyRuntime(
 
 class TestAdapter implements PlatformAdapter {
   readonly adapterName = 'TestAdapter'
+  // 契约要求带版本号（页面改版后旧解析器必须作废），测试桩给一个固定值即可。
+  readonly adapterVersion = 'test-1'
   readonly platform: string
   constructor(
     private readonly detector: (context: PlatformAdapterContext) => Promise<PlatformLoginResult>,
     platform = '抖店'
   ) { this.platform = platform }
   supports(platform: string): boolean { return platform === this.platform }
-  getCapabilities() {
-    return { loginDetection: true, orders: false, products: false, inventory: false, refunds: false, salesData: false }
+  // 测试桩只声明登录检测能力；其余能力位必须完整且为 false（能力位是"未验证=不许点亮"的契约）。
+  getCapabilities(): Readonly<PlatformAdapterCapabilities> {
+    return {
+      loginDetection: true, orders: false, salesMetrics: false, productSalesMetrics: false,
+      products: false, inventory: false, refunds: false, salesData: false
+    }
   }
   detectLoginStatus(context: PlatformAdapterContext): Promise<PlatformLoginResult> { return this.detector(context) }
 }
@@ -96,13 +105,13 @@ describe('PlatformAdapterRegistry', () => {
     expect(() => registry.getAdapter('未知平台')).toThrow('UNSUPPORTED_PLATFORM')
   })
 
-  it('PDD 声明订单采集能力；商品能力位**只跟着实测档案走**', () => {
+  it('所有平台都不再声明订单管理能力；商品能力位**只跟着实测档案走**', () => {
     const registry = createDefaultPlatformAdapterRegistry()
     for (const platform of registry.listPlatforms()) {
       const capabilities = registry.getAdapter(platform).getCapabilities()
       expect(capabilities).toMatchObject({
         loginDetection: true,
-        orders: platform === '拼多多',
+        orders: false,
         inventory: false,
         refunds: false,
         salesData: false
@@ -175,7 +184,8 @@ describe('platform login service safety and lifecycle gates', () => {
       reasonCode: 'TEST_POSITIVE', safeMessage: 'ignored', evidenceType: 'DOM'
     }))
     const runtime = readyRuntime(adapter, {
-      getSessionStatus: vi.fn(() => ({
+      // 同 readyRuntime：显式标注返回类型，避免 status/loginStatus 字面量被拓宽成 string。
+      getSessionStatus: vi.fn((_storeId: string): ShopSessionStatusSummary => ({
         storeId: 'store_a', status: 'CHECKING', sessionPresent: true, sessionReady: false,
         healthy: null, loginStatus: 'UNKNOWN', platform: '抖店', lastCheckedAt: null,
         loginCheckedAt: null, loginReasonCode: null, loginSafeMessage: null,

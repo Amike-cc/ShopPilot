@@ -113,7 +113,7 @@ function harness(stores: Array<{ id: string; platform: string }>): Harness {
           id: `m-${input.storeId}`, platform: '拼多多', storeId: input.storeId, periodType: 'TODAY',
           periodStart: 0, periodEnd: 0, orderCount: 2, paidOrderCount: 2, salesQuantity: 2,
           grossSalesAmountMinor: 1000, paidSalesAmountMinor: 1000, refundAmountMinor: 0,
-          refundOrderCount: 0, refundQuantity: 0, netSalesAmountMinor: 1000,
+          refundOrderCount: 0, refundQuantity: 0, netSalesAmountMinor: 1000, adSpendMinor: null,
           collectedAt: clock.value, sourceUpdatedAt: null, sourceType: 'DOM', adapterVersion: 'v1',
           metricDefinitionVersion: 'sales-metrics-1', dataStatus: 'REAL_VALUE', runId: runContext.runId
         })
@@ -187,7 +187,8 @@ describe('经营采集调度器 · 节拍', () => {
     tickSalesMetricsScheduler()
     await settle()
 
-    const runs = listRuns({ storeId: 'store_a' }, h.clock.value)
+    // listRuns 现在只接收查询条件（时间口径由运行时注入的 clock 决定），不再传第二个 now 参数
+    const runs = listRuns({ storeId: 'store_a' })
     expect(runs.total).toBe(1)
     expect(runs.items[0].status).toBe('SUCCEEDED')
     expect(runs.items[0].plannedAt).toBe(h.clock.value - 1)
@@ -223,7 +224,9 @@ describe('经营采集调度器 · 节拍', () => {
 
   realIt('同一店铺不会并行：采集未结束时再触发不产生第二条运行', async () => {
     const h = use(harness([{ id: 'store_a', platform: '拼多多' }]))
-    let release: (() => void) | null = null
+    // 不初始化成 null：初始化会让 TS 把类型收窄成 null，控制流看不到下面 Promise 回调里的赋值，
+    // 于是 release?.() 会被判成对 never 的调用。留成未赋值的 `| undefined` 才符合"回调里才赋值"的事实。
+    let release: (() => void) | undefined
     h.behavior = storeId => new Promise(resolve => { release = () => resolve(result(storeId, 'SUCCEEDED')) })
     startSalesMetricsScheduler()
     dueNow(h)
@@ -236,11 +239,11 @@ describe('经营采集调度器 · 节拍', () => {
     tickSalesMetricsScheduler()
     await settle()
     expect(h.collectCalls).toHaveLength(1)
-    expect(listRuns({ storeId: 'store_a' }, NOW).total).toBe(1)
+    expect(listRuns({ storeId: 'store_a' }).total).toBe(1)
 
     release?.()
     await settle()
-    expect(listRuns({ storeId: 'store_a' }, NOW).items[0].status).toBe('SUCCEEDED')
+    expect(listRuns({ storeId: 'store_a' }).items[0].status).toBe('SUCCEEDED')
   })
 
   realIt('全局并发上限为 2：三店同时到期时先跑两家，没跑过的店不会被挤掉', async () => {

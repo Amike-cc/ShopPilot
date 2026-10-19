@@ -22,6 +22,7 @@ import {
   browserExtensionSetMasterSchema
 } from '@shared/schemas/extension'
 import * as ExtensionManager from '../services/extension-manager'
+import { acceptanceHooksEnabled } from '../services/acceptance-gate'
 import { writeAudit } from '../services/audit-logger'
 import { getOpenStoreIds, getStoreTabs, getTabWebContents } from '../browser/window-manager'
 import { ipcErrFromUnknown, ipcFail, ipcOk } from './envelope'
@@ -73,11 +74,12 @@ export function registerExtensionHandlers(): void {
   handle(IPC_CHANNELS.EXTENSION_IMPORT, async (): Promise<IPCResult<BrowserExtensionImportResult>> => {
     const requestId = randomUUID()
     try {
-      // 验收钩子：打包版无法驱动原生目录选择框，允许在显式声明 SHOPILOT_ACCEPTANCE=1 时
-      // 用环境变量指定源目录。导入后的复制/校验逻辑与手动选择完全一致，不放宽安全边界。
+      // 验收钩子：打包版无法驱动原生目录选择框，允许在「验收构建 + 显式运行期开关」下
+      // 用环境变量指定源目录（门禁见 services/acceptance-gate.ts；生产构建里该分支被剥离）。
+      // 导入后的复制/校验逻辑与手动选择完全一致，不放宽安全边界。
       const testDir = process.env.SHOPILOT_TEST_EXTENSION_IMPORT_DIR
       let sourceDir = ''
-      if (testDir && process.env.SHOPILOT_ACCEPTANCE === '1') {
+      if (testDir && acceptanceHooksEnabled()) {
         sourceDir = testDir
       } else {
         const win = BrowserWindow.getFocusedWindow()

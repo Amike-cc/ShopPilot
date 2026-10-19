@@ -1,17 +1,10 @@
 import type { Session, WebContents } from 'electron'
 import type {
   PlatformAdapterCapabilities,
-  PlatformOrderCollectionOptions,
-  PlatformOrderCollectionResult,
-  PlatformOrderObservationOptions,
   PlatformEvidenceType,
   PlatformLoginResult,
   PlatformLoginStatus
 } from '@shared/contracts/platform-adapter'
-import type {
-  PddOrderObservationStartResult,
-  PddOrderObservationStopResult
-} from '@shared/contracts/pdd-order-observation'
 import type {
   SalesMetricsCollectionResult,
   SalesMetricsEvidenceCheck,
@@ -53,23 +46,6 @@ export interface PlatformAdapter {
   detectLoginStatus(context: PlatformAdapterContext): Promise<PlatformLoginResult>
 }
 
-/** 只由已经声明 orders=true 的平台实现；其它 Adapter 不需要假方法。 */
-export interface OrderCapableAdapter extends PlatformAdapter {
-  collectOrders(
-    context: PlatformAdapterContext,
-    options: PlatformOrderCollectionOptions
-  ): Promise<PlatformOrderCollectionResult>
-}
-
-/** 只由拼多多 Adapter 实现的人工数据源观察生命周期。 */
-export interface OrderObservationCapableAdapter extends OrderCapableAdapter {
-  startOrderObservation(
-    context: PlatformAdapterContext,
-    options: PlatformOrderObservationOptions
-  ): Promise<PddOrderObservationStartResult>
-  stopOrderObservation(storeId: string): Promise<PddOrderObservationStopResult>
-}
-
 /** 只由已声明 salesMetrics=true 的平台实现；能力未验证时仍可安全返回 DATA_SOURCE_NOT_VERIFIED。 */
 export interface SalesMetricsCapableAdapter extends PlatformAdapter {
   /**
@@ -99,6 +75,7 @@ export interface SalesMetricsCapableAdapter extends PlatformAdapter {
 
 export const LOGIN_DETECTION_ONLY_CAPABILITIES: Readonly<PlatformAdapterCapabilities> = Object.freeze({
   loginDetection: true,
+  // 保留旧诊断字段，当前产品不再提供订单管理能力。
   orders: false,
   salesMetrics: false,
   productSalesMetrics: false,

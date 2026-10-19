@@ -10,6 +10,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { logMain } from './logger'
+import { acceptanceHooksEnabled } from './acceptance-gate'
 
 export interface AskOptions {
   title: string
@@ -91,25 +92,10 @@ function runWindow(query: Record<string, string>, timeoutMs = 180000): Promise<s
   })
 }
 
-let acceptanceHookLogged = false
-/**
- * 测试钩子：开发态直接生效；打包态必须由验收器显式声明 `SHOPILOT_ACCEPTANCE=1`
- * （生产安装包不会设置它，机器上残留 SHOPILOT_TEST_* 也无法单独打开确认门）。
- */
-function testHooksEnabled(): boolean {
-  if (!app.isPackaged) return true
-  if (process.env.SHOPILOT_ACCEPTANCE !== '1') return false
-  if (!acceptanceHookLogged) {
-    acceptanceHookLogged = true
-    // 打包态启用钩子必须留痕，便于事后审计"这次导出为何没有人工确认"。
-    logMain('warn', '[acceptance] 打包态测试钩子已启用（SHOPILOT_ACCEPTANCE=1）：人工确认/密码对话框将被环境变量替代')
-  }
-  return true
-}
-
 /** 采集密码；取消返回 null */
 export async function askPassword(opts: AskOptions): Promise<string | null> {
-  if (testHooksEnabled() && process.env.SHOPILOT_TEST_PASSWORD) return process.env.SHOPILOT_TEST_PASSWORD
+  // 测试钩子门禁统一在 acceptance-gate：开发态放行；打包态必须「验收构建 + 显式运行期开关」。
+  if (acceptanceHooksEnabled() && process.env.SHOPILOT_TEST_PASSWORD) return process.env.SHOPILOT_TEST_PASSWORD
   return runWindow({
     mode: 'password',
     title: opts.title,
@@ -129,7 +115,7 @@ export interface ConfirmOptions {
 
 /** 人工确认；取消返回 false - §6.3 / §13 */
 export async function askConfirm(opts: ConfirmOptions): Promise<boolean> {
-  if (testHooksEnabled() && process.env.SHOPILOT_TEST_AUTOCONFIRM === '1') return true
+  if (acceptanceHooksEnabled() && process.env.SHOPILOT_TEST_AUTOCONFIRM === '1') return true
   const r = await runWindow({
     mode: 'confirm',
     title: opts.title,

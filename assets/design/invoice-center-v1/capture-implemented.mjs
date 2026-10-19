@@ -3,7 +3,7 @@
  *
  * 做法与 tools/acceptance/invoice-license-local-verify.js 同路：
  *   隔离 userData → 建店/填营业执照 → 直接往隔离库种入待开票快照（等价于"采集任务跑过一轮"）
- *   → 启动应用 → 走界面点进「数据分析 → 发票中心」→ CDP 截图。
+ *   → 启动应用 → 走界面点进独立「发票中心」页面 → CDP 截图。
  *
  * 用法：node assets/design/invoice-center-v1/capture-implemented.mjs
  * 产物：本目录 09/10/11-implemented-*.png
@@ -201,10 +201,8 @@ async function main() {
     await ui.eval('location.reload(); return true')
     await sleep(3000)
 
-    // 4. 走界面进「数据分析 → 发票中心」
-    await ui.eval(`const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent||'').includes('数据分析')); if (nav) nav.click(); return true`)
-    await until(() => ui.eval(`return !!document.querySelector('.unified-route-tabs')`), 12000, 'route tabs')
-    await ui.eval(`const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(i => (i.textContent||'').includes('发票中心')); if (tab) tab.click(); return true`)
+    // 4. 走界面进独立「发票中心」页面
+    await ui.eval(`const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent||'').includes('发票中心')); if (nav) nav.click(); return true`)
     const ok = await until(() => ui.eval(`return document.querySelectorAll('[data-test="invoice-row"]').length >= 4`), 15000, 'invoice rows')
     if (!ok) throw new Error('发票中心没渲染出 4 家店')
 

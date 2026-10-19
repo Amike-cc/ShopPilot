@@ -36,7 +36,12 @@ describe('自动采集总开关的解析（fail-closed）', () => {
   it('发票中心读总开关用 shared 常量与解析（不许手抄 key，不许 === true 自造口径）', () => {
     // 2026-10-15 审查 M3：以前手抄 'collection.autoEnabled' 且 === true 判定——
     // 存量值为 1/"true" 时主进程按"开"跑、界面却显示"总开关是关的"（假状态）
-    const page = readFileSync(resolve(__dirname, '../../apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue'), 'utf8')
+    const page = [
+  'apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-invoice-detail.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-tax-license.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-data-collection.ts',
+    ].map(p => readFileSync(resolve(p), 'utf8')).join('\n')
     expect(page).toContain('parseAutoCollectionEnabled')
     expect(page).toContain('settings.get(AUTO_COLLECTION_SETTING)')
     expect(page, '不许再手抄设置键字面量').not.toContain("= 'collection.autoEnabled'")

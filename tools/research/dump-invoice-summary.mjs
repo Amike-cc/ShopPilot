@@ -37,13 +37,10 @@ const main = async () => {
     return result.result.value
   }
 
-  // 先切到发票中心，再切到「按主体统计」视图
+  // 先切到独立发票中心页面，再切到「按主体统计」视图
   await evalJs(`
-    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('数据分析'))
+    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('发票中心'))
     if (nav) nav.click()
-    await new Promise(r => setTimeout(r, 1500))
-    const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(i => (i.textContent || '').includes('发票中心'))
-    if (tab) tab.click()
     await new Promise(r => setTimeout(r, 4000))
     const sub = document.querySelector('[data-test="invoice-view-summary"]')
     if (sub) sub.click()

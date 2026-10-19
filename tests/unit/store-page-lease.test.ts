@@ -87,7 +87,17 @@ describe('店铺页面租约账本', () => {
  * 账本再对，只要调用方不归还，页面照样常驻——这种"少一行就退化"的约定靠类型检查发现不了。
  */
 describe('借用/归还的调用链', () => {
-  const TASK_RUNNER = readFileSync(resolve('apps/desktop/src/main/tasks/task-runner.ts'), 'utf8')
+  // 2026-10-19 P1 重构：引擎已从 task-runner.ts 拆成 tasks/ 下多个内聚模块，
+// 源码级约定（不是 import 调用）改为扫描整个引擎模块集合；断言语义不变。
+const TASK_RUNNER = [
+  'task-runner.ts',
+  'task-runner-registry.ts',
+  'task-runner-lifecycle.ts',
+  'task-runner-control.ts',
+  'task-runner-execute.ts',
+  'task-step-dom.ts',
+  'task-step-executor.ts'
+].map(f => readFileSync(resolve('apps/desktop/src/main/tasks', f), 'utf8')).join('\n')
   const COLLECTION_SERVICE = readFileSync(
     resolve('apps/desktop/src/main/sales-metrics/sales-metrics-collection-service.ts'),
     'utf8'

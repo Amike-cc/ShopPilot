@@ -30,8 +30,6 @@ import {
 import { INVOICE_COLUMNS } from '@shared/constants/invoice'
 import { buildInvoiceCsv, ensureCsvExtension, invoiceCsvRows } from '@shared/invoice-csv'
 import { filterRowsByLicenseKey, licenseScopeLabel } from '@shared/store-license'
-import { ordersProfileFor } from '@shared/constants/orders'
-import { mapOrdersRows, orderColumnLabel } from '@shared/orders-steps'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
 import { ipcOk as success, ipcFail as error } from './envelope'
@@ -79,12 +77,11 @@ const SETTING_VALUE_MAX_BYTES = 64 * 1024
  * - ui.*               左/右侧栏收起状态、Agent UI 之外的界面偏好
  * - update.*           更新通道与启动自动检查（§21 双通道）
  * - platform.homeUrls  各平台首页地址覆盖
- * - orders.profiles    订单页实测覆盖
  * - invite.*           邀约配置（配置树 / 广场地址 / 按店铺配置）
  * - security.idleMinutes 空闲自动锁定分钟数（应用锁的其它键仍被挡在门外）
  * - collection.*       采集口径（如 collection.autoEnabled 自动采集总开关，默认关）
  */
-const SETTING_ALLOW_PREFIXES = ['ui.', 'update.', 'platform.homeUrls', 'orders.profiles', 'invite.', 'security.idleMinutes', 'collection.']
+const SETTING_ALLOW_PREFIXES = ['ui.', 'update.', 'platform.homeUrls', 'invite.', 'security.idleMinutes', 'collection.']
 
 /** 前三段属于"非敏感但需要说明"的越权尝试；其余不在白名单里的一律按参数错误返回 */
 const SETTING_SENSITIVE_PREFIXES = ['securi', 'ai_cred', 'ai.', 'proxy_cred', 'agent.']
@@ -222,77 +219,6 @@ export function registerProfileAndMiscHandlers(): void {
     const requestId = generateRequestId()
     try {
       return success(overviewStatsSummary(), requestId)
-    } catch (err: any) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
-    }
-  })
-
-  /**
-   * overview:orders - 订单明细：汇总各店铺**最近一次**订单页整表采集的行（只读）。
-   *
-   * 数据来源：订单明细采集任务 readTable(keepRows, metric='orders.detail') 落下的快照。
-   * 列按平台**实测档案**的列顺序映射到统一列（见 shared/constants/orders.ts 的红线）；
-   * 未实测的平台如实返回 supported:false（界面显示"未实测"），绝不估算或伪造。
-   */
-  handle(IPC_CHANNELS.OVERVIEW_ORDERS, async (): Promise<IPCResult> => {
-    const requestId = generateRequestId()
-    try {
-      const db = getDatabase()
-      let overrides: Record<string, any> = {}
-      try {
-        const row = db.prepare('SELECT value_json FROM app_settings WHERE key=?').get('orders.profiles') as any
-        if (row?.value_json) overrides = JSON.parse(row.value_json)
-      } catch { /* 覆盖配置损坏时按内置档案走 */ }
-      const stores = db.prepare('SELECT id, name, platform FROM stores WHERE deleted_at IS NULL ORDER BY platform, name').all() as any[]
-      const snaps = db.prepare(`
-        SELECT store_id, value_json, captured_at FROM (
-          SELECT store_id, value_json, captured_at, ROW_NUMBER() OVER (PARTITION BY store_id ORDER BY rowid DESC) AS rn
-          FROM store_snapshots WHERE metric = 'orders.detail'
-        ) WHERE rn = 1
-      `).all() as any[]
-      const snapByStore = new Map(snaps.map(item => [item.store_id, item]))
-      const rows = stores.map(store => {
-        const profile = ordersProfileFor(store.platform, overrides)
-        const snapshot = snapByStore.get(store.id)
-        let raw: unknown = null
-        if (snapshot?.value_json) { try { raw = JSON.parse(snapshot.value_json) } catch { raw = null } }
-        const columns = profile ? profile.columns.map(column => ({ key: column.key, label: orderColumnLabel(column.key), header: column.header })) : []
-        const mapped = profile && Array.isArray(raw) ? mapOrdersRows(profile.columns, raw) : []
-        return {
-          storeId: store.id,
-          storeName: store.name,
-          platform: store.platform,
-          supported: !!profile,
-          measuredAt: profile?.measuredAt || null,
-          note: profile?.note || null,
-          columns,
-          rows: mapped,
-          capturedAt: snapshot?.captured_at || null
-        }
-      })
-      // 最近一次采集失败：只有最近一次确实是失败才回报（不把已被成功覆盖的旧失败一直挂着）。
-      // 用窗口函数在 SQL 里取每店最新一条（rn=1）：原写法物化全部历史 run 再在 JS 去重，
-      // 定时采集跑几个月后这张列表会拖慢数据中心首屏。
-      const lastRuns = db.prepare(`
-        SELECT storeId, status, error_code, error_message FROM (
-          SELECT s.id AS storeId, r.status, r.error_code, r.error_message,
-                 ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY r.rowid DESC) AS rn
-          FROM task_runs r
-          JOIN tasks t ON t.id = r.task_id
-          JOIN stores s ON s.id = r.store_id
-          WHERE t.name LIKE '订单明细采集 ·%'
-        ) WHERE rn = 1
-      `).all() as any[]
-      const failByStore = new Map<string, any>()
-      for (const run of lastRuns) {
-        if (failByStore.has(run.storeId)) continue
-        failByStore.set(run.storeId, run.status === 'failed' ? run : null)
-      }
-      for (const row of rows) {
-        const fail = failByStore.get(row.storeId)
-        if (fail) (row as any).error = { code: fail.error_code, message: fail.error_message }
-      }
-      return success({ generatedAt: Date.now(), stores: rows }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
     }

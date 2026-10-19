@@ -15,7 +15,9 @@ import { AGENT_SIDE_EFFECT_STEP_TYPES, isSideEffectStepType } from '@shared/agen
  * "编辑器允许给副作用步骤设 retryLimit" 或"把可安全重放的步骤挡在重试之外"这类口径分裂。
  */
 describe('STEP_CATALOG.sideEffect 与运行时副作用集合一致', () => {
-  const catalogTypes = new Set(STEP_CATALOG.map(entry => entry.type))
+  // 运行时的副作用集合按 string 登记（见 AGENT_SIDE_EFFECT_STEP_TYPES），
+  // 这里要判定"目录里有没有这个类型字符串"，所以集合元素类型显式放宽成 string。
+  const catalogTypes = new Set<string>(STEP_CATALOG.map(entry => entry.type))
 
   it('目录里的每个类型都按同一判定标 sideEffect', () => {
     const mismatched = STEP_CATALOG

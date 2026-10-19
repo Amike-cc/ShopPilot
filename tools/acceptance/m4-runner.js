@@ -49,7 +49,7 @@ function launchApp(exe, userData, port, extraEnv = {}) {
   let log = ''
   child.stdout.on('data', d => { log += d.toString() })
   child.stderr.on('data', d => { log += d.toString() })
-  return { child, getLog: () => log }
+  return { child, exe, getLog: () => log }
 }
 
 function runVerify(port, userData, phase, storeName, prevStore) {
@@ -74,7 +74,8 @@ async function stopApp(ctx) {
   await sleep(1200)
   // 必须整树结束：残留的子进程持有 exe 文件锁，会让后续升级安装的旧卸载器只能登记
   // "挂起删除"，待进程退出后把新装的文件一并删掉（本套件实测到的真实坑）
-  killStray('停止应用')
+  // 只杀本套件自己的实例：ctx.exe 是本次启动的 exe（并发跑的其它套件不碰）
+  killStray('停止应用', [ctx.exe])
   await waitNoStray(20000)
 }
 
@@ -174,11 +175,23 @@ async function uninstallExisting() {
 }
 
 /** 清理游离实例：NSIS 静默安装会按 runAfterFinish 自动拉起应用（含子进程，必须整树结束）。
+ *  只结束**本套件自己**的实例（临时副本 / 本次安装目录 / 历史 m4 临时目录，按 exe 路径收敛）：
+ *  全局 `taskkill /IM ShopPilot.exe /T /F` 会把**并发跑着的其它验收套件**连根杀掉
+ *  （2026-10-18 实测过一次：某个套件运行中被别的运行掐死）；上一轮残留的清理统一收敛到
+ *  run-acceptance.ps1 开头的 Kill-ShopPilot。
  *  注意：绝不杀 Un_A.exe / Au_.exe —— 它们是 NSIS 安装/卸载流程自身的临时副本，中断会导致卸载器未写回。 */
-function killStray(reason) {
-  const r = spawnSync('taskkill', ['/IM', 'ShopPilot.exe', '/T', '/F'], { encoding: 'utf8' })
-  const killed = r.status === 0 ? 1 : 0
-  if (killed) console.log(`[清理] ${reason}：已结束应用进程树`)
+function killStray(reason, extraPaths = []) {
+  const exact = [...new Set(extraPaths.filter(Boolean).map(String))]
+  const exactList = exact.length ? `@(${exact.map(item => `'${item.replace(/'/g, "''")}'`).join(', ')})` : '@()'
+  const script = [
+    `$exact = ${exactList}`,
+    '$n = 0',
+    "Get-Process -Name ShopPilot -ErrorAction SilentlyContinue | Where-Object { ($exact -contains $_.Path) -or ($_.Path -and $_.Path -like '*\\shopilot-m4-*') } | ForEach-Object { $n++; try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {} }",
+    '$n'
+  ].join('; ')
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], { encoding: 'utf8' })
+  const killed = Number(String(r.stdout || '').trim().split(/\r?\n/).filter(Boolean).pop()) || 0
+  if (killed) console.log(`[清理] ${reason}：已结束 ${killed} 个本套件实例（按路径收敛，不碰其它套件）`)
   return killed
 }
 
@@ -320,7 +333,7 @@ async function main() {
     record('阶段2 静默安装完成（NSIS /S 写入自定义目录）', true, installDir)
   }
   // NSIS runAfterFinish 会在静默安装后自动拉起应用：清理后再跑我们的受控实例
-  const strayAfterInstall = killStray('安装后')
+  const strayAfterInstall = killStray('安装后', [installedExe])
   record('阶段2 安装器自动启动的实例已清理（不影响受控验收）', true, strayAfterInstall ? `清理 ${strayAfterInstall} 个映像` : '本次未自动启动')
   await sleep(1200)
 
@@ -338,11 +351,11 @@ async function main() {
   record('阶段2 安装版用户数据已生成', fs.existsSync(path.join(udInstalled, 'shopilot.db')))
 
   // ---------- 阶段 3：升级安装 → 数据保留 ----------
-  killStray('升级安装前')
+  killStray('升级安装前', [installedExe])
   await waitNoStray(20000)
   const upgraded = await silentRun(SETUP, ['/S', '/D=' + installDir], installedExe, 120000, '升级安装')
   record('阶段3 覆盖安装（升级）完成', upgraded)
-  killStray('升级安装后')
+  killStray('升级安装后', [installedExe])
   await sleep(1200)
   // 升级完整性：等一段时间再复核，捕捉"挂起删除"把新装文件清空的场景
   const asarPath = path.join(installDir, 'resources', 'app.asar')
@@ -371,7 +384,7 @@ async function main() {
   await stopApp(ctx)
 
   // ---------- 阶段 4：卸载 ----------
-  killStray('卸载前')
+  killStray('卸载前', [installedExe])
   await sleep(1000)
   const realDir = path.dirname(installedExe)
   const listing = fs.existsSync(realDir) ? fs.readdirSync(realDir) : []

@@ -13,6 +13,23 @@
  */
 export type InviteBlockKind = 'already-invited' | 'quota-exhausted' | 'throttled' | 'unknown'
 
+/** 引擎停止码 → 人话。只映射**已登记**的码，未知码原样返回 null（不猜）。 */
+export function inviteStopReasonLabel(reason: string | null | undefined): string | null {
+  const code = String(reason || '').trim()
+  if (!code) return null
+  return ({
+    TASK_QUOTA_EXCEEDED: '平台额度用尽',
+    TASK_SELECTION_SHORTFALL: '候选不足',
+    TASK_DRAWER_NOT_OPEN: '邀约抽屉未打开',
+    TASK_DAREN_ALREADY_INVITED: '近 7 天已邀',
+    TASK_DAREN_NOT_INVITABLE: '未达合作门槛',
+    TASK_DAREN_PAGE_UNOPENABLE: '详情页打不开',
+    TASK_PAGE_EXHAUSTED: '本页候选已耗尽',
+    target_reached: '达到本次目标',
+    user_stopped: '用户停止'
+  } as Record<string, string>)[code] || null
+}
+
 /** 已邀约：平台原话是「你已经邀请过该达人，7天内不可再次发送带货邀约」 */
 const ALREADY_INVITED_RE = /已邀请过该达人|已经邀请过该达人|7\s*天内不可再次发送|已邀约|已经邀约/
 /** 额度：平台可能说「今日邀请机会已用完」「今日邀请次数已达上限」「额度不足」 */

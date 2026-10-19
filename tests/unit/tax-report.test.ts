@@ -14,7 +14,12 @@ import { epochToQuarterText } from '../../apps/desktop/src/main/tasks/api-reader
 import { stepInputSchemas } from '../../apps/desktop/src/main/tasks/task-step-schemas'
 
 const read = (p: string) => readFileSync(resolve(p), 'utf8')
-const PAGE = read('apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue')
+const PAGE = [
+  'apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-invoice-detail.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-tax-license.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-data-collection.ts',
+].map(p => readFileSync(resolve(p), 'utf8')).join('\n')
 const OVERVIEW_SERVICE = read('apps/desktop/src/main/services/overview-service.ts')
 const PRELOAD = read('apps/desktop/src/preload/index.ts')
 const ENV_DTS = read('apps/desktop/src/renderer/src/env.d.ts')
@@ -236,7 +241,7 @@ describe('涉税报送任务的识别与口径', () => {
   })
 
   it('只认前缀，不误伤别的任务（尤其发票采集）', () => {
-    for (const name of ['发票采集 ·快手小店', '经营指标采集 · 抖店', '订单明细采集 · 抖店', '涉税信息报送', '']) {
+    for (const name of ['发票采集 ·快手小店', '经营指标采集 · 抖店', '商品同步 · 抖店', '涉税信息报送', '']) {
       expect(isTaxCollectTask(name), name).toBe(false)
     }
     expect(isTaxCollectTask(null)).toBe(false)
@@ -339,7 +344,7 @@ describe('收入三段：两种平台形态的统一入口', () => {
     expect(out.amount).toBeCloseTo(1234.56)
     expect(out.refund).toBeCloseTo(34.56)
     expect(out.net).toBeCloseTo(1200)
-    expect(out.reconcilies ?? out.reconciles).toBe(true)
+    expect(out.reconciles).toBe(true)
   })
 
   it('抖店形态（三列分开）能读', () => {

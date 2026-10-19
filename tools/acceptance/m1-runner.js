@@ -131,4 +131,4 @@ async function main() {
   }
 }
 
-main().catch(err => { console.error('RUNNER_ERROR', err); try { process.exit(1) } catch {}; })
+main().catch(err => { console.error('RUNNER_ERROR', err); try { process.exit(1) } catch {} })

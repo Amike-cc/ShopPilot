@@ -25,6 +25,14 @@ ShopPilot 是 Windows 优先的桌面电商浏览器工作台。开发目标是�
 
 ### 2.1 推荐技术栈
 
+> ⚠️ **历史注记（2026-10-19 核对，不代表当前实现）**：本节是 v0.2 的选型设想，落地时有四处**没有采用**——
+> **Vue Router**（当前是单工作台屏幕，无路由）、**UI 组件库**（当前手写 CSS + CSS 变量，图标为 PNG 资源）、
+> **pino**（当前是自研 `main/services/logger`，按天滚动 + 统一脱敏）、**Playwright**
+> （当前验收走自研 CDP 脚本；Playwright 只出现在 `design/**` 与 `tools/ui/**` 的截图脚本里）。
+> 其余选型（Electron / Vue 3 / TypeScript / Pinia / SQLite + better-sqlite3 / Zod / Vitest /
+> electron-builder NSIS / safeStorage）与当前实现一致。
+> **当前架构以 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 为准**，本文其它章节同属历史设计基线。
+
 - 桌面壳：Electron，固定一个经过验证的稳定版本。
 - 前端：Vue 3、TypeScript、Pinia、Vue Router。
 - UI：CSS 变量 + 组件库，优先复用设计图中的深色主题、10px 圆角和蓝色主色。

@@ -1,9 +1,12 @@
 {
   "name": "shopilot",
-  "version": "0.4.75",
+  "version": "0.5.0",
   "description": "ShopPilot - 电商店铺浏览器工作台",
   "private": true,
   "packageManager": "pnpm@10.34.7",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "pnpm": {
     "overrides": {
       "http-cache-semantics": "4.3.0",
@@ -22,12 +25,15 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
     "dist": "electron-vite build && electron-builder --win --x64",
     "dist:dir": "electron-vite build && electron-builder --win --x64 --dir",
+    "dist:acceptance": "node tools/acceptance/build-acceptance.mjs",
     "release:manifest": "node tools/release/release-manifest.js",
     "release:publish": "node tools/release/publish-release.js",
     "release:full": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run dist && node tools/release/release-manifest.js && node tools/release/publish-release.js",
     "lint": "eslint .",
+    "lint:ci": "eslint . --max-warnings 1145",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:custom-local": "node tools/acceptance/custom-task-local-verify.js",
@@ -35,6 +41,7 @@
     "test:invite-douyin-local": "node tools/acceptance/douyin-invite-local-verify.js",
     "test:customer-service-switch": "node tools/acceptance/customer-service-switch-local-verify.js",
     "test:invite-live-log": "node tools/acceptance/invite-live-log-verify.js",
+    "test:invite-v2-smoke": "node tools/acceptance/creator-invite-smoke.js",
     "test:custom-realclick": "node tools/acceptance/custom-task-real-click-verify.js",
     "test:webview-attach": "node tools/acceptance/webview-attach-local-verify.js"
   },
@@ -55,13 +62,13 @@
     "electron-vite": "6.0.0",
     "eslint": "8.57.0",
     "eslint-plugin-vue": "9.22.0",
+    "happy-dom": "20.14.6",
     "pinia": "2.3.1",
     "playwright": "1.64.1",
     "typescript": "5.9.3",
     "vite": "7.3.7",
     "vitest": "5.0.4",
     "vue": "3.5.44",
-    "vue-router": "4.5.1",
     "vue-tsc": "3.3.13"
   }
 }

@@ -15,7 +15,12 @@ import { resolve } from 'node:path'
  *   4. 异常如实（登录失效 / 未填执照 / 本次没采到 / 未解析）与跳转链路等红线一个都不能少。
  */
 
-const PAGE = readFileSync(resolve('apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue'), 'utf8')
+const PAGE = [
+  'apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-invoice-detail.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-tax-license.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-data-collection.ts',
+].map(p => readFileSync(resolve(p), 'utf8')).join('\n')
 
 describe('发票中心精简版 UI（2026-10-15）', () => {
   it('概览合并为一行：invoice-totals 内恰 3 个 .dc-num，且顺序固定（条数/金额/店铺）', () => {

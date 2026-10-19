@@ -189,7 +189,7 @@ export function registerCustomerServiceWebContents(webContents: WebContents, sto
     throw new Error('CUSTOMER_SERVICE_SESSION_MISMATCH')
   }
   if (!(sharedSession as any).__customerServiceNavigationGuard) {
-    ;(sharedSession as any).__customerServiceNavigationGuard = true
+    (sharedSession as any).__customerServiceNavigationGuard = true
     try {
       sharedSession.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, callback) => {
         if (details.resourceType !== 'mainFrame' || details.webContentsId == null) {
@@ -216,7 +216,7 @@ export function registerCustomerServiceWebContents(webContents: WebContents, sto
         }
       })
     } catch (error) {
-      ;(sharedSession as any).__customerServiceNavigationGuard = false
+      (sharedSession as any).__customerServiceNavigationGuard = false
       logMain('warn', `customer-service request guard unavailable: ${String((error as Error)?.message || error).slice(0, 160)}`)
     }
   }
@@ -297,7 +297,7 @@ export function getStoreSession(storeId: string): Session {
   // 变更触发 N 次同步加密+写盘（2026-09-28 审查确认的写放大/监听器泄漏）。
   try {
     if (!(storeSession as any).__cookieSnapHooked) {
-      ;(storeSession as any).__cookieSnapHooked = true
+      (storeSession as any).__cookieSnapHooked = true
       let snapTimer: NodeJS.Timeout | null = null
       storeSession.cookies.on('changed', () => {
         if (snapTimer) clearTimeout(snapTimer)
@@ -386,7 +386,7 @@ export async function waitForCustomerServiceSessionReady(storeId: string): Promi
 /** 等待店铺 Session 的代理配置与会话 Cookie 恢复完成。 */
 export async function waitForStoreSessionReady(storeId: string): Promise<void> {
   // ShopSessionManager 可能已经先取得了同一店铺的 Session；复用现有配置 Promise，
-  // 避免 WebContentsView 创建时重复注册 webRequest / download 监听器。
+  // 避免 DOM <webview> 挂载/首次导航时重复注册 webRequest / download 监听器。
   if (!activeSessions.has(storeId) || !sessionReady.has(storeId)) getStoreSession(storeId)
   await sessionReady.get(storeId)
   await restoreStoreSession(storeId)
@@ -434,7 +434,7 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
   // 同 Cookie 监听：Session 是单例，重复进入这里会在同一个对象上叠加监听 →
   // 一次下载写 N 条 downloads 记录 + N 次 mkdirSync（2026-09-28 审查确认）。
   if (!(sess as any).__downloadHooked) {
-    ;(sess as any).__downloadHooked = true
+    (sess as any).__downloadHooked = true
     sess.on('will-download', (_event, item, webContents) => {
     try {
       const db = getDatabase()

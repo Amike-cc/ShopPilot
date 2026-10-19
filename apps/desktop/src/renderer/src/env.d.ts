@@ -56,6 +56,7 @@ declare global {
           create: (storeId: string, url?: string) => Promise<IPCResult>
           activate: (storeId: string, tabId: string) => Promise<IPCResult>
           close: (storeId: string, tabId: string) => Promise<IPCResult>
+          closeMany: (input: { storeId: string, mode: 'ids' | 'others' | 'all', tabIds?: string[], keepTabId?: string, includePinned?: boolean }) => Promise<IPCResult>
           reorder: (storeId: string, orderedTabIds: string[]) => Promise<IPCResult>
           setPinned: (storeId: string, tabId: string, pinned: boolean) => Promise<IPCResult>
           list: (storeId: string) => Promise<IPCResult>
@@ -105,7 +106,6 @@ declare global {
       overview: {
         stats: () => Promise<IPCResult>
         datacenter: () => Promise<IPCResult>
-        orders: () => Promise<IPCResult>
         invoiceCenter: () => Promise<IPCResult>
         invoiceExport: (input?: { licenseKey?: string }) => Promise<IPCResult>
         /** 涉税信息报送：各店铺的平台侧报送数据；返回体带 disclaimer（不得作为税务申报依据） */
@@ -156,15 +156,6 @@ declare global {
         cookies: (storeId: string, search?: string) => Promise<IPCResult>
         deleteCookie: (storeId: string, name: string, domain: string, path: string, secure?: boolean) => Promise<IPCResult>
         clearCookies: (storeId: string) => Promise<IPCResult>
-      }
-      orders: {
-        collect: (input: { storeId: string; maxPages?: number; maxOrders?: number; timeoutMs?: number }) => Promise<IPCResult>
-        list: (query: { storeId: string; status?: string; startDate?: number; endDate?: number; page?: number; pageSize?: number }) => Promise<IPCResult>
-        get: (storeId: string, orderId: string) => Promise<IPCResult>
-        observation: {
-          start: (input: { storeId: string; timeoutMs?: number; maxResponses?: number }) => Promise<IPCResult>
-          stop: (storeId: string) => Promise<IPCResult>
-        }
       }
       // 商品管理：只有"同步（只读采集）+ 查询 + 台账"，**没有发布**（发布走任务引擎与人工门禁）
       products: {
@@ -248,6 +239,31 @@ declare global {
         create: (label?: string) => Promise<IPCResult>
         list: () => Promise<IPCResult>
         restore: (backupId: string) => Promise<IPCResult>
+      }
+      /** 达人邀约 v2：批次 / 逐人记录 / 汇总（启动仍由主进程创建 TaskRun） */
+      invite: {
+        startCampaign: (input: any) => Promise<IPCResult>
+        campaigns: (input?: { storeId?: string; limit?: number }) => Promise<IPCResult>
+        campaignDetail: (campaignId: string) => Promise<IPCResult>
+        records: (input?: { storeId?: string; campaignId?: string; status?: string; limit?: number; offset?: number }) => Promise<IPCResult>
+        updateRecordStatus: (input: { id: string; storeId: string; status: string; reason?: string }) => Promise<IPCResult>
+        summary: (input?: { storeId?: string }) => Promise<IPCResult>
+        quota: (input: { storeId: string }) => Promise<IPCResult>
+        creators: {
+          list: (input?: { storeId?: string; platform?: string; query?: string; blacklisted?: boolean; limit?: number }) => Promise<IPCResult>
+          update: (input: { storeId: string; platform: string; creatorKey: string; tags?: string[]; note?: string | null; blacklisted?: boolean; blacklistReason?: string | null }) => Promise<IPCResult>
+          blacklisted: (input: { storeId: string; platform: string }) => Promise<IPCResult>
+        }
+        scripts: {
+          list: (input: { storeId: string; platform?: string }) => Promise<IPCResult>
+          save: (input: { id?: string; storeId: string; platform: string; name: string; mode?: 'manual' | 'ai'; template: string; maxLen?: number | null }) => Promise<IPCResult>
+          remove: (input: { id: string; storeId: string }) => Promise<IPCResult>
+        }
+        productSets: {
+          list: (input: { storeId: string; platform?: string }) => Promise<IPCResult>
+          save: (input: { id?: string; storeId: string; platform: string; name: string; productIds: string[] }) => Promise<IPCResult>
+          remove: (input: { id: string; storeId: string }) => Promise<IPCResult>
+        }
       }
       task: {
         create: (input: any) => Promise<IPCResult>

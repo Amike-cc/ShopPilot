@@ -50,7 +50,12 @@ describe('发票中心入口数据', () => {
 // 没档案的平台退回该店后台地址，两者都没有就置灰——绝不猜一个地址出来。
 
 describe('发票中心跳转开票地址', () => {
-  const PAGE = readFileSync(resolve('apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue'), 'utf8')
+  const PAGE = [
+  'apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-invoice-detail.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-tax-license.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-data-collection.ts'
+  ].map(p => readFileSync(resolve(p), 'utf8')).join('\n')
   const OVERVIEW = readFileSync(resolve('apps/desktop/src/main/services/overview-service.ts'), 'utf8')
 
   it('主进程为每个店铺返回实测发票页与后台地址（界面才有得跳）', () => {

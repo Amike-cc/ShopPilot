@@ -1,8 +1,10 @@
 ﻿import { describe, expect, it } from 'vitest'
-import { inviteProfileFor } from '@shared/constants/invite'
+import { inviteProfileFor, isBatchProfile } from '@shared/constants/invite'
 import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig, parseInviteProductIds } from '@shared/invite-task'
 
 const douyin = inviteProfileFor('抖店')!
+// 抖店是 batch-list 档案：收窄一次才能访问 maxBatch 这类批量流专属字段（类型层面的事实校验）。
+if (!isBatchProfile(douyin)) throw new Error('抖店应为 batch-list 档案')
 const wechat = inviteProfileFor('微信小店')!
 const kuaishou = inviteProfileFor('快手小店')!
 
@@ -19,6 +21,8 @@ describe('Invite task builder (panel + agent single source)', () => {
     const payload = buildInviteTaskPayload({ profile: douyin, storeId: 'store_a', squareUrl: douyin.pageUrl, config })!
     expect(payload).not.toBeNull()
     expect(payload.storeScope).toBe('store_a')
+    // v33：类型显式化，不再让统计依赖「达人邀约 ·」名称前缀
+    expect(payload.kind).toBe('creator_invite')
     expect(payload.name).toContain('达人邀约 · 抖店 · 美妆')
     expect(payload.name).toContain(`最多 ${douyin.maxBatch} 位`)
     expect(payload.steps.length).toBeGreaterThan(0)
@@ -116,6 +120,31 @@ describe('Invite task builder (panel + agent single source)', () => {
     // 没台账时不生成 skipTexts（不猜）
     const noLedger = buildInviteTaskPayload({ profile: kuaishou, storeId: 'store_k', squareUrl: kuaishou.pageUrl, config: normalizeInviteTaskConfig('batch-list', { ...raw, recentlyInvited: undefined }) })!
     expect(JSON.stringify(noLedger.steps)).not.toContain('skipTexts')
+  })
+
+  it('批量流只给「选达人」的 clickAll 打 recordNames，选商品的 clickAll 不能混进邀约记录', () => {
+    const flattenClickAll = (steps: any[]): any[] => steps.flatMap(step => step.type === 'loop'
+      ? (Array.isArray(step.input?.steps) ? step.input.steps.filter((child: any) => child.type === 'clickAll') : [])
+      : [])
+    const douyinConfig = normalizeInviteTaskConfig('batch-list', {
+      category: '个护家清', levels: ['LV0'], count: 2, scriptMode: 'manual',
+      batchPhone: '13800138000', batchWechat: 'wx_test', batchProductCount: 1
+    })
+    const douyinPayload = buildInviteTaskPayload({ profile: douyin, storeId: 'store_a', squareUrl: douyin.pageUrl, config: douyinConfig })!
+    const douyinClickAll = flattenClickAll(douyinPayload.steps as any[])
+    expect(douyinClickAll).toHaveLength(1)
+    expect(douyinClickAll[0].input.recordNames).toBe(true)
+
+    const kuaishouConfig = normalizeInviteTaskConfig('batch-list', {
+      category: '', levels: [], count: 2, script: '你好', scriptMode: 'manual',
+      batchContact: '刘涛', batchPhone: '15057937334', batchWechat: 'jiaoe988', batchProductCount: 1
+    })
+    const kuaishouPayload = buildInviteTaskPayload({ profile: kuaishou, storeId: 'store_k', squareUrl: kuaishou.pageUrl, config: kuaishouConfig })!
+    const kuaishouClickAll = flattenClickAll(kuaishouPayload.steps as any[])
+    expect(kuaishouClickAll).toHaveLength(2)
+    // 选达人的那一步带 scroll=true；选商品的弹窗那一步不带 scroll，也绝不能带 recordNames
+    expect(kuaishouClickAll.find(step => step.input.scroll === true)?.input.recordNames).toBe(true)
+    expect(kuaishouClickAll.find(step => step.input.scroll !== true)?.input.recordNames).toBeUndefined()
   })
 
   it('7 天内邀过的达人昵称进载荷（点「详情」时跳过），并有边界收口', () => {

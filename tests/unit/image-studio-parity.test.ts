@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const readSource = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
-const studio = readSource('apps/desktop/src/renderer/src/features/workbench/UnifiedImageStudioPage.vue')
+// 2026-10-19 拆分：页面 + 两个 composable 一起扫描（断言/字面量/阈值一字未动，只改读哪些文件）
+const studio = [
+  'apps/desktop/src/renderer/src/features/workbench/UnifiedImageStudioPage.vue',
+  'apps/desktop/src/renderer/src/features/workbench/use-image-studio-generation.ts',
+  'apps/desktop/src/renderer/src/features/workbench/use-image-studio-history.ts'
+].map(readSource).join('\n')
 const dashboard = readSource('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue')
 const imageClient = readSource('apps/desktop/src/main/services/ai-client.ts')
 const imageHandlers = readSource('apps/desktop/src/main/ipc/ai-handlers.ts')
@@ -81,7 +86,7 @@ describe('AI 商品图工作台页签细节', () => {
   })
 
   it('图片工作台仍保留主工作台左侧导航', () => {
-    expect(dashboard).toContain("'picker-mode': taskPicking && activePage === 'browser'")
+    expect(dashboard).not.toContain("'picker-mode': taskPicking && activePage === 'browser'")
     expect(dashboard).toContain("'image-studio-shell': activePage === 'image-studio'")
     expect(dashboard).toContain('<aside class="dashboard-sidebar sidebar"')
     expect(dashboard).toContain('.image-studio-shell .dashboard-toolbar { display: none; }')

@@ -119,6 +119,11 @@ export const ERROR_CODES = {
     message: '当前任务状态不允许该操作',
     retryable: false
   },
+  INVITE_QUOTA_EXCEEDED: {
+    code: 'INVITE_QUOTA_EXCEEDED',
+    message: '今日邀约额度不足',
+    retryable: false
+  },
   NAVIGATION_BLOCKED: {
     code: 'NAVIGATION_BLOCKED',
     message: '导航目标不被允许',

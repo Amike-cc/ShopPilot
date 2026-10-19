@@ -10,7 +10,21 @@ import path from 'path'
  * 而这类错误只有构建/类型检查才暴露，运行时表现是"点击步骤报各种怪错"。
  * 这里把关键片段抽出来做一次语法自检。
  */
-const SRC = fs.readFileSync(path.join(__dirname, '../../apps/desktop/src/main/tasks/task-runner.ts'), 'utf8')
+/**
+ * 引擎源码集合（2026-10-19 P1 重构）：task-runner.ts 已拆成 tasks/ 下多个内聚模块，
+ * 注入脚本常量搬到了 task-step-dom.ts —— 源码级断言必须扫描整个引擎模块集合。
+ */
+const ENGINE_DIR = path.join(__dirname, '../../apps/desktop/src/main/tasks')
+const ENGINE_FILES = [
+  'task-runner.ts',
+  'task-runner-registry.ts',
+  'task-runner-lifecycle.ts',
+  'task-runner-control.ts',
+  'task-runner-execute.ts',
+  'task-step-dom.ts',
+  'task-step-executor.ts'
+]
+const SRC = ENGINE_FILES.map(f => fs.readFileSync(path.join(ENGINE_DIR, f), 'utf8')).join('\n')
 
 describe('注入脚本的语法自检', () => {
   it('task-runner 源码里的注入片段不含"嵌套模板字面量"这类会被外层吃掉的写法', () => {
@@ -32,7 +46,10 @@ describe('注入脚本的语法自检', () => {
 
   it('店铺页面按活动状态控制后台节流（隐藏页节流，活动页/任务页保持活跃）', () => {
     expect(SRC.length).toBeGreaterThan(0)
-    const wm = fs.readFileSync(path.join(__dirname, '../../apps/desktop/src/main/browser/window-manager.ts'), 'utf8')
+    // 2026-10-19 P1 重构：window-manager.ts 已拆成 browser/ 下多个内聚模块，扫描整个模块集合
+    const wm = ['window-manager.ts', 'window-state.ts', 'window-browser-core.ts', 'window-capture.ts', 'window-diagnostics.ts']
+      .map(f => fs.readFileSync(path.join(ENGINE_DIR, '../browser', f), 'utf8'))
+      .join('\n')
     const main = fs.readFileSync(path.join(__dirname, '../../apps/desktop/src/main/index.ts'), 'utf8')
     // 店铺页面由主窗口 DOM <webview> 承载后，guest 初始允许节流，
     // 窗口管理器在活动页/任务页上按场景解除；独立窗口也采用同一默认策略。

@@ -14,7 +14,8 @@ describe('发票档案（抓取待开票信息用）', () => {
   })
 
   it('已实测平台都有页地址/就绪判据/表头映射/指标名（缺一项就抓不了）', () => {
-    expect(INVOICE_SUPPORTED_PLATFORMS.sort()).toEqual(['微信小店', '抖店', '拼多多', '快手小店'].sort())
+    // 平台清单是只读常量（不允许被 sort 原地改写），先拷贝再排序
+    expect([...INVOICE_SUPPORTED_PLATFORMS].sort()).toEqual(['微信小店', '抖店', '拼多多', '快手小店'].sort())
     for (const [name, p] of Object.entries(INVOICE_PROFILES)) {
       expect(p.platform, name).toBe(name)
       expect(p.pageUrl).toMatch(/^https:\/\//)

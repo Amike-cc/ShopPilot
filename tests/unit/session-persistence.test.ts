@@ -51,11 +51,28 @@ import {
   snapshotStoreSession
 } from '../../apps/desktop/src/main/services/session-persistence'
 
+/**
+ * 测试用 Cookie 记录：Electron Cookie 的一个最小子集。
+ * 迁移时会给补进来的旧 Cookie 补 sameSite，所以形状里必须有这个可选字段
+ * （否则 `currentCookies.push(...)` 会被推断出的窄字面量类型挡住）。
+ */
+interface TestCookie {
+  name: string
+  domain: string
+  path: string
+  value: string
+  secure?: boolean
+  httpOnly?: boolean
+  expirationDate?: number
+  sameSite?: string
+}
+
 describe('会话快照并发收敛', () => {
   it('同一店铺的异步 Cookie 读取按调用顺序串行写入', async () => {
     mocks.encryptString.mockClear()
     mocks.renameSync.mockClear()
-    let releaseFirst: (() => void) | null = null
+    // 不在声明处初始化：Promise 回调里才赋值，若初始化成 null，TS 会把它收窄成 null 并判定 release?.() 不可调用。
+    let releaseFirst: (() => void) | undefined
     const firstRead = new Promise<void>(resolve => { releaseFirst = resolve })
     const session = {
       cookies: {
@@ -80,7 +97,7 @@ describe('会话快照并发收敛', () => {
   })
 
   it('清理快照会使在途读取失效，旧结果不能重新写回磁盘', async () => {
-    let release: (() => void) | null = null
+    let release: (() => void) | undefined
     const pending = new Promise<void>(resolve => { release = resolve })
     const session = { cookies: { get: vi.fn(async () => { await pending; return [{ name: 'stale', domain: 'example.com', value: '1' }] }) } } as any
     mocks.getActiveStoreSession.mockReturnValue(session)
@@ -95,7 +112,7 @@ describe('会话快照并发收敛', () => {
   })
 
   it('迁移旧客服 Cookie 时保留工作台同键新值，只补入缺失的平台 Cookie', async () => {
-    const currentCookies = [
+    const currentCookies: TestCookie[] = [
       { name: 'session', domain: 'im.jinritemai.com', path: '/', value: 'workbench-current', secure: true, httpOnly: true, expirationDate: Date.now() / 1000 + 3600 }
     ]
     const legacyCookies = [

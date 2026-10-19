@@ -73,13 +73,10 @@ const main = async () => {
     return out
   }`
 
-  // 先把界面切到发票中心（采集入口在那里），并确保有店铺开着
+  // 先把界面切到独立发票中心页面（采集入口在那里），并确保有店铺开着
   await evalJs(`
-    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('数据分析'))
+    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('发票中心'))
     if (nav) nav.click()
-    await new Promise(r => setTimeout(r, 1500))
-    const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(i => (i.textContent || '').includes('发票中心'))
-    if (tab) tab.click()
     await new Promise(r => setTimeout(r, 3500))
     return true
   `)

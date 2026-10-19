@@ -541,7 +541,7 @@ HR 生成岗位卡，必须包含：
 - 门禁与提示词同源：`toolApprovalRequired`（提示词里给工具打「需确认」标记、技能步骤资格判定）现在 = `AGENT_CONFIRM_REQUIRED_ACTIONS`（29 项）∪ 例外清单 ∪ 资金名匹配。此前它只看 3 项例外清单，导致提示词告诉模型“自治运营默认自动执行”，而实际有 20+ 个动作会弹确认卡。
 - **「风险等级」与「是否需要确认」是两件事，分别取两个集合**（2026-09-26 用户定调）：风险看 `AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS`（会改动持久状态的动作），确认看 `AGENT_CONFIRM_REQUIRED_ACTIONS`，后者是前者的子集。达人邀约 `runInvite`（用户在对话里发起、额度用尽自动停止）与技能启用/停用 `updateSkill`（可逆的本地定义变更）已撤出确认名单，但**仍在副作用集合里**（risk=write、只读执行者不能接、`side_effect_started` 照置位）；两者也仍在技能禁入清单里。`agent-service.planFromActions` 用前者推 risk、用后者推 requiresConfirmation——历史上这两者绑在一起，撤一个动作的确认就等于顺手把它降级成 read。
 - 新增工具时必须同步四个地方，缺一个就会出现“能规划不能执行”或“提示词与实际门禁不一致”：① `packages/shared/src/schemas/agent.ts` 的 action schema + `AGENT_SOFTWARE_ACTION_TYPES`；② `packages/shared/src/agent-tools.ts` 的 `AGENT_TOOL_CATALOG`（契约测试保证与 ① 一一对应）；③ `agent-service.ts` 的 `SOFTWARE_ACTION_LABELS` + `describeSoftwareAction` + `validateSoftwareAction` + `executeAgentSoftwarePlan` 的 case；④ `agent-domain-rules.ts` 的 `AGENT_CONFIRM_REQUIRED_ACTIONS`（会弹确认卡）与 `agent-tools.ts` 的 `AGENT_SKILL_FORBIDDEN_STEPS`（不可被技能嵌套）。
-- **动作名有两个消费方，且渲染层不能引 `agent-tools.ts`**：Main 用目录自带的 `label`，计划卡用纯数据表 `packages/shared/src/agent-tool-labels.ts`（引 `agent-tools.ts` 会连带 `agent-domain-rules.ts` → `node:crypto`，浏览器构建直接失败）。两份由 `tests/unit/agent-tools.test.ts` 的一致性测试锁死，改标签时一并改两处。
+- **动作名的来源**：Main 使用 `agent-tools.ts` 目录自带的 `label`。当前 Agent UI 已收敛为纯对话模式，旧的渲染计划卡及其浏览器安全标签表已移除；若未来恢复计划卡，必须新增不依赖 Node 内置模块的标签数据层，并补充与目录的一致性测试。
 - **面板与模型共用同一个写函数时，必须先摘掉动作判别键 `type`**：面板传纯输入（无 `type`），模型动作自带 `type`，直接喂严格 schema 会报 `unrecognized_keys: ["type"]`（`createSkill`、`updatePlugin`/`deletePlugin` 都踩过）。约定用 `stripActionType`，只摘 `type`，其余多余键仍严格拒绝。
 - 路由：含“任务/发票/备份/团队/书签”等软件功能词的指令优先走智能体回合，不会被当成页面任务去观察页面；只有真正的页面任务（标题/表格/库存/点击/截图等）才生成页面计划。
 
@@ -566,14 +566,14 @@ HR 生成岗位卡，必须包含：
 
 - 非资金任务与软件操作（打开/切换店铺、查询、采集、备份、删除/回收站、任务运行与取消、组织变更、面板导航等）生成即执行，不需要用户逐次审批。
 - 资金动作（付款、支付、下单、提交订单、退款、收款、打款、转账、充值、结算、开票/申领发票、投放/广告费、货款、保证金，以及英文 pay/payment/checkout/purchase/refund/payout/transfer/topup）必须人工确认：页面计划会插入可见确认门禁，Agent Job 停在 waiting_confirmation，软件操作先展示计划等确认。
-- 资金识别由 Main 的 MONEY_ACTION_RE 统一执行，扫描目标、步骤说明和输入；纯读取（如发票采集、读取订单列表）不算资金。
+- 资金识别由 Main 的 MONEY_ACTION_RE 统一执行，扫描目标、步骤说明和输入；纯读取（如发票采集、读取经营指标）不算资金。
 - 例外审批清单（APPROVAL_REQUIRED_SOFTWARE_ACTIONS）：除资金外，不可逆的数据销毁动作也必须确认，当前包含“彻底删除店铺”（`deleteStorePermanent`）；清单可扩展。
 - 计划生成后 Renderer 自动派发非资金任务并自动执行非资金软件计划；资金计划与例外清单计划等待用户点“派发并执行 / 确认并执行”。
 - 全局设置仍按 §5.2 的禁入清单执行。
 
 ### 5.5 多店任务
 
-用户说“检查所有店铺订单 / 每个店铺 / 逐家 / 按顺序全查”时，Main 逐店执行（最多 5 家）：
+用户说“检查所有店铺经营指标 / 每个店铺 / 逐家 / 按顺序全查”时，Main 逐店执行（最多 5 家）：
 
 1. 打开并显示该店铺（没有标签页时按店铺地址新建）。
 2. 观察当前页面 → 用页面规划器生成计划 → 严格校验。
@@ -608,20 +608,18 @@ HR 生成岗位卡，必须包含：
 - **任务编辑（面板）**：任务列表卡片有「编辑」，复用自定义任务编辑器（与「复制」同一套步骤转换），保存走 `TASK_UPDATE` → `taskStore.updateTask`：未传字段不改、`storeScope/schedule` 传 `null` 清空、`steps` 整体替换并重排下标、每次写 `updated_at` 与审计 `task.update`；校验复用 `taskCreateSchema.shape.*` 与 `validateStepInput`（与创建同源），非法步骤在写库前就被拒。有未结束运行（queued/running/waiting_confirmation/paused）时只允许改名称/计划：面板在步骤未改动时干脆不发 `steps`，改了则由 Main 以 `TASK_BAD_STATE` 拒绝并说明原因。
 - **可见性**：启用的技能进入软件上下文 `skills`（id/name/description/stepCount）并显示在 Agent 抽屉的软件上下文里，模型据此选择 `runSkill`。
 
-### 5.8 达人邀约发送与订单明细采集（智能体工具）
+### 5.8 达人邀约发送（智能体工具）
 
-两个提交/采集类能力也按闭合工具登记（面板与智能体共用同一份构造器，避免两处漂移）：
+达人邀约发送按闭合工具登记（面板与智能体共用同一份构造器，避免两处漂移）：
 
 - **达人邀约发送（`runInvite`）**：按店铺读取「达人邀约」面板保存的配置（`invite.config.store.<storeId>`，回退旧版按平台键），用共享构造器 `buildInviteTaskPayload` 生成任务并派给子 Agent。配置不完整时逐条说明缺项（`AGENT_INVITE_CONFIG_INCOMPLETE`）；平台未实测时明确拒绝（`AGENT_INVITE_UNSUPPORTED`）；广场地址沿用设置里的平台覆盖（`invite.squareUrls`）→ 档案内置默认。发送类动作**不进技能**（技能禁入清单含 `runInvite`），必须每次由用户明确要求；流程自带额度预检与「抽屉关闭」结果校验，按用户要求不设二次确认。
-- **订单明细采集（`collectOrders`）**：从订单列表页整表读取（`readTable + keepRows`），按表头映射到统一列（订单号/状态/实付金额/下单时间/商品/买家），逐行落在任务结果里。**平台档案必须先实测**（`packages/shared/src/constants/orders.ts` 的红线）：未实测的平台如实报「未实测」，不猜锚点；实测后可通过设置 `orders.profiles`（platform → 档案 JSON）即时登记，无需发版。意图路由：含「订单明细/逐条订单/订单列表」时优先于经营指标（两者都含“订单”）。
-
 Job 载荷清洗（`sanitizeJobValue`）：嵌套上限 16 层，超限**如实报错**（`AGENT_JOB_PAYLOAD_TOO_DEEP`）而不是把结构字段静默替换成字符串——真机实测：旧实现 6 层上限会把 `loop → steps → input` 的邀约载荷在第 6 层替换成字符串，导致引擎校验报 `TASK_INVALID_STEP`。
 
 凭据健壮性：`credential-store.decrypt` 遇到不可解密的密文（OSCrypt 密钥未落盘、强杀/断电后的半写状态）按「未配置」处理并记日志，**不允许让应用启动失败**（真机夹具复现：`ensureAgentRuntimeBootstrap → getAiConfig → hasAiKey` 抛错会导致整个应用无法启动）。
 
 ### 5.9 Job 结束后自动续办（「提问题 → 智能体想办法解决」闭环）
 
-派发的任务（多店页面任务、采集、技能运行、邀约、订单明细）结束后，Renderer 在**回报结果之后**把「用户目标 + Job 结果摘要」交回智能体回合（`agent:job:followUp`），让主 Agent 判断目标是否达成并给下一步：
+派发的任务（多店页面任务、采集、技能运行、邀约）结束后，Renderer 在**回报结果之后**把「用户目标 + Job 结果摘要」交回智能体回合（`agent:job:followUp`），让主 Agent 判断目标是否达成并给下一步：
 
 - 结果摘要来自 Job 的真实状态与证据（目标、状态、最后一条事件原因、最多 3 条证据摘要），总长 ≤ 2400 字符；
 - 系统提示明确：这是执行结果回报、不是新的用户请求；达成 → 给结论与关键数字；未达成 → 看失败原因换办法（换采集方式、先打开店铺、改派其它店铺、查看已采集数据）或如实说明需要用户配合（扫码登录、补配置）；

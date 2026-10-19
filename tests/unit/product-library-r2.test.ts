@@ -112,6 +112,8 @@ realIt('复制：标题加「（副本）」；媒体行 sha256/local_path 原�
   for (const row of copyMedia) {
     const source = sourceBySha.get(String(row.sha256))
     expect(source).toBeDefined()
+    // 显式窄化：断言存在不等于类型上一定存在（缺失时下面这行会读出 undefined 而误判）
+    if (!source) throw new Error(`复制行的 sha256 在源媒体里找不到：${String(row.sha256)}`)
     expect(row.local_path).toBe(source.local_path)
   }
   const copy = repo.getProduct(duplicated.productId)
@@ -149,7 +151,7 @@ realIt('彻底删除：无发布记录才可；级联行删除、链接回「未
   // 移除发布记录 → 可彻底删；链接回到未归并；规格/媒体行级联消失
   db.prepare(`DELETE FROM product_publish_jobs WHERE id = 'job_1'`).run()
   // 软删进回收站后也能彻底删（回收站行的操作）
-  repo.softDelete?.(id)
+  repo.softDeleteProduct(id)
   const result = service.purge({ productId: id })
   expect(result.media).toBeGreaterThan(0)
   expect(repo.getProduct(id)).toBeNull()

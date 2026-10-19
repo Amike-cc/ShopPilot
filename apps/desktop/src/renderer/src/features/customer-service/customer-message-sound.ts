@@ -70,5 +70,5 @@ export function playCustomerMessageBeep(): void {
 
 /** 仅供单测：注入一个假的 AudioContext 构造函数，验证"可关"与"失败静默"两条边界 */
 export function __setAudioContextForTest(ctor: unknown): void {
-  ;(globalThis as { AudioContext?: unknown }).AudioContext = ctor
+  (globalThis as { AudioContext?: unknown }).AudioContext = ctor
 }

@@ -43,11 +43,8 @@ const main = async () => {
   if (!target) throw new Error('没找到应用窗口')
   const cdp = new CDP(target.webSocketDebuggerUrl)
   const out = await cdp.eval(`
-    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('数据分析'))
+    const nav = [...document.querySelectorAll('.dashboard-nav-item')].find(i => (i.textContent || '').includes('发票中心'))
     if (nav) nav.click()
-    await new Promise(r => setTimeout(r, 1500))
-    const tab = [...document.querySelectorAll('.unified-route-tabs button')].find(i => (i.textContent || '').includes('发票中心'))
-    if (tab) tab.click()
     await new Promise(r => setTimeout(r, 3500))
     const norm = s => (s || '').replace(/\\s+/g, ' ').trim()
     // 方向卡片：名字在 .inv-sec-name，徽标在 .inv-sec-badge，条数在 .inv-sec-num

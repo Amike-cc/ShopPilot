@@ -379,7 +379,12 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * （选择被清空、抽屉不开），整批就在"等抽屉"上白等到超时。
      * 台账里记着我们自己近 7 天邀过的昵称 → 勾选时直接跳过这些行，别让平台替我们剔。
      */
-    skipTexts: z.array(z.string().min(1).max(120)).max(500).optional()
+    skipTexts: z.array(z.string().min(1).max(120)).max(500).optional(),
+    /**
+     * 达人邀约批量流专用：为 true 时把本次实际勾选的完整昵称回传给轮末记账。
+     * 快手商品弹窗同样用 clickAll（选商品），它**不带**这个标记——不能把商品名写成达人。
+     */
+    recordNames: z.boolean().optional()
   }).strict().refine((v) => !!v.selector !== !!v.text, { message: 'selector 与 text 必须二选一' }),
   setInput: z.object({ selector, text: z.string().max(2000) }).strict(),
   // AI 生成：从 sourceSelector 读商品信息 → 主进程调大模型 → 写入 selector（参数仍只有选择器与文本/数值）
@@ -668,5 +673,10 @@ export const taskCreateSchema = z.object({
   steps: z.array(taskStepSchema).min(1).max(100),
   // 复用 agent 那份 schedule schema：定义两处必然漂移——2026-09-29 实测，主进程这份没有 backgroundOpen，
   // parse 时把调用方传的 backgroundOpen 静默strip 掉，于是定时任务后台开页面的开关永远为假。
-  schedule: agentScheduleSchema.nullish()
+  schedule: agentScheduleSchema.nullish(),
+  // 达人邀约 v2：类型/来源/批次显式化。旧调用方不传时由 createTask 按名称前缀兜底，
+  // 但新代码（批次服务/面板）必须传，避免再次把名称当类型。
+  kind: z.enum(['custom', 'creator_invite']).optional(),
+  source: z.enum(['manual', 'panel', 'agent', 'campaign']).optional(),
+  campaignId: z.string().max(80).nullish()
 })

@@ -2,8 +2,8 @@
 
 > **当前产品边界（2026-10-13）**：本文是 Agent 操作能力的历史设计记录。当前 Agent 仅提供普通文字聊天，不读取或操作店铺、浏览器、商品、订单、任务或 Job；本文中的能力矩阵、工具契约和里程碑不代表当前运行时能力。工作台现有手动任务和店铺浏览器保持独立。
 >
-> 版本：v1.0（2026-10-01）  
-> 状态：`M1 IMPLEMENTED / PARTIAL`；`M2 INVENTORY/SKU IMPLEMENTED / PARTIAL`；`M3 ORDER/LIFECYCLE IMPLEMENTED / PARTIAL`；`M4 LOCAL INSIGHT IMPLEMENTED / PARTIAL`；`M5 LOCAL CONTENT/GROWTH IMPLEMENTED / PARTIAL`；代码实现按本文档的 M1 → M6 顺序推进
+> 版本：v1.0（2026-10-01，2026-10-18 校正当前边界）
+> 状态：`M1 IMPLEMENTED / PARTIAL`；`M2 INVENTORY/SKU IMPLEMENTED / PARTIAL`；`M3 ORDER/LIFECYCLE DE-SCOPED`；`M4 LOCAL INSIGHT IMPLEMENTED / PARTIAL`；`M5 LOCAL CONTENT/GROWTH IMPLEMENTED / PARTIAL`。订单管理、订单明细、履约、售后和退款工作流已从当前产品移除；数据库历史迁移和经营指标中的订单/退款统计字段保留，不代表仍提供订单域操作。
 > 运行时：唯一执行主体 `root-ceo`  
 > 发布边界：继续保持 `INTERNAL_BUILD`，没有真实店铺、真实提交和 Windows 桌面验收证据的能力不得标记为 `VERIFIED`。
 
@@ -16,10 +16,8 @@ ShopPilot 的目标是让一个 `root-ceo` Agent 在店铺浏览器、平台适�
   → 商品与素材
   → 库存、价格、SKU
   → 商品发布
-  → 订单、发货、物流
-  → 售后、退款、客服
   → 经营数据、财务、发票
-  → 内容、达人、广告、优惠券
+  → 客服、内容、达人、广告、优惠券
   → 计划任务、失败恢复、审计和复盘
 ```
 
@@ -46,7 +44,7 @@ ShopPilot 的目标是让一个 `root-ceo` Agent 在店铺浏览器、平台适�
 
 | 层 | 作用 | 允许内容 |
 |---|---|---|
-| 领域动作 | 可重复、可解析、可回读的电商操作 | `productSync`、`orderCollect`、`inventoryWriteback` |
+| 领域动作 | 可重复、可解析、可回读的电商操作 | `productSync`、`inventoryWriteback` |
 | 通用页面动作 | 尚未登记平台能力时的人工辅助 | 导航、观察、读取表格、人工填写 |
 | TaskRunner 步骤 | 执行已批准的页面计划 | 受限选择器、等待、点击、读取和确认 |
 
@@ -79,9 +77,7 @@ flowchart LR
 | 本地商品库 | 草稿、素材、归并、回读 | `IMPLEMENTED/PARTIAL` | Agent 读写动作和审核记录 |
 | 商品发布 | 预检、人工打开、人工提交、回读 | 微信档案已接入 Agent；应用不自动提交；真实副作用 `UNTESTED` | 四平台档案、真实测试商品、回读闭环 |
 | 库存/价格/SKU | 读取、差异、人工确认写回 | Agent 契约、快照差异和幂等提案已接入；真实平台写回 `NOT_VERIFIED` | 每个平台字段级真实采集/写回/回读 |
-| 订单 | 采集、订单详情、状态、买家隐私隔离 | 订单档案为空；拼多多观察模式 | 四平台规范化订单和增量游标 |
-| 履约物流 | 发货、物流单号、异常 | 未完成 | 人工确认发货、回读状态、失败不重放 |
-| 售后退款 | 售后列表、退款审核、退货状态 | 未完成 | 资金/退款必经人工确认和审计 |
+| 订单管理 | 订单明细、履约、售后和退款工作流 | `DE-SCOPED`：当前产品不提供这些动作；仅保留经营指标里的订单/退款统计 | 无，若重新立项需单独产品决策 |
 | 经营数据 | GMV、订单、销量、退款、广告 | 四平台读取配置，指标不统一 | 口径、周期、来源和缺失字段显式化 |
 | 财务发票 | 待开票、发票状态、导出 | 读取/导出已验证 | 不自动开票付款；跨平台状态回读 |
 | 主体资质 | 主体读取、冲突检查、回填 | 主要覆盖快手 | 多平台证照字段和冲突人工处理 |
@@ -112,23 +108,15 @@ flowchart LR
 
 这些动作不能传平台 URL、选择器、脚本、Cookie、Token 或任意文件路径；URL 由已实测平台档案生成。
 
-### 4.2 订单、库存和售后域（M2-M3）
+### 4.2 库存、价格和 SKU 域（M2）
 
 M2 已新增并登记：
 
 - `inventoryCollect`、`inventoryDiff`、`inventoryWriteback`
 - `skuCollect`、`skuDiff`、`skuWriteback`
-- `orderCollect`、`orderList`、`orderGet`
-- `fulfillmentPrepare`、`fulfillmentConfirm`、`fulfillmentVerify`
-- `afterSaleCollect`、`refundReview`、`refundConfirm`、`refundVerify`
+- 历史迁移 v26 的 `order_fulfillments`、`after_sale_cases`、`order_action_proposals` 表暂时保留；当前运行时不再读取或写入这些表。
 
-M3 当前已新增 Main-only 订单生命周期服务：
-
-- `fulfillmentPrepare` 按已采集订单状态建立发货人工确认提案；`fulfillmentConfirm` 只记录确认，不提交平台；`fulfillmentVerify` 没有平台回读时返回 `UNKNOWN`。
-- `afterSaleCollect`、`refundReview` 只读取脱敏本地摘要；`refundConfirm` 要求明确退款金额、校验不超过本地实付金额并建立人工提案；`refundVerify` 没有平台回读时返回 `UNKNOWN`。
-- 数据库迁移 v26 新增 `order_fulfillments`、`after_sale_cases`、`order_action_proposals`；提案保存 before/after 摘要、confirmationId、幂等键和 `side_effect_started`，不保存买家姓名、电话、地址、聊天正文或原始平台 payload。
-
-写回、发货、退款和资金相关动作统一要求人工确认；确认后只执行一次，回读失败进入 `recovery_required`，不得盲目重放。
+订单明细、履约、售后和退款工作流已下线。经营数据采集仍可返回订单数、退款金额和退款订单数等统计字段，但这些字段不提供逐单读取、发货或资金操作。
 
 库存/SKU 当前只读取 `product_platform_links`、`product_sku_links` 的真实本地快照，按字段返回 before/after、`inputHash` 和 `storeId + platform + productId + skuId + inputHash` 幂等键。写回先落 `commerce_writeback_proposals`，未有真实平台适配器证据时即使人工确认也返回 `NOT_VERIFIED`，不触碰平台数据；多规格 SKU 保留完整规格组合。
 
@@ -201,13 +189,11 @@ M3 当前已新增 Main-only 订单生命周期服务：
 - 证据清单：`artifacts/agent/inventory-sku-m2-20261001.json`，只记录本地可验证事实和真实平台未验证边界。
 - 状态边界：M2 代码为 `IMPLEMENTED / PARTIAL`；四平台真实库存/价格/SKU 采集、登录过期、页面改版、网络失败、真实写回和写回后平台回读仍为 `NOT_VERIFIED/UNTESTED`。
 
-### M3 订单履约、售后和退款当前实现证据（2026-10-01）
+### M3 订单域下线记录（2026-10-18）
 
-- 新增 `apps/desktop/src/main/orders/order-lifecycle-service.ts`，并把七个 M3 动作接入 Agent Service 结构化回执。
-- 新增迁移 v26：履约、售后快照和人工动作提案分表保存；重复输入使用稳定幂等键，确认后仍保持 `side_effect_started=0`，未验证平台不提交页面或资金动作。
-- 本地验证：`pnpm.cmd typecheck` 通过；`tests/unit/order-lifecycle-service.test.ts` 2/2、`tests/unit/pdd-orders.test.ts` 14/14、`tests/unit/agent-software.test.ts` 11/11、`tests/unit/migrations.test.ts` 9/9 通过。
-- 证据清单：`artifacts/agent/order-lifecycle-m3-20261001.json`。
-- 状态边界：M3 本地契约和提案流程为 `IMPLEMENTED / PARTIAL`；四平台真实发货、物流回读、售后采集、退款提交、退款回读、登录过期、页面改版、网络失败和 Windows 验收仍为 `NOT_VERIFIED/UNTESTED`。
+- 订单明细、统一订单、拼多多订单观察、履约、售后和退款的 UI、Agent 动作、IPC、适配器接口、服务与单测已删除。
+- 历史数据库迁移和本地历史表暂时保留，避免破坏已有数据；当前运行时不再读取或写入订单管理数据。
+- 经营指标中的订单数、退款金额和退款订单数仍按各平台已验证口径采集，属于聚合统计，不是订单管理功能。
 
 ### M4 经营、财务和主体当前实现证据（2026-10-01）
 
@@ -226,20 +212,19 @@ M3 当前已新增 Main-only 订单生命周期服务：
 
 - 数据库迁移 v28 新增 `commerce_agent_action_ledger`，Main 在 M4/M5 直接动作完成后记录 `actionType`、`storeId`、稳定 `inputHash`、状态、确认凭证、副作用标记、摘要、evidence 和可执行恢复建议；相同输入幂等更新，不重复插入。
 - 领域回执仍由 Agent Service 统一返回，台账写入失败不会阻断用户动作；台账只能由 Main 写入，Renderer 不直接访问数据库。
-- `RUNNING`、`WAITING_CONFIRMATION`、`NOT_VERIFIED`、`PARTIAL`、`RECOVERY_REQUIRED` 均有恢复提示；每个受跟踪领域动作在执行前先写入 `running`，商品发布打开页、退款确认和履约确认的回执随后写入终态，并根据回执摘要持久化 `side_effect_started`。
+- `RUNNING`、`WAITING_CONFIRMATION`、`NOT_VERIFIED`、`PARTIAL`、`RECOVERY_REQUIRED` 均有恢复提示；每个受跟踪领域动作在执行前先写入 `running`，并根据回执摘要持久化 `side_effect_started`。
 - 新增 Main-only 只读 IPC `agent:commerce:ledger:list`，只返回最近动作的脱敏摘要、状态、evidence 和恢复建议；Renderer 不能传 SQL、路径、Cookie 或平台地址。
 - `tests/unit/commerce-action-ledger.test.ts` 已覆盖幂等更新、恢复状态、副作用标记和查询解析。计划任务、真实平台重启恢复和 Windows 长时间验收仍为 `UNTESTED/NOT_VERIFIED`。
 
 ### M2：库存、价格、SKU 和订单读取
 
 - 补齐平台适配器能力位和真实页面档案。
-- 规范化增量游标、订单状态、库存差异和 SKU 明细。
+- 完成库存差异和 SKU 明细的只读与人工确认边界。
 - 先完成只读和差异报告，再实现人工确认写回。
 
-### M3：履约、售后和退款
+### M3：订单域（已下线）
 
-- 建立发货/物流/售后/退款状态机。
-- 资金动作和不可逆动作接入人工确认、回读和恢复。
+- 不在当前版本实现；如需恢复必须重新进行产品、隐私和平台能力评审。
 
 ### M4：经营、财务和主体
 

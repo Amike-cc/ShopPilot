@@ -19,6 +19,7 @@ import * as AiClient from '../services/ai-client'
 import { deleteAiImageKey, deleteAiImageTextKey, deleteAiKey, hasAiImageKey, hasAiImageTextKey, hasAiKey, saveAiImageKey, saveAiImageTextKey, saveAiKey } from '../services/credential-store'
 import { writeAudit, auditRequestId } from '../services/audit-logger'
 import { logMain } from '../services/logger'
+import { describeAiFailure } from '../services/ai-failure-text'
 import { syncMainAgentProfileFromAiConfig } from '../services/agent-runtime'
 import { assertTrustedRenderer } from '../services/renderer-trust'
 import { assertSafeImageRevealPath, assertSafeImageSavePath } from '../services/safe-image-save'
@@ -380,8 +381,7 @@ export function registerAiHandlers(): void {
     } catch (e: any) {
       const denied = deniedResult(e)
       if (denied) return denied
-      const code = e instanceof AiClient.AiError ? e.code : 'AI_REQUEST_FAILED'
-      const message = String(e?.message || e).replace(/^[A-Z_]+:\s*/, '')
+      const { code, message } = describeAiFailure(e)
       writeAudit('ai.imageText.analyze', 'failure', { requestId: auditRequestId(requestId, code) })
       logMain('warn', `[ai:image-text] 商品分析失败 ${code}: ${message}`)
       return failure(code, message)
@@ -417,8 +417,7 @@ export function registerAiHandlers(): void {
     } catch (e: any) {
       const denied = deniedResult(e)
       if (denied) return denied
-      const code = e instanceof AiClient.AiError ? e.code : 'AI_REQUEST_FAILED'
-      const message = String(e?.message || e).replace(/^[A-Z_]+:\s*/, '')
+      const { code, message } = describeAiFailure(e)
       writeAudit('ai.generate', 'failure', { requestId: auditRequestId(requestId, code) })
       logMain('warn', `[ai] 图片生成失败 ${code}: ${message}`)
       return failure(code, message)

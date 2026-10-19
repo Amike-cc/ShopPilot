@@ -197,7 +197,7 @@ export async function ensureSession(storeId: string): Promise<Session> {
   }
 }
 
-/** 供已有 WebContentsView 首次导航复用，保持原有等待语义并更新状态。 */
+/** 供已挂载的 DOM `<webview>`（guest）首次导航复用，保持原有等待语义并更新状态。 */
 export async function waitForSessionReady(storeId: string): Promise<void> {
   const id = assertStoreExists(storeId)
   try {
