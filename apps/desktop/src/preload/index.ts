@@ -7,6 +7,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, EVENT_CHANNELS, createIpcInvoker } from '@shared/contracts/ipc'
 import type { IPCResult, IpcRequest } from '@shared/contracts/ipc'
+import type { SellCopyInput } from '@shared/contracts/ai-sell-copy'
 import { PLATFORM_CATALOG } from '@shared/constants/platforms'
 import type { AgentUiState } from '@shared/schemas/agent'
 
@@ -207,6 +208,11 @@ const api = {
   products: {
     sync: (input: { storeId: string; trigger?: 'manual' | 'schedule'; maxPages?: number; maxProducts?: number; timeoutMs?: number }): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC, input),
+    syncFull: (input: { storeId: string; trigger?: 'manual' | 'schedule'; maxPages?: number; maxProducts?: number; timeoutMs?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC_FULL, input),
+    // 请求中断进行中的全量详情采集（没有在跑时返回 requested:false，不假装成功）
+    syncFullCancel: (input: { storeId: string }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC_FULL_CANCEL, input),
     list: (query: { storeId?: string; platform?: string; onlyOrphan?: boolean; platformStatus?: string; keyword?: string; sort?: string; order?: 'asc' | 'desc'; limit?: number; offset?: number }): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIST, query),
     syncRuns: (query: { storeId?: string } = {}): Promise<IPCResult> =>
@@ -374,6 +380,7 @@ const api = {
     startCampaign: (input: IpcRequest<'invite:campaign:start'>) => invoke(IPC_CHANNELS.INVITE_CAMPAIGN_START, JSON.parse(JSON.stringify(input))),
     campaigns: (input: { storeId?: string; limit?: number } = {}) => invoke(IPC_CHANNELS.INVITE_CAMPAIGN_LIST, input),
     campaignDetail: (campaignId: string) => invoke(IPC_CHANNELS.INVITE_CAMPAIGN_DETAIL, { campaignId }),
+    cancelScheduled: (campaignId: string) => invoke(IPC_CHANNELS.INVITE_CAMPAIGN_CANCEL, { campaignId }),
     records: (input: { storeId?: string; campaignId?: string; status?: string; limit?: number; offset?: number } = {}) => invoke(IPC_CHANNELS.INVITE_RECORDS_LIST, input),
     updateRecordStatus: (input: { id: string; storeId: string; status: string; reason?: string }) => invoke(IPC_CHANNELS.INVITE_RECORDS_UPDATE_STATUS, input),
     summary: (input: { storeId?: string } = {}) => invoke(IPC_CHANNELS.INVITE_RECORDS_SUMMARY, input),
@@ -476,6 +483,9 @@ const api = {
     listImageTextModels: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_MODELS_LIST),
     analyzeImageProduct: (input: { name?: string; tags?: string; price?: string; originalPrice?: string; images?: Array<{ mimeType: string; b64Json: string }> }): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_ANALYZE, JSON.parse(JSON.stringify(input))),
+    // 图文带货文案：结构化输入，提示词与 JSON 解析都在主进程（AI 域未接入 IpcContract，继续走旧路径）
+    generateSellCopy: (input: SellCopyInput): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_SELL_COPY, JSON.parse(JSON.stringify(input))),
     generateImage: (input: { prompt: string; size?: string; n?: number; confirmed?: boolean; sourceImages?: Array<{ name: string; mimeType: string; b64Json: string }> }): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_GENERATE, JSON.parse(JSON.stringify(input))),
     // 把生成结果存到本地（不传 outputPath 时主进程弹"另存为"）

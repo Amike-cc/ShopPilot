@@ -29,6 +29,12 @@ import { classifyLoadFailure, formatViewUrl } from '@shared/view-state'
 import { logMain } from '../services/logger'
 import { isStoreDownloadActive } from './download-manager'
 import { planTabClose } from './tab-close-plan'
+import {
+  destroyBackgroundPageTab,
+  forgetBackgroundPages,
+  hasBackgroundPages,
+  setBackgroundPageLifecycleHook
+} from './background-page'
 import { STORE_COLD_SLEEP_AFTER_MS, STORE_REAP_BLOCK_RETRY_MS, STORE_WARM_CACHE_LIMIT, TAB_RELOAD_MIN_INTERVAL_MS, browserStates, clearStoreReapTimer, describeBeforeInput, generateTabId, getCurrentStoreWebContents, getStandaloneWindowCount, guestTabs, guestWaiters, inPageSaveAt, inPageSaveTimers, isAllowedPageNavigation, logInputDiagnostic, notifyGuestWaiters, pageLeases, pendingGuestCloseTimers, setStoreLifecycleBlockInternal, standaloneWindows, storeLifecycle, storeLifecycleBlocks, storeOpenListeners, storeReapTimers, tabKey, tabReloadGuard, taskAwakeStores } from './window-state'
 import type { Tab, ViewportBounds, StoreLifecycleBlockReason, BrowserState } from './window-state'
 
@@ -40,6 +46,7 @@ export function storeLifecycleBlockReasons(storeId: string): string[] {
   if (taskAwakeStores.has(storeId)) reasons.add('task')
   if (pageLeases.isBorrowed(storeId)) reasons.add('page-lease')
   if (getCollectionTabId(storeId)) reasons.add('collection')
+  if (hasBackgroundPages(storeId)) reasons.add('background-page')
   if (isStoreDownloadActive(storeId)) reasons.add('download')
   if (getStandaloneWindowCount(storeId) > 0) reasons.add('standalone-window')
   return Array.from(reasons).sort()
@@ -145,6 +152,11 @@ function reapStoreIfEligible(storeId: string): void {
 function applyBackgroundThrottling(tab: Tab): void {
   const wc = tab.webContents
   if (!wc || wc.isDestroyed()) return
+  // 后台工作页永远不节流：它本来就是隐藏窗口，节流会让平台的弹层/rAF 停摆。
+  if (tab.worker === true) {
+    try { wc.setBackgroundThrottling(false) } catch { /* 页面正在销毁 */ }
+    return
+  }
   const state = browserStates.get(tab.storeId)
   const isActiveVisibleTab = displayedStoreId === tab.storeId && state?.activeTabId === tab.id
   const shouldThrottle = !isActiveVisibleTab && !taskAwakeStores.has(tab.storeId)
@@ -261,7 +273,9 @@ function tabSnapshot(tab: Tab) {
     loading,
     guestAttached: !!tab.webContents && !tab.webContents.isDestroyed() && tab.guestAttached === true,
     // 采集专用标签页：渲染层据此"挂隐藏 webview 但不进标签栏、不当作活动页"
-    internal: tab.internal === true
+    internal: tab.internal === true,
+    // 后台工作页（达人邀约）：主进程隐藏窗口承载，渲染层连隐藏 webview 都不该挂
+    worker: tab.worker === true
   }
 }
 
@@ -271,7 +285,12 @@ function emitTabs(storeId: string): void {
     emit(EVENT_CHANNELS.BROWSER_TAB_UPDATED, { storeId, tabs: [], activeTabId: null })
     return
   }
-  const tabs = Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex).map(tabSnapshot)
+  // 后台工作页对渲染层**完全不存在**：既不出现在标签栏，也不该让渲染层误以为
+  // "这家店被用户打开了"，更不能让渲染层给它挂 webview（那会把隐藏窗口的页面抢走）。
+  const tabs = Array.from(state.tabs.values())
+    .filter(tab => tab.worker !== true)
+    .sort((a, b) => a.orderIndex - b.orderIndex)
+    .map(tabSnapshot)
   emit(EVENT_CHANNELS.BROWSER_TAB_UPDATED, { storeId, tabs, activeTabId: state.activeTabId })
 }
 
@@ -430,6 +449,7 @@ export function closeStoreBrowser(storeId: string): void {
 
   taskAwakeStores.delete(storeId)
   collectionTabs.delete(storeId)
+  forgetBackgroundPages(storeId)
   pageLeases.forget(storeId)
   const state = browserStates.get(storeId)
   if (!state) return
@@ -438,6 +458,10 @@ export function closeStoreBrowser(storeId: string): void {
   // 直接清掉本店标签行，免得留一堆永远不会被恢复的陈旧 URL。
   getDatabase().prepare('DELETE FROM tabs WHERE store_id = ?').run(storeId)
   state.tabs.forEach(tab => {
+    // 后台工作页的隐藏窗口不在 contentView 里，detach 的异步 close 不够：必须显式销毁。
+    if (tab.workerWindow && !tab.workerWindow.isDestroyed()) {
+      try { tab.workerWindow.destroy() } catch { /* 窗口已销毁 */ }
+    }
     detachGuestWebContents(tab)
     // tabReloadGuard 只在 closeTab 里清过；关店铺这条路径漏了 → 长期开关店铺 + 偶发页面崩溃
     // 会让这个 Map 只增不减（tabId 是随机串，等于慢性泄漏，2026-09-28 审查确认）
@@ -647,6 +671,9 @@ export async function registerWebview(
   const state = browserStates.get(storeId)
   const tab = state?.tabs.get(tabId)
   if (!state || !tab) throw new Error('Tab not found')
+  // 后台工作页的页面在隐藏 BrowserWindow 里，渲染层一旦挂 webview 就会把 guest 抢走，
+  // 正在跑的邀约立刻失去页面。这里直接拒绝，而不是让两边打架。
+  if (tab.worker === true) throw new Error('IPC_FORBIDDEN: 后台工作页不接受渲染层挂载')
   if (!Number.isInteger(webContentsId) || webContentsId <= 0) throw new Error('INVALID_ARGUMENT: webContentsId 无效')
 
   const guest = webContents.fromId(webContentsId)
@@ -935,6 +962,14 @@ export function activateTab(storeId: string, tabId: string): void {
   if (!state) throw new Error('Browser not open for this store')
   const tab = state.tabs.get(tabId)
   if (!tab) throw new Error('Tab not found')
+  // 内部页（采集专用页 / 邀约后台页）不是用户的标签页，不能被激活成"当前页"：
+  // 否则标签栏会高亮一个看不见的页，截图/地址栏也会指错对象。
+  if (tab.internal === true) {
+    storeLifecycle.used(storeId, 'background')
+    // 静默空操作排障困难：留一条 debug 级痕迹，谁在激活内部页一眼可见（2026-10-21 审查 P2）
+    logMain('info', `[browser] activateTab 落在内部页，忽略 store=${storeId} tab=${tabId} internal=true worker=${tab.worker === true}`)
+    return
+  }
 
   state.activeTabId = tabId
   for (const item of state.tabs.values()) setFingerprintTargetActive(storeId, item.id, item.id === tabId)
@@ -956,6 +991,16 @@ export function closeTab(storeId: string, tabId: string): void {
   if (!state) return
   const tab = state.tabs.get(tabId)
   if (!tab) return
+
+  /**
+   * 后台页（worker）不是用户的标签页：没有 DOM guest、没有落库行、也不参与标签栏重排。
+   * 直接交给后台页模块销毁窗口与登记；它会通知生命周期钩子在「最后一个页面关掉」时
+   * 回收 browserState。
+   */
+  if (tab.worker === true) {
+    destroyBackgroundPageTab(storeId, tabId, { destroyWindow: true })
+    return
+  }
 
   detachGuestWebContents(tab)
   tabReloadGuard.delete(tabId)
@@ -1031,8 +1076,10 @@ export function closeTabs(storeId: string, input: CloseTabsInput): CloseTabsResu
   const state = browserStates.get(storeId)
   if (!state) return { closed: 0, skippedPinned: 0, remaining: 0, nothingToClose: true }
 
-  // 先取快照（先拷贝再逐个关：closeTab 会改 state.tabs，遍历 Map 时删元素不可靠）
-  const plan = planTabClose(Array.from(state.tabs.values()), input)
+  // 先取快照（先拷贝再逐个关：closeTab 会改 state.tabs，遍历 Map 时删元素不可靠）。
+  // worker 页（邀约后台页）永远不进关闭候选：它对渲染层不可见，「关闭全部/关闭其他」
+  // 的语义是"用户的标签页"，绝不能把正在跑的后台任务顺手杀掉。
+  const plan = planTabClose(Array.from(state.tabs.values()).filter(tab => tab.worker !== true), input)
   const includePinned = input.includePinned === true
   for (const tabId of plan.targetIds) closeTab(storeId, tabId)
 
@@ -1053,6 +1100,8 @@ export function setTabPinned(storeId: string, tabId: string, pinned: boolean): v
   if (!state) return
   const tab = state.tabs.get(tabId)
   if (!tab) return
+  // worker 页不是用户的标签页：没有落库行，pin 它毫无意义还可能把状态写歪（对 activateTab 的 internal 空操作同款口径）
+  if (tab.worker === true) return
   tab.isPinned = pinned
   getDatabase().prepare('UPDATE tabs SET is_pinned = ?, updated_at = ? WHERE id = ?')
     .run(pinned ? 1 : 0, Date.now(), tabId)
@@ -1070,14 +1119,15 @@ export function reorderTabs(storeId: string, orderedTabIds: string[]): void {
   let index = 0
   for (const tabId of orderedTabIds) {
     const tab = state.tabs.get(tabId)
-    if (tab && !seen.has(tabId)) {
+    // worker 页不参与重排（无落库行、不进标签栏；写它的 orderIndex 是在动看不见的状态）
+    if (tab && tab.worker !== true && !seen.has(tabId)) {
       seen.add(tabId)
       tab.orderIndex = index
       stmt.run(index, Date.now(), tabId)
       index++
     }
   }
-  for (const tab of Array.from(state.tabs.values()).sort((a, b) => a.orderIndex - b.orderIndex)) {
+  for (const tab of Array.from(state.tabs.values()).filter(item => item.worker !== true).sort((a, b) => a.orderIndex - b.orderIndex)) {
     if (seen.has(tab.id)) continue
     tab.orderIndex = index
     try { stmt.run(index, Date.now(), tab.id) } catch { /* ignore */ }
@@ -1094,6 +1144,9 @@ export function navigateTab(storeId: string, tabId: string, url: string): void {
   if (!state) throw new Error('Browser not open for this store')
   const tab = state.tabs.get(tabId)
   if (!tab) throw new Error('Tab not found')
+  // worker 页（邀约后台页）的导航由后台页模块自己管理；渲染层不允许把隐藏页导走——
+  // 否则一次渲染层状态错乱就能把正在跑的邀约劫持到任意 URL（2026-10-21 审查 P1-6）。
+  if (tab.worker === true) throw new Error('后台运行页由系统管理，不允许导航')
 
   const safeUrl = assertNavigableUrl(url)
   tab.url = safeUrl
@@ -1452,3 +1505,24 @@ function saveTabToDatabase(tab: Tab): void {
     `).run(tab.id, tab.storeId, tab.url, tab.title, tab.isPinned ? 1 : 0, tab.orderIndex, now, now)
   }
 }
+
+/**
+ * 后台页与浏览器状态的衔接：最后一个后台页关掉后回收 browserState；
+ * 还有页面（用户标签页或其它用途后台页）时只重新调度冷休眠。
+ *
+ * 重入防护：closeStoreBrowser → workerWindow.destroy() → 'closed' 回调 → destroyBackgroundPageTab
+ * → 本钩子 → 「tabs 已空」再调 closeStoreBrowser，是同步重入链。closeStoreBrowser 幂等所以
+ * 目前无害，但 DELETE/emitTabs/reap 会被执行两遍——显式挡掉，避免后续改动踩进真递归。
+ */
+let backgroundPageHookReentry = false
+setBackgroundPageLifecycleHook((storeId: string) => {
+  if (backgroundPageHookReentry) return
+  const state = browserStates.get(storeId)
+  if (!state) return
+  if (state.tabs.size === 0) {
+    backgroundPageHookReentry = true
+    try { closeStoreBrowser(storeId) } finally { backgroundPageHookReentry = false }
+  } else {
+    scheduleAllStoreReaps()
+  }
+})

@@ -74,3 +74,6 @@ update-online-drill.log
 # 本地 `electron-vite dev` / 仅渲染层重启的 stderr 留档（根目录临时诊断文件，
 # 由本地开发重启流程生成；此前一直以未跟踪状态堆在工作区，发布前的工作区清洁检查会被它们挡住）
 /*.err
+
+# 验收运行时产物（真机验收的 userData 副本与临时探针脚本，不进版本库）
+.acceptance/

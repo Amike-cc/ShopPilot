@@ -43,6 +43,23 @@ function pageHelpers(deep: boolean): string {
   const __own = (el) => { let s = ''; for (const n of el.childNodes) if (n.nodeType === 3) s += n.textContent; return s.replace(/[\\u200b-\\u200f\\ufeff]/g, '').replace(/\\s+/g, ' ').trim() };
   const __clean = (s) => String(s == null ? '' : s).replace(/[\\u200b-\\u200f\\ufeff]/g, '').replace(/\\s+/g, ' ').trim();
   const __vis = (el) => { try { return el.getClientRects().length > 0 } catch { return false } };
+  // 价格/库存解析：平台输入框常回显千分位（1,299.00）或货币符（¥99），
+  // 直接 parseFloat/parseInt 会把 "1,299.00" 读成 1 —— 错值当真值写库比"没读到=null"更糟。
+  // 先剥到纯数字再解析；剥完为空或非有限数一律返回 null（如实上报"没读到"）。
+  const __parsePriceMinor = (t) => {
+    const s = String(t == null ? '' : t).replace(/[^\\d.]/g, '');
+    if (!s) return null;
+    const parts = s.split('.');
+    const norm = parts.length > 2 ? (parts[0] + '.' + parts.slice(1).join('')) : s;
+    const v = parseFloat(norm);
+    return Number.isFinite(v) && v >= 0 ? Math.round(v * 100) : null;
+  };
+  const __parseCount = (t) => {
+    const s = String(t == null ? '' : t).replace(/[^\\d]/g, '');
+    if (!s) return null;
+    const v = parseInt(s, 10);
+    return Number.isFinite(v) && v >= 0 ? v : null;
+  };
 `
 }
 
@@ -232,12 +249,19 @@ export interface ProductDetailRead {
    * （实测微信小店：4 个规格值 ↔ 4 行价格/库存，顺序一致）。两者数量不等时
    * 一律返回空数组 + `pairingNote` 说明 —— 宁可不写，也不把 A 的价格安到 B 头上。
    */
-  skus: Array<{ spec: Array<{ name: string; value: string }>; priceMinor: number | null; stock: number | null; skuCode: string | null }>
+  skus: Array<{ spec: Array<{ name: string; value: string }>; priceMinor: number | null; stock: number | null; skuCode: string | null; barcode: string | null }>
   /** 配对情况的如实说明（界面直接显示） */
   pairingNote: string | null
   /** 详情页读到的其它字段（类目/短标题/品牌…），只用于展示与排障 */
-  fields: Array<{ label: string; value: string }>
+  fields: Array<{ label: string; value: string; kind?: 'input' | 'textarea' | 'select' | 'content' | 'text' }>
   title: string | null
+  subtitle: string | null
+  description: string | null
+  brand: string | null
+  categoryPath: string | null
+  barcode: string | null
+  attributes: Array<{ name: string; value: string }>
+  missingFields: string[]
 }
 
 /**
@@ -252,20 +276,31 @@ export interface ProductDetailRead {
  *     把 `w/124/h/124` 换成 `w/800/h/800` 就能拿到大图（平台自己的参数，不是我们猜的路径）。
  */
 export async function readProductDetail(wc: PageHandle, profile: ProductProfile): Promise<ProductDetailRead> {
-  const empty: ProductDetailRead = { ok: false, imageUrls: [], specNames: [], skus: [], pairingNote: null, fields: [], title: null }
+  const empty: ProductDetailRead = {
+    ok: false, imageUrls: [], specNames: [], skus: [], pairingNote: null, fields: [], title: null,
+    subtitle: null, description: null, brand: null, categoryPath: null, barcode: null, attributes: [], missingFields: []
+  }
   if (wc.isDestroyed()) return { ...empty, reason: 'ERR' }
   const code = script(profile, `
     const urls = [];
+    const addImageUrl = (raw) => {
+      let src = __clean(raw);
+      if (!src) return;
+      // srcset 是“url 1x, url 2x”或“url 320w, url 800w”：实现只取**第一个**候选
+      //（不按密度/宽度选最大——首候选通常是原图，后处理参数会统一放大到 800）。
+      src = src.split(',')[0].trim().split(/\\s+/)[0];
+      if (!src || src.startsWith('data:') || src.startsWith('blob:')) return;
+      try { src = new URL(src, location.href).href } catch { return; }
+      // 把平台自己的缩略参数换成大图参数（微信实测形态：imageView2/1/w/124/h/124/format/webp）
+      src = src.replace(/\\/w\\/\\d+\\/h\\/\\d+/, '/w/800/h/800');
+      if (urls.indexOf(src) < 0) urls.push(src);
+    };
     for (const el of __q('img')) {
       if (!__vis(el)) continue;
       const r = el.getBoundingClientRect();
       if (r.width < 60 || r.height < 60) continue;      // 跳过图标
-      let src = el.getAttribute('src') || el.getAttribute('data-src') || '';
-      if (!src) continue;
-      if (src.startsWith('//')) src = 'https:' + src;
-      // 把平台自己的缩略参数换成大图参数（微信实测形态：imageView2/1/w/124/h/124/format/webp）
-      src = src.replace(/\\/w\\/\\d+\\/h\\/\\d+/, '/w/800/h/800');
-      if (urls.indexOf(src) < 0) urls.push(src);
+      addImageUrl(el.currentSrc || el.getAttribute('src') || el.getAttribute('data-src') || el.getAttribute('data-original') || el.getAttribute('data-lazy-src') || '');
+      addImageUrl(el.getAttribute('srcset') || '');
       if (urls.length >= 30) break;
     }
 
@@ -282,27 +317,108 @@ export async function readProductDetail(wc: PageHandle, profile: ProductProfile)
       if (specNames.length >= 6) break;
     }
 
-    // 其它字段：占位符 → 当前值（详情页的输入框就是"字段名 + 值"，实测可读）
+    const labelFor = (el) => {
+      const aria = __clean(el.getAttribute('aria-label'));
+      const placeholder = __clean(el.getAttribute('placeholder'));
+      const name = __clean(el.getAttribute('name'));
+      const id = __clean(el.getAttribute('id'));
+      if (aria) return aria;
+      if (placeholder) return placeholder;
+      const parent = el.closest && el.closest('label');
+      if (parent) return __clean(parent.textContent).slice(0, 120);
+      if (id) {
+        for (const label of __q('label')) {
+          if (label.getAttribute('for') === id) return __clean(label.textContent).slice(0, 120);
+        }
+      }
+      if (name) return name;
+      if (id) return id;
+      return '';
+    };
+
     const fields = [];
+    const pushField = (label, value, kind) => {
+      const l = __clean(label), v = __clean(value);
+      if (!l && !v) return;
+      if (fields.some(item => item.label === l && item.value === v)) return;
+      fields.push({ label: l.slice(0, 120), value: v.slice(0, 2000), kind });
+    };
+    // 其它字段：占位符/label → 当前值（详情页的输入框就是"字段名 + 值"，实测可读）
     for (const el of __q('input,textarea')) {
       if (!__vis(el)) continue;
       const type = String(el.getAttribute('type') || el.tagName.toLowerCase());
-      if (type === 'hidden' || type === 'file') continue;
-      const label = __clean(el.getAttribute('placeholder'));
-      const value = __clean(el.value);
-      if (!label && !value) continue;
-      fields.push({ label: label.slice(0, 30), value: value.slice(0, 60) });
-      if (fields.length >= 20) break;
+      // password 的值绝不允许离开页面（登录页场景下 value 就是用户密码）；
+      // search 是用户搜索词，对商品详情无意义且是噪声。
+      if (type === 'hidden' || type === 'file' || type === 'password' || type === 'search') continue;
+      pushField(labelFor(el), el.value, el.tagName.toLowerCase() === 'textarea' ? 'textarea' : 'input');
+      if (fields.length >= 200) break;
+    }
+    for (const el of __q('[contenteditable="true"],select')) {
+      if (!__vis(el)) continue;
+      const value = el.tagName.toLowerCase() === 'select'
+        ? (el.options && el.options[el.selectedIndex] ? el.options[el.selectedIndex].textContent : el.value)
+        : (el.innerText || el.textContent || '');
+      pushField(labelFor(el), value, el.tagName.toLowerCase() === 'select' ? 'select' : 'content');
+      if (fields.length >= 200) break;
+    }
+    // 平台常把类目、物流、材质等信息渲染成 dl/table/静态文本，不一定存在 input。
+    // 只收“标签 + 值”结构，避免把整页导航文案当成商品字段；原始字段仍保留在 fields 中。
+    for (const dl of __q('dl')) {
+      const terms = [...dl.querySelectorAll('dt')];
+      for (const dt of terms) {
+        const dd = dt.nextElementSibling;
+        if (dd && dd.tagName && dd.tagName.toLowerCase() === 'dd') pushField(dt.textContent, dd.textContent, 'text');
+        if (fields.length >= 200) break;
+      }
+      if (fields.length >= 200) break;
+    }
+    for (const tr of __q('table tr')) {
+      if (!__vis(tr)) continue;
+      const cells = [...tr.querySelectorAll(':scope > th, :scope > td')].map(cell => __clean(cell.innerText || cell.textContent || '')).filter(Boolean);
+      if (cells.length >= 2 && cells.length <= 4 && cells[0].length <= 120) {
+        pushField(cells[0], cells.slice(1).join(' | '), 'text');
+      }
+      if (fields.length >= 200) break;
     }
 
     let title = null;
+    let subtitle = null;
+    let description = null;
+    let brand = null;
+    let categoryPath = null;
+    let barcode = null;
     for (const el of __q('input')) {
       const ph = __clean(el.getAttribute('placeholder'));
-      if (ph.indexOf('商品名称') < 0) continue;
-      title = __clean(el.value) || null;
-      break;
+      const label = labelFor(el);
+      const value = __clean(el.value) || null;
+      const key = ph + ' ' + label;
+      if (!title && /商品名称|商品标题|名称与关键字/.test(key)) title = value;
+      if (!subtitle && /短标题|副标题/.test(key)) subtitle = value;
+      if (!brand && /品牌/.test(key)) brand = value;
+      if (!barcode && /条形码|条码|barcode/i.test(key)) barcode = value;
+      if (!categoryPath && /类目|分类/.test(key)) categoryPath = value;
+    }
+    for (const item of fields) {
+      if (!description && /商品描述|详情描述|图文详情|详情/.test(item.label) && item.value.length > 0) description = item.value;
+      if (!categoryPath && /类目|分类/.test(item.label)) categoryPath = item.value || null;
+      if (!brand && /品牌/.test(item.label)) brand = item.value || null;
+      if (!subtitle && /短标题|副标题/.test(item.label)) subtitle = item.value || null;
+      if (!barcode && /条形码|条码/.test(item.label)) barcode = item.value || null;
+    }
+    if (!description) {
+      const rich = __q('[contenteditable="true"]').find(el => __vis(el) && __clean(el.innerText || el.textContent).length > 20);
+      if (rich) description = __clean(rich.innerText || rich.textContent).slice(0, 20000);
     }
 
+    // 属性按页面上稳定的“名称 + 值”字段保留；未知字段仍完整留在 fields 中。
+    const attributes = [];
+    for (const item of fields) {
+      if (!item.label || !item.value) continue;
+      if (/商品名称|短标题|副标题|品牌|类目|分类|描述|详情|价格|库存|条形码|条码|规格/.test(item.label)) continue;
+      if (attributes.some(row => row.name === item.label && row.value === item.value)) continue;
+      attributes.push({ name: item.label, value: item.value });
+      if (attributes.length >= 200) break;
+    }
     // 规格值：placeholder 形如「请输入<规格名>」（实测微信小店是「请输入尺码」），值就是规格值。
     //
     // ⚠️ 难点：**商品属性**也用「请输入」前缀（实测 请输入规格 / 请输入功能 / 请输入类型），
@@ -313,12 +429,18 @@ export async function readProductDetail(wc: PageHandle, profile: ProductProfile)
     // 哪一组才是规格值**。多组都等长或有零组等长时一律不配对（fail-closed，见下面的 pairingNote）。
     // 这与之前 EMPTY_TABLE 的对账思路一致：判据用页面自己给的数字，不用启发式。
     const groups = {};
+    const isSkuSpecPlaceholder = (name) => {
+      const value = __clean(name);
+      if (!value) return false;
+      // 商品属性也常用“请输入”前缀；这些字段没有逐 SKU 行，不参与规格配对。
+      return !/商品名称|短标题|条形码|成分|编码/.test(value);
+    };
     for (const el of __q('input')) {
       if (!__vis(el)) continue;
       const ph = __clean(el.getAttribute('placeholder'));
       if (ph.indexOf('请输入') !== 0) continue;
       const name = ph.slice(3);
-      if (/商品名称|短标题|条形码|成分|编码/.test(name)) continue;
+      if (!isSkuSpecPlaceholder(name)) continue;
       const value = __clean(el.value);
       if (!value) continue;                                  // 空行是"新增规格值"的待填位
       if (!groups[name]) groups[name] = [];
@@ -327,18 +449,41 @@ export async function readProductDetail(wc: PageHandle, profile: ProductProfile)
     }
 
     // 逐 SKU 行：价格 / 库存 / 规格编码（实测占位符：输入售卖价格 / 输入库存 / 输入规格编码）
-    const priceEls = [], stockEls = [], codeEls = [];
+    const priceEls = [], stockEls = [], codeEls = [], barcodeEls = [];
     for (const el of __q('input')) {
       if (!__vis(el)) continue;
       const ph = __clean(el.getAttribute('placeholder'));
       if (ph === '输入售卖价格') priceEls.push(el);
       else if (ph === '输入库存') stockEls.push(el);
       else if (/规格编码|SKU编码/.test(ph)) codeEls.push(el);
+      else if (/商品条形码|条形码|SKU条码/.test(ph)) barcodeEls.push(el);
     }
+
+    // 多规格商品通常把颜色/尺码输入框和价格行放进同一行（tr 或 role=row）。
+    // 优先按这一行读取规格组合，避免仅按单个 placeholder 分组导致“颜色×尺码”丢失。
+    const rowSpecs = (priceEls.map((priceEl) => {
+      const row = priceEl.closest && priceEl.closest('tr,[role="row"]');
+      if (!row) return [];
+      const parts = [];
+      for (const input of row.querySelectorAll('input')) {
+        const ph = __clean(input.getAttribute('placeholder'));
+        if (!ph || ph.indexOf('请输入') !== 0) continue;
+        const name = ph.slice(3);
+        if (!isSkuSpecPlaceholder(name)) continue;
+        const value = __clean(input.value);
+        if (value) parts.push({ name, value });
+      }
+      const unique = [];
+      for (const part of parts) {
+        if (!unique.some(item => item.name === part.name && item.value === part.value)) unique.push(part);
+      }
+      return unique;
+    }));
     const skuRows = priceEls.map((el, i) => ({
       priceText: __clean(el.value),
       stockText: stockEls[i] ? __clean(stockEls[i].value) : '',
-      skuCode: codeEls[i] ? __clean(codeEls[i].value) : ''
+      skuCode: codeEls[i] ? __clean(codeEls[i].value) : '',
+      barcode: barcodeEls[i] ? __clean(barcodeEls[i].value) : ''
     }));
 
     // 选出"条数恰好等于价格行数"的那一组作为规格值
@@ -346,6 +491,8 @@ export async function readProductDetail(wc: PageHandle, profile: ProductProfile)
     const candidates = Object.keys(groups);
     const matched = priceCount > 0 ? candidates.filter(n => groups[n].length === priceCount) : [];
     const specValues = matched.length === 1 ? groups[matched[0]] : [];
+    const hasReliableRowSpecs = skuRows.length > 0 && rowSpecs.length === skuRows.length &&
+      rowSpecs.every(parts => parts.length > 0);
 
     // 配对：**只在数量相等且唯一匹配时**按 DOM 顺序一一对应；否则如实说明、不猜
     const skus = [];
@@ -357,18 +504,29 @@ export async function readProductDetail(wc: PageHandle, profile: ProductProfile)
       pairingNote = '没有读到逐 SKU 价格行（候选规格值组：' + groupSummary + '），本次不写 SKU 映射';
     } else if (matched.length === 0) {
       pairingNote = '没有哪一组规格值的条数等于价格行数 ' + priceCount + '（候选：' + groupSummary + '），无法可靠配对（本次不写 SKU 映射）';
+    } else if (hasReliableRowSpecs) {
+      // 逐行规格值是页面 DOM 的真实组合顺序，优先级高于按 placeholder 分组的启发式。
+      for (let i = 0; i < skuRows.length; i++) {
+        const row = skuRows[i];
+        skus.push({
+          spec: rowSpecs[i],
+          priceMinor: __parsePriceMinor(row.priceText),
+          stock: __parseCount(row.stockText),
+          skuCode: row.skuCode || null,
+          barcode: row.barcode || null
+        });
+      }
     } else if (matched.length > 1) {
       pairingNote = '有 ' + matched.length + ' 组规格值都是 ' + priceCount + ' 条，分不清哪组是规格（候选：' + groupSummary + '），本次不写 SKU 映射';
     } else {
       for (let i = 0; i < specValues.length; i++) {
         const row = skuRows[i];
-        const price = parseFloat(row.priceText);
-        const stock = parseInt(row.stockText, 10);
         skus.push({
           spec: [{ name: specValues[i].name, value: specValues[i].value }],
-          priceMinor: Number.isFinite(price) && price >= 0 ? Math.round(price * 100) : null,
-          stock: Number.isFinite(stock) && stock >= 0 ? stock : null,
-          skuCode: row.skuCode || null
+          priceMinor: __parsePriceMinor(row.priceText),
+          stock: __parseCount(row.stockText),
+          skuCode: row.skuCode || null,
+          barcode: row.barcode || null
         });
       }
     }
@@ -378,9 +536,28 @@ export async function readProductDetail(wc: PageHandle, profile: ProductProfile)
     // 表现为怎么等都是 DETAIL_EMPTY（2026-09-30 实际踩到，排查了很久）。所以另起名字。
     const specNamesFromValues = [];
     for (const item of specValues) if (specNamesFromValues.indexOf(item.name) < 0) specNamesFromValues.push(item.name);
+    for (const row of rowSpecs) for (const item of row) if (specNamesFromValues.indexOf(item.name) < 0) specNamesFromValues.push(item.name);
 
-    return JSON.stringify({ ok: urls.length > 0 || specNamesFromValues.length > 0, imageUrls: urls,
-                            specNames: specNamesFromValues, skus, pairingNote, fields, title });
+    const missingFields = [];
+    if (!title) missingFields.push('title');
+    if (!description) missingFields.push('description');
+    if (!brand) missingFields.push('brand');
+    if (!categoryPath) missingFields.push('category');
+    // 只有页面上真的存在 SKU 结构（有规格输入框/读到了规格名/多行价格）却没配出 SKU 时才记缺失。
+    // 完全没有规格结构的单规格商品（无规格输入、单价格行）配不出 SKU 是正常形态——
+    // 记成缺失会让纯单规格店铺的全量抓取永远 PARTIAL、UI 永远红（2026-10-21 审查 P2-3）。
+    // priceCount>1 保留：多行价格却没有任何规格迹象更可能是读错元素，仍按 fail-closed 记缺失。
+    if (!skus.length && (candidates.length > 0 || specNamesFromValues.length > 0 || priceCount > 1)) missingFields.push('sku');
+
+    // "读到详情"的判定只用强信号（图集/规格/SKU/标题/品牌等——各自都要求特定结构或关键词命中）。
+    // fields/attributes 是"页面上所有可见输入框"的兜底收集，登录页/错误页也会命中（账号框、
+    // 搜索框都会被收进来），拿它们判定成功会把垃圾快照无条件覆盖掉之前抓到的好数据，
+    // 所以它们只作展示、不参与判定（fail-closed：判不出来就继续轮询/如实报 incomplete）。
+    const hasAnyDetail = urls.length > 0 || specNamesFromValues.length > 0 || skus.length > 0 ||
+      !!title || !!subtitle || !!description || !!brand || !!categoryPath || !!barcode;
+    return JSON.stringify({ ok: hasAnyDetail, imageUrls: urls,
+                            specNames: specNamesFromValues, skus, pairingNote, fields, title, subtitle, description,
+                            brand, categoryPath, barcode, attributes, missingFields });
   `)
   try {
     const raw = await wc.executeJavaScript(code, false)

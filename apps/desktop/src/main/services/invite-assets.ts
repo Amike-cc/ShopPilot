@@ -7,29 +7,7 @@
 import { randomUUID } from 'node:crypto'
 import { getDatabase } from '../db/database'
 import { logMain } from './logger'
-
-export interface InviteScriptView {
-  id: string
-  storeId: string
-  platform: string
-  name: string
-  mode: 'manual' | 'ai'
-  template: string
-  maxLen: number | null
-  status: string
-  createdAt: number
-  updatedAt: number
-}
-
-export interface InviteProductSetView {
-  id: string
-  storeId: string
-  platform: string
-  name: string
-  productIds: string[]
-  createdAt: number
-  updatedAt: number
-}
+import type { InviteProductSetView, InviteScriptView } from '@shared/invite-campaign'
 
 function parseProducts(raw: unknown): string[] {
   try {

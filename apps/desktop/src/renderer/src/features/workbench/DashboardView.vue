@@ -1,5 +1,5 @@
 <template>
-  <section :class="['dashboard-shell welcome', { 'image-studio-shell': activePage === 'image-studio', 'workspace-hidden': !props.active, 'mobile-nav-open': mobileNavOpen }]" data-test="dashboard-home">
+  <section :class="['dashboard-shell welcome', { 'image-studio-shell': activePage === 'image-studio' || activePage === 'graphic-sell', 'workspace-hidden': !props.active, 'mobile-nav-open': mobileNavOpen }]" data-test="dashboard-home">
     <aside class="dashboard-sidebar sidebar" :class="{ collapsed: leftSidebarCollapsed, 'mobile-open': mobileNavOpen }" data-test="sidebar" aria-label="ShopPilot 主导航">
       <div v-if="leftSidebarCollapsed && !mobileNavOpen" class="sidebar-rail">
         <button type="button" class="rail-btn" data-test="sidebar-expand" title="展开左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(true)"><img :src="forwardIcon" alt="" /></button>
@@ -219,8 +219,9 @@
       <UnifiedDataPage v-else-if="activePage === 'tax'" mode="tax" @open-store="openStoreFromPage" />
       <UnifiedSettingsPage v-else-if="activePage === 'settings'" :initial-tab="settingsTab" @close="closeSettings" />
       <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" @busy-change="imageStudioBusy = $event" />
+      <UnifiedGraphicSellPage v-else-if="activePage === 'graphic-sell'" @go-home="navigateTo('overview')" @busy-change="graphicSellBusy = $event" />
       <ProductManagementPage v-else-if="activePage === 'products'" @navigate="navigateTo" @open-store="openStoreFromPage" />
-      <CreatorInvitePage v-else-if="activePage === 'creator-invite'" @open-config="openCreatorInvite" @open-store="openStoreFromPage" @navigate="handleInviteNavigate" />
+      <CreatorInvitePage v-else-if="activePage === 'creator-invite'" @open-store="openStoreFromPage" @navigate="handleInviteNavigate" />
       <UnifiedAppsPage v-else-if="activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-assistant="openAssistant" @open-invite="openCreatorInvite" />
       <DashboardOverviewPage
         v-else-if="activePage === 'overview'"
@@ -327,6 +328,7 @@ const UnifiedStorePage = defineAsyncComponent(() => import('./UnifiedStorePage.v
 const UnifiedDataPage = defineAsyncComponent(() => import('./UnifiedDataPage.vue'))
 const UnifiedSettingsPage = defineAsyncComponent(() => import('./UnifiedSettingsPage.vue'))
 const UnifiedImageStudioPage = defineAsyncComponent(() => import('./UnifiedImageStudioPage.vue'))
+const UnifiedGraphicSellPage = defineAsyncComponent(() => import('./UnifiedGraphicSellPage.vue'))
 const ProductManagementPage = defineAsyncComponent(() => import('../products/ProductManagementPage.vue'))
 const CreatorInvitePage = defineAsyncComponent(() => import('../invite/CreatorInvitePage.vue'))
 const UnifiedAppsPage = defineAsyncComponent(() => import('./UnifiedAppsPage.vue'))
@@ -398,7 +400,7 @@ const settingsNav = { label: '设置中心', glyph: '⚙', icon: settingsIcon }
 const PAGE_TITLES: Record<string, string> = {
   overview: '经营总览', browser: '店铺工作台', products: '商品管理', stores: '店铺管理',
   ai: 'AI 创作', analytics: '数据分析', invoices: '发票中心', tax: '涉税信息', apps: '应用中心', settings: '设置中心',
-  'image-studio': '图片工作台', 'creator-invite': '达人邀约'
+  'image-studio': '图片工作台', 'creator-invite': '达人邀约', 'graphic-sell': '图文带货'
 }
 const pageTitle = computed(() => PAGE_TITLES[activePage.value] || '经营总览')
 /**
@@ -416,11 +418,13 @@ function tickClock() {
   const pad = (n: number) => String(n).padStart(2, '0')
   nowLabel.value = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
-type DashboardPage = 'overview' | 'browser' | 'products' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'image-studio' | 'creator-invite'
+type DashboardPage = 'overview' | 'browser' | 'products' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'image-studio' | 'creator-invite' | 'graphic-sell'
 type SettingsTab = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'
 const activePage = ref<DashboardPage>('overview')
 /** 生图请求仍在运行时保留图片工作台，避免卸载页面丢失返回结果。 */
 const imageStudioBusy = ref(false)
+/** 图文带货生成中同理：文案/配图请求未返回时不允许把页面切走。 */
+const graphicSellBusy = ref(false)
 const settingsReturnPage = ref<DashboardPage>('overview')
 const settingsReturnStoreId = ref<string | null>(null)
 const settingsTab = ref<SettingsTab>('entry')
@@ -457,7 +461,7 @@ let noticeTimer: number | undefined
 /** 顶栏通知中心只聚合仍有用户页面的达人邀约状态与客服未读。 */
 const notificationOpen = ref(false)
 /** 运行状态以 runLive 的实时值为准（latestRun 可能停在列表加载那一刻）。 */
-const notificationTasks = computed(() => (ws.tasks as any[])
+const notificationTasks = computed(() => ws.tasks
   .filter(task => task?.kind === 'creator_invite' || String(task?.name || '').trim().startsWith('达人邀约 ·'))
   .map(task => {
     const run = task?.latestRun
@@ -496,9 +500,10 @@ async function loadInvoiceTodo() {
   try {
     const response = await window.shopilot.overview.invoiceCenter()
     if (!response.ok) { invoiceTodoRows.value = []; invoiceTodoState.value = 'error'; return }
-    invoiceTodoRows.value = ((response.data as any)?.rows || [])
-      .map((row: any) => ({ storeId: String(row.storeId || ''), storeName: String(row.storeName || '未命名店铺'), count: Number(row.count) || 0 }))
-      .filter((row: { storeId: string; count: number }) => row.storeId && row.count > 0)
+    const rows = (response.data as { rows?: Array<{ storeId?: unknown; storeName?: unknown; count?: unknown }> } | undefined)?.rows || []
+    invoiceTodoRows.value = rows
+      .map(row => ({ storeId: String(row.storeId || ''), storeName: String(row.storeName || '未命名店铺'), count: Number(row.count) || 0 }))
+      .filter(row => row.storeId && row.count > 0)
     invoiceTodoState.value = invoiceTodoRows.value.length ? 'ready' : 'empty'
   } catch {
     invoiceTodoRows.value = []
@@ -514,14 +519,25 @@ function handleNav(item: { label: string }) {
   mobileNavOpen.value = false
   navigateTo(pageByLabel[item.label] || 'overview')
 }
-function preventBusyImageStudioExit() {
-  if (activePage.value !== 'image-studio' || !imageStudioBusy.value) return false
-  activeNav.value = 'AI 创作'
-  showNotice('图片仍在生成，完成后再离开，避免丢失结果。')
-  return true
+/**
+ * 生图/图文工作台正在请求接口时拦截离开：结果只在当前页面内存里，
+ * 切页会卸载组件、丢掉已经拿到的图片与文案。
+ */
+function preventBusyAiStudioExit() {
+  if (activePage.value === 'image-studio' && imageStudioBusy.value) {
+    activeNav.value = 'AI 创作'
+    showNotice('图片仍在生成，完成后再离开，避免丢失结果。')
+    return true
+  }
+  if (activePage.value === 'graphic-sell' && graphicSellBusy.value) {
+    activeNav.value = 'AI 创作'
+    showNotice('图文仍在生成，完成后再离开，避免丢失结果。')
+    return true
+  }
+  return false
 }
 function navigateTo(page: DashboardPage) {
-  if (page !== 'image-studio' && preventBusyImageStudioExit()) return
+  if (page !== activePage.value && preventBusyAiStudioExit()) return
   mobileNavOpen.value = false
   // B4：回到经营总览时补一次发票待办——「待开发票」那几行只在挂载与"停在总览页时的任务终态事件"
   // 里刷新；从发票中心采集完再回来，数字会停在这一轮之前（看起来像"采集没生效"）。
@@ -557,7 +573,7 @@ function navigateTo(page: DashboardPage) {
   else if (page === 'invoices') activeNav.value = '发票中心'
   else if (page === 'tax') activeNav.value = '涉税信息'
   else if (page === 'apps' || page === 'creator-invite') activeNav.value = '应用中心'
-  else if (page === 'image-studio') activeNav.value = 'AI 创作'
+  else if (page === 'image-studio' || page === 'graphic-sell') activeNav.value = 'AI 创作'
 }
 /** 达人邀约页内的返回/去店铺动作：页面只发语义，不在子组件里猜主路由。 */
 function handleInviteNavigate(page: string) {
@@ -586,7 +602,7 @@ async function closeSettings() {
   navigateTo('overview')
 }
 async function openStoreFromPage(storeId: string) {
-  if (preventBusyImageStudioExit()) return
+  if (preventBusyAiStudioExit()) return
   mobileNavOpen.value = false
   // 从"设置页进入的店铺"不算设置页业务：把返回目标清掉，否则之后点关闭设置会把用户拽回旧状态
   settingsReturnPage.value = 'overview'
@@ -605,7 +621,7 @@ async function openStoreFromPage(storeId: string) {
  * 取店优先级：页面选中的店 → 正在显示的店 → 已打开的店 → 第一家店；一家都没有就先去店铺管理。
  */
 async function openCreatorInvite(storeIdHint?: string): Promise<void> {
-  if (preventBusyImageStudioExit()) return
+  if (preventBusyAiStudioExit()) return
   const storeId = storeIdHint || ws.displayedStoreId || ws.openStoreIds[0] || ws.stores[0]?.id
   if (!storeId) {
     navigateTo('stores')
@@ -805,8 +821,8 @@ watch([() => ws.displayedStoreId, () => ws.displaySource], ([storeId, source]) =
   // 客服工作区显示时，经营工作台虽然保持挂载，但不跟随后台/Agent 的店铺显示事件改页。
   if (!props.active) return
   if (storeId && source === 'main' && activePage.value !== 'browser') {
-    if (preventBusyImageStudioExit()) {
-      // 主进程的原生店铺视图覆盖在渲染层上；生成未结束时收起它，保留图片工作台。
+    if (preventBusyAiStudioExit()) {
+      // 主进程的原生店铺视图覆盖在渲染层上；生成未结束时收起它，保留生图 / 图文工作台。
       ws.displayedStoreId = null
       const bridge = (window as Window & { shopilot?: Window['shopilot'] }).shopilot
       if (bridge) void bridge.browser.display(null)

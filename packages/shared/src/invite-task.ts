@@ -8,6 +8,18 @@
 import { ASSIST_DEFAULT_MAX_INVITES, ASSIST_LOOP_MAX_ROUNDS, buildInviteSteps, hasRequiredBatchContacts, normalizeMaxInvites, type AssistInviteOptions, type BatchInviteOptions, type StepDraft } from './invite-steps'
 import type { InviteProfile } from './constants/invite'
 
+/** 显式任务类型：主进程 task-kinds 与任务构造器共用同一个值，统计不再依赖名称前缀。 */
+export const CREATOR_INVITE_KIND = 'creator_invite'
+
+/**
+ * 任务识别（渲染层/主进程统一口径）：
+ * 新任务带显式 kind；存量旧任务没有 kind 字段，只能按任务名前缀兜底识别。
+ * 之前这段判断在 use-invite-run / CreatorInvitePage 里各写了一遍，改口径容易漏。
+ */
+export function isCreatorInviteTask(task: { kind?: string | null; name?: string | null }): boolean {
+  return task?.kind === CREATOR_INVITE_KIND || String(task?.name || '').startsWith('达人邀约 · ')
+}
+
 /** 邀约配置快照（面板按店铺存进 app_settings 的那份；字段按流程可选） */
 export interface InviteTaskConfigSnapshot {
   category?: string

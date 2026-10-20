@@ -63,7 +63,7 @@ function specToText(spec: Array<{ name: string; value: string }>): string {
 }
 
 /** 编辑器当前草稿（保存与实时校验共用同一份构建，避免两处口径漂移）。 */
-function buildDraft(description: string | null): LocalProductDraft {
+function buildDraft(description: string | null, details: LocalProductDraft['details'] = null): LocalProductDraft {
   return {
     title: title.value,
     subtitle: subtitle.value.trim() ? subtitle.value : null,
@@ -80,21 +80,22 @@ function buildDraft(description: string | null): LocalProductDraft {
         // 不能再从旧的透传值恢复，避免用户无法删除过期条码。
         barcode: variant.barcodeText.trim() ? variant.barcodeText : null,
       })),
-    media: mediaItems.value.map(item => ({ ...item }))
+    media: mediaItems.value.map(item => ({ ...item })),
+    details
   }
 }
 
 const liveIssues = computed<DraftIssue[]>(() => {
   if (loading.value || loadError.value) return serverIssues.value
   try {
-    return productDraftIssues(buildDraft(passthrough.value.description ?? null)) as DraftIssue[]
+    return productDraftIssues(buildDraft(passthrough.value.description ?? null, passthrough.value.details)) as DraftIssue[]
   } catch {
     return serverIssues.value
   }
 })
 
 /** get-modify-save 的透传区（本编辑器不展示但草稿里有的字段）。 */
-const passthrough = ref<{ description: string | null }>({ description: null })
+const passthrough = ref<{ description: string | null; details: LocalProductDraft['details'] }>({ description: null, details: null })
 
 onMounted(async () => {
   await reload()
@@ -123,6 +124,7 @@ async function reload(): Promise<void> {
   }))
   passthrough.value = {
     description: data.draft.description ?? null,
+    details: data.draft.details ?? null
   }
   serverIssues.value = data.issues ?? []
   loadError.value = ''
@@ -226,7 +228,7 @@ async function save(): Promise<void> {
     const current = await window.shopilot.products.library.get(props.productId)
     if (!current.ok) { ws.toast('保存失败：' + current.error.message, 'error'); return }
     const fetched = (current.data as { draft: Record<string, unknown> }).draft
-    const draft = buildDraft((fetched.description as string | null) ?? null)
+    const draft = buildDraft((fetched.description as string | null) ?? null, (fetched.details as LocalProductDraft['details']) ?? null)
     const result = await window.shopilot.products.library.save({
       productId: props.productId, draft
     })

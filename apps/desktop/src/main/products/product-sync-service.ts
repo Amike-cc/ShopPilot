@@ -17,6 +17,7 @@ import type {
   PlatformProductCollectionOptions,
   PlatformProductCollectionResult
 } from '@shared/contracts/platform-product'
+import type { ProductDetailResult } from './product-detail-service'
 import type { PlatformAdapter } from '../platform-adapters/platform-adapter'
 import { platformAdapterRegistry } from '../platform-adapters/platform-adapter-registry'
 import { detectStoreLoginStatus } from '../platform-adapters/platform-login-service'
@@ -26,6 +27,22 @@ import { getDatabase } from '../db/database'
 import { isAppLocked } from '../services/security-manager'
 import { logMain } from '../services/logger'
 import { ProductRepository } from './product-repository'
+import { productDetailService } from './product-detail-service'
+import { emitToRenderer } from '../browser/window-browser-core'
+import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+
+/** 全量同步详情阶段的实时进度（事件 payload，只含计数与店铺 id，不含商品正文）。 */
+export interface ProductFullSyncProgress {
+  storeId: string
+  total: number
+  done: number
+  succeeded: number
+  failed: number
+  skipped: number
+  incomplete: number
+  /** 最后一帧为真：本轮详情循环被用户取消，剩余商品未采集 */
+  canceled?: boolean
+}
 
 /** 商品采集能力：能力位为真、且真的有 collectProducts 实现（两者缺一不可）。 */
 export interface ProductCapableAdapter extends PlatformAdapter {
@@ -55,6 +72,8 @@ export interface ProductSyncRuntime {
   detectLoginStatus: (storeId: string) => Promise<PlatformLoginResult>
   isLocked: () => boolean
   repository: ProductRepository
+  /** 详情采集可注入，便于全量编排单测；省略时使用默认详情服务。 */
+  collectDetail?: (input: { storeId: string; platformProductId: string }) => Promise<ProductDetailResult>
 }
 
 function createDefaultRuntime(): ProductSyncRuntime {
@@ -65,7 +84,8 @@ function createDefaultRuntime(): ProductSyncRuntime {
     getAdapter: platform => platformAdapterRegistry.resolveAdapter(platform),
     detectLoginStatus: detectStoreLoginStatus,
     isLocked: isAppLocked,
-    repository: new ProductRepository(database)
+    repository: new ProductRepository(database),
+    collectDetail: input => productDetailService.collect(input)
   }
 }
 
@@ -100,6 +120,18 @@ export interface ProductSyncResult {
   finishedAt: number
 }
 
+export interface ProductFullSyncResult extends ProductSyncResult {
+  detailTotal: number
+  detailSucceeded: number
+  detailFailed: number
+  detailSkipped: number
+  /** 详情页有返回但缺少核心字段；快照已保留，不能算完整完成。 */
+  detailIncomplete: number
+  /** 列表未截断且每一条详情都成功才为 true。 */
+  complete: boolean
+  detailFailures: Array<{ platformProductId: string; status: string; reasonCode: string; safeMessage: string; missingFields?: string[] }>
+}
+
 const DEFAULT_OPTIONS: Required<Pick<ProductSyncInput, 'maxPages' | 'maxProducts' | 'timeoutMs'>> = {
   maxPages: 20,
   maxProducts: 500,
@@ -113,9 +145,29 @@ function assertStoreId(storeId: string): string {
 
 export class ProductSyncService {
   private readonly runtimeFactory: () => ProductSyncRuntime
+  /** 进行中的全量同步（storeId）；取消请求置位后由详情循环在下一条前消费。 */
+  private readonly fullSyncRunning = new Set<string>()
+  private readonly fullSyncCancelFlags = new Set<string>()
 
   constructor(runtime?: ProductSyncRuntime) {
     this.runtimeFactory = runtime ? () => runtime : createDefaultRuntime
+  }
+
+  /** 该店是否正在进行全量同步（详情阶段）。 */
+  isFullSyncRunning(storeId: string): boolean {
+    return this.fullSyncRunning.has(assertStoreId(storeId))
+  }
+
+  /**
+   * 请求中断进行中的全量详情采集。返回 false = 当前没有在跑的全量同步（如实告知，
+   * 不假装"已请求取消"）。标志在下一条开始前被消费并清掉，不影响下一轮同步。
+   */
+  requestFullSyncCancel(storeId: string): boolean {
+    const key = assertStoreId(storeId)
+    if (!this.fullSyncRunning.has(key)) return false
+    this.fullSyncCancelFlags.add(key)
+    logMain('info', `[product-sync] 已收到全量同步取消请求 store=${key}（下一条详情前生效）`)
+    return true
   }
 
   /**
@@ -299,6 +351,144 @@ export class ProductSyncService {
       hasMore: collected.hasMore,
       startedAt,
       finishedAt: Date.now()
+    }
+  }
+
+  /**
+   * 全量商品资料：先完成列表同步，再按平台商品 ID 逐条进入详情页。
+   *
+   * 任何详情失败都会保留已成功的快照并返回 PARTIAL；不会用列表字段冒充详情，
+   * 也不会因为一条坏详情回滚整个店铺已经确认的商品列表。
+   */
+  async syncStoreFull(input: ProductSyncInput): Promise<ProductFullSyncResult> {
+    const list = await this.syncStore({
+      ...input,
+      maxPages: input.maxPages ?? 200,
+      maxProducts: input.maxProducts ?? 5000,
+      timeoutMs: input.timeoutMs ?? 600_000
+    })
+    const empty = (overrides: Partial<ProductFullSyncResult> = {}): ProductFullSyncResult => ({
+      ...list,
+      detailTotal: 0,
+      detailSucceeded: 0,
+      detailFailed: 0,
+      detailSkipped: 0,
+      detailIncomplete: 0,
+      complete: false,
+      detailFailures: [],
+      ...overrides
+    })
+    if (list.status !== 'SUCCEEDED' && list.status !== 'PARTIAL') {
+      return empty({ safeMessage: `${list.safeMessage}；未进入详情采集` })
+    }
+
+    const runtime = this.runtimeFactory()
+    const links = runtime.repository.listLinkIdsForStore(list.storeId, input.maxProducts ?? 5000)
+    const collectDetail = runtime.collectDetail
+    if (!collectDetail) {
+      return empty({ safeMessage: `${list.safeMessage}；当前构建没有可用的详情采集器`, detailSkipped: links.length })
+    }
+
+    let detailSucceeded = 0
+    let detailFailed = 0
+    let detailSkipped = 0
+    let detailIncomplete = 0
+    let canceled = false
+    const detailFailures: ProductFullSyncResult['detailFailures'] = []
+    // 取消标志 + 运行登记：循环内每条让出事件循环后再检查（2026-10-21 审查 P2-5：
+    // 此前 5000 条串行既无法取消、还会长时间阻塞主进程事件循环，其它 IPC 全部饿死）。
+    const storeKey = list.storeId
+    this.fullSyncRunning.add(storeKey)
+    this.fullSyncCancelFlags.delete(storeKey)
+    const emitProgress = (): void => {
+      const payload: ProductFullSyncProgress = {
+        storeId: storeKey, total: links.length, done: detailSucceeded + detailFailed + detailSkipped + detailIncomplete,
+        succeeded: detailSucceeded, failed: detailFailed, skipped: detailSkipped, incomplete: detailIncomplete, canceled: canceled || undefined
+      }
+      try { emitToRenderer(EVENT_CHANNELS.PRODUCT_SYNC_FULL_PROGRESS, payload) } catch { /* 进度事件是尽力而为 */ }
+    }
+    try {
+      for (const link of links) {
+        // 让出事件循环：详情单条最长可达几十秒，不让出的话期间所有 IPC/定时器都被挂起
+        await new Promise<void>(resolve => setImmediate(resolve))
+        if (this.fullSyncCancelFlags.has(storeKey)) {
+          this.fullSyncCancelFlags.delete(storeKey)
+          canceled = true
+          logMain('info', `[product-sync] 全量同步被用户中断 store=${storeKey} done=${detailSucceeded + detailFailed + detailSkipped + detailIncomplete}/${links.length}`)
+          break
+        }
+        try {
+          const result = await collectDetail({ storeId: list.storeId, platformProductId: link.platformProductId })
+          if (result.status === 'SUCCEEDED') {
+            detailSucceeded += 1
+            // 快照可以保存“已读到的部分”，但只要核心字段仍缺失，
+            // 就不能把整轮宣称为完整资料。保留缺失字段，供界面逐条重试/补录。
+            if (result.missingFields.length) {
+              detailIncomplete += 1
+              detailFailures.push({
+                platformProductId: link.platformProductId,
+                status: 'INCOMPLETE',
+                reasonCode: 'DETAIL_FIELDS_MISSING',
+                safeMessage: `详情已保存，但仍缺少：${result.missingFields.join('、')}`,
+                missingFields: result.missingFields
+              })
+            }
+          }
+          else if (result.status === 'NOT_VERIFIED' || result.status === 'LINK_NOT_FOUND') {
+            detailSkipped += 1
+            detailFailures.push({ platformProductId: link.platformProductId, status: result.status, reasonCode: result.reasonCode, safeMessage: result.safeMessage })
+          } else {
+            detailFailed += 1
+            detailFailures.push({ platformProductId: link.platformProductId, status: result.status, reasonCode: result.reasonCode, safeMessage: result.safeMessage })
+          }
+        } catch (error) {
+          detailFailed += 1
+          detailFailures.push({
+            platformProductId: link.platformProductId,
+            status: 'FAILED',
+            reasonCode: 'DETAIL_SERVICE_ERROR',
+            safeMessage: '详情采集服务异常，本条未写入详情快照'
+          })
+          logMain('warn', `[product-sync] 全量详情失败 store=${list.storeId} product=${link.platformProductId} error=${String((error as Error)?.message || error).slice(0, 160)}`)
+        }
+        emitProgress()
+      }
+      emitProgress()
+    } finally {
+      this.fullSyncRunning.delete(storeKey)
+      this.fullSyncCancelFlags.delete(storeKey)
+    }
+
+    // fetchedCount 包含“没有平台 ID 而被跳过”的行；这类行无法进入详情阶段，
+    // 因此不能把“详情循环跑完”误报成全量完成。只有列表未截断、没有跳过行，
+    // 且每一条可追踪商品都成功读取详情，才允许 complete=true。
+    const expectedDetailTotal = Math.max(0, list.fetchedCount - list.skippedCount)
+    const complete = list.status === 'SUCCEEDED'
+      && !list.hasMore
+      && list.skippedCount === 0
+      && links.length === expectedDetailTotal
+      && detailSucceeded === links.length
+      && detailIncomplete === 0
+      && detailFailed === 0
+      && detailSkipped === 0
+    const status: ProductFullSyncResult['status'] = complete ? 'SUCCEEDED' : 'PARTIAL'
+    const canceledNote = canceled
+      ? `；已按用户要求中断，剩余 ${links.length - detailSucceeded - detailFailed - detailSkipped - detailIncomplete} 条未采集`
+      : ''
+    const safeMessage = complete
+      ? `已完成全量商品资料：列表 ${links.length} 件，详情全部采集成功`
+      : `商品列表 ${list.fetchedCount} 件；详情成功 ${detailSucceeded}、字段不完整 ${detailIncomplete}、失败 ${detailFailed}、未验证 ${detailSkipped}${list.hasMore ? '；列表本轮被截断，还有更多商品' : ''}${canceledNote}`
+    return {
+      ...list,
+      status,
+      safeMessage,
+      detailTotal: links.length,
+      detailSucceeded,
+      detailFailed,
+      detailSkipped,
+      detailIncomplete,
+      complete,
+      detailFailures
     }
   }
 

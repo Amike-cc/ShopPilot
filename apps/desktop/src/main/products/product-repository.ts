@@ -11,7 +11,7 @@
 
 import { randomUUID } from 'crypto'
 import type Database from 'better-sqlite3'
-import type { PlatformProduct, PlatformProductStatus } from '@shared/contracts/platform-product'
+import type { PlatformProduct, PlatformProductDetailSnapshot, PlatformProductStatus } from '@shared/contracts/platform-product'
 import type { LocalProductDraft } from '@shared/product-draft'
 import { logMain } from '../services/logger'
 
@@ -58,6 +58,7 @@ export interface ProductLinkRow {
   /** 为空 = 平台上发现、本地还没有归属 */
   productId: string | null
   productTitle: string | null
+  detailCollectedAt?: number | null
 }
 
 export interface ProductLinkQuery {
@@ -341,7 +342,7 @@ export class ProductRepository {
     const rows = this.db.prepare(`
       SELECT l.id AS link_id, l.platform, l.store_id, l.platform_product_id, l.platform_title,
              l.platform_status, l.platform_price_minor, l.platform_stock, l.platform_updated_at,
-             l.collected_at, l.product_id, p.title AS product_title, s.name AS store_name
+             l.collected_at, l.detail_collected_at, l.product_id, p.title AS product_title, s.name AS store_name
       FROM product_platform_links l
       LEFT JOIN products p ON p.id = l.product_id
       LEFT JOIN stores s ON s.id = l.store_id
@@ -369,6 +370,7 @@ export class ProductRepository {
         platformStock: nullableNumber(row.platform_stock),
         platformUpdatedAt: nullableNumber(row.platform_updated_at),
         collectedAt: Number(row.collected_at ?? 0),
+        detailCollectedAt: nullableNumber(row.detail_collected_at),
         productId: nullableString(row.product_id),
         productTitle: nullableString(row.product_title)
       })),
@@ -405,12 +407,13 @@ export class ProductRepository {
     const run = this.db.transaction(() => {
       this.db.prepare(`
         INSERT INTO products (id, title, subtitle, description, brand, local_category, tags_json,
-                              status, draft_hash, source_link_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)
+                              details_json, status, draft_hash, source_link_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)
       `).run(
         id, input.draft.title, input.draft.subtitle ?? null, input.draft.description ?? null,
         input.draft.brand ?? null, input.draft.localCategory ?? null,
-        JSON.stringify(input.draft.tags ?? []), input.draftHash, input.sourceLinkId ?? null, now, now
+        JSON.stringify(input.draft.tags ?? []), input.draft.details ? JSON.stringify(input.draft.details) : null,
+        input.draftHash, input.sourceLinkId ?? null, now, now
       )
       this.replaceVariants(id, input.draft, now)
       this.replaceMedia(id, input.draft, now)
@@ -425,12 +428,13 @@ export class ProductRepository {
     const run = this.db.transaction(() => {
       this.db.prepare(`
         UPDATE products SET title = ?, subtitle = ?, description = ?, brand = ?, local_category = ?,
-                            tags_json = ?, draft_hash = ?, updated_at = ?
+                            tags_json = ?, details_json = ?, draft_hash = ?, updated_at = ?
         WHERE id = ? AND deleted_at IS NULL
       `).run(
         input.draft.title, input.draft.subtitle ?? null, input.draft.description ?? null,
         input.draft.brand ?? null, input.draft.localCategory ?? null,
-        JSON.stringify(input.draft.tags ?? []), input.draftHash, now, input.productId
+        JSON.stringify(input.draft.tags ?? []), input.draft.details ? JSON.stringify(input.draft.details) : null,
+        input.draftHash, now, input.productId
       )
       this.replaceVariants(input.productId, input.draft, now)
       this.replaceMedia(input.productId, input.draft, now)
@@ -515,6 +519,7 @@ export class ProductRepository {
         brand: nullableString(row.brand),
         localCategory: nullableString(row.local_category),
         tags: parseJsonArray(row.tags_json),
+        details: parseJsonObject(row.details_json) as LocalProductDraft['details'],
         variants: variants.map(variant => ({
           spec: parseJsonArray<{ name: string; value: string }>(variant.spec_json),
           priceMinor: nullableNumber(variant.price_minor),
@@ -555,7 +560,7 @@ export class ProductRepository {
     rows: Array<{
       id: string; title: string; status: string; updatedAt: number; createdAt: number
       variantCount: number; priceMin: number | null; priceMax: number | null; stockTotal: number | null
-      coverState: string | null; coverLocalPath: string | null; linkCount: number; platforms: string[]
+      coverState: string | null; coverLocalPath: string | null; linkCount: number; platforms: string[]; sourceStoreIds: string[]
     }>
     total: number
   } {
@@ -598,6 +603,7 @@ export class ProductRepository {
              (SELECT local_path FROM product_media m WHERE m.product_id = p.id AND m.role = 'cover' AND m.state = 'localized' AND m.local_path IS NOT NULL ORDER BY m.sort_order LIMIT 1) AS cover_local_path,
              (SELECT COUNT(*) FROM product_platform_links l WHERE l.product_id = p.id) AS link_count,
              (SELECT GROUP_CONCAT(DISTINCT l.platform) FROM product_platform_links l WHERE l.product_id = p.id) AS platforms
+             ,(SELECT GROUP_CONCAT(DISTINCT l.store_id) FROM product_platform_links l WHERE l.product_id = p.id) AS source_store_ids
       FROM products p ${whereSql}
       ORDER BY ${orderSql} LIMIT ? OFFSET ?
     `).all(...params, limit, offset) as Array<Record<string, unknown>>
@@ -616,7 +622,8 @@ export class ProductRepository {
         coverState: nullableString(row.cover_state),
         coverLocalPath: nullableString(row.cover_local_path),
         linkCount: Number(row.link_count ?? 0),
-        platforms: String(row.platforms ?? '').split(',').filter(Boolean)
+        platforms: String(row.platforms ?? '').split(',').filter(Boolean),
+        sourceStoreIds: String(row.source_store_ids ?? '').split(',').filter(Boolean)
       })),
       total: Number(totalRow?.c ?? 0)
     }
@@ -679,13 +686,13 @@ export class ProductRepository {
     const run = this.db.transaction(() => {
       this.db.prepare(`
         INSERT INTO products (id, title, subtitle, description, brand, local_category, tags_json,
-                              status, draft_hash, source_link_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, NULL, ?, ?)
+                              details_json, status, draft_hash, source_link_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, NULL, ?, ?)
       `).run(
         newId,
         `${String(source.title ?? '')}（副本）`,
         source.subtitle ?? null, source.description ?? null, source.brand ?? null,
-        source.local_category ?? null, source.tags_json ?? null,
+        source.local_category ?? null, source.tags_json ?? null, source.details_json ?? null,
         // draft_hash 是 NOT NULL：先放源商品的指纹占位，服务层复制完立刻按新内容重算覆盖
         String(source.draft_hash ?? ''),
         now, now
@@ -805,6 +812,48 @@ export class ProductRepository {
       UPDATE product_platform_links SET platform_image_urls_json = ?, platform_image_count = ?
       WHERE id = ?
     `).run(JSON.stringify(urls), urls.length, input.linkId)
+  }
+
+  /** 保存详情页的完整结构化快照；列表同步的 raw_snapshot_json 保持独立。 */
+  updateLinkDetail(input: { linkId: string; detail: PlatformProductDetailSnapshot }): void {
+    this.db.prepare(`
+      UPDATE product_platform_links
+      SET platform_detail_json = ?, detail_collected_at = ?
+      WHERE id = ?
+    `).run(JSON.stringify(input.detail), input.detail.collectedAt, input.linkId)
+  }
+
+  /** 全量详情采集的输入：只返回当前店铺的有效平台商品，不跨店串数据。 */
+  listLinkIdsForStore(storeId: string, limit = 5000): Array<{ linkId: string; platform: string; platformProductId: string }> {
+    const safeLimit = Math.min(Math.max(Number(limit) || 1, 1), 5000)
+    const rows = this.db.prepare(`
+      SELECT id, platform, platform_product_id
+      FROM product_platform_links
+      WHERE store_id = ? AND COALESCE(platform_status, '') != 'missing'
+      ORDER BY collected_at DESC, platform_product_id
+      LIMIT ?
+    `).all(storeId, safeLimit) as Array<Record<string, unknown>>
+    return rows.map(row => ({
+      linkId: String(row.id),
+      platform: String(row.platform),
+      platformProductId: String(row.platform_product_id)
+    }))
+  }
+
+  getLinkDetail(linkId: string): PlatformProductDetailSnapshot | null {
+    const row = this.db.prepare('SELECT platform_detail_json FROM product_platform_links WHERE id = ?').get(linkId) as { platform_detail_json?: unknown } | undefined
+    return parseJsonObject(row?.platform_detail_json) as PlatformProductDetailSnapshot | null
+  }
+
+  /** 跨店上传门禁：目标店已经挂有该本地商品时，不再把它当成“其他店铺”重复排队。 */
+  hasProductStoreLink(productId: string, storeId: string): boolean {
+    const row = this.db.prepare(`
+      SELECT 1 AS found
+      FROM product_platform_links
+      WHERE product_id = ? AND store_id = ?
+      LIMIT 1
+    `).get(productId, storeId) as { found?: number } | undefined
+    return !!row?.found
   }
 
   /**
@@ -1218,5 +1267,18 @@ function parseJsonArray<T>(value: unknown): T[] {
     return Array.isArray(parsed) ? (parsed as T[]) : []
   } catch {
     return []
+  }
+}
+
+/** 解析 JSON 对象；坏数据返回 null，兼容 v35 之前的存量库。 */
+function parseJsonObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'string' || !value) return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
   }
 }

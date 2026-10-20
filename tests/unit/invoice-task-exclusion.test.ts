@@ -28,6 +28,7 @@ const read = (p: string) => readFileSync(resolve(p), 'utf8')
 const TASK_PAGE = read('apps/desktop/src/renderer/src/features/workbench/UnifiedTaskPage.vue')
 const DASHBOARD = read('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue')
 const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue')
+const INVITE_VIEW = read('apps/desktop/src/renderer/src/features/invite/InvitePanelView.vue')
 const DATA_PAGE = [
   'apps/desktop/src/renderer/src/features/workbench/UnifiedDataPage.vue',
   'apps/desktop/src/renderer/src/features/workbench/use-invoice-detail.ts',
@@ -108,7 +109,8 @@ describe('后台采集不计入任务的各个口径', () => {
     expect(SURFACE).not.toContain('taskRows = computed')
     expect(SURFACE).not.toContain('task-tab-tasks')
     expect(SURFACE).not.toContain('task-new')
-    expect(SURFACE).toContain('data-test="invite-panel"')
+    expect(SURFACE).toContain('InvitePanelView')
+    expect(INVITE_VIEW).toContain('data-test="invite-panel"')
   })
 
   it('主进程的任务总数用它排除，且前缀不再有第二处硬编码', () => {

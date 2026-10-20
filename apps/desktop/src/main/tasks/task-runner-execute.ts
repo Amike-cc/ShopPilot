@@ -3,16 +3,16 @@
  * 2026-10-19 P1 重构：由 task-runner.ts 等价搬迁（实现与注释逐字保留）。
  */
 
-import { canRetryStepInPlace, shouldUseInternalRunTab } from '@shared/agent-step-effects'
-import { logMain } from '../services/logger'
-import { inviteStopReasonLabel } from '@shared/invite-notices'
-import { createTab, getTabWebContents, getStoreTabs, activateTab, getActiveTabId, waitForTabWebContents, setStoreTaskActivity, acquireCollectionTab } from '../browser/window-manager'
-import { waitForStoreSessionReady } from '../browser/session-manager'
-import * as TaskStore from './task-store'
-import { isInternalRunTab } from './task-step-dom'
-import { execStep } from './task-step-executor'
-import { classifyError, emitProgress, transition } from './task-runner-lifecycle'
-import { runTabByStore } from './task-runner-registry'
+import { canRetryStepInPlace, shouldUseInternalRunTab } from '@shared/agent-step-effects'
+import { logMain } from '../services/logger'
+import { createTab, getTabWebContents, getStoreTabs, activateTab, getActiveTabId, waitForTabWebContents, setStoreTaskActivity, acquireCollectionTab, acquireBackgroundPage } from '../browser/window-manager'
+import { getTaskKindDefinition } from './task-kinds'
+import { waitForStoreSessionReady } from '../browser/session-manager'
+import * as TaskStore from './task-store'
+import { isInternalRunTab } from './task-step-dom'
+import { execStep } from './task-step-executor'
+import { classifyError, emitProgress, transition } from './task-runner-lifecycle'
+import { runTabByStore } from './task-runner-registry'
 import type { RunHandle } from './task-runner-registry'
 
 // ---------- 执行循环 ----------
@@ -91,6 +91,18 @@ export async function execute(run: RunHandle): Promise<void> {
     if (requestedTabId) {
       // Agent 计划显式绑定生成计划时的标签页；不新建 about:blank 再切换，避免误读其他页面。
       run.tabId = requestedTabId
+    } else if (getTaskKindDefinition(run.taskKind)?.surface === 'background') {
+      /**
+       * 后台执行面（达人邀约等）：页面由主进程隐藏 BrowserWindow 承载，
+       * 登记成 internal+worker 标签页——不进标签栏、不抢活动位、不触发工作台切页，
+       * 用户没打开这家店也能跑。
+       *
+       * 与采集专用页（acquireCollectionTab）的区别：后者仍依赖渲染层挂隐藏 `<webview>`，
+       * 用户停在欢迎页/没开这家店时没有页面可用；后台执行面不能有这种前置条件。
+       */
+      run.tabId = tabExists(run.tabId)
+        ? run.tabId!
+        : acquireBackgroundPage(run.storeId, { purpose: run.taskKind }).tabId
     } else if (internalRun) {
       /**
        * **采集专用页**（2026-10-15 用户要求「采集数据的时候不要影响浏览器使用」）。
@@ -218,15 +230,10 @@ export async function execute(run: RunHandle): Promise<void> {
     }
 
     /**
-     * 运行终态文案：达人邀约把 loop 的停止码与完成轮数带进 statusReason，
+     * 运行终态文案：业务类型可把「停止码 / 完成轮数」带进 statusReason，
      * 通知中心/批次页不用再翻 task_step_results 才能说清"为什么停"。
      */
-    const inviteStop = run.taskKind === 'creator_invite'
-      ? (inviteStopReasonLabel(run.lastStopReason) || '达到本次上限')
-      : null
-    const successReason = inviteStop
-      ? `达人邀约结束：${inviteStop}，完成 ${run.lastCompletedRounds} 轮`
-      : '全部步骤完成'
+    const successReason = getTaskKindDefinition(run.taskKind)?.successReason?.(run) || '全部步骤完成'
     transition(run, 'succeeded', successReason)
   } catch (e: any) {
     try {

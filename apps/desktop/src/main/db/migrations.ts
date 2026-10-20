@@ -1871,18 +1871,87 @@ export const migrations: Migration[] = [
       DROP TABLE IF EXISTS creator_profiles;
     `)
   }
+  ,{
+    version: 35,
+    name: 'product_detail_snapshots',
+    up: (db) => {
+      // 详情页采集是列表同步之后的补充阶段。扩展字段独立保存，既不污染列表快照，
+      // 也不会在平台字段不全时把本地商品的人工编辑值覆盖掉。
+      // 只容忍两类可预期错误：列已存在（重复跑）、旧夹具缺表；其余（磁盘满/库只读/锁表）
+      // 必须上抛——否则迁移被静默记成功、列实际没建，会拖到运行时 INSERT 才爆（2026-10-21 审查 P2）。
+      const addColumn = (table: string, column: string, definition: string): void => {
+        try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`) } catch (error) {
+          const message = String((error as Error)?.message || error)
+          if (/duplicate column/i.test(message) || /no such table/i.test(message)) return
+          throw error
+        }
+      }
+      addColumn('product_platform_links', 'platform_detail_json', 'TEXT')
+      addColumn('product_platform_links', 'detail_collected_at', 'INTEGER')
+      addColumn('products', 'details_json', 'TEXT')
+      try { db.exec('CREATE INDEX IF NOT EXISTS idx_ppl_detail_time ON product_platform_links(store_id, detail_collected_at DESC)') } catch { /* 旧夹具缺表时跳过 */ }
+    },
+    down: (db) => {
+      try { db.exec('DROP INDEX IF EXISTS idx_ppl_detail_time') } catch { /* ignore */ }
+      for (const sql of [
+        'ALTER TABLE product_platform_links DROP COLUMN detail_collected_at',
+        'ALTER TABLE product_platform_links DROP COLUMN platform_detail_json',
+        'ALTER TABLE products DROP COLUMN details_json'
+      ]) {
+        try { db.exec(sql) } catch { /* SQLite/旧库不支持删列时忽略 */ }
+      }
+    }
+  }
+  ,{
+    version: 36,
+    name: 'invite_campaign_schedule',
+    up: (db) => {
+      // 定时邀约（2026-10-20）：批次可以带一个排期时间，由主进程调度器到点拉起。
+      // status_reason 与引擎停止码（task_step_results.payload.stopReason）分开存：
+      // 排期被取消、到点额度不足这类原因是批次层决定的，运行可能根本不存在。
+      // 与 v35 同口径：只容忍列已存在/夹具缺表，其余上抛（2026-10-21 审查 P2）
+      const addColumn = (table: string, column: string, definition: string): void => {
+        try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`) } catch (error) {
+          const message = String((error as Error)?.message || error)
+          if (/duplicate column/i.test(message) || /no such table/i.test(message)) return
+          throw error
+        }
+      }
+      addColumn('invite_campaigns', 'scheduled_at', 'INTEGER')
+      addColumn('invite_campaigns', 'status_reason', 'TEXT')
+      try { db.exec('CREATE INDEX IF NOT EXISTS idx_invite_campaigns_schedule ON invite_campaigns(status, scheduled_at)') } catch { /* ignore */ }
+    },
+    down: (db) => {
+      try { db.exec('DROP INDEX IF EXISTS idx_invite_campaigns_schedule') } catch { /* ignore */ }
+      for (const sql of [
+        'ALTER TABLE invite_campaigns DROP COLUMN status_reason',
+        'ALTER TABLE invite_campaigns DROP COLUMN scheduled_at'
+      ]) {
+        try { db.exec(sql) } catch { /* SQLite/旧库不支持删列时忽略 */ }
+      }
+    }
+  }
 ]
 
 /**
  * 获取当前数据库版本
+ *
+ * 失败口径（2026-10-22 审查修正）：
+ *   · 表不存在（no such table）→ 确实是新库，按 0 处理（首次迁移从 v1 建表是正常路径）；
+ *   · 其他错误（SQLITE_BUSY/CORRUPT 等瞬时或持久故障）→ **原样上抛**，
+ *     由 initDatabase → initialize 的启动失败路径明确报错，绝不误判成"新库"
+ *     ——误判会让迁移从 v1 重放，v1 的 CREATE TABLE 在健康库上必抛错，
+ *     进而把用户引向"用备份恢复"（可能拿旧备份覆盖较新数据）。
  */
 export function getCurrentVersion(db: Database.Database): number {
   try {
     const row = db.prepare('SELECT MAX(version) as version FROM schema_migrations').get() as { version: number } | undefined
     return row?.version || 0
   } catch (error) {
-    // 读不到版本（新库/损坏/临时只读）按 0 处理；留一条 warn，否则"迁移从 0 重放"在持久日志里查不到（P3）
-    logMain('warn', `[migration] 读取当前 schema 版本失败，按 0 处理：${String((error as any)?.message || error).slice(0, 200)}`)
+    const message = String((error as Error)?.message || error)
+    if (!/no such table/i.test(message)) throw error
+    // 新库还没有 schema_migrations 表：按 0 处理；留一条 warn，否则"迁移从 0 重放"在持久日志里查不到（P3）
+    logMain('warn', `[migration] schema_migrations 不存在（新库），按 0 处理：${message.slice(0, 200)}`)
     return 0
   }
 }

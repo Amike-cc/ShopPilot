@@ -1408,3 +1408,56 @@ CDP 验收：
 ---
 
 **一句话总结：这次重构不是给现有面板加功能，而是把「邀约」从一次任务执行变成一门可管理的经营动作——执行层继续可靠，业务层开始用业务语言表达。**
+
+---
+
+## 附录 E · 独立功能与后端运行（2026-10-19 第三轮，用户要求）
+
+**需求原话**：「达人邀约作为一个单独的功能，让达人邀约在后端运行，不影响浏览器正常使用」。
+
+### 改成了什么
+
+| 之前 | 现在 |
+|---|---|
+| 开始邀约要在店铺浏览器里开一个标签页，运行期间占着用户正在用的窗口；用户切走标签，任务还得把页面切回前台 | 主进程建一个 `show:false` 的隐藏 `BrowserWindow`（同 `persist:store_<id>` 分区），登记成 `internal + worker` 标签页，任务引擎照旧跑，但页面不在任何用户可见窗口里 |
+| 用户没打开这家店时，队列泵会一直等「店铺已打开」 | `enqueueRun` 对 `creator_invite` 先建后台页，队列泵立即放行；用户停在欢迎页也能发起 |
+| 独立页「新建邀约」跳回侧栏配置面板（等于把用户送回店铺浏览器） | 独立页内嵌同一个 `InvitePanelView`，就地配置并启动；侧栏仍保留同一份组件与全部验收锚点 |
+| 运行结束靠冷休眠回收 | 终态（成功/失败/取消）立即释放后台页；`paused` 保留，恢复继续用同一张页面 |
+
+### 关键实现
+
+- **为什么不用采集专用页**：`acquireCollectionTab` 仍要求渲染层给这家店挂隐藏 `<webview>`；用户没打开店铺时没有页面。独立功能不能有这种前置条件。
+- **worker 标签页对渲染层完全不存在**：`tabSnapshot` 带 `worker` 标记，`emitTabs` / `browser.state` 过滤；`registerWebview` 明确拒绝 worker 标签页（否则渲染层会把隐藏窗口的 guest 抢走）。
+- **不抢活动位**：`activateTab` 对 `internal` 直接返回；`ensureRunTabForeground` 原有 `isInternalRunTab` 分支天然跳过。
+- **window.open 也留在后台**：`setWindowOpenHandler` 拒绝原生弹窗，自己建隐藏子窗口并登记成新的 worker 标签页，`followTab` 仍能在 `getStoreTabs` 里找到并跟过去；轮末 `closeOld` 关闭时一并销毁窗口。
+- **冷休眠门禁**：`storeLifecycleBlockReasons` 增加 `invite-worker`，运行期间不会被店铺冷休眠回收；后台页永久 `backgroundThrottling:false`（否则平台弹层依赖的 rAF 停摆）。
+- **独立页显式店铺**：`useCreatorInvite` 新增可选 `storeId`；页面用自己下拉框选中的店铺，不跟随「浏览器当前显示哪家店」；`startInvite` 移入 composable，侧栏与独立页同一份校验、台账、黑名单与启动口径。
+
+### 涉及文件
+
+- `apps/desktop/src/main/browser/window-browser-core.ts`（后台工作页、关闭/释放、弹窗转后台、生命周期门禁）
+- `apps/desktop/src/main/browser/window-state.ts`（`Tab.worker/workerWindow`）
+- `apps/desktop/src/main/tasks/task-runner-execute.ts`（`creator_invite` 走后台页）
+- `apps/desktop/src/main/tasks/task-runner-control.ts`（入队预建、继续/重试不跳浏览器）
+- `apps/desktop/src/main/tasks/task-runner-lifecycle.ts`（终态释放）
+- `apps/desktop/src/renderer/src/features/invite/InvitePanelView.vue`（侧栏/独立页共用视图，锚点不变）
+- `apps/desktop/src/renderer/src/features/invite/CreatorInvitePage.vue`（就地配置面板 `invite-v2-launcher`）
+- `apps/desktop/src/renderer/src/features/workbench/use-creator-invite.ts`（显式 `storeId`、`startInvite`）
+- `apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue`（只保留平台入口与配置重载）
+- `tools/acceptance/creator-invite-smoke.js`（后台运行红线）
+
+### 验证
+
+- `pnpm typecheck` ✓
+- `pnpm test`：169 files / 1898 tests ✓（新增 `invite-background-run.test.ts` 源码契约；三个旧面板锚点测试改指共享视图）
+- `pnpm lint`：0 error ✓
+- `pnpm build` ✓；`electron-builder --dir` ✓
+- 打包产物冒烟：**18/18** ✓
+  - 独立页就地打开配置面板、面板标注后台运行；
+  - `waitMs` 批次跑到 `completed`，且 `browser.state` 里可见标签页数为 **0**；
+  - 本地 HTTP 页面真实跑 `navigate → waitForText → clickByText → waitForText`：隐藏窗口能布局、能点击，仍然 **0 个可见标签页**。
+
+### 仍需真机确认
+
+- 平台「详情」`window.open` 转后台子页已有本地真页覆盖：冒烟用 `target=_blank` 打开 `/detail`，`followTab → waitForPage → waitForText` 全部通过，且可见标签页仍为 0。真实抖店/微信/快手的弹窗行为仍需登录态下再跑一次真机见证。
+- 平台对隐藏窗口是否有额外风控（例如要求窗口可见）未实测；如真机出现「页面可见性判据失败」，可退化为离屏窗口（`offscreen:true`）或最小化显示，而不是把页面塞回用户标签栏。

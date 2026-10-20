@@ -11,26 +11,8 @@
 import { randomUUID } from 'node:crypto'
 import { getDatabase } from '../db/database'
 import { logMain } from './logger'
+import type { CreatorView } from '@shared/invite-campaign'
 import type { InviteIdentityLevel } from '@shared/invite-identity'
-
-export interface CreatorView {
-  id: string
-  storeId: string
-  platform: string
-  creatorKey: string
-  identityLevel: InviteIdentityLevel
-  nickname: string
-  finderUsername: string | null
-  tags: string[]
-  note: string | null
-  blacklisted: boolean
-  blacklistReason: string | null
-  lastStatus: string | null
-  lastInvitedAt: number | null
-  inviteCount: number
-  firstSeenAt: number
-  lastSeenAt: number
-}
 
 export interface CreatorListInput {
   storeId?: string

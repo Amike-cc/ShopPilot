@@ -337,6 +337,10 @@ describe('数据库迁移', () => {
     expect(taskColumns).toEqual(expect.arrayContaining(['kind', 'source', 'campaign_id']))
     const inviteTables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('invite_campaigns','invite_records','creator_profiles','invite_scripts','invite_product_sets','invite_events')").all() as Array<{ name: string }>).map(r => r.name)
     expect(inviteTables.sort()).toEqual(['creator_profiles', 'invite_campaigns', 'invite_events', 'invite_product_sets', 'invite_records', 'invite_scripts'])
+    // v36：定时邀约需要排期时间与批次层原因（与引擎停止码分开）
+    const campaignColumns = (db.prepare('PRAGMA table_info(invite_campaigns)').all() as Array<{ name: string }>).map(c => c.name)
+    expect(campaignColumns.filter(c => c === 'scheduled_at')).toHaveLength(1)
+    expect(campaignColumns.filter(c => c === 'status_reason')).toHaveLength(1)
     db.close()
   })
 
@@ -379,5 +383,28 @@ describe('数据库迁移', () => {
     const stepIndexCols = (db.prepare('PRAGMA index_info(idx_task_step_results_run_step)').all() as Array<{ name: string }>).map(c => c.name)
     expect(stepIndexCols).toEqual(['run_id', 'step_index'])
     db.close()
+  })
+
+  realDbIt('getCurrentVersion：schema_migrations 不存在（新库）按 0 处理，不抛错（真实 SQLite）', () => {
+    const db = openMemoryDb()
+    // 不建任何表：SELECT 报 "no such table" 必须被识别为"新库"（返回 0），而不是启动失败
+    expect(getCurrentVersion(db as MigrationDb)).toBe(0)
+    db.close()
+  })
+
+  it('getCurrentVersion：非"表不存在"的读失败（如 SQLITE_BUSY）原样上抛，绝不误判成新库', () => {
+    // 模拟杀软/同步盘短暂锁库：prepare() 正常返回语句，get() 抛 SQLITE_BUSY。
+    // 旧行为会把这类瞬时失败 catch 成"新库"（返回 0）→ 从 v1 重放迁移 → 健康库上必炸。
+    const busyError = Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' })
+    const db = {
+      exec: () => undefined,
+      prepare: () => ({
+        all: () => { throw busyError },
+        get: () => { throw busyError },
+        run: () => { throw busyError }
+      }),
+      close: () => undefined
+    }
+    expect(() => getCurrentVersion(db as unknown as MigrationDb)).toThrow(busyError)
   })
 })

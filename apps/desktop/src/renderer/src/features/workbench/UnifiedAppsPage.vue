@@ -16,12 +16,13 @@ import analyticsAppIcon from '../../assets/icons/app-analytics.svg'
 import invoicesAppIcon from '../../assets/icons/app-invoices.svg'
 import taxAppIcon from '../../assets/icons/app-tax.svg'
 import inviteAppIcon from '../../assets/icons/invite-creator.svg'
+import graphicSellAppIcon from '../../assets/icons/settings-square.svg'
 import forwardIcon from '../../assets/generated/ui-icons/forward-gen.png'
 import assistantArt from '../../assets/generated/ai-assistant-generated.png'
 import assistantOpenIcon from '../../assets/generated/ui-icons/assistant-open-gen.png'
 
 type Mode = 'ai' | 'apps'
-type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'image-studio' | 'products' | 'creator-invite'
+type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'image-studio' | 'graphic-sell' | 'products' | 'creator-invite'
 type AppCat = 'store' | 'insight' | 'create' | 'tool'
 type AppCatKey = 'all' | AppCat
 type AppTone = 'violet' | 'blue' | 'cyan' | 'orange' | 'indigo' | 'green' | 'pink' | 'slate' | 'amber'
@@ -81,6 +82,7 @@ const appLinks: AppLink[] = [
   { key: 'invoices', label: '发票中心', description: '汇总待开票记录并导出 CSV，按主体与店铺核对。', note: '待开票 · CSV 导出', cat: 'insight', catLabel: '数据洞察', tone: 'orange', icon: invoicesAppIcon, page: 'invoices' },
   { key: 'tax', label: '涉税信息', description: '查看平台按季度报送的涉税经营数据与主体汇总。', note: '季度报送 · 只读核对', cat: 'insight', catLabel: '数据洞察', tone: 'green', icon: taxAppIcon, page: 'tax' },
   { key: 'image-studio', label: 'AI 生成商品图', description: '模型选择、对话式生图与真实结果预览。', note: '模型选择 · 结果预览', cat: 'create', catLabel: '内容创作', tone: 'pink', icon: aiAppIcon, page: 'image-studio' },
+  { key: 'graphic-sell', label: '图文带货', description: '填商品信息，AI 生成带货笔记文案与多张配图，可编辑、复制与保存。', note: '带货文案 · 多图配图 · 历史', cat: 'create', catLabel: '内容创作', tone: 'orange', icon: graphicSellAppIcon, page: 'graphic-sell' },
   { key: 'settings', label: '设置中心', description: '平台地址、AI 配置、应用锁与数据维护。', note: '地址 · AI · 应用锁', cat: 'tool', catLabel: '系统工具', tone: 'slate', icon: settingsAppIcon, page: 'settings' }
 ]
 
@@ -148,6 +150,7 @@ function iconMask(url: string): Record<string, string> {
       </div>
       <div class="app-card-grid">
         <article class="app-card app-card-action" @click="emit('navigate', 'image-studio')" @keydown.enter="emit('navigate', 'image-studio')" tabindex="0" role="button"><span class="app-card-icon purple"><img :src="aiAppIcon" alt="" /></span><div><h2>AI 生成商品图</h2><p>进入模型选择、对话生图和真实结果预览工作台。</p></div><span class="app-card-arrow"><img :src="forwardIcon" alt="" /></span></article>
+        <article class="app-card app-card-action" data-test="app-graphic-sell" @click="emit('navigate', 'graphic-sell')" @keydown.enter="emit('navigate', 'graphic-sell')" tabindex="0" role="button"><span class="app-card-icon orange"><img :src="graphicSellAppIcon" alt="" /></span><div><h2>图文带货</h2><p>填商品信息，AI 写带货文案并生成多张配图；可编辑、复制、保存。</p></div><span class="app-card-arrow"><img :src="forwardIcon" alt="" /></span></article>
         <article class="app-card app-card-action" data-test="app-publish" @click="emit('navigate', 'products')" @keydown.enter="emit('navigate', 'products')" tabindex="0" role="button"><span class="app-card-icon blue"><img :src="publishAppIcon" alt="" /></span><div><h2>批量发布商品</h2><p>进入商品管理，发起发布预检与批量编排；提交仍需在店铺页面人工确认。</p></div><span class="app-card-arrow"><img :src="forwardIcon" alt="" /></span></article>
         <article class="app-card app-card-action" @click="emit('navigate', 'settings')" @keydown.enter="emit('navigate', 'settings')" tabindex="0" role="button"><span class="app-card-icon violet"><img :src="settingsAppIcon" alt="" /></span><div><h2>AI 模型配置</h2><p>查看文本/生图服务商、模型连接与凭据状态。</p></div><span class="app-card-arrow"><img :src="forwardIcon" alt="" /></span></article>
       </div>

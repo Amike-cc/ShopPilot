@@ -354,95 +354,62 @@ async function main() {
     autoExpanded.rail === false && autoExpanded.width === 320 && autoExpanded.bar === true && autoExpanded.toasts.length > 0,
     JSON.stringify(autoExpanded))
 
-  // 切到任务面板 → UI 确认条 → 点「允许」
-  const tabOn = await cdp.evaluate(`
-    const tabs = [...document.querySelectorAll('.ptab')];
-    const t = tabs.find(b => b.textContent.trim() === '任务');
-    if (t) t.click();
-    return !!t;
-  `)
-  await sleep(700)
-  const uiCards = await cdp.evaluate(`return document.querySelectorAll('.task-card').length;`)
-  check('UI 任务面板渲染（tab 存在 + 任务卡片）', tabOn && uiCards >= 1, 'cards=' + uiCards)
-
-  // 二级页签：任务列表 / 达人邀约——切走再切回，任务列表必须完好
-  const subTabs = await cdp.evaluate(`
-    const inv = document.querySelector('[data-test="task-tab-invite"]');
-    const tl = document.querySelector('[data-test="task-tab-tasks"]');
-    if (!inv || !tl) return { error: 'NO_SUB_TABS' };
-    const before = document.querySelectorAll('.task-card').length;
-    inv.click();
-    await new Promise(r => setTimeout(r, 500));
+  /**
+   * 右栏在 2026-10 的「AI 任务中心移除」后收敛为：收藏 / 下载 / 环境 / 达人邀约。
+   * 任务列表与「任务 → 达人邀约」二级页签已删除（任务管理改由 IPC 与独立页承担），
+   * 这里断言的是**当前 UI 的真实结构**，不再检查已删除的 tab 与 .task-card。
+   */
+  const panelTabs = await cdp.evaluate(`
+    const labels = [...document.querySelectorAll('.ptab')].map(b => b.textContent.trim());
+    const inviteTab = [...document.querySelectorAll('.ptab')].find(b => b.textContent.trim() === '达人邀约');
+    if (inviteTab) inviteTab.click();
+    await new Promise(r => setTimeout(r, 700));
     const panel = document.querySelector('[data-test="invite-panel"]');
     const out = {
-      before,
-      panel: !!panel,
+      labels,
+      hasTaskTab: labels.includes('任务'),
+      legacySubTab: !!(document.querySelector('[data-test="task-tab-invite"]') || document.querySelector('[data-test="task-tab-tasks"]')),
+      legacyTaskCard: document.querySelectorAll('.task-card').length,
+      invitePanel: !!panel,
       startBtn: !!document.querySelector('[data-test="invite-start"]'),
-      text: panel ? panel.textContent.replace(/\\s+/g, ' ').trim().slice(0, 120) : null,
+      text: panel ? panel.textContent.replace(/\s+/g, ' ').trim().slice(0, 160) : null,
       overflowX: panel ? panel.scrollWidth > panel.clientWidth + 2 : null
     };
-    tl.click();
-    await new Promise(r => setTimeout(r, 400));
-    out.after = document.querySelectorAll('.task-card').length;
-    out.newTaskBtnBack = !![...document.querySelectorAll('.right-panel button')].find(b => (b.textContent || '').includes('新建任务'));
-    out.activeRunButtonsDisabled = [...document.querySelectorAll('[data-test="task-run"]')].filter(b => b.disabled).length;
+    const back = [...document.querySelectorAll('.ptab')].find(b => b.textContent.trim() === '收藏');
+    if (back) back.click();
+    await new Promise(r => setTimeout(r, 500));
+    out.invitePanelClosed = !document.querySelector('[data-test="invite-panel"]');
     return out;
   `)
-  check('任务面板有「任务列表 / 达人邀约」二级页签，切走再切回后任务列表完好',
-    subTabs.panel === true && subTabs.after === subTabs.before && subTabs.newTaskBtnBack === true,
-    JSON.stringify(subTabs))
-  check('活动任务运行时禁止重复启动（界面按钮禁用）',
-    subTabs.activeRunButtonsDisabled >= 1, JSON.stringify({ disabled: subTabs.activeRunButtonsDisabled }))
+  check('右栏页签为当前结构（收藏/下载/环境/达人邀约；任务页签与二级页签已移除）',
+    panelTabs.labels.includes('达人邀约') && panelTabs.hasTaskTab === false &&
+    panelTabs.legacySubTab === false && panelTabs.legacyTaskCard === 0,
+    JSON.stringify({ labels: panelTabs.labels, legacySubTab: panelTabs.legacySubTab }))
+  check('切到「达人邀约」页签渲染配置面板（切走后不残留、无横向溢出）',
+    panelTabs.invitePanel === true && panelTabs.overflowX === false && panelTabs.invitePanelClosed === true,
+    JSON.stringify({ panel: panelTabs.invitePanel, overflowX: panelTabs.overflowX, closed: panelTabs.invitePanelClosed }))
   // 当前店铺是拼多多 → 面板必须"明确拒绝"而不是猜测式实现
   check('达人邀约：店铺平台未实现时明确拒绝（如实列出已支持平台，且不给「开始邀约」）',
-    /暂不支持/.test(subTabs.text || '') && /抖店/.test(subTabs.text || '') && subTabs.startBtn === false,
-    JSON.stringify(subTabs.text))
+    /暂不支持/.test(panelTabs.text || '') && /抖店/.test(panelTabs.text || '') && panelTabs.startBtn === false,
+    JSON.stringify(panelTabs.text))
 
   // 换一个抖店店铺 → 面板应给出完整可配置表单，并守住"空话术不得启动"
 
-  // 新建任务对话框布局：当前版本只允许从已实现流程中创建任务，
-  // 不再暴露底层步骤编辑器；这里验证实际对话框的流程选择、阻断说明、
-  // 操作按钮和横向布局，避免验收脚本继续检查已经删除的旧编辑器。
-  const dialogLayout = await cdp.evaluate(`
-    const newBtn = [...document.querySelectorAll('.right-panel button')].find(b => (b.textContent || '').includes('新建任务'));
-    if (!newBtn) return { error: '未找到新建任务按钮' };
-    newBtn.click();
-    await new Promise(r => setTimeout(r, 700));
-    const modal = document.querySelector('[data-test="task-dialog"] .modal');
-    if (!modal) return { error: '对话框未出现' };
-    const dRect = modal.getBoundingClientRect();
-    const cancel = modal.querySelector('[data-test="task-cancel"]');
-    const submit = modal.querySelector('[data-test="task-submit"]');
-    const flow = modal.querySelector('[data-test="task-flow"]');
-    const blocked = modal.querySelector('[data-test="task-flow-blocked"]');
-    const rect = el => el ? el.getBoundingClientRect() : null;
-    const cr = rect(cancel), sr = rect(submit);
-    const out = {
-      overflowX: modal.scrollWidth > modal.clientWidth + 1,
-      dialogInsideViewport: dRect.width > 0 && dRect.height > 0 && dRect.right <= window.innerWidth + 1 && dRect.bottom <= window.innerHeight + 1,
-      hasFlow: !!flow,
-      hasBlockedHint: !!blocked,
-      hasSummary: !!modal.querySelector('[data-test="task-flow-summary"]'),
-      cancelVisible: !!cr && cr.width > 0 && cr.height > 0,
-      submitVisible: !!sr && sr.width > 0 && sr.height > 0,
-      cancelInsideDialog: !!cr && cr.left >= dRect.left - 1 && cr.right <= dRect.right + 1,
-      submitInsideDialog: !!sr && sr.left >= dRect.left - 1 && sr.right <= dRect.right + 1
+  /**
+   * 新建自定义任务的对话框随「AI 任务中心移除」一起下线：右栏不再提供「新建任务」与
+   * `task-dialog`。这里断言"不在右栏伪造入口"；任务创建链路仍由本套件前面的
+   * `task.create` / `task.run` 用例覆盖（引擎侧未受影响）。
+   */
+  const legacyTaskUi = await cdp.evaluate(`
+    const right = document.querySelector('[data-test="right-panel"]');
+    const texts = right ? [...right.querySelectorAll('button')].map(b => (b.textContent || '').trim()) : [];
+    return {
+      hasNewTaskButton: texts.some(t => t.includes('新建任务')),
+      hasDialog: !!document.querySelector('[data-test="task-dialog"]')
     };
-    if (cancel) cancel.click();
-    await new Promise(r => setTimeout(r, 400));
-    out.closed = !document.querySelector('[data-test="task-dialog"]');
-    return out;
   `)
-  check('新建任务对话框无横向溢出（步骤行不撑爆）',
-    dialogLayout.error === undefined && dialogLayout.overflowX === false && dialogLayout.dialogInsideViewport === true, JSON.stringify(dialogLayout))
-  check('新建任务对话框展示当前流程选择与不可用原因',
-    dialogLayout.hasFlow === true && dialogLayout.hasBlockedHint === true && dialogLayout.hasSummary === false,
-    JSON.stringify({ flow: dialogLayout.hasFlow, blocked: dialogLayout.hasBlockedHint, summary: dialogLayout.hasSummary }))
-  check('新建任务对话框操作按钮在可视区内',
-    dialogLayout.cancelVisible === true && dialogLayout.submitVisible === true &&
-    dialogLayout.cancelInsideDialog === true && dialogLayout.submitInsideDialog === true,
-    JSON.stringify({ cancel: dialogLayout.cancelVisible, submit: dialogLayout.submitVisible, inside: dialogLayout.cancelInsideDialog && dialogLayout.submitInsideDialog }))
-  check('对话框关闭正常（取消按钮生效，不残留遮罩）', dialogLayout.closed === true)
+  check('右栏不再提供已下线的任务创建入口（不伪造对话框）',
+    legacyTaskUi.hasNewTaskButton === false && legacyTaskUi.hasDialog === false, JSON.stringify(legacyTaskUi))
 
   // 确认门禁必须跨面板可见：曾写在"任务"面板分支内，用户切到其他面板时任务干等（看起来像卡住）
   const crossPanel = await cdp.evaluate(`
@@ -452,7 +419,7 @@ async function main() {
     const bar = document.querySelector('.confirm-bar');
     const r = bar ? bar.getBoundingClientRect() : null;
     const visible = !!r && r.width > 0 && r.height > 0 && r.top >= 0 && r.bottom <= window.innerHeight + 1;
-    const back = [...document.querySelectorAll('.ptab')].find(b => b.textContent.trim() === '任务');
+    const back = [...document.querySelectorAll('.ptab')].find(b => b.textContent.trim() === '收藏');
     back.click();
     await new Promise(r => setTimeout(r, 600));
     return { visibleOnEnv: visible, stillThere: !!document.querySelector('.confirm-bar') };
@@ -976,18 +943,15 @@ async function main() {
       card.querySelector('.store-action').click();
       await new Promise(r => setTimeout(r, 3200));
     }
-    // 右栏可能是收起态（只剩窄轨）：先经窄轨的"任务"图标展开，否则没有页签可点
+    // 右栏可能是收起态（只剩窄轨）：先经窄轨的「达人邀约」图标展开，否则没有页签可点
     if (document.querySelector('.panel-rail')) {
-      const rail = document.querySelector('[data-test="rail-tasks"]');
+      const rail = document.querySelector('[data-test="rail-invite"]');
       if (rail) rail.click();
       await new Promise(r => setTimeout(r, 800));
     }
-    const t = [...document.querySelectorAll('.ptab')].find(b => b.textContent.trim() === '任务');
+    const t = [...document.querySelectorAll('.ptab')].find(b => b.textContent.trim() === '达人邀约');
     if (t) t.click();
     await new Promise(r => setTimeout(r, 700));
-    const inv = document.querySelector('[data-test="task-tab-invite"]');
-    if (inv) inv.click();
-    await new Promise(r => setTimeout(r, 600));
     const panel = document.querySelector('[data-test="invite-panel"]');
     const btn = document.querySelector('[data-test="invite-start"]');
     const out = {

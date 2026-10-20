@@ -3,18 +3,19 @@
  * 2026-10-19 P1 重构：由 task-runner.ts 等价搬迁；导出名不变，task-runner.ts 只做 re-export。
  */
 
-import { EVENT_CHANNELS } from '@shared/contracts/ipc'
-import type { TaskScheduledFiredEvent } from '@shared/schemas/task'
-import * as TaskStore from './task-store'
-import { NON_RESUMABLE_TYPES } from './task-store'
-import { writeAudit } from '../services/audit-logger'
-import { logMain } from '../services/logger'
-import { isAppLocked } from '../services/security-manager'
-import { emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, borrowStorePage, openStoreBrowser } from '../browser/window-manager'
-import { getDatabase } from '../db/database'
-import { execute } from './task-runner-execute'
-import { borrowedPageReleases, findActiveRunForTask, forgetRun, transition } from './task-runner-lifecycle'
-import { failedHandles, getCurrent, getKeepAliveTimer, live, queue, setCurrent, setKeepAliveTimer } from './task-runner-registry'
+import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import type { TaskScheduledFiredEvent } from '@shared/schemas/task'
+import * as TaskStore from './task-store'
+import { NON_RESUMABLE_TYPES } from './task-store'
+import { writeAudit } from '../services/audit-logger'
+import { logMain } from '../services/logger'
+import { isAppLocked } from '../services/security-manager'
+import { emitToRenderer, getOpenStoreIds, onStoreBrowserOpened, borrowStorePage, openStoreBrowser } from '../browser/window-manager'
+import { getTaskKindDefinition } from './task-kinds'
+import { getDatabase } from '../db/database'
+import { execute } from './task-runner-execute'
+import { borrowedPageReleases, findActiveRunForTask, forgetRun, transition } from './task-runner-lifecycle'
+import { failedHandles, getCurrent, getKeepAliveTimer, live, queue, setCurrent, setKeepAliveTimer } from './task-runner-registry'
 import type { RunHandle } from './task-runner-registry'
 
 // ---------- 入队与控制 ----------
@@ -28,7 +29,16 @@ export function enqueueRun(taskId: string, opts: { reason: string; storeId?: str
   }
   const storeId = opts.storeId || task.storeScope
   if (!storeId) throw new Error('TASK_BAD_STATE: 任务未绑定店铺，请先在任务中指定店铺或运行时选择')
+  /**
+   * 达人邀约不占用户的店铺浏览器：入队前先把**隐藏后台页**建好。
+   * 队列泵的放行条件是"这家店已打开"（getOpenStoreIds），而后台页会把店铺登记进
+   * browserState——所以即使工作台停在欢迎页、用户没开这家店，邀约也能立刻开跑。
+   */
+  // prepare（为邀约等建后台隐藏页）放在 createRun 成功之后：createRun 若抛（DB 忙/IO 错），
+  // 先前已建的隐藏 BrowserWindow 没有任何释放路径，会泄漏一个常驻渲染进程——先关掉 DB
+  // 失败窗口，再动窗口（2026-10-21 审查 P2）。
   const run = TaskStore.createRun(taskId, storeId, opts.reason)
+  getTaskKindDefinition(task.kind)?.prepare?.(storeId)
   const handle: RunHandle = {
     runId: run.id, taskId, taskName: task.name, storeId,
     taskKind: task.kind || 'custom', campaignId: task.campaignId || null,
@@ -52,16 +62,30 @@ export function enqueueRun(taskId: string, opts: { reason: string; storeId?: str
   return { runId: run.id, storeId }
 }
 
+/**
+ * 恢复/重试前确保 run 有页面可用。
+ *
+ * 普通任务沿用"打开并显示店铺浏览器"（用户要看着页面继续点）；
+ * 达人邀约走后台隐藏页——用户点"继续/重试"时界面不该跳到店铺浏览器。
+ */
+function ensurePageForRun(run: RunHandle): void {
+  if (getOpenStoreIds().includes(run.storeId)) return
+  const kind = getTaskKindDefinition(run.taskKind)
+  if (kind?.surface === 'background') {
+    kind.prepare?.(run.storeId)
+    return
+  }
+  openStoreBrowser(run.storeId, { display: true, source: 'main' })
+}
+
 /** 从暂停恢复（paused -> queued -> running）：从当前步骤继续 */
 export function resumeRun(runId: string): void {
   const run = live.get(runId)
   if (!run) throw new Error('TASK_BAD_STATE: 该运行属于上一进程会话，无法原地恢复；请重新运行任务')
   if (run.status !== 'paused') throw new Error(`TASK_BAD_STATE: ${run.status} 状态不可恢复`)
-  // 暂停期间店铺可能已进入冷休眠。恢复是用户明确发起的动作，先恢复店铺浏览器
-  // 并显示目标店铺，再入队；否则队列泵会一直等待一个已被生命周期回收的店铺。
-  if (!getOpenStoreIds().includes(run.storeId)) {
-    openStoreBrowser(run.storeId, { display: true, source: 'main' })
-  }
+  // 暂停期间店铺可能已进入冷休眠。恢复是用户明确发起的动作，先恢复页面再入队；
+  // 达人邀约恢复的是后台隐藏页，不把界面切到店铺浏览器。
+  ensurePageForRun(run)
   run.resumeKind = 'continue'
   run.pauseRequested = false
   run.lastStopReason = null
@@ -86,11 +110,9 @@ export function retryRunFromFailed(runId: string): void {
   if (step && NON_RESUMABLE_TYPES.has(step.type)) {
     throw new Error('TASK_BAD_STATE: 失败步骤为副作用步骤（草稿填充/人工确认），按规范不进入可恢复重试范围，请重新运行任务')
   }
-  // 冷休眠可能已经关闭了该店铺。用户明确点击重试时恢复店铺并显示目标页，
-  // 否则 run 会进入 queued 后一直等待“店铺已打开”。
-  if (!getOpenStoreIds().includes(run.storeId)) {
-    openStoreBrowser(run.storeId, { display: true, source: 'main' })
-  }
+  // 冷休眠可能已经关闭了该店铺。用户明确点击重试时恢复页面，否则 run 会进入 queued
+  // 后一直等待"店铺已打开"。达人邀约恢复的是后台隐藏页，界面不跳转。
+  ensurePageForRun(run)
   run.skipDone = true
   run.resumeKind = 'from-failed'
   run.lastStopReason = null

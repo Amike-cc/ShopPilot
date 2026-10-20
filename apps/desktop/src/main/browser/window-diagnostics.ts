@@ -8,6 +8,7 @@ import { StorePageLeases } from './page-lease'
 import { VIEW_PROBE_TIMEOUT_MARKER, classifyProbeFailure, classifyProbeState, formatViewUrl } from '@shared/view-state'
 import type { BrowserViewState } from '@shared/view-state'
 import { getActiveDownloadStoreIds } from './download-manager'
+import { getBackgroundPageSnapshots } from './background-page'
 import { displayedStoreId, storeLifecycleBlockReasons } from './window-browser-core'
 import { STORE_WARM_CACHE_LIMIT, browserStates, pageLeases, standaloneWindows, storeLifecycle, taskAwakeStores } from './window-state'
 import type { Tab } from './window-state'
@@ -127,6 +128,8 @@ export async function getMemoryDiagnostics(): Promise<{
   views: ViewProbe[]
   /** 后台采集借用的页面：谁还开着、是借用中还是用户接手 */
   pageLeases: ReturnType<StorePageLeases['snapshot']>
+  /** 后台工作页（邀约等）：用途、存活时长；为空说明已释放 */
+  backgroundPages: ReturnType<typeof getBackgroundPageSnapshots>
   /** 仍在下载的店铺，仅用于诊断和回收门禁，不包含文件信息。 */
   activeDownloads: string[]
   totals: { openStores: number; tabs: number; attachedGuests: number; standaloneWindows: number; webContents: number }
@@ -174,6 +177,7 @@ export async function getMemoryDiagnostics(): Promise<{
     views,
     /** 后台采集借用的页面：谁还开着、是借用中还是用户接手（"占用为什么没降下来"看这里） */
     pageLeases: pageLeases.snapshot(),
+    backgroundPages: getBackgroundPageSnapshots(),
     activeDownloads: getActiveDownloadStoreIds(),
     totals: { openStores: storeRows.length, tabs, attachedGuests, standaloneWindows: standaloneCount, webContents: webContents.getAllWebContents().length }
   }

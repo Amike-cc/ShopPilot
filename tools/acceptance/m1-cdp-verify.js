@@ -686,11 +686,12 @@ async function main() {
     JSON.stringify({ before: viewExpanded.innerWidth, after: viewCollapsed.innerWidth }))
   check('收起状态写入设置 ui.rightPanelCollapsed=true', pCollapsed.setting === true, String(pCollapsed.setting))
 
-  await cdp.evaluate(`document.querySelector('[data-test="rail-tasks"]').click(); return true;`)
+  // 2026-10「AI 任务中心移除」后，窄轨里对应的是「达人邀约」；断言当前结构与文案。
+  await cdp.evaluate(`document.querySelector('[data-test="rail-invite"]').click(); return true;`)
   await sleep(1000)
   const pRailTasks = await panelRect()
-  check('点窄轨图标 → 展开并切到该面板（任务）',
-    pRailTasks.panel === 320 && pRailTasks.rail === false && pRailTasks.active === '任务', JSON.stringify(pRailTasks))
+  check('点窄轨图标 → 展开并切到该面板（达人邀约）',
+    pRailTasks.panel === 320 && pRailTasks.rail === false && pRailTasks.active === '达人邀约', JSON.stringify(pRailTasks))
 
   await cdp.evaluate(`
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'B', ctrlKey: true, shiftKey: true, bubbles: true }));
@@ -1169,12 +1170,10 @@ async function main() {
     }
     const expand = document.querySelector('[data-test="panel-expand"]');
     if (expand) { expand.click(); await new Promise(r => setTimeout(r, 600)); }
-    const ptab = [...document.querySelectorAll('.ptab')].find(b => b.textContent.trim() === '任务');
+    // 右栏页签：达人邀约是顶层页签（任务页签与其二级页签已于 2026-10 移除）
+    const ptab = [...document.querySelectorAll('.ptab')].find(b => b.textContent.trim() === '达人邀约');
     if (ptab) ptab.click();
     await new Promise(r => setTimeout(r, 700));
-    const invTab = document.querySelector('[data-test="task-tab-invite"]');
-    if (invTab) invTab.click();
-    await new Promise(r => setTimeout(r, 500));
     const panelEl = document.querySelector('[data-test="invite-panel"]');
     const scriptBox = document.querySelector('[data-test="invite-script"]');
     const startBtn = document.querySelector('[data-test="invite-start"]');

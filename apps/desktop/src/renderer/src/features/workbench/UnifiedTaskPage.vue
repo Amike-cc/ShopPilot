@@ -57,9 +57,9 @@ const draftIssues = computed<CustomStepIssue[]>(() => validateCustomSteps(draftS
  * 采集前也要靠它复用同一个任务。所以在**展示与统计**这一层过滤，不动数据源。
  * 判定用 shared 的 isBackgroundCollectTask（两个前缀的单一事实来源）。
  */
-const visibleTasks = computed(() => ws.tasks.filter((task: any) => !isBackgroundCollectTask(task)))
-const filteredTasks = computed(() => visibleTasks.value.filter((task: any) => { const status = effectiveStatus(task); return (!query.value.trim() || String(task.name || '').toLowerCase().includes(query.value.trim().toLowerCase())) && (!storeFilter.value || task.storeScope === storeFilter.value) && (!statusFilter.value || status === statusFilter.value) }))
-const activeTasks = computed(() => visibleTasks.value.filter((task: any) => isActive(task)).length)
+const visibleTasks = computed(() => ws.tasks.filter(task => !isBackgroundCollectTask(task)))
+const filteredTasks = computed(() => visibleTasks.value.filter(task => { const status = effectiveStatus(task); return (!query.value.trim() || String(task.name || '').toLowerCase().includes(query.value.trim().toLowerCase())) && (!storeFilter.value || task.storeScope === storeFilter.value) && (!statusFilter.value || status === statusFilter.value) }))
+const activeTasks = computed(() => visibleTasks.value.filter(task => isActive(task)).length)
 const waitingTasks = computed(() => visibleTasks.value.filter((task: any) => effectiveStatus(task) === 'waiting_confirmation').length)
 const completedTasks = computed(() => visibleTasks.value.filter((task: any) => effectiveStatus(task) === 'succeeded').length)
 const canSubmit = computed(() => !!draftStore.value && draftSteps.value.length > 0 && !hasBlockingIssues(draftIssues.value) && !submitting.value && (!draftEveryMin.value || (Number.isInteger(Number(draftEveryMin.value)) && Number(draftEveryMin.value) >= 1 && Number(draftEveryMin.value) <= 43200)))

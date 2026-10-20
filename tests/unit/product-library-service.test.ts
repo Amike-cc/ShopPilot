@@ -77,6 +77,38 @@ describe('本地商品库：另存为（本地商品从哪来）', () => {
     db.close()
   })
 
+  realIt('详情快照优先于列表字段，并完整带入扩展字段、SKU 条码和多规格', () => {
+    const { db, repo, service } = setup()
+    seedLink(db, 'l1', '10003', '列表标题', 100, 1, ['https://example.com/thumb.jpg'])
+    db.prepare(`UPDATE product_platform_links SET platform_detail_json = ?, detail_collected_at = ? WHERE id = 'l1'`).run(JSON.stringify({
+      title: '详情标题', subtitle: '详情副标题', description: '详情描述', brand: '详情品牌',
+      categoryPath: '服饰/上衣', barcode: '69000000',
+      attributes: [{ name: '材质', value: '棉' }],
+      fields: [{ label: '产地', value: '中国', kind: 'text' }],
+      specNames: ['颜色', '尺码'],
+      imageUrls: ['https://example.com/cover.webp'],
+      skus: [
+        { platformSkuId: 'R-S', skuCode: 'R-S', spec: [{ name: '颜色', value: '红' }, { name: '尺码', value: 'S' }], priceMinor: 1290, stock: 4, barcode: '69000001', imageUrl: null, state: 'active' }
+      ],
+      collectedAt: 123, missingFields: []
+    }), 123)
+
+    const result = service.saveAsLocal({ platform: PLATFORM, storeId: STORE, platformProductId: '10003' })
+    const product = repo.getProduct(result.productId)!
+    expect(product.draft.title).toBe('详情标题')
+    expect(product.draft.subtitle).toBe('详情副标题')
+    expect(product.draft.description).toBe('详情描述')
+    expect(product.draft.brand).toBe('详情品牌')
+    expect(product.draft.localCategory).toBe('服饰/上衣')
+    expect(product.draft.media[0]).toMatchObject({ remoteUrl: 'https://example.com/cover.webp' })
+    expect(product.draft.variants[0]).toMatchObject({
+      skuCode: 'R-S', barcode: '69000001', priceMinor: 1290, stock: 4,
+      spec: [{ name: '颜色', value: '红' }, { name: '尺码', value: 'S' }]
+    })
+    expect(product.draft.details).toMatchObject({ barcode: '69000000', attributes: [{ name: '材质', value: '棉' }] })
+    db.close()
+  })
+
   realIt('另存为不存在的平台商品 → 明确抛 LINK_NOT_FOUND（不静默建空商品）', () => {
     const { db, service } = setup()
     expect(() => service.saveAsLocal({ platform: PLATFORM, storeId: STORE, platformProductId: '不存在' })).toThrow('LINK_NOT_FOUND')

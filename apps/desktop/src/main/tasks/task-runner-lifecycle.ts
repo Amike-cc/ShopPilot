@@ -8,8 +8,8 @@ import type { TaskProgressEvent } from '@shared/schemas/task'
 import { assertRunTransition, isActiveRunStatus, isTerminalRunStatus, progressPhaseForStatus } from './run-state'
 import { classifyTaskError } from './error-classifier'
 import { logMain } from '../services/logger'
-import { recordInviteEvent } from '../services/invite-events'
 import { emitToRenderer, setStoreTaskActivity } from '../browser/window-manager'
+import { getTaskKindDefinition } from './task-kinds'
 import * as TaskStore from './task-store'
 import { FAILED_HANDLE_KEEP, failedHandles, live } from './task-runner-registry'
 import type { RunHandle } from './task-runner-registry'
@@ -68,18 +68,15 @@ export function transition(run: RunHandle, to: string, reason: string): void {
   if (isTerminalRunStatus(to)) {
     setStoreTaskActivity(run.storeId, false)
     releaseBorrowedPage(run.runId)
-  }
-
-  if (run.taskKind === 'creator_invite' && isTerminalRunStatus(to)) {
-    try {
-      recordInviteEvent({
-        storeId: run.storeId,
-        campaignId: run.campaignId,
-        runId: run.runId,
-        type: `run.${to}`,
-        payload: { reason: String(reason || '').slice(0, 200), completedRounds: run.lastCompletedRounds }
-      })
-    } catch { /* 审计失败不影响状态机 */ }
+    /**
+     * 后台执行面的页面只服务这一轮：成功/失败/取消后释放，避免隐藏窗口常驻吃内存。
+     * paused 不在此列（上面 isTerminalRunStatus 为 false）——继续跑还要用同一张页面。
+     */
+    const kind = getTaskKindDefinition(run.taskKind)
+    try { kind?.release?.(run.storeId) } catch (error) {
+      logMain('warn', `[task-kind] 释放执行面失败 kind=${run.taskKind} store=${run.storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
+    }
+    try { kind?.onTerminal?.(run, to, reason) } catch { /* 业务钩子失败不影响状态机 */ }
   }
 
   if (to === 'failed') {

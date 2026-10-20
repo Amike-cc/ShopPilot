@@ -22,17 +22,19 @@ export const readbackCache: { current: null | { itemId: string; suggestions: unk
  *   · 回收站可见可恢复（软删可逆；不自动重挂平台归并——D2）。
  * 红线不回退：发布人工提交、归并人工确认、抓不到如实说、面板间不堆叠语义变化。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { hasProductProfile } from '@shared/constants/product'
 import { productStatusLabel } from '@shared/product-rules'
 import { PRODUCT_BATCH_LIMITS } from '@shared/product-batch'
 import { storeStatusLabel } from '@shared/enums/store-status'
+import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import type { PlatformProductStatus } from '@shared/contracts/platform-product'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import { useWorkspaceStore } from '../../stores/workspace'
 import ProductPager from '../products/ProductPager.vue'
 import ProductEditorDrawer from '../products/ProductEditorDrawer.vue'
 import { canUnmerge, unmergeConfirmText, unmergeErrorText } from './product-link-actions'
+import { buildUploadTargetOptions } from './product-upload-targets'
 import storeManageIcon from '../../assets/generated/ui-icons/app-store-gen.png'
 import syncIcon from '../../assets/generated/ui-icons/sync-gen.png'
 import productSyncIcon from '../../assets/generated/ui-icons/product-sync-sheet-gen.png'
@@ -81,6 +83,7 @@ interface ProductRow {
   platformUpdatedAt: number | null
   productId: string | null
   productTitle: string | null
+  detailCollectedAt?: number | null
 }
 interface RunRow { storeId: string; platform: string; total: number; orphan: number; latestRun: { status: string; reasonCode: string | null; startedAt: number; safeMessage: string | null; hasMore: number; insertedCount: number; updatedCount: number; missingCount: number } | null }
 
@@ -90,6 +93,21 @@ const linkLoading = ref(false)
 const orphanTotal = ref(0)
 const runRows = ref<RunRow[]>([])
 const syncingStoreId = ref('')
+const fullSyncingStoreId = ref('')
+/** 全量详情阶段实时进度（主进程事件推送；只有计数，不携带商品正文）。 */
+interface FullSyncProgress { storeId: string; total: number; done: number; succeeded: number; failed: number; skipped: number; incomplete: number; canceled?: boolean }
+const fullSyncProgress = ref<FullSyncProgress | null>(null)
+function onFullSyncProgress(payload: FullSyncProgress): void {
+  if (!payload || typeof payload.storeId !== 'string') return
+  fullSyncProgress.value = payload
+}
+onMounted(() => { window.shopilot.on(EVENT_CHANNELS.PRODUCT_SYNC_FULL_PROGRESS, onFullSyncProgress) })
+onUnmounted(() => { window.shopilot.off(EVENT_CHANNELS.PRODUCT_SYNC_FULL_PROGRESS, onFullSyncProgress) })
+async function cancelFullSync(storeId: string): Promise<void> {
+  const result = await window.shopilot.products.syncFullCancel({ storeId })
+  if (result.ok && result.data?.requested) ws.toast('已请求中断，当前这条详情完成后停止', 'info')
+  else ws.toast('当前没有进行中的全量抓取', 'info')
+}
 
 const linkQuery = ref({
   storeId: '', platform: '', platformStatus: '', onlyOrphan: false, keyword: '',
@@ -132,7 +150,7 @@ async function loadLinks(): Promise<void> {
 interface LocalRow {
   id: string; title: string; status: string; updatedAt: number; createdAt: number
   variantCount: number; priceMin: number | null; priceMax: number | null; stockTotal: number | null
-  coverState: string | null; coverLocalPath: string | null; linkCount: number; platforms: string[]
+  coverState: string | null; coverLocalPath: string | null; linkCount: number; platforms: string[]; sourceStoreIds?: string[]
 }
 
 const localRows = ref<LocalRow[]>([])
@@ -327,6 +345,26 @@ async function syncOne(storeId: string): Promise<void> {
   }
 }
 async function syncStore(store: { id: string }): Promise<void> { await syncOne(store.id) }
+async function syncFullStore(store: { id: string }): Promise<void> {
+  fullSyncingStoreId.value = store.id
+  fullSyncProgress.value = null
+  try {
+    const result = await window.shopilot.products.syncFull({ storeId: store.id, trigger: 'manual', maxPages: 200, maxProducts: 5000, timeoutMs: 600_000 })
+    if (!result.ok) { ws.toast('全量抓取失败：' + result.error.message, 'error'); return }
+    const data = result.data as { status?: string; safeMessage?: string; complete?: boolean; detailFailures?: Array<{ platformProductId: string; safeMessage: string }> } | undefined
+    const message = data?.safeMessage || (data?.complete ? '全量商品资料已完成' : '全量抓取未完成')
+    ws.toast(message, data?.complete ? 'success' : 'error')
+    if (data?.detailFailures?.length) {
+      ws.toast(`有 ${data.detailFailures.length} 条详情未完成，已保留失败原因，可单独重试`, 'error')
+    }
+    await Promise.all([loadLinks(), loadLocal()])
+  } catch (error) {
+    ws.toast('全量抓取失败：' + String((error as Error)?.message || error), 'error')
+  } finally {
+    fullSyncingStoreId.value = ''
+    fullSyncProgress.value = null
+  }
+}
 /** 同步全部：**逐店串行**（与方案 §5.4 的"单店串行、跨店 2 并发"一致；界面入口先做串行，稳且可解释）。 */
 async function syncAll(): Promise<void> {
   for (const store of ws.stores) {
@@ -412,7 +450,9 @@ interface ImportPlanData {
   conflicts: Array<{ rowNumber: number; title: string; reason: string }>
 }
 
-/** 多选（跨页保留，上限 500 = PRODUCT_BATCH_LIMITS.select）。 */
+/** 多选（上限 500 = PRODUCT_BATCH_LIMITS.select）。注意：切页/刷新列表时 localRows 整体替换，
+ * 下方 watch 会把不在当前页里的勾选剪掉——所以 selectedIds 天然只含当前页的行，
+ * 上传面板与批量操作用它取行、传参都是同一口径（2026-10-21 审查 P2-7 复核结论）。 */
 const selectedIds = ref<Set<string>>(new Set())
 const allPageSelected = computed(() => localRows.value.length > 0 && localRows.value.every(row => selectedIds.value.has(row.id)))
 function toggleSelect(id: string): void {
@@ -573,8 +613,9 @@ async function collectDetail(row: ProductRow): Promise<void> {
   try {
     const result = await window.shopilot.products.detail.collect({ storeId: row.storeId, platformProductId: row.platformProductId })
     if (!result.ok) { ws.toast('拉取详情失败：' + result.error.message, 'error'); return }
-    const data = result.data as { status: string; safeMessage: string; imageCount: number; specNames: string[] } | undefined
-    const ok = data?.status === 'SUCCEEDED'
+    const data = result.data as { status: string; safeMessage: string; imageCount: number; specNames: string[]; missingFields?: string[] } | undefined
+    // 详情快照可以部分保存，但有 missingFields 就不能在界面上显示成“完整成功”。
+    const ok = data?.status === 'SUCCEEDED' && !(data.missingFields?.length)
     ws.toast(data?.safeMessage || (ok ? '已拉取详情' : '没能拉到详情'), ok ? 'success' : 'error')
     await loadLinks()
   } finally {
@@ -665,6 +706,27 @@ const readback = ref<ReadbackState | null>(readbackCache.current as ReadbackStat
 watch(readback, value => { readbackCache.current = value as never })
 const batch = ref<BatchState | null>(null)
 const mediaQueue = ref<MediaQueueState | null>(null)
+const uploadPanelOpen = ref(false)
+const uploadTargetIds = ref<string[]>([])
+
+const uploadSelectionRows = computed(() => {
+  const rows = selectedIds.value.size
+    ? localRows.value.filter(row => selectedIds.value.has(row.id))
+    : localRows.value.slice(0, 20)
+  return rows
+})
+const uploadTargetOptions = computed(() => buildUploadTargetOptions(ws.stores, uploadSelectionRows.value))
+const uploadTargets = computed(() => uploadTargetOptions.value.filter(store => store.canReceive))
+function toggleUploadTarget(storeId: string): void {
+  uploadTargetIds.value = uploadTargetIds.value.includes(storeId)
+    ? uploadTargetIds.value.filter(id => id !== storeId)
+    : [...uploadTargetIds.value, storeId]
+}
+function openUploadPanel(): void {
+  uploadTargetIds.value = uploadTargets.value.map(store => store.id)
+  uploadPanelOpen.value = true
+}
+function closeUploadPanel(): void { uploadPanelOpen.value = false }
 
 /**
  * 发布预检（M3）：算清楚"能不能发、要让人看什么、会不会重复发"。
@@ -805,21 +867,34 @@ function fieldActionLabel(action: string): string {
  * 之后按"当前店铺"逐店往前走 —— 一次只打开一个店铺。
  */
 async function createBatch(): Promise<void> {
-  const online = ws.stores.filter(store => store.status === 'online')
+  const online = uploadTargets.value
   if (!localRows.value.length) { ws.toast('还没有本地商品', 'error'); return }
   if (!online.length) { ws.toast('没有在线店铺，先登录要发布的店铺', 'error'); return }
+  const productIds = selectedIds.value.size ? [...selectedIds.value] : localRows.value.slice(0, 20).map(row => row.id)
+  const allowedTargetIds = new Set(online.map(store => store.id))
+  const targetStoreIds = (uploadTargetIds.value.length ? uploadTargetIds.value : online.map(store => store.id))
+    .filter(storeId => allowedTargetIds.has(storeId))
+  if (!productIds.length) { ws.toast('请先选择要上传的商品', 'error'); return }
+  if (!targetStoreIds.length) { ws.toast('请选择至少一个目标店铺', 'error'); return }
   busy.value = true
   try {
     const result = await window.shopilot.products.publish.batchCreate({
-      productIds: localRows.value.slice(0, 20).map(row => row.id),
-      storeIds: online.slice(0, 20).map(store => store.id)
+      productIds: productIds.slice(0, 20),
+      storeIds: targetStoreIds.slice(0, 20)
     })
     if (!result.ok) { ws.toast('建批量失败：' + result.error.message, 'error'); return }
     const data = result.data as { ok: boolean; batchId: string | null; errors: string[]; progress: BatchProgress } | undefined
     if (!data?.ok) { ws.toast('批量计划被拒绝：' + (data?.errors || []).join('；'), 'error'); return }
     batch.value = { batchId: data.batchId!, progress: data.progress, items: [] }
-    ws.toast('已建批量：' + data.progress.summary, 'success')
+    uploadPanelOpen.value = false
+    ws.toast(`已建立跨店上传计划：${data.progress.summary}；首项会自动打开并预填`, 'success')
     await loadBatch()
+    // 自动启动首个目标项：只导航和预填，不提交。
+    const first = batch.value.items.find(item => item.status === 'pending')
+    if (first) {
+      const opened = await window.shopilot.products.publish.open({ itemId: first.itemId, fill: true })
+      if (!opened.ok) ws.toast('自动打开首个目标店铺失败：' + opened.error.message, 'error')
+    }
   } finally {
     busy.value = false
   }
@@ -1037,15 +1112,21 @@ onMounted(() => { void loadLinks(); void loadLocal() })
       </div>
     </header>
 
-    <div class="unified-alert info" v-if="!hasAnyMeasuredPlatform">
+    <div class="unified-alert info" v-if="ws.stores.length && !hasAnyMeasuredPlatform">
       <strong>暂无已实测的商品数据源</strong>
       <span>四个平台里还没有实测到商品列表的档案，因此暂不能同步。这不是"没有商品"，是"这个平台还没实测"。</span>
     </div>
 
     <div v-if="!ws.ready" class="unified-state"><span class="loader"></span>正在读取店铺…</div>
-    <div v-else-if="!ws.stores.length" class="unified-empty">暂无店铺<button type="button" class="inline-link" @click="emit('navigate', 'stores')">添加店铺</button></div>
+    <div v-else-if="!ws.stores.length" class="unified-alert info" data-test="product-no-stores">
+      <strong>还没有店铺</strong>
+      <span>本地商品仍可继续创建和维护；添加并登录店铺后，才能同步平台商品或进行跨店上传。</span>
+      <button type="button" class="inline-link" @click="emit('navigate', 'stores')">添加店铺</button>
+    </div>
 
-    <template v-else>
+    <!-- 加载中与主 UI 互斥（加载态未就绪时数据是残的）；无店铺时提示条与主 UI 共存是有意的——
+         空态文案明说「本地商品仍可继续创建和维护」（2026-10-21 审查 P2：原无条件 template 与加载态同帧渲染） -->
+    <template v-if="ws.ready">
       <div class="product-summary-bar" data-test="product-summary">
         <button type="button" class="summary-chip" :class="{ active: tab === 'local' }" @click="switchTab('local')">本地商品 <b>{{ localTotal }}</b></button>
         <button type="button" class="summary-chip" :class="{ active: tab === 'platform' }" @click="switchTab('platform')">平台商品 <b>{{ linkTotal }}</b></button>
@@ -1237,14 +1318,34 @@ onMounted(() => { void loadLinks(); void loadLocal() })
         </div>
 
         <div v-if="localRows.length" class="product-toolbar" style="margin-top:10px">
-          <button type="button" class="unified-button ghost" :data-test="'batch-create'" :disabled="busy" @click="createBatch">
-          <img class="button-icon" :src="publishIcon" alt="" />批量发布（全部 × 在线店铺）</button>
+          <button type="button" class="unified-button ghost" :data-test="'batch-create'" :disabled="busy" @click="openUploadPanel">
+          <img class="button-icon" :src="publishIcon" alt="" />自动化上传到其他店铺</button>
           <button type="button" class="unified-button ghost" :data-test="'media-queue-scan'" :disabled="busy" @click="scanMediaQueue">
           <img class="button-icon" :src="scanQueueIcon" alt="" />扫图片队列</button>
           <button type="button" class="unified-button ghost" :data-test="'media-queue-run'" :disabled="busy" @click="runMediaQueue">
           <img class="button-icon" :src="downloadImageIcon" alt="" />跑队列（20 张）</button>
           <button type="button" class="unified-button ghost" :data-test="'media-orphans'" :disabled="busy" @click="scanOrphans">
           <img class="button-icon" :src="cleanupIcon" alt="" />查孤儿文件</button>
+        </div>
+
+        <div v-if="uploadPanelOpen" class="batch-panel" data-test="cross-store-upload-panel">
+          <div class="batch-panel-head">
+            <strong>跨店铺自动化上传</strong>
+            <button type="button" class="inline-link" data-test="cross-store-upload-close" @click="closeUploadPanel">关闭</button>
+          </div>
+          <p class="product-more">{{ selectedIds.size ? `将上传已选 ${selectedIds.size} 个商品` : '未勾选商品时默认取当前本地商品前 20 条' }}。已自动排除这些商品已有归并的平台店铺；应用会自动打开目标店铺、预填已验证字段并停在人工确认点，提交前请核对类目、规格、图片和平台提示。</p>
+          <div class="upload-targets">
+            <label v-for="store in uploadTargets" :key="store.id" class="upload-target">
+              <input type="checkbox" :checked="uploadTargetIds.includes(store.id)" :disabled="!store.canReceive" :data-test="`upload-target-${store.id}`" @change="toggleUploadTarget(store.id)" />
+              <span>{{ store.name }}</span><small>{{ store.platform }}<template v-if="store.existingCount"> · 已存在 {{ store.existingCount }}/{{ store.selectedCount }} 项</template></small>
+            </label>
+          </div>
+          <div v-if="!uploadTargets.length" class="unified-empty">没有可用的在线目标店铺；所选商品可能都已挂载到现有店铺，或还没有完成店铺登录。</div>
+          <div class="batch-actions">
+            <button type="button" class="unified-button primary" data-test="cross-store-upload-start" :disabled="busy || !uploadTargetIds.length" @click="createBatch">
+              <img class="button-icon" :src="publishIcon" alt="" />开始自动化上传</button>
+            <button type="button" class="unified-button ghost" @click="closeUploadPanel">取消</button>
+          </div>
         </div>
       </template>
 
@@ -1258,9 +1359,18 @@ onMounted(() => { void loadLinks(); void loadLocal() })
               <span>{{ store.platform }} · {{ storeSyncText(store) }}</span>
             </div>
             <span class="unified-status" :class="storeStatusClass(store.status)"><i></i>{{ storeStatusLabelOf(store.status) }}</span>
-            <button type="button" class="unified-button ghost" :data-test="'product-sync-' + store.id" :disabled="!!syncingStoreId" @click="syncStore(store)">
+            <button type="button" class="unified-button ghost" :data-test="'product-sync-' + store.id" :disabled="!!syncingStoreId || !!fullSyncingStoreId" @click="syncStore(store)">
               <img class="button-icon" :src="productSyncIcon" alt="" />{{ syncingStoreId === store.id ? '同步中…' : '同步商品' }}
             </button>
+            <button type="button" class="unified-button ghost" :data-test="'product-sync-full-' + store.id" :disabled="!!syncingStoreId || !!fullSyncingStoreId" @click="syncFullStore(store)">
+              <img class="button-icon" :src="scanQueueIcon" alt="" />{{ fullSyncingStoreId === store.id ? '抓取详情中…' : '全量抓取详情' }}
+            </button>
+            <button v-if="fullSyncingStoreId === store.id" type="button" class="unified-button ghost" :data-test="'product-sync-full-cancel-' + store.id" @click="cancelFullSync(store.id)">
+              取消抓取
+            </button>
+            <span v-if="fullSyncingStoreId === store.id && fullSyncProgress && fullSyncProgress.storeId === store.id" class="sync-full-progress" data-test="product-sync-full-progress">
+              详情 {{ fullSyncProgress.done }}/{{ fullSyncProgress.total }} · 成功 {{ fullSyncProgress.succeeded }} · 失败 {{ fullSyncProgress.failed }}<template v-if="fullSyncProgress.incomplete"> · 不完整 {{ fullSyncProgress.incomplete }}</template>
+            </span>
             <button type="button" class="unified-button ghost" @click="emit('open-store', store.id)">
               <img class="button-icon" :src="externalIcon" alt="" />打开店铺后台</button>
           </article>
@@ -1313,20 +1423,18 @@ onMounted(() => { void loadLinks(); void loadLocal() })
                 <td>{{ row.platformStock == null ? '未取到' : row.platformStock }}</td>
                 <td>{{ productStatusLabel(row.platformStatus || 'unknown') }}</td>
                 <td>
-                  <template v-if="row.productTitle">{{ row.productTitle }}</template>
-                  <template v-else>
-                    <span class="product-orphan">未归并</span>
-                    <!-- 归并**必须由用户点**（方案 D2：绝不自动合并） -->
-                    <button type="button" class="unified-button ghost" :data-test="'product-detail-' + row.platformProductId"
-                            :disabled="busy" @click="collectDetail(row)">
-                    <img class="button-icon" :src="scanQueueIcon" alt="" />拉取详情</button>
-                    <button type="button" class="unified-button ghost" :data-test="'product-save-as-' + row.platformProductId"
-                            :disabled="busy" @click="saveAsLocal(row)">
-                    <img class="button-icon" :src="downloadImageIcon" alt="" />另存为本地商品</button>
-                  </template>
+                  <template v-if="row.productTitle">{{ row.productTitle }}<small v-if="row.detailCollectedAt">详情已抓取 · {{ formatTime(row.detailCollectedAt) }}</small></template>
+                  <span v-else class="product-orphan">未归并</span>
+                  <!-- 归并**必须由用户点**（方案 D2：绝不自动合并） -->
                 </td>
                 <td>{{ formatTime(row.collectedAt) }}</td>
                 <td class="product-actions">
+                  <button type="button" class="unified-button ghost" :data-test="'product-detail-' + row.platformProductId"
+                          :disabled="busy" @click="collectDetail(row)">
+                    <img class="button-icon" :src="scanQueueIcon" alt="" />{{ row.detailCollectedAt ? '重新抓取详情' : '拉取详情' }}</button>
+                  <button v-if="!row.productId" type="button" class="unified-button ghost" :data-test="'product-save-as-' + row.platformProductId"
+                          :disabled="busy" @click="saveAsLocal(row)">
+                    <img class="button-icon" :src="downloadImageIcon" alt="" />另存为本地商品</button>
                   <button type="button" class="unified-button ghost" v-if="row.productId" :disabled="busy" @click="switchTab('local')">在本地商品里管理</button>
                   <!-- 解除归并：`products.list` 每行本就带 linkId/productId，此前渲染层没有入口（只能挂不能摘）。
                        未归并或缺 linkId 的行不渲染（`canUnmerge` 判定），避免"点了没反应"的假按钮。 -->
@@ -1617,6 +1725,10 @@ onMounted(() => { void loadLinks(); void loadLocal() })
 .issue-blocker b{color:#b42318}.issue-warning b{color:#b54708}.issue-info b{color:#175cd3}
 .verdict-ready{color:#027a48}.verdict-ready_with_warnings{color:#b54708}.verdict-blocked{color:#b42318}
 .product-drawer-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.upload-targets{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:10px 0}
+.upload-target{display:flex;align-items:center;gap:7px;padding:9px 10px;border:1px solid var(--dash-border);border-radius:9px;background:#fff;font-size:12px;cursor:pointer}
+.upload-target input{accent-color:#6d4aff}
+.upload-target small{margin-left:auto;color:var(--dash-text-muted);font-size:10px}
 
 /* ---- R3 批量条 / 面板 / 多选列 ---- */
 .th-check{width:34px;text-align:center}

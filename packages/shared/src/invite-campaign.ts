@@ -15,6 +15,8 @@ import type { InviteIdentityLevel } from './invite-identity'
 export const INVITE_CAMPAIGN_STATUSES = [
   'draft',
   'ready',
+  /** 已排期，等主进程调度器到点拉起（2026-10-20 定时邀约） */
+  'scheduled',
   'running',
   'paused',
   'completed',
@@ -63,6 +65,10 @@ export interface InviteCampaignView {
   finishedAt: number | null
   /** 引擎停止码（如 TASK_QUOTA_EXCEEDED / TASK_SELECTION_SHORTFALL），没有就是 null */
   stopReason: string | null
+  /** 排期时间（毫秒）；未排期为 null */
+  scheduledAt: number | null
+  /** 批次层的原因（排期被取消、到点额度不足等），与 stopReason（引擎停止码）分开 */
+  statusReason: string | null
   filters: Record<string, unknown> | null
   scriptText: string | null
   productIds: string[]
@@ -125,6 +131,11 @@ export interface InviteCampaignStartInput {
     createdBy?: string
     /** 预留：direct=点开始即真实发送；confirm=启动前再确认一次 */
     sendMode?: 'direct' | 'confirm'
+    /**
+     * 定时启动（毫秒时间戳）。传了就不立即入队：批次状态为 scheduled，
+     * 到点由主进程调度器拉起；中途可取消。不传 = 立即启动。
+     */
+    scheduleAt?: number | null
   }
 }
 
@@ -139,4 +150,55 @@ export interface InviteRecordListInput {
   status?: string
   limit?: number
   offset?: number
+}
+
+/**
+ * 达人库 / 话术库 / 商品集的行视图（主进程 invite-creators / invite-assets 服务返回）。
+ *
+ * 之前渲染层（CreatorInvitePage）手写过一份字段较少的副本，和服务返回结构重复：
+ * 服务加字段时副本不会跟着变，页面拿到的类型是"看起来对但少了字段"的假象，挪到这里单一事实来源。
+ */
+/** 达人库行（creator_profiles 表的视图） */
+export interface CreatorView {
+  id: string
+  storeId: string
+  platform: string
+  creatorKey: string
+  identityLevel: InviteIdentityLevel
+  nickname: string
+  finderUsername: string | null
+  tags: string[]
+  note: string | null
+  blacklisted: boolean
+  blacklistReason: string | null
+  lastStatus: string | null
+  lastInvitedAt: number | null
+  inviteCount: number
+  firstSeenAt: number
+  lastSeenAt: number
+}
+
+/** 话术库行（invite_scripts 表的视图） */
+export interface InviteScriptView {
+  id: string
+  storeId: string
+  platform: string
+  name: string
+  mode: 'manual' | 'ai'
+  template: string
+  maxLen: number | null
+  status: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** 商品集行（invite_product_sets 表的视图） */
+export interface InviteProductSetView {
+  id: string
+  storeId: string
+  platform: string
+  name: string
+  productIds: string[]
+  createdAt: number
+  updatedAt: number
 }

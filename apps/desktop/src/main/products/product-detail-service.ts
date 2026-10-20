@@ -12,6 +12,7 @@
 
 import type { WebContents } from 'electron'
 import type { Store } from '@shared/schemas/store'
+import type { PlatformProductDetailSnapshot } from '@shared/contracts/platform-product'
 import { detailUrlFor, productProfileFor } from '@shared/constants/product'
 import * as StoreManager from '../stores/store-manager'
 import { openStoreBrowser, waitForStoreWebContents, setStoreLifecycleBlock } from '../browser/window-manager'
@@ -46,7 +47,9 @@ export interface ProductDetailResult {
   skuCount: number
   specNames: string[]
   /** 详情页读到的其它字段（类目/短标题/品牌…），只用于界面展示 */
-  fields: Array<{ label: string; value: string }>
+  fields: Array<{ label: string; value: string; kind?: 'input' | 'textarea' | 'select' | 'content' | 'text' }>
+  missingFields: string[]
+  detailFieldCount: number
 }
 
 function delay(ms: number): Promise<void> {
@@ -102,7 +105,7 @@ export class ProductDetailService {
     const runtime = this.runtimeFactory()
     const store = runtime.getStore(input.storeId)
     if (!store) {
-      return { status: 'FAILED', reasonCode: 'STORE_NOT_FOUND', safeMessage: '店铺不存在或已删除', imageCount: 0, skuCount: 0, specNames: [], fields: [] }
+      return { status: 'FAILED', reasonCode: 'STORE_NOT_FOUND', safeMessage: '店铺不存在或已删除', imageCount: 0, skuCount: 0, specNames: [], fields: [], missingFields: [], detailFieldCount: 0 }
     }
     const profile = productProfileFor(store.platform)
     const url = detailUrlFor(store.platform, input.platformProductId)
@@ -110,7 +113,7 @@ export class ProductDetailService {
       return {
         status: 'NOT_VERIFIED', reasonCode: 'DETAIL_NOT_VERIFIED',
         safeMessage: `${store.platform}尚未实测到商品详情页地址，暂不能拉取详情（不猜 URL 结构）`,
-        imageCount: 0, skuCount: 0, specNames: [], fields: []
+        imageCount: 0, skuCount: 0, specNames: [], fields: [], missingFields: [], detailFieldCount: 0
       }
     }
 
@@ -118,7 +121,7 @@ export class ProductDetailService {
       platform: store.platform, storeId: input.storeId, platformProductId: input.platformProductId
     })
     if (!link) {
-      return { status: 'LINK_NOT_FOUND', reasonCode: 'LINK_NOT_FOUND', safeMessage: '本地没有这条平台商品记录，请先同步一次', imageCount: 0, skuCount: 0, specNames: [], fields: [] }
+      return { status: 'LINK_NOT_FOUND', reasonCode: 'LINK_NOT_FOUND', safeMessage: '本地没有这条平台商品记录，请先同步一次', imageCount: 0, skuCount: 0, specNames: [], fields: [], missingFields: [], detailFieldCount: 0 }
     }
 
     // 详情采集可能包含导航和懒加载轮询；明确登记生命周期门禁，
@@ -134,7 +137,7 @@ export class ProductDetailService {
       wc = await runtime.waitForStoreWebContents(input.storeId, 30_000)
     }
     if (!wc || wc.isDestroyed()) {
-      return { status: 'PAGE_NOT_READY', reasonCode: 'PAGE_NOT_READY', safeMessage: '店铺页面不可用，请先打开该店铺', imageCount: 0, skuCount: 0, specNames: [], fields: [] }
+      return { status: 'PAGE_NOT_READY', reasonCode: 'PAGE_NOT_READY', safeMessage: '店铺页面不可用，请先打开该店铺', imageCount: 0, skuCount: 0, specNames: [], fields: [], missingFields: [], detailFieldCount: 0 }
     }
 
     // 导航重试一次：实测页面正在加载时导航会被打断 —— 属于瞬态，不该让用户看到"失败"就结束。
@@ -149,22 +152,27 @@ export class ProductDetailService {
       return {
         status: 'FAILED', reasonCode: 'NAVIGATION_FAILED',
         safeMessage: `打开商品详情页失败（已重试一次：${nav.reason ?? 'UNKNOWN'}），请确认该店铺已登录、页面能正常打开`,
-        imageCount: 0, skuCount: 0, specNames: [], fields: []
+        imageCount: 0, skuCount: 0, specNames: [], fields: [], missingFields: [], detailFieldCount: 0
       }
     }
 
-    // 详情页是懒渲染的（实测：刚打开时图集还没出来）→ 轮询到读出内容为止
+    // 详情页是懒渲染的（实测：刚打开时图集还没出来）→ 轮询到读出内容为止。
+    // 判定只用强信号：fields/attributes 是"所有可见输入框"的兜底收集，登录页也会命中，
+    // 拿它们判定成功会把登录表单字段的垃圾快照覆盖写入（reader 侧 hasAnyDetail 同口径）。
+    const hasDetailData = (value: Awaited<ReturnType<typeof readProductDetail>>): boolean =>
+      value.imageUrls.length > 0 || value.specNames.length > 0 || value.skus.length > 0 ||
+      !!value.title || !!value.subtitle || !!value.description || !!value.brand || !!value.categoryPath || !!value.barcode
     let detail = await readProductDetail(wc, profile)
-    for (let attempt = 0; attempt < 24 && detail.imageUrls.length === 0; attempt++) {
+    for (let attempt = 0; attempt < 24 && !hasDetailData(detail); attempt++) {
       await delay(2000)
       detail = await readProductDetail(wc, profile)
     }
-    if (detail.imageUrls.length === 0 && detail.specNames.length === 0) {
+    if (!hasDetailData(detail)) {
       logMain('warn', `[product-detail] 详情页没读到图集与规格 platform=${store.platform} id=${input.platformProductId}`)
       return {
         status: 'FAILED', reasonCode: 'DETAIL_EMPTY',
         safeMessage: '详情页没读到商品图与规格（可能页面还没渲染完，或平台已改版）——本次未改动本地数据',
-        imageCount: 0, skuCount: 0, specNames: [], fields: []
+        imageCount: 0, skuCount: 0, specNames: [], fields: [], missingFields: [], detailFieldCount: 0
       }
     }
 
@@ -185,9 +193,32 @@ export class ProductDetailService {
       platformSkuId: sku.skuCode || sku.spec.map(part => `${part.name}=${part.value}`).join('|'),
       spec: sku.spec,
       priceMinor: sku.priceMinor,
-      stock: sku.stock
+      stock: sku.stock,
+      barcode: sku.barcode ?? null
     }))
-    const written = skus.length ? runtime.repository.replaceLinkSkus({ linkId, skus }) : { inserted: 0, missing: 0 }
+    const detailSnapshot: PlatformProductDetailSnapshot = {
+      title: detail.title,
+      subtitle: detail.subtitle,
+      description: detail.description,
+      brand: detail.brand,
+      categoryPath: detail.categoryPath,
+      barcode: detail.barcode,
+      attributes: detail.attributes,
+      fields: detail.fields,
+      specNames: detail.specNames,
+      imageUrls: detail.imageUrls,
+      skus: skus.map(sku => ({ ...sku, skuCode: sku.platformSkuId, imageUrl: null, state: 'active' as const })),
+      collectedAt: Date.now(),
+      missingFields: detail.missingFields
+    }
+    // SKU 映射重写与快照覆盖放进**同一事务**：分两步时中途失败会留下
+    // 「旧 link_skus + 新快照的空 skus」的不一致，library 侧会因此回退到列表单规格占位
+    //（2026-10-21 审查 P2）。
+    const written = runtime.repository.transaction(() => {
+      const replaced = skus.length ? runtime.repository.replaceLinkSkus({ linkId, skus }) : { inserted: 0, missing: 0 }
+      runtime.repository.updateLinkDetail({ linkId, detail: detailSnapshot })
+      return replaced
+    })
 
     const specSummary = detail.specNames.join('、') || '无'
     const skuSummary = skus.length
@@ -197,11 +228,13 @@ export class ProductDetailService {
     return {
       status: 'SUCCEEDED',
       reasonCode: 'OK',
-      safeMessage: `已拉取详情：商品图 ${detail.imageUrls.length} 张、规格名 ${detail.specNames.length} 个（${specSummary}）；${skuSummary}`,
+      safeMessage: `已拉取详情：商品图 ${detail.imageUrls.length} 张、规格名 ${detail.specNames.length} 个、字段 ${detail.fields.length} 个（${specSummary}）；${skuSummary}${detail.missingFields.length ? `；尚未读到：${detail.missingFields.join('、')}` : ''}`,
       imageCount: detail.imageUrls.length,
       skuCount: written.inserted,
       specNames: detail.specNames,
-      fields: detail.fields
+      fields: detail.fields,
+      missingFields: detail.missingFields,
+      detailFieldCount: detail.fields.length
     }
     } finally {
       runtime.setStoreLifecycleBlock?.(input.storeId, 'external', false)

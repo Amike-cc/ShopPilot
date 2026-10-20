@@ -47,8 +47,35 @@ export interface PlatformProductSku {
   priceMinor: number | null
   stock: number | null
   skuCode: string | null
+  /** 平台详情页按 SKU 暴露的条码；平台没有该字段时保持 null。 */
+  barcode?: string | null
   imageUrl: string | null
   state: 'active' | 'missing'
+}
+
+/**
+ * 商品详情页的结构化快照。
+ *
+ * 列表页只能给出商品级价格/库存，详情页才是完整商品资料的来源。字段保持
+ * "已读到什么就保存什么" 的口径：未知字段不会被补成空字符串或猜测值，
+ * 额外字段通过 fields/attributes 保留，避免跨平台采集时丢失平台自有属性。
+ */
+export interface PlatformProductDetailSnapshot {
+  title: string | null
+  subtitle: string | null
+  description: string | null
+  brand: string | null
+  categoryPath: string | null
+  barcode: string | null
+  attributes: Array<{ name: string; value: string }>
+  fields: Array<{ label: string; value: string; kind?: 'input' | 'textarea' | 'select' | 'content' | 'text' }>
+  specNames: string[]
+  imageUrls: string[]
+  skus: PlatformProductSku[]
+  /** 采集时刻，不参与本地商品草稿指纹。 */
+  collectedAt: number
+  /** 详情页明确缺失的核心字段；用于界面如实提示，不代表平台一定没有该字段。 */
+  missingFields: string[]
 }
 
 export interface PlatformProduct {

@@ -115,6 +115,7 @@ async function main() {
   await cdp.ready
   await sleep(800)
 
+  let fixtureStoreId = null
   try {
     // 就绪等待：应用冷启动要恢复上次会话的店铺页签，preload/工作台导航可能晚于 target 出现
     // （2026-10-15 实录：启动 23 秒时 API/导航还没就绪，1 分钟后一切正常）。
@@ -129,6 +130,25 @@ async function main() {
     }
     check('应用就绪（preload + 工作台导航）', ready)
     if (!ready) throw new Error('应用 60 秒内未就绪')
+
+    // 隔离 profile 可能没有店铺。商品管理应能在无店铺时展示本地商品，
+    // 但本套件仍需要一条店铺记录来验收平台 Tab；夹具自行创建并在 finally 清理，
+    // 不把“请先手动建店”变成隐藏前置条件。
+    const storeState = await cdp.evaluate(`
+      const r = await window.shopilot.store.list()
+      return r && r.ok ? (r.data || []).map(store => ({ id: store.id, name: store.name })) : []
+    `)
+    if (!Array.isArray(storeState) || storeState.length === 0) {
+      const created = await cdp.evaluate(`
+        const r = await window.shopilot.store.create({ name: '商品管理验收临时店', platform: '抖店', adminUrl: 'http://127.0.0.1:1/' })
+        return r && r.ok ? r.data : null
+      `)
+      fixtureStoreId = created?.id || null
+      check('验收夹具自动准备临时店铺', !!fixtureStoreId, fixtureStoreId || 'store.create failed')
+      if (!fixtureStoreId) throw new Error('验收夹具无法创建临时店铺')
+    } else {
+      check('验收夹具发现可用店铺', true, `${storeState.length} 家`)
+    }
 
     // 跨运行状态防护：应用不重启时商品页可能缓存上次的列表（trashLoaded 等不重载）。
     // 直接刷新页面拿全新状态，再导航——所有"计数与底层一致"的断言都必须建立在新鲜 UI 上。
@@ -381,6 +401,12 @@ async function main() {
         `)
         for (const id of (Array.isArray(res) ? res : [])) {
           const purged = await cdp.evaluate(`
+            let removed = true
+            if (${JSON.stringify(method)} === 'local') {
+              const r = await window.shopilot.products.library.remove('${id}')
+              removed = !!(r && r.ok)
+            }
+            if (!removed) return false
             const r = await window.shopilot.products.library.purge('${id}')
             return r && r.ok
           `)
@@ -733,7 +759,6 @@ async function main() {
       Array.isArray(deletedIds) && deletedIds.includes(r3Blank) && deletedIds.includes(r3Source))
 
     // 清理：导入的新品 + 恢复的源商品回到原状（blank 已随批量删除进回收站且无发布记录 → purge）
-    await cdp.evaluate(`await window.shopilot.products.library.remove(${JSON.stringify(r3Source)}).then(r => r && r.ok)`).catch(() => true)
     for (const item of (Array.isArray(importedProduct) ? importedProduct : [])) {
       await cdp.evaluate(`await window.shopilot.products.library.purge(${JSON.stringify(item.id)}).then(r => r && r.ok)`).catch(() => true)
     }
@@ -776,6 +801,14 @@ async function main() {
       process.exitCode = 1
     }
   } finally {
+    if (fixtureStoreId) {
+      await cdp.evaluate(`
+        const id = ${JSON.stringify(fixtureStoreId)}
+        const archived = await window.shopilot.store.archive(id)
+        if (archived && archived.ok) await window.shopilot.store.purge(id)
+        return true
+      `).catch(error => console.warn('验收临时店铺清理失败:', error && error.message ? error.message : error))
+    }
     cdp.close()
   }
 }

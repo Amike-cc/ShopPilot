@@ -400,4 +400,141 @@ describe('商品同步服务：编排的每一步都要"要么写对、要么明
     expect(countLinks(db)).toBe(1)
     db.close()
   })
+
+  realIt('全量同步：列表完整且每条详情成功才报告 complete', async () => {
+    const products = [product('10001', 'A'), product('10002', 'B')]
+    const collected: string[] = []
+    const { runtime, db } = setupRuntime({
+      getAdapter: () => fakeAdapter(okResult(products)) as never,
+      collectDetail: async ({ platformProductId }) => {
+        collected.push(platformProductId)
+        return {
+          status: 'SUCCEEDED', reasonCode: 'OK', safeMessage: '详情已采集', imageCount: 2, skuCount: 1,
+          specNames: ['颜色'], fields: [{ label: '商品名称', value: platformProductId }], missingFields: [], detailFieldCount: 1
+        }
+      }
+    })
+    const result = await new ProductSyncService(runtime).syncStoreFull({ storeId: STORE_ID })
+
+    expect(result.status).toBe('SUCCEEDED')
+    expect(result.complete).toBe(true)
+    expect(result.detailTotal).toBe(2)
+    expect(result.detailSucceeded).toBe(2)
+    expect(result.detailFailed).toBe(0)
+    expect(result.detailSkipped).toBe(0)
+    expect(collected).toEqual(['10001', '10002'])
+    db.close()
+  })
+
+  realIt('全量同步：列表被截断时即使详情全成功也不能报告 complete', async () => {
+    const products = [product('10001', 'A')]
+    const { runtime, db } = setupRuntime({
+      getAdapter: () => fakeAdapter(okResult(products, { hasMore: true, reasonCode: 'TRUNCATED' })) as never,
+      collectDetail: async () => ({
+        status: 'SUCCEEDED', reasonCode: 'OK', safeMessage: '详情已采集', imageCount: 1, skuCount: 0,
+        specNames: [], fields: [{ label: '标题', value: 'A' }], missingFields: ['sku'], detailFieldCount: 1
+      })
+    })
+    const result = await new ProductSyncService(runtime).syncStoreFull({ storeId: STORE_ID })
+
+    expect(result.status).toBe('PARTIAL')
+    expect(result.complete).toBe(false)
+    expect(result.hasMore).toBe(true)
+    expect(result.detailSucceeded).toBe(1)
+    expect(result.safeMessage).toContain('列表本轮被截断')
+    db.close()
+  })
+
+  realIt('全量同步：详情快照已保存但核心字段缺失时不能报告 complete', async () => {
+    const products = [product('10001', 'A')]
+    const { runtime, db } = setupRuntime({
+      getAdapter: () => fakeAdapter(okResult(products)) as never,
+      collectDetail: async () => ({
+        status: 'SUCCEEDED', reasonCode: 'OK', safeMessage: '详情已采集', imageCount: 2, skuCount: 1,
+        specNames: ['颜色'], fields: [{ label: '商品名称', value: 'A' }], missingFields: ['description', 'category'], detailFieldCount: 1
+      })
+    })
+    const result = await new ProductSyncService(runtime).syncStoreFull({ storeId: STORE_ID })
+
+    expect(result.status).toBe('PARTIAL')
+    expect(result.complete).toBe(false)
+    expect(result.detailSucceeded).toBe(1)
+    expect(result.detailIncomplete).toBe(1)
+    expect(result.detailFailures).toEqual([
+      expect.objectContaining({
+        platformProductId: '10001',
+        status: 'INCOMPLETE',
+        reasonCode: 'DETAIL_FIELDS_MISSING',
+        missingFields: ['description', 'category']
+      })
+    ])
+    expect(result.safeMessage).toContain('字段不完整 1')
+    db.close()
+  })
+
+  realIt('全量同步：单条详情失败或未验证只影响该条，并保留分类原因', async () => {
+    const products = [product('10001', 'A'), product('10002', 'B'), product('10003', 'C')]
+    const { runtime, db } = setupRuntime({
+      getAdapter: () => fakeAdapter(okResult(products)) as never,
+      collectDetail: async ({ platformProductId }) => {
+        if (platformProductId === '10001') {
+          return { status: 'SUCCEEDED', reasonCode: 'OK', safeMessage: '详情已采集', imageCount: 1, skuCount: 0, specNames: [], fields: [{ label: '标题', value: 'A' }], missingFields: [], detailFieldCount: 1 }
+        }
+        if (platformProductId === '10002') {
+          return { status: 'NOT_VERIFIED', reasonCode: 'DETAIL_NOT_VERIFIED', safeMessage: '详情页未实测', imageCount: 0, skuCount: 0, specNames: [], fields: [], missingFields: [], detailFieldCount: 0 }
+        }
+        return { status: 'FAILED', reasonCode: 'DETAIL_EMPTY', safeMessage: '详情页空', imageCount: 0, skuCount: 0, specNames: [], fields: [], missingFields: [], detailFieldCount: 0 }
+      }
+    })
+    const result = await new ProductSyncService(runtime).syncStoreFull({ storeId: STORE_ID })
+
+    expect(result.status).toBe('PARTIAL')
+    expect(result.complete).toBe(false)
+    expect(result.detailSucceeded).toBe(1)
+    expect(result.detailSkipped).toBe(1)
+    expect(result.detailFailed).toBe(1)
+    expect(result.detailFailures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ platformProductId: '10002', status: 'NOT_VERIFIED', reasonCode: 'DETAIL_NOT_VERIFIED' }),
+      expect.objectContaining({ platformProductId: '10003', status: 'FAILED', reasonCode: 'DETAIL_EMPTY' })
+    ]))
+    db.close()
+  })
+
+  realIt('全量同步：用户取消后下一条前停止，已完成部分如实保留（审查 P2-5）', async () => {
+    const products = [product('10001', 'A'), product('10002', 'B'), product('10003', 'C')]
+    const collected: string[] = []
+    let service: ProductSyncService | null = null
+    const { runtime, db } = setupRuntime({
+      getAdapter: () => fakeAdapter(okResult(products)) as never,
+      collectDetail: async ({ platformProductId }) => {
+        collected.push(platformProductId)
+        if (platformProductId === '10001') {
+          // 第一条完成后同步置取消标志：循环在第二条开始前消费（下一条前生效语义）
+          service?.requestFullSyncCancel(STORE_ID)
+        }
+        return {
+          status: 'SUCCEEDED', reasonCode: 'OK', safeMessage: '详情已采集', imageCount: 1, skuCount: 0,
+          specNames: [], fields: [{ label: '标题', value: platformProductId }], missingFields: [], detailFieldCount: 1
+        }
+      }
+    })
+    service = new ProductSyncService(runtime)
+    const result = await service.syncStoreFull({ storeId: STORE_ID })
+
+    expect(collected).toEqual(['10001'])           // 取消生效，第二/三条不再采集
+    expect(result.status).toBe('PARTIAL')
+    expect(result.complete).toBe(false)
+    expect(result.detailTotal).toBe(3)
+    expect(result.detailSucceeded).toBe(1)
+    expect(result.safeMessage).toContain('已按用户要求中断')
+    // 取消是一次性标志：结束后再次请求取消必须如实返回 false（没有在跑的全量同步）
+    expect(service.requestFullSyncCancel(STORE_ID)).toBe(false)
+    db.close()
+  })
+
+  realIt('全量同步：没有在跑的全量同步时取消请求如实返回 false', () => {
+    const service = new ProductSyncService(setupRuntime({ getAdapter: () => fakeAdapter(okResult([])) as never }).runtime)
+    expect(service.requestFullSyncCancel(STORE_ID)).toBe(false)
+    expect(service.isFullSyncRunning(STORE_ID)).toBe(false)
+  })
 })

@@ -13,7 +13,8 @@ import { randomUUID } from 'crypto'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC_CHANNELS, type IPCResult } from '@shared/contracts/ipc'
-import { AI_IMAGE_SETTING_KEYS, AI_IMAGE_TEXT_SETTING_KEYS, AI_IMAGE_TIMEOUT_MAX_MS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS } from '@shared/constants/ai'
+import type { SellCopyInput } from '@shared/contracts/ai-sell-copy'
+import { AI_IMAGE_SETTING_KEYS, AI_IMAGE_TEXT_SETTING_KEYS, AI_IMAGE_TIMEOUT_MAX_MS, AI_PRODUCT_ANALYSIS_IMAGE_LIMIT, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS } from '@shared/constants/ai'
 import { getDatabase } from '../db/database'
 import * as AiClient from '../services/ai-client'
 import { deleteAiImageKey, deleteAiImageTextKey, deleteAiKey, hasAiImageKey, hasAiImageTextKey, hasAiKey, saveAiImageKey, saveAiImageTextKey, saveAiKey } from '../services/credential-store'
@@ -361,8 +362,8 @@ export function registerAiHandlers(): void {
       const tags = String(input?.tags || '').trim().slice(0, 240)
       const price = String(input?.price || '').trim().slice(0, 24)
       const originalPrice = String(input?.originalPrice || '').trim().slice(0, 24)
-      // 图片：最多 2 张，单张 ≤ 8MB，类型白名单（与上传时一致）
-      const images = (Array.isArray(input?.images) ? input.images : []).slice(0, 3).map(item => ({
+      // 图片：最多 AI_PRODUCT_ANALYSIS_IMAGE_LIMIT（3）张，单张 ≤ 8MB，类型白名单（与上传时一致）
+      const images = (Array.isArray(input?.images) ? input.images : []).slice(0, AI_PRODUCT_ANALYSIS_IMAGE_LIMIT).map(item => ({
         mimeType: String(item?.mimeType || '').split(';')[0].trim().toLowerCase(),
         b64Json: String(item?.b64Json || '')
       })).filter(item => {
@@ -384,6 +385,26 @@ export function registerAiHandlers(): void {
       const { code, message } = describeAiFailure(e)
       writeAudit('ai.imageText.analyze', 'failure', { requestId: auditRequestId(requestId, code) })
       logMain('warn', `[ai:image-text] 商品分析失败 ${code}: ${message}`)
+      return failure(code, message)
+    }
+  })
+
+  // 图文带货文案：只接受结构化字段 + 受限图片，提示词组装与 JSON 解析都在 Main，渲染层无法注入 system。
+  ipcMain.handle(IPC_CHANNELS.AI_IMAGE_TEXT_SELL_COPY, async (event: IpcMainInvokeEvent, input: SellCopyInput): Promise<IPCResult> => {
+    const requestId = randomUUID()
+    try {
+      assertTrusted(event)
+      const result = await AiClient.generateSellCopyText(input)
+      const usedVision = result.imageCount > 0
+      // 审计只记模型 / 读图张数 / 是否回退：不写商品名、卖点与正文原文（审计查询是明文展示的）
+      writeAudit('ai.imageText.sellCopy', 'success', { requestId: auditRequestId(requestId, `${result.model}${usedVision ? `(读图${result.imageCount}张)` : ''}${result.source === 'main-text' ? '(回退主文本 API)' : ''}`) })
+      return success(result)
+    } catch (e: any) {
+      const denied = deniedResult(e)
+      if (denied) return denied
+      const { code, message } = describeAiFailure(e)
+      writeAudit('ai.imageText.sellCopy', 'failure', { requestId: auditRequestId(requestId, code) })
+      logMain('warn', `[ai:image-text] 图文带货文案生成失败 ${code}: ${message}`)
       return failure(code, message)
     }
   })

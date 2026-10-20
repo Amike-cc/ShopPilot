@@ -38,6 +38,15 @@ export interface ProductDraftMedia {
   failReason?: string | null
 }
 
+/** 从平台详情页带回的扩展资料。编辑器不展示的字段也必须透传保存。 */
+export interface ProductDraftDetails {
+  attributes: Array<{ name: string; value: string }>
+  fields: Array<{ label: string; value: string; kind?: 'input' | 'textarea' | 'select' | 'content' | 'text' }>
+  barcode?: string | null
+  sourcePlatform?: string | null
+  capturedAt?: number | null
+}
+
 export interface LocalProductDraft {
   title: string
   subtitle?: string | null
@@ -47,6 +56,8 @@ export interface LocalProductDraft {
   tags?: string[]
   variants: ProductDraftVariant[]
   media: ProductDraftMedia[]
+  /** 平台详情页的扩展字段快照；可选以兼容历史本地商品。 */
+  details?: ProductDraftDetails | null
 }
 
 export interface ProductDraftIssue {
@@ -192,6 +203,11 @@ export function localProductDraftHash(draft: LocalProductDraft): string {
       skuCode: variant.skuCode ?? null
     })),
     media: (draft.media ?? []).map((item, index) => ({ role: item.role, key: item.remoteUrl || `#${index}` }))
+    ,details: draft.details ? {
+      attributes: (draft.details.attributes ?? []).map(item => [item.name, item.value]),
+      fields: (draft.details.fields ?? []).map(item => [item.label, item.value, item.kind ?? 'text']),
+      barcode: draft.details.barcode ?? null
+    } : null
   })
 }
 
@@ -202,12 +218,13 @@ export function draftFromPlatformProduct(input: {
   priceMinor: number | null
   stock: number | null
   imageUrls?: string[]
-  skus?: Array<{ spec: Array<{ name: string; value: string }>; priceMinor: number | null; stock: number | null; imageUrl?: string | null }>
+  skus?: Array<{ spec: Array<{ name: string; value: string }>; priceMinor: number | null; stock: number | null; skuCode?: string | null; barcode?: string | null; imageUrl?: string | null }>
+  details?: ProductDraftDetails | null
 }): LocalProductDraft {
   const imageUrls = input.imageUrls ?? []
   const skus = input.skus ?? []
   const variants: ProductDraftVariant[] = skus.length
-    ? skus.map(sku => ({ spec: sku.spec, priceMinor: sku.priceMinor, stock: sku.stock }))
+    ? skus.map(sku => ({ spec: sku.spec, priceMinor: sku.priceMinor, stock: sku.stock, skuCode: sku.skuCode ?? null, barcode: sku.barcode ?? null }))
     // 列表页拿不到 SKU（实测四平台都是"要进详情页才有"）→ 用商品级价格库存建一个单规格，
     // 并在界面上说明"这是列表页的单规格占位，需要补规格"
     : [{ spec: [], priceMinor: input.priceMinor, stock: input.stock }]
@@ -220,6 +237,7 @@ export function draftFromPlatformProduct(input: {
     localCategory: null,
     tags: [],
     variants,
-    media: imageUrls.map((url, index) => ({ role: index === 0 ? 'cover' : 'gallery', remoteUrl: url, state: 'pending' }))
+    media: imageUrls.map((url, index) => ({ role: index === 0 ? 'cover' : 'gallery', remoteUrl: url, state: 'pending' })),
+    details: input.details ?? null
   }
 }

@@ -783,12 +783,32 @@ export class ProductPublishService {
       return { ok: false, batchId: null, errors: [`有 ${missing.length} 个本地商品不存在或已删除，请刷新后重试`], progress: null }
     }
 
+    // “上传到其他店铺”必须在主进程再次兜底：渲染层列表可能过期，
+    // 也可能有人绕过界面直接调用 IPC。口径与渲染层 upload-targets 保持一致：
+    // 「部分商品已挂载」的店铺允许继续上传，重复的 (商品,店铺) 对直接剔除并如实提示，
+    // 只有剔除后没有剩余项（全部对都重复）才拒绝——避免一次跨店上传变成同店重复发布，
+    // 也避免复现旧版「任意一条归并记录就整店排除」的误伤。
+    const dedupedItems = plan.items.filter(item => !runtime.repository.hasProductStoreLink(item.productId, item.storeId))
+    const duplicateCount = plan.items.length - dedupedItems.length
+    if (duplicateCount > 0) {
+      logMain('info', `[product-publish] 跨店上传剔除已存在的 (商品,店铺) 对 ${duplicateCount} 个，剩余 ${dedupedItems.length} 个`)
+    }
+    if (!dedupedItems.length) {
+      const sample = plan.items.slice(0, 3).map(item => `${item.productId.slice(0, 8)}→${item.storeId.slice(0, 8)}`).join('、')
+      return {
+        ok: false,
+        batchId: null,
+        errors: [`所选商品均已存在于对应店铺（${sample}${plan.items.length > 3 ? '…' : ''}），无需重复上传`],
+        progress: null
+      }
+    }
+
     const batchId = `batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
     const now = Date.now()
-    for (const productId of Array.from(new Set(plan.items.map(item => item.productId)))) {
+    for (const productId of Array.from(new Set(dedupedItems.map(item => item.productId)))) {
       const product = runtime.repository.getProduct(productId)!
       const jobId = runtime.repository.createPublishJob({ productId, draftHash: product.draftHash, batchId, now })
-      for (const item of plan.items.filter(row => row.productId === productId)) {
+      for (const item of dedupedItems.filter(row => row.productId === productId)) {
         const store = runtime.getStore(item.storeId)
         runtime.repository.upsertPublishItem({
           jobId, storeId: item.storeId,
@@ -801,7 +821,7 @@ export class ProductPublishService {
       }
     }
     const progress = this.batchProgressFor({ batchId }).progress
-    logMain('info', `[product-publish] 建批量 batch=${batchId} 商品=${plan.totals.products} 店铺=${plan.totals.stores} 项=${plan.totals.items}（只建台账，未提交任何内容）`)
+    logMain('info', `[product-publish] 建批量 batch=${batchId} 商品=${new Set(dedupedItems.map(i => i.productId)).size} 店铺=${new Set(dedupedItems.map(i => i.storeId)).size} 项=${dedupedItems.length}（只建台账，未提交任何内容）`)
     return { ok: true, batchId, errors: [], progress }
   }
 

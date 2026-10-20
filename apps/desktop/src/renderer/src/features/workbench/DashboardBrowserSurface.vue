@@ -210,155 +210,12 @@
 
         <div v-else class="dashboard-browser-panel-body invite-panel-body">
           <div class="browser-panel-heading"><strong>达人邀约</strong><button type="button" @click="ws.refreshTasks()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button></div>
-          <section class="invite-panel" data-test="invite-panel">
-            <div class="env-sec invite-config-sec">
-              <div class="env-h">达人邀约 <span v-if="inviteProfile" class="row-sub">· {{ inviteProfile.platform }}</span><span v-else class="row-sub">· 当前平台未接入真实邀约流程</span></div>
-              <template v-if="!inviteProfile">
-                <div class="env-note">当前平台暂不支持达人邀约；已接入：抖店、微信小店、快手小店。保留入口但不会猜测页面选择器或伪造发送结果。</div>
-              </template>
-              <template v-else>
-                <div class="invite-config-actions"><button type="button" class="mini-btn" data-test="invite-open-page" @click="openInvitePage">打开达人广场</button><button type="button" class="mini-btn" data-test="invite-save-config" :disabled="inviteSaving" @click="saveInviteConfig">{{ inviteSaving ? '保存中…' : '保存配置' }}</button></div>
-                <template v-if="isBatchProfile(inviteProfile)">
-                  <div class="invite-form-grid">
-                    <label class="invite-field"><span>{{ inviteProfile.categoryLabelText || '主推类目' }}</span><select v-model="invite.category" data-test="invite-category"><option value="">不限</option><option v-for="item in inviteCategoryOptions" :key="item" :value="item">{{ item }}</option></select></label>
-                    <label class="invite-field"><span>二级类目</span><select v-model="invite.subcategory" data-test="invite-subcategory" :disabled="!invite.category"><option value="">不限</option><option v-for="item in inviteSubcategoryOptions" :key="item" :value="item">{{ item }}</option></select></label>
-                    <label v-if="inviteProfile.categoryDepth === 3" class="invite-field"><span>三级类目</span><select v-model="invite.category3" data-test="invite-category3" :disabled="!invite.subcategory || !inviteThirdCategoryOptions.length"><option value="">不限</option><option v-for="item in inviteThirdCategoryOptions" :key="item" :value="item">{{ item }}</option></select></label>
-                    <label class="invite-field"><span>每批邀约数量</span><input v-model.number="invite.count" data-test="invite-count" type="number" min="1" :max="inviteProfile.maxBatch" /></label>
-                    <!-- 邀约商品数量：批量流是在平台商品弹窗里勾几个（快手必选商品，0 无意义 → min 1） -->
-                    <label v-if="inviteProfile.goodsModal" class="invite-field">
-                      <span>邀约商品数量<small v-if="inviteProfile.maxProducts"> · 最多 {{ inviteProfile.maxProducts }}</small></span>
-                      <input v-model.number="invite.batchProductCount" data-test="invite-batch-product-count" type="number" :min="1" :max="inviteProfile.maxProducts || 10" />
-                    </label>
-                  </div>
-                  <div v-if="inviteProfile.levels.length" class="invite-choice-group"><span>达人等级</span><div class="invite-chips"><label v-for="level in inviteProfile.levels" :key="level" class="inv-chip" :class="{ on: invite.levels.includes(level) }"><input v-model="invite.levels" type="checkbox" :value="level" :data-test="`invite-level-${level}`" />{{ level }}</label></div></div>
-                  <div v-if="inviteProfile.strengths" class="invite-choice-group"><span>{{ inviteProfile.strengths.label }}</span><div class="invite-chips"><label v-for="strength in inviteProfile.strengths.options" :key="strength" class="inv-chip" :class="{ on: invite.strengths.includes(strength) }"><input v-model="invite.strengths" type="checkbox" :value="strength" :data-test="`invite-strength-${strength}`" />{{ strength }}</label></div></div>
-                  <div v-if="inviteProfile.benefits?.length" class="invite-choice-group"><span>{{ inviteProfile.benefitsLabelText || '专属权益' }}<small v-if="inviteProfile.benefitsMax"> · 最多 {{ inviteProfile.benefitsMax }} 项</small></span><div class="invite-chips"><label v-for="benefit in inviteProfile.benefits" :key="benefit" class="inv-chip" :class="{ on: invite.benefits.includes(benefit) }"><input v-model="invite.benefits" type="checkbox" :value="benefit" :data-test="`invite-benefit-${benefit}`" />{{ benefit }}</label></div></div>
-                  <div v-if="inviteProfile.drawerForm?.mainCategory" class="invite-form-grid"><label class="invite-field"><span>主营类目</span><select v-model="invite.mainCategory" data-test="invite-main-category"><option value="">不填写</option><option v-for="item in inviteMainCategoryPaths" :key="item" :value="item">{{ item }}</option></select></label></div>
-                  <div v-if="inviteProfile.contactSelectors?.phone || inviteProfile.contactSelectors?.wechat || inviteProfile.contactSelectors?.contact" class="invite-form-grid">
-                    <label v-if="inviteProfile.contactSelectors?.contact" class="invite-field"><span>联系人</span><input v-model="invite.batchContact" data-test="invite-batch-contact" maxlength="30" placeholder="联系人" /></label>
-                    <label v-if="inviteProfile.contactSelectors?.phone" class="invite-field"><span>手机号</span><input v-model="invite.batchPhone" data-test="invite-batch-phone" maxlength="20" placeholder="11 位手机号" /></label>
-                    <label v-if="inviteProfile.contactSelectors?.wechat" class="invite-field"><span>微信号</span><input v-model="invite.batchWechat" data-test="invite-batch-wechat" maxlength="40" placeholder="微信号" /></label>
-                  </div>
-                </template>
-                <template v-else>
-                  <div class="invite-form-grid"><label class="invite-field"><span>邀约联系人</span><input v-model="invite.contact" data-test="invite-contact" placeholder="联系人" /></label><label class="invite-field"><span>微信号</span><input v-model="invite.wechat" data-test="invite-wechat" placeholder="微信号" /></label><label class="invite-field"><span>手机号</span><input v-model="invite.phone" data-test="invite-phone" placeholder="手机号" /></label></div>
-                  <!--
-                    商品ID（2026-10-04 补：此前**面板没有这个输入框**，只能靠配置文件里已有的值，
-                    新用户根本找不到在哪填）。填了 → 每单按 ID 挂这几个商品（ensureRowsById，顺序无关、
-                    不依赖平台列表顺序）；留空 → 平台自动挑 1 个可邀商品。
-                    ⚠️ 用 **textarea** 而不是 input：商品ID 常是从后台表格里整列复制出来的，
-                    一列一个 ID（换行分隔）。单行 input 会把换行吞掉，粘贴后只剩一串连在一起的数字
-                    （用户实测反馈："商品ID不能换行"）。
-                  -->
-                  <label class="invite-field" style="margin-top:8px">
-                    <span>商品ID<small> · 可留空；一行一个，或用逗号/空格分隔</small></span>
-                    <textarea v-model="invite.productIds" data-test="invite-product-ids" rows="2" spellcheck="false" placeholder="每行一个商品ID，例如：&#10;10000687986563&#10;10000687986564&#10;（留空 = 平台自动挑 1 个）"></textarea>
-                  </label>
-                  <!-- 广场筛选（带货者广场上真实存在的三行筛选：带货类目 / 近30日带货数据·带货销售总额 / 其他筛选）。
-                       选项全部来自真机逐项实测（见 shared/constants/invite.ts 的微信档案注释）：
-                       面板只提供实测过的文案，避免点了页面又找不到（实测平台把「汽车电动」改成了「汽摩电动」）。 -->
-                  <label class="invite-field" style="margin-top:8px"><span>带货者类型</span>
-                    <select v-model="invite.finderType" data-test="invite-finder-type">
-                      <option v-for="t in inviteProfile.finderTypes" :key="t" :value="t">{{ t }}</option>
-                    </select>
-                  </label>
-                  <div class="invite-choice-group">
-                    <span>{{ inviteProfile.finderCategoryLabel }}
-                      <small v-if="invite.finderCategories.length"> · 已选 {{ invite.finderCategories.length }} 项</small>
-                      <button v-if="invite.finderCategories.length" type="button" class="browser-panel-row-action" data-test="invite-finder-cats-clear" @click="invite.finderCategories.splice(0)">清空</button>
-                    </span>
-                    <input v-if="inviteCatsExpanded || inviteCatQuery" v-model="inviteCatQuery" type="text" class="invite-cat-search" data-test="invite-cat-search" placeholder="搜索类目，如 母婴 / 生鲜" />
-                    <div class="invite-chips">
-                      <label v-for="c in inviteCategoryShown" :key="c" class="inv-chip" :class="{ on: invite.finderCategories.includes(c) }">
-                        <input type="checkbox" :value="c" v-model="invite.finderCategories" :data-test="'invite-finder-category-' + c" />{{ c }}
-                      </label>
-                    </div>
-                    <button
-                      v-if="!inviteCatQuery && (inviteCategoryHidden > 0 || inviteCatsExpanded)"
-                      type="button" class="mini-btn" data-test="invite-finder-cats-toggle"
-                      @click="inviteCatsExpanded = !inviteCatsExpanded"
-                    >{{ inviteCatsExpanded ? '收起类目' : `展开全部 ${inviteProfile.finderCategories.length} 项（还有 ${inviteCategoryHidden} 项）` }}</button>
-                  </div>
-                  <div v-if="inviteProfile.finderSalesMetric && inviteProfile.finderSalesTiers?.length" class="invite-choice-group">
-                    <span>{{ inviteProfile.finderSalesMetric }} <small>近30日 · 可多选 · 选完立即生效</small></span>
-                    <div class="invite-chips">
-                      <label
-                        v-for="tier in inviteProfile.finderSalesTiers" :key="tier"
-                        class="inv-chip" :class="{ on: invite.finderSalesTiers.includes(tier) }"
-                      >
-                        <input
-                          type="checkbox" :value="tier" :checked="invite.finderSalesTiers.includes(tier)"
-                          :data-test="'invite-finder-sales-' + tier" @change="toggleSalesTier(tier)"
-                        />{{ tier }}
-                      </label>
-                    </div>
-                    <div class="env-note" v-if="inviteSalesTypeWarning">{{ inviteSalesTypeWarning }}</div>
-                  </div>
-                  <div class="invite-choice-group">
-                    <span>{{ inviteProfile.finderOtherLabel }}</span>
-                    <div class="invite-chips">
-                      <label v-for="f in inviteProfile.finderOtherFilters" :key="f" class="inv-chip" :class="{ on: invite.finderOtherFilters.includes(f) }">
-                        <input type="checkbox" :value="f" v-model="invite.finderOtherFilters" :data-test="'invite-finder-other-' + f" />{{ f }}
-                      </label>
-                    </div>
-                  </div>
-                  <div class="env-note">广场筛选会在「开始邀约」时由任务引擎按顺序应用（点完会回读勾选态，没选上就如实失败）。</div>
-                </template>
-                <!-- 话术：仅对真的有话术框/辅助流的平台展示（抖店改版抽屉是结构化拼装，没有 textarea） -->
-                <div v-if="inviteProfile.flow !== 'batch-list' || !!inviteProfile.scriptSelector" class="invite-choice-group invite-script-group">
-                  <span>邀约话术<small> · 最多 {{ inviteProfile.scriptMaxLen }} 字</small></span>
-                  <div class="invite-script-row">
-                    <select v-model="inviteScriptId" data-test="invite-script-select" @change="applyInviteScript(inviteScriptId)">
-                      <option value="">从话术库选择…</option>
-                      <option v-for="script in inviteScripts" :key="script.id" :value="script.id">{{ script.name }}</option>
-                    </select>
-                    <label class="inv-chip" :class="{ on: invite.scriptMode === 'manual' }">
-                      <input v-model="invite.scriptMode" type="radio" value="manual" data-test="invite-script-mode-manual" />手动
-                    </label>
-                    <label class="inv-chip" :class="{ on: invite.scriptMode === 'ai' }">
-                      <input v-model="invite.scriptMode" type="radio" value="ai" data-test="invite-script-mode-ai" />AI 生成
-                    </label>
-                  </div>
-                  <textarea
-                    v-model="invite.script"
-                    data-test="invite-script"
-                    rows="3"
-                    :maxlength="inviteProfile.scriptMaxLen"
-                    :readonly="invite.scriptMode === 'ai'"
-                    placeholder="手填话术，或选 AI 由运行时生成（AI 模式需先在设置中心配置 Key）"
-                  ></textarea>
-                  <div v-if="invite.scriptMode === 'ai' && !inviteAiConfigured" class="env-note invite-ai-hint">AI 未配置：开始按钮已禁用。请到「设置中心 → AI 配置」填 Key，或切回手动话术。</div>
-                </div>
-                <ul v-if="inviteMissingItems.length" class="invite-missing" data-test="invite-missing"><li v-for="item in inviteMissingItems" :key="item">{{ item }}</li></ul>
-                <div class="invite-start-row">
-                  <button type="button" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="startInvite"><img class="button-icon" :src="browserStartIcon" alt="" />{{ inviteSubmitting ? '正在启动…' : '开始邀约' }}</button>
-                  <label class="invite-max-invites" title="平台不显示今日剩余次数，这里是我们自己的上限：到量就干净收工">本次最多邀约
-                    <input type="number" min="1" max="50" step="1" v-model.number="invite.maxInvites" data-test="invite-max-invites" />
-                    位
-                  </label>
-                  <label class="invite-max-invites" title="0 = 不设日上限；设置后同一天累计到此数会拒绝启动">日上限
-                    <input type="number" min="0" max="500" step="1" v-model.number="invite.dailyCap" data-test="invite-daily-cap" />
-                    位
-                  </label>
-                  <span class="row-sub">{{ inviteReady ? `配置完整，最多发 ${invite.maxInvites} 位` : '补齐必填项后可开始' }}</span>
-                  <span v-if="inviteRecentCount" class="row-sub" data-test="invite-recent-count">· 近 7 天已邀 {{ inviteRecentCount }} 位，会自动跳过</span>
-                  <span v-if="inviteBlacklistCount" class="row-sub" data-test="invite-blacklist-count">· 黑名单 {{ inviteBlacklistCount }} 位，会自动跳过</span>
-                  <span v-if="inviteQuota" class="row-sub" data-test="invite-quota">· 今日已发 {{ inviteQuota.used }}{{ inviteQuota.limit ? ` / ${inviteQuota.limit}` : '（未设日上限）' }}<template v-if="inviteQuota.reserved"> · 运行中预留 {{ inviteQuota.reserved }}</template></span>
-                </div>
-              </template>
-            </div>
-            <div class="env-sec invite-live-sec"><div class="env-h">达人邀约实时日志<span v-if="inviteLatest" class="row-sub"> · {{ inviteStatus(inviteLatest) }}</span></div>
-              <div v-if="!inviteLatest" class="browser-panel-empty invite-live-empty" data-test="invite-live-empty">本店铺还没有邀约运行，点“开始邀约”后这里会实时显示进度。</div>
-              <template v-else>
-                <div class="invite-live-stuck" data-test="invite-live-stuck">{{ inviteStuckText(inviteLatest) }}</div>
-                <div class="step-row" v-for="(step, index) in (inviteLatest.steps || [])" :key="`${inviteLatest.id}-${index}`"><span class="s-ico">{{ inviteStepIcon(inviteLatest, toStepIndex(index)) }}</span><div class="v-info"><div class="row-main">第 {{ toStepIndex(index) + 1 }} 步 · {{ inviteStepLabel(step) }}</div><div class="row-sub">{{ inviteStepInput(step) }}</div></div></div>
-                <div class="tc-btns" v-if="inviteRunId(inviteLatest)"><button v-if="inviteActive(inviteLatest)" type="button" class="mini-btn" data-test="invite-live-stop" @click="stopInvite(inviteLatest)"><img class="button-icon" :src="browserStopIcon" alt="" />停止</button><button type="button" class="mini-btn" @click="ws.refreshTasks()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button></div>
-                <div v-if="inviteLiveMessage(inviteLatest)" class="row-sub invite-message">{{ inviteLiveMessage(inviteLatest) }}</div>
-                <div ref="inviteLiveLogEl" class="log-box invite-live-log" data-test="invite-live-log"><div v-if="!inviteLogs(inviteLatest).length" class="log-line">等待运行输出…开始邀约后，这里的日志会实时滚动，卡住时看停在最后几行。</div><div v-for="(log, index) in inviteLogs(inviteLatest)" :key="`${inviteRunId(inviteLatest)}-${index}`" class="log-line">{{ inviteLogText(log) }}</div></div>
-              </template>
-            </div>
-            <div class="env-sec invite-unavailable"><div class="env-note">达人邀约配置与平台页面仍沿用真实运行、店铺配置和人工操作边界；未配置时不会伪造可发送结果。</div></div>
-          </section>
+          <!--
+            配置 + 实时日志是独立组件：同一份视图也用在「应用中心 → 达人邀约」独立页。
+            达人邀约在后端隐藏窗口运行，这里只是配置入口，不再承担"打开店铺浏览器"的前置条件。
+          -->
+          <InvitePanelView v-if="ws.displayedStoreId" :controller="inviteController" @started="onInviteStarted" />
+          <div v-else class="browser-panel-empty invite-live-empty">先选择一家店铺，再配置并启动达人邀约。</div>
         </div>
       </aside>
 
@@ -418,7 +275,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import bookmarksArt from '../../assets/ui/browser/bookmarks.png'
 import downloadsArt from '../../assets/ui/browser/downloads.png'
@@ -447,11 +304,7 @@ import panelToggleIcon from '../../assets/generated/ui-icons/chevron-right-gen.p
 import verifiedIcon from '../../assets/generated/ui-icons/browser-verified-gen.png'
 import unknownIcon from '../../assets/generated/ui-icons/browser-unknown-gen.png'
 import browserRefreshIcon from '../../assets/generated/ui-icons/browser-refresh-gen.png'
-import browserStartIcon from '../../assets/generated/ui-icons/browser-start-gen.png'
-import browserStopIcon from '../../assets/generated/ui-icons/browser-stop-gen.png'
 import { useWorkspaceStore } from '../../stores/workspace'
-import { isBatchProfile } from '@shared/constants/invite'
-import { buildInviteTaskPayload, parseInviteProductIds } from '@shared/invite-task'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 // 标签栏「固定 / 拖拽重排」的纯逻辑（菜单文案、落点 → 新顺序）
 // 「主动检测登录状态」的纯逻辑（结果文案 / 按钮文案 / 按钮门控）
@@ -463,6 +316,7 @@ import { looksLikePlaceholderStoreName } from '@shared/store-name'
 import { useBrowserTabs } from './use-browser-tabs'
 
 import { useCreatorInvite } from './use-creator-invite'
+import InvitePanelView from '../invite/InvitePanelView.vue'
 import { useStoreWebviews, type OpenWebviewEntry, type ViewDiagnostic } from './use-store-webviews'
 const emit = defineEmits<{
   // 环境面板的跳转入口：打开设置中心并落到指定页签（安全 / 数据与维护）
@@ -709,57 +563,22 @@ function handleWebviewFailure(item: OpenWebviewEntry, event: any): void {
 
 
 // ---------- 达人邀约（状态/IPC 读写/校验/任务进度映射见 use-creator-invite.ts）----------
-// 面板模板与验收锚点仍在本组件；这里只接线，域逻辑全部在 composable 里。
+// 配置与日志的模板已抽到 features/invite/InvitePanelView.vue（独立页复用同一份视图）。
+// 本组件只保留「平台入口」这条侧栏通用数据，以及店铺切换时的配置重载。
+const inviteController = useCreatorInvite({ store })
 const {
-  inviteLiveLogEl,
   entryRoutes,
   displayedPlatformName,
-  inviteProfile,
-  invite,
-  inviteSaving,
-  inviteQuota,
-  inviteScripts,
-  inviteScriptId,
-  inviteAiConfigured,
-  inviteSubmitting,
-  inviteRecentCount,
-  inviteBlacklistCount,
-  inviteCategoryOptions,
-  inviteSubcategoryOptions,
-  inviteThirdCategoryOptions,
-  inviteMainCategoryPaths,
-  inviteMissingItems,
-  inviteCatQuery,
-  inviteCatsExpanded,
-  inviteCategoryShown,
-  inviteCategoryHidden,
-  inviteSalesTypeWarning,
-  toggleSalesTier,
-  inviteReady,
-  inviteLatest,
   refreshSquareUrls,
   loadInviteCategoryTrees,
   refreshEntryRoutes,
-  loadInviteQuota,
-  applyInviteScript,
-  loadInviteConfig,
-  inviteSnapshot,
-  saveInviteConfig,
-  inviteSquareUrl,
-  openInvitePage,
-  inviteRunId,
-  inviteStatus,
-  inviteActive,
-  inviteStuckText,
-  inviteStepIcon,
-  inviteStepLabel,
-  toStepIndex,
-  inviteStepInput,
-  inviteLiveMessage,
-  inviteLogs,
-  inviteLogText,
-  stopInvite,
-} = useCreatorInvite({ store })
+  loadInviteConfig
+} = inviteController
+
+/** 开始邀约成功后的界面反馈：日志区已由 composable 刷新，这里只同步一次任务数据。 */
+function onInviteStarted(): void {
+  void ws.refreshTasks()
+}
 function normalizeUrl(value: string) {
   const trimmed = value.trim()
   if (!trimmed) return ''
@@ -1072,79 +891,6 @@ async function lockNow() {
   else ws.toast(result.error.message, 'error')
 }
 
-async function startInvite() {
-  if (inviteSubmitting.value || !inviteProfile.value || !ws.displayedStoreId || !inviteReady.value) return
-  inviteSubmitting.value = true
-  try {
-    const storeId = ws.displayedStoreId
-    /**
-     * 7 天内邀过的达人**不再重复邀约**（用户要求）：开跑前把台账里的昵称清单查出来塞进配置。
-     * 广场列表行没有"已邀约"标记（真机实测），所以任务侧只能靠这份清单在点「详情」前跳过；
-     * 清单没覆盖到的（手工邀过等）由平台的"7 天内不可再次邀请"兜底。
-     */
-    let recentlyInvited: string[] = []
-    try {
-      const history = await window.shopilot.browser.recentInviteHistory({ storeId, days: 7 })
-      if (history.ok) {
-        recentlyInvited = ((history.data as { nicknames?: string[] })?.nicknames || []).filter(Boolean)
-        inviteRecentCount.value = recentlyInvited.length
-      }
-    } catch { /* 台账读不到不该拦住开跑：平台侧仍会拦重复邀约 */ }
-    /**
-     * 黑名单与 7 天台账走同一个 skipTexts 口径：在选人/点详情前直接跳过。
-     * 黑名单来自达人库（人工维护），平台侧没有这个概念；这里不合并进 inviteRecentCount，
-     * 避免把"黑名单"说成"近 7 天已邀"。
-     */
-    try {
-      const blacklist = await window.shopilot.invite.creators.blacklisted({ storeId, platform: inviteProfile.value.platform })
-      if (blacklist.ok) {
-        const names = (blacklist.data as { nicknames?: string[] })?.nicknames || []
-        inviteBlacklistCount.value = names.length
-        recentlyInvited = [...new Set([...recentlyInvited, ...names])]
-      }
-    } catch { /* 黑名单读不到不拦开跑；平台侧仍会拦重复邀约 */ }
-    const payload = buildInviteTaskPayload({
-      profile: inviteProfile.value,
-      storeId,
-      squareUrl: inviteSquareUrl(),
-      config: { ...inviteSnapshot(), recentlyInvited },
-      source: 'panel'
-    })
-    if (!payload) { ws.toast('邀约配置不完整，无法创建任务', 'error'); return }
-    /**
-     * v2：任务与批次由主进程同一条路径创建（INVITE_CAMPAIGN_START）。
-     * 这样新模块页能按批次查看「目标/已发/跳过/停止原因」，而不是只能靠任务名前缀猜。
-     * 任务构造器仍是同一份 buildInviteTaskPayload，面板/智能体不会各写一套配置。
-     */
-    const targetCount = isBatchProfile(inviteProfile.value)
-      ? Math.max(1, Number(invite.count) || 1)
-      : Math.max(1, Number(invite.maxInvites) || 10)
-    const created = await window.shopilot.invite.startCampaign({
-      task: payload,
-      campaign: {
-        storeId,
-        targetCount,
-        filters: inviteSnapshot(),
-        scriptText: String(invite.script || ''),
-        productIds: parseInviteProductIds(invite.productIds as any),
-        createdBy: 'panel'
-      }
-    })
-    if (!created.ok) { ws.toast(`创建邀约批次失败：${created.error.message}`, 'error'); return }
-    const started = created.data as { waitingForStore?: boolean } | undefined
-    ws.toast(started?.waitingForStore
-      ? '邀约批次已创建；店铺浏览器未打开，运行会在打开店铺后开始'
-      : recentlyInvited.length
-        ? `邀约批次已启动：近 7 天已邀的 ${recentlyInvited.length} 位会自动跳过`
-        : '邀约批次已启动，进度和日志会实时显示在当前面板', 'success')
-    await ws.refreshTasks()
-    void loadInviteQuota(storeId)
-  } finally {
-    inviteSubmitting.value = false
-  }
-}
-
-
 async function removeBookmark(id: string) {
   const result = await window.shopilot.bookmark.delete(id)
   if (result.ok) await ws.refreshBookmarks()
@@ -1166,7 +912,6 @@ async function confirmRun(runId: string, approved: boolean) {
 
 watch(() => ws.activeTab?.url, value => { urlDraft.value = value || '' }, { immediate: true })
 watch(() => confirmations.value.length, count => { if (count > 0) panelOpen.value = true })
-watch(() => `${inviteRunId(inviteLatest.value)}:${inviteLogs(inviteLatest.value).length}`, () => { void nextTick(() => { if (inviteLiveLogEl.value) inviteLiveLogEl.value.scrollTop = inviteLiveLogEl.value.scrollHeight }) })
 // 宿主不再随切页销毁（页面状态要留住），因此"回到浏览器页时重读设置"必须显式做：
 // 平台首页地址、达人广场地址、类目树都可能刚在设置中心被改过，靠旧的"重新挂载"刷新已经不成立。
 watch(() => props.active, active => {

@@ -149,11 +149,12 @@ describe('AI 商品图工作台页签细节', () => {
     expect(studio).toContain('HISTORY_STORAGE_BUDGET')
     expect(studio).toContain('function persistHistory()')
     expect(dashboard).toContain('@busy-change="imageStudioBusy = $event"')
-    expect(dashboard).toContain('function preventBusyImageStudioExit()')
-    expect(dashboard).toContain("activePage.value !== 'image-studio' || !imageStudioBusy.value")
-    expect(dashboard).toContain('if (page !== \'image-studio\' && preventBusyImageStudioExit()) return')
-    expect(dashboard).toContain('if (preventBusyImageStudioExit()) return')
-    expect(dashboard).toContain('if (preventBusyImageStudioExit()) {\n      // 主进程的原生店铺视图覆盖在渲染层上')
+    // 2026-10-19：值守函数扩展为「生图 / 图文带货」两个工作台共用（同一保护语义）
+    expect(dashboard).toContain('function preventBusyAiStudioExit()')
+    expect(dashboard).toContain("activePage.value === 'image-studio' && imageStudioBusy.value")
+    expect(dashboard).toContain("if (page !== activePage.value && preventBusyAiStudioExit()) return")
+    expect(dashboard).toContain('if (preventBusyAiStudioExit()) return')
+    expect(dashboard).toContain('if (preventBusyAiStudioExit()) {\n      // 主进程的原生店铺视图覆盖在渲染层上')
   })
 
   it('不保留已删除的重复导航和遗留计费样式', () => {

@@ -32,6 +32,8 @@ export type AuditAction =
   | 'ai.keySet' | 'ai.keyClear' | 'ai.test' | 'ai.generate' | 'ai.models' | 'ai.config'
   | 'ai.imageConfig' | 'ai.imageKeySet' | 'ai.imageKeyClear' | 'ai.image.test' | 'ai.image.models' | 'ai.imageSave'
   | 'ai.imageTextConfig' | 'ai.imageTextKeySet' | 'ai.imageTextKeyClear' | 'ai.imageText.test' | 'ai.imageText.models' | 'ai.imageText.analyze'
+  // 图文带货文案生成：只记 model / 读图张数 / 错误码，不记商品名与正文原文（Lead 2026-10-19 授权）
+  | 'ai.imageText.sellCopy'
   // 技能/插件/分享包属于「定义变更」：会改变后续 Job 能自动执行什么，必须留痕（2026-09-26 审计 P2）。
   | 'agent.skill.create' | 'agent.skill.update' | 'agent.skill.delete' | 'agent.skill.run'
   | 'agent.plugin.create' | 'agent.plugin.update' | 'agent.plugin.delete'

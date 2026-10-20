@@ -33,6 +33,8 @@ export interface CreateInviteCampaignInput {
   productIds?: string[]
   createdBy?: string
   sendMode?: 'direct' | 'confirm'
+  /** 定时启动时间（毫秒）；有值则批次状态为 scheduled，不立即入队 */
+  scheduledAt?: number | null
 }
 
 export function newInviteCampaignId(): string {
@@ -63,10 +65,11 @@ export function createInviteCampaign(input: CreateInviteCampaignInput): void {
   db.prepare(`
     INSERT INTO invite_campaigns (
       id, store_id, platform, name, status, filters_json, script_snapshot, product_ids_json,
-      target_count, daily_cap, send_mode, created_by, task_id, run_id, created_at, started_at, finished_at, stats_json
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      target_count, daily_cap, send_mode, created_by, task_id, run_id, created_at, started_at, finished_at, stats_json,
+      scheduled_at, status_reason
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
-    input.id, input.storeId, input.platform, input.name.slice(0, 120), 'ready',
+    input.id, input.storeId, input.platform, input.name.slice(0, 120), input.scheduledAt ? 'scheduled' : 'ready',
     filtersJson,
     input.scriptText ? String(input.scriptText).slice(0, 2000) : null,
     productsJson,
@@ -74,7 +77,8 @@ export function createInviteCampaign(input: CreateInviteCampaignInput): void {
     null,
     input.sendMode === 'confirm' ? 'confirm' : 'direct',
     String(input.createdBy || 'panel').slice(0, 40),
-    null, null, Date.now(), null, null, null
+    null, null, Date.now(), null, null, null,
+    input.scheduledAt ?? null, null
   )
 }
 
@@ -132,7 +136,8 @@ function readStopReason(taskId: string | null, runId: string | null): string | n
 
 function deriveStatus(base: string, runStatus: string | null, stopReason: string | null): InviteCampaignStatus {
   if (!runStatus) {
-    return (['draft', 'ready', 'failed', 'stopped'].includes(base) ? base : 'ready') as InviteCampaignStatus
+    // scheduled 必须保留：它是"还没跑"的真实状态，退化成 ready 会让人以为点了没反应。
+    return (['draft', 'ready', 'scheduled', 'failed', 'stopped'].includes(base) ? base : 'ready') as InviteCampaignStatus
   }
   if (runStatus === 'queued' || runStatus === 'running') return 'running'
   if (runStatus === 'paused') return 'paused'
@@ -165,6 +170,8 @@ function mapCampaign(row: any, task: any, run: any, counts: { sent: number; skip
     startedAt: run?.startedAt ?? row.started_at ?? null,
     finishedAt: run?.finishedAt ?? row.finished_at ?? null,
     stopReason,
+    scheduledAt: Number.isFinite(Number(row.scheduled_at)) && Number(row.scheduled_at) > 0 ? Number(row.scheduled_at) : null,
+    statusReason: row.status_reason ? String(row.status_reason) : null,
     filters: parseJsonObject(row.filters_json),
     scriptText: row.script_snapshot ?? null,
     productIds: parseProducts(row.product_ids_json),
@@ -243,5 +250,76 @@ export function getInviteCampaignDetail(campaignId: string): InviteCampaignDetai
   } catch (error) {
     logMain('error', `[invite] 读取批次详情失败 campaign=${campaignId}: ${String((error as Error)?.message || error)}`)
     return null
+  }
+}
+
+/** 批次层状态写入（排期取消、到点额度不足等）；失败不抛，避免掩盖主流程。 */
+export function setInviteCampaignStatus(campaignId: string, status: InviteCampaignStatus, reason?: string | null): void {
+  try {
+    getDatabase().prepare(`
+      UPDATE invite_campaigns SET status = ?, status_reason = ?, finished_at = ? WHERE id = ?
+    `).run(status, reason ? String(reason).slice(0, 300) : null,
+      ['completed', 'exhausted', 'stopped', 'failed'].includes(status) ? Date.now() : null,
+      campaignId)
+  } catch (error) {
+    logMain('error', `[invite] 写入批次状态失败 campaign=${campaignId}: ${String((error as Error)?.message || error)}`)
+  }
+}
+
+/** 把排期批次关联到(尚未存在的)任务；run 在真正到时才产生。 */
+export function attachInviteCampaignTask(campaignId: string, taskId: string): void {
+  try {
+    getDatabase().prepare('UPDATE invite_campaigns SET task_id = ? WHERE id = ?').run(taskId, campaignId)
+  } catch { /* 关联失败由调用方按任务不存在处理 */ }
+}
+
+export interface DueInviteCampaign {
+  id: string
+  storeId: string
+  platform: string
+  name: string
+  taskId: string | null
+  targetCount: number
+  scheduledAt: number
+}
+
+/**
+ * 到点该起的批次。只读 status='scheduled' 的行：
+ * 取消/已跑的批次改了状态就自然不会再被选中，不需要额外的内存计时器。
+ */
+export function listDueInviteCampaigns(now: number, limit = 10): DueInviteCampaign[] {
+  try {
+    const rows = getDatabase().prepare(`
+      SELECT id, store_id, platform, name, task_id, target_count, scheduled_at
+      FROM invite_campaigns
+      WHERE status = 'scheduled' AND scheduled_at IS NOT NULL AND scheduled_at <= ?
+      ORDER BY scheduled_at ASC
+      LIMIT ?
+    `).all(now, limit) as any[]
+    return rows.map(row => ({
+      id: String(row.id),
+      storeId: String(row.store_id),
+      platform: String(row.platform),
+      name: String(row.name || ''),
+      taskId: row.task_id ? String(row.task_id) : null,
+      targetCount: Number(row.target_count) || 1,
+      scheduledAt: Number(row.scheduled_at) || 0
+    }))
+  } catch (error) {
+    logMain('error', `[invite] 读取到点批次失败: ${String((error as Error)?.message || error)}`)
+    return []
+  }
+}
+
+/** 取消排期：只对 scheduled 生效，已经跑起来的不在这里处理（走任务取消）。 */
+export function cancelScheduledInviteCampaign(campaignId: string, reason = '用户取消排期'): boolean {
+  const db = getDatabase()
+  try {
+    const row = db.prepare("SELECT id, status FROM invite_campaigns WHERE id = ?").get(campaignId) as { id: string; status: string } | undefined
+    if (!row || row.status !== 'scheduled') return false
+    setInviteCampaignStatus(campaignId, 'stopped', reason)
+    return true
+  } catch {
+    return false
   }
 }

@@ -27,6 +27,7 @@ import { registerProductHandlers } from './ipc/product-handlers'
 import { backfillProductStatusesIfNeeded } from './products/product-library-service'
 import { registerProductMediaProtocol, registerProductMediaScheme } from './products/product-media-protocol'
 import { stopSalesMetricsScheduler } from './sales-metrics/sales-metrics-scheduler'
+import { stopInviteScheduler } from './services/invite-scheduler'
 import { registerTaskHandlers } from './ipc/task-handlers'
 import { registerSessionAndSecurityHandlers } from './ipc/session-security-handlers'
 import { registerMaintenanceHandlers } from './ipc/maintenance-handlers'
@@ -748,6 +749,9 @@ app.on('before-quit', () => {
   try { stopSalesMetricsScheduler() } catch (e: any) {
     try { logMain('warn', '退出前停止经营采集调度失败: ' + String(e?.message || e)) } catch { /* ignore */ }
   }
+  // 定时邀约的 15s 节拍：节拍内部自带 try/catch 不会留脏状态，但退出时明确停掉，
+  // 不给"退出路径上还在查库"留任何窗口（2026-10-21 审查 P2：stop 一直无人调用）。
+  try { stopInviteScheduler() } catch { /* ignore */ }
   try { customerMessageMonitor.stop() } catch { /* ignore */ }
   try {
     const active = TaskRunner.listLiveRuns()

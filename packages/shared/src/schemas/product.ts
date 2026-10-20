@@ -163,6 +163,21 @@ const draftMediaSchema = z.object({
   sha256: z.string().max(64).nullable().optional(),
   failReason: z.string().max(120).nullable().optional()
 })
+const draftDetailFieldSchema = z.object({
+  label: z.string().max(120),
+  value: z.string().max(2_000),
+  kind: z.enum(['input', 'textarea', 'select', 'content', 'text']).optional()
+})
+const draftDetailsSchema = z.object({
+  // value 上限与 reader 的字段截断（product-page-reader pushField slice(0,2000)）对齐：
+  // attributes 由 fields 派生，上限小于读取上限时，501-2000 字的属性在编辑器保存会被
+  // strict 校验拒绝且用户无法自救（2026-10-21 审查 P2）。
+  attributes: z.array(z.object({ name: z.string().max(120), value: z.string().max(2_000) }).strict()).max(200),
+  fields: z.array(draftDetailFieldSchema).max(200),
+  barcode: z.string().max(128).nullable().optional(),
+  sourcePlatform: z.string().max(32).nullable().optional(),
+  capturedAt: z.number().int().nullable().optional()
+}).strict()
 
 export const productLibrarySaveInputSchema = z.object({
   productId: productIdSchema,
@@ -181,7 +196,8 @@ export const productLibrarySaveInputSchema = z.object({
       skuCode: z.string().max(64).nullable().optional(),
       barcode: z.string().max(64).nullable().optional()
     })).max(200),
-    media: z.array(draftMediaSchema).max(50)
+    media: z.array(draftMediaSchema).max(50),
+    details: draftDetailsSchema.nullable().optional()
   }).strict()
 }).strict()
 
@@ -193,6 +209,15 @@ export type ProductLibrarySaveAsInput = z.infer<typeof productLibrarySaveAsInput
 export const productDetailCollectInputSchema = z.object({
   storeId: storeIdSchema,
   platformProductId: z.string().trim().min(1).max(64)
+}).strict()
+
+/** 全量商品同步：先拉完整列表，再逐商品进入已验证的详情页采集。 */
+export const productFullSyncInputSchema = z.object({
+  storeId: storeIdSchema,
+  trigger: z.enum(['manual', 'schedule']).optional(),
+  maxPages: z.number().int().min(1).max(200).optional(),
+  maxProducts: z.number().int().min(1).max(5000).optional(),
+  timeoutMs: z.number().int().min(5_000).max(600_000).optional()
 }).strict()
 // ---------------------------------------------------------------- 发布（M3）
 

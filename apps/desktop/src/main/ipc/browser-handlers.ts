@@ -160,6 +160,9 @@ export function registerBrowserHandlers(): void {
     const parsed = browserTabInputSchema.safeParse(input)
     if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, '店铺或标签页参数不合法', requestId)
     try {
+      // worker 页（邀约后台页）的生命周期由主进程在批次终态统一释放，渲染层无权关闭
+      const workerTab = WindowManager.getStoreTabs(parsed.data.storeId).find(t => t.id === parsed.data.tabId && t.worker === true)
+      if (workerTab) return error(ERROR_CODES.INVALID_ARGUMENT.code, '后台运行页由系统管理，不允许关闭', requestId)
       WindowManager.closeTab(parsed.data.storeId, parsed.data.tabId)
       return success({ success: true }, requestId)
     } catch (err: any) {
@@ -629,7 +632,9 @@ export function registerBrowserHandlers(): void {
     const parsed = browserStoreIdSchema.safeParse(input)
     if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, 'storeId 无效', requestId)
     try {
-      const tabs = WindowManager.getStoreTabs(parsed.data.storeId).map(t => ({
+      // worker 页（邀约后台页）对渲染层不可见——这里是与 emitTabs/browser:state 同口径的
+      // 第四个出口，漏过滤会让渲染层拿到 tabId 再借 tab:close/navigate 伤害后台任务
+      const tabs = WindowManager.getStoreTabs(parsed.data.storeId).filter(t => t.worker !== true).map(t => ({
         id: t.id, url: t.url, title: t.title, isPinned: t.isPinned, orderIndex: t.orderIndex,
         guestAttached: t.guestAttached === true && !!t.webContents && !t.webContents.isDestroyed()
       }))
@@ -647,7 +652,7 @@ export function registerBrowserHandlers(): void {
       const stores = WindowManager.getOpenStoreIds().map(storeId => ({
         storeId,
         activeTabId: WindowManager.getActiveTabId(storeId),
-        tabs: WindowManager.getStoreTabs(storeId).map(t => ({
+        tabs: WindowManager.getStoreTabs(storeId).filter(t => t.worker !== true).map(t => ({
           id: t.id, url: t.url, title: t.title, isPinned: t.isPinned, orderIndex: t.orderIndex,
           guestAttached: t.guestAttached === true && !!t.webContents && !t.webContents.isDestroyed(),
           // 采集专用页必须把标记带给渲染层：渲染层据此"挂隐藏 webview 但不进标签栏"，

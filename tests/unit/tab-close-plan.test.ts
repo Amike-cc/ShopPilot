@@ -375,9 +375,10 @@ describe('模块边界与对外契约', () => {
     for (const field of ['closed: number', 'skippedPinned: number', 'remaining: number', 'nothingToClose: boolean']) {
       expect(WINDOW_MANAGER).toContain(field)
     }
-    // 决策已经委托给纯模块，执行与日志仍在这里
+    // 决策已经委托给纯模块，执行与日志仍在这里；
+    // worker 页（邀约后台页）不进关闭候选——「关闭全部/其他」只作用于用户的标签页
     expect(WINDOW_MANAGER).toContain("import { planTabClose } from './tab-close-plan'")
-    expect(WINDOW_MANAGER).toContain('const plan = planTabClose(Array.from(state.tabs.values()), input)')
+    expect(WINDOW_MANAGER).toContain('const plan = planTabClose(Array.from(state.tabs.values()).filter(tab => tab.worker !== true), input)')
     expect(WINDOW_MANAGER).toContain('[tabs] closeMany store=${storeId} mode=${input.mode} asked=')
   })
 })

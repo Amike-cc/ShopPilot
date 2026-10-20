@@ -48,7 +48,8 @@ import {
   productPublishOpenInputSchema,
   productPublishPreflightInputSchema,
   productListQuerySchema,
-  productSyncInputSchema
+  productSyncInputSchema,
+  productFullSyncInputSchema
 } from '@shared/schemas/product'
 import { productSyncService } from '../products/product-sync-service'
 import { productDetailService } from '../products/product-detail-service'
@@ -88,6 +89,21 @@ export function registerProductHandlers(): void {
     const parsed = productSyncInputSchema.safeParse(raw)
     if (!parsed.success) return inputError(rid)
     try { return ok(await productSyncService.syncStore(parsed.data), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
+  handle(IPC_CHANNELS.PRODUCT_SYNC_FULL, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const parsed = productFullSyncInputSchema.safeParse(raw)
+    if (!parsed.success) return inputError(rid)
+    try { return ok(await productSyncService.syncStoreFull(parsed.data), rid) } catch (error) { return serviceError(error, rid) }
+  })
+
+  // 请求中断进行中的全量详情采集（详情循环在下一条前生效；没有在跑的全量同步时如实返回 false）
+  handle(IPC_CHANNELS.PRODUCT_SYNC_FULL_CANCEL, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
+    const rid = requestId()
+    const storeId = String((raw as { storeId?: unknown } | null)?.storeId || '')
+    if (!storeId) return inputError(rid)
+    try { return ok({ requested: productSyncService.requestFullSyncCancel(storeId) }, rid) } catch (error) { return serviceError(error, rid) }
   })
 
   handle(IPC_CHANNELS.PRODUCT_LIST, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {

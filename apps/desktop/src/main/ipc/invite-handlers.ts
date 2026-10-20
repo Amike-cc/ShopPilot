@@ -15,22 +15,17 @@ import { randomUUID } from 'crypto'
 import { familyHandle } from './family-handle'
 import { INVITE_REPEAT_WINDOW_DAYS, listInvites, recentInvitedNicknames } from '../services/invite-history'
 import {
-  createInviteCampaign,
-  attachInviteCampaignRun,
+  cancelScheduledInviteCampaign,
   getInviteCampaignDetail,
-  listInviteCampaigns,
-  markInviteCampaignFailed,
-  newInviteCampaignId
+  listInviteCampaigns
 } from '../services/invite-campaigns'
 import { inviteRecordSummary, listInviteRecords, updateInviteRecordStatus } from '../services/invite-records'
-import { checkInviteQuota, getInviteQuota } from '../services/invite-quota'
+import { getInviteQuota } from '../services/invite-quota'
 import { listBlacklistedNicknames, listCreators, updateCreator } from '../services/invite-creators'
 import { deleteInviteProductSet, deleteInviteScript, listInviteProductSets, listInviteScripts, saveInviteProductSet, saveInviteScript } from '../services/invite-assets'
 import { recordInviteEvent } from '../services/invite-events'
-import * as TaskStore from '../tasks/task-store'
-import * as Runner from '../tasks/task-runner'
+import { startInviteCampaign } from '../services/invite-campaign-service'
 import { getDatabase } from '../db/database'
-import { getOpenStoreIds } from '../browser/window-manager'
 import { logMain } from '../services/logger'
 import { ipcFail as error, ipcOk as ok } from './envelope'
 
@@ -70,88 +65,22 @@ export function registerInviteHandlers(): void {
   /**
    * 创建批次 + 任务 + 运行。
    *
-   * 为什么不在渲染层分两步（task.create → task.run）：那样批次拿不到 taskId，
-   * 而且 create 成功、run 失败会留下「有批次没运行」；这里由主进程一次编排，
-   * 失败时把批次标记为 failed，页面能看到真实结果。
+   * 编排逻辑在 `services/invite-campaign-service.ts`（可脱离 Electron 单测）；
+   * 这里只做参数透传、错误映射与 envelope。
    */
   handle(IPC_CHANNELS.INVITE_CAMPAIGN_START, async (_event: IpcMainInvokeEvent, input: InviteCampaignStartInput): Promise<IPCResult> => {
     const requestId = rid()
     try {
-      const storeId = String(input?.campaign?.storeId || input?.task?.storeScope || '')
-      if (!input?.task || !storeId) return error(ERROR_CODES.INVALID_ARGUMENT.code, '缺少任务载荷或店铺', requestId)
-      const store = getDatabase().prepare('SELECT id, platform FROM stores WHERE id = ? AND deleted_at IS NULL').get(storeId) as { id: string; platform: string } | undefined
-      if (!store) return error(ERROR_CODES.INTERNAL_ERROR.code, '店铺不存在或已在回收站', requestId)
-
-      /**
-       * 同店同平台只允许一个进行中的邀约批次：多个任务同时操作同一个广场会争标签页、
-       * 互相把对方的筛选/弹窗切走（真机已多次验证），也会让日额度预留失真。
-       * 不同店铺仍可并行（平台限流由各店铺自己承担）。
-       */
-      const active = getDatabase().prepare(`
-        SELECT c.id, c.name FROM invite_campaigns c
-        JOIN task_runs r ON r.id = c.run_id
-        WHERE c.store_id = ? AND c.platform = ?
-          AND r.status IN ('queued','running','paused','waiting_confirmation')
-        ORDER BY c.created_at DESC LIMIT 1
-      `).get(storeId, store.platform) as { id: string; name: string } | undefined
-      if (active) {
-        return error(ERROR_CODES.TASK_BAD_STATE.code, `该店铺已有进行中的邀约批次「${active.name}」，请先停止或等它结束`, requestId)
-      }
-
-      const campaignId = newInviteCampaignId()
-      const targetCount = Math.max(1, Math.min(500, Math.round(Number(input.campaign.targetCount) || 1)))
-      /**
-       * 日额度护栏：只在店铺配置了 dailyCap 时硬拦。
-       * 未配置时仍统计 used/reserved（页面/侧栏如实展示），但不拿一个拍出来的默认值阻止用户。
-       */
-      const quota = checkInviteQuota(storeId, store.platform, targetCount)
-      if (!quota.ok) {
-        return error(ERROR_CODES.INVITE_QUOTA_EXCEEDED.code, quota.message, requestId)
-      }
-      createInviteCampaign({
-        id: campaignId,
-        storeId,
-        platform: store.platform,
-        name: input.task.name,
-        targetCount,
-        filters: input.campaign.filters ?? null,
-        scriptText: input.campaign.scriptText ?? null,
-        productIds: input.campaign.productIds ?? [],
-        createdBy: input.campaign.createdBy || 'panel',
-        sendMode: input.campaign.sendMode === 'confirm' ? 'confirm' : 'direct'
-      })
-
-      let task: ReturnType<typeof TaskStore.createTask>
-      try {
-        task = TaskStore.createTask({
-          ...input.task,
-          storeScope: storeId,
-          kind: 'creator_invite',
-          source: input.campaign.createdBy === 'agent' ? 'agent' : input.campaign.createdBy === 'panel' ? 'panel' : 'campaign',
-          campaignId
-        })
-      } catch (err) {
-        markInviteCampaignFailed(campaignId)
-        return inviteError(err, requestId)
-      }
-
-      try {
-        const run = Runner.enqueueRun(task.id, { reason: '达人邀约', storeId })
-        attachInviteCampaignRun(campaignId, task.id, run.runId)
-        recordInviteEvent({
-          storeId, campaignId, runId: run.runId, type: 'campaign.started',
-          payload: { platform: store.platform, targetCount, createdBy: input.campaign.createdBy || 'panel' }
-        })
-        return ok({
-          campaignId,
-          task,
-          run: TaskStore.getRun(run.runId),
-          waitingForStore: !getOpenStoreIds().includes(storeId)
-        }, requestId)
-      } catch (err) {
-        markInviteCampaignFailed(campaignId)
-        return inviteError(err, requestId)
-      }
+      const result = startInviteCampaign(input)
+      if (!result.ok) return error(result.code, result.message, requestId)
+      return ok({
+        campaignId: result.campaignId,
+        task: result.task,
+        run: result.run,
+        waitingForStore: result.waitingForStore,
+        // service 的权威排期时间（null=立即启动）：渲染层要展示"已排期于 X"得从这里拿
+        scheduledAt: result.scheduledAt
+      }, requestId)
     } catch (err) {
       return inviteError(err, requestId)
     }
@@ -172,6 +101,24 @@ export function registerInviteHandlers(): void {
       const detail = getInviteCampaignDetail(campaignId)
       if (!detail) return error(ERROR_CODES.TASK_NOT_FOUND.code, '邀约批次不存在', requestId)
       return ok(detail, requestId)
+    } catch (err) { return inviteError(err, requestId) }
+  })
+
+  /**
+   * 取消排期：只对 scheduled 生效。已经跑起来的批次要走任务取消（INVITE 停止按钮），
+   * 这里明确返回 false，避免用户以为"取消排期"能停掉正在跑的发送。
+   */
+  handle(IPC_CHANNELS.INVITE_CAMPAIGN_CANCEL, (_event: IpcMainInvokeEvent, input: { campaignId?: string } = {}): IPCResult => {
+    const requestId = rid()
+    try {
+      const campaignId = String(input?.campaignId || '')
+      if (!campaignId) return error(ERROR_CODES.INVALID_ARGUMENT.code, '缺少 campaignId', requestId)
+      // 取消前先取一次详情拿 storeId：取消后按店铺过滤事件流时这条不能丢（同文件其它事件都带）
+      const before = getInviteCampaignDetail(campaignId)
+      const cancelled = cancelScheduledInviteCampaign(campaignId)
+      if (!cancelled) return error(ERROR_CODES.TASK_BAD_STATE.code, '该批次不在排期状态（可能已启动或已取消）', requestId)
+      recordInviteEvent({ campaignId, storeId: before?.campaign?.storeId || undefined, type: 'campaign.schedule_cancelled', payload: {} })
+      return ok({ campaignId, cancelled: true }, requestId)
     } catch (err) { return inviteError(err, requestId) }
   })
 

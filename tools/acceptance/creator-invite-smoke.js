@@ -2,13 +2,15 @@
  * 达人邀约 v2 冒烟验收（2026-10-19）
  *
  * 目标：在**真实 Electron 主窗口**里走一遍：
- *   应用中心 → 达人邀约卡片 → 独立模块页 → 页面数据 IPC。
- * 不触碰平台页面、不发送任何邀约；只验证路由、迁移 v33、preload/IPC 与空态。
+ *   应用中心 → 达人邀约卡片 → 独立模块页 → 页面数据 IPC → 就地配置面板。
+ * 不触碰平台页面、不发送任何邀约；只验证路由、迁移 v33、preload/IPC、空态，
+ * 以及「邀约在后端隐藏窗口运行、不占用户标签页」这条产品红线。
  *
  * 用法：node tools/acceptance/creator-invite-smoke.js
  * 前置：pnpm build（source runner 读 apps/desktop/out）；打包产物存在时也可直接跑。
  */
 const { spawn, execSync } = require('child_process')
+const http = require('http')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -44,6 +46,21 @@ async function main() {
   let log = ''
   child.stdout.on('data', d => { log += d.toString() })
   child.stderr.on('data', d => { log += d.toString() })
+
+  /**
+   * 本地静态页：用真实浏览器步骤验证"后台隐藏窗口里 DOM 能布局、能点"。
+   * 不依赖平台登录，也不发任何邀约——只走 navigate / waitForText / clickByText。
+   */
+  const localServer = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    if (String(req.url || '').startsWith('/detail')) {
+      res.end('<!doctype html><html><head><meta charset="utf-8"><title>详情</title></head><body><h1>详情页就绪</h1></body></html>')
+      return
+    }
+    res.end('<!doctype html><html><head><meta charset="utf-8"><title>后台页</title></head><body><h1>后台就绪</h1><button onclick="document.getElementById(\'out\').textContent=\'已点击\'">点我</button><div id="out"></div><a href="/detail" target="_blank">查看详情</a></body></html>')
+  })
+  await new Promise(resolve => localServer.listen(0, '127.0.0.1', resolve))
+  const localPort = localServer.address().port
 
   let client = null
   try {
@@ -155,10 +172,227 @@ async function main() {
       const assetsTab = await click('[data-test="invite-v2-tab-assets"]');
       const scriptInput = !!document.querySelector('[data-test="invite-v2-script-name"]');
       const quota = !!document.querySelector('[data-test="invite-v2-quota"]');
-      return { creatorsTab, creatorsEmpty, assetsTab, scriptInput, quota };
+
+      // 页签拆分后的独立组件：任务列表 → 详情抽屉 → 说明页 → 记录页
+      await click('[data-test="invite-v2-tab-tasks"]');
+      const row = document.querySelector('[data-test="invite-v2-campaign-row"]');
+      if (row) { row.click(); await wait(900); }
+      const drawer = document.querySelector('[data-test="invite-v2-campaign-detail"]');
+      const drawerTitle = drawer ? String((drawer.querySelector('h2') || {}).textContent || '') : '';
+      const drawerKpis = drawer ? drawer.querySelectorAll('.invite-detail-kpis span').length : 0;
+      const closeBtn = drawer ? [...drawer.querySelectorAll('button')].find(b => String(b.textContent || '').trim() === '关闭') : null;
+      if (closeBtn) { closeBtn.click(); await wait(300); }
+      const drawerClosed = !document.querySelector('[data-test="invite-v2-campaign-detail"]');
+
+      await click('[data-test="invite-v2-tab-about"]');
+      const aboutText = String((document.querySelector('.invite-about') || {}).innerText || '');
+      await click('[data-test="invite-v2-tab-records"]');
+      const recordsEmpty = !!document.querySelector('[data-test="invite-v2-records-empty"]');
+
+      return { creatorsTab, creatorsEmpty, assetsTab, scriptInput, quota,
+        drawer: !!drawer, drawerTitle, drawerKpis, drawerClosed,
+        about: aboutText.includes('配置入口在哪') && aboutText.includes('后端隐藏窗口执行'),
+        recordsEmpty };
     `)
     checker.check('达人库页签可打开（无记录时如实空态）', tabs.creatorsTab === true && tabs.creatorsEmpty === true, JSON.stringify(tabs))
     checker.check('资产页签与额度 chip 渲染', tabs.assetsTab === true && tabs.scriptInput === true && tabs.quota === true, JSON.stringify(tabs))
+    checker.check('任务页签打开批次详情抽屉并可关闭',
+      tabs.drawer === true && tabs.drawerTitle.includes('冒烟') && tabs.drawerKpis >= 4 && tabs.drawerClosed === true,
+      JSON.stringify({ drawer: tabs.drawer, drawerTitle: tabs.drawerTitle, drawerKpis: tabs.drawerKpis, drawerClosed: tabs.drawerClosed }))
+    checker.check('说明页与记录页（拆分组件）渲染', tabs.about === true && tabs.recordsEmpty === true, JSON.stringify({ about: tabs.about, recordsEmpty: tabs.recordsEmpty }))
+
+    /**
+     * 独立页就地配置：以前「新建邀约」会跳到店铺浏览器侧栏；现在必须留在本页，
+     * 因为发送改由主进程隐藏窗口负责，不再需要用户先打开店铺。
+     */
+    const launcher = await client.eval(`
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      const click = async sel => { const el = document.querySelector(sel); if (el) { el.click(); await wait(400); } return !!el; };
+      await click('[data-test="invite-v2-tab-tasks"]');
+      const opened = await click('[data-test="invite-v2-open-config"]');
+      for (let i = 0; i < 30; i++) {
+        if (document.querySelector('[data-test="invite-v2-launcher"]')) break;
+        await wait(200);
+      }
+      await wait(600);
+      const box = document.querySelector('[data-test="invite-v2-launcher"]');
+      return {
+        opened,
+        launcher: !!box,
+        panel: !!(box && box.querySelector('[data-test="invite-panel"]')),
+        start: !!(box && box.querySelector('[data-test="invite-start"]')),
+        storeSelect: !!(box && box.querySelector('[data-test="invite-v2-launcher-store"]')),
+        storeOptions: box ? box.querySelectorAll('[data-test="invite-v2-launcher-store"] option').length : 0,
+        storeValue: box ? String((box.querySelector('[data-test="invite-v2-launcher-store"]') || {}).value || '') : '',
+        backendNote: !!(box && box.querySelector('[data-test="invite-backend-note"]')),
+        stillOnPage: !!document.querySelector('[data-test="creator-invite-page"]')
+      };
+    `)
+    checker.check('独立页就地打开配置面板（不跳店铺浏览器）',
+      launcher.opened === true && launcher.launcher === true && launcher.panel === true && launcher.start === true && launcher.stillOnPage === true,
+      JSON.stringify(launcher))
+    checker.check('面板明确标注后台运行', launcher.backendNote === true, JSON.stringify({ backendNote: launcher.backendNote }))
+    checker.check('配置面板可指定店铺（店铺下拉已接入）',
+      launcher.storeSelect === true && launcher.storeOptions >= 1 && launcher.storeValue.length > 0,
+      JSON.stringify({ storeSelect: launcher.storeSelect, storeOptions: launcher.storeOptions, storeValue: launcher.storeValue }))
+
+    /**
+     * 四步向导（2026-10-20）：目标 → 受众 → 话术 → 确认。
+     * 断言步骤按钮存在、可切换，且切到第 4 步时「开始邀约」与定时输入都在同一屏。
+     */
+    const wizard = await client.eval(`
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      const box = () => document.querySelector('[data-test="invite-v2-launcher"]');
+      const steps = box() ? box().querySelectorAll('[data-test="invite-v2-steps"] .invite-step') : [];
+      const clickStep = async n => {
+        const el = box() && box().querySelector('[data-test="invite-v2-step-' + n + '"]');
+        if (el) { el.click(); await wait(320); }
+        return !!el;
+      };
+      const visible = sel => {
+        const el = box() && box().querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      // 同一选择器可能有多个（不同步骤里的 chip）：只要"有一个可见"就算这一步渲染了。
+      const anyVisible = sel => [...(box() ? box().querySelectorAll(sel) : [])].some(el => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+      const step1Category = visible('[data-test="invite-category"]');
+      const ok2 = await clickStep(2);
+      const step2Chip = anyVisible('.inv-chip');
+      const step1HiddenOn2 = !visible('[data-test="invite-category"]');
+      const ok3 = await clickStep(3);
+      const step3Script = visible('[data-test="invite-script"]') ?? visible('[data-test="invite-step3-noop"]');
+      const ok4 = await clickStep(4);
+      const step4Start = visible('[data-test="invite-start"]');
+      return { steps: steps.length, ok2, ok3, ok4, step1Category, step1HiddenOn2, step2Chip, step3Script: !!step3Script, step4Start };
+    `)
+    checker.check('四步向导可切换（目标/受众/话术/确认）',
+      wizard.steps === 4 && wizard.ok2 && wizard.ok3 && wizard.ok4 && wizard.step1Category === true &&
+      wizard.step1HiddenOn2 === true && wizard.step2Chip === true && wizard.step3Script === true && wizard.step4Start === true,
+      JSON.stringify(wizard))
+
+    /**
+     * 定时邀约（2026-10-20）：排期批次不入队，状态为 scheduled；取消后变 stopped。
+     * 这里用 IPC 直接建（不点 UI 的 datetime-local，避免依赖本机时区格式），
+     * 验证的是主进程排期语义与取消路径——真正到点拉起由单测覆盖。
+     */
+    const scheduled = await client.eval(`
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      const store = await window.shopilot.store.create({ name: '定时邀约测试店', platform: '抖店', adminUrl: 'https://example.com/' });
+      if (!store.ok) return { ok: false, stage: 'store', error: store.error };
+      const at = Date.now() + 30 * 60 * 1000;
+      const started = await window.shopilot.invite.startCampaign({
+        task: { name: '达人邀约 · 抖店 · 定时', storeScope: store.data.id, steps: [{ type: 'waitMs', input: { ms: 120 }, timeoutMs: 3000 }] },
+        campaign: { storeId: store.data.id, targetCount: 1, filters: {}, scriptText: '', scheduleAt: at }
+      });
+      if (!started.ok) return { ok: false, stage: 'start', error: started.error };
+      const detail = await window.shopilot.invite.campaignDetail(started.data.campaignId);
+      const row = detail.ok ? detail.data.campaign : null;
+      const cancel = await window.shopilot.invite.cancelScheduled(started.data.campaignId);
+      const after = await window.shopilot.invite.campaignDetail(started.data.campaignId);
+      const cancelAgain = await window.shopilot.invite.cancelScheduled(started.data.campaignId);
+      const past = await window.shopilot.invite.startCampaign({
+        task: { name: '达人邀约 · 抖店 · 过去时间', storeScope: store.data.id, steps: [{ type: 'waitMs', input: { ms: 120 }, timeoutMs: 3000 }] },
+        campaign: { storeId: store.data.id, targetCount: 1, scheduleAt: Date.now() - 60000 }
+      });
+      return {
+        ok: true,
+        status: row ? row.status : null,
+        scheduledAt: row ? row.scheduledAt : null,
+        runId: row ? row.runId : null,
+        cancelOk: cancel.ok === true,
+        afterStatus: after.ok ? after.data.campaign.status : null,
+        cancelAgainOk: cancelAgain.ok === true,
+        pastRejected: past.ok === false,
+        pastMessage: past.ok === false ? past.error.message : ''
+      };
+    `)
+    checker.check('定时邀约：建批次后状态=scheduled 且没有 run（不立即发送）',
+      scheduled.ok === true && scheduled.status === 'scheduled' && scheduled.scheduledAt > 0 && !scheduled.runId,
+      JSON.stringify(scheduled))
+    checker.check('定时邀约：取消排期 → stopped，重复取消被拒绝',
+      scheduled.cancelOk === true && scheduled.afterStatus === 'stopped' && scheduled.cancelAgainOk === false,
+      JSON.stringify({ cancelOk: scheduled.cancelOk, afterStatus: scheduled.afterStatus, cancelAgainOk: scheduled.cancelAgainOk }))
+    checker.check('定时邀约：过去时间被拒绝（不静默改成立即发送）',
+      scheduled.pastRejected === true && String(scheduled.pastMessage).includes('1 分钟'),
+      JSON.stringify({ pastRejected: scheduled.pastRejected, message: scheduled.pastMessage }))
+
+    /**
+     * 后端运行：waitMs 任务的批次必须真的跑到 succeeded（说明隐藏工作页建得起来、页面句柄可用），
+     * 同时浏览器状态里**不能**出现任何可见标签页——运行不该替用户打开店铺。
+     */
+    const background = await client.eval(`
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      const campaignId = ${JSON.stringify(campaign && campaign.campaignId ? campaign.campaignId : '')};
+      let status = null;
+      let last = null;
+      for (let i = 0; i < 30; i++) {
+        const detail = await window.shopilot.invite.campaignDetail(campaignId);
+        last = detail && detail.ok ? detail.data : null;
+        status = last && last.campaign ? last.campaign.status : null;
+        if (status === 'completed' || status === 'failed' || status === 'cancelled') break;
+        await wait(300);
+      }
+      const state = await window.shopilot.browser.state();
+      const visibleTabs = state && state.ok ? (state.data.stores || []).reduce((sum, s) => sum + (s.tabs || []).filter(t => t.internal !== true).length, 0) : -1;
+      return { status, visibleTabs, campaignId, runStatus: last && last.campaign ? last.campaign.status : null };
+    `)
+    checker.check('后台工作页可用：批次跑到终态（completed）', background.status === 'completed', JSON.stringify(background))
+    checker.check('运行没有打开任何可见标签页（不占用户浏览器）', background.visibleTabs === 0, JSON.stringify({ visibleTabs: background.visibleTabs }))
+
+    /**
+     * 真实页面步骤（本地 HTTP）：证明隐藏窗口不是"只占个位"——
+     * waitForText 依赖 getBoundingClientRect>0，如果窗口没布局会直接失败。
+     */
+    const local = await client.eval(`
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      const store = await window.shopilot.store.create({ name: '后台页测试店', platform: '抖店', adminUrl: 'https://example.com/' });
+      if (!store.ok) return { ok: false, stage: 'store', error: store.error };
+      const started = await window.shopilot.invite.startCampaign({
+        task: {
+          name: '达人邀约 · 抖店 · 后台页',
+          storeScope: store.data.id,
+          kind: 'creator_invite',
+          source: 'panel',
+          steps: [
+            { type: 'navigate', input: { url: 'http://127.0.0.1:${localPort}/' }, timeoutMs: 20000 },
+            { type: 'waitForText', input: { text: '后台就绪' }, timeoutMs: 12000 },
+            { type: 'clickByText', input: { text: '点我' }, timeoutMs: 12000 },
+            { type: 'waitForText', input: { text: '已点击' }, timeoutMs: 12000 },
+            // window.open / target=_blank → 主进程隐藏子页：followTab 必须能跟过去，且仍不产生可见标签页
+            { type: 'clickByText', input: { text: '查看详情', mode: 'real', followTab: { urlIncludes: '/detail' } }, timeoutMs: 12000 },
+            { type: 'waitForPage', input: { urlIncludes: '/detail' }, timeoutMs: 12000 },
+            { type: 'waitForText', input: { text: '详情页就绪' }, timeoutMs: 12000 }
+          ]
+        },
+        campaign: { storeId: store.data.id, targetCount: 1, filters: {}, scriptText: '' }
+      });
+      if (!started.ok) return { ok: false, stage: 'start', error: started.error };
+      let status = null;
+      for (let i = 0; i < 60; i++) {
+        const detail = await window.shopilot.invite.campaignDetail(started.data.campaignId);
+        status = detail && detail.ok && detail.data.campaign ? detail.data.campaign.status : null;
+        if (status === 'completed' || status === 'failed' || status === 'cancelled') break;
+        await wait(300);
+      }
+      const state = await window.shopilot.browser.state();
+      const visibleTabs = state && state.ok ? (state.data.stores || []).reduce((sum, s) => sum + (s.tabs || []).filter(t => t.internal !== true).length, 0) : -1;
+      const detail = await window.shopilot.invite.campaignDetail(started.data.campaignId);
+      const diag = await window.shopilot.browser.memoryDiagnostics();
+      const backgroundPages = diag && diag.ok && Array.isArray(diag.data.backgroundPages) ? diag.data.backgroundPages.length : -1;
+      return {
+        ok: true, status, visibleTabs, backgroundPages,
+        stopReason: detail && detail.ok && detail.data.campaign ? detail.data.campaign.stopReason : null,
+        storeId: store.data.id
+      };
+    `)
+    checker.check('后台隐藏窗口能真实布局并点击（本地页面）', local.ok === true && local.status === 'completed', JSON.stringify(local))
+    checker.check('真实页面步骤也没有打开可见标签页', local.visibleTabs === 0, JSON.stringify({ visibleTabs: local.visibleTabs }))
+    checker.check('终态释放后台页（诊断里 backgroundPages=0，无隐藏窗口泄漏）', local.backgroundPages === 0, JSON.stringify({ backgroundPages: local.backgroundPages }))
 
     const ok = checker.summary('达人邀约 v2 冒烟')
     if (!ok) {
@@ -171,6 +405,7 @@ async function main() {
     process.exitCode = 1
   } finally {
     try { client?.close() } catch { /* ignore */ }
+    try { localServer.close() } catch { /* ignore */ }
     killTree(child)
     await sleep(500)
     try { fs.rmSync(userData, { recursive: true, force: true }) } catch { /* ignore */ }

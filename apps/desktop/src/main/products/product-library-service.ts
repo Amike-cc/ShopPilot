@@ -13,6 +13,7 @@
 
 import { deriveProductStatus, localProductDraftHash, productDraftIssues, type LocalProductDraft } from '@shared/product-draft'
 import type { ProductDraftIssue } from '@shared/product-draft'
+import type { PlatformProductDetailSnapshot } from '@shared/contracts/platform-product'
 import { planMediaQueue } from '@shared/product-media-queue-rules'
 import { getDatabase } from '../db/database'
 import { logMain } from '../services/logger'
@@ -65,22 +66,32 @@ export class ProductLibraryService {
     const link = this.repository.linkByPlatformProduct(input)
     if (!link) throw new Error('LINK_NOT_FOUND')
 
+    const detail = parseDetail(link.platform_detail_json)
+    const imageUrls = detail?.imageUrls?.length ? detail.imageUrls : parseImageUrls(link.platform_image_urls_json)
+    const variants = detail?.skus?.length
+      ? detail.skus.map(sku => ({ spec: sku.spec, priceMinor: sku.priceMinor, stock: sku.stock, skuCode: sku.skuCode, barcode: sku.barcode ?? null }))
+      : [{ spec: [], priceMinor: linkNumber(link.platform_price_minor), stock: linkNumber(link.platform_stock) }]
     const draft: LocalProductDraft = {
-      title: String(link.platform_title ?? ''),
-      subtitle: null,
-      description: null,
-      brand: null,
-      localCategory: null,
-      tags: [],
-      // 列表页只有商品级价格/库存 → 单规格占位（不是猜 SKU，是如实建一个待补的规格）
-      variants: [{ spec: [], priceMinor: linkNumber(link.platform_price_minor), stock: linkNumber(link.platform_stock) }],
-      // 图片：同步时采集到的 URL 存在 link 的 platform_image_urls_json 里（v20 补的列）。
-      // 有就用真的，没有就**不假装有图** —— 界面会按"没有主图"如实提示。
-      media: parseImageUrls(link.platform_image_urls_json).map((url, index) => ({
+      title: detail?.title || String(link.platform_title ?? ''),
+      subtitle: detail?.subtitle ?? null,
+      description: detail?.description ?? null,
+      brand: detail?.brand ?? null,
+      localCategory: detail?.categoryPath ?? null,
+      tags: detail?.attributes?.filter(item => item.name && item.value).slice(0, 30).map(item => `${item.name}:${item.value}`) ?? [],
+      variants,
+      // 图片：详情页的原图优先，列表页缩略图只作为回退。
+      media: imageUrls.map((url, index) => ({
         role: index === 0 ? 'cover' : 'gallery',
         state: 'pending',
         remoteUrl: url
-      }))
+      })),
+      details: detail ? {
+        attributes: detail.attributes,
+        fields: detail.fields,
+        barcode: detail.barcode,
+        sourcePlatform: input.platform,
+        capturedAt: detail.collectedAt
+      } : null
     }
 
     const draftHash = localProductDraftHash(draft)
@@ -331,6 +342,67 @@ function parseImageUrls(value: unknown): string[] {
     return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string' && !!item) : []
   } catch {
     return []
+  }
+}
+
+/**
+ * 逐项校验详情快照里的 SKU：快照来自页面采集，坏数据（spec 缺失/非数组等）曾一路透传，
+ * 让 saveAsLocal 算草稿指纹时在 `variant.spec.map` 处抛 TypeError（product-draft.ts:200）。
+ * 规矩与 parseDetail 其它字段一致：只认类型对得上的字段，整条不合格就丢弃并留 warn 痕。
+ */
+function parseDetailSkus(value: unknown): PlatformProductDetailSnapshot['skus'] {
+  if (!Array.isArray(value)) return []
+  const skus: PlatformProductDetailSnapshot['skus'] = []
+  let dropped = 0
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) { dropped += 1; continue }
+    const record = item as Record<string, unknown>
+    // spec 不是数组直接丢整条：草稿指纹按 spec.map 取值，缺了必抛
+    const spec = Array.isArray(record.spec)
+      ? record.spec.filter((part): part is { name: string; value: string } =>
+          Boolean(part) && typeof part === 'object'
+          && typeof (part as { name?: unknown }).name === 'string'
+          && typeof (part as { value?: unknown }).value === 'string')
+      : null
+    if (!spec) { dropped += 1; continue }
+    skus.push({
+      platformSkuId: typeof record.platformSkuId === 'string' ? record.platformSkuId : '',
+      spec,
+      priceMinor: typeof record.priceMinor === 'number' && Number.isFinite(record.priceMinor) ? record.priceMinor : null,
+      stock: typeof record.stock === 'number' && Number.isFinite(record.stock) ? record.stock : null,
+      skuCode: typeof record.skuCode === 'string' ? record.skuCode : null,
+      barcode: typeof record.barcode === 'string' ? record.barcode : null,
+      imageUrl: typeof record.imageUrl === 'string' && record.imageUrl ? record.imageUrl : null,
+      state: record.state === 'missing' ? 'missing' : 'active'
+    })
+  }
+  if (dropped) logMain('warn', `[product-library] 详情快照里有 ${dropped} 条结构不完整的 SKU，已丢弃（其余字段仍可另存为）`)
+  return skus
+}
+
+/** 解析详情快照；坏数据按 null 处理，存量链接仍可按列表字段另存为。 */
+function parseDetail(value: unknown): PlatformProductDetailSnapshot | null {
+  if (typeof value !== 'string' || !value) return null
+  try {
+    const parsed = JSON.parse(value) as Partial<PlatformProductDetailSnapshot>
+    if (!parsed || typeof parsed !== 'object') return null
+    return {
+      title: typeof parsed.title === 'string' ? parsed.title : null,
+      subtitle: typeof parsed.subtitle === 'string' ? parsed.subtitle : null,
+      description: typeof parsed.description === 'string' ? parsed.description : null,
+      brand: typeof parsed.brand === 'string' ? parsed.brand : null,
+      categoryPath: typeof parsed.categoryPath === 'string' ? parsed.categoryPath : null,
+      barcode: typeof parsed.barcode === 'string' ? parsed.barcode : null,
+      attributes: Array.isArray(parsed.attributes) ? parsed.attributes.filter(item => item && typeof item.name === 'string' && typeof item.value === 'string') as Array<{ name: string; value: string }> : [],
+      fields: Array.isArray(parsed.fields) ? parsed.fields.filter(item => item && typeof item.label === 'string' && typeof item.value === 'string') as PlatformProductDetailSnapshot['fields'] : [],
+      specNames: Array.isArray(parsed.specNames) ? parsed.specNames.filter((item): item is string => typeof item === 'string') : [],
+      imageUrls: Array.isArray(parsed.imageUrls) ? parsed.imageUrls.filter((item): item is string => typeof item === 'string' && !!item) : [],
+      skus: parseDetailSkus(parsed.skus),
+      collectedAt: Number(parsed.collectedAt ?? 0),
+      missingFields: Array.isArray(parsed.missingFields) ? parsed.missingFields.filter((item): item is string => typeof item === 'string') : []
+    }
+  } catch {
+    return null
   }
 }
 

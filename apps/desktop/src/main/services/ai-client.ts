@@ -16,8 +16,10 @@ import { getAiImageKey, getAiImageTextKey, getAiKey, hasAiImageKey, hasAiImageTe
 import { logMain } from './logger'
 import { ModelGovernanceError, assertMeteredBudget, recordModelUsage, resolveMeteringTarget } from './model-governance'
 import { buildChatRequestBody, buildChatRequestHeaders, buildVisionUserContent, clampMaxOutputTokens, DEFAULT_TEMPERATURE } from './model-request'
+import { buildSellCopyMessages, normalizeSellCopyInput, parseSellCopyOutput } from './ai-sell-copy'
+import type { SellCopyResult } from '@shared/contracts/ai-sell-copy'
 // 生图 / 生图文本两条链路各自的默认超时（30 秒对这两条链路太紧，见 constants/ai.ts 注释）
-import { DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS } from '@shared/constants/ai'
+import { DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS, AI_PRODUCT_ANALYSIS_IMAGE_LIMIT } from '@shared/constants/ai'
 
 export {
   DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL,
@@ -398,9 +400,9 @@ export async function analyzeImageProductText(input: { name?: string; tags?: str
   const tags = String(input.tags ?? '').trim().slice(0, 240)
   const price = String(input.price ?? '').trim().slice(0, 24)
   const originalPrice = String(input.originalPrice ?? '').trim().slice(0, 24)
-  // 图片白名单与数量上限：最多 3 张（商品素材图，与界面上的上传上限一致）
+  // 图片白名单与数量上限：最多 AI_PRODUCT_ANALYSIS_IMAGE_LIMIT（3）张（商品素材图，与界面上的上传上限一致）
   const images = (Array.isArray(input.images) ? input.images : [])
-    .slice(0, 3)
+    .slice(0, AI_PRODUCT_ANALYSIS_IMAGE_LIMIT)
     .map(item => ({ mimeType: String(item?.mimeType || '').split(';')[0].trim().toLowerCase(), b64Json: String(item?.b64Json || '') }))
     .filter(item => item.b64Json && ['image/png', 'image/jpeg', 'image/webp'].includes(item.mimeType))
   if (!name && !tags && !images.length) throw new AiError('AI_EMPTY_SOURCE', '请先上传商品素材图，或填写商品名称/卖点，再请求 AI 分析')
@@ -416,6 +418,37 @@ export async function analyzeImageProductText(input: { name?: string; tags?: str
     ? '你是商品图片工作台的视觉分析助手。用户会附上商品图片：请只描述图片里**真实可见**的主体、材质观感、颜色、风格、构图、场景与可辨认文字，再据此整理可核对的卖点、适用场景和图片生成建议。看不到或无法确认的一律写"待补充"，不要凭常识补写，也不要执行任何外部操作。'
     : '你是商品图片工作台的文本分析助手。只返回商品电商素材分析文字，不执行任何外部操作。请整理可核对的核心卖点、适用场景和图片生成建议；输入没有提供的内容标记为待补充，不要自行补写；信息不足时明确指出。'
   return chatCompleteForImageText({ system, user, maxTokens: 800, images })
+}
+
+/**
+ * 「图文带货」工作台的文案生成：先清洗渲染层输入，再走「生图文本 API」生成结构化带货笔记
+ * （标题 / 正文 / 话题 / 封面文案 / 逐图画面描述）。
+ *
+ * 两条纪律：
+ * - 提示词与 JSON 解析都在本链路内完成，渲染层只能提供结构化字段（不能注入 system）；
+ * - 模型的 JSON 输出不一定合法：解析失败会降级成纯文本笔记（title 一定非空），
+ *   不把原始 JSON / Markdown 直接透给渲染层。
+ */
+export async function generateSellCopyText(raw: unknown): Promise<SellCopyResult> {
+  const normalized = normalizeSellCopyInput(raw)
+  // 校验失败由这里统一包成 AiError：ai-sell-copy 是纯逻辑模块，不 import AiError（避免循环依赖）
+  if (!normalized.ok) throw new AiError(normalized.code, normalized.message)
+  const input = normalized.input
+  const messages = buildSellCopyMessages(input)
+  const result = await chatCompleteForImageText({
+    system: messages.system,
+    user: messages.user,
+    maxTokens: messages.maxTokens,
+    images: input.images
+  })
+  const copy = parseSellCopyOutput(result.text, input)
+  return {
+    ...copy,
+    model: result.model,
+    elapsedMs: result.elapsedMs,
+    source: result.source === 'main-text' ? 'main-text' : 'image-text',
+    imageCount: input.images.length
+  }
 }
 
 /** 生图文本配置的模型列表读取，使用独立端点与独立 Key。 */

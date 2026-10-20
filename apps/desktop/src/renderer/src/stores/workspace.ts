@@ -7,6 +7,7 @@
 import { defineStore } from 'pinia'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { PLATFORM_CATALOG } from '@shared/constants/platforms'
+import type { TaskView } from '@shared/schemas/task'
 import type { TabInfo } from '../env'
 import { initCustomerMessageSound, playCustomerMessageBeep } from '../features/customer-service/customer-message-sound'
 // 店铺分组的输入口径（trim / 折叠空白 / 空→null / 字符白名单）与店铺页共用同一个纯模块
@@ -125,7 +126,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     downloads: [] as any[],
     downloadsStoreId: null as string | null,
     /** 任务引擎 - §6.4/§6.6（事件驱动实时态） */
-    tasks: [] as any[],
+    tasks: [] as TaskView[],
     runLive: {} as Record<string, any>,
     taskLogs: {} as Record<string, any[]>,
     confirmations: {} as Record<string, any>,

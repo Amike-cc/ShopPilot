@@ -145,6 +145,8 @@ export const IPC_CHANNELS = {
   INVITE_CAMPAIGN_START: 'invite:campaign:start',
   INVITE_CAMPAIGN_LIST: 'invite:campaign:list',
   INVITE_CAMPAIGN_DETAIL: 'invite:campaign:detail',
+  /** 取消排期（只对 status=scheduled 生效） */
+  INVITE_CAMPAIGN_CANCEL: 'invite:campaign:cancel',
   INVITE_RECORDS_LIST: 'invite:records:list',
   INVITE_RECORDS_SUMMARY: 'invite:records:summary',
   INVITE_RECORDS_UPDATE_STATUS: 'invite:records:updateStatus',
@@ -207,6 +209,9 @@ export const IPC_CHANNELS = {
   // 商品管理（商品管理方案 §5）：同步是**只读采集**；列表与台账供只读商品页使用。
   // 发布不在这里——发布必须走任务引擎 + 人工确认门禁（方案 §7.9）。
   PRODUCT_SYNC: 'products:sync',
+  PRODUCT_SYNC_FULL: 'products:syncFull',
+  /** 请求中断进行中的全量详情采集（2026-10-21 审查 P2-5：此前 5000 条串行无法取消）。 */
+  PRODUCT_SYNC_FULL_CANCEL: 'products:syncFullCancel',
   PRODUCT_LIST: 'products:list',
   PRODUCT_SYNC_RUNS: 'products:syncRuns',
   // 本地商品库（M2）：归并**必须由用户触发**（方案 D2：绝不自动合并）；
@@ -452,6 +457,8 @@ export const IPC_CHANNELS = {
   AI_IMAGE_TEXT_TEST: 'ai:image-text:test',
   AI_IMAGE_TEXT_MODELS_LIST: 'ai:image-text:models:list',
   AI_IMAGE_TEXT_ANALYZE: 'ai:image-text:analyze',
+  // 图文带货文案生成：渲染层只提交受限结构化字段，提示词组装与 JSON 解析都在主进程（防注入）
+  AI_IMAGE_TEXT_SELL_COPY: 'ai:image-text:sell-copy',
   // 生成图片（主进程持有 API Key，渲染层只提交受限提示词）
   AI_IMAGE_GENERATE: 'ai:image:generate',
   // 保存生成结果到本地磁盘（另存为对话框；带 outputPath 时直接写该路径，供验收脚本使用）
@@ -489,6 +496,12 @@ export const EVENT_CHANNELS = {
   BROWSER_TAB_CLOSE_REQUESTED: 'browser:tab:closeRequested',
   PROXY_HEALTH_CHANGED: 'proxy:healthChanged',
   SESSION_EXPIRED: 'session:expired',
+  /**
+   * 全量商品同步「详情阶段」的实时进度（2026-10-21 审查 P2-5）。
+   * payload：{ storeId, total, done, succeeded, failed, skipped, incomplete, canceled? }——
+   * 只有计数与店铺 id，不携带商品正文；done===total 时为最后一帧（canceled 标记是否被用户中断）。
+   */
+  PRODUCT_SYNC_FULL_PROGRESS: 'products:syncFullProgress',
   TASK_PROGRESS: 'task:progress',
   TASK_SCHEDULED_FIRED: 'task:scheduledFired',
   TASK_CONFIRMATION_REQUIRED: 'task:confirmationRequired',
@@ -535,7 +548,7 @@ export const EVENT_CHANNELS = {
  *   · 本层不 import electron（shared 是主/渲共用纯规则层）：`createIpcInvoker` 只做类型收窄，
  *     真正的 `ipcRenderer.invoke` 由 preload 注入。
  *
- * 已覆盖 12 个域 / 105 个通道：store · browser(+tab) · invite · task · snapshot · security ·
+ * 已覆盖 12 个域 / 106 个通道：store · browser(+tab) · invite · task · snapshot · security ·
  * session · settings · customerService · salesMetrics · extensions · maintenance。
  * 仍是扩展位（preload 继续走原来的 `ipcRenderer.invoke(...)`，行为不变，可按同一规则逐域接入）：
  * products / ai / proxy / bookmark / download / profile / overview / audit / diagnostics /
@@ -670,6 +683,7 @@ export interface IpcContract {
   'invite:campaign:start': { req: Record<string, unknown>; res: IpcUnresolved }
   'invite:campaign:list': { req: { storeId?: string; limit?: number }; res: IpcUnresolved }
   'invite:campaign:detail': { req: { campaignId: string }; res: IpcUnresolved }
+  'invite:campaign:cancel': { req: { campaignId: string }; res: IpcUnresolved }
   'invite:records:list': {
     req: { storeId?: string; campaignId?: string; status?: string; limit?: number; offset?: number }
     res: IpcUnresolved

@@ -50,6 +50,18 @@ export interface Tab {
    * 这样采集有真实页面可读，而用户的标签页（URL、表单、滚动位置）一点没动。
    */
   internal?: boolean
+  /**
+   * 后台工作页（达人邀约专用）：由主进程自己的**隐藏 BrowserWindow** 承载，
+   * 不依赖渲染层挂 `<webview>`、不进标签栏、不抢活动位，也不会让主界面切到店铺浏览器。
+   *
+   * 与 internal（采集专用页）的区别：internal 仍要渲染层挂隐藏 webview 才有页面；
+   * worker 页在用户完全没打开店铺、甚至没打开工作台浏览器时也能跑。
+   */
+  worker?: boolean
+  /** 后台工作页的用途（worker=true 时存在）：同一店铺可并存多个用途的后台页。 */
+  purpose?: string
+  /** 后台工作页对应的隐藏窗口（worker=true 时存在）；关闭标签页时一并销毁。 */
+  workerWindow?: Electron.BrowserWindow
   /** Renderer DOM <webview> 注册后的 guest 句柄；不向 Renderer 暴露。 */
   webContents?: Electron.WebContents
   guestWebContentsId?: number

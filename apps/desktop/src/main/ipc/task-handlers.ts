@@ -12,6 +12,7 @@ import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as TaskStore from '../tasks/task-store'
 import * as Runner from '../tasks/task-runner'
 import * as Scheduler from '../tasks/scheduler'
+import { startInviteScheduler } from '../services/invite-scheduler'
 import { getOpenStoreIds } from '../browser/window-manager'
 import { ipcOk as ok, ipcFail as err, ipcErrFromUnknown } from './envelope'
 import { z } from 'zod'
@@ -154,4 +155,5 @@ export function registerTaskHandlers(): void {
 
   Runner.startEngine()
   Scheduler.startScheduler()
+  startInviteScheduler()
 }
