@@ -8,6 +8,7 @@ import { IpcMainInvokeEvent, app } from 'electron'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import { normalizeDouyinCategoryTree } from '@shared/douyin-category-tree'
+import { DOUDIAN_FINDER_MAP } from '@shared/constants/invite'
 import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as WindowManager from '../browser/window-manager'
 import * as StoreManager from '../stores/store-manager'
@@ -292,18 +293,8 @@ export function registerBrowserHandlers(): void {
       await new Promise(r => setTimeout(r, 500))
     }
     // 达人类型：微信档案文案 → 抖店 radio 文案映射；未知值按原文尝试（平台改版时仍有机会命中）
-    const FINDER_MAP: Record<string, string> = {
-      '全部带货者': '全部达人',
-      '短视频带货者': '视频达人',
-      '直播带货者': '直播达人',
-      '图文带货者': '图文达人',
-      '橱窗带货者': '橱窗达人',
-      '全部达人': '全部达人',
-      '视频达人': '视频达人',
-      '直播达人': '直播达人',
-      '图文达人': '图文达人',
-      '橱窗达人': '橱窗达人'
-    }
+    // 文案映射收敛到 shared 单一事实来源（渲染层 chips 同用）
+    const FINDER_MAP: Record<string, string> = DOUDIAN_FINDER_MAP
     const applyRadio = async (needle: string): Promise<{ ok: boolean, reason?: string }> => {
       for (let attempt = 0; attempt < 4; attempt++) {
         const raw = await wc.executeJavaScript(`(() => {

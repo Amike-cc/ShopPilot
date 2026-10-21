@@ -27,6 +27,15 @@
               <input v-model.number="invite.batchProductCount" data-test="invite-batch-product-count" type="number" :min="1" :max="inviteProfile.maxProducts || 10" />
             </label>
           </div>
+          <!-- 达人类型筛选（抖店真机实测文案 2026-10-21）：打开达人广场时由主进程应用到平台 radio -->
+          <div v-show="showStep(1)" v-if="inviteProfile.platform === '抖店'" class="invite-choice-group" data-test="invite-doudian-finder-type">
+            <span>达人类型<small> · 打开达人广场时应用</small></span>
+            <div class="invite-chips">
+              <label v-for="t in DOUDIAN_FINDER_TYPES" :key="t" class="inv-chip" :class="{ on: doudianFinderType === t }">
+                <input type="radio" name="invite-doudian-finder-type" :value="t" :checked="doudianFinderType === t" :data-test="'invite-finder-type-doudian-' + t" @change="doudianFinderType = t" />{{ t }}
+              </label>
+            </div>
+          </div>
           <!-- 候选预览（2026-10-21 真机实测打通）：打开达人广场时从列表卡片读取，
                供发送前人工核对"将邀请的是这些人"——候选预览/目标名单的第一版 -->
           <div v-show="showStep(1)" v-if="squareCandidates.length" class="invite-choice-group" data-test="invite-candidates-preview">
@@ -130,12 +139,6 @@
         <ul v-show="showStep(4)" v-if="inviteMissingItems.length" class="invite-missing" data-test="invite-missing"><li v-for="item in inviteMissingItems" :key="item">{{ item }}</li></ul>
         <div v-show="showStep(4)" class="invite-start-row">
           <button type="button" class="mini-btn primary" data-test="invite-start" :disabled="!inviteReady || inviteSubmitting" @click="submit"><img class="button-icon" :src="browserStartIcon" alt="" />{{ inviteSubmitting ? '正在启动…' : '开始邀约' }}</button>
-          <label class="invite-schedule" title="选填：到点后由主进程自动启动，应用重启也能恢复；中途可在批次列表取消">
-            <span>定时启动</span>
-            <input v-model="scheduleAt" type="datetime-local" data-test="invite-schedule-at" />
-            <button v-if="scheduleAt" type="button" class="mini-btn" data-test="invite-schedule-clear" @click="scheduleAt = ''">立即</button>
-          </label>
-          <span v-if="scheduleError" class="row-sub invite-schedule-error" data-test="invite-schedule-error">{{ scheduleError }}</span>
           <label class="invite-max-invites" title="平台不显示今日剩余次数，这里是我们自己的上限：到量就干净收工">本次最多邀约
             <input type="number" min="1" max="50" step="1" v-model.number="invite.maxInvites" data-test="invite-max-invites" />
             位
@@ -190,7 +193,7 @@
  * 不可能漂移；验收脚本引用的 data-test 锚点也全部保留。
  */
 import { computed, nextTick, ref, watch } from 'vue'
-import { isBatchProfile } from '@shared/constants/invite'
+import { DOUDIAN_FINDER_MAP, DOUDIAN_FINDER_TYPES, isBatchProfile } from '@shared/constants/invite'
 import browserStartIcon from '../../assets/generated/ui-icons/browser-start-gen.png'
 import browserStopIcon from '../../assets/generated/ui-icons/browser-stop-gen.png'
 import browserRefreshIcon from '../../assets/generated/ui-icons/browser-refresh-gen.png'
@@ -260,20 +263,17 @@ const candidateAgeText = computed(() => {
   return `${minutes} 分钟前`
 })
 
-/** 定时启动（选填）：空字符串 = 立即启动。 */
-const scheduleAt = ref('')
-const scheduleMs = computed(() => {
-  const raw = scheduleAt.value.trim()
-  if (!raw) return null
-  const ms = new Date(raw).getTime()
-  return Number.isFinite(ms) ? ms : null
+/**
+ * 抖店达人类型筛选（2026-10-21）：chips 用抖店真实文案；invite.finderType 的存量值
+ * 可能是微信口径（如默认「全部带货者」），getter 统一经映射折算成抖店文案再高亮，
+ * setter 直接写回抖店文案——主进程 FINDER_MAP 两种口径都认识。
+ */
+const doudianFinderType = computed<string>({
+  get: () => DOUDIAN_FINDER_MAP[invite.finderType] || invite.finderType || '全部达人',
+  set: (v) => { invite.finderType = v }
 })
-const scheduleError = computed(() => {
-  if (!scheduleAt.value.trim()) return ''
-  if (scheduleMs.value == null) return '时间格式无法识别'
-  if (scheduleMs.value < Date.now() + 60_000) return '定时启动至少要晚于当前时间 1 分钟'
-  return ''
-})
+
+/** 定时启动输入已按 2026-10-21 用户要求移除；批次排期能力保留在服务层与批次列表管理中。 */
 
 /**
  * 步骤显示逻辑（2026-10-21 侧栏重构）：
@@ -300,8 +300,7 @@ function showStep(step: number): boolean {
 const liveLogCollapsed = ref(false)
 
 async function submit(): Promise<void> {
-  if (scheduleError.value) { ws.toast(`定时启动时间不可用：${scheduleError.value}`, 'error'); return }
-  if (await startInvite({ scheduleAt: scheduleMs.value })) emit('started')
+  if (await startInvite()) emit('started')
 }
 
 /** 日志自动滚到底：只依赖"日志条数/运行变化"，不打断用户向上翻看历史（跟随最新一条）。 */

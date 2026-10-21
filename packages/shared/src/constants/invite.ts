@@ -783,3 +783,25 @@ export function inviteProfileFor(platformName: string | null | undefined): Invit
   if (!platformName) return null
   return INVITE_PROFILES[platformName] || null
 }
+
+/**
+ * 达人类型文案映射：微信档案口径 → 抖店达人广场 radio 的真实文案。
+ * （2026-10-21 真机实测：抖店 radio 是「全部达人 / 视频达人 / 直播达人 / 图文达人 / 橱窗达人」，
+ * 档案里的「全部带货者」等是微信口径——主进程应用筛选与渲染层 chips 显示共用这一份映射。）
+ * 未知值按原文尝试（平台改版时仍有机会命中）。
+ */
+export const DOUDIAN_FINDER_MAP: Record<string, string> = {
+  '全部带货者': '全部达人',
+  '短视频带货者': '视频达人',
+  '直播带货者': '直播达人',
+  '图文带货者': '图文达人',
+  '橱窗带货者': '橱窗达人',
+  '全部达人': '全部达人',
+  '视频达人': '视频达人',
+  '直播达人': '直播达人',
+  '图文达人': '图文达人',
+  '橱窗达人': '橱窗达人'
+}
+
+/** 抖店面板的达人类型选项（chips 顺序即展示顺序） */
+export const DOUDIAN_FINDER_TYPES = ['全部达人', '视频达人', '直播达人', '图文达人', '橱窗达人'] as const

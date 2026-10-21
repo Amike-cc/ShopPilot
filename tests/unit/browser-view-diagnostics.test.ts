@@ -366,9 +366,21 @@ describe('抖店达人广场分支（2026-10-21 真机实测固化，删掉不�
   })
 
   it('文案映射：微信档案口径 → 抖店 radio 真实文案（实测「全部达人」），未知值按原文尝试', () => {
-    expect(HANDLERS).toContain("'全部带货者': '全部达人'")
-    expect(HANDLERS).toContain("'短视频带货者': '视频达人'")
+    // 2026-10-21 映射收敛到 shared 单一事实来源（主进程与面板 chips 共用）
+    expect(HANDLERS).toContain('DOUDIAN_FINDER_MAP')
     expect(HANDLERS).toContain('FINDER_MAP[input.finderType] || input.finderType')
+    const shared = read('packages/shared/src/constants/invite.ts')
+    expect(shared).toContain("'全部带货者': '全部达人'")
+    expect(shared).toContain("'短视频带货者': '视频达人'")
+    expect(shared).toContain('DOUDIAN_FINDER_TYPES')
+  })
+
+  it('面板有抖店达人类型筛选（chips 用抖店真实文案），定时启动输入已按用户要求移除', () => {
+    const panel = read('apps/desktop/src/renderer/src/features/invite/InvitePanelView.vue')
+    expect(panel).toContain('invite-doudian-finder-type')
+    expect(panel).toContain('DOUDIAN_FINDER_TYPES')
+    expect(panel).toContain('doudianFinderType')
+    expect(panel).not.toContain('invite-schedule-at')
   })
 
   it('抖店就绪等待与列表判定用真实结构（搜索按钮/在线沟通），不再等「详情」文本', () => {
