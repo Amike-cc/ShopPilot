@@ -57,6 +57,12 @@ export function createInviteState(context: InviteStateContext) {
     dailyCap: 0
   })
   const inviteSaving = ref(false)
+  /**
+   * 「打开达人广场」时从列表读到的候选预览（2026-10-21 真机实测打通）。
+   * 用途：发送前让人工核对"将邀请的是这些人"——候选预览/目标名单的第一版数据源。
+   * 只在成功打开广场时刷新；打开失败保留上次结果并在 UI 标注时效。
+   */
+  const squareCandidates = ref<Array<{ nickname: string; summary: string; at: number }>>([])
   const inviteQuota = ref<{ used: number; reserved: number; limit: number | null; remaining: number | null } | null>(null)
   const inviteScripts = ref<Array<{ id: string; name: string; mode: 'manual' | 'ai'; template: string; maxLen: number | null }>>([])
   const inviteScriptId = ref('')
@@ -204,6 +210,7 @@ export function createInviteState(context: InviteStateContext) {
     currentStoreId,
     inviteLiveLogEl,
     squareUrls,
+    squareCandidates,
     dynamicCategoryTrees,
     entryRoutes,
     displayedPlatformName,

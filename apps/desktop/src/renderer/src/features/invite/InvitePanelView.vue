@@ -18,6 +18,18 @@
               <input v-model.number="invite.batchProductCount" data-test="invite-batch-product-count" type="number" :min="1" :max="inviteProfile.maxProducts || 10" />
             </label>
           </div>
+          <!-- 候选预览（2026-10-21 真机实测打通）：打开达人广场时从列表卡片读取，
+               供发送前人工核对"将邀请的是这些人"——候选预览/目标名单的第一版 -->
+          <div v-show="showStep(1)" v-if="squareCandidates.length" class="invite-choice-group" data-test="invite-candidates-preview">
+            <span>广场候选预览<small> · 打开达人广场时读取，共 {{ squareCandidates.length }} 位（{{ candidateAgeText }}）</small></span>
+            <div class="invite-candidates">
+              <div v-for="(c, i) in squareCandidates.slice(0, 8)" :key="`${c.nickname}-${i}`" class="invite-candidate">
+                <b>{{ c.nickname }}</b>
+                <small>{{ c.summary }}</small>
+              </div>
+              <div v-if="squareCandidates.length > 8" class="invite-candidate-more">…其余 {{ squareCandidates.length - 8 }} 位见广场页面</div>
+            </div>
+          </div>
           <div v-show="showStep(2)" v-if="inviteProfile.levels.length" class="invite-choice-group"><span>达人等级</span><div class="invite-chips"><label v-for="level in inviteProfile.levels" :key="level" class="inv-chip" :class="{ on: invite.levels.includes(level) }"><input v-model="invite.levels" type="checkbox" :value="level" :data-test="`invite-level-${level}`" />{{ level }}</label></div></div>
           <div v-show="showStep(2)" v-if="inviteProfile.strengths" class="invite-choice-group"><span>{{ inviteProfile.strengths.label }}</span><div class="invite-chips"><label v-for="strength in inviteProfile.strengths.options" :key="strength" class="inv-chip" :class="{ on: invite.strengths.includes(strength) }"><input v-model="invite.strengths" type="checkbox" :value="strength" :data-test="`invite-strength-${strength}`" />{{ strength }}</label></div></div>
           <div v-show="showStep(2)" v-if="inviteProfile.benefits?.length" class="invite-choice-group"><span>{{ inviteProfile.benefitsLabelText || '专属权益' }}<small v-if="inviteProfile.benefitsMax"> · 最多 {{ inviteProfile.benefitsMax }} 项</small></span><div class="invite-chips"><label v-for="benefit in inviteProfile.benefits" :key="benefit" class="inv-chip" :class="{ on: invite.benefits.includes(benefit) }"><input v-model="invite.benefits" type="checkbox" :value="benefit" :data-test="`invite-benefit-${benefit}`" />{{ benefit }}</label></div></div>
@@ -215,6 +227,17 @@ const {
   stopInvite,
   startInvite
 } = props.controller
+
+/** 候选预览的时效标注：超过 30 分钟提示重新打开广场刷新。 */
+const squareCandidates = props.controller.squareCandidates
+const candidateAgeText = computed(() => {
+  const last = squareCandidates.value[squareCandidates.value.length - 1]
+  if (!last?.at) return '刚刚'
+  const minutes = Math.round((Date.now() - last.at) / 60_000)
+  if (minutes < 1) return '刚刚'
+  if (minutes >= 30) return `已过去 ${minutes} 分钟，建议重新打开广场刷新`
+  return `${minutes} 分钟前`
+})
 
 /** 定时启动（选填）：空字符串 = 立即启动。 */
 const scheduleAt = ref('')

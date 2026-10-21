@@ -14,7 +14,7 @@ export interface InviteNavigationPorts {
 const INVITE_CATEGORY_TREES_SETTING = 'invite.categoryTrees'
 
 export function useInviteNavigation(state: InviteState, ports: InviteNavigationPorts) {
-  const { ws, currentStoreId, inviteProfile, invite, squareUrls, dynamicCategoryTrees, entryRoutes } = state
+  const { ws, currentStoreId, inviteProfile, invite, squareUrls, squareCandidates, dynamicCategoryTrees, entryRoutes } = state
 
   async function refreshSquareUrls() {
     const result = await window.shopilot.settings.get('invite.squareUrls')
@@ -49,18 +49,47 @@ export function useInviteNavigation(state: InviteState, ports: InviteNavigationP
     if (!url || !profile) return
     if (profile.platform === '抖店' && isBatchProfile(profile) && profile.categoryDepth === 3 && currentStoreId.value) {
       try {
-        const result = await window.shopilot.browser.prepareInviteSquare(currentStoreId.value, { url, loadCategoryTree: true })
+        // 2026-10-21 真机实测：抖店广场是「筛选表单页 → 搜索 → 列表」，radio 真实文案为
+        // 「全部达人」（主进程做微信→抖店文案映射）；本次一并带筛选参数并读取候选预览。
+        const result = await window.shopilot.browser.prepareInviteSquare(currentStoreId.value, {
+          url, loadCategoryTree: true,
+          finderType: invite.finderType,
+          categories: invite.category ? [invite.category] : [],
+          salesTiers: JSON.parse(JSON.stringify(invite.finderSalesTiers)) as string[],
+          otherFilters: JSON.parse(JSON.stringify(invite.finderOtherFilters)) as string[]
+        })
         if (!result.ok) {
           ws.toast(`打开达人广场/读取三级类目失败：${result.error.message}`, 'error')
           return
         }
-        const tree = (result.data as { categoryTree?: CategoryNode[] })?.categoryTree
+        const data = result.data as {
+          categoryTree?: CategoryNode[]
+          applied?: boolean
+          finderType?: { ok: boolean, reason?: string }
+          salesTiers?: Array<{ name: string, ok: boolean, reason?: string }>
+          listReady?: boolean
+          candidates?: Array<{ nickname: string, summary: string }>
+        } | undefined
+        const tree = data?.categoryTree
         if (tree?.length) {
           await saveInviteCategoryTree(profile.platform, tree)
           await ports.reloadConfig()
           ws.toast(`达人广场已打开，已读取 ${tree.length} 个一级类目的完整三级结构`, 'success')
         } else {
           ws.toast('达人广场已打开，但平台未返回三级类目', 'info')
+        }
+        // 候选预览（抖店真机实测：列表卡片含昵称/类目地区/合作标签/粉丝与结算区间）
+        const candidates = (data?.candidates || []).map(c => ({ ...c, at: Date.now() }))
+        squareCandidates.value = candidates
+        const failedFilters = [
+          ...(data?.finderType && data.finderType.ok === false ? [`类型（${data.finderType.reason || '未生效'}）`] : []),
+          ...(data?.salesTiers || []).filter(s => !s.ok).map(s => `销售额「${s.name}」（${s.reason || '未生效'}）`)
+        ]
+        if (failedFilters.length) {
+          ws.toast(`筛选有未生效项：${failedFilters.join('、')}——列表为当前可见候选，请人工核对后再开始`, 'error', 9000)
+        } else if (candidates.length) {
+          const names = candidates.slice(0, 3).map(c => c.nickname).join('、')
+          ws.toast(`广场候选 ${candidates.length} 位（如 ${names}），发送前请人工核对`, 'success', 8000)
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)

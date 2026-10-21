@@ -127,3 +127,10 @@
 .invite-page .invite-record-head, .invite-page .invite-record-row {min-width:640px}
 .invite-page .invite-campaign-actions {width:100%;justify-content:flex-end}
 }
+
+/* 候选预览（2026-10-21 真机实测打通）：发送前人工核对广场候选 */
+.invite-page .invite-candidates {display:flex;flex-direction:column;gap:4px;margin-top:6px}
+.invite-page .invite-candidate {display:flex;flex-direction:column;gap:1px;padding:5px 8px;border:1px solid var(--dash-border);border-radius:6px;background:var(--dash-surface)}
+.invite-page .invite-candidate b {font-size:10px;color:var(--dash-text)}
+.invite-page .invite-candidate small {font-size:9px;color:var(--dash-text-muted);line-height:1.4}
+.invite-page .invite-candidate-more {font-size:9px;color:var(--dash-text-muted);padding:2px 8px}

@@ -353,3 +353,36 @@ describe('guest id 就绪等待：读不到 ≠ 失败（用户实报回归）',
     expect(workspace).toContain('this.displayedStoreId = null')
   })
 })
+
+describe('抖店达人广场分支（2026-10-21 真机实测固化，删掉不会编译报错的接线）', () => {
+  const HANDLERS = read('apps/desktop/src/main/ipc/browser-handlers.ts')
+  const NAVIGATION = read('apps/desktop/src/renderer/src/features/invite/composables/use-invite-navigation.ts')
+  const STATE = read('apps/desktop/src/renderer/src/features/invite/composables/invite-state.ts')
+  const PANEL = read('apps/desktop/src/renderer/src/features/invite/InvitePanelView.vue')
+
+  it('平台分支按 URL 判定，抖店走专属流程（不落进微信的「详情」就绪探针）', () => {
+    expect(HANDLERS).toContain('prepareDoudianSquare')
+    expect(HANDLERS).toContain('/buyin\\.jinritemai\\.com/.test(safeUrl)')
+  })
+
+  it('文案映射：微信档案口径 → 抖店 radio 真实文案（实测「全部达人」），未知值按原文尝试', () => {
+    expect(HANDLERS).toContain("'全部带货者': '全部达人'")
+    expect(HANDLERS).toContain("'短视频带货者': '视频达人'")
+    expect(HANDLERS).toContain('FINDER_MAP[input.finderType] || input.finderType')
+  })
+
+  it('抖店就绪等待与列表判定用真实结构（搜索按钮/在线沟通），不再等「详情」文本', () => {
+    expect(HANDLERS).toContain("own(b) === '搜索'")
+    expect(HANDLERS).toContain("own(el) !== '在线沟通'")
+    expect(HANDLERS).toContain('candidates')
+    // 搜索按钮是 SPAN（实测），不许退回只查 button 标签
+    expect(HANDLERS).toContain("'button,span,div,[role=button]'")
+  })
+
+  it('候选预览全链：service 返回 → navigation 存 state → 面板展示（发送前人工核对）', () => {
+    expect(STATE).toContain('squareCandidates')
+    expect(NAVIGATION).toContain('squareCandidates.value = candidates')
+    expect(PANEL).toContain('squareCandidates')
+    expect(PANEL).toContain('invite-candidates-preview')
+  })
+})

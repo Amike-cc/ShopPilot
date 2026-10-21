@@ -224,7 +224,221 @@ export function registerBrowserHandlers(): void {
     }
   })
   
-  // browser:prepareInviteSquare — 微信带货者广场筛选应用（用户仍需人工进入达人详情）
+  // browser:prepareInviteSquare — 达人广场筛选应用（用户仍需人工进入达人详情）
+  /**
+   * 抖店达人广场分支（2026-10-21 真机实测固化，与微信分支的结构完全不同）：
+   *   · 实测 `https://buyin.jinritemai.com/dashboard/servicehall/daren-square` 落地是**筛选表单页**
+   *     （主推类目 / 内容类型 / 达人类型 radio / 带货数据等 32 个表单项），**点「搜索」后列表才渲染**；
+   *     微信分支等「详情」文本就绪的探针在这里永远超时。
+   *   · 达人类型 radio 的真实文案是「全部达人 / 视频达人 / 直播达人 / 图文达人 / 橱窗达人」
+   *     （不是微信的「全部带货者」页签）；radio 按 label 自有文本合成 click 即生效（实测选中回读通过）。
+   *   · 列表卡片没有「详情」入口，真实操作按钮是「**加入达人库**」和「**在线沟通**」；
+   *     卡片含昵称/类目地区/合作标签/粉丝与结算区间——这是「候选预览」的数据源。
+   *   · 销售额档是 checkbox 且自身 label 文本为空（文本在兄弟/父级），按文案合成点击后回读
+   *     `input.checked`，没选上就如实报——不假装成功。
+   */
+  const prepareDoudianSquare = async (wc: Electron.WebContents, tabId: string, input: {
+    url: string, finderType?: string, categories?: string[], salesTiers?: string[], otherFilters?: string[]
+  }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    // 登录检测（抖店口径）：出现登录/角色选择特征 = 未登录
+    const loginExpired = await wc.executeJavaScript(
+      `(() => { const t = String(document.body ? document.body.innerText : ''); return /请选择您要登录的角色|登录商家工作台|请重新登录|扫码登录/.test(t) || /\\/login\\//.test(location.href) })()`
+    ).catch(() => false)
+    if (loginExpired) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, '抖店达人广场未登录：请在店铺窗口完成商家工作台登录后重试', requestId)
+    }
+    // 就绪等待：筛选表单出现（「搜索」按钮或达人类型 radio 任一可见）
+    const readyDeadline = Date.now() + 15000
+    for (;;) {
+      const ready = await wc.executeJavaScript(`(() => {
+        const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
+        for (const el of document.querySelectorAll('button,input,label,span,div')) {
+          const o = own(el)
+          if ((o === '搜索' && el.tagName === 'BUTTON') || o === '全部达人') {
+            const r = el.getBoundingClientRect()
+            if (r.width > 0 && r.height > 0) return true
+          }
+        }
+        return false
+      })()`).catch(() => false)
+      if (ready || Date.now() >= readyDeadline) break
+      await new Promise(r => setTimeout(r, 500))
+    }
+    // 达人类型：微信档案文案 → 抖店 radio 文案映射；未知值按原文尝试（平台改版时仍有机会命中）
+    const FINDER_MAP: Record<string, string> = {
+      '全部带货者': '全部达人',
+      '短视频带货者': '视频达人',
+      '直播带货者': '直播达人',
+      '图文带货者': '图文达人',
+      '橱窗带货者': '橱窗达人',
+      '全部达人': '全部达人',
+      '视频达人': '视频达人',
+      '直播达人': '直播达人',
+      '图文达人': '图文达人',
+      '橱窗达人': '橱窗达人'
+    }
+    const applyRadio = async (needle: string): Promise<{ ok: boolean, reason?: string }> => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const raw = await wc.executeJavaScript(`(() => {
+          const NEEDLE = ${JSON.stringify(needle)}
+          const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
+          const checkedLabel = (() => { const c = [...document.querySelectorAll('input[type=radio]')].find((r) => r.checked); if (!c) return ''; const l = c.closest('label') || c.parentElement; return l ? l.innerText.replace(/\\s+/g, ' ').trim() : '' })()
+          if (checkedLabel === NEEDLE) return JSON.stringify({ ok: true, already: true })
+          const hits = [...document.querySelectorAll('span,div,label')].filter((x) => { const o = own(x); return o === NEEDLE && x.children.length <= 3 })
+          hits.sort((a, b) => own(a).length - own(b).length)
+          const hit = hits[0]
+          if (!hit) return JSON.stringify({ ok: false, reason: 'NOT_FOUND' })
+          const r = hit.getBoundingClientRect()
+          if (!(r.width > 0 && r.height > 0)) return JSON.stringify({ ok: false, reason: 'INVISIBLE' })
+          ;(hit.closest('label') || hit).click()
+          return JSON.stringify({ ok: true, clicked: true })
+        })()`).catch(() => JSON.stringify({ ok: false, reason: 'EVAL_FAILED' }))
+        const parsed = (() => { try { return JSON.parse(String(raw)) } catch { return { ok: false, reason: 'EVAL_FAILED' } } })() as { ok: boolean, reason?: string, already?: boolean, clicked?: boolean }
+        if (parsed.ok) {
+          await new Promise(r => setTimeout(r, parsed.clicked ? 800 : 0))
+          const after = await wc.executeJavaScript(`(() => {
+            const NEEDLE = ${JSON.stringify(needle)}
+            const c = [...document.querySelectorAll('input[type=radio]')].find((r) => r.checked)
+            if (!c) return JSON.stringify({ selected: false })
+            const l = c.closest('label') || c.parentElement
+            return JSON.stringify({ selected: l ? l.innerText.replace(/\\s+/g, ' ').trim() === NEEDLE : false })
+          })()`).catch(() => '{"selected":false}') as string
+          if (JSON.parse(String(after)).selected) return { ok: true }
+          continue
+        }
+        if (parsed.reason === 'NOT_FOUND' || parsed.reason === 'INVISIBLE') { await new Promise(r => setTimeout(r, 800)); continue }
+        return { ok: false, reason: parsed.reason === 'EVAL_FAILED' ? '页面脚本执行失败' : parsed.reason }
+      }
+      return { ok: false, reason: '点击后未确认选中' }
+    }
+    // 抖店筛选项通用应用：按文案找到元素 → 合成点击（label 容器优先）→ 回读最近的 checkbox 勾选态
+    const applyDoudianCheck = async (needle: string): Promise<{ ok: boolean, reason?: string }> => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const raw = await wc.executeJavaScript(`(() => {
+          const NEEDLE = ${JSON.stringify(needle)}
+          const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
+          const checkedNow = (() => {
+            const hits = [...document.querySelectorAll('span,div,label')].filter((x) => own(x) === NEEDLE && x.children.length <= 3)
+            hits.sort((a, b) => own(a).length - own(b).length)
+            for (const h of hits) { const box = (h.closest('label') && h.closest('label').querySelector('input[type=checkbox]')) || (h.parentElement && h.parentElement.querySelector('input[type=checkbox]')); if (box) return box.checked }
+            return null
+          })()
+          if (checkedNow === true) return JSON.stringify({ ok: true, already: true })
+          const hits = [...document.querySelectorAll('span,div,label')].filter((x) => own(x) === NEEDLE && x.children.length <= 3)
+          hits.sort((a, b) => own(a).length - own(b).length)
+          const hit = hits[0]
+          if (!hit) return JSON.stringify({ ok: false, reason: 'NOT_FOUND' })
+          const r = hit.getBoundingClientRect()
+          if (!(r.width > 0 && r.height > 0)) return JSON.stringify({ ok: false, reason: 'INVISIBLE' })
+          ;(hit.closest('label') || hit.parentElement || hit).click()
+          return JSON.stringify({ ok: true, clicked: true })
+        })()`).catch(() => JSON.stringify({ ok: false, reason: 'EVAL_FAILED' }))
+        const parsed = (() => { try { return JSON.parse(String(raw)) } catch { return { ok: false, reason: 'EVAL_FAILED' } } })() as { ok: boolean, reason?: string, already?: boolean, clicked?: boolean }
+        if (parsed.ok) {
+          await new Promise(r => setTimeout(r, parsed.clicked ? 800 : 0))
+          const state = await wc.executeJavaScript(`(() => {
+            const NEEDLE = ${JSON.stringify(needle)}
+            const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
+            const hits = [...document.querySelectorAll('span,div,label')].filter((x) => own(x) === NEEDLE && x.children.length <= 3)
+            hits.sort((a, b) => own(a).length - own(b).length)
+            for (const h of hits) { const box = (h.closest('label') && h.closest('label').querySelector('input[type=checkbox]')) || (h.parentElement && h.parentElement.querySelector('input[type=checkbox]')); if (box) return JSON.stringify({ found: true, checked: box.checked }) }
+            return JSON.stringify({ found: false, checked: false })
+          })()`).catch(() => '{"found":false,"checked":false}') as string
+          const s = JSON.parse(String(state)) as { found: boolean, checked: boolean }
+          if (s.checked) return { ok: true }
+          if (!s.found) return { ok: false, reason: '选项中找不到该文案（平台可能改版）' }
+          continue
+        }
+        if (parsed.reason === 'NOT_FOUND' || parsed.reason === 'INVISIBLE') { await new Promise(r => setTimeout(r, 800)); continue }
+        return { ok: false, reason: parsed.reason === 'EVAL_FAILED' ? '页面脚本执行失败' : parsed.reason }
+      }
+      return { ok: false, reason: '点击后未确认选中' }
+    }
+    const typeNeedle = input.finderType ? (FINDER_MAP[input.finderType] || input.finderType) : ''
+    const typeRes = typeNeedle ? await applyRadio(typeNeedle) : { ok: true }
+    const catRes: Array<{ name: string, ok: boolean, reason?: string }> = []
+    for (const c of (input.categories || [])) catRes.push({ name: c, ...(await applyDoudianCheck(c)) })
+    const salesRes: Array<{ name: string, ok: boolean, reason?: string }> = []
+    for (const t of (input.salesTiers || [])) salesRes.push({ name: t, ...(await applyDoudianCheck(t)) })
+    const otherRes: Array<{ name: string, ok: boolean, reason?: string }> = []
+    for (const f of (input.otherFilters || [])) otherRes.push({ name: f, ...(await applyDoudianCheck(f)) })
+    // 搜索提交（列表只在搜索后渲染——实测 2026-10-21）。
+    // 实测「搜索」是 SPAN 而非 button（探针19），所以不限标签，只要可见文本精确命中即可点。
+    const searchRes = await (async (): Promise<{ ok: boolean, reason?: string }> => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const clicked = await wc.executeJavaScript(`(() => {
+          const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
+          const btn = [...document.querySelectorAll('button,span,div,[role=button]')].find((b) => own(b) === '搜索')
+          if (!btn) return JSON.stringify({ ok: false, reason: 'NOT_FOUND' })
+          const r = btn.getBoundingClientRect()
+          if (!(r.width > 0 && r.height > 0)) return JSON.stringify({ ok: false, reason: 'INVISIBLE' })
+          btn.click()
+          return JSON.stringify({ ok: true })
+        })()`).catch(() => '{"ok":false}')
+        if (JSON.parse(String(clicked)).ok) return { ok: true }
+        await new Promise(r => setTimeout(r, 800))
+      }
+      return { ok: false, reason: '找不到「搜索」按钮（平台可能改版）' }
+    })()
+    // 等列表渲染：出现「在线沟通」/「加入达人库」卡片操作（实测列表卡片真实按钮）
+    let listReady = false
+    const listDeadline = Date.now() + 12000
+    while (Date.now() < listDeadline) {
+      listReady = await wc.executeJavaScript(`(() => {
+        const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
+        for (const el of document.querySelectorAll('button,span,div')) {
+          if (own(el) !== '在线沟通') continue
+          const r = el.getBoundingClientRect()
+          if (r.width > 0 && r.height > 0) return true
+        }
+        return false
+      })()`).catch(() => false)
+      if (listReady) break
+      await new Promise(r => setTimeout(r, 600))
+    }
+    // 候选预览读取（实测：卡片 = 同时含「加入达人库」与「在线沟通」的最小容器；昵称是第一行文本）
+    const candidatesRaw = await wc.executeJavaScript(`(() => {
+      const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
+      const anchors = [...document.querySelectorAll('button,span,div')].filter((el) => own(el) === '在线沟通')
+      const seen = new Set()
+      const out = []
+      for (const a of anchors) {
+        let card = a
+        for (let i = 0; i < 8 && card; i++, card = card.parentElement) {
+          const t = card.innerText || ''
+          if (t.includes('加入达人库') && t.length > 60) break
+        }
+        if (!card || seen.has(card)) continue
+        seen.add(card)
+        const lines = (card.innerText || '').split('\\n').map((s) => s.trim()).filter(Boolean)
+        if (!lines.length) continue
+        out.push({ nickname: lines[0].slice(0, 40), summary: lines.slice(1).join(' / ').slice(0, 160) })
+        if (out.length >= 20) break
+      }
+      return JSON.stringify(out)
+    })()`).catch(() => '[]') as string
+    let candidates: Array<{ nickname: string, summary: string }> = []
+    try { candidates = JSON.parse(String(candidatesRaw)) as Array<{ nickname: string, summary: string }> } catch { candidates = [] }
+    const allOk = typeRes.ok && catRes.every(x => x.ok) && salesRes.every(x => x.ok) && otherRes.every(x => x.ok) && searchRes.ok
+    // 列表就绪即达成目的：radio 切换可能自动触发列表刷新（实测点击 radio 后无需点搜索列表就出现），
+    // 「找不到搜索按钮」在列表已就绪时不算失败，否则 applied 会被误标 false。
+    const listOk = searchRes.ok || listReady
+    return success({
+      tabId,
+      applied: allOk && listOk && listReady,
+      // 语义沿用微信分支的"可见候选数"：抖店没有「详情」入口，用列表卡片数
+      detailLinks: candidates.length,
+      finderType: { name: input.finderType || '', ...typeRes },
+      categories: catRes,
+      salesTiers: salesRes,
+      otherFilters: otherRes,
+      search: searchRes,
+      listReady,
+      candidates
+    }, requestId)
+  }
+
   handle(IPC_CHANNELS.BROWSER_PREPARE_INVITE_SQUARE, async (_event: IpcMainInvokeEvent, input: {
     storeId: string, url: string, finderType?: string, categories?: string[], salesTiers?: string[], otherFilters?: string[],
     loadCategoryTree?: boolean
@@ -249,6 +463,11 @@ export function registerBrowserHandlers(): void {
       }
       await wc.loadURL(safeUrl)
       await new Promise(r => setTimeout(r, 2000))
+      // 平台分支：抖店达人广场的真实结构与微信完全不同（筛选表单页 + 搜索后出列表 +
+      // radio 文案不同 + 卡片无「详情」入口，实测 2026-10-21），走专属流程
+      if (/buyin\.jinritemai\.com/.test(safeUrl)) {
+        return prepareDoudianSquare(wc, tabId, input)
+      }
       if (input.loadCategoryTree) {
         const pageState = await wc.executeJavaScript(`(() => {
           const text = String(document.body ? document.body.innerText : '')
