@@ -212,6 +212,32 @@ export function registerBrowserHandlers(): void {
   })
   
   // browser:navigate
+  // browser:inviteClickAt — 在店铺当前标签页的视口坐标注入受信任鼠标点击（邀约专用）。
+  // 动机见 @shared/contracts/ipc.ts BROWSER_INVITE_CLICK_AT 注释：达人广场的沟通按钮
+  // 带 isTrusted 校验，只有主进程 sendInputEvent 走原生输入管线能真正点中。
+  handle(IPC_CHANNELS.BROWSER_INVITE_CLICK_AT, async (_event: IpcMainInvokeEvent, input: { storeId: string; x: number; y: number }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    const storeId = String((input as { storeId?: unknown })?.storeId || '')
+    const x = Number((input as { x?: unknown })?.x)
+    const y = Number((input as { y?: unknown })?.y)
+    if (!storeId || !Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+      return error(ERROR_CODES.INVALID_ARGUMENT.code, '点击坐标参数不合法', requestId)
+    }
+    try {
+      const tabId = WindowManager.getActiveTabId(storeId)
+      if (!tabId) return error(ERROR_CODES.INTERNAL_ERROR.code, '店铺没有当前标签页', requestId)
+      const wc = await WindowManager.waitForTabWebContents(storeId, tabId)
+      WindowManager.activateTab(storeId, tabId)
+      // 与微信分支 realClick 同款序列：move → down → up（受信任、走原生输入管线）
+      wc.sendInputEvent({ type: 'mouseMove', x: Math.round(x), y: Math.round(y) })
+      wc.sendInputEvent({ type: 'mouseDown', x: Math.round(x), y: Math.round(y), button: 'left', clickCount: 1 })
+      wc.sendInputEvent({ type: 'mouseUp', x: Math.round(x), y: Math.round(y), button: 'left', clickCount: 1 })
+      return success({ success: true, clicked: { x: Math.round(x), y: Math.round(y) } }, requestId)
+    } catch (err: any) {
+      return browserError(err, requestId)
+    }
+  })
+
   handle(IPC_CHANNELS.BROWSER_NAVIGATE, async (_event: IpcMainInvokeEvent, input: { storeId: string, tabId: string, url: string }): Promise<IPCResult> => {
     const requestId = generateRequestId()
     const parsed = browserNavigateSchema.safeParse(input)

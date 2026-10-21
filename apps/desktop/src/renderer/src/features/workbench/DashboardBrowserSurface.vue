@@ -1181,4 +1181,21 @@ onBeforeUnmount(() => {
   .dashboard-browser-tabs { position: relative; margin-right: -2px; }
   .dashboard-tabs-batch { position: absolute; right: 8px; top: 8px; z-index: 3; }
   .dashboard-browser-panel-tabs button { font-size: 9px; }
-}</style>
+}
+/* ===== 达人邀约侧栏重构（2026-10-21）：紧凑步骤导航 + 单步显示 + 日志折叠 =====
+   侧栏容器是 .invite-panel-body（InvitePanelView 不传 step 时启用内置导航）。
+   注意独立页的样式挂在 invite-page.css 的 .invite-page 下，两处作用域不同。 */
+.invite-panel-body .invite-panel-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 8px; }
+.invite-panel-body .invite-panel-step { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 4px; border: 1px solid var(--dash-border); border-radius: 7px; background: var(--dash-surface); color: var(--dash-text-muted); font-size: 10px; font-weight: 600; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
+.invite-panel-body .invite-panel-step b { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--dash-border); color: var(--dash-text); font-size: 9px; }
+.invite-panel-body .invite-panel-step:hover { border-color: var(--dash-text-muted); }
+.invite-panel-body .invite-panel-step.on { background: rgba(59,130,246,.12); border-color: rgba(59,130,246,.5); color: #1d4ed8; }
+.invite-panel-body .invite-panel-step.on b { background: #3b82f6; color: #fff; }
+.invite-panel-body .invite-panel-step:focus-visible { outline: 2px solid rgba(59,130,246,.55); outline-offset: 1px; }
+.invite-panel-body .invite-panel-next { margin-top: 10px; display: flex; justify-content: flex-end; }
+.invite-panel-body .invite-live-toggle { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: transparent; padding: 0; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.invite-panel-body .invite-live-toggle:focus-visible { outline: 2px solid rgba(59,130,246,.55); outline-offset: 2px; border-radius: 4px; }
+.invite-panel-body .invite-live-caret { margin-left: auto; font-size: 9px; color: var(--dash-text-muted); }
+.invite-panel-body .invite-live-sec.collapsed { padding-bottom: 6px; }
+</style>
+

@@ -45,6 +45,8 @@ const api = {
   // 浏览器（契约域 browser:* / browser:tab:*）
   browser: {
     open: (storeId: string, opts?: { display?: boolean }) => invoke(IPC_CHANNELS.BROWSER_OPEN, { storeId, ...(opts || {}) }),
+    // 邀约专用：在店铺当前标签页视口坐标注入受信任鼠标点击（达人广场「在线沟通」需 isTrusted）
+    inviteClickAt: (input: { storeId: string; x: number; y: number }) => invoke(IPC_CHANNELS.BROWSER_INVITE_CLICK_AT, input),
     close: (storeId: string) => invoke(IPC_CHANNELS.BROWSER_CLOSE, { storeId }),
     display: (storeId: string | null) => invoke(IPC_CHANNELS.BROWSER_DISPLAY, { storeId }),
     /** 注册标签页对应的 webview 内容，供主进程维护其挂载关系 */

@@ -7,6 +7,15 @@
       </template>
       <template v-else>
         <div class="invite-config-actions"><button type="button" class="mini-btn" data-test="invite-open-page" @click="openInvitePage">打开达人广场</button><button type="button" class="mini-btn" data-test="invite-save-config" :disabled="inviteSaving" @click="saveInviteConfig">{{ inviteSaving ? '保存中…' : '保存配置' }}</button></div>
+        <!-- 侧栏模式的紧凑步骤导航（独立页有自己的四步导航，这里只在 step 未传时出现） -->
+        <nav v-if="isSidebarMode" class="invite-panel-steps" data-test="invite-panel-steps" aria-label="邀约配置步骤">
+          <button
+            v-for="tab in inviteStepTabs" :key="tab.n" type="button"
+            class="invite-panel-step" :class="{ on: activeStep === tab.n }"
+            :data-test="`invite-panel-step-${tab.n}`" :aria-current="activeStep === tab.n ? 'step' : undefined"
+            @click="goLocalStep(tab.n)"
+          ><b>{{ tab.n }}</b><span>{{ tab.label }}</span></button>
+        </nav>
         <template v-if="isBatchProfile(inviteProfile)">
           <div v-show="showStep(1)" class="invite-form-grid">
             <label class="invite-field"><span>{{ inviteProfile.categoryLabelText || '主推类目' }}</span><select v-model="invite.category" data-test="invite-category"><option value="">不限</option><option v-for="item in inviteCategoryOptions" :key="item" :value="item">{{ item }}</option></select></label>
@@ -141,10 +150,21 @@
           <span v-if="inviteQuota" class="row-sub" data-test="invite-quota">· 今日已发 {{ inviteQuota.used }}{{ inviteQuota.limit ? ` / ${inviteQuota.limit}` : '（未设日上限）' }}<template v-if="inviteQuota.reserved"> · 运行中预留 {{ inviteQuota.reserved }}</template></span>
         </div>
         <div v-show="showStep(4)" class="env-note invite-backend-note" data-test="invite-backend-note">邀约在后台独立运行：不会打开或切换你的浏览器页面，可以继续正常浏览。</div>
+        <!-- 侧栏模式：当前步的"下一步"引导（独立页由四步导航条负责） -->
+        <div v-if="isSidebarMode && activeStep < 4" class="invite-panel-next">
+          <button type="button" class="mini-btn primary" data-test="invite-panel-next" @click="goLocalStep(activeStep + 1)">下一步：{{ inviteStepTabs[activeStep]?.label }} →</button>
+        </div>
       </template>
     </div>
-    <div class="env-sec invite-live-sec">
-      <div class="env-h">达人邀约实时日志<span v-if="inviteLatest" class="row-sub"> · {{ inviteStatus(inviteLatest) }}</span></div>
+    <div class="env-sec invite-live-sec" :class="{ collapsed: isSidebarMode && liveLogCollapsed }">
+      <button
+        v-if="isSidebarMode" type="button"
+        class="env-h invite-live-toggle" data-test="invite-live-toggle"
+        :aria-expanded="!liveLogCollapsed"
+        @click="liveLogCollapsed = !liveLogCollapsed"
+      >达人邀约实时日志<span v-if="inviteLatest" class="row-sub"> · {{ inviteStatus(inviteLatest) }}</span><span class="invite-live-caret">{{ liveLogCollapsed ? '▸' : '▾' }}</span></button>
+      <div v-else class="env-h">达人邀约实时日志<span v-if="inviteLatest" class="row-sub"> · {{ inviteStatus(inviteLatest) }}</span></div>
+      <template v-if="!isSidebarMode || !liveLogCollapsed">
       <div v-if="!inviteLatest" class="browser-panel-empty invite-live-empty" data-test="invite-live-empty">本店铺还没有邀约运行，点“开始邀约”后这里会实时显示进度。</div>
       <template v-else>
         <div class="invite-live-stuck" data-test="invite-live-stuck">{{ inviteStuckText(inviteLatest) }}</div>
@@ -152,6 +172,7 @@
         <div class="tc-btns" v-if="inviteRunId(inviteLatest)"><button v-if="inviteActive(inviteLatest)" type="button" class="mini-btn" data-test="invite-live-stop" @click="stopInvite(inviteLatest)"><img class="button-icon" :src="browserStopIcon" alt="" />停止</button><button type="button" class="mini-btn" @click="ws.refreshTasks()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button></div>
         <div v-if="inviteLiveMessage(inviteLatest)" class="row-sub invite-message">{{ inviteLiveMessage(inviteLatest) }}</div>
         <div ref="inviteLiveLogEl" class="log-box invite-live-log" data-test="invite-live-log"><div v-if="!inviteLogs(inviteLatest).length" class="log-line">等待运行输出…开始邀约后，这里的日志会实时滚动，卡住时看停在最后几行。</div><div v-for="(log, index) in inviteLogs(inviteLatest)" :key="`${inviteRunId(inviteLatest)}-${index}`" class="log-line">{{ inviteLogText(log) }}</div></div>
+      </template>
       </template>
     </div>
     <div class="env-sec invite-unavailable"><div class="env-note">达人邀约配置与平台页面仍沿用真实运行、店铺配置和人工操作边界；未配置时不会伪造可发送结果。</div></div>
@@ -254,10 +275,29 @@ const scheduleError = computed(() => {
   return ''
 })
 
-/** 当前步是否要显示；未传 step 时全显示（侧栏）。 */
-function showStep(step: number): boolean {
-  return props.step == null || props.step === step
+/**
+ * 步骤显示逻辑（2026-10-21 侧栏重构）：
+ *   · 独立页传 step（四步向导驱动）——沿用外部步号；
+ *   · 侧栏不传 step——以前这里"全步骤堆叠显示"是侧栏 UI 混乱的根源（40+ 行表单挤在
+ *     窄容器里），现在内置一份紧凑步骤导航（仅侧栏模式渲染），单步显示。
+ */
+const localStep = ref(1)
+const isSidebarMode = computed(() => props.step == null)
+const activeStep = computed(() => (props.step == null ? localStep.value : props.step))
+const inviteStepTabs = [
+  { n: 1, label: '目标' },
+  { n: 2, label: '受众' },
+  { n: 3, label: '话术' },
+  { n: 4, label: '启动' }
+] as const
+function goLocalStep(n: number): void {
+  localStep.value = Math.max(1, Math.min(4, Math.round(n) || 1))
 }
+function showStep(step: number): boolean {
+  return activeStep.value === step
+}
+/** 侧栏日志区折叠（默认展开保持实时反馈；收起时省出一屏空间给表单）。 */
+const liveLogCollapsed = ref(false)
 
 async function submit(): Promise<void> {
   if (scheduleError.value) { ws.toast(`定时启动时间不可用：${scheduleError.value}`, 'error'); return }

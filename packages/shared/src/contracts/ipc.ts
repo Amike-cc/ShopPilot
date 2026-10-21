@@ -135,6 +135,15 @@ export const IPC_CHANNELS = {
   BROWSER_TAB_SET_PINNED: 'browser:tab:setPinned',
   BROWSER_TAB_LIST: 'browser:tab:list',
   BROWSER_NAVIGATE: 'browser:navigate',
+  /**
+   * 在店铺当前标签页的指定视口坐标注入**受信任**鼠标点击（2026-10-21 抖店邀约真机实测新增）。
+   *
+   * 为什么必须有：达人广场的「在线沟通」按钮带 isTrusted 校验（合成 dispatchEvent 被平台忽略），
+   * 而 CDP 直连 guest 的 Input 注入绕不过 webview 的 embedder 输入路由（mousemove 可达、
+   * mouseDown 被丢）——只有主进程 `WebContents.sendInputEvent` 走原生输入管线能真正点中
+   *（微信分支 realClick 点筛选项已验证同款路径有效）。
+   */
+  BROWSER_INVITE_CLICK_AT: 'browser:inviteClickAt',
   BROWSER_PREPARE_INVITE_SQUARE: 'browser:prepareInviteSquare',
   /**
    * 邀约台账：近 N 天已邀过的达人昵称（默认 7 天）。
@@ -660,6 +669,8 @@ export interface IpcContract {
   'browser:tab:list': { req: z.input<typeof browserStoreIdSchema>; res: { tabs: IpcBrowserTabSummary[] } }
   'browser:tab:control': { req: z.input<typeof browserTabControlSchema>; res: { success: true } }
   'browser:navigate': { req: z.input<typeof browserNavigateSchema>; res: { success: true } }
+  /** 邀约专用受信任点击（坐标为店铺当前标签页的视口坐标） */
+  'browser:inviteClickAt': { req: { storeId: string; x: number; y: number }; res: { success: true; clicked: { x: number; y: number } } }
   'browser:prepareInviteSquare': { req: z.input<typeof browserInviteSquareSchema>; res: IpcUnresolved }
   'browser:clearData': { req: z.input<typeof browserClearDataSchema>; res: { success: true } }
   'browser:capture': {
