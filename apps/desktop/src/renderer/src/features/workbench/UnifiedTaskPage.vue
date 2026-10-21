@@ -69,7 +69,7 @@ function taskStatus(task: any) { return ({ running: '运行中', queued: '排队
 function taskStatusClass(task: any) { return `status-${effectiveStatus(task)}` }
 function taskProgress(task: any) { const run = task.latestRun; if (!run) return 0; const live = run.id ? ws.runLive[run.id] : null; if ((live?.status || run.status) === 'succeeded') return 100; const step = live?.stepIndex ?? run.currentStep; return task.steps?.length && step != null ? Math.min(99, Math.max(0, Math.round(((step + 1) / task.steps.length) * 100))) : 0 }
 function latestRunTime(task: any) { const at = task.latestRun?.finishedAt || task.latestRun?.finished_at || task.latestRun?.startedAt || task.latestRun?.started_at; return at ? new Date(at).toLocaleString('zh-CN') : '尚未运行' }
-function storeName(id?: string) { return ws.stores.find(store => store.id === id)?.name || (id ? '店铺已删除' : '全部店铺') }
+function storeName(id?: string | null) { return ws.stores.find(store => store.id === id)?.name || (id ? '店铺已删除' : '全部店铺') }
 function requireBridge(): boolean {
   if (bridgeAvailable) return true
   ws.toast('原生桥接不可用（纯渲染预览模式），任务功能暂不可用', 'error')

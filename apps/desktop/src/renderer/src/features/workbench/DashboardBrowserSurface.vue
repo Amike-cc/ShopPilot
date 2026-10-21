@@ -77,19 +77,28 @@
             @did-finish-load="clearWebviewError(item)"
             @destroyed="handleWebviewDestroyed(item)"
           ></webview>
-          <div v-if="webviewDiagnostics.length" class="dashboard-browser-webview-diagnostics" data-test="webview-diagnostics">
-            <div class="diagnostic-head">
-              <strong>浏览器视图诊断</strong>
-              <span class="diagnostic-count">{{ failedDiagnostics.length ? `${failedDiagnostics.length} 个页面未就绪` : '连接中' }}</span>
-              <button
-                type="button"
-                class="mini-btn icon-btn diagnostic-collapse"
-                :aria-expanded="!diagnosticsCollapsed"
-                :aria-label="diagnosticsCollapsed ? '展开诊断详情' : '收起诊断详情（失败列表仍会保留）'"
-                @click="diagnosticsCollapsed = !diagnosticsCollapsed"
-              >{{ diagnosticsCollapsed ? '展开' : '收起' }}</button>
-            </div>
-            <template v-if="!diagnosticsCollapsed">
+          <div v-if="webviewDiagnostics.length" class="dashboard-browser-webview-diagnostics" :class="{ collapsed: diagnosticsCollapsed }" data-test="webview-diagnostics">
+            <!-- 收起态：整条只剩一行胶囊（占位最小化——2026-10-21 用户反馈）；失败数仍可见，展开是主动动作 -->
+            <button
+              v-if="diagnosticsCollapsed"
+              type="button"
+              class="mini-btn icon-btn diagnostic-pill"
+              :aria-expanded="false"
+              aria-label="展开浏览器视图诊断详情（失败列表仍会保留）"
+              @click="diagnosticsCollapsed = false"
+            >{{ failedDiagnostics.length ? `浏览器诊断 · ${failedDiagnostics.length} 个页面未就绪` : '浏览器诊断 · 连接中' }} ▸</button>
+            <template v-else>
+              <div class="diagnostic-head">
+                <strong>浏览器视图诊断</strong>
+                <span class="diagnostic-count">{{ failedDiagnostics.length ? `${failedDiagnostics.length} 个页面未就绪` : '连接中' }}</span>
+                <button
+                  type="button"
+                  class="mini-btn icon-btn diagnostic-collapse"
+                  :aria-expanded="true"
+                  aria-label="收起诊断详情（失败列表仍会保留）"
+                  @click="diagnosticsCollapsed = true"
+                >收起</button>
+              </div>
               <!-- live region 只包文本：按钮放在 region 外，避免每次店铺/标签切换都被朗读器重播一遍控件 -->
               <div class="diagnostic-list" aria-live="polite" aria-atomic="false">
                 <span v-for="diagnostic in webviewDiagnostics" :key="diagnostic.key" class="diagnostic-text">{{ diagnostic.text }}</span>
@@ -1053,6 +1062,11 @@ onBeforeUnmount(() => {
 .dashboard-browser-webview { position: absolute; inset: 0; display: flex; width: 100%; height: 100%; border: 0; opacity: 0; pointer-events: none; z-index: 0; }
 .dashboard-browser-webview.active { opacity: 1; pointer-events: auto; z-index: 1; }
 .dashboard-browser-webview-diagnostics { position: absolute; left: 10px; bottom: 10px; z-index: 3; display: flex; max-width: min(560px, calc(100% - 20px)); flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid rgba(242, 165, 87, .36); border-radius: 8px; background: #fff8ec; color: #92400e; font-size: 10px; line-height: 1.5; }
+/* 收起态：一行胶囊，padding 与最大宽度都收紧到内容自适应——占位最小化（2026-10-21 用户反馈） */
+.dashboard-browser-webview-diagnostics.collapsed { max-width: calc(100% - 20px); width: fit-content; padding: 3px 8px; gap: 0; }
+.diagnostic-pill { border: 0; background: transparent; color: inherit; font: inherit; padding: 0; display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.diagnostic-pill:hover { text-decoration: underline; }
+.diagnostic-pill:focus-visible { outline: 2px solid rgba(146, 64, 14, .55); outline-offset: 1px; }
 /* 头部：标题 + 失败条数 + 收起。收起后只剩这一行，避免浮层长期盖住平台页面左下角（审查 P3-10） */
 .diagnostic-head { display: flex; align-items: center; gap: 8px; }
 .diagnostic-head strong { color: #7a3d0a; font-size: 10px; }

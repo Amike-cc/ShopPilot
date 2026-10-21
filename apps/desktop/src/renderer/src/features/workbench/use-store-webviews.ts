@@ -77,7 +77,11 @@ watch(openWebviews, list => {
 
 /** 诊断条目（浮层一行）：失败态与「连接中」共用一份结构，失败才带动作按钮 */
 
-const diagnosticsCollapsed = ref(false)
+/**
+ * 诊断浮层默认收起为一行胶囊（2026-10-21 用户反馈：展开面板挡住浏览器内容太占位）。
+ * 失败数仍显示在胶囊上，信息不丢；展开是用户主动动作，不再自动弹开。
+ */
+const diagnosticsCollapsed = ref(true)
 
 function setWebviewRef(key: string, element: unknown): void {
   if (element) {

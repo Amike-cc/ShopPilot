@@ -47,7 +47,8 @@
           <article v-for="task in orphanTasks" :key="task.id" class="invite-orphan-row">
             <div><strong>{{ task.name }}</strong><small>{{ storeName(task.storeScope) }} · {{ formatTime(task.createdAt) }}</small></div>
             <span class="invite-chip muted">{{ campaignStatusLabel(task.latestRun?.status === 'running' ? 'running' : task.latestRun?.status === 'failed' ? 'failed' : task.latestRun?.status === 'succeeded' ? 'completed' : 'ready') }}</span>
-            <button type="button" class="invite-mini" @click="openStore(task.storeScope)">打开店铺</button>
+            <!-- 孤儿任务没有 storeScope（null）：按钮禁用而非把 null 塞进导航 -->
+            <button type="button" class="invite-mini" :disabled="!task.storeScope" @click="task.storeScope && openStore(task.storeScope)">打开店铺</button>
           </article>
         </section>
       </div>

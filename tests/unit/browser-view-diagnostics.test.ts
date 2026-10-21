@@ -184,7 +184,10 @@ describe('接线：主进程探针与浮层（源码级约定，删掉不会编�
 
   it('浮层可收起，且失败条数在标题栏可见（不再永久盖住平台页面左下角）', () => {
     expect(SURFACE).toContain('diagnosticsCollapsed')
-    expect(SURFACE).toContain(':aria-expanded="!diagnosticsCollapsed"')
+    // 2026-10-21 起默认收起为一行胶囊（用户反馈占位）：失败数在胶囊文本上，展开才是完整面板
+    expect(SURFACE).toContain('diagnostic-pill')
+    expect(SURFACE).toContain(':aria-expanded="false"')
+    expect(SURFACE).toContain(':aria-expanded="true"')
     expect(SURFACE).toContain('failedDiagnostics.length')
   })
 
