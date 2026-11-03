@@ -3,28 +3,28 @@
  * 2026-10-19 P1 重构：由 task-runner.ts 等价搬迁（switch 原样保留）。
  */
 
-import { matchesTextToken } from '@shared/text-match'
-import { app } from 'electron'
-import { createHash } from 'crypto'
-import { mkdirSync, writeFileSync } from 'fs'
-import { join } from 'path'
-import { EVENT_CHANNELS } from '@shared/contracts/ipc'
-import { redactAgentText } from '@shared/agent-privacy'
-import { canRetryStepInPlace } from '@shared/agent-step-effects'
-import { TABLE_ROW_CLEAN_FN } from '@shared/constants/invoice'
-import { readApiResponse, readScalarValues } from './api-reader'
-import type { TaskStepDef, StepResultKind, TaskConfirmationEvent } from '@shared/schemas/task'
-import * as TaskStore from './task-store'
-import { DEFAULT_STEP_TIMEOUT } from './task-store'
-import { writeAudit } from '../services/audit-logger'
-import { logMain } from '../services/logger'
-import { generateInviteScript } from '../services/ai-client'
-import { recordInviteBatch } from '../services/invite-records'
-import { classifyInviteBlockNotice } from '@shared/invite-notices'
-import { getTabWebContents, emitToRenderer, getStoreTabs, activateTab, closeTab, waitForTabWebContents } from '../browser/window-manager'
-import { ENUM_DEEP_FN, PICK_SORT_FN, SCOPE_FN, VISIBLE_JS, assertCheckedAfterClick, assertViewMounted, assertWriteApplied, detectSessionStall, findTextTarget, followOpenedTab, guardSignals, isInternalRunTab, jsClickByTextFallback, performHitClick, pollUntil, readAlreadyInvitedEvidence, readBlockingNotice, readFieldValue, realClick, trustedWrite, waitForSelector, wcOrThrow, withDeadline, withTimeout } from './task-step-dom'
-import { classifyError, emitProgress, transition } from './task-runner-lifecycle'
-import { cancelSig, runTabByStore } from './task-runner-registry'
+import { matchesTextToken } from '@shared/text-match'
+import { app } from 'electron'
+import { createHash } from 'crypto'
+import { mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import { redactAgentText } from '@shared/agent-privacy'
+import { canRetryStepInPlace } from '@shared/agent-step-effects'
+import { TABLE_ROW_CLEAN_FN } from '@shared/constants/invoice'
+import { readApiResponse, readScalarValues } from './api-reader'
+import type { TaskStepDef, StepResultKind, TaskConfirmationEvent } from '@shared/schemas/task'
+import * as TaskStore from './task-store'
+import { DEFAULT_STEP_TIMEOUT } from './task-store'
+import { writeAudit } from '../services/audit-logger'
+import { logMain } from '../services/logger'
+import { generateInviteScript } from '../services/ai-client'
+import { recordInviteBatch } from '../services/invite-records'
+import { classifyInviteBlockNotice } from '@shared/invite-notices'
+import { getTabWebContents, emitToRenderer, getStoreTabs, activateTab, closeTab, waitForTabWebContents } from '../browser/window-manager'
+import { ENUM_DEEP_FN, PICK_SORT_FN, SCOPE_FN, VISIBLE_JS, assertCheckedAfterClick, assertViewMounted, assertWriteApplied, detectSessionStall, findTextTarget, followOpenedTab, guardSignals, isInternalRunTab, jsClickByTextFallback, performHitClick, pollUntil, readAlreadyInvitedEvidence, readBlockingNotice, readFieldValue, realClick, trustedWrite, waitForSelector, wcOrThrow, withDeadline, withTimeout } from './task-step-dom'
+import { classifyError, emitProgress, transition } from './task-runner-lifecycle'
+import { cancelSig, runTabByStore } from './task-runner-registry'
 import type { RunHandle } from './task-runner-registry'
 
 // ---------- 步骤执行器（全部预定义，无任意代码路径） ----------
@@ -679,6 +679,57 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
       return { kind: 'confirm', payload: { approved: true, message } }
     }
     // ---------- 副作用步骤（点击/写入）：固定注入脚本 + Zod 校验参数，仍无任意代码入口 ----------
+    // scrollNext：把"目标按钮所在的滚动容器"向下滚一屏（抖店逐人沟通流专用，2026-10-21）。
+    // 无副作用（纯滚动）；滚到底报 TASK_LIST_EXHAUSTED——loop 的 stopOn 把它当"候选耗尽"正常收尾。
+    // 滚动逻辑与 clickAll 的滚动续选同款：找首个目标元素的可滚动祖先 → scroll-behavior:auto →
+    // 滚 1.2 屏（近底部收敛 0.95）→ settle 检测 → atBottom 判定。
+    case 'scrollNext': {
+      const wc = wcOrThrow(run)
+      const anchorSel = String((input as { selector?: string }).selector || '')
+      const anchorText = String((input as { text?: string }).text || '在线沟通')
+      const scrollExpr2 = `(async () => {
+        let first = null;
+        if (${JSON.stringify(anchorSel)}) first = document.querySelector(${JSON.stringify(anchorSel)});
+        if (!first) {
+          for (const el of document.querySelectorAll('*')) {
+            const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+            if (own === ${JSON.stringify(anchorText)}) { first = el; break }
+          }
+        }
+        let box = null;
+        if (first) {
+          let node = first;
+          while (node && node !== document.body) {
+            if (node.scrollHeight > node.clientHeight + 20 && node.clientHeight > 120) { box = node; break }
+            node = node.parentElement;
+          }
+        }
+        if (!box) box = document.querySelector('.auxo-table-body, [class*="table-body"], [class*="sharedScrollRoot"]');
+        if (!box) return { moved: false, reason: 'NO_SCROLLER' };
+        const before = Math.round(box.scrollTop);
+        const maxTop = Math.max(0, box.scrollHeight - box.clientHeight);
+        box.style.scrollBehavior = 'auto';
+        const remaining = maxTop - before;
+        const stepRatio = remaining > box.clientHeight * 2 ? 1.2 : 0.95;
+        const target = Math.min(maxTop, before + Math.floor(box.clientHeight * stepRatio));
+        box.scrollTop = target;
+        let settle = -1;
+        for (let i = 0; i < 10; i++) {
+          await new Promise(r => setTimeout(r, 100));
+          const now = Math.round(box.scrollTop);
+          if (Math.abs(now - target) <= 2) { settle = now; break }
+          if (now === settle) break
+          settle = now;
+        }
+        const at = Math.round(box.scrollTop);
+        return { moved: at > before + 5, before, scrollTop: at, atBottom: at >= maxTop - 3 };
+      })()`
+      const scrollRes = await wc.executeJavaScript(scrollExpr2).catch(() => ({ moved: false, reason: 'EVAL_FAILED' })) as { moved?: boolean, atBottom?: boolean, reason?: string }
+      if (scrollRes?.atBottom) {
+        throw new Error('TASK_LIST_EXHAUSTED: 列表已滚到底，本轮没有更多可沟通的达人了')
+      }
+      return { kind: 'executed', payload: { moved: !!scrollRes?.moved } }
+    }
     case 'click': {
       const wc = wcOrThrow(run)
       const sel = String(input.selector)
@@ -961,6 +1012,8 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
       const within = input.within as { selector?: string; text?: string; climb?: number } | undefined
       // 找不到目标时的错误码（默认 TASK_SELECTOR_CHANGED）；批量循环里用它区分"页面改版"与"没有下一个候选"
       const missingCode = input.missingCode ? String(input.missingCode) : 'TASK_SELECTOR_CHANGED'
+      // "当前页都处理过"单独成码：它可由 loop 的 onCode 滚动/翻页恢复，不能和"找不到元素"混用。
+      const allVisitedCode = input.allVisitedCode ? String(input.allVisitedCode) : missingCode
       // 禁用态的错误码（默认 TASK_TARGET_DISABLED）：翻页按钮在最后一页会置灰——
       // 那不是"平台限制操作"，而是"没有更多了"，用 disabledCode 让它如实收工
       const disabledCode = input.disabledCode ? String(input.disabledCode) : 'TASK_TARGET_DISABLED'
@@ -990,6 +1043,10 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
        */
       const skipTexts = Array.isArray(input.skipTexts) ? (input.skipTexts as string[]).map(String).filter(Boolean) : []
       const recordRowText = input.recordRowText === true
+      /** 落点被平台装饰图盖住时，允许临时关掉该图片的指针事件（见 task-step-dom）。 */
+      const ignoreImageOverlay = input.ignoreImageOverlay === true
+      /** 抖店用昵称相等匹配，避免行文本里短昵称误杀（如「小美」命中「小美美」）。 */
+      const skipTextsMatch = input.skipTextsMatch === 'exact-nickname' ? 'exact-nickname' as const : 'contains' as const
       /**
        * onlyIfVisible：只有这段文案可见时才点（条件性收尾，见 StepInput.onlyIfVisible）。
        * 不可见 → 本步**什么都不做**（不算失败）：面板已经收起时再点一次会把面板点开、盖住列表。
@@ -1041,12 +1098,25 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
       if (input.mode === 'real') {
         for (;;) {
           guardSignals(run)
-          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, pick, allowJsWhenDetached, absentTexts, !!input.exact, input.skipIfChecked === true, skipTexts, recordRowText)
+          hit = await findTextTarget(wc, run, needle, deep, step.timeoutMs, 'clickByText', within, pick, allowJsWhenDetached, absentTexts, !!input.exact, input.skipIfChecked === true, skipTexts, recordRowText, ignoreImageOverlay, skipTextsMatch)
           if (hit.ok) break
           if (hit.reason === 'DISABLED') {
+            // 先记"这一行已访问"：loop 的 advance 会重开本轮换下一位；不记会反复选中同一行。
+            if (unvisited && hit.rowKey) run.visitedRows.add(hit.rowKey)
             // 把平台给的禁用原因一并报出来（读到了就带，读不到退回默认文案）
             const why = hit.disabledReason ? `——平台提示「${hit.disabledReason}」` : (disabledCode === 'TASK_TARGET_DISABLED' ? '（平台限制该操作）' : '')
-            throw new Error(`${disabledCode}: 「${needle}」当前为禁用态${why}`)
+            /**
+             * 禁用原因优先于步骤声明的 disabledCode：
+             * 平台明确说"今日邀请机会用完"时按额度收工；明确说"已经邀约过"时按已邀跳过。
+             * 否则沿用步骤自己的码（抖店是 TASK_DAREN_NOT_INVITABLE → 换下一位）。
+             */
+            const noticeKind = classifyInviteBlockNotice(hit.disabledReason)
+            const effectiveCode = noticeKind === 'quota-exhausted'
+              ? 'TASK_QUOTA_EXCEEDED'
+              : noticeKind === 'already-invited'
+                ? 'TASK_DAREN_ALREADY_INVITED'
+                : disabledCode
+            throw new Error(`${effectiveCode}: 「${needle}」当前为禁用态${why}`)
           }
           // ABSENT：页面明确写着"这件事做不了"（如微信详情页「暂未到达合作门槛」）。
           // 立刻如实报出，**不等到超时**——它不是"页面慢"，是这位对象本身不可用；
@@ -1062,7 +1132,7 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
           // ALL_VISITED：列表已渲染、候选都在，只是本页每一条都已处理过 → 立刻交给上层翻页，
           // 不必空等到超时（实测每个"本页取尽"都白等 30s，几十轮下来很可观）
           if (hit.reason === 'ALL_VISITED') {
-            throw new Error(`${missingCode}: 当前页的候选都已处理过（没有新的「${needle}」可点）`)
+            throw new Error(`${allVisitedCode}: 当前页的候选都已处理过（没有新的「${needle}」可点）`)
           }
           // SCOPE_NOT_FOUND 不能立即失败：导航刚完成时筛选区往往还没渲染出来
           // （实测真店"点开始邀约"就折在这里——第一步点类目时 .quick-filter-button-enums 还不存在）。
@@ -1088,6 +1158,9 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
           await new Promise(r => setTimeout(r, 300))
         }
         guardSignals(run)
+        if (hit.ignoredOverlay) {
+          logMain('info', `[task] 「${needle}」落点被装饰图片遮挡，已临时解除图片的点击拦截 run=${run.runId}`)
+        }
         const follow = input.followTab as { urlIncludes?: string; closeOld?: boolean } | undefined
         const beforeTabIds = follow ? new Set(getStoreTabs(run.storeId).map(t => t.id)) : null
         if (unvisited && hit.rowKey) run.visitedRows.add(hit.rowKey)
@@ -1102,6 +1175,8 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
         // skipIfChecked 命中时**不点**：那份 hit 里没有坐标（没走遮挡采样），
         // 硬发受信任鼠标会带着 undefined 坐标下去（Electron 直接抛 "Invalid event object"）。
         if (hit.skipped !== 'checked') performHitClick(wc, hit)
+        // 发送动作已真正点下去：本轮随后若中断，loop 会把勾选名单记为 unknown（可能已发）
+        if (hit.skipped !== 'checked' && input.markSendAttempt === true) run.inviteSendAttempted = true
         guardSignals(run)
         if (follow && beforeTabIds) {
           const openedId = await followOpenedTab(run, beforeTabIds, follow.urlIncludes, step.timeoutMs)
@@ -1286,6 +1361,8 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
             ...(verifyActive ? { verifiedActive: true } : {}),
             ...(input.verifyChecked === true ? { verifiedChecked: true } : {}),
             ...(hit.rowKey ? { picked: hit.picked ?? 'best', rowKey: hit.rowKey } : {}),
+            // 本页因台账/平台剔除而跳过的候选数（7 天已邀、不可邀约）→ 批次「跳过」列
+            ...(hit.skippedInvited ? { skippedInvited: hit.skippedInvited } : {}),
             ...(follow ? { followedTab: run.tabId } : {})
           }
         }
@@ -1351,6 +1428,7 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
       })()`), run, Math.min(step.timeoutMs, 10000), 'clickByText')
         if (res && res.ok) {
           guardSignals(run)
+          if (input.markSendAttempt === true) run.inviteSendAttempted = true
           // verifyChecked：点完校验它**真的处于勾选态**（见 assertCheckedAfterClick 的说明）。
           // 与 mode:'real' 分支同一套判据，保证两条点击路径行为一致。
           if (input.verifyChecked === true) {
@@ -1402,6 +1480,15 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
       if (!nested.length) throw new Error('TASK_INVALID_STEP: loop 缺少 steps')
       const maxRounds = Number(input.maxRounds)
       const stopOn: string[] = Array.isArray(input.stopOn) ? input.stopOn.map(String) : []
+      /**
+       * 本次总量（达人邀约）：0/缺省 = 不额外限制（旧任务行为不变）。
+       * 到量就按 target_reached 收工，且 clickAll 每轮按剩余量收敛——不再出现"预留 40、实发 800"。
+       */
+      const totalCap = Number(input.totalCap) > 0 ? Math.min(500, Math.round(Number(input.totalCap))) : 0
+      run.inviteTotalCap = totalCap
+      /** 轮末记账状态：抖店逐人沟通只能确认"已发起"，写 inviting；其余平台保持 sent */
+      const recordStatus = input.recordStatus === 'inviting' ? 'inviting' : 'sent'
+      const recordStatusReason = input.recordStatusReason ? String(input.recordStatusReason).slice(0, 200) : null
       // onCode：命中错误码先跑恢复步骤、再重试本轮同一个子步骤（实测场景：微信广场"本页达人都已
       // 邀约过" → 点「下一页」→ 重试取人）。与 stopOn 的区别：stopOn 是收工，onCode 是换个条件继续。
       const onCodeRaw = Array.isArray(input.onCode) ? input.onCode : []
@@ -1427,12 +1514,58 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
       let skipStreak = 0
       let skippedTotal = 0
       let lastArtifact: { path: string; sha256: string } | undefined
+      /**
+       * 轮末把"本轮已点过发送的名单"落库。成功轮与"发送后按预期收工"轮共用。
+       *
+       * 为什么单独抽出来（2026-10-25 实测）：抖店逐人沟通每轮最后一步是 scrollNext，
+       * 列表到底时它抛 TASK_LIST_EXHAUSTED（在 stopOn 里＝按预期收工）。旧代码在 stopOn
+       * 分支直接 break，**这一轮刚点过「在线沟通」的那位一条记录都不写**——每单最后一位
+       * 必然漏账，日额度少算、7 天台账漏人。
+       *
+       * 只由"已经点过发送"的轮次调用（调用方用 run.inviteSendAttempted 判定）：
+       * 发送前就按预期收工的轮次（勾不满、额度用尽）本来就没发出去，不能凭空记账。
+       */
+      const flushRoundInvites = (at: number): number => {
+        const names = [...run.pendingInvitedNames]
+        if (!names.length && run.pendingCreatorNickname) names.push(run.pendingCreatorNickname)
+        if (!names.length) return 0
+        const tabUrl = (() => { try { return String(getTabWebContents(run.storeId, run.tabId || '')?.getURL() || '') } catch { return '' } })()
+        const username = names.length === 1
+          ? (tabUrl.match(/[?&]finderUsername=([^&]+)/) || [])[1] || null
+          : null
+        recordInviteBatch({
+          storeId: run.storeId,
+          platform: String((step.input as any)?.platform || ''),
+          names,
+          finderUsername: username ? decodeURIComponent(username) : null,
+          taskId: run.taskId,
+          runId: run.runId,
+          campaignId: run.campaignId,
+          invitedAt: at,
+          status: recordStatus,
+          statusSource: 'local',
+          ...(recordStatus === 'inviting' ? { statusReason: recordStatusReason } : {})
+        })
+        // 已确认发出：累计到本次总量，后续轮次按剩余额度收敛
+        run.inviteSentCount += names.length
+        run.pendingInvitedNames = []
+        run.pendingCreatorNickname = null
+        return names.length
+      }
       roundLoop: for (let round = 1; round <= maxRounds; round++) {
         guardSignals(run)
+        // 总量已满：干净收工（不是失败）。放在轮首，避免多跑一轮空转。
+        if (totalCap && run.inviteSentCount >= totalCap) {
+          stopReason = 'target_reached'
+          summary.push({ round, ok: true, stop: 'target_reached', ms: 0, message: `已达到本次上限 ${totalCap} 位` })
+          emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `已达到本次上限 ${totalCap} 位，收工` })
+          break
+        }
         const startedAt = Date.now()
         // 每一轮从空名单开始：上一轮失败/换人时，绝不能让旧名单混进本轮的成功记账
         run.pendingInvitedNames = []
         run.pendingCreatorNickname = null
+        run.inviteSendAttempted = false
         let childIdx = 0
         let childType = ''
         let recovered = 0
@@ -1472,8 +1605,21 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
                 // restart/advance 规则：重开本轮（limit 是"连续跳过上限"）
                 // 非 restart 规则：重试当前子步骤（limit 是"本轮恢复次数上限"）
                 const reopen = hitRule.restart || hitRule.advance
+                /** 抖店的"当前屏都处理过 → 滚动"不是跳过某位达人，只用于换屏。 */
+                const pageRecovery = hitRule.code === 'TASK_DOU_DIAN_PAGE_VISITED'
                 const overLimit = reopen ? skipStreak >= hitRule.limit : recovered >= hitRule.limit
                 if (overLimit) {
+                  // 抖店滚动换屏：连续 50 屏仍没有新的可沟通候选 → 干净收尾（不是平台故障）。
+                  if (pageRecovery) {
+                    stopReason = hitRule.code
+                    summary.push({
+                      round, ok: false, stop: hitRule.code, ms: Date.now() - startedAt,
+                      message: `连续滚动 ${recovered} 屏仍没有新的可沟通候选（累计跳过 ${run.inviteSkipped} 位），按预期收尾`.slice(0, 240),
+                      ...(recoveryLog.length ? { recovered: recoveryLog } : {})
+                    })
+                    emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮按预期停止：连续滚动 ${recovered} 屏无新候选` })
+                    break roundLoop
+                  }
                   // advance（这一位不满足平台合作条件，换下一位）连续撞满上限 → **干净收尾**，不算失败。
                   // 理由：触发它的判据是平台自己写明的"不可邀约"文案（如「暂未到达合作门槛」），
                   // 那是确定性的信号、不是渲染故障——连续这么多位都不可邀约，只能说明这组筛选下
@@ -1483,10 +1629,12 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
                     stopReason = hitRule.code
                     summary.push({
                       round, ok: false, stop: hitRule.code, ms: Date.now() - startedAt,
-                      message: `连续 ${skipStreak} 位都不满足平台的合作条件（累计跳过 ${skippedTotal} 位），没有更多可邀约的人，按预期收尾`.slice(0, 240),
+                      message: (pageRecovery
+                        ? `连续滚动 ${skipStreak} 屏仍没有新的候选（累计跳过 ${skippedTotal} 位），按预期收尾`
+                        : `连续 ${skipStreak} 位都不满足平台的合作条件（累计跳过 ${skippedTotal} 位），没有更多可邀约的人，按预期收尾`).slice(0, 240),
                       ...(recoveryLog.length ? { recovered: recoveryLog } : {})
                     })
-                    emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮按预期停止：连续 ${skipStreak} 位不可邀约` })
+                    emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: pageRecovery ? `第 ${round} 轮按预期停止：连续滚动 ${skipStreak} 屏无新候选` : `第 ${round} 轮按预期停止：连续 ${skipStreak} 位不可邀约` })
                     break roundLoop
                   }
                   // restart（详情页打不开）撞满上限才按故障处理：它更可能是平台整体不可用，
@@ -1530,6 +1678,8 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
                   //  - advance（这位不满足平台合作条件）：**保留**记录 —— 重开就是为了换下一位，
                   //    回滚等于原地重试同一个人，永远走不出去。
                   skippedTotal++
+                  // 页面滚动恢复没有跳过任何达人，不能计入批次「跳过」人数（否则统计虚高）。
+                  if (!pageRecovery) run.inviteSkipped++
                   if (hitRule.restart) run.visitedRows = new Set(visitedSnapshot)
                   childIdx = -1
                   break
@@ -1537,6 +1687,10 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
                 continue // 恢复完成 → 重试本轮同一个子步骤
               }
               if (out?.artifact) lastArtifact = out.artifact
+              // 跳过计数：勾选/取人阶段被台账或平台剔除的人数，落进运行句柄供批次「跳过」列使用
+              if (out?.payload && ((out.payload as any).action === 'clickAll' || (out.payload as any).action === 'clickByText')) {
+                run.inviteSkipped += Number((out.payload as any).skippedInvited) || 0
+              }
               break
             }
             if (run.deniedByConfirm) break
@@ -1552,27 +1706,10 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
            * 辅助流：names = 本轮点「详情」回传的昵称，finderUsername 从详情页地址里取。
            * 写记录失败**不影响**这一轮的结果（recordInviteBatch 内部已兜住并记 error 日志）。
            */
-          const invitedNames = [...run.pendingInvitedNames]
-          if (!invitedNames.length && run.pendingCreatorNickname) invitedNames.push(run.pendingCreatorNickname)
-          if (invitedNames.length) {
-            const tabUrl = (() => { try { return String(getTabWebContents(run.storeId, run.tabId || '')?.getURL() || '') } catch { return '' } })()
-            const username = invitedNames.length === 1
-              ? (tabUrl.match(/[?&]finderUsername=([^&]+)/) || [])[1] || null
-              : null
-            recordInviteBatch({
-              storeId: run.storeId,
-              platform: String((step.input as any)?.platform || ''),
-              names: invitedNames,
-              finderUsername: username ? decodeURIComponent(username) : null,
-              taskId: run.taskId,
-              runId: run.runId,
-              campaignId: run.campaignId,
-              invitedAt: startedAt,
-              status: 'sent'
-            })
-          }
+          if (run.pendingInvitedNames.length || run.pendingCreatorNickname) flushRoundInvites(startedAt)
           run.pendingInvitedNames = []
           run.pendingCreatorNickname = null
+          run.inviteSendAttempted = false
           summary.push({ round, ok: true, ms: Date.now() - startedAt, ...(recoveryLog.length ? { recovered: recoveryLog } : {}) })
           emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮完成` })
         } catch (e: any) {
@@ -1582,9 +1719,46 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
           if (stopOn.includes(code)) {
             stopReason = code
             run.lastStopReason = code
+            /**
+             * 收工前补记账：本轮**已经点过发送**、随后才命中"按预期停止"的（典型：抖店点完
+             * 「在线沟通」→ scrollNext 发现列表到底 → TASK_LIST_EXHAUSTED）——这一位是真实发出去的，
+             * 不记就等于每单最后一位永远漏账。只认 inviteSendAttempted，发送前的收工不记账。
+             */
+            if (run.inviteSendAttempted && (run.pendingInvitedNames.length || run.pendingCreatorNickname)) {
+              try { flushRoundInvites(startedAt) } catch { /* 记账失败不掩盖收工原因 */ }
+            }
+            run.inviteSendAttempted = false
             summary.push({ round, ok: false, stop: code, message: String(e?.message || e).slice(0, 240), ms: Date.now() - startedAt, ...(recoveryLog.length ? { recovered: recoveryLog } : {}) })
             emitProgress(run, { phase: 'succeeded', stepIndex: parentIndex, stepType: step.type, message: `第 ${round} 轮按预期停止：${code}` })
             break
+          }
+          /**
+           * 本轮已经点过发送、随后才失败 → 名单里的人**可能真的发出去了**。
+           *
+           * 典型：平台弹「部分邀约发送失败」（TASK_SEND_PARTIAL）——它列的是被拒的那几位，
+           * 同批其余人已经发出；此前整轮抛错导致一条记录都不写，额度少算、7 天台账漏人。
+           * 这里按 unknown 如实落库（status_source=local，不冒充平台回读），并计入已发尝试数，
+           * 防止重试时按原额度再发一遍。发送前就失败的轮次（没点过发送）仍然一条不记。
+           */
+          if (run.inviteSendAttempted && run.pendingInvitedNames.length) {
+            const attemptedNames = [...run.pendingInvitedNames]
+            try {
+              recordInviteBatch({
+                storeId: run.storeId,
+                platform: String((step.input as any)?.platform || ''),
+                names: attemptedNames,
+                taskId: run.taskId,
+                runId: run.runId,
+                campaignId: run.campaignId,
+                invitedAt: startedAt,
+                status: 'unknown',
+                statusSource: 'local',
+                statusReason: `本轮发送后中断（${code}），未确认是否发出`
+              })
+              run.inviteSentCount += attemptedNames.length
+            } catch { /* 记账失败不掩盖原始错误 */ }
+            run.pendingInvitedNames = []
+            run.pendingCreatorNickname = null
           }
           // 其他错误照常失败，但把"第几轮、哪个子步骤"带进消息——否则只看到子步骤报错，不知道跑到哪了
           //
@@ -1640,7 +1814,13 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
       const wc = wcOrThrow(run)
       const sel = input.selector ? String(input.selector) : ''
       const txt = input.text ? String(input.text) : ''
-      const max = Number(input.max)
+      /**
+       * 本次总量收敛（达人邀约）：每轮最多只能勾"总量 - 已确认发出"这么多，
+       * 否则最后一批会按固定 max 超发（例如总量 100、每批 40：第三轮只该勾 20）。
+       */
+      const requestedMax = Number(input.max)
+      const capRemaining = run.inviteTotalCap > 0 ? Math.max(0, run.inviteTotalCap - run.inviteSentCount) : requestedMax
+      const max = Math.max(1, Math.min(requestedMax, capRemaining || 1))
       const scroll = !!input.scroll
       const maxRounds = input.maxRounds == null ? 25 : Number(input.maxRounds)
       const deadline = Date.now() + step.timeoutMs
@@ -1824,6 +2004,8 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
       })()`
 
       let totalClicked = 0, skippedDisabled = 0, skippedInvisible = 0, skippedChecked = 0, retried = 0, corrected = 0
+      /** 台账/平台剔除的候选数（跨轮累计）：批次「跳过」列取这个值，不再恒为 0 */
+      let skippedInvitedTotal = 0
       const samples: string[] = []
       /** 完整勾选名单（去重后最多 200）：达人邀约批量流据此逐人记账，不再只留 8 个样本 */
       const clickedNames: string[] = []
@@ -1856,6 +2038,7 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
         skippedDisabled = Math.max(skippedDisabled, res.skippedDisabled)
         skippedInvisible = Math.max(skippedInvisible, res.skippedInvisible)
         skippedChecked += res.skippedChecked || 0
+        skippedInvitedTotal += res.skippedInvited || 0
         retried += res.retried || 0
         corrected += res.corrected || 0
         for (const c of res.clicked || []) {
@@ -1902,7 +2085,7 @@ export async function execStep(run: RunHandle, step: TaskStepDef, ctx: StepConte
       if (run.taskKind === 'creator_invite' && input.recordNames === true && clickedNames.length) {
         run.pendingInvitedNames = [...clickedNames]
       }
-      return { kind: 'executed', payload: { action: 'clickAll', target: sel || txt, clicked: totalClicked, pageSelected, initialSelected, selected, skippedDisabled, skippedInvisible, skippedChecked, retried, corrected, rounds, scrolled, requested: max, exhausted, samples, clickedNames: clickedNames.slice(0, 200) } }
+      return { kind: 'executed', payload: { action: 'clickAll', target: sel || txt, clicked: totalClicked, pageSelected, initialSelected, selected, skippedDisabled, skippedInvisible, skippedChecked, skippedInvited: skippedInvitedTotal, retried, corrected, rounds, scrolled, requested: max, exhausted, samples, clickedNames: clickedNames.slice(0, 200) } }
     }
     case 'setInput': {
       const wc = wcOrThrow(run)

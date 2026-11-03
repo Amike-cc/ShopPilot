@@ -22,7 +22,11 @@ vi.mock('../../apps/desktop/src/main/services/logger', () => ({ logMain: vi.fn()
 
 import {
   buildCustomerMessageProbeScript,
+  CUSTOMER_MONITOR_RETRY_CHANGED_MS,
+  CUSTOMER_MONITOR_RETRY_ERROR_MS,
+  CUSTOMER_MONITOR_RETRY_LOGIN_MS,
   CustomerMessageMonitor,
+  customerMonitorRetryDelayMs,
   interpretCustomerMessageProbe
 } from '../../apps/desktop/src/main/services/customer-message-monitor'
 import { isCustomerMessageCheckFresh } from '../../packages/shared/src/contracts/customer-service'
@@ -256,5 +260,73 @@ describe('客服消息监控', () => {
     releasePage?.()
     await first
     mocks.getStore.mockReturnValue({ id: 'store-1', platform: '抖店' })
+  })
+
+  it('失败结果按状态冷却：登录失效 15 分钟、改版/无证据 5 分钟、其它错误 2 分钟', () => {
+    expect(customerMonitorRetryDelayMs({ status: 'AVAILABLE' })).toBe(0)
+    expect(customerMonitorRetryDelayMs({ status: 'CHECKING' })).toBe(0)
+    expect(customerMonitorRetryDelayMs({ status: 'LOGIN_REQUIRED' })).toBe(CUSTOMER_MONITOR_RETRY_LOGIN_MS)
+    expect(customerMonitorRetryDelayMs({ status: 'PAGE_CHANGED' })).toBe(CUSTOMER_MONITOR_RETRY_CHANGED_MS)
+    expect(customerMonitorRetryDelayMs({ status: 'NOT_VERIFIED' })).toBe(CUSTOMER_MONITOR_RETRY_CHANGED_MS)
+    expect(customerMonitorRetryDelayMs({ status: 'ERROR' })).toBe(CUSTOMER_MONITOR_RETRY_ERROR_MS)
+  })
+
+  it('冷却期内不再为失败店铺重建隐藏页（省掉 150–300MB/店的常驻 Chromium 页面）', async () => {
+    const now = 1_700_000_000_000
+    const borrowPage = vi.fn()
+    mocks.listStores.mockReturnValue([{ id: 'store-1', platform: '拼多多' }])
+    mocks.db.prepare.mockImplementation((sql: string) => ({
+      all: () => String(sql).includes('customer_message_checks')
+        ? [{
+            store_id: 'store-1', platform: '拼多多', status: 'LOGIN_REQUIRED', unread_count: null,
+            conversation_count: null, reason_code: 'LOGIN_REQUIRED', message: '需要登录',
+            captured_at: now - 60_000, source_url_hash: null, evidence_json: null
+          }]
+        : [],
+      run: () => ({ changes: 1 })
+    }))
+    try {
+      const monitor = new CustomerMessageMonitor({
+        now: () => now,
+        borrowPage: borrowPage as any,
+        emit: mocks.emit,
+        displayedStoreId: () => null
+      })
+      await monitor.checkAll()
+      expect(borrowPage).not.toHaveBeenCalled()
+    } finally {
+      mocks.listStores.mockReturnValue([])
+      mocks.db.prepare.mockImplementation(() => ({ all: () => [], run: () => ({ changes: 1 }) }))
+    }
+  })
+
+  it('冷却到期后会重新检查失败店铺（不会永久放弃）', async () => {
+    const now = 1_700_000_000_000
+    const borrowPage = vi.fn(() => ({ waitForWebContents: async () => null, release: vi.fn() }))
+    mocks.listStores.mockReturnValue([{ id: 'store-1', platform: '拼多多' }])
+    mocks.getStore.mockReturnValue({ id: 'store-1', platform: '拼多多' })
+    mocks.db.prepare.mockImplementation((sql: string) => ({
+      all: () => String(sql).includes('customer_message_checks')
+        ? [{
+            store_id: 'store-1', platform: '拼多多', status: 'LOGIN_REQUIRED', unread_count: null,
+            conversation_count: null, reason_code: 'LOGIN_REQUIRED', message: '需要登录',
+            captured_at: now - CUSTOMER_MONITOR_RETRY_LOGIN_MS - 1, source_url_hash: null, evidence_json: null
+          }]
+        : [],
+      run: () => ({ changes: 1 })
+    }))
+    try {
+      const monitor = new CustomerMessageMonitor({
+        now: () => now,
+        borrowPage: borrowPage as any,
+        emit: mocks.emit,
+        displayedStoreId: () => null
+      })
+      await monitor.checkAll()
+      expect(borrowPage).toHaveBeenCalledOnce()
+    } finally {
+      mocks.listStores.mockReturnValue([])
+      mocks.db.prepare.mockImplementation(() => ({ all: () => [], run: () => ({ changes: 1 }) }))
+    }
   })
 })

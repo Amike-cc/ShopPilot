@@ -57,6 +57,21 @@ async function main() {
       res.end('<!doctype html><html><head><meta charset="utf-8"><title>详情</title></head><body><h1>详情页就绪</h1></body></html>')
       return
     }
+    /**
+     * 抖店逐人沟通的本地替身：一个「在线沟通」按钮 + 永远停在底部的滚动容器。
+     * 用来验证 clickByText(recordRowText+nth) → scrollNext 到底 → 按预期收工 这条链，
+     * 不登录、不触达任何平台页面。
+     */
+    if (String(req.url || '').startsWith('/invite-list')) {
+      res.end(`<!doctype html><html><head><meta charset="utf-8"><title>广场</title>
+<style>body{margin:0;font:14px/1.4 sans-serif}#sc{height:220px;overflow:auto;border:1px solid #ddd}#inner{height:260px;position:relative}table{width:100%;border-collapse:collapse;position:absolute;bottom:0}td{padding:6px}</style>
+</head><body><div id="sc"><div id="inner"><table><tbody>
+<tr><td><span class="truncate">达人甲</span></td><td>美妆</td><td><button>在线沟通</button></td></tr>
+</tbody></table></div></div>
+<script>b=document.getElementById('sc');setInterval(()=>{b.scrollTop=b.scrollHeight},80);</script>
+</body></html>`)
+      return
+    }
     res.end('<!doctype html><html><head><meta charset="utf-8"><title>后台页</title></head><body><h1>后台就绪</h1><button onclick="document.getElementById(\'out\').textContent=\'已点击\'">点我</button><div id="out"></div><a href="/detail" target="_blank">查看详情</a></body></html>')
   })
   await new Promise(resolve => localServer.listen(0, '127.0.0.1', resolve))
@@ -68,7 +83,11 @@ async function main() {
     checker.check('主窗口 CDP 就绪', !!client)
     if (!client) throw new Error('主窗口未就绪')
 
-    const nav = await client.eval(`
+    /**
+     * 应用中心已下线达人邀约（2026-10-25 用户要求：只保留店铺浏览器右侧边栏）。
+     * 断言：应用中心不再出现该卡片。
+     */
+    const apps = await client.eval(`
       const wait = ms => new Promise(r => setTimeout(r, ms));
       for (let i = 0; i < 60; i++) {
         if (document.querySelector('[data-test="dashboard-home"]')) break;
@@ -77,35 +96,78 @@ async function main() {
       const item = [...document.querySelectorAll('.dashboard-nav-item')].find(el => String(el.textContent || '').includes('应用中心'));
       if (!item) return { ok: false, reason: 'no-apps-nav', text: document.body.innerText.slice(0, 400) };
       item.click();
-      await wait(600);
-      const card = document.querySelector('[data-test="apps-card-invite"]');
-      return { ok: !!card, card: !!card, text: card ? String(card.innerText || '').slice(0, 160) : document.body.innerText.slice(0, 400) };
-    `)
-    checker.check('应用中心存在「达人邀约」卡片', nav.ok === true, JSON.stringify(nav))
-
-    const page = await client.eval(`
-      const wait = ms => new Promise(r => setTimeout(r, ms));
-      const card = document.querySelector('[data-test="apps-card-invite"]');
-      if (!card) return { ok: false, reason: 'no-card' };
-      card.click();
-      for (let i = 0; i < 40; i++) {
-        if (document.querySelector('[data-test="creator-invite-page"]')) break;
-        await wait(200);
-      }
-      await wait(900);
-      const root = document.querySelector('[data-test="creator-invite-page"]');
+      await wait(700);
+      const cards = [...document.querySelectorAll('[data-test^="apps-card-"]')].map(el => el.getAttribute('data-test'));
       return {
-        ok: !!root,
-        page: !!root,
-        kpi: !!document.querySelector('[data-test="invite-v2-kpi"]'),
-        tabs: !!document.querySelector('[data-test="invite-v2-tab-tasks"]'),
-        empty: !!document.querySelector('[data-test="invite-v2-empty"]'),
-        text: root ? String(root.innerText || '').slice(0, 300) : document.body.innerText.slice(0, 400)
+        ok: true,
+        hasInvite: !!document.querySelector('[data-test="apps-card-invite"]'),
+        cards
       };
     `)
-    checker.check('应用中心卡片进入独立模块页', page.page === true, JSON.stringify(page))
-    checker.check('工作台 KPI 与页签渲染', page.kpi === true && page.tabs === true, JSON.stringify({ kpi: page.kpi, tabs: page.tabs }))
-    checker.check('无店铺/无批次时显示如实空态', page.empty === true, JSON.stringify({ empty: page.empty }))
+    checker.check('应用中心已下线「达人邀约」入口', apps.ok === true && apps.hasInvite === false, JSON.stringify(apps))
+
+    /**
+     * 唯一入口：店铺浏览器右侧「达人邀约」面板。
+     * 用 IPC 建店 → 重载页面 → 点店铺卡打开浏览器 → 点右栏 rail-invite。
+     */
+    const sidebarStoreId = await client.eval(`
+      const created = await window.shopilot.store.create({ name: '冒烟侧栏店', platform: '抖店', adminUrl: 'https://example.com/' });
+      return created && created.ok ? String(created.data.id) : '';
+    `)
+    checker.check('侧栏测试店铺创建成功', typeof sidebarStoreId === 'string' && sidebarStoreId.length > 0, JSON.stringify({ sidebarStoreId }))
+    await client.eval('location.reload()').catch(() => {})
+    for (let i = 0; i < 40; i++) {
+      const ready = await client.eval(`!!document.querySelector('[data-test="dashboard-home"]')`).catch(() => false)
+      if (ready) break
+      await sleep(250)
+    }
+    const sidebar = await client.eval(`
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      const card = document.querySelector('[data-test="store-card"][data-store-id="${sidebarStoreId}"]');
+      if (!card) return { ok: false, reason: 'no-store-card', text: document.body.innerText.slice(0, 300) };
+      card.click();
+      for (let i = 0; i < 80; i++) {
+        if (document.querySelector('[data-test="dashboard-browser-host"].active')) break;
+        await wait(250);
+      }
+      await wait(900);
+      const rail = document.querySelector('[data-test="rail-invite"]');
+      if (rail) rail.click();
+      await wait(700);
+      const panel = document.querySelector('[data-test="invite-panel"]');
+      const exists = sel => !!(panel && panel.querySelector(sel));
+      const visible = sel => {
+        const el = panel && panel.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      return {
+        ok: !!panel,
+        rail: !!rail,
+        panel: !!panel,
+        steps: panel ? panel.querySelectorAll('[data-test="invite-panel-steps"] .invite-panel-step').length : 0,
+        category: visible('[data-test="invite-category"]'),
+        startExists: exists('[data-test="invite-start"]'),
+        backendNote: exists('[data-test="invite-backend-note"]'),
+        contactNote: exists('[data-test="invite-contact-flow-note"]'),
+        quota: exists('[data-test="invite-quota"]')
+      };
+    `)
+    checker.check('右侧边栏打开达人邀约面板（唯一入口）', sidebar.ok === true && sidebar.panel === true, JSON.stringify(sidebar))
+    // 抖店是逐人沟通（没有受众/话术页），导航只保留「目标 → 启动」两步；其余平台仍是四步。
+    const expectedSteps = sidebar.contactNote ? 2 : 4
+    checker.check('侧栏步骤导航与抖店配置字段渲染',
+      sidebar.steps === expectedSteps && sidebar.category === true && sidebar.startExists === true && sidebar.backendNote === true,
+      JSON.stringify({ steps: sidebar.steps, expectedSteps, category: sidebar.category, start: sidebar.startExists, backendNote: sidebar.backendNote }))
+    checker.check('抖店显示「逐人沟通」说明（不再要求话术/联系方式）', sidebar.contactNote === true, JSON.stringify({ contactNote: sidebar.contactNote }))
+
+    /**
+     * 上面为了验证侧栏入口，真的打开了这家店的浏览器（会产生 1 个可见标签页）。
+     * 后面的"后台运行不占可见标签页"断言必须从干净状态起算：先把这家店关掉。
+     */
+    await client.eval(`window.shopilot.browser.close(${JSON.stringify(sidebarStoreId)})`).catch(() => {})
+    await sleep(800)
 
     const ipc = await client.eval(`
       const summary = await window.shopilot.invite.summary({});
@@ -162,118 +224,6 @@ async function main() {
       JSON.stringify(campaign))
     checker.check('批次列表/详情可读', campaign.listOk === true && campaign.listCount === 1 && campaign.detailOk === true && campaign.detailName === '达人邀约 · 抖店 · 冒烟 · 最多 1 位', JSON.stringify(campaign))
 
-    const tabs = await client.eval(`
-      const wait = ms => new Promise(r => setTimeout(r, ms));
-      const click = async sel => { const el = document.querySelector(sel); if (el) { el.click(); await wait(350); } return !!el; };
-      // 冒烟直接走 IPC 建店，ws.stores 不会自动刷新；点一次页面刷新让它发现新店并选中
-      await click('[data-test="invite-v2-refresh"]');
-      const creatorsTab = await click('[data-test="invite-v2-tab-creators"]');
-      const creatorsEmpty = !!document.querySelector('[data-test="invite-v2-creators-empty"]');
-      const assetsTab = await click('[data-test="invite-v2-tab-assets"]');
-      const scriptInput = !!document.querySelector('[data-test="invite-v2-script-name"]');
-      const quota = !!document.querySelector('[data-test="invite-v2-quota"]');
-
-      // 页签拆分后的独立组件：任务列表 → 详情抽屉 → 说明页 → 记录页
-      await click('[data-test="invite-v2-tab-tasks"]');
-      const row = document.querySelector('[data-test="invite-v2-campaign-row"]');
-      if (row) { row.click(); await wait(900); }
-      const drawer = document.querySelector('[data-test="invite-v2-campaign-detail"]');
-      const drawerTitle = drawer ? String((drawer.querySelector('h2') || {}).textContent || '') : '';
-      const drawerKpis = drawer ? drawer.querySelectorAll('.invite-detail-kpis span').length : 0;
-      const closeBtn = drawer ? [...drawer.querySelectorAll('button')].find(b => String(b.textContent || '').trim() === '关闭') : null;
-      if (closeBtn) { closeBtn.click(); await wait(300); }
-      const drawerClosed = !document.querySelector('[data-test="invite-v2-campaign-detail"]');
-
-      await click('[data-test="invite-v2-tab-about"]');
-      const aboutText = String((document.querySelector('.invite-about') || {}).innerText || '');
-      await click('[data-test="invite-v2-tab-records"]');
-      const recordsEmpty = !!document.querySelector('[data-test="invite-v2-records-empty"]');
-
-      return { creatorsTab, creatorsEmpty, assetsTab, scriptInput, quota,
-        drawer: !!drawer, drawerTitle, drawerKpis, drawerClosed,
-        about: aboutText.includes('配置入口在哪') && aboutText.includes('后端隐藏窗口执行'),
-        recordsEmpty };
-    `)
-    checker.check('达人库页签可打开（无记录时如实空态）', tabs.creatorsTab === true && tabs.creatorsEmpty === true, JSON.stringify(tabs))
-    checker.check('资产页签与额度 chip 渲染', tabs.assetsTab === true && tabs.scriptInput === true && tabs.quota === true, JSON.stringify(tabs))
-    checker.check('任务页签打开批次详情抽屉并可关闭',
-      tabs.drawer === true && tabs.drawerTitle.includes('冒烟') && tabs.drawerKpis >= 4 && tabs.drawerClosed === true,
-      JSON.stringify({ drawer: tabs.drawer, drawerTitle: tabs.drawerTitle, drawerKpis: tabs.drawerKpis, drawerClosed: tabs.drawerClosed }))
-    checker.check('说明页与记录页（拆分组件）渲染', tabs.about === true && tabs.recordsEmpty === true, JSON.stringify({ about: tabs.about, recordsEmpty: tabs.recordsEmpty }))
-
-    /**
-     * 独立页就地配置：以前「新建邀约」会跳到店铺浏览器侧栏；现在必须留在本页，
-     * 因为发送改由主进程隐藏窗口负责，不再需要用户先打开店铺。
-     */
-    const launcher = await client.eval(`
-      const wait = ms => new Promise(r => setTimeout(r, ms));
-      const click = async sel => { const el = document.querySelector(sel); if (el) { el.click(); await wait(400); } return !!el; };
-      await click('[data-test="invite-v2-tab-tasks"]');
-      const opened = await click('[data-test="invite-v2-open-config"]');
-      for (let i = 0; i < 30; i++) {
-        if (document.querySelector('[data-test="invite-v2-launcher"]')) break;
-        await wait(200);
-      }
-      await wait(600);
-      const box = document.querySelector('[data-test="invite-v2-launcher"]');
-      return {
-        opened,
-        launcher: !!box,
-        panel: !!(box && box.querySelector('[data-test="invite-panel"]')),
-        start: !!(box && box.querySelector('[data-test="invite-start"]')),
-        storeSelect: !!(box && box.querySelector('[data-test="invite-v2-launcher-store"]')),
-        storeOptions: box ? box.querySelectorAll('[data-test="invite-v2-launcher-store"] option').length : 0,
-        storeValue: box ? String((box.querySelector('[data-test="invite-v2-launcher-store"]') || {}).value || '') : '',
-        backendNote: !!(box && box.querySelector('[data-test="invite-backend-note"]')),
-        stillOnPage: !!document.querySelector('[data-test="creator-invite-page"]')
-      };
-    `)
-    checker.check('独立页就地打开配置面板（不跳店铺浏览器）',
-      launcher.opened === true && launcher.launcher === true && launcher.panel === true && launcher.start === true && launcher.stillOnPage === true,
-      JSON.stringify(launcher))
-    checker.check('面板明确标注后台运行', launcher.backendNote === true, JSON.stringify({ backendNote: launcher.backendNote }))
-    checker.check('配置面板可指定店铺（店铺下拉已接入）',
-      launcher.storeSelect === true && launcher.storeOptions >= 1 && launcher.storeValue.length > 0,
-      JSON.stringify({ storeSelect: launcher.storeSelect, storeOptions: launcher.storeOptions, storeValue: launcher.storeValue }))
-
-    /**
-     * 四步向导（2026-10-20）：目标 → 受众 → 话术 → 确认。
-     * 断言步骤按钮存在、可切换，且切到第 4 步时「开始邀约」与定时输入都在同一屏。
-     */
-    const wizard = await client.eval(`
-      const wait = ms => new Promise(r => setTimeout(r, ms));
-      const box = () => document.querySelector('[data-test="invite-v2-launcher"]');
-      const steps = box() ? box().querySelectorAll('[data-test="invite-v2-steps"] .invite-step') : [];
-      const clickStep = async n => {
-        const el = box() && box().querySelector('[data-test="invite-v2-step-' + n + '"]');
-        if (el) { el.click(); await wait(320); }
-        return !!el;
-      };
-      const visible = sel => {
-        const el = box() && box().querySelector(sel);
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      };
-      // 同一选择器可能有多个（不同步骤里的 chip）：只要"有一个可见"就算这一步渲染了。
-      const anyVisible = sel => [...(box() ? box().querySelectorAll(sel) : [])].some(el => {
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      });
-      const step1Category = visible('[data-test="invite-category"]');
-      const ok2 = await clickStep(2);
-      const step2Chip = anyVisible('.inv-chip');
-      const step1HiddenOn2 = !visible('[data-test="invite-category"]');
-      const ok3 = await clickStep(3);
-      const step3Script = visible('[data-test="invite-script"]') ?? visible('[data-test="invite-step3-noop"]');
-      const ok4 = await clickStep(4);
-      const step4Start = visible('[data-test="invite-start"]');
-      return { steps: steps.length, ok2, ok3, ok4, step1Category, step1HiddenOn2, step2Chip, step3Script: !!step3Script, step4Start };
-    `)
-    checker.check('四步向导可切换（目标/受众/话术/确认）',
-      wizard.steps === 4 && wizard.ok2 && wizard.ok3 && wizard.ok4 && wizard.step1Category === true &&
-      wizard.step1HiddenOn2 === true && wizard.step2Chip === true && wizard.step3Script === true && wizard.step4Start === true,
-      JSON.stringify(wizard))
 
     /**
      * 定时邀约（2026-10-20）：排期批次不入队，状态为 scheduled；取消后变 stopped。
@@ -393,6 +343,75 @@ async function main() {
     checker.check('后台隐藏窗口能真实布局并点击（本地页面）', local.ok === true && local.status === 'completed', JSON.stringify(local))
     checker.check('真实页面步骤也没有打开可见标签页', local.visibleTabs === 0, JSON.stringify({ visibleTabs: local.visibleTabs }))
     checker.check('终态释放后台页（诊断里 backgroundPages=0，无隐藏窗口泄漏）', local.backgroundPages === 0, JSON.stringify({ backgroundPages: local.backgroundPages }))
+
+    /**
+     * 抖店逐人沟通链路（2026-10-25）：建批次 → 点「在线沟通」→ 列表到底收工 → 记账。
+     *
+     * 两条曾经的事故都在这条链上：
+     *   ① scrollNext 只加进了 TASK_STEP_TYPES/引擎，漏登记 stepInputSchemas →
+     *      `validateStepInput` 抛「未登记的步骤类型」→ 侧栏点开始 100% 失败；
+     *   ② clickByText 不带 nth 时引擎不走"按行取人"分支 → rowNickname 恒空 →
+     *      点过的人一条记录都不写（额度/7 天去重全失真），且 skipTexts 静默失效。
+     */
+    const doudianFlow = await client.eval(`
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      const store = await window.shopilot.store.create({ name: '抖店逐人测试店', platform: '抖店', adminUrl: 'http://127.0.0.1:${localPort}/invite-list' });
+      if (!store.ok) return { ok: false, stage: 'store', error: store.error };
+      const started = await window.shopilot.invite.startCampaign({
+        task: {
+          name: '达人邀约 · 抖店 · 逐人沟通',
+          storeScope: store.data.id,
+          kind: 'creator_invite',
+          source: 'panel',
+          steps: [
+            { type: 'navigate', input: { url: 'http://127.0.0.1:${localPort}/invite-list' }, timeoutMs: 20000 },
+            { type: 'waitForPage', input: { urlIncludes: '/invite-list' }, timeoutMs: 12000 },
+            {
+              type: 'loop',
+              input: {
+                label: '逐人沟通 · 最多 5 位',
+                maxRounds: 5,
+                stopOn: ['TASK_LIST_EXHAUSTED'],
+                recordStatus: 'inviting',
+                recordStatusReason: '已发起在线沟通，平台未回读结果',
+                steps: [
+                  { type: 'clickByText', input: { text: '在线沟通', mode: 'real', nth: 'unvisited', recordRowText: true, markSendAttempt: true }, timeoutMs: 20000 },
+                  { type: 'waitMs', input: { ms: 600 } },
+                  { type: 'scrollNext', input: { text: '在线沟通' }, timeoutMs: 10000 }
+                ]
+              },
+              timeoutMs: 120000
+            }
+          ]
+        },
+        campaign: { storeId: store.data.id, targetCount: 5, filters: {}, scriptText: '', createdBy: 'panel' }
+      });
+      if (!started.ok) return { ok: false, stage: 'start', error: started.error };
+      let status = null, stopReason = null;
+      for (let i = 0; i < 80; i++) {
+        const detail = await window.shopilot.invite.campaignDetail(started.data.campaignId);
+        const c = detail && detail.ok ? detail.data.campaign : null;
+        status = c ? c.status : null;
+        stopReason = c ? c.stopReason : null;
+        if (status && !['running', 'queued', 'paused', 'waiting', 'ready', 'scheduled'].includes(status)) break;
+        await wait(300);
+      }
+      await wait(600);
+      // 记录列表 IPC 的 data 就是数组（不是 { records }），按数组读，别把"读不到"当成"没记账"
+      const rec = await window.shopilot.invite.records({ campaignId: started.data.campaignId, limit: 10 });
+      const rows = rec && rec.ok ? (rec.data.records || rec.data || []) : [];
+      return {
+        ok: true, status, stopReason,
+        count: rows.length,
+        names: rows.map(r => r.nickname),
+        firstStatus: rows[0] && rows[0].status,
+        recordCampaignId: rows[0] && rows[0].campaignId
+      };
+    `)
+    checker.check('抖店逐人沟通：建任务不再被白名单拒绝，且能跑完', doudianFlow.ok === true && doudianFlow.status === 'exhausted', JSON.stringify(doudianFlow))
+    checker.check('抖店逐人沟通：列表到底按预期收工（候选不足，不是失败）', doudianFlow.stopReason === 'TASK_LIST_EXHAUSTED', JSON.stringify({ stopReason: doudianFlow.stopReason }))
+    checker.check('抖店逐人沟通：点过的那位已记账并归属本批次，昵称取自行内', doudianFlow.count === 1 && doudianFlow.names[0] === '达人甲' && !!doudianFlow.recordCampaignId, JSON.stringify({ count: doudianFlow.count, names: doudianFlow.names, campaignId: doudianFlow.recordCampaignId }))
+    checker.check('抖店逐人沟通：记录为「邀请中」（平台不回读，不伪造已发送）', doudianFlow.firstStatus === 'inviting', JSON.stringify({ firstStatus: doudianFlow.firstStatus }))
 
     const ok = checker.summary('达人邀约 v2 冒烟')
     if (!ok) {

@@ -12,8 +12,8 @@ import { useInviteRun } from '../invite/composables/use-invite-run'
  *
  * 2026-10-20 P2 拆分的第二半：状态与五个领域 composable 已分别落在
  * `features/invite/composables/`，这里只做接线，并**保持返回结构不变**——
- * 侧栏 `DashboardBrowserSurface.vue` 与独立页 `CreatorInvitePage.vue`
- * 都按这个对象取值，锚点与行为不受拆分影响。
+ * 唯一使用者是店铺浏览器右侧栏 `DashboardBrowserSurface.vue`（独立邀约页已下线），
+ * 锚点与行为不受拆分影响。
  *
  *   invite-state        表单/选项/校验/快照（纯状态，无 IPC）
  *   use-invite-config   配置读写（含串行号与切店保护、自动保存）
@@ -45,10 +45,26 @@ export function useCreatorInvite(options: CreatorInviteOptions = {}) {
   const config = useInviteConfig(state, {
     loadQuota: quota.loadInviteQuota,
     loadScripts: assets.loadInviteScripts,
-    loadBlacklistCount: quota.loadBlacklistCount
+    loadBlacklistCount: quota.loadBlacklistCount,
+    loadRecentCount: quota.loadInviteRecentCount
   })
-  const navigation = useInviteNavigation(state, { reloadConfig: config.loadInviteConfig })
+  const navigation = useInviteNavigation(state, {
+    reloadConfig: config.loadInviteConfig,
+    flushConfig: config.flushInviteConfig
+  })
   const run = useInviteRun(state, { reloadQuota: quota.loadInviteQuota })
+
+  /** 侧栏「刷新」的统一入口：任务、批次/逐人记录、额度、7 天人数、黑名单一次重读。 */
+  async function refreshInvite(): Promise<void> {
+    const storeId = currentStoreId.value
+    const platform = state.inviteProfile.value?.platform || ''
+    await run.refreshInviteData()
+    if (storeId) {
+      void quota.loadInviteQuota(storeId)
+      void quota.loadInviteRecentCount(storeId)
+    }
+    if (storeId && platform) void quota.loadBlacklistCount(storeId, platform)
+  }
 
   return {
     ...state,
@@ -57,6 +73,7 @@ export function useCreatorInvite(options: CreatorInviteOptions = {}) {
     ...config,
     ...navigation,
     ...run,
+    refreshInvite,
     currentStoreId
   }
 }

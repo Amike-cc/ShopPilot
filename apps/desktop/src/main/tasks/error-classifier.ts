@@ -47,6 +47,8 @@ const PREFIX_CODES: readonly string[] = [
   'TASK_SELECTION_SHORTFALL',
   // 当前分页里的候选都已处理过，由 loop 的 onCode 恢复步骤消化
   'TASK_PAGE_EXHAUSTED',
+  // 抖店逐人沟通：当前屏候选都处理过 → onCode 滚动一屏后重试；连续多屏仍如此则干净收尾
+  'TASK_DOU_DIAN_PAGE_VISITED',
   // 这一位达人的详情页打不开（微应用间歇性不渲染），交给 onCode 退避重试
   'TASK_DAREN_PAGE_UNOPENABLE',
   // 页面正常，但平台明说不满足合作条件：重试同一位永远没用，必须跳过换人

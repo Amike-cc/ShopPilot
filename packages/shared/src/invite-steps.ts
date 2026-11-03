@@ -13,6 +13,7 @@
  * 点「开始邀约」即开始真实发送，不可撤回。
  */
 
+import { DOUDIAN_FINDER_MAP } from './constants/invite'
 import type { AssistInviteProfile, BatchInviteProfile, InviteProfile } from './constants/invite'
 
 export interface StepDraft {
@@ -37,8 +38,18 @@ export interface BatchInviteOptions {
   subcategory?: string
   /** 三级类目（'' = 不限三级）；仅 category/subcategory 都非空时有效 */
   category3?: string
+  /**
+   * 达人类型（抖店逐人沟通流专用，2026-10-21）：微信口径或抖店文案都接受——
+   * buildDoudianContactSteps 里经 DOUDIAN_FINDER_MAP 统一折算。留空 = 不切类型页签。
+   */
+  finderType?: string
   levels: string[]
   count: number
+  /**
+   * 本次运行的**总量上限**（2026-10-25 重构）：每批 count 位，loop 跑到累计达到 totalCap 就收工。
+   * 不传时按「每批 × 20 轮」封顶到 500 —— 这是旧行为的上限，也是本地上限的硬边界。
+   */
+  totalCap?: number
   script: string
   scriptMode: 'manual' | 'ai'
   benefits: string[]
@@ -154,6 +165,174 @@ export function urlPathHint(url: string): string {
 }
 
 /**
+ * 抖店「逐人沟通」流（2026-10-21 重写，全部基于当日真机实测）：
+ *
+ * 平台现状（实测）：
+ *   · 广场 URL 落地是筛选表单页，点「搜索」后列表才渲染（虚拟表格）；
+ *   · 达人类型 radio 真实文案「全部达人/视频达人/直播达人/图文达人/橱窗达人」，合成 click 生效；
+ *   · 卡片操作只有「加入达人库 / 在线沟通」——**「批量邀约带货」抽屉已下线**；
+ *   · 沟通按钮在表格右侧固定列，横向要滚到最右才可见；列表纵向在 auxo-table-body 内滚。
+ *
+ * 序列：navigate → 达人类型 radio → 类目 chip（可选）→ 搜索 → 等列表 →
+ *       loop[ click「在线沟通」(受信任 mode:'real') → waitMs 平台建会话 → scrollNext 下一屏 ]
+ *
+ * 诚实边界：
+ *   · 点击「在线沟通」= 平台侧发起沟通请求；会话是否真的建立由平台 IM 决定，
+ *     本流程**不伪造 sent**——记录与日志如实反映"已执行点击"这一动作；
+ *   · 等级/销售额筛选暂不进序列：快筛按钮组的展开交互未实测，未实测不写选择器；
+ *   · loop 收尾：scrollNext 报 TASK_LIST_EXHAUSTED（列表到底）= 本轮候选用完，正常收工。
+ */
+function buildDoudianContactSteps(p: BatchInviteProfile, opts: BatchInviteOptions, squareUrl: string): StepDraft[] {
+  const finderType = opts.finderType ? (DOUDIAN_FINDER_MAP[opts.finderType] || opts.finderType) : ''
+  const round: StepDraft[] = [
+    { type: 'navigate', input: { url: squareUrl }, timeoutMs: 45000 },
+    { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrl) }, timeoutMs: 45000 }
+  ]
+  if (finderType) {
+    // radio 按自有文案定位：合成 click 实测有效（探针 2026-10-21），无需受信任模式
+    round.push({ type: 'clickByText', input: { text: finderType }, timeoutMs: 25000 })
+  }
+  if (opts.category) {
+    const filterRowLabel = String(p.categoryLabelText || p.texts.categoryLabel || '').trim()
+    if (filterRowLabel) round.push({ type: 'waitForText', input: { text: filterRowLabel, deep: true }, timeoutMs: 40000 })
+    const chipWithin = typeof p.categoryChipScope === 'string'
+      ? { selector: p.categoryChipScope }
+      : { text: p.categoryChipScope.text, climb: p.categoryChipScope.climb }
+    round.push({ type: 'clickByText', input: { text: opts.category, within: chipWithin }, timeoutMs: 20000 })
+    const sub = (opts.subcategory || '').trim()
+    const third = sub ? (opts.category3 || '').trim() : ''
+    if (third) {
+      round.push({ type: 'hover', input: { text: sub, within: { selector: p.categoryPopoverSelector } }, timeoutMs: 20000 })
+      round.push({ type: 'clickByText', input: { text: third, exact: true, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
+    } else if (sub) {
+      round.push({ type: 'clickByText', input: { text: sub, within: { selector: p.categoryPopoverSelector }, mode: 'real' }, timeoutMs: 25000 })
+    }
+    round.push({ type: 'pressKey', input: { key: 'Escape' }, timeoutMs: 10000 })
+  }
+  if (p.texts.search) round.push({ type: 'clickByText', input: { text: p.texts.search }, timeoutMs: 20000 })
+  round.push({ type: 'waitForText', input: { text: '在线沟通' }, timeoutMs: 40000 })
+  // 横向滚到最右：沟通按钮在表格右侧固定列，778 视口下不横滚就点不到（实测 2026-10-21）
+  // scrollNext 的锚点选「在线沟通」会自动找表格滚动容器；先纵向锚定列表，再由 loop 内每轮续滚。
+  const requested = Math.max(1, Math.min(opts.count, p.maxBatch || 40))
+  /** 总量再收一次口（智能体/旧配置可能同时带 totalCap）：count 与 totalCap 取小。 */
+  const need = Math.max(1, Math.min(requested, Math.round(Number(opts.totalCap) || requested)))
+  /** 台账里"近 7 天已邀过"+黑名单 → 点「在线沟通」前就跳过，不白开一次会话 */
+  const recentlyInvited = (opts.recentlyInvited || []).map(n => String(n).trim()).filter(Boolean).slice(0, 500)
+  round.push({
+    type: 'loop',
+    input: {
+      label: `逐人沟通 · ${finderType || '全部达人'}${opts.category ? ' · ' + opts.category : ''} · 最多 ${need} 位`,
+      maxRounds: need,
+      /**
+       * 只剩"列表到底"算正常收工。
+       * 旧写法把 TASK_SELECTOR_CHANGED 也当收工——平台改版时会静默显示"已完成"，
+       * 实际一位都没沟通，这是最危险的一类假成功。
+       */
+      stopOn: ['TASK_LIST_EXHAUSTED', 'TASK_QUOTA_EXCEEDED'],
+      /**
+       * 抖店列表的两种"取不到下一位"不能用同一处置：
+       *   · 本页可见候选都处理过 → 先往下滚一屏再重试（advance 保留已访问，换下一位）；
+       *   · 某行「在线沟通」是禁用态（平台限制/已沟通/不可沟通）→ 记下这一行并换下一位；
+       *     连续 20 位都禁用则视为这组筛选下没有可沟通的人，干净收工。
+       * 列表到底由 scrollNext 报 TASK_LIST_EXHAUSTED（在 stopOn 里）正常收尾。
+       */
+      onCode: [
+        {
+          code: 'TASK_DOU_DIAN_PAGE_VISITED',
+          /**
+           * 不设 advance：滚动换屏没有"跳过某位达人"，不能重开本轮（会消耗 maxRounds，
+           * 40 位目标里前 30 屏是已邀/不可沟通时，真正能发的人会被挤掉）。
+           * 恢复步骤执行后引擎会重试同一个 click 子步骤；scrollNext 到底报 TASK_LIST_EXHAUSTED，
+           * 在 stopOn 里干净收工。limit 是防止无限滚动的安全上限。
+           */
+          limit: 50,
+          steps: [
+            { type: 'scrollNext', input: { text: '在线沟通' }, timeoutMs: 20000 },
+            { type: 'waitMs', input: { ms: 800 }, timeoutMs: 10000 }
+          ]
+        },
+        {
+          code: 'TASK_DAREN_NOT_INVITABLE',
+          limit: 20,
+          advance: true,
+          steps: [{ type: 'waitMs', input: { ms: 300 }, timeoutMs: 5000 }]
+        },
+        {
+          // 禁用 tooltip 明确说"7 天内已经邀约过"：跳过换下一位（不重复点详情/会话）
+          code: 'TASK_DAREN_ALREADY_INVITED',
+          limit: 20,
+          advance: true,
+          steps: [{ type: 'waitMs', input: { ms: 300 }, timeoutMs: 5000 }]
+        }
+      ],
+      /**
+       * 点「在线沟通」只代表"已发起沟通"，平台不回读是否被接受/回复。
+       * 记录写 inviting（邀请中）而不是 sent（已发送），不伪造发送结果。
+       */
+      recordStatus: 'inviting',
+      recordStatusReason: '已发起在线沟通，平台未回读结果',
+      steps: [
+        /**
+         * recordRowText：把这一行的达人昵称回传 → 轮末写入逐人记录/7 天台账。
+         * 旧实现漏了这一项：抖店逐人沟通虽然真的点了「在线沟通」，但台账永远是 0 条，
+         * 额度、达人库、7 天去重全部失真。
+         * markSendAttempt：点击即"发起沟通"，之后中断按 unknown 记账，不丢人。
+         * skipTexts：7 天已邀 + 黑名单在点之前就跳掉（平台不会替我们拦"刚沟通过"的人）。
+         * nth:'unvisited'：**必须带**。引擎的「按行取人」逻辑（skipTexts 过滤 + rowNickname
+         *   回传）只在这条路径上生效；不带时 clickByText 只做"点最短文案的那个"，
+         *   skipTexts 与 recordRowText 会被静默忽略——表现是台账恒 0、7 天去重形同虚设
+         *   （2026-10-25 源码复核确认）。带上后每轮取"本次还没点过的第一条"，
+         *   点过的行（按钮变「继续沟通」）本来也不在候选里。
+         */
+        {
+          type: 'clickByText',
+          input: {
+            text: '在线沟通',
+            mode: 'real',
+            nth: 'unvisited',
+            recordRowText: true,
+            markSendAttempt: true,
+            /**
+             * 抖店广场的优惠券装饰图（position:absolute，横跨右侧操作列）在滚动后会盖住
+             * 「在线沟通」的落点。elementFromPoint 返回 IMG，真实鼠标点到图片上，平台毫无反馈——
+             * 表现就是第 2 轮起 `TASK_TARGET_COVERED: 被「IMG.」遮挡`（2026-11-01 真机）。
+             * 该选项只对非交互图片临时关指针事件，不碰按钮/链接/对话框。
+             */
+            ignoreImageOverlay: true,
+            /**
+             * 禁用态「在线沟通」= 这一位当前不可沟通（平台 tooltip 会给出原因）。
+             * 不能让它把整单打挂：交给 loop 的 advance 换下一位。
+             * 当前页都处理过与"找不到元素"分开编码，前者由 onCode 滚动后重试。
+             */
+            disabledCode: 'TASK_DAREN_NOT_INVITABLE',
+            allVisitedCode: 'TASK_DOU_DIAN_PAGE_VISITED',
+            /**
+             * 抖店行文本包含昵称+徽标+类目。近 7 天跳过名单用「昵称相等」而不是整行 includes，
+             * 否则黑名单里的短昵称（如「小美」）会把「小美美」也误跳过。
+             */
+            skipTextsMatch: 'exact-nickname',
+            ...(recentlyInvited.length ? { skipTexts: recentlyInvited } : {})
+          },
+          timeoutMs: 30000
+        },
+        // 点击后给平台一点建会话的时间；随后滚到下一屏继续（在线沟通按钮被点过会变成
+        // 「继续沟通」，不再匹配下一轮的 clickByText——天然不会重复点同一位）
+        { type: 'waitMs', input: { ms: 2500 } },
+        /**
+         * 平台可能在点「在线沟通」后弹出会话抽屉/浮层；先按一次 Esc 收起。
+         * 没有浮层时 Esc 对列表无害（筛选弹层已在前一步关掉），有浮层时避免它
+         * 盖住下一轮的「在线沟通」。真机实测 2026-11-01：第 2 轮被 IMG. 遮挡。
+         */
+        { type: 'pressKey', input: { key: 'Escape' }, timeoutMs: 10000 },
+        { type: 'scrollNext', input: { text: '在线沟通' }, timeoutMs: 20000 }
+      ]
+    },
+    timeoutMs: 600000
+  })
+  return round
+}
+
+/**
  * 批量勾选流（抖店 / 快手小店）。要点：
  * - 平台无稳定 data-test，筛选与提交靠文案点击（clickByText）；
  * - 行复选框用 tbody 限定，避免点到表头的"全选"；勾选是**逐个点**（clickAll 不碰表头全选）；
@@ -168,6 +347,14 @@ export function urlPathHint(url: string): string {
  *   minSelect / quotaCheck / goodsModal / benefits / strengths / contacts / postSendConfirmTexts。
  */
 export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions, squareUrl: string): StepDraft[] {
+  /**
+   * 抖店分流（2026-10-21 重写）：平台已下线「批量邀约带货」抽屉路径——
+   * 实测列表页没有该入口、没有「确认发送」、卡片操作只剩「加入达人库/在线沟通」。
+   * 旧 34 步（勾选→批量邀约→抽屉→确认发送）实测在第 18 步（等级级联）就死掉。
+   * 新路径：逐人「在线沟通」（引擎受信任点击 + 滚动续抓），见 buildDoudianContactSteps。
+   * 快手小店继续走勾选+抽屉流（平台未变）。
+   */
+  if (p.contactOnly) return buildDoudianContactSteps(p, opts, squareUrl)
   const round: StepDraft[] = [
     { type: 'navigate', input: { url: squareUrl }, timeoutMs: 45000 },
     { type: 'waitForPage', input: { urlIncludes: urlPathHint(squareUrl) }, timeoutMs: 45000 }
@@ -267,6 +454,14 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   // 勾选数下限（实测快手：只勾 1 位点「批量邀约」静默无反应）→ 不足就把本批要的人数抬到下限，
   // 否则每轮都会白跑一次"点了没反应"。count 本身已由面板按 maxBatch 收过口。
   const need = Math.max(opts.count, p.minSelect || 1)
+  /**
+   * 本次总量（2026-10-25）：默认「每批 × 20 轮」并封顶 500（与 campaign.target_count 同口径）。
+   * 它不是"每批人数"，而是整单的硬上限——额度校验、进度展示、loop 收工都读这一个数。
+   * 没有它时旧实现只能按"每批人数"预留额度，而实际最多能发 20 倍。
+   */
+  const totalCap = Math.max(need, Math.min(500, Math.round(Number(opts.totalCap) || need * BATCH_LOOP_MAX_ROUNDS)))
+  /** 轮数按总量收敛：总量 100、每批 40 → 最多 3 轮（第 3 轮由引擎按剩余量少勾） */
+  const roundsForCap = Math.max(1, Math.min(BATCH_LOOP_MAX_ROUNDS, Math.ceil(totalCap / need)))
   /** 台账里"近 7 天已邀过"的昵称 → 勾选时跳过这些行（快手/抖店列表行都没有"已邀约"标记） */
   const recentlyInvited = (opts.recentlyInvited || []).map(n => String(n).trim()).filter(Boolean).slice(0, 500)
   // scroll=true：广场列表在固定容器里滚动加载（无分页），一屏放不下 40 位——
@@ -515,7 +710,7 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
   //   ③ 发送后校验（抽屉关闭 / 平台失败文案）：把"点了发送"和"真的发出去了"分开。
   // 代价要说清楚：点下「开始邀约」后，批量流的邀约是**真实发出且不可撤回**的——
   // 面板与运行卡片都已如实写明这一点。
-  round.push({ type: 'clickByText', input: { text: p.texts.confirmSend } })
+  round.push({ type: 'clickByText', input: { text: p.texts.confirmSend, markSendAttempt: true } })
   // 发送后**可能**弹二次确认框（平台行为未定时的兜底）：出现就点、没出现就跳过，如实记录。
   // 不硬等（白等超时会把成功报成失败），也不假设没有（真弹了没人点其实没发出去）。
   //
@@ -570,13 +765,15 @@ export function buildBatchSteps(p: BatchInviteProfile, opts: BatchInviteOptions,
         (opts.subcategory && opts.category3 ? '/' + opts.category3 : '')
       : '全部',
     ...(opts.levels.length ? [opts.levels.join('/')] : []),
-    `每批 ${need} 位`
+    `每批 ${need} 位`,
+    `本次最多 ${totalCap} 位`
   ]
   return [{
     type: 'loop',
     input: {
       label: labelParts.join(' · '),
-      maxRounds: BATCH_LOOP_MAX_ROUNDS,
+      maxRounds: roundsForCap,
+      totalCap,
       /**
        * 按预期收工（不算失败）的三种情况：
        *   · 额度用完（平台明示的剩余邀请机会为 0）；
@@ -860,7 +1057,7 @@ export function buildAssistSteps(p: AssistInviteProfile, opts: AssistInviteOptio
   }
 
   // 发送（无门禁，真实发出）→ 等平台确认弹窗 → 确认 → 校验表单被清空
-  round.push({ type: 'clickByText', input: { text: p.texts.sendInvite, deep: true, mode: 'real' }, timeoutMs: 20000 })
+  round.push({ type: 'clickByText', input: { text: p.texts.sendInvite, deep: true, mode: 'real', markSendAttempt: true }, timeoutMs: 20000 })
   round.push({ type: 'waitForText', input: { text: p.texts.dialogMarker, deep: true }, timeoutMs: 25000 })
   round.push({ type: 'clickByText', input: { text: p.texts.confirmSend, deep: true, mode: 'real' }, timeoutMs: 20000 })
   /**

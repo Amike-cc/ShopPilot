@@ -95,6 +95,8 @@ export const STEP_IDEMPOTENT_TYPES: ReadonlySet<string> = new Set<string>([
   'readApi',
   // 读重复卡片列表：纯读，重跑最多是再读一遍
   'readCards',
+  // 列表滚动到下一屏（抖店逐人沟通流）：纯滚动无副作用，重跑最多多滚一屏
+  'scrollNext',
   'mirrorTabUrl', 'requireQuota', 'requireEnabled', 'requireTextAbsent',
   // 覆盖式写入：重跑只是把同一个值再写一遍
   'setInput', 'typeText', 'fillDraft', 'ensureRows', 'ensureRowsById',

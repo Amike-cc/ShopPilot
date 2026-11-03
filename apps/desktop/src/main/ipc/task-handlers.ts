@@ -13,6 +13,7 @@ import * as TaskStore from '../tasks/task-store'
 import * as Runner from '../tasks/task-runner'
 import * as Scheduler from '../tasks/scheduler'
 import { startInviteScheduler } from '../services/invite-scheduler'
+import { closeInviteCampaignsForTask } from '../services/invite-campaigns'
 import { getOpenStoreIds } from '../browser/window-manager'
 import { ipcOk as ok, ipcFail as err, ipcErrFromUnknown } from './envelope'
 import { z } from 'zod'
@@ -67,6 +68,16 @@ export function registerTaskHandlers(): void {
   handle(IPC_CHANNELS.TASK_RUN, async (_e: IpcMainInvokeEvent, input: { taskId: string; storeId?: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {
+      /**
+       * 达人邀约任务**不允许从任务中心直跑**（2026-10-25 重构）。
+       * 直跑不经过 startInviteCampaign：没有日额度校验、没有同店互斥、没有 7 天/黑名单跳过名单，
+       * 记录也不归属批次。取消排期后仍能从任务中心发出去，就是这个口子。
+       * 正确入口是「达人邀约」页新建批次（内部仍走 enqueueRun）。
+       */
+      const task = TaskStore.getTask(input.taskId)
+      if (task?.kind === 'creator_invite') {
+        return err(ERROR_CODES.TASK_BAD_STATE.code, '达人邀约请在店铺浏览器右侧「达人邀约」面板新建批次启动：任务直跑会绕过日额度与同店互斥，记录也无法归属批次', requestId)
+      }
       const res = Runner.enqueueRun(input.taskId, { reason: '手动触发', storeId: input.storeId })
       return ok({ ...res, waitingForStore: !getOpenStoreIds().includes(res.storeId) }, requestId)
     } catch (e: any) { return taskError(e, requestId) }
@@ -137,6 +148,11 @@ export function registerTaskHandlers(): void {
         }
       }
       TaskStore.deleteTask(input.taskId)
+      /**
+       * 达人邀约任务删除后必须收尾批次：runs 会被级联删除，而 invite_campaigns 行还在，
+       * 状态会永远停在 running（且没有 runId 可停止）。这里如实标 stopped 并写原因。
+       */
+      if (task.kind === 'creator_invite') closeInviteCampaignsForTask(input.taskId, '任务已被删除')
       return ok({ success: true }, requestId)
     } catch (e: any) { return taskError(e, requestId) }
   })
@@ -144,7 +160,14 @@ export function registerTaskHandlers(): void {
   // 诊断：立即触发定时任务（与到点触发同路径），便于验收与用户"立即运行一次"
   handle(IPC_CHANNELS.TASK_CREATE_FIRE, async (_e: IpcMainInvokeEvent, input: { taskId: string }): Promise<IPCResult> => {
     const requestId = rid()
-    try { return ok(Scheduler.fireNow(input.taskId), requestId) } catch (e: any) { return taskError(e, requestId) }
+    try {
+      // 与 TASK_RUN 同一道门：邀约任务只能走批次入口，不能借"立即触发"绕过额度与同店锁
+      const task = TaskStore.getTask(input.taskId)
+      if (task?.kind === 'creator_invite') {
+        return err(ERROR_CODES.TASK_BAD_STATE.code, '达人邀约任务不能手动触发：请到店铺浏览器右侧「达人邀约」面板新建批次', requestId)
+      }
+      return ok(Scheduler.fireNow(input.taskId), requestId)
+    } catch (e: any) { return taskError(e, requestId) }
   })
 
   // 店铺指标快照 - §5.11（供环境面板/概览页展示巡检聚合指标）

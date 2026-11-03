@@ -9,6 +9,8 @@ import type { InviteState } from './invite-state'
 export interface InviteNavigationPorts {
   /** 类目树更新后重载配置（面板下拉需要新选项） */
   reloadConfig(): void | Promise<void>
+  /** reloadConfig 会 reset 表单：先把当前表单落盘，避免刚改的筛选被旧配置覆盖 */
+  flushConfig(): void | Promise<void>
 }
 
 const INVITE_CATEGORY_TREES_SETTING = 'invite.categoryTrees'
@@ -49,6 +51,8 @@ export function useInviteNavigation(state: InviteState, ports: InviteNavigationP
     if (!url || !profile) return
     if (profile.platform === '抖店' && isBatchProfile(profile) && profile.categoryDepth === 3 && currentStoreId.value) {
       try {
+        // 先把当前表单/筛选落盘：下面读到三级类目后会 reloadConfig，不能让它回滚成旧配置。
+        await ports.flushConfig()
         // 2026-10-21 真机实测：抖店广场是「筛选表单页 → 搜索 → 列表」，radio 真实文案为
         // 「全部达人」（主进程做微信→抖店文案映射）；本次一并带筛选参数并读取候选预览。
         const result = await window.shopilot.browser.prepareInviteSquare(currentStoreId.value, {
@@ -69,14 +73,18 @@ export function useInviteNavigation(state: InviteState, ports: InviteNavigationP
           salesTiers?: Array<{ name: string, ok: boolean, reason?: string }>
           listReady?: boolean
           candidates?: Array<{ nickname: string, summary: string }>
+          disabledCandidates?: number
         } | undefined
         const tree = data?.categoryTree
+        const cachedTree = dynamicCategoryTrees.value[profile.platform]
+        // 读不到三级类目不必吓人：面板已有缓存树时筛选照样可用，只提示一次合并结果。
+        let treeNote = ''
         if (tree?.length) {
           await saveInviteCategoryTree(profile.platform, tree)
           await ports.reloadConfig()
-          ws.toast(`达人广场已打开，已读取 ${tree.length} 个一级类目的完整三级结构`, 'success')
-        } else {
-          ws.toast('达人广场已打开，但平台未返回三级类目', 'info')
+          treeNote = `已读取 ${tree.length} 个一级类目的三级结构`
+        } else if (!cachedTree?.length) {
+          treeNote = '平台未返回三级类目'
         }
         // 候选预览（抖店真机实测：列表卡片含昵称/类目地区/合作标签/粉丝与结算区间）
         const candidates = (data?.candidates || []).map(c => ({ ...c, at: Date.now() }))
@@ -86,10 +94,14 @@ export function useInviteNavigation(state: InviteState, ports: InviteNavigationP
           ...(data?.salesTiers || []).filter(s => !s.ok).map(s => `销售额「${s.name}」（${s.reason || '未生效'}）`)
         ]
         if (failedFilters.length) {
-          ws.toast(`筛选有未生效项：${failedFilters.join('、')}——列表为当前可见候选，请人工核对后再开始`, 'error', 9000)
+          ws.toast(`广场已打开；筛选有未生效项：${failedFilters.join('、')}——列表为当前可见候选，请人工核对后再开始`, 'error', 9000)
         } else if (candidates.length) {
           const names = candidates.slice(0, 3).map(c => c.nickname).join('、')
-          ws.toast(`广场候选 ${candidates.length} 位（如 ${names}），发送前请人工核对`, 'success', 8000)
+          const disabledNote = data?.disabledCandidates ? `；另有 ${data.disabledCandidates} 位当前不可沟通（已排除）` : ''
+          ws.toast(`广场已打开，候选 ${candidates.length} 位（如 ${names}）${treeNote ? `；${treeNote}` : ''}${disabledNote}；发送前请人工核对`, 'success', 8000)
+        } else {
+          const disabledNote = data?.disabledCandidates ? `（另有 ${data.disabledCandidates} 位当前不可沟通）` : ''
+          ws.toast(`广场已打开${treeNote ? `（${treeNote}）` : ''}，但列表里没有读到可沟通候选${disabledNote}——可能还没搜索出结果或店铺登录已失效，请先人工确认`, 'info', 9000)
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)

@@ -16,12 +16,16 @@ export interface WorkbenchNotificationItem {
   detail: string
   tone: WorkbenchNotificationTone
   target: WorkbenchNotificationTarget
+  /** 关联店铺：点击后打开这家店的浏览器并切到右侧「达人邀约」面板 */
+  storeId?: string | null
   at: number | null
 }
 
 export interface NotificationTaskLike {
   id: string
   name?: string | null
+  /** 任务绑定的店铺（点击通知用来打开对应店铺的侧栏面板） */
+  storeScope?: string | null
   /** 迁移 v33：creator_invite = 达人邀约；缺省时回退名称前缀（旧数据） */
   kind?: string | null
   latestRun?: {
@@ -86,10 +90,11 @@ export function buildWorkbenchNotifications(input: {
       kind: waiting ? 'invite_waiting' : 'invite_active',
       title: `达人邀约「${inviteName(task)}」${waiting ? '等待确认' : STATUS_LABELS[status] || '进行中'}`,
       detail: waiting
-        ? '需要你在达人邀约页确认后才会继续'
-        : '可在达人邀约页查看批次进度与逐人记录',
+        ? '需要在店铺浏览器右侧「达人邀约」面板确认后才会继续'
+        : '可在店铺浏览器右侧「达人邀约」面板查看进度',
       tone: waiting ? 'warning' : 'info',
       target: 'creator-invite',
+      storeId: task.storeScope ?? null,
       at: Number.isFinite(run.startedAt) ? Number(run.startedAt) : null
     })
   }
@@ -106,9 +111,10 @@ export function buildWorkbenchNotifications(input: {
       id: `invite:${task.id}:${run.id || 'failed'}`,
       kind: 'invite_failed',
       title: `达人邀约「${inviteName(task)}」失败`,
-      detail: String(run.statusReason || '').trim().slice(0, 120) || '可到达人邀约页查看日志与失败步骤',
+      detail: String(run.statusReason || '').trim().slice(0, 120) || '可到店铺浏览器右侧「达人邀约」面板查看日志',
       tone: 'error',
       target: 'creator-invite',
+      storeId: task.storeScope ?? null,
       at
     })
   }
@@ -134,6 +140,7 @@ export function buildWorkbenchNotifications(input: {
       detail,
       tone: /额度|候选|TASK_QUOTA|SHORTFALL|EXHAUSTED/.test(detail) ? 'warning' : 'info',
       target: 'creator-invite',
+      storeId: task.storeScope ?? null,
       at
     })
   }

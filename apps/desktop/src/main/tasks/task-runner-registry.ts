@@ -60,6 +60,17 @@ export interface RunHandle {
    * 失败/换人重开时在下一轮开头清空，绝不把没发出去的人记成已邀。
    */
   pendingInvitedNames: string[]
+  /**
+   * 本次运行的总量上限（loop 的 input.totalCap；0 = 不额外限制）。
+   * 与 inviteSentCount 一起构成"还能勾几位"：clickAll 每轮按剩余量收敛，避免最后一批超发。
+   */
+  inviteTotalCap: number
+  /** 本次运行**已确认发出**的人数（轮末记账后累加）；重试同一轮时不回滚（宁可少发，不重复发） */
+  inviteSentCount: number
+  /** 本次运行跳过的候选人数（7 天已邀 / 平台不可邀约 / 勾不到），用于批次「跳过」列 */
+  inviteSkipped: number
+  /** 本轮是否已经点过发送（markSendAttempt）：发送后中断时据此把名单记为 unknown，而不是丢掉 */
+  inviteSendAttempted: boolean
 }
 
 export const queue: RunHandle[] = []

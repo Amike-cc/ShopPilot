@@ -24,24 +24,39 @@ describe('Invite task builder (panel + agent single source)', () => {
     // v33：类型显式化，不再让统计依赖「达人邀约 ·」名称前缀
     expect(payload.kind).toBe('creator_invite')
     expect(payload.name).toContain('达人邀约 · 抖店 · 美妆')
-    expect(payload.name).toContain(`最多 ${douyin.maxBatch} 位`)
+    expect(payload.name).toContain(`本次最多 ${douyin.maxBatch} 位`)
     expect(payload.steps.length).toBeGreaterThan(0)
-    expect(JSON.stringify(payload.steps)).toContain('佣金高')
+    /**
+     * 抖店 2026-10-21 起改「逐人沟通」：不再有抽屉/权益/批量勾选，
+     * 轮内动作是点「在线沟通」并回传昵称。配置里的权益/等级不再进步骤（档案不再支持）。
+     */
+    expect(JSON.stringify(payload.steps)).toContain('在线沟通')
+    expect(JSON.stringify(payload.steps)).toContain('"recordRowText":true')
+    expect(JSON.stringify(payload.steps)).not.toContain('佣金高')
     // 超上限的数量不会被静默收敛：由 inviteTaskIssues 明确报错（见下一个用例）
     expect(inviteTaskIssues({ profile: douyin, config: { ...config, count: 999 } })).toContain('邀约数量需为 1～40 的整数')
   })
 
   it('reports readable issues instead of guessing missing fields', () => {
     const empty = normalizeInviteTaskConfig('batch-list', {})
-    expect(inviteTaskIssues({ profile: douyin, config: empty })).toContain('达人等级未选择')
-    expect(inviteTaskIssues({ profile: douyin, config: empty })).toContain('邀约数量需为 1～40 的整数')
-    expect(inviteTaskIssues({ profile: douyin, config: empty }).some(issue => issue.includes('联系方式'))).toBe(true)
+    /**
+     * 抖店 2026-10-21 起走「逐人沟通」：没有抽屉表单，等级/联系方式/权益都不参与执行。
+     * 这些字段不能拿来拦启动——否则用户被要求填一堆"填了也没用"的东西。
+     */
+    const douyinIssues = inviteTaskIssues({ profile: douyin, config: empty })
+    expect(douyinIssues).toContain('邀约数量需为 1～40 的整数')
+    expect(douyinIssues).not.toContain('达人等级未选择')
+    expect(douyinIssues.some(issue => issue.includes('联系方式'))).toBe(false)
+    // 填好数量即可启动（不需要电话/微信/等级）
+    const contactReady = normalizeInviteTaskConfig('batch-list', { count: 5 })
+    expect(inviteTaskIssues({ profile: douyin, config: contactReady })).toEqual([])
+    expect(buildInviteTaskPayload({ profile: douyin, storeId: 'store_a', squareUrl: douyin.pageUrl, config: contactReady })).not.toBeNull()
     expect(buildInviteTaskPayload({ profile: douyin, storeId: 'store_a', squareUrl: douyin.pageUrl, config: empty })).toBeNull()
     // 快手档案声明了三项必填联系方式与话术框（scriptSelector）
     const kuaishouEmpty = normalizeInviteTaskConfig('batch-list', { count: 2, levels: [] })
     expect(inviteTaskIssues({ profile: kuaishou, config: kuaishouEmpty })).toContain('邀约话术未填写')
     expect(inviteTaskIssues({ profile: kuaishou, config: kuaishouEmpty }).some(issue => issue.includes('联系方式'))).toBe(true)
-    const fixed = normalizeInviteTaskConfig('batch-list', { count: 2, script: '你好', scriptMode: 'manual', batchContact: '张三', batchPhone: '13800138000', batchWechat: 'wx' })
+    const fixed = normalizeInviteTaskConfig('batch-list', { count: 2, script: '你好', scriptMode: 'manual', batchContact: '张三', batchPhone: '13800138000', batchWechat: 'wx', totalCap: 2 })
     expect(inviteTaskIssues({ profile: kuaishou, config: fixed })).toEqual([])
   })
 
@@ -126,14 +141,18 @@ describe('Invite task builder (panel + agent single source)', () => {
     const flattenClickAll = (steps: any[]): any[] => steps.flatMap(step => step.type === 'loop'
       ? (Array.isArray(step.input?.steps) ? step.input.steps.filter((child: any) => child.type === 'clickAll') : [])
       : [])
+    /**
+     * 抖店已改逐人沟通：没有 clickAll，改用「在线沟通」clickByText + recordRowText 记账。
+     * 这里同时钉住"不混进商品记录"这条原始意图：抖店步骤里不应该出现任何 clickAll。
+     */
     const douyinConfig = normalizeInviteTaskConfig('batch-list', {
       category: '个护家清', levels: ['LV0'], count: 2, scriptMode: 'manual',
       batchPhone: '13800138000', batchWechat: 'wx_test', batchProductCount: 1
     })
     const douyinPayload = buildInviteTaskPayload({ profile: douyin, storeId: 'store_a', squareUrl: douyin.pageUrl, config: douyinConfig })!
     const douyinClickAll = flattenClickAll(douyinPayload.steps as any[])
-    expect(douyinClickAll).toHaveLength(1)
-    expect(douyinClickAll[0].input.recordNames).toBe(true)
+    expect(douyinClickAll).toHaveLength(0)
+    expect(JSON.stringify(douyinPayload.steps)).toContain('"recordRowText":true')
 
     const kuaishouConfig = normalizeInviteTaskConfig('batch-list', {
       category: '', levels: [], count: 2, script: '你好', scriptMode: 'manual',

@@ -13,6 +13,7 @@ import { getDatabase } from '../db/database'
 import * as TaskStore from '../tasks/task-store'
 import { logMain } from './logger'
 import { inviteCountsByCampaign, listInviteRecords } from './invite-records'
+import { deriveStatus } from './invite-status'
 import type {
   InviteCampaignDetail,
   InviteCampaignListInput,
@@ -92,11 +93,11 @@ export function attachInviteCampaignRun(campaignId: string, taskId: string, runI
   }
 }
 
-export function markInviteCampaignFailed(campaignId: string): void {
+export function markInviteCampaignFailed(campaignId: string, reason?: string): void {
   try {
     getDatabase().prepare(`
-      UPDATE invite_campaigns SET status = 'failed', finished_at = ? WHERE id = ?
-    `).run(Date.now(), campaignId)
+      UPDATE invite_campaigns SET status = 'failed', status_reason = ?, finished_at = ? WHERE id = ?
+    `).run(reason ? String(reason).slice(0, 300) : null, Date.now(), campaignId)
   } catch { /* 批次状态写失败不掩盖原始错误 */ }
 }
 
@@ -134,36 +135,56 @@ function readStopReason(taskId: string | null, runId: string | null): string | n
   } catch { return null }
 }
 
-function deriveStatus(base: string, runStatus: string | null, stopReason: string | null): InviteCampaignStatus {
-  if (!runStatus) {
-    // scheduled 必须保留：它是"还没跑"的真实状态，退化成 ready 会让人以为点了没反应。
-    return (['draft', 'ready', 'scheduled', 'failed', 'stopped'].includes(base) ? base : 'ready') as InviteCampaignStatus
-  }
-  if (runStatus === 'queued' || runStatus === 'running') return 'running'
-  if (runStatus === 'paused') return 'paused'
-  if (runStatus === 'cancelled') return 'stopped'
-  if (runStatus === 'failed') return 'failed'
-  if (runStatus === 'succeeded') {
-    if (stopReason === 'TASK_QUOTA_EXCEEDED' || stopReason === 'TASK_SELECTION_SHORTFALL' || stopReason === 'TASK_DRAWER_NOT_OPEN') return 'exhausted'
-    return 'completed'
-  }
-  return 'failed'
+/** 运行统计（轮末由引擎写入 stats_json）：跳过人数不落逐人记录，只做批次级计数。 */
+export interface InviteRunStats {
+  skipped?: number
+  sent?: number
+  completedRounds?: number
+  at?: number
 }
+
+function parseStats(raw: unknown): InviteRunStats {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(String(raw))
+    return parsed && typeof parsed === 'object' ? parsed as InviteRunStats : {}
+  } catch { return {} }
+}
+
+/**
+ * 批次状态推导（2026-10-25 重构）：实现与口径说明都在 `invite-status.ts`（纯函数，可单测）。
+ */
 
 function mapCampaign(row: any, task: any, run: any, counts: { sent: number; skipped: number; failed: number; unknown: number }): InviteCampaignView {
   const stopReason = readStopReason(task?.id ?? row.task_id ?? null, run?.id ?? row.run_id ?? null)
+  const stats = parseStats(row.stats_json)
+  const targetCount = Number(row.target_count) || 0
+  const mergedCounts = {
+    sent: counts.sent,
+    // 跳过只存在于引擎统计里（不落逐人记录）；两者都有时取大值，避免重复累计
+    skipped: Math.max(counts.skipped, Number(stats.skipped) || 0),
+    failed: Math.max(counts.failed, 0),
+    unknown: counts.unknown
+  }
+  // 僵尸批次：任务被删/run 不存在，但行里还写着 running → 如实降级为 stopped 并说明原因，
+  // 否则界面永远显示「执行中」且没有可停止对象。
+  const zombie = !run && !task && String(row.status || '') === 'running'
+  const hasInviteLoop = Array.isArray(task?.steps) && task.steps.some((step: any) => step?.type === 'loop')
+  const status = zombie
+    ? 'stopped'
+    : deriveStatus(String(row.status || 'ready'), run?.status ?? null, stopReason, mergedCounts, targetCount, Boolean(hasInviteLoop))
   return {
     id: row.id,
     storeId: row.store_id,
     storeName: row.store_name ?? null,
     platform: row.platform,
     name: row.name,
-    status: deriveStatus(String(row.status || 'ready'), run?.status ?? null, stopReason),
-    targetCount: Number(row.target_count) || 0,
-    sentCount: counts.sent,
-    skippedCount: counts.skipped,
-    failedCount: counts.failed,
-    unknownCount: counts.unknown,
+    status,
+    targetCount,
+    sentCount: mergedCounts.sent,
+    skippedCount: mergedCounts.skipped,
+    failedCount: mergedCounts.failed,
+    unknownCount: mergedCounts.unknown,
     taskId: task?.id ?? row.task_id ?? null,
     runId: run?.id ?? row.run_id ?? null,
     createdAt: Number(row.created_at) || Date.now(),
@@ -171,7 +192,7 @@ function mapCampaign(row: any, task: any, run: any, counts: { sent: number; skip
     finishedAt: run?.finishedAt ?? row.finished_at ?? null,
     stopReason,
     scheduledAt: Number.isFinite(Number(row.scheduled_at)) && Number(row.scheduled_at) > 0 ? Number(row.scheduled_at) : null,
-    statusReason: row.status_reason ? String(row.status_reason) : null,
+    statusReason: zombie ? '任务已删除，批次已收尾' : (row.status_reason ? String(row.status_reason) : null),
     filters: parseJsonObject(row.filters_json),
     scriptText: row.script_snapshot ?? null,
     productIds: parseProducts(row.product_ids_json),
@@ -195,7 +216,8 @@ export function listInviteCampaigns(input: InviteCampaignListInput = {}): Invite
     `).all(...params, limit) as any[]
     return rows.map(row => {
       const task = row.task_id ? TaskStore.getTask(row.task_id) : null
-      const run = row.run_id ? TaskStore.getRun(row.run_id) : (task?.latestRun ?? null)
+      // 优先任务的当前运行：批次结束前用户可能手动重跑，旧 run_id 会把状态钉在过去。
+      const run = task?.latestRun ?? (row.run_id ? TaskStore.getRun(row.run_id) : null)
       return mapCampaign(row, task, run, inviteCountsByCampaign(row.id))
     })
   } catch (error) {
@@ -238,7 +260,7 @@ export function getInviteCampaignDetail(campaignId: string): InviteCampaignDetai
     `).get(campaignId) as any
     if (!row) return null
     const task = row.task_id ? TaskStore.getTask(row.task_id) : null
-    const run = row.run_id ? TaskStore.getRun(row.run_id) : (task?.latestRun ?? null)
+    const run = task?.latestRun ?? (row.run_id ? TaskStore.getRun(row.run_id) : null)
     const records = listInviteRecords({ campaignId, limit: 500 })
     return {
       campaign: mapCampaign(row, task, run, inviteCountsByCampaign(campaignId)),
@@ -308,6 +330,44 @@ export function listDueInviteCampaigns(now: number, limit = 10): DueInviteCampai
   } catch (error) {
     logMain('error', `[invite] 读取到点批次失败: ${String((error as Error)?.message || error)}`)
     return []
+  }
+}
+
+/**
+ * 写入批次级运行统计（跳过人数据此展示）。
+ * 逐人记录只写"真实勾选/发送"的人，跳过的人没有逐人记录——所以计数必须单独存，
+ * 不能靠 `inviteCountsByCampaign` 从状态前缀里统计（那些状态永远不会有写入方）。
+ */
+export function updateInviteCampaignStats(campaignId: string | null | undefined, patch: InviteRunStats): void {
+  if (!campaignId) return
+  try {
+    const db = getDatabase()
+    const row = db.prepare('SELECT stats_json FROM invite_campaigns WHERE id = ?').get(campaignId) as { stats_json?: string } | undefined
+    if (!row) return
+    const next = { ...parseStats(row.stats_json), ...patch, at: Date.now() }
+    db.prepare('UPDATE invite_campaigns SET stats_json = ? WHERE id = ?')
+      .run(JSON.stringify(next).slice(0, 4000), campaignId)
+  } catch (error) {
+    logMain('warn', `[invite] 写入批次统计失败 campaign=${campaignId}: ${String((error as Error)?.message || error)}`)
+  }
+}
+
+/**
+ * 任务被删除：把它名下的批次收尾。
+ * 不这么做会留下"批次=running、run 已级联删除"的僵尸行——界面永远执行中，且没有可停止的对象。
+ */
+export function closeInviteCampaignsForTask(taskId: string, reason = '任务已被删除'): number {
+  if (!taskId) return 0
+  try {
+    const result = getDatabase().prepare(`
+      UPDATE invite_campaigns
+      SET status = 'stopped', status_reason = ?, finished_at = COALESCE(finished_at, ?)
+      WHERE task_id = ? AND status IN ('ready','scheduled','running','waiting','paused')
+    `).run(String(reason).slice(0, 300), Date.now(), taskId)
+    return Number(result.changes) || 0
+  } catch (error) {
+    logMain('warn', `[invite] 删除任务时收尾批次失败 task=${taskId}: ${String((error as Error)?.message || error)}`)
+    return 0
   }
 }
 

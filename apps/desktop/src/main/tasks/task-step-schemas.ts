@@ -51,6 +51,18 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
    * 有了独立码，loop 才能把它当"按预期收工"（stopOn）而不是"任务失败"。
    */
   waitForSelector: z.object({ selector, deep: z.boolean().optional(), code: z.string().min(1).max(40).optional(), hint: z.string().max(300).optional() }).strict(),
+  /**
+   * 列表向下滚一屏（抖店逐人沟通流）。
+   *
+   * 这个类型 2026-10-21 就加进了 `TASK_STEP_TYPES`、幂等表和引擎（executor 里有 case），
+   * 但**漏登记在白名单里**：`validateStepInput` 拿不到 schema → 建任务直接抛
+   * 「step 9.3 scrollNext: 未登记的步骤类型」→ 抖店侧栏点开始必失败（2026-10-25 实测）。
+   * 白名单是建任务时的**唯一**闸门，只加类型、不加 schema 等于该类型不可用；
+   * 现在由 tests/unit/task-step-whitelist.test.ts 逐一钉住，不会再漏。
+   *
+   * 入参：text 是滚动容器锚点（默认「在线沟通」），selector 优先于 text。
+   */
+  scrollNext: z.object({ selector: selector.optional(), text: z.string().min(1).max(60).optional() }).strict(),
   readText: z.object({
     selector, metric: z.string().min(1).max(60).optional(), deep: z.boolean().optional(),
     /** Agent 读取页面时必须开启：先脱敏再进入 task_step_results。 */
@@ -189,8 +201,21 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * 点「详情」之前就把那些行剔掉，省掉一次详情页访问；全被剔掉则交给 loop 翻页。
      */
     skipTexts: z.array(z.string().min(1).max(120)).max(500).optional(),
+    /**
+     * skipTexts 的匹配方式：
+     *   · contains（默认，兼容既有平台/旧任务）：整行文本包含任一昵称；
+     *   · exact-nickname：只比较"从行里提取出的昵称"与清单是否相等。
+     * 抖店用后者：行文本包含状态徽标/类目，短昵称（如「小美」）用 contains 会误杀「小美美」。
+     */
+    skipTextsMatch: z.enum(['contains', 'exact-nickname']).optional(),
     /** 命中后回传"这一行的达人昵称"（供引擎写邀约台账） */
     recordRowText: z.boolean().optional(),
+    /**
+     * 标记"这一步是真正的发送动作"。
+     * 达人邀约用它把"点了发送"与"发送前失败"分开：发送之后本轮若异常中断，
+     * 引擎会把本轮勾选名单如实记为 unknown（可能已发出），而不是一条都不记。
+     */
+    markSendAttempt: z.boolean().optional(),
     /**
      * "找不到目标就先点这个开关"（2026-10-04 加）。
      *
@@ -216,6 +241,12 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      * 给它 TASK_SELECTION_SHORTFALL，loop 就会**干净停止**而不是报失败。
      */
     missingCode: z.string().min(1).max(40).optional(),
+    /**
+     * 当前页候选都处理过（ALL_VISITED）时的错误码。
+     * 与 missingCode 分开：找不到元素仍是"页面没渲染好/改版"（应失败或继续等），
+     * 而"这一页都点过"可以交给 loop 的 onCode 滚动/翻页后重试。
+     */
+    allVisitedCode: z.string().min(1).max(40).optional(),
     /**
      * 目标处于禁用态时用的错误码（默认 TASK_TARGET_DISABLED）。
      * 用途：翻页按钮在最后一页会被平台置灰——那个禁用不是"平台限制操作"，
@@ -265,6 +296,13 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
      *   当前页全都点过 = 该页取不出（配 missingCode 让 loop 翻页后重试）。
      */
     nth: z.enum(['round', 'unvisited']).optional(),
+    /**
+     * 真实点击时，若落点被**非交互图片**盖住（平台装饰图/优惠券横幅等），临时把该图片
+     * 设为 pointer-events:none 再点，4 秒后恢复。只对非交互 IMG 生效（祖先里有
+     * a/button/label/role=dialog/aria-modal 一律拒绝），避免点穿真正的弹层。
+     * 抖店达人广场实测：优惠券装饰图横跨右侧操作列，滚动后会把「在线沟通」盖住。
+     */
+    ignoreImageOverlay: z.boolean().optional(),
     /**
      * 页面视口塌陷（DOM <webview> 的 guest 尚未注册 / 页面被移出文档 / 平台折叠内容区）时，
      * 是否允许降级为 JS 点击。
@@ -560,6 +598,18 @@ export const stepInputSchemas: Record<string, z.ZodSchema> = {
     /** 平台名（微信小店/抖店…）：仅用于写"邀约台账"时留档，不参与任何点击逻辑 */
     platform: z.string().max(40).optional(),
     maxRounds: z.number().int().min(1).max(50),
+    /**
+     * 本次运行的**总量上限**（达人邀约用）：到量即停，且每轮勾选数按剩余额度收敛。
+     * 缺省 = 只受 maxRounds × 每轮数量约束（旧行为）。
+     */
+    totalCap: z.number().int().min(1).max(500).optional(),
+    /**
+     * 轮末记账的状态（达人邀约）：默认 sent（已发送）。
+     * 抖店逐人沟通点的是「在线沟通」，只能证明"已发起"，写 inviting 更如实。
+     */
+    recordStatus: z.enum(['sent', 'inviting']).optional(),
+    /** 记账状态的原因（如「已发起在线沟通，平台未回读结果」） */
+    recordStatusReason: z.string().max(200).optional(),
     stopOn: z.array(z.string().min(1).max(40)).min(1).max(8),
     onCode: z.array(z.object({
       code: z.string().min(1).max(40),
@@ -658,6 +708,8 @@ export const DEFAULT_STEP_TIMEOUT: Record<string, number> = {
   readLabelValue: 25000,
   waitMs: 120000,
   waitForGone: 30000,
+  // 滚动一屏 + settle 检测（最多 1s 稳定判定），与步骤构造侧传入的 20000 保持同值
+  scrollNext: 20000,
   useTab: 30000,
   // loop 的 timeoutMs 不参与实际计时（由内部各步骤自己的超时决定）；
   // 这里给个展示用的大值，避免界面上显示成 15s 起步的时间

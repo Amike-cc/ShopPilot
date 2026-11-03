@@ -108,6 +108,12 @@ export interface BatchDrawerForm {
  */
 export interface BatchInviteProfile extends InviteProfileBase {
   flow: 'batch-list'
+  /**
+   * 平台走「逐人沟通」而不是批量抽屉（2026-10-21 抖店改版后）：
+   * 一位一轮、点「在线沟通」，没有话术/联系方式/权益/等级这些表单字段。
+   * 置 true 后：步骤构造走 contact 分支，面板隐藏这些无效字段，校验也不再强制它们。
+   */
+  contactOnly?: boolean
   /** 平台单次批量上限 */
   maxBatch: number
   /**
@@ -407,6 +413,8 @@ const DOUDIAN: BatchInviteProfile = {
   platform: '抖店',
   pageUrl: 'https://buyin.jinritemai.com/dashboard/servicehall/daren-square',
   flow: 'batch-list',
+  /** 2026-10-21 起平台只剩「在线沟通」：没有批量邀约抽屉，也就没有话术/联系方式/权益表单 */
+  contactOnly: true,
   maxBatch: 40,
   scriptMaxLen: 150,
   maxProducts: 5,

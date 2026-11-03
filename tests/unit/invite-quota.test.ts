@@ -24,7 +24,7 @@ function makeDb(): any {
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE invite_records (
       id TEXT PRIMARY KEY, store_id TEXT NOT NULL, platform TEXT NOT NULL, status TEXT NOT NULL,
-      invited_at INTEGER, created_at INTEGER NOT NULL
+      campaign_id TEXT, invited_at INTEGER, created_at INTEGER NOT NULL
     );
     CREATE TABLE invite_campaigns (
       id TEXT PRIMARY KEY, store_id TEXT NOT NULL, platform TEXT NOT NULL, target_count INTEGER NOT NULL,
@@ -35,9 +35,9 @@ function makeDb(): any {
   return { exec: (sql: string) => raw.exec(sql), prepare: (sql: string) => raw.prepare(sql), close: () => raw.close() }
 }
 
-function insertRecord(raw: any, id: string, at: number, status = 'sent'): void {
-  state.db.prepare('INSERT INTO invite_records (id, store_id, platform, status, invited_at, created_at) VALUES (?,?,?,?,?,?)')
-    .run(id, 's1', '抖店', status, at, at)
+function insertRecord(raw: any, id: string, at: number, status = 'sent', campaignId: string | null = null): void {
+  state.db.prepare('INSERT INTO invite_records (id, store_id, platform, status, campaign_id, invited_at, created_at) VALUES (?,?,?,?,?,?,?)')
+    .run(id, 's1', '抖店', status, campaignId, at, at)
 }
 
 describe('达人邀约日额度', () => {
@@ -62,6 +62,21 @@ describe('达人邀约日额度', () => {
     expect(quota).toMatchObject({ used: 2, reserved: 5, limit: 10, remaining: 3, source: 'config' })
     expect(checkInviteQuota('s1', '抖店', 3).ok).toBe(true)
     expect(checkInviteQuota('s1', '抖店', 4).ok).toBe(false)
+  })
+
+  realIt('跨天仍在跑 + 已发一部分：按剩余容量预留，不按创建日归零也不重复占满', () => {
+    const today = Date.now()
+    const yesterday = today - 24 * 60 * 60 * 1000
+    // 昨晚起跑的批次 c1：target 10，昨天已发 4，今天已发 1 → 还能发 5
+    for (let i = 0; i < 4; i++) insertRecord({}, `old${i}`, yesterday, 'sent', 'c1')
+    insertRecord({}, 'today1', today, 'sent', 'c1')
+    state.db.prepare("INSERT INTO app_settings VALUES ('invite.config.store.s1', ?, 0)").run(JSON.stringify({ dailyCap: 20 }))
+    state.db.prepare("INSERT INTO task_runs VALUES ('run_cross', 'running')").run()
+    state.db.prepare("INSERT INTO invite_campaigns VALUES ('c1','s1','抖店',10,'run_cross',?)").run(yesterday)
+
+    const quota = getInviteQuota('s1', '抖店')
+    // used 只算今天（1）；reserved 是这条跨天批次剩余 5；不能因创建于昨天就归零，也不能按 10 重复占满
+    expect(quota).toMatchObject({ used: 1, reserved: 5, limit: 20, remaining: 14, source: 'config' })
   })
 
   realIt('未配置 dailyCap：只统计不拦截，remaining=null（不拿猜的默认值阻止用户）', () => {

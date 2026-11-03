@@ -31,13 +31,15 @@ const RETRY_ALLOWED = [
   'readApi',
   // 读重复卡片列表：纯读页面（一张账单一张卡），重跑最多再读一遍
   'readCards',
+  // 纯滚动（2026-10-21 抖店逐人沟通）：只改滚动位置，不产生业务副作用，重跑安全
+  'scrollNext',
   'mirrorTabUrl', 'requireQuota', 'requireEnabled', 'requireTextAbsent',
   'setInput', 'typeText', 'fillDraft', 'ensureRows', 'ensureRowsById', 'aiGenerate'
 ]
 const RETRY_FORBIDDEN = ['click', 'clickByText', 'clickAll', 'clickIfPresent', 'loop', 'waitForUserConfirmation', 'useTab']
 
 describe('步骤重试闸（单一事实来源）', () => {
-  it('幂等集合与引擎步骤类型是一一对应：24 允许 + 7 禁止 = 全部 31 种', () => {
+  it('幂等集合与引擎步骤类型是一一对应：25 允许 + 7 禁止 = 全部 32 种', () => {
     expect([...STEP_IDEMPOTENT_TYPES].sort()).toEqual([...RETRY_ALLOWED].sort())
     expect(RETRY_ALLOWED.length + RETRY_FORBIDDEN.length).toBe(TASK_STEP_TYPES.length)
     // 每个引擎步骤类型都被明确分类，没有"漏登记"的类型（漏登记=只能靠 fail-closed 兜）

@@ -15,6 +15,7 @@ export interface InviteConfigPorts {
   loadQuota(storeId: string): void | Promise<void>
   loadScripts(storeId: string, platform: string): void | Promise<void>
   loadBlacklistCount(storeId: string, platform: string): void | Promise<void>
+  loadRecentCount(storeId: string): void | Promise<void>
 }
 
 export function useInviteConfig(state: InviteState, ports: InviteConfigPorts) {
@@ -52,6 +53,7 @@ export function useInviteConfig(state: InviteState, ports: InviteConfigPorts) {
     void ports.loadQuota(storeId)
     void ports.loadScripts(storeId, profile.platform)
     void ports.loadBlacklistCount(storeId, profile.platform)
+    void ports.loadRecentCount(storeId)
     void loadInviteAiStatus()
     let saved = await readInviteSetting(inviteConfigKey(storeId))
     if (token !== serial || currentStoreId.value !== storeId) return
@@ -100,6 +102,18 @@ export function useInviteConfig(state: InviteState, ports: InviteConfigPorts) {
     if (mode === 'ai') void loadInviteAiStatus()
   })
 
+  /**
+   * 立即落盘（读完广场三级类目会 reloadConfig，reload 会 reset 表单）。
+   * 不先 flush 的话，用户改完类目/数量 500ms 内点「打开广场 · 仅预览」，
+   * reload 会把界面回滚到旧配置——预览/后续任务用的筛选和用户看到的不是一份。
+   */
+  async function flushInviteConfig(): Promise<void> {
+    const storeId = currentStoreId.value
+    if (!storeId || !inviteProfile.value || !inviteConfigLoaded.value || loadedStoreId !== storeId) return
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+    try { await window.shopilot.settings.set(inviteConfigKey(storeId), state.inviteSnapshot()) } catch { /* 预览不应因落盘失败被阻断 */ }
+  }
+
   /** 防抖到期 / 卸载补写共用的落盘：守卫与到期回调一致，切店后挂起的定时器自动作废。 */
   function flushInviteConfigSave(storeId: string): void {
     if (currentStoreId.value !== storeId || !inviteConfigLoaded.value || loadedStoreId !== storeId) return
@@ -125,5 +139,5 @@ export function useInviteConfig(state: InviteState, ports: InviteConfigPorts) {
     flushInviteConfigSave(saveTimerStoreId)
   })
 
-  return { loadInviteConfig, saveInviteConfig, loadInviteAiStatus }
+  return { loadInviteConfig, saveInviteConfig, flushInviteConfig, loadInviteAiStatus }
 }

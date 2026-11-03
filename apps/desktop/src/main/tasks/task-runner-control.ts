@@ -47,7 +47,11 @@ export function enqueueRun(taskId: string, opts: { reason: string; storeId?: str
     status: 'queued', reason: opts.reason,
     cancelRequested: false, pauseRequested: false, deniedByConfirm: false,
     pendingConfirm: null, tabId: null, startedOnce: false, visitedRows: new Set(), useTabPick: null, pendingCreatorNickname: null,
-    pendingInvitedNames: []
+    pendingInvitedNames: [],
+    inviteTotalCap: 0,
+    inviteSentCount: 0,
+    inviteSkipped: 0,
+    inviteSendAttempted: false
   }
   live.set(run.id, handle)
   // 同一任务重新入队后，旧的失败句柄已被新运行取代（一个任务只有一个现行运行）：

@@ -29,6 +29,11 @@ export interface PlatformDef {
   color: string
   /** 商家后台默认地址（新建店铺时自动填入，可改） */
   adminUrl: string
+  /**
+   * 平台后台首页（比 adminUrl 更具体的落地页，用于浏览器的「首页」按钮与登录失效后的重开）。
+   * 缺省时回退 adminUrl；用户仍可在设置中心「平台入口」按平台覆盖。
+   */
+  homeUrl?: string
   /** 平台入口（只读，不重复入库，见 §5.8 source=entry_route） */
   entryRoutes: PlatformEntryRoute[]
   /** 发票入口（「发票中心」用；实测到的排前面，未实测的如实标注） */
@@ -80,6 +85,9 @@ export const PLATFORM_CATALOG: readonly PlatformDef[] = [
     name: '抖店',
     color: '#FE2C55',
     adminUrl: 'https://fxg.jinritemai.com',
+    // 用户给定的后台首页（2026-10-25）：浏览器「首页」按钮与登录失效重开都落在这里，
+    // 不再只到根域名（根域名会再跳一次，慢且看不出当前店铺）。
+    homeUrl: 'https://fxg.jinritemai.com/ffa/mshop/trade/dashboard',
     entryRoutes: [
       { title: '抖店后台首页', url: 'https://fxg.jinritemai.com/ffa/mshop/trade/dashboard' },
       { title: '订单管理', url: 'https://fxg.jinritemai.com/ffa/mshop/order/list' },
@@ -103,6 +111,15 @@ export function findPlatform(name: string): PlatformDef | undefined {
 
 export function platformAdminUrl(name: string): string {
   return findPlatform(name)?.adminUrl || ''
+}
+
+/**
+ * 平台默认首页：优先平台声明的最具体落地页，缺省回退后台根地址。
+ * 空串 = 该平台没有可用的默认地址（自定义平台）。
+ */
+export function platformHomeUrl(name: string): string {
+  const platform = findPlatform(name)
+  return platform?.homeUrl || platform?.adminUrl || ''
 }
 
 export function platformEntryRoutes(name: string): PlatformEntryRoute[] {

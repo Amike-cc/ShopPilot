@@ -268,29 +268,49 @@ export function registerBrowserHandlers(): void {
     url: string, finderType?: string, categories?: string[], salesTiers?: string[], otherFilters?: string[]
   }): Promise<IPCResult> => {
     const requestId = generateRequestId()
-    // 登录检测（抖店口径）：出现登录/角色选择特征 = 未登录
-    const loginExpired = await wc.executeJavaScript(
-      `(() => { const t = String(document.body ? document.body.innerText : ''); return /请选择您要登录的角色|登录商家工作台|请重新登录|扫码登录/.test(t) || /\\/login\\//.test(location.href) })()`
-    ).catch(() => false)
-    if (loginExpired) {
-      return error(ERROR_CODES.INTERNAL_ERROR.code, '抖店达人广场未登录：请在店铺窗口完成商家工作台登录后重试', requestId)
-    }
-    // 就绪等待：筛选表单出现（「搜索」按钮或达人类型 radio 任一可见）
+    /**
+     * 就绪等待 + 登录/角色选择检测（抖店口径）。
+     *
+     * `loadURL` 后平台可能先跳 `/mpa/account/roles-select` 再跳广场；只做一次"加载后 2 秒"
+     * 的登录检测会漏掉这次重定向（2026-11-02 实测）。所以每一轮都同时看：
+     *   · 是否停在登录/角色选择页 → 立即如实返回，不要白等 15 秒；
+     *   · 筛选表单是否已出现 → 继续后续点击。
+     */
     const readyDeadline = Date.now() + 15000
+    let pageState = { ready: false, roleSelect: false, login: false, url: '' }
     for (;;) {
-      const ready = await wc.executeJavaScript(`(() => {
+      pageState = await wc.executeJavaScript(`(() => {
+        const t = String(document.body ? document.body.innerText : '')
         const own = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
+        let ready = false
         for (const el of document.querySelectorAll('button,input,label,span,div')) {
           const o = own(el)
           if ((o === '搜索' && el.tagName === 'BUTTON') || o === '全部达人') {
             const r = el.getBoundingClientRect()
-            if (r.width > 0 && r.height > 0) return true
+            if (r.width > 0 && r.height > 0) { ready = true; break }
           }
         }
-        return false
-      })()`).catch(() => false)
-      if (ready || Date.now() >= readyDeadline) break
+        const roleSelect = /\\/roles-select\\b/.test(location.href) || /请选择您要登录的角色|选择商家角色/.test(t)
+        // 登录失效时广场会重定向到抖音电商营销站（实测 www.douyinec.com）或登录页，
+        // 不认这两个地址就要白等 15 秒才报"未出现筛选表单"。
+        const login = roleSelect || /douyinec\\.com/.test(location.href) || /登录商家工作台|请重新登录|扫码登录/.test(t) || /\\/login\\//.test(location.href)
+        return { ready, roleSelect, login, url: location.href }
+      })()`).catch(() => ({ ready: false, roleSelect: false, login: false, url: '' })) as typeof pageState
+      if (pageState.login) {
+        return error(ERROR_CODES.INTERNAL_ERROR.code, pageState.roleSelect
+          ? '抖店达人广场需要先选择商家角色：请在店铺窗口完成角色选择后重试'
+          : '抖店达人广场未登录：请在店铺窗口完成商家工作台登录后重试', requestId, { url: pageState.url })
+      }
+      if (pageState.ready || Date.now() >= readyDeadline) break
       await new Promise(r => setTimeout(r, 500))
+    }
+    if (!pageState.ready) {
+      return error(
+        ERROR_CODES.INTERNAL_ERROR.code,
+        `抖店达人广场未出现筛选表单（当前地址 ${pageState.url || '未知'}）——可能未登录、停在角色选择页或页面还没加载完，请在店铺窗口确认后重试`,
+        requestId,
+        { url: pageState.url }
+      )
     }
     // 达人类型：微信档案文案 → 抖店 radio 文案映射；未知值按原文尝试（平台改版时仍有机会命中）
     // 文案映射收敛到 shared 单一事实来源（渲染层 chips 同用）
@@ -420,7 +440,16 @@ export function registerBrowserHandlers(): void {
       const anchors = [...document.querySelectorAll('button,span,div')].filter((el) => own(el) === '在线沟通')
       const seen = new Set()
       const out = []
+      let disabledCount = 0
       for (const a of anchors) {
+        /**
+         * 禁用态「在线沟通」不是可邀约候选：旧预览把它算进去，会显示"候选 15 位"，
+         * 实际运行第 2 步就会跳过这些行。预览只统计当前可沟通的人，另给一个 disabled 计数说明。
+         */
+        if (a.disabled === true || a.getAttribute('aria-disabled') === 'true' || a.closest('[class*="disabled"]')) {
+          disabledCount += 1
+          continue
+        }
         let card = a
         for (let i = 0; i < 8 && card; i++, card = card.parentElement) {
           const t = card.innerText || ''
@@ -428,15 +457,26 @@ export function registerBrowserHandlers(): void {
         }
         if (!card || seen.has(card)) continue
         seen.add(card)
-        const lines = (card.innerText || '').split('\\n').map((s) => s.trim()).filter(Boolean)
+        const lines = (card.innerText || '').split('\\n').map((s) => s.trim())
+          .filter(Boolean)
+          // 卡片操作按钮不是达人信息：预览里去掉，避免"昵称 / 加入达人库 / 在线沟通"挤成一串。
+          .filter((line) => !/^(加入达人库|在线沟通|继续沟通|详情)$/.test(line))
         if (!lines.length) continue
         out.push({ nickname: lines[0].slice(0, 40), summary: lines.slice(1).join(' / ').slice(0, 160) })
         if (out.length >= 20) break
       }
-      return JSON.stringify(out)
-    })()`).catch(() => '[]') as string
+      return JSON.stringify({ list: out, disabled: disabledCount })
+    })()`).catch(() => '{"list":[],"disabled":0}') as string
     let candidates: Array<{ nickname: string, summary: string }> = []
-    try { candidates = JSON.parse(String(candidatesRaw)) as Array<{ nickname: string, summary: string }> } catch { candidates = [] }
+    let disabledCandidates = 0
+    try {
+      const parsed = JSON.parse(String(candidatesRaw)) as Array<{ nickname: string, summary: string }> | { list?: Array<{ nickname: string, summary: string }>, disabled?: number }
+      if (Array.isArray(parsed)) candidates = parsed
+      else {
+        candidates = parsed?.list || []
+        disabledCandidates = Math.max(0, Number(parsed?.disabled) || 0)
+      }
+    } catch { candidates = [] }
     const allOk = typeRes.ok && catRes.every(x => x.ok) && salesRes.every(x => x.ok) && otherRes.every(x => x.ok) && searchRes.ok
     // 列表就绪即达成目的：radio 切换可能自动触发列表刷新（实测点击 radio 后无需点搜索列表就出现），
     // 「找不到搜索按钮」在列表已就绪时不算失败，否则 applied 会被误标 false。
@@ -452,7 +492,9 @@ export function registerBrowserHandlers(): void {
       otherFilters: otherRes,
       search: searchRes,
       listReady,
-      candidates
+      candidates,
+      /** 当前屏里「在线沟通」是禁用态、没有计入 candidates 的人数（如实转述，不当候选） */
+      disabledCandidates
     }, requestId)
   }
 

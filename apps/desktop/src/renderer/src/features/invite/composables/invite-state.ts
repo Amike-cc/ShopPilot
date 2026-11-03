@@ -39,6 +39,11 @@ export function createInviteState(context: InviteStateContext) {
   const inviteProfile = computed(() => inviteProfileFor(store.value?.platform))
   const invite = reactive({
     category: '', subcategory: '', category3: '', levels: [] as string[], count: 5,
+    /**
+     * 本次总量（2026-10-25）：批次进度、日额度预留、loop 收工都以它为准。
+     * 旧实现只有"每批人数"，实际最多能发 20 批，日上限拦不住。
+     */
+    totalCap: 200,
     script: '', scriptMode: 'manual' as 'manual' | 'ai', benefits: [] as string[], strengths: [] as string[],
     mainCategory: '', extraFilters: {} as Record<string, string[]>, batchContact: '', batchPhone: '', batchWechat: '', batchProductCount: 1,
     /**
@@ -94,11 +99,20 @@ export function createInviteState(context: InviteStateContext) {
     if (!profile || !isBatchProfile(profile) || !profile.drawerForm?.mainCategory) return []
     return inviteCategoryTreeFor(profile).flatMap(item => [item.name, ...item.children.map(child => `${item.name}/${child}`)])
   })
+  /**
+   * 这个平台是否真的会用到话术。
+   * 抖店逐人沟通没有话术框（contactOnly），配置里遗留的 scriptMode='ai' 不该拦住开跑——
+   * 旧实现无条件检查 AI Key，用户会在一个根本不填话术的平台上被要求去配置大模型。
+   */
+  const inviteScriptRequired = computed(() => {
+    const profile = inviteProfile.value
+    return !!profile && (profile.flow !== 'batch-list' || !!profile.scriptSelector)
+  })
   const inviteMissingItems = computed(() => {
     const profile = inviteProfile.value
     if (!profile || !currentStoreId.value) return ['请先选择一个店铺']
     const issues = inviteTaskIssues({ profile, config: JSON.parse(JSON.stringify(invite)) })
-    if (invite.scriptMode === 'ai' && !inviteAiConfigured.value) {
+    if (inviteScriptRequired.value && invite.scriptMode === 'ai' && !inviteAiConfigured.value) {
       issues.push('AI 未配置：请在设置中心配置大模型 Key，或改用手动话术')
     }
     return issues
@@ -154,10 +168,13 @@ export function createInviteState(context: InviteStateContext) {
     invite.subcategory = ''; invite.category3 = ''
     invite.levels = profile && isBatchProfile(profile) ? [...profile.levelsWithQuotaHint] : []
     invite.count = profile && isBatchProfile(profile) ? Math.max(1, Math.min(5, profile.maxBatch)) : 1
+    invite.totalCap = 200
     invite.script = ''; invite.scriptMode = 'manual'; invite.benefits = []; invite.strengths = []; invite.mainCategory = ''
     invite.extraFilters = {}; invite.batchContact = ''; invite.batchPhone = ''; invite.batchWechat = ''; invite.batchProductCount = 1
     invite.contact = ''; invite.wechat = ''; invite.phone = ''; invite.productIds = ''; invite.finderType = '全部带货者'; invite.finderCategories = []; invite.finderSalesTiers = []; invite.finderOtherFilters = []; invite.maxInvites = 10; invite.dailyCap = 0
     inviteQuota.value = null
+    // 候选预览属于某一家店/某一次广场读取：切店后必须清空，否则会把上一家店的达人显示成这一家的。
+    squareCandidates.value = []
     inviteBlacklistCount.value = 0
     inviteScripts.value = []; inviteScriptId.value = ''
     inviteCatQuery.value = ''; inviteCatsExpanded.value = false
@@ -167,7 +184,7 @@ export function createInviteState(context: InviteStateContext) {
   function inviteSnapshot() {
     return JSON.parse(JSON.stringify({
       category: invite.category, subcategory: invite.subcategory, category3: invite.category3, levels: invite.levels,
-      count: invite.count, script: invite.script, scriptMode: invite.scriptMode, benefits: invite.benefits, strengths: invite.strengths,
+      count: invite.count, totalCap: invite.totalCap, script: invite.script, scriptMode: invite.scriptMode, benefits: invite.benefits, strengths: invite.strengths,
       mainCategory: invite.mainCategory, extraFilters: invite.extraFilters, batchContact: invite.batchContact, batchPhone: invite.batchPhone,
       batchWechat: invite.batchWechat, batchProductCount: invite.batchProductCount, contact: invite.contact, wechat: invite.wechat,
       phone: invite.phone, productIds: invite.productIds, finderType: invite.finderType, finderCategories: invite.finderCategories,
@@ -236,6 +253,7 @@ export function createInviteState(context: InviteStateContext) {
     inviteCategoryHidden,
     inviteSalesTypeWarning,
     toggleSalesTier,
+    inviteScriptRequired,
     inviteReady,
     resetInviteDefaults,
     inviteSnapshot,

@@ -13,6 +13,7 @@
 
 import { acquireBackgroundPage, releaseBackgroundPages } from '../browser/window-manager'
 import { recordInviteEvent } from '../services/invite-events'
+import { updateInviteCampaignStats } from '../services/invite-campaigns'
 import { inviteStopReasonLabel } from '@shared/invite-notices'
 import { logMain } from '../services/logger'
 import type { RunHandle } from './task-runner-registry'
@@ -63,7 +64,13 @@ registerTaskKind({
   },
   successReason(run: RunHandle): string | null {
     const stop = inviteStopReasonLabel(run.lastStopReason) || '达到本次上限'
-    return `达人邀约结束：${stop}，完成 ${run.lastCompletedRounds} 轮`
+    /**
+     * 报"已发起几位"而不是只报"完成几轮"：逐人沟通流一轮一位，按预期收工的那一轮
+     * （点完最后一位 → 列表到底）`lastCompletedRounds` 不含它，只报轮数会写成"完成 0 轮"，
+     * 而实际上刚刚已发起 1 位（实测 2026-10-25）。
+     */
+    const sent = Math.max(0, Math.round(Number(run.inviteSentCount) || 0))
+    return `达人邀约结束：${stop}，已发起 ${sent} 位`
   },
   onTerminal(run: RunHandle, status: string, reason: string): void {
     try {
@@ -75,5 +82,16 @@ registerTaskKind({
         payload: { reason: String(reason || '').slice(0, 200), completedRounds: run.lastCompletedRounds }
       })
     } catch { /* 审计失败不影响状态机 */ }
+    /**
+     * 批次级统计（2026-10-25）：跳过人数只在引擎里累计，不落逐人记录。
+     * 终态写一次即可——批次页的「跳过」列读 stats_json，不再恒为 0。
+     */
+    try {
+      updateInviteCampaignStats(run.campaignId, {
+        skipped: run.inviteSkipped,
+        sent: run.inviteSentCount,
+        completedRounds: run.lastCompletedRounds
+      })
+    } catch { /* 统计失败不影响状态机 */ }
   }
 })

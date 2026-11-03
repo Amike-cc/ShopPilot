@@ -1,7 +1,11 @@
-import { computed } from 'vue'
+import { computed, onScopeDispose, ref, watch } from 'vue'
 import { isBatchProfile } from '@shared/constants/invite'
+import { inviteConfigKey } from '@shared/invite-config'
+import { inviteStopReasonLabel } from '@shared/invite-notices'
 import { buildInviteTaskPayload, isCreatorInviteTask, parseInviteProductIds } from '@shared/invite-task'
-import type { TaskView } from '@shared/schemas/task'
+import type { InviteCampaignDetail, InviteCampaignView, InviteRecordView } from '@shared/invite-campaign'
+import type { TaskRunView, TaskView } from '@shared/schemas/task'
+import { inviteCampaignCountsText, inviteCampaignStatusLabel, inviteRecordLineText, inviteRecordToneClass } from './invite-run-labels'
 import type { InviteState } from './invite-state'
 
 /** 运行日志行（TASK_PROGRESS 事件写入 taskLogs 的形状；字段都可选，读不到就如实降级展示） */
@@ -13,10 +17,14 @@ interface InviteRunLogEntry {
 }
 
 /**
- * 运行面：任务列表、进度映射、启动与停止。
+ * 运行面：任务列表、进度映射、启动与停止，以及**从库里读回**的批次/逐人记录。
  *
- * 「启动」是唯一的写入口：独立页与侧栏共用，保证配置快照、7 天台账、黑名单、
- * 定时参数的口径完全一致。发送本身在主进程隐藏窗口里跑，这里不碰页面。
+ * 2026-10-25 之后侧栏是唯一入口，但它以前只看 `ws.tasks` + 内存事件：
+ *   · 应用重启后（事件不补发）日志永远是「等待运行输出」；
+ *   · 创建任务前就失败的批次根本没有 task，侧栏完全看不见；
+ *   · 逐人结果只存在内存 log 里，切店/刷新/重启就没了。
+ * 现在以批次（invite_campaigns）+ 逐人记录（invite_records）为准：
+ * 任务只负责实时日志与停止，批次负责"这次到底发了多少、结果在哪"。
  */
 export interface InviteRunPorts {
   /** 启动后刷新额度占用（运行中预留会变） */
@@ -47,6 +55,219 @@ export function useInviteRun(state: InviteState, ports: InviteRunPorts) {
     return rows.sort((a, b) => Number(b.latestRun?.finishedAt || b.updatedAt || b.createdAt || 0) - Number(a.latestRun?.finishedAt || a.updatedAt || a.createdAt || 0))[0] || null
   })
 
+  // ---------------- 批次与逐人记录（库内真相） ----------------
+
+  const inviteCampaigns = ref<InviteCampaignView[]>([])
+  const inviteCampaignDetail = ref<InviteCampaignDetail | null>(null)
+  const inviteCampaignError = ref('')
+  /** 用户在「最近批次」里手动选中的批次；空 = 跟随活动/最新批次。 */
+  const inviteSelectedCampaignId = ref('')
+  /** 载入串行号：切店后旧请求晚到，不能把上一家店的批次写进当前面板。 */
+  let campaignSerial = 0
+
+  /**
+   * 手动选中优先；否则展示"正在跑/等人确认"的批次；都没有才退回最新一条。
+   * 这样既能回看历史批次，又不会在定时批次插进来时把用户正在看的运行顶掉。
+   */
+  const inviteCampaign = computed<InviteCampaignView | null>(() => {
+    const selected = inviteCampaigns.value.find(item => item.id === inviteSelectedCampaignId.value)
+    if (selected) return selected
+    return inviteCampaigns.value.find(item => ['running', 'waiting', 'paused'].includes(item.status))
+      || inviteCampaigns.value[0]
+      || null
+  })
+
+  const inviteCampaignTask = computed<TaskView | null>(() => {
+    const campaign = inviteCampaign.value
+    const detail = inviteCampaignDetail.value
+    if (!campaign || !detail || detail.campaign.id !== campaign.id) return null
+    return detail.task ?? null
+  })
+
+  const inviteCampaignRun = computed<TaskRunView | null>(() => {
+    const campaign = inviteCampaign.value
+    const detail = inviteCampaignDetail.value
+    if (!campaign || !detail || detail.campaign.id !== campaign.id) return null
+    return detail.run ?? detail.task?.latestRun ?? null
+  })
+
+  const inviteCampaignRecords = computed<InviteRecordView[]>(() => {
+    const campaign = inviteCampaign.value
+    const detail = inviteCampaignDetail.value
+    if (!campaign || !detail || detail.campaign.id !== campaign.id) return []
+    return [...(detail.records || [])].sort((a, b) => Number(b.invitedAt || b.createdAt || 0) - Number(a.invitedAt || a.createdAt || 0))
+  })
+
+  /** 日志/停止仍以任务为对象；没有批次时退回旧的手动任务。 */
+  const inviteDisplayTask = computed<TaskView | null>(() => inviteCampaign.value ? inviteCampaignTask.value : (inviteLatest.value ?? null))
+  const inviteDisplayRun = computed<TaskRunView | null>(() => inviteCampaign.value ? inviteCampaignRun.value : (inviteDisplayTask.value?.latestRun ?? null))
+  const inviteDisplayRunId = computed(() => {
+    if (inviteCampaign.value) return inviteCampaignRun.value?.id || inviteCampaign.value.runId || ''
+    return inviteDisplayTask.value?.latestRun?.id || ''
+  })
+  const inviteDisplayActive = computed(() => {
+    const run = inviteDisplayRun.value
+    const live = run?.id ? ws.runLive[run.id]?.status : ''
+    if (['queued', 'running', 'waiting_confirmation', 'paused'].includes(live || run?.status || '')) return true
+    return Boolean(inviteCampaign.value && ['running', 'waiting', 'paused'].includes(inviteCampaign.value.status))
+  })
+  const inviteDisplayStatus = computed(() => {
+    if (inviteCampaign.value) return inviteCampaignStatusLabel(inviteCampaign.value.status)
+    return inviteDisplayTask.value ? inviteStatus(inviteDisplayTask.value) : ''
+  })
+  const inviteDisplayTone = computed(() => {
+    const status = inviteCampaign.value?.status || inviteDisplayRun.value?.status || ''
+    if (status === 'failed') return 'fail'
+    if (status === 'completed' || status === 'succeeded') return 'ok'
+    if (['exhausted', 'stopped', 'cancelled'].includes(status)) return 'warn'
+    if (['running', 'waiting', 'paused', 'queued', 'scheduled', 'ready'].includes(status)) return 'active'
+    return ''
+  })
+  const inviteDisplayCounts = computed(() => inviteCampaign.value ? inviteCampaignCountsText(inviteCampaign.value) : '')
+
+  /**
+   * 失败/结束原因：批次级原因（排期取消、任务创建失败）+ 引擎停止码 + run 的 errorMessage。
+   * 旧批次可能没有 status_reason，这里如实说明"旧记录未保存原因"，不编造。
+   */
+  const inviteDisplayReason = computed(() => {
+    const parts: string[] = []
+    const campaign = inviteCampaign.value
+    if (campaign) {
+      const stop = inviteStopReasonLabel(campaign.stopReason)
+      if (stop) parts.push(`停止原因：${stop}`)
+      if (campaign.statusReason) parts.push(campaign.statusReason)
+      if (campaign.status === 'failed' && !campaign.taskId) parts.push('任务创建失败，未进入运行（旧记录可能未保存原因）')
+    }
+    const run = inviteDisplayRun.value
+    if (run && ['failed', 'cancelled'].includes(run.status)) {
+      const code = String(run.errorCode || '').trim()
+      const message = String(run.errorMessage || run.statusReason || '').trim()
+      const detail = code && message && !message.includes(code) ? `${code}：${message}` : (message || code)
+      if (detail) parts.push(detail)
+    }
+    return [...new Set(parts)].join(' · ')
+  })
+
+  const inviteDisplaySummary = computed(() => {
+    const task = inviteDisplayTask.value
+    const records = inviteCampaignRecords.value
+    if (inviteCampaign.value) {
+      const live = task ? inviteLiveMessage(task) : ''
+      if (inviteDisplayActive.value) return live || (records.length ? `已记录 ${records.length} 位，运行中…` : '正在运行，等待逐人结果…')
+      if (records.length) return `本批次共记录 ${records.length} 位`
+      if (inviteCampaign.value.status === 'scheduled') return '已排期，到点后自动在后台运行'
+      return '本次运行没有逐人记录'
+    }
+    return task ? (inviteLiveMessage(task) || inviteStatus(task)) : ''
+  })
+
+  const inviteDisplayNoRecordHint = computed(() => {
+    const campaign = inviteCampaign.value
+    if (!campaign) return ''
+    if (!campaign.taskId) return '（批次在创建任务前失败，没有进入运行）'
+    if (campaign.status === 'scheduled') return '（到点运行后才会产生逐人结果）'
+    if (campaign.status === 'exhausted') return '（候选不足或全部被跳过，没有可记录的人）'
+    if (campaign.status === 'failed') return '（失败发生在产生逐人记录之前）'
+    return ''
+  })
+
+  const inviteDisplayLogs = computed<InviteRunLogEntry[]>(() => inviteDisplayTask.value ? inviteLogs(inviteDisplayTask.value) : [])
+
+  async function loadInviteCampaigns(storeIdArg?: string): Promise<void> {
+    const storeId = String(storeIdArg || currentStoreId.value || '')
+    const token = ++campaignSerial
+    if (!storeId) {
+      inviteCampaigns.value = []
+      inviteCampaignDetail.value = null
+      inviteCampaignError.value = ''
+      return
+    }
+    try {
+      const result = await window.shopilot.invite.campaigns({ storeId, limit: 8 })
+      if (token !== campaignSerial || currentStoreId.value !== storeId) return
+      if (!result.ok) {
+        inviteCampaignError.value = result.error.message
+        inviteCampaigns.value = []
+        inviteCampaignDetail.value = null
+        return
+      }
+      inviteCampaignError.value = ''
+      inviteCampaigns.value = (Array.isArray(result.data) ? result.data : []) as InviteCampaignView[]
+      if (inviteSelectedCampaignId.value && !inviteCampaigns.value.some(item => item.id === inviteSelectedCampaignId.value)) {
+        inviteSelectedCampaignId.value = ''
+      }
+      const target = inviteCampaign.value
+      if (!target) {
+        inviteCampaignDetail.value = null
+        return
+      }
+      const detail = await window.shopilot.invite.campaignDetail(target.id)
+      if (token !== campaignSerial || currentStoreId.value !== storeId) return
+      if (!detail.ok) {
+        inviteCampaignError.value = detail.error.message
+        inviteCampaignDetail.value = null
+        return
+      }
+      const data = detail.data as InviteCampaignDetail | undefined
+      if (data && data.campaign?.id === target.id) inviteCampaignDetail.value = data
+      else {
+        inviteCampaignDetail.value = null
+        inviteCampaignError.value = '批次详情为空，无法读取逐人记录'
+      }
+    } catch (error) {
+      if (token !== campaignSerial) return
+      inviteCampaignError.value = error instanceof Error ? error.message : String(error)
+      inviteCampaigns.value = []
+      inviteCampaignDetail.value = null
+    }
+  }
+
+  /** 手动切换要看的批次（回看历史结果）；详情会按当前选择重新加载。 */
+  function selectInviteCampaign(campaignId: string): void {
+    inviteSelectedCampaignId.value = String(campaignId || '')
+    inviteCampaignDetail.value = null
+    void loadInviteCampaigns()
+  }
+
+  async function refreshInviteData(): Promise<void> {
+    await ws.refreshTasks()
+    await loadInviteCampaigns()
+  }
+
+  function inviteRecordLine(record: InviteRecordView): string { return inviteRecordLineText(record) }
+  function inviteRecordTone(record: InviteRecordView): string { return inviteRecordToneClass(record.status) }
+
+  /**
+   * 运行中每 5 秒刷新一次任务与批次：实时事件在应用重启后不补发，
+   * 任务结束后也会靠这次刷新把批次从 running 推导成最终状态。
+   */
+  let pollTimer: ReturnType<typeof setInterval> | null = null
+  watch(inviteDisplayActive, active => {
+    if (active) {
+      if (pollTimer) return
+      pollTimer = setInterval(() => {
+        void ws.refreshTasks()
+        void loadInviteCampaigns()
+      }, 5000)
+      return
+    }
+    if (!pollTimer) return
+    clearInterval(pollTimer)
+    pollTimer = null
+    void loadInviteCampaigns()
+  }, { immediate: true })
+  watch(() => currentStoreId.value, storeId => {
+    inviteCampaigns.value = []
+    inviteCampaignDetail.value = null
+    inviteCampaignError.value = ''
+    inviteSelectedCampaignId.value = ''
+    if (storeId) void loadInviteCampaigns(storeId)
+  }, { immediate: true })
+  onScopeDispose(() => {
+    if (pollTimer) clearInterval(pollTimer)
+    pollTimer = null
+  })
+
   function inviteStepIndex(task: TaskView) {
     const run = inviteRun(task)
     return run?.id ? (ws.runLive[run.id]?.stepIndex ?? run.currentStep ?? null) : (run?.currentStep ?? null)
@@ -74,7 +295,7 @@ export function useInviteRun(state: InviteState, ports: InviteRunPorts) {
     const parsed = typeof value === 'number' ? value : Number(value)
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0
   }
-  function inviteStepLabel(step: TaskView['steps'][number]) { return ({ waitMs: '等待页面状态', navigate: '打开平台页面', click: '点击页面元素', input: '填写页面内容', screenshot: '保存页面截图', readText: '读取页面信息' } as Record<string, string>)[step?.type] || step?.type || '任务步骤' }
+  function inviteStepLabel(step: TaskView['steps'][number]) { return ({ waitMs: '等待页面状态', navigate: '打开平台页面', click: '点击页面元素', input: '填写页面内容', screenshot: '保存页面截图', readText: '读取页面信息', scrollNext: '列表向下滚动' } as Record<string, string>)[step?.type] || step?.type || '任务步骤' }
   function inviteStepInput(step: TaskView['steps'][number]) {
     const value = step?.input
     if (!value) return '等待真实运行结果'
@@ -85,10 +306,13 @@ export function useInviteRun(state: InviteState, ports: InviteRunPorts) {
   function inviteLogText(log: InviteRunLogEntry) { return `[${new Date(log.at || Date.now()).toLocaleTimeString()}] ${log.message || log.phase || log.status || '任务状态已更新'}` }
   async function stopInvite(task: TaskView) {
     const runId = inviteRunId(task)
+    if (runId) await stopInviteRun(runId)
+  }
+  async function stopInviteRun(runId: string) {
     if (!runId) return
     const result = await window.shopilot.task.cancel(runId)
     if (!result.ok) ws.toast(`停止邀约失败：${result.error.message}`, 'error')
-    await ws.refreshTasks()
+    await refreshInviteData()
   }
 
   /**
@@ -147,8 +371,17 @@ export function useInviteRun(state: InviteState, ports: InviteRunPorts) {
        * 任务构造器仍是同一份 buildInviteTaskPayload，面板/智能体不会各写一套配置。
        */
       const targetCount = isBatchProfile(inviteProfile.value)
-        ? Math.max(1, Number(invite.count) || 1)
+        // 抖店逐人沟通：一位一轮，count 就是本次总量。
+        // 快手批量：count 只是每批人数，整单上限是 totalCap（旧实现拿每批人数当总量，可放大 20 倍）。
+        ? (inviteProfile.value.contactOnly === true
+            ? Math.max(1, Number(invite.count) || 1)
+            : Math.max(1, Math.min(500, Number(invite.totalCap) || 200)))
         : Math.max(1, Number(invite.maxInvites) || 10)
+      /**
+       * 配置有 500ms 防抖落盘：用户改完日上限/数量立刻点开始，主进程读到的还是旧值。
+       * 启动前显式落盘一次，保证额度校验用的就是界面上的这份配置。
+       */
+      await window.shopilot.settings.set(inviteConfigKey(storeId), state.inviteSnapshot())
       const created = await window.shopilot.invite.startCampaign({
         task: payload,
         campaign: {
@@ -171,10 +404,13 @@ export function useInviteRun(state: InviteState, ports: InviteRunPorts) {
           ? '邀约批次已创建，但后台页面未能就绪：请打开一次该店铺后会自动开始'
           : recentlyInvited.length
             ? `邀约已在后台启动：近 7 天已邀的 ${recentlyInvited.length} 位会自动跳过`
-            : '邀约已在后台启动，你可以继续使用浏览器；进度在「达人邀约」页查看', 'success')
+            : '邀约已在后台启动，你可以继续使用浏览器；进度在右侧「达人邀约」面板查看', 'success')
       }
       await ws.refreshTasks()
       void ports.reloadQuota(storeId)
+      // 新批次启动后回到"跟随最新"：否则用户正在回看旧批次时看不到刚启动的这一单。
+      inviteSelectedCampaignId.value = ''
+      void loadInviteCampaigns(storeId)
       return true
     } catch (error) {
       // 上方已逐点处理已知的业务拒绝（history/blacklist 读失败、payload 不完整、created.ok === false）；
@@ -204,6 +440,32 @@ export function useInviteRun(state: InviteState, ports: InviteRunPorts) {
     inviteLogs,
     inviteLogText,
     stopInvite,
-    startInvite
+    stopInviteRun,
+    startInvite,
+    // 批次与逐人记录
+    inviteCampaigns,
+    inviteCampaign,
+    inviteCampaignDetail,
+    inviteCampaignTask,
+    inviteCampaignRun,
+    inviteCampaignRecords,
+    inviteCampaignError,
+    inviteSelectedCampaignId,
+    selectInviteCampaign,
+    inviteDisplayTask,
+    inviteDisplayRun,
+    inviteDisplayRunId,
+    inviteDisplayActive,
+    inviteDisplayStatus,
+    inviteDisplayTone,
+    inviteDisplayCounts,
+    inviteDisplayReason,
+    inviteDisplaySummary,
+    inviteDisplayNoRecordHint,
+    inviteDisplayLogs,
+    inviteRecordLine,
+    inviteRecordTone,
+    loadInviteCampaigns,
+    refreshInviteData
   }
 }

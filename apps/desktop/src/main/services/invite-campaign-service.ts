@@ -54,6 +54,34 @@ export interface StartInviteCampaignFailure {
 export type StartInviteCampaignResult = StartInviteCampaignSuccess | StartInviteCampaignFailure
 
 /**
+ * 同店正在运行的邀约任务（不论它挂不挂批次）。
+ *
+ * 2026-10-21 审查 P0-2：旧锁只查 `invite_campaigns.run_id`，任务中心/智能体直跑的
+ * creator_invite 任务不在锁内——两个 run 会同时操作同一个广场页，互相切走筛选/弹窗。
+ * 侧栏启动前用它兜住这一类并发，比只查批次关联更接近"同一家店同时只跑一个邀约"。
+ */
+function findActiveInviteRun(storeId: string): { taskId: string; runId: string; name: string } | null {
+  try {
+    const row = getDatabase().prepare(`
+      SELECT r.id AS run_id, r.task_id, t.name
+      FROM task_runs r
+      JOIN tasks t ON t.id = r.task_id
+      WHERE r.store_id = ? AND t.kind = 'creator_invite'
+        AND r.status IN ('queued','running','paused','waiting_confirmation')
+      ORDER BY r.started_at DESC LIMIT 1
+    `).get(storeId) as { task_id: string; run_id: string; name: string } | undefined
+    return row ? { taskId: row.task_id, runId: row.run_id, name: row.name } : null
+  } catch (error) {
+    // 老库/单测里可能还没建 tasks/task_runs（本检查是额外护栏，不能反过来拦住启动）。
+    const message = String((error as Error)?.message || error)
+    if (!/no such table/i.test(message)) {
+      logMain('warn', `[invite] 检查同店运行中邀约失败（按无活动运行继续）: ${message.slice(0, 200)}`)
+    }
+    return null
+  }
+}
+
+/**
  * 创建批次 + 任务 + 运行。
  *
  * 为什么不分两步（task.create → task.run）：那样批次拿不到 taskId，而且 create 成功、
@@ -88,6 +116,14 @@ export function startInviteCampaign(input: InviteCampaignStartInput): StartInvit
       ok: false,
       code: ERROR_CODES.TASK_BAD_STATE.code,
       message: `该店铺已有进行中的邀约批次「${active.name}」，请先停止或等它结束`
+    }
+  }
+  const activeRun = findActiveInviteRun(storeId)
+  if (activeRun) {
+    return {
+      ok: false,
+      code: ERROR_CODES.TASK_BAD_STATE.code,
+      message: `该店铺已有进行中的达人邀约任务「${activeRun.name}」，请先停止或等它结束`
     }
   }
 
@@ -143,7 +179,7 @@ export function startInviteCampaign(input: InviteCampaignStartInput): StartInvit
     })
   } catch (error) {
     // 批次已建、任务没建：把批次标成 failed，页面能看到真实结果，而不是一条永远「排队中」的空批次。
-    markInviteCampaignFailed(campaignId)
+    markInviteCampaignFailed(campaignId, `任务创建失败：${String((error as Error)?.message || error).slice(0, 200)}`)
     throw error
   }
 
@@ -187,7 +223,7 @@ export function startInviteCampaign(input: InviteCampaignStartInput): StartInvit
     }
   } catch (error) {
     // 走到这里只可能是 enqueueRun 抛（attach 失败已在内层兜底）：run 未创建，标 failed 是如实的
-    markInviteCampaignFailed(campaignId)
+    markInviteCampaignFailed(campaignId, `启动失败：${String((error as Error)?.message || error).slice(0, 200)}`)
     logMain('error', `[invite] 批次启动失败 campaign=${campaignId} store=${storeId}: ${String((error as Error)?.message || error).slice(0, 300)}`)
     throw error
   }

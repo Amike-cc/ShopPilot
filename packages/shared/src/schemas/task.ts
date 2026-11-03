@@ -7,6 +7,9 @@ export const TASK_STEP_TYPES = [
   'navigate',
   'waitForPage',
   'waitForSelector',
+  // 列表滚动到下一屏（抖店逐人沟通流 2026-10-21）：纯滚动无副作用，
+  // 滚到底报 TASK_LIST_EXHAUSTED（loop 的 stopOn 当"候选耗尽"正常收尾）
+  'scrollNext',
   'readText',
   'readTable',
   // 读**接口响应**（只读）：页面把数据渲染不出来、但确实请求了它时用（实测微信小店涉税报送页

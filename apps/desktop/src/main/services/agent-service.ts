@@ -50,7 +50,10 @@ import { businessProfileFor } from '@shared/constants/business'
 import { INVITE_SUPPORTED_PLATFORMS, inviteProfileFor } from '@shared/constants/invite'
 import { inviteConfigKey, legacyInviteConfigKey } from '@shared/invite-config'
 import { INVITE_SQUARE_URLS_SETTING } from '@shared/constants/ai'
-import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig } from '@shared/invite-task'
+import { buildInviteTaskPayload, inviteTaskIssues, normalizeInviteTaskConfig, parseInviteProductIds } from '@shared/invite-task'
+import { startInviteCampaign } from './invite-campaign-service'
+import { INVITE_REPEAT_WINDOW_DAYS, recentInvitedNicknames } from './invite-history'
+import { listBlacklistedNicknames } from './invite-creators'
 import { buildEntityCollectSteps } from '@shared/entity-steps'
 import { entityProfileFor } from '@shared/constants/entity'
 import { listBookmarks, createBookmark, deleteBookmark } from '../browser/bookmark-manager'
@@ -2268,18 +2271,37 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
         if (typeof step.action.count === 'number') config.count = step.action.count
         const issues = inviteTaskIssues({ profile, config })
         if (issues.length) softwareError('AGENT_INVITE_CONFIG_INCOMPLETE', `「${store.name}」的邀约配置不完整：${issues.join('、')}；请在“达人邀约”面板补全后重试`)
+        /**
+         * 与面板同一口径（2026-10-25）：7 天台账 + 黑名单在**主进程现查**。
+         * 智能体读的是配置快照，快照里没有这两个名单——不补就会绕过"7 天不重复邀约"。
+         */
+        const skipNames = new Set<string>(recentInvitedNicknames(store.id, INVITE_REPEAT_WINDOW_DAYS))
+        for (const nickname of listBlacklistedNicknames(store.id, profile.platform)) skipNames.add(nickname)
+        config.recentlyInvited = [...skipNames].slice(0, 500)
         const payload = buildInviteTaskPayload({ profile, storeId: store.id, squareUrl: inviteSquareUrlFor(profile.platform), config })
         if (!payload) softwareError('AGENT_INVITE_CONFIG_INCOMPLETE', `「${store.name}」的邀约配置不完整`)
-        const delegated = await delegateAgentTask({
-          actorAgentId: ROOT_AGENT_ID,
-          goal: `达人邀约 · ${store.name}`,
-          storeId: store.id,
-          requiresConfirmation: false,
-          run: true,
-          browserTask: { name: payload.name, storeScope: store.id, steps: payload.steps as unknown as Record<string, unknown>[] }
+        /**
+         * 必须走批次入口（startInviteCampaign）：那里才有日额度、同店互斥、批次账本。
+         * 旧实现走 delegateAgentTask 直建任务，等于绕过全部护栏，且记录不归属批次。
+         */
+        const targetCount = profile.flow === 'batch-list'
+          ? (profile.contactOnly === true
+              ? Math.max(1, Number(config.count) || 1)
+              : Math.max(1, Math.min(500, Number(config.totalCap) || 200)))
+          : Math.max(1, Number(config.maxInvites) || 10)
+        const started = startInviteCampaign({
+          task: payload,
+          campaign: {
+            storeId: store.id,
+            targetCount,
+            filters: { ...config } as unknown as Record<string, unknown>,
+            scriptText: String(config.script || ''),
+            productIds: parseInviteProductIds(config.productIds),
+            createdBy: 'agent'
+          }
         })
-        jobIds.push(String(delegated.job.id))
-        messages.push(`已由主 Agent 执行达人邀约 Job「${payload.name}」（额度用尽或可选达人不足会自动停止，明细进邀约实时日志）`)
+        if (!started.ok) softwareError('AGENT_INVITE_START_FAILED', `「${store.name}」启动邀约失败：${started.message}`)
+        messages.push(`已启动达人邀约批次「${payload.name}」（${started.waitingForStore ? '等待店铺页面就绪后自动开始' : '后台运行中'}）；额度用尽或候选不足会自动停止，进度见店铺浏览器右侧「达人邀约」面板`)
         break
       }
       case 'openPanel':

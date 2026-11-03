@@ -4,10 +4,10 @@
  * 单测（injected-script-syntax / silent-success-boundary）以这些锚点为断言对象，勿重排或压缩。
  */
 
-import { logMain } from '../services/logger'
-import { classifyInviteBlockNotice, matchSessionStall } from '@shared/invite-notices'
-import { getTabWebContents, getStoreTabs } from '../browser/window-manager'
-import { cancelSig, getCurrent, pauseSig } from './task-runner-registry'
+import { logMain } from '../services/logger'
+import { classifyInviteBlockNotice, matchSessionStall } from '@shared/invite-notices'
+import { getTabWebContents, getStoreTabs } from '../browser/window-manager'
+import { cancelSig, getCurrent, pauseSig } from './task-runner-registry'
 import type { RunHandle } from './task-runner-registry'
 
 /**
@@ -455,8 +455,18 @@ export async function findTextTarget(
    */
   skipTexts?: string[],
   /** 命中后把"这一行的达人昵称"一并回传（用于写入邀约台账） */
-  recordRowText = false
-): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string; rowKey?: string; picked?: string; viaBlocker?: string; transport?: 'trusted-mouse' | 'js-fallback'; absentText?: string; disabledReason?: string; skipped?: 'checked'; rowNickname?: string; skippedInvited?: number }> {
+  recordRowText = false,
+  /**
+   * 落点被非交互图片盖住时，临时把该图片设为 pointer-events:none 再点（4 秒后恢复）。
+   * 见 StepInput.ignoreImageOverlay；只处理 IMG，不碰按钮/链接/对话框里的图片。
+   */
+  ignoreImageOverlay = false,
+  /**
+   * skipTexts 匹配：默认 contains（旧行为）；exact-nickname 只比较提取出的昵称，
+   * 避免抖店行文本里"小美"命中"小美美"这类误杀（2026-11-02）。
+   */
+  skipTextsMatch: 'contains' | 'exact-nickname' = 'contains'
+): Promise<{ ok: boolean; reason?: string; x?: number; y?: number; clickedText?: string; candidates?: number; coveredBy?: string; rowKey?: string; picked?: string; viaBlocker?: string; transport?: 'trusted-mouse' | 'js-fallback'; absentText?: string; disabledReason?: string; skipped?: 'checked'; rowNickname?: string; skippedInvited?: number; ignoredOverlay?: boolean }> {
   return withTimeout(() => wc.executeJavaScript(`(() => {
     ${deep ? ENUM_DEEP_FN : ''}
     ${VISIBLE_JS}
@@ -471,6 +481,8 @@ export async function findTextTarget(
     const dedupNs = ${JSON.stringify((pick && pick.dedupNs) || '')};
     const skipTexts = ${JSON.stringify(skipTexts || [])};
     const recordRowText = ${recordRowText ? 'true' : 'false'};
+    const ignoreImageOverlay = ${ignoreImageOverlay ? 'true' : 'false'};
+    const skipTextsMatch = ${JSON.stringify(skipTextsMatch)};
     const scope = ${deep ? '__enumDeep()' : 'document.querySelectorAll("*")'};
     const roots = within ? __scopeRoots(within, ${deep ? 'true' : 'false'}) : null;
     if (within && !roots) return { ok: false, reason: 'SCOPE_NOT_FOUND' };
@@ -522,8 +534,22 @@ export async function findTextTarget(
     let skippedInvited = 0;
     if (roundIdx != null || dedupNs) {
       const rowOf = (el) => el.closest('tr, li, [data-row-key], [class*="card"], [class*="dorami"]') || el.parentElement || el;
+      /**
+       * 固定列镜像行（只有操作单元格）按 rowIndex 找回主表行。
+       * 抖店表格横向滚动时平台会复制一份 fixed-right 行；如果不归一，keyOf 会给同一达人
+       * 两个不同的键（镜像行只有"在线沟通"文字），去重与 visitedRows 都可能漏掉，导致重复点击。
+       */
+      const mainRowOf = (row) => {
+        if (!row || row.tagName !== 'TR' || row.querySelectorAll('td').length > 2) return row;
+        const tbody = row.closest('tbody');
+        const siblings = tbody ? [...tbody.querySelectorAll('tr')] : [];
+        const idx = siblings.indexOf(row);
+        const mainBody = document.querySelector('.auxo-table-body');
+        const mainRows = mainBody ? [...mainBody.querySelectorAll('tbody tr')] : [];
+        return idx >= 0 && mainRows[idx] ? mainRows[idx] : row;
+      };
       const keyOf = (el) => {
-        const row = rowOf(el);
+        const row = mainRowOf(rowOf(el));
         return String((row && row.innerText) || el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 200);
       };
       const seen = new Set();
@@ -543,27 +569,57 @@ export async function findTextTarget(
         if (rich.length) entries.length = 0, entries.push(...rich);
       }
       /**
+       * 这一行的达人昵称。
+       *
+       * 旧实现取"行内第一个 .truncate"，在抖店会踩到**状态徽标**：行里第一个 truncate 是
+       * 「可在线沟通」，于是台账把徽标当成达人名（2026-11-01 真机：记录昵称=可在线沟通）。
+       * 这个假昵称还会进入 7 天 skipTexts，下一轮把整片行都误跳过。
+       *
+       * 现在：① 固定列镜像行（只有操作单元格）按 rowIndex 找回主表行；
+       *      ② 取首列的第一行文本；③ 显式排除常见状态词；④ 最后才退回 .truncate/行首段。
+       */
+      const nicknameOf = (el) => {
+        const clean = (v) => String(v || '').replace(/\\s+/g, ' ').trim();
+        const bad = /^(可在线沟通|在线沟通|继续沟通|已沟通|加入达人库|详情|黑马达人|潜力合作|优选合作|有联系方式)$/;
+        const row = mainRowOf(rowOf(el));
+        if (!row) return '';
+        const cell = row.tagName === 'TR' ? row.querySelector('td') : null;
+        // 首列里的 .truncate 通常就是昵称；不要再取"行内第一个 .truncate"（那可能是状态徽标）。
+        const cellNode = cell && cell.querySelector ? cell.querySelector('.truncate') : null;
+        if (cellNode) {
+          const t = clean(cellNode.innerText);
+          if (t.length >= 2 && !bad.test(t)) return t.slice(0, 120);
+        }
+        const cellText = cell ? String(cell.innerText || '') : String((cellNode && cellNode.innerText) || row.innerText || '');
+        const lines = cellText.split('\\n').map(clean).filter(Boolean);
+        const name = lines.find(line => line.length >= 2 && !bad.test(line));
+        if (name) return name.slice(0, 120);
+        const rowNode = row.querySelector ? row.querySelector('.truncate') : null;
+        if (rowNode) { const t = clean(rowNode.innerText); if (t && !bad.test(t)) return t.slice(0, 120); }
+        const text = clean(row.innerText);
+        return (text.split(' ').find(part => part && !bad.test(part)) || text.split(' ')[0] || '').slice(0, 120);
+      };
+
+      /**
        * 剔掉"近 7 天已邀过"的行（skipTexts = 本地台账里的昵称清单）。
-       * 判定用**整行文本包含**：列表行里同时有昵称、类目、评分等，昵称是其中一段。
+       * contains（默认）看整行文本；exact-nickname 只比较提取出的昵称，避免短昵称误杀。
        * 全被剔掉 → 与"本页都点过"同义（这一页没有可邀的人了）→ 交给上层翻页。
        */
       let usable = entries;
       if (skipTexts.length) {
+        const normalizeNick = (v) => String(v || '').replace(/\\s+/g, ' ').trim();
         usable = entries.filter(e => {
-          const hitSkip = skipTexts.some(t => t && e.key.includes(t));
+          const hitSkip = skipTexts.some(t => {
+            if (!t) return false;
+            if (skipTextsMatch !== 'exact-nickname') return e.key.includes(t);
+            const own = normalizeNick(nicknameOf(e.el));
+            return !!own && own === normalizeNick(t);
+          });
           if (hitSkip) skippedInvited++;
           return !hitSkip;
         });
         if (!usable.length) return { ok: false, reason: 'ALL_VISITED', skippedInvited, candidates: cands.length };
       }
-      /** 这一行的达人昵称：优先取首列里的 .truncate（真机实测微信首列结构），否则取行文本第一段 */
-      const nicknameOf = (el) => {
-        const row = rowOf(el);
-        const node = (row && row.querySelector ? (row.querySelector('td .truncate') || row.querySelector('.truncate')) : null);
-        if (node) return String(node.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
-        const text = String((row && row.innerText) || '').replace(/\\s+/g, ' ').trim();
-        return (text.split(' ')[0] || '').slice(0, 120);
-      };
       if (roundIdx != null) {
         if (roundIdx >= usable.length) return { ok: false, reason: 'NOT_FOUND' };
         hit = usable[roundIdx].el;
@@ -618,7 +674,9 @@ export async function findTextTarget(
           if (pop) why = String(pop.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 120);
         }
       } catch { /* 读不到原因不影响主流程 */ }
-      return { ok: false, reason: 'DISABLED', disabledReason: why };
+      // 带上 rowKey：调用方（loop 的 advance 规则）需要把"这一位不可操作"记进已访问，
+      // 否则重开本轮还会选到同一行，原地打转到上限。抖店列表里就有禁用态「在线沟通」。
+      return { ok: false, reason: 'DISABLED', disabledReason: why, rowKey, rowNickname: (typeof rowNickname === 'string' ? rowNickname : undefined) };
     }
     // 视口退化的兜底：页面文档视口塌成近 0 时（DOM <webview> 尚未注册 guest、被从文档里
     // 移除、或平台自己把内容区折叠），元素还在、也还有尺寸，但坐标全在视口外，
@@ -662,15 +720,55 @@ export async function findTextTarget(
     // 而点条目中部（文字区）才会展开。中心点也是人点这类条目的自然落点，对按钮/页签同样安全。
     const xs = [0.5, 0.3, 0.7, 0.12, 0.88].map(f => Math.round(r.left + r.width * f));
     const ys = [0.5, 0.25, 0.75].map(f => Math.round(r.top + r.height * f));
-    for (const x of xs) {
-      for (const y of ys) {
-        const at = deepAt(x, y);
-        if (at && (at === hit || hit.contains(at) || at.contains(hit) || labelEl.contains(at) || at.contains(labelEl))) {
-          return { ok: true, x, y, clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, picked, rowKey, skippedInvited, rowNickname: (typeof rowNickname === 'string' ? rowNickname : undefined) };
+    const sampleHit = () => {
+      for (const x of xs) {
+        for (const y of ys) {
+          const at = deepAt(x, y);
+          if (at && (at === hit || hit.contains(at) || at.contains(hit) || labelEl.contains(at) || at.contains(labelEl))) return { x, y };
         }
       }
+      return null;
+    };
+    const firstSample = sampleHit();
+    if (firstSample) {
+      return { ok: true, x: firstSample.x, y: firstSample.y, clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, picked, rowKey, skippedInvited, rowNickname: (typeof rowNickname === 'string' ? rowNickname : undefined) };
     }
-    const blocker = deepAt(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    let blocker = deepAt(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    /**
+     * 装饰图/优惠券横幅盖住落点：只对非交互 IMG 生效，临时关掉它的指针事件再采样一次。
+     * 抖店达人广场实测：右侧操作列在滚动后会被横幅里的优惠券图盖住（elementFromPoint 返回 IMG），
+     * 真实鼠标点到的是图片而不是「在线沟通」——平台没有任何反馈，看起来像"点不动"。
+     * 祖先里有 a/button/label/role=dialog 的图片一律不动（那可能是真正的弹层）。
+     */
+    if (ignoreImageOverlay && blocker && blocker.tagName === 'IMG') {
+      let interactive = false;
+      for (let p = blocker, i = 0; p && p !== document.body && i < 6; i++, p = p.parentElement) {
+        const tag = p.tagName;
+        if (tag === 'A' || tag === 'BUTTON' || tag === 'LABEL' || p.getAttribute('role') === 'button' || p.getAttribute('role') === 'dialog' || p.getAttribute('aria-modal') === 'true') { interactive = true; break; }
+      }
+      if (!interactive) {
+        const img = blocker;
+        try {
+          const prev = img.style.pointerEvents;
+          img.style.pointerEvents = 'none';
+          img.dataset.shopilotPeRestore = prev;
+          setTimeout(() => {
+            try {
+              if (img.dataset.shopilotPeRestore !== undefined) {
+                img.style.pointerEvents = img.dataset.shopilotPeRestore;
+                delete img.dataset.shopilotPeRestore;
+              }
+            } catch (e) { /* 页面已重渲染，图片节点被回收 */ }
+          }, 4000);
+        } catch (e) { /* 样式写入失败就按原样报遮挡 */ }
+        const secondSample = sampleHit();
+        if (secondSample) {
+          return { ok: true, x: secondSample.x, y: secondSample.y, clickedText: String(hit.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40), candidates: cands.length, picked, rowKey, skippedInvited, rowNickname: (typeof rowNickname === 'string' ? rowNickname : undefined), ignoredOverlay: true };
+        }
+        // 图片指针事件已关掉，剩余的遮挡者才是真正的原因（重新读一次）。
+        blocker = deepAt(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+      }
+    }
     // 遮挡者若是"同一行/同一卡片里的可点链接"（平台常把整卡做成 <a> 覆盖住里面的按钮），
     // 点它就是用户实际会做的事（实测微信广场「详情」被 A.w-full text-right 盖住）；限定同一行内才点。
     const rowOf = (el) => el.closest('tr, li, [data-row-key], [class*="card"], [class*="dorami"]') || el.parentElement;

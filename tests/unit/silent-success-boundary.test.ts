@@ -94,7 +94,9 @@ describe('额度/禁用语义边界', () => {
     if (!isBatchProfile(kuaishou)) throw new Error('快手小店应为 batch-list 档案')
     expect(kuaishou.quotaDisabledMeansExhausted).toBeUndefined()
 
-    // 构建出的步骤要把声明透传给引擎（否则档案声明了、引擎还是按"不确定"失败）
+    // 构建出的步骤：抖店 2026-10-21 起改「逐人沟通」，没有"确认发送"按钮，
+    // 因此**不生成 requireEnabled**——宁可不判断额度，也不套用错误的语义。
+    // 档案上的 quotaDisabledMeansExhausted 保留给旧的抽屉流（若回滚），这里只钉住"不被误用"。
     const { buildInviteTaskPayload, normalizeInviteTaskConfig } = await import('@shared/invite-task')
     const config = normalizeInviteTaskConfig('batch-list', {
       category: '美妆', levels: ['LV0'], count: 2, script: '你好', scriptMode: 'manual',
@@ -102,8 +104,8 @@ describe('额度/禁用语义边界', () => {
     })
     const payload = buildInviteTaskPayload({ profile: douyin, storeId: 'store_a', squareUrl: douyin.pageUrl, config })
     expect(payload).not.toBeNull()
-    const requireEnabled = JSON.stringify(payload!.steps).includes('"disabledMeansQuota":true')
-    expect(requireEnabled, '抖店邀约步骤缺少 disabledMeansQuota 透传').toBe(true)
+    expect(JSON.stringify(payload!.steps)).not.toContain('requireEnabled')
+    expect(JSON.stringify(payload!.steps)).toContain('在线沟通')
   })
 
   it('"额度读不到"与"额度不足"是两个不同的码（前者不在 stopOn 语义内）', () => {

@@ -25,6 +25,10 @@ export function inviteStopReasonLabel(reason: string | null | undefined): string
     TASK_DAREN_NOT_INVITABLE: '未达合作门槛',
     TASK_DAREN_PAGE_UNOPENABLE: '详情页打不开',
     TASK_PAGE_EXHAUSTED: '本页候选已耗尽',
+    /** 抖店逐人沟通：点完一位后列表已滚到底，没有更多可沟通的达人（正常收工） */
+    TASK_LIST_EXHAUSTED: '候选列表已到底',
+    /** 抖店逐人沟通：当前屏候选都处理过，连续滚动多屏仍没有新的可沟通的人 */
+    TASK_DOU_DIAN_PAGE_VISITED: '当前页候选已处理完',
     target_reached: '达到本次目标',
     user_stopped: '用户停止'
   } as Record<string, string>)[code] || null

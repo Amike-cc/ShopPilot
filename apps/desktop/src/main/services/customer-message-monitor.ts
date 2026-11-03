@@ -5,7 +5,7 @@ import { onCustomerServiceSessionClosed, registerCustomerServiceWebContents, wai
 import { registerFingerprintTarget, unregisterFingerprintTarget } from '../browser/fingerprint-injector'
 import { getStore, listStores } from '../stores/store-manager'
 import { getDatabase } from '../db/database'
-import { displayStore as displayStoreInMain, emitToRenderer, isHostWindowFocused } from '../browser/window-manager'
+import { displayStore as displayStoreInMain, emitToRenderer, getDisplayedStoreId, isHostWindowFocused } from '../browser/window-manager'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { createCustomerAlertState, decideCustomerAlert, pickCustomerCheckDelayMs, type CustomerAlertState } from '@shared/customer-message-alert'
 import { Notification } from 'electron'
@@ -40,6 +40,24 @@ export interface CustomerMessageProbeResult {
  * 会话列表和未读徽标。没有数量证据时不能把「壳已出现」当成最终结果。
  */
 export const CUSTOMER_MESSAGE_PROBE_TIMEOUT_MS = 15_000
+
+/**
+ * 失败结果的"冷却时间"：页面本身读不到消息时，没必要每 12/45 秒重新建隐藏页并加载平台。
+ * 2026-11-02 内存优化：每家店的隐藏监控页约 150–300MB，4 家店常驻可达 900MB；
+ * 登录失效/页面改版/无可核对计数这类结果按下面的节奏重试，其余时间释放隐藏页。
+ * 用户手动点「刷新消息状态」或切到该店铺时仍然会立即检查（不走冷却）。
+ */
+export const CUSTOMER_MONITOR_RETRY_LOGIN_MS = 15 * 60_000
+export const CUSTOMER_MONITOR_RETRY_CHANGED_MS = 5 * 60_000
+export const CUSTOMER_MONITOR_RETRY_ERROR_MS = 2 * 60_000
+
+export function customerMonitorRetryDelayMs(item: { status?: string | null } | null | undefined): number {
+  const status = String(item?.status || '')
+  if (!status || status === 'AVAILABLE' || status === 'CHECKING') return 0
+  if (status === 'LOGIN_REQUIRED') return CUSTOMER_MONITOR_RETRY_LOGIN_MS
+  if (status === 'PAGE_CHANGED' || status === 'NOT_VERIFIED') return CUSTOMER_MONITOR_RETRY_CHANGED_MS
+  return CUSTOMER_MONITOR_RETRY_ERROR_MS
+}
 
 /**
  * 采集脚本只回传计数和布尔信号，绝不回传 body.innerText、聊天正文、昵称或完整 DOM。
@@ -181,6 +199,8 @@ interface MonitorRuntime {
   isWindowFocused?: () => boolean
   /** 系统通知被点击时切到该店铺（null 安全；失败不影响监控循环） */
   displayStore?: (storeId: string) => void
+  /** 当前主窗口显示的店铺：它不参与失败冷却，且失败时也保留隐藏页方便用户登录 */
+  displayedStoreId?: () => string | null
 }
 
 /**
@@ -329,7 +349,8 @@ function defaultRuntime(): MonitorRuntime {
     // 主窗口在前台就查得更勤（12s），不在前台降到 45s 但**继续查**（用户要求常驻含后台）
     isWindowFocused: () => { try { return isHostWindowFocused() } catch { return false } },
     // 系统通知被点击时切到那家店（用户要求：不自动切店，只在点击时切）
-    displayStore: (storeId: string) => { try { displayStoreInMain(storeId, 'main') } catch { /* 窗口可能已关 */ } }
+    displayStore: (storeId: string) => { try { displayStoreInMain(storeId, 'main') } catch { /* 窗口可能已关 */ } },
+    displayedStoreId: () => { try { return getDisplayedStoreId() } catch { return null } }
   }
 }
 
@@ -488,9 +509,35 @@ export class CustomerMessageMonitor {
       logMain('warn', `[customer-service] 读取店铺列表失败: ${String((error as Error)?.message || error).slice(0, 160)}`)
       return
     }
-    for (let index = 0; index < ids.length; index += 2) {
+    /**
+     * 失败结果冷却 + 释放隐藏页（2026-11-02 内存优化）：
+     * 只有当前显示店铺和"上次有效/已到重试时间"的店铺才检查；其余店铺的隐藏页立即释放。
+     * 这样 4 家店里 3 家登录/页面异常时，不会长期常驻 3 个 150–300MB 的 Chromium 页面。
+     */
+    const displayedStoreId = this.runtime.displayedStoreId?.() || null
+    const latest = new Map<string, CustomerMessageCheck>()
+    try {
+      for (const item of this.list(undefined, 1000).items) latest.set(item.storeId, item)
+    } catch { /* 读不到历史就按全部到期处理（宁可多检查一次，不漏消息） */ }
+    const now = this.runtime.now()
+    const due: string[] = []
+    let skipped = 0
+    for (const id of ids) {
+      if (id === displayedStoreId) { due.push(id); continue }
+      const last = latest.get(id)
+      if (!last) { due.push(id); continue }
+      const delay = customerMonitorRetryDelayMs(last)
+      if (delay === 0 || now - last.capturedAt >= delay) due.push(id)
+      else {
+        skipped += 1
+        // 手动"刷新消息状态"可能正在用这个隐藏页：不能把它从下面抽走。
+        if (!this.inFlight.has(id)) closeCustomerServiceMonitorWindow(id)
+      }
+    }
+    if (skipped) logMain('info', `[customer-service] 本轮跳过 ${skipped} 家（上次结果仍在冷却期），已释放隐藏页`)
+    for (let index = 0; index < due.length; index += 2) {
       if (this.isPaused()) return
-      await Promise.all(ids.slice(index, index + 2).map(id => this.check(id).catch(error => {
+      await Promise.all(due.slice(index, index + 2).map(id => this.check(id).catch(error => {
         logMain('warn', `[customer-service] 检查失败 store=${id}: ${String((error as Error)?.message || error).slice(0, 160)}`)
       })))
     }
@@ -607,6 +654,16 @@ export class CustomerMessageMonitor {
     } catch { /* 清理失败不影响本次摘要返回 */ }
     if (this.isPaused(lifecycleVersion)) return this.lifecycleResult(storeId, platform, lifecycleVersion)
     this.emit(item)
+    /**
+     * 读不到有效结果（登录失效/改版/无计数证据/错误）时，隐藏页继续常驻没有任何收益：
+     * 下一轮会被冷却跳过，页面只会白占 150–300MB。非当前显示店铺立即释放；
+     * 当前显示店铺保留（用户可能正要在里面登录/排查）。
+     */
+    const displayedStoreId = this.runtime.displayedStoreId?.() || null
+    if (item.status !== 'AVAILABLE' && displayedStoreId !== storeId) {
+      closeCustomerServiceMonitorWindow(storeId)
+      logMain('info', `[customer-service] ${item.status}，已释放隐藏页 store=${storeId}`)
+    }
     return item
   }
 
@@ -641,6 +698,8 @@ export class CustomerMessageMonitor {
   private attachUnreadWatcher(storeId: string, platform: string, wc: WebContents): void {
     if (this.watchedWebContents.has(wc.id)) return
     this.watchedWebContents.add(wc.id)
+    // 隐藏页可能被"失败冷却"释放：销毁时把 id 移出集合，避免长期运行后 Set 只增不减。
+    try { wc.once('destroyed', () => { this.watchedWebContents.delete(wc.id) }) } catch { /* 已销毁 */ }
     try {
       wc.on('console-message', (event: unknown, ...legacy: unknown[]) => {
         // Electron 37+ 传事件对象；更早的版本是 (event, level, message, ...)

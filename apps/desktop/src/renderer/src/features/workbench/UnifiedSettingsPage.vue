@@ -17,7 +17,7 @@
         <div v-if="entryValidationError" class="settings-note error" role="alert">{{ entryValidationError }}</div>
         <div class="settings-group" data-test="settings-entry-platform">
           <div class="settings-group-head"><h3>平台首页地址</h3><span>地址栏「首页」按钮使用这里的覆盖值；输入框占位符即平台默认地址</span></div>
-          <div v-for="platform in platformDefs" :key="platform.name" class="settings-field-row" data-test="platform-home-row"><label><span class="plat-name">{{ platform.name }}</span><input v-model="homeDraft[platform.name]" :data-test="`home-url-${platform.name}`" :placeholder="platform.adminUrl" spellcheck="false" :disabled="homeLoading || !homeLoaded" /></label><button type="button" class="unified-button ghost" :disabled="homeLoading || entrySaving || !homeLoaded || !homeDraft[platform.name]" @click="homeDraft[platform.name] = ''"><img class="button-icon" :src="refreshIcon" alt="" />恢复默认</button></div>
+          <div v-for="platform in platformDefs" :key="platform.name" class="settings-field-row" data-test="platform-home-row"><label><span class="plat-name">{{ platform.name }}</span><input v-model="homeDraft[platform.name]" :data-test="`home-url-${platform.name}`" :placeholder="platformHomeUrl(platform.name) || platform.adminUrl" spellcheck="false" :disabled="homeLoading || !homeLoaded" /></label><button type="button" class="unified-button ghost" :disabled="homeLoading || entrySaving || !homeLoaded || !homeDraft[platform.name]" @click="homeDraft[platform.name] = ''"><img class="button-icon" :src="refreshIcon" alt="" />恢复默认</button></div>
         </div>
         <div class="settings-group" data-test="settings-entry-square">
           <div class="settings-group-head"><h3>达人广场地址</h3><span>仅对已有真实流程档案的平台开放；支持：{{ inviteProfiles.map(item => item.platform).join('、') || '暂无' }}</span></div>
@@ -256,6 +256,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { BrowserExtensionItem, BrowserExtensionListResult } from '@shared/contracts/extensions'
+import { platformHomeUrl } from '@shared/constants/platforms'
 import { useWorkspaceStore } from '../../stores/workspace'
 import settingsIcon from '../../assets/icons/nav-settings.svg'
 import configIcon from '../../assets/icons/settings-config.svg'

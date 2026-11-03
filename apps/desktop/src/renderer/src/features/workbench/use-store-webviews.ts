@@ -1,5 +1,6 @@
 import { reactive, ref, watch, type ComputedRef, type Ref } from 'vue'
 import { readGuestWebContentsId } from '@shared/view-state'
+import { platformHomeUrl } from '@shared/constants/platforms'
 import { useWorkspaceStore } from '../../stores/workspace'
 
 /**
@@ -207,7 +208,7 @@ async function openProxyPanel(diagnostic: ViewDiagnostic): Promise<void> {
 
 async function reopenHome(diagnostic: ViewDiagnostic): Promise<void> {
   const target = ws.stores.find(store => store.id === diagnostic.storeId)
-  const url = target ? (platformHomeUrls.value[target.platform] || target.adminUrl || '') : ''
+  const url = target ? (platformHomeUrls.value[target.platform] || platformHomeUrl(target.platform) || target.adminUrl || '') : ''
   if (!url) {
     ws.toast('这家店铺还没有配置首页地址，请先在地址栏输入并打开', 'error')
     return

@@ -204,6 +204,7 @@
         data-test="dashboard-browser-host"
       >
         <DashboardBrowserSurface
+          ref="browserSurfaceRef"
           :active="browserHostActive"
           @open-settings="openSettingsTab"
         />
@@ -221,7 +222,6 @@
       <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" @busy-change="imageStudioBusy = $event" />
       <UnifiedGraphicSellPage v-else-if="activePage === 'graphic-sell'" @go-home="navigateTo('overview')" @busy-change="graphicSellBusy = $event" />
       <ProductManagementPage v-else-if="activePage === 'products'" @navigate="navigateTo" @open-store="openStoreFromPage" />
-      <CreatorInvitePage v-else-if="activePage === 'creator-invite'" @open-store="openStoreFromPage" @navigate="handleInviteNavigate" />
       <UnifiedAppsPage v-else-if="activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-assistant="openAssistant" @open-invite="openCreatorInvite" />
       <DashboardOverviewPage
         v-else-if="activePage === 'overview'"
@@ -330,7 +330,6 @@ const UnifiedSettingsPage = defineAsyncComponent(() => import('./UnifiedSettings
 const UnifiedImageStudioPage = defineAsyncComponent(() => import('./UnifiedImageStudioPage.vue'))
 const UnifiedGraphicSellPage = defineAsyncComponent(() => import('./UnifiedGraphicSellPage.vue'))
 const ProductManagementPage = defineAsyncComponent(() => import('../products/ProductManagementPage.vue'))
-const CreatorInvitePage = defineAsyncComponent(() => import('../invite/CreatorInvitePage.vue'))
 const UnifiedAppsPage = defineAsyncComponent(() => import('./UnifiedAppsPage.vue'))
 import DashboardOverviewPage from './components/DashboardOverviewPage.vue'
 import { waitForWorkspaceReady } from './use-dashboard-overview'
@@ -400,7 +399,7 @@ const settingsNav = { label: '设置中心', glyph: '⚙', icon: settingsIcon }
 const PAGE_TITLES: Record<string, string> = {
   overview: '经营总览', browser: '店铺工作台', products: '商品管理', stores: '店铺管理',
   ai: 'AI 创作', analytics: '数据分析', invoices: '发票中心', tax: '涉税信息', apps: '应用中心', settings: '设置中心',
-  'image-studio': '图片工作台', 'creator-invite': '达人邀约', 'graphic-sell': '图文带货'
+  'image-studio': '图片工作台', 'graphic-sell': '图文带货'
 }
 const pageTitle = computed(() => PAGE_TITLES[activePage.value] || '经营总览')
 /**
@@ -418,7 +417,7 @@ function tickClock() {
   const pad = (n: number) => String(n).padStart(2, '0')
   nowLabel.value = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
-type DashboardPage = 'overview' | 'browser' | 'products' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'image-studio' | 'creator-invite' | 'graphic-sell'
+type DashboardPage = 'overview' | 'browser' | 'products' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'image-studio' | 'graphic-sell'
 type SettingsTab = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'
 const activePage = ref<DashboardPage>('overview')
 /** 生图请求仍在运行时保留图片工作台，避免卸载页面丢失返回结果。 */
@@ -473,10 +472,24 @@ const notifications = computed<WorkbenchNotificationItem[]>(() => buildWorkbench
   customerUnread: customerUnreadTotal.value
 }))
 const notificationCount = computed(() => notifications.value.length)
-function runNotification(item: WorkbenchNotificationItem) {
+const browserSurfaceRef = ref<{ openInvitePanel: (storeId?: string | null) => Promise<void> } | null>(null)
+/**
+ * 通知点击：客服走抽屉，达人邀约**不再有独立页**——切到店铺工作台并打开右侧邀约面板。
+ * 面板没挂载时兜底只切店铺，至少让用户看到目标店铺。
+ */
+async function runNotification(item: WorkbenchNotificationItem) {
   notificationOpen.value = false
-  if (item.target === 'customer-service') emit('open-customer-service')
-  else navigateTo('creator-invite')
+  if (item.target === 'customer-service') {
+    emit('open-customer-service')
+    return
+  }
+  navigateTo('browser')
+  await nextTick()
+  if (browserSurfaceRef.value) {
+    await browserSurfaceRef.value.openInvitePanel(item.storeId || null)
+  } else if (item.storeId) {
+    try { await ws.showStore(item.storeId) } catch { /* 店铺可能已删除 */ }
+  }
 }
 const otherStoreOptions = computed(() => ws.stores.filter(store => store.id !== storeContext.store?.id))
 const canOpenStandalone = computed(() => !!storeContext.store && ws.displayedStoreId === storeContext.store.id && !!ws.activeTab)
@@ -572,12 +585,8 @@ function navigateTo(page: DashboardPage) {
   else if (page === 'analytics') activeNav.value = '数据分析'
   else if (page === 'invoices') activeNav.value = '发票中心'
   else if (page === 'tax') activeNav.value = '涉税信息'
-  else if (page === 'apps' || page === 'creator-invite') activeNav.value = '应用中心'
+  else if (page === 'apps') activeNav.value = '应用中心'
   else if (page === 'image-studio' || page === 'graphic-sell') activeNav.value = 'AI 创作'
-}
-/** 达人邀约页内的返回/去店铺动作：页面只发语义，不在子组件里猜主路由。 */
-function handleInviteNavigate(page: string) {
-  if (page === 'apps' || page === 'stores') navigateTo(page)
 }
 /** 设置中心页签白名单：环境面板等入口只允许跳到已知页签，未知值回落到默认「平台入口」 */
 const SETTINGS_TABS: SettingsTab[] = ['entry', 'ai', 'security', 'extensions', 'maintenance', 'about']

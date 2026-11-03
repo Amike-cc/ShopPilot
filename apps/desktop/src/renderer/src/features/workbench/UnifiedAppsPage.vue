@@ -15,14 +15,13 @@ import storesAppIcon from '../../assets/icons/app-stores.svg'
 import analyticsAppIcon from '../../assets/icons/app-analytics.svg'
 import invoicesAppIcon from '../../assets/icons/app-invoices.svg'
 import taxAppIcon from '../../assets/icons/app-tax.svg'
-import inviteAppIcon from '../../assets/icons/invite-creator.svg'
 import graphicSellAppIcon from '../../assets/icons/settings-square.svg'
 import forwardIcon from '../../assets/generated/ui-icons/forward-gen.png'
 import assistantArt from '../../assets/generated/ai-assistant-generated.png'
 import assistantOpenIcon from '../../assets/generated/ui-icons/assistant-open-gen.png'
 
 type Mode = 'ai' | 'apps'
-type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'image-studio' | 'graphic-sell' | 'products' | 'creator-invite'
+type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'image-studio' | 'graphic-sell' | 'products'
 type AppCat = 'store' | 'insight' | 'create' | 'tool'
 type AppCatKey = 'all' | AppCat
 type AppTone = 'violet' | 'blue' | 'cyan' | 'orange' | 'indigo' | 'green' | 'pink' | 'slate' | 'amber'
@@ -76,7 +75,6 @@ const appCategories: Array<{ key: AppCatKey; label: string }> = [
 /** 只列真实存在的页面；没有的模块一律不摆卡片，避免点进去是空壳 */
 const appLinks: AppLink[] = [
   { key: 'stores', label: '店铺管理', description: '管理店铺、平台与登录状态，托管本机浏览器工作区。', note: '平台登录 · 浏览器工作区', cat: 'store', catLabel: '店铺运营', tone: 'blue', icon: storesAppIcon, page: 'stores' },
-  { key: 'invite', label: '达人邀约', description: '按店铺查看邀约批次、逐人记录与停止原因；配置与发送沿用平台实测流程。', note: '批次 · 逐人记录 · 停止原因', cat: 'store', catLabel: '店铺运营', tone: 'amber', icon: inviteAppIcon, page: 'creator-invite' },
   { key: 'products', label: '商品管理', description: '查询、编辑与批量发布预检，支持草稿、回收站与 CSV。', note: '批量发布 · 回收站', cat: 'store', catLabel: '店铺运营', tone: 'green', icon: productsAppIcon, page: 'products' },
   { key: 'analytics', label: '数据分析', description: '查看真实快照、经营指标与数据采集入口。', note: '真实快照 · 采集口径', cat: 'insight', catLabel: '数据洞察', tone: 'violet', icon: analyticsAppIcon, page: 'analytics' },
   { key: 'invoices', label: '发票中心', description: '汇总待开票记录并导出 CSV，按主体与店铺核对。', note: '待开票 · CSV 导出', cat: 'insight', catLabel: '数据洞察', tone: 'orange', icon: invoicesAppIcon, page: 'invoices' },

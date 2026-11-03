@@ -3,7 +3,7 @@
  * 管理每个店铺的独立 Chromium session partition
  */
 
-import { app, session, Session, WebContents } from 'electron'
+import { app, dialog, session, Session, WebContents, BrowserWindow } from 'electron'
 import { isAllowedCustomerServiceUrl } from '@shared/contracts/customer-service'
 import { storeSessionPartition } from '@shared/contracts/shop-session'
 import { getDatabase } from '../db/database'
@@ -81,10 +81,21 @@ function highEntropyHeaders(ch: NonNullable<ReturnType<typeof parseUaClientHints
   return { architecture: 'x86', bitness: '64', platformVersion: '10.0.0', wow64: false }
 }
 
-/** 店铺名转安全文件名片段 */
-function sanitizeForFilename(name: string): string {
-  return name.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40)
-}
+/** 视频扩展名（2026-11-02）：命中的下载弹「另存为」对话框由用户选位置，其余自动落盘 */
+const VIDEO_DOWNLOAD_EXT_RE = /\.(mp4|webm|mov|m4v|avi|mkv|flv|wmv|mpg|mpeg|3gp|ts)$/i
+
+/**
+ * 视频「一批只问一次」状态（2026-11-02）：
+ *   · videoFolder / expiresAt —— 用户选定的文件夹会话，最后一个视频后 60s 过期；
+ *   · videoFolderAsking —— 文件夹选择框打开期间到达的后续视频挂起等待；
+ *   · videoPendingNames —— 挂起中的 url→原始文件名（确认后随批重发）；
+ *   · videoReissueNames —— 重发时恢复原始文件名（downloadURL 会丢 download 属性）。
+ */
+const VIDEO_FOLDER_SESSION_MS = 60 * 1000
+const videoFolder: { dir: string; expiresAt: number } = { dir: '', expiresAt: 0 }
+let videoFolderAsking = false
+const videoPendingNames = new Map<string, string>()
+const videoReissueNames = new Map<string, string>()
 
 /** 唯一放行的权限：剪贴板**写入**（页面的"复制"按钮要用）。读取一律拒绝——
  *  剪贴板里可能是用户刚复制的密码/验证码/订单信息，页面没有理由能读到它。
@@ -435,37 +446,139 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
   // 一次下载写 N 条 downloads 记录 + N 次 mkdirSync（2026-09-28 审查确认）。
   if (!(sess as any).__downloadHooked) {
     (sess as any).__downloadHooked = true
-    sess.on('will-download', (_event, item, webContents) => {
+    sess.on('will-download', (event, item, webContents) => {
     try {
-      const db = getDatabase()
-      const store = db.prepare('SELECT name FROM stores WHERE id = ?').get(storeId) as { name: string } | undefined
-      const storeName = sanitizeForFilename(store?.name || storeId)
+      const pageUrl = (() => { try { return webContents.getURL() } catch { return undefined } })()
+      const suggested = safeDownloadName(item.getFilename())
+      const mime = (() => { try { return String(item.getMimeType() || '') } catch { return '' } })()
+      /** 视频（2026-11-02 用户要求）：弹系统「另存为」让用户选保存位置，不再自动落盘。 */
+      const isVideo = /^video\//i.test(mime) || VIDEO_DOWNLOAD_EXT_RE.test(suggested)
 
-      const downloadDir = join(app.getPath('userData'), 'stores', storeId, 'downloads')
-      mkdirSync(downloadDir, { recursive: true })
+      if (isVideo) {
+        /**
+         * 「一批只问一次」（2026-11-02 用户要求）：
+         *   · 一批的第一个视频 → 弹一次**文件夹**选择框；确认后该批全部自动落进所选文件夹；
+         *   · 对话框打开期间到达的后续视频 → preventDefault 挂起，确认后经 downloadURL 重发；
+         *   · 文件夹会话持续到「最后一个视频后 60 秒」，期内新视频免问直接落盘（窗口随活动顺延）——
+         *     批量下载中间隔几十秒也在同一批；超过窗口视为新一批，再问一次。
+         *   · 用户取消文件夹框 → 本批全部不下载、不留记录。
+         *
+         * 为什么重发而不是暂停：setSavePath 只允许在 will-download 回调同步调用（Electron 文档），
+         * 异步选完文件夹再设不生效；preventDefault 后用 downloadURL 重发是唯一可靠路径。
+         * 重发会丢 `download` 属性的预填文件名，所以用 videoPendingNames 把原始文件名带过去。
+         */
+        const url = item.getURL()
+        const now = Date.now()
+        const sessionActive = !!videoFolder.dir && now < videoFolder.expiresAt
 
-      // 文件名加店铺前缀，重名追加序号 - §5.9
+        // 会话期内（或重发的批次成员）：直接落进已选文件夹
+        const rememberedName = videoReissueNames.get(url)
+        if (rememberedName || sessionActive) {
+          videoReissueNames.delete(url)
+          videoFolder.expiresAt = now + VIDEO_FOLDER_SESSION_MS
+          const dir = videoFolder.dir
+          mkdirSync(dir, { recursive: true })
+          const original = safeDownloadName(rememberedName || suggested)
+          let fileName = original
+          let target = join(dir, fileName)
+          let seq = 1
+          while (existsSync(target)) {
+            const parsed = parse(original)
+            fileName = `${parsed.name}(${seq})${parsed.ext}`
+            target = join(dir, fileName)
+            seq++
+          }
+          item.setSavePath(target)
+          const downloadId = recordDownload(storeId, fileName, target, pageUrl)
+          emitDownloadCreated({ id: downloadId, storeId, fileName, filePath: target })
+          item.on('updated', (_e2, state) => {
+            if (state !== 'progressing') updateDownloadState(downloadId, 'interrupted')
+            emitDownloadProgress({
+              id: downloadId, storeId,
+              state: state === 'progressing' ? 'progressing' : 'interrupted',
+              receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes()
+            })
+          })
+          item.on('done', (_e2, state) => {
+            const finalState = state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted'
+            if (finalState === 'completed') updateDownloadState(downloadId, 'completed', item.getReceivedBytes())
+            else updateDownloadState(downloadId, finalState)
+            emitDownloadProgress({
+              id: downloadId, storeId, state: finalState,
+              receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes()
+            })
+            if (finalState !== 'completed') logMain('warn', `[download] ${finalState} store=${storeId} file=${fileName}`)
+          })
+          return
+        }
+
+        // 对话框已开着：本条挂起，等文件夹选定后随批重发
+        if (videoFolderAsking) {
+          event.preventDefault()
+          videoPendingNames.set(url, suggested)
+          return
+        }
+
+        // 新一批的第一个视频：问一次文件夹
+        event.preventDefault()
+        videoPendingNames.set(url, suggested)
+        videoFolderAsking = true
+        void (async () => {
+          try {
+            const parent = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+            const result = await dialog.showOpenDialog(parent, {
+              title: '选择视频保存文件夹（本批视频都会存到这里）',
+              defaultPath: videoFolder.dir || join(app.getPath('userData'), 'stores', storeId, 'downloads'),
+              properties: ['openDirectory', 'createDirectory']
+            })
+            if (result.canceled || !result.filePaths?.length) {
+              const count = videoPendingNames.size
+              videoPendingNames.clear()
+              videoFolderAsking = false
+              logMain('info', `[download] 视频保存文件夹未选择（用户取消），${count} 个视频未下载`)
+              return
+            }
+            videoFolder.dir = result.filePaths[0]
+            videoFolder.expiresAt = Date.now() + VIDEO_FOLDER_SESSION_MS
+            // 重发：本条 + 对话框期间到达的后续条目，全部免问落进所选文件夹
+            const entries = [...videoPendingNames.entries()]
+            videoPendingNames.clear()
+            for (const [u, name] of entries) videoReissueNames.set(u, name)
+            videoFolderAsking = false
+            for (const [u] of entries) sess.downloadURL(u)
+          } catch (err) {
+            videoPendingNames.clear()
+            videoFolderAsking = false
+            logMain('error', `[download] 视频文件夹选择失败 store=${storeId}: ${String((err as Error)?.message || err).slice(0, 160)}`)
+          }
+        })()
+        return
+      }
+
+      // 非视频：沿用自动落盘。重名追加序号（文件名**不带店铺前缀**，2026-11-02 用户要求：
+      // 下载目录本身就按店铺分目录，前缀在文件名里是冗余信息）。
       //
       // 先做 basename + 字符清洗：`getFilename()` 是平台（Content-Disposition）给的名字，
       // 上游没有"已清洗"的承诺，带 `..\` 或非法字符就会写出下载目录之外或落盘失败。
       // 同时挡掉 Windows 保留名（CON/NUL/COM1…）与尾随点/空格。
-      const original = safeDownloadName(item.getFilename())
-      let prefixed = original.startsWith(storeName + '_') ? original : `${storeName}_${original}`
-      let target = join(downloadDir, prefixed)
+      const downloadDir = join(app.getPath('userData'), 'stores', storeId, 'downloads')
+      mkdirSync(downloadDir, { recursive: true })
+      const original = suggested
+      let fileName = original
+      let target = join(downloadDir, fileName)
       let seq = 1
       while (existsSync(target)) {
         const parsed = parse(original)
-        prefixed = `${storeName}_${parsed.name}(${seq})${parsed.ext}`
-        target = join(downloadDir, prefixed)
+        fileName = `${parsed.name}(${seq})${parsed.ext}`
+        target = join(downloadDir, fileName)
         seq++
       }
 
       item.setSavePath(target)
 
-      const pageUrl = (() => { try { return webContents.getURL() } catch { return undefined } })()
-      const downloadId = recordDownload(storeId, prefixed, target, pageUrl)
+      const downloadId = recordDownload(storeId, fileName, target, pageUrl)
       // 新下载要让界面立刻看到（此前 BROWSER_DOWNLOAD_CREATED 两侧皆空＝死事件）
-      emitDownloadCreated({ id: downloadId, storeId, fileName: prefixed, filePath: target })
+      emitDownloadCreated({ id: downloadId, storeId, fileName, filePath: target })
 
       item.on('updated', (_e2, state) => {
         if (state !== 'progressing') updateDownloadState(downloadId, 'interrupted')
@@ -489,7 +602,7 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
           receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes()
         })
         if (finalState !== 'completed') {
-          logMain('warn', `[download] ${finalState} store=${storeId} file=${prefixed}`)
+          logMain('warn', `[download] ${finalState} store=${storeId} file=${fileName}`)
         }
       })
     } catch (err) {

@@ -27,6 +27,8 @@ export interface InviteTaskConfigSnapshot {
   category3?: string
   levels?: string[]
   count?: number
+  /** 本次运行的总量上限（每批 count 位 × 轮次收敛到这一个数）；缺省 200 */
+  totalCap?: number
   script?: string
   scriptMode?: 'manual' | 'ai'
   benefits?: string[]
@@ -93,6 +95,11 @@ export function normalizeInviteTaskConfig(flow: 'batch-list' | 'assist-form', sa
       category3: text(record.category3, 40),
       levels: list(record.levels, 40),
       count: Number.isFinite(count) ? Math.round(count) : undefined,
+      /**
+       * 本次总量：旧配置没有这个字段 → 用 200 兜底（5 批 × 每批 40）。
+       * 不能沿用"每批 × 20 轮"当默认：那会让额度预留凭空放大 20 倍，日上限形同虚设。
+       */
+      totalCap: Number.isFinite(Number(record.totalCap)) ? Math.max(1, Math.min(500, Math.round(Number(record.totalCap)))) : 200,
       script: text(record.script, 2000),
       scriptMode,
       benefits: list(record.benefits, 120),
@@ -204,20 +211,41 @@ export function inviteTaskIssues(input: { profile: InviteProfile; config: Invite
     }
     return issues
   }
-  if (profile.levels.length > 0 && !(config.levels || []).length) issues.push('达人等级未选择')
-  const benefitCount = boundedPicks(config.benefits).length
-  if (profile.benefitsMax != null && benefitCount > profile.benefitsMax) {
-    issues.push(`${profile.benefitsLabelText || '权益'}最多选择 ${profile.benefitsMax} 项`)
+  /**
+   * 逐人沟通平台（抖店 2026-10-21 改版）：没有抽屉表单，等级/权益/核心优势/联系方式
+   * 都不参与执行。这些字段仍留在快照里给旧流程/回滚用，但**不能拿来拦启动**——
+   * 否则用户会被要求填一堆"填了也没用"的东西。
+   */
+  if (!profile.contactOnly) {
+    if (profile.levels.length > 0 && !(config.levels || []).length) issues.push('达人等级未选择')
+    const benefitCount = boundedPicks(config.benefits).length
+    if (profile.benefitsMax != null && benefitCount > profile.benefitsMax) {
+      issues.push(`${profile.benefitsLabelText || '权益'}最多选择 ${profile.benefitsMax} 项`)
+    }
+    const strengthMax = profile.strengths?.maxSelect
+    if (strengthMax != null && boundedPicks(config.strengths).length > strengthMax) {
+      issues.push('核心优势最多选择 ' + strengthMax + ' 项')
+    }
+    const contactsOk = hasRequiredBatchContacts(profile, { contact: config.batchContact, phone: config.batchPhone, wechat: config.batchWechat })
+    if (!contactsOk) issues.push('抽屉必填的联系方式未填写（联系人/手机号/微信号）')
   }
-  const strengthMax = profile.strengths?.maxSelect
-  if (strengthMax != null && boundedPicks(config.strengths).length > strengthMax) {
-    issues.push('核心优势最多选择 ' + strengthMax + ' 项')
-  }
-  const contactsOk = hasRequiredBatchContacts(profile, { contact: config.batchContact, phone: config.batchPhone, wechat: config.batchWechat })
-  if (!contactsOk) issues.push('抽屉必填的联系方式未填写（联系人/手机号/微信号）')
   const count = Number(config.count)
   const minCount = Math.max(1, Math.min(profile.maxBatch, profile.minSelect || 1))
   if (!Number.isInteger(count) || count < minCount || count > profile.maxBatch) issues.push(`邀约数量需为 ${minCount}～${profile.maxBatch} 的整数`)
+  /**
+   * 本次总量必须显式、有界，且不小于每批人数——它是日额度预留、批次进度和 loop 收工的唯一口径。
+   * 逐人沟通（抖店）一位一轮，count 本身就是总量，没有"每批"概念，不校验 totalCap。
+   */
+  if (!profile.contactOnly) {
+    const totalCap = Number(config.totalCap)
+    if (!Number.isInteger(totalCap) || totalCap < 1 || totalCap > 500) {
+      issues.push(`「本次最多邀约」需为 1～500 的整数（当前 ${config.totalCap === undefined ? '未设置' : String(config.totalCap)}）`)
+    } else {
+      if (Number.isInteger(count) && totalCap < count) issues.push(`「本次最多邀约」不能小于每批人数（每批 ${count} 位）`)
+      const dailyCap = Number(config.dailyCap)
+      if (Number.isFinite(dailyCap) && dailyCap > 0 && totalCap > dailyCap) issues.push(`「本次最多邀约」不能超过日上限 ${dailyCap} 位`)
+    }
+  }
   return issues
 }
 
@@ -231,8 +259,11 @@ export function buildInviteTaskPayload(input: { profile: InviteProfile; storeId:
       category: config.category || '',
       subcategory: config.subcategory || '',
       category3: config.category3 || '',
+      // 达人类型（抖店逐人沟通流）：微信/抖店口径都接受，步骤构造里统一折算
+      finderType: config.finderType || '',
       levels: (config.levels || []).filter(level => profile.levels.includes(level)),
       count: Math.max(1, Math.min(Number(config.count), profile.maxBatch)),
+      totalCap: Math.max(1, Math.min(500, Math.round(Number(config.totalCap) || 200))),
       script: config.script || '',
       scriptMode: config.scriptMode || 'manual',
       // Shared/Main 也要执行平台上限，不能只依赖 Renderer 的 watch。
@@ -261,7 +292,7 @@ export function buildInviteTaskPayload(input: { profile: InviteProfile; storeId:
       config.category
         ? config.category + (config.subcategory ? '/' + config.subcategory : '') + (config.subcategory && config.category3 ? '/' + config.category3 : '')
         : '全部'
-    } · 最多 ${batch.count} 位`
+    } · 本次最多 ${profile.contactOnly ? batch.count : batch.totalCap} 位`
     return { name, storeScope: storeId, steps: buildInviteSteps(profile, { batch }, squareUrl), kind: 'creator_invite', ...(source ? { source } : {}), ...(campaignId ? { campaignId } : {}) }
   }
   const assist: AssistInviteOptions = {

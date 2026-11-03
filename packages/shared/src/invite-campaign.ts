@@ -18,6 +18,8 @@ export const INVITE_CAMPAIGN_STATUSES = [
   /** 已排期，等主进程调度器到点拉起（2026-10-20 定时邀约） */
   'scheduled',
   'running',
+  /** 运行停在人工确认点（任务里带 waitForUserConfirmation 步骤）：不是失败，等人点确认 */
+  'waiting',
   'paused',
   'completed',
   'exhausted',

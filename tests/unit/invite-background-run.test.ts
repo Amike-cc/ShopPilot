@@ -21,12 +21,17 @@ const LIFECYCLE = read('apps/desktop/src/main/tasks/task-runner-lifecycle.ts')
 const KINDS = read('apps/desktop/src/main/tasks/task-kinds.ts')
 const CORE = read('apps/desktop/src/main/browser/window-browser-core.ts')
 const BACKGROUND = read('apps/desktop/src/main/browser/background-page.ts')
-const PAGE = read('apps/desktop/src/renderer/src/features/invite/CreatorInvitePage.vue')
+const PAGE = read('apps/desktop/src/renderer/src/features/invite/InvitePanelView.vue')
 const HOOK = read('apps/desktop/src/renderer/src/features/workbench/use-creator-invite.ts')
+const APPS = read('apps/desktop/src/renderer/src/features/workbench/UnifiedAppsPage.vue')
+const DASHBOARD = read('apps/desktop/src/renderer/src/features/workbench/DashboardView.vue')
+const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue')
 // 2026-10-20 P2 第二半：组合式函数已拆成 state + 5 个领域模块；这里按拆分后的真实位置断言。
 const STATE = read('apps/desktop/src/renderer/src/features/invite/composables/invite-state.ts')
 const RUN = read('apps/desktop/src/renderer/src/features/invite/composables/use-invite-run.ts')
 const VIEW = read('apps/desktop/src/renderer/src/features/invite/InvitePanelView.vue')
+const STEP_EXECUTOR = read('apps/desktop/src/main/tasks/task-step-executor.ts')
+const STEP_DOM = read('apps/desktop/src/main/tasks/task-step-dom.ts')
 
 describe('浏览器层：只有通用后台页，没有业务概念', () => {
   it('window-browser-core 不再出现邀约/creator_invite', () => {
@@ -89,15 +94,27 @@ describe('任务类型注册表：引擎只认 surface 与钩子', () => {
   })
 })
 
-describe('独立页：就地配置并启动，不再跳回店铺浏览器', () => {
-  it('页面里有启动面板、店铺下拉与共享视图，不再调用 emit(open-config)', () => {
-    expect(PAGE).toContain('data-test="invite-v2-launcher"')
-    expect(PAGE).toContain('data-test="invite-v2-launcher-store"')
-    expect(PAGE).toContain('<InvitePanelView')
-    expect(PAGE).not.toContain("emit('open-config'")
+describe('入口收敛：只剩店铺浏览器右侧边栏（2026-10-25）', () => {
+  it('应用中心不再有达人邀约卡片与路由', () => {
+    expect(APPS).not.toContain("page: 'creator-invite'")
+    expect(DASHBOARD).not.toContain('CreatorInvitePage')
+    expect(DASHBOARD).not.toContain("navigateTo('creator-invite')")
   })
 
-  it('启动使用页面自己的店铺（显式 storeId），不跟随浏览器当前店铺', () => {
+  it('右侧边栏保留邀约面板，并暴露给通知/外部入口', () => {
+    expect(SURFACE).toContain("key: 'invite'")
+    expect(SURFACE).toContain("openPanel('invite')")
+    expect(SURFACE).toContain('defineExpose({ openInvitePanel })')
+    expect(PAGE).toContain('data-test="invite-panel"')
+    expect(PAGE).toContain('data-test="invite-start"')
+  })
+
+  it('通知点击打开对应店铺的侧栏面板，而不是已删除的独立页', () => {
+    expect(DASHBOARD).toContain('openInvitePanel(item.storeId')
+    expect(DASHBOARD).not.toContain('creator-invite')
+  })
+
+  it('启动使用当前店铺（显式 storeId），不跟随浏览器当前店铺', () => {
     expect(HOOK).toContain('const currentStoreId = options.storeId ?? computed(() => ws.displayedStoreId)')
     expect(STATE).toContain('const currentStoreId = context.storeId')
     const fn = RUN.match(/async function startInvite[\s\S]*?\n {2}\}/)![0]
@@ -108,5 +125,32 @@ describe('独立页：就地配置并启动，不再跳回店铺浏览器', () =
   it('界面明确告知"后台运行、不影响浏览"', () => {
     expect(VIEW).toContain('data-test="invite-backend-note"')
     expect(VIEW).toContain('不会打开或切换你的浏览器页面')
+  })
+
+  it('禁用态候选先记入已访问再报错：loop 的 advance 才能换下一位而不是原地打转', () => {
+    const block = STEP_EXECUTOR.match(/if \(hit\.reason === 'DISABLED'\) \{[\s\S]*?\n\s*\}/)?.[0] || ''
+    expect(block).toContain('unvisited && hit.rowKey')
+    expect(block).toContain('run.visitedRows.add(hit.rowKey)')
+    // 「当前页都处理过」必须有自己的码，才能交给 onCode 滚动后重试
+    expect(STEP_EXECUTOR).toContain('const allVisitedCode')
+    expect(STEP_EXECUTOR).toContain('${allVisitedCode}: 当前页的候选都已处理过')
+    // 禁用原因优先：额度用完必须收工，已邀过必须跳过，不能一律按 disabledCode 处理
+    expect(STEP_EXECUTOR).toContain('const noticeKind = classifyInviteBlockNotice(hit.disabledReason)')
+    expect(STEP_EXECUTOR).toContain("noticeKind === 'quota-exhausted'")
+    expect(STEP_EXECUTOR).toContain("noticeKind === 'already-invited'")
+    // 页面滚动恢复不是"跳过某位达人"，不能把批次 skipped 计数打高
+    expect(STEP_EXECUTOR).toContain('const pageRecovery')
+    expect(STEP_EXECUTOR).toContain('if (!pageRecovery) run.inviteSkipped++')
+    // 滚动换屏连续 50 屏无新候选时干净收尾，而不是按平台故障失败
+    expect(STEP_EXECUTOR).toContain('连续滚动 ${recovered} 屏仍没有新的可沟通候选')
+  })
+
+  it('7 天/黑名单支持按昵称相等匹配（抖店短昵称不再误杀）', () => {
+    expect(STEP_DOM).toContain("skipTextsMatch !== 'exact-nickname'")
+    expect(STEP_DOM).toContain('normalizeNick(nicknameOf(e.el))')
+    expect(STEP_DOM).toContain('own === normalizeNick(t)')
+    // 固定列镜像行必须先归一到主表行，否则同一达人会有两个 rowKey（重复点击风险）
+    expect(STEP_DOM).toContain('const mainRowOf')
+    expect(STEP_DOM).toContain('mainRowOf(rowOf(el))')
   })
 })

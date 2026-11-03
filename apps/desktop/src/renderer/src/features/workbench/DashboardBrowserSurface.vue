@@ -218,7 +218,7 @@
         </div>
 
         <div v-else class="dashboard-browser-panel-body invite-panel-body">
-          <div class="browser-panel-heading"><strong>达人邀约</strong><button type="button" @click="ws.refreshTasks()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button></div>
+          <div class="browser-panel-heading"><strong>达人邀约</strong><button type="button" @click="inviteController.refreshInvite()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button></div>
           <!--
             配置 + 实时日志是独立组件：同一份视图也用在「应用中心 → 达人邀约」独立页。
             达人邀约在后端隐藏窗口运行，这里只是配置入口，不再承担"打开店铺浏览器"的前置条件。
@@ -322,6 +322,7 @@ import { canCheckLogin, describeLoginCheckResult, loginCheckBlockedReason, login
 // 「视图体检」读同一份定义，避免两处各写一遍、各错一半
 import { BROWSER_VIEW_STATE_SENTENCE, classifyLoadFailure } from '@shared/view-state'
 import { looksLikePlaceholderStoreName } from '@shared/store-name'
+import { platformHomeUrl } from '@shared/constants/platforms'
 import { useBrowserTabs } from './use-browser-tabs'
 
 import { useCreatorInvite } from './use-creator-invite'
@@ -393,7 +394,10 @@ function onTabCloseRequested(payload: { storeId?: string, tabId?: string, mode?:
 
 const store = computed(() => ws.stores.find(item => item.id === ws.displayedStoreId) || null)
 const platformHomeUrls = ref<Record<string, string>>({})
-const homeUrl = computed(() => store.value ? platformHomeUrls.value[store.value.platform] || store.value.adminUrl || '' : '')
+const homeUrl = computed(() => store.value
+  // 优先级：用户在设置中心按平台覆盖 → 平台档案声明的具体首页（如抖店 trade/dashboard）→ 店铺后台地址
+  ? platformHomeUrls.value[store.value.platform] || platformHomeUrl(store.value.platform) || store.value.adminUrl || ''
+  : '')
 type PanelKey = 'bookmarks' | 'downloads' | 'env' | 'invite'
 const panel = ref<PanelKey>('invite')
 const panelOpen = ref(true)
@@ -630,6 +634,18 @@ async function setPanelOpen(next: boolean) {
   if (!result.ok) ws.toast(`侧栏状态保存失败：${result.error.message}`, 'error')
 }
 function openPanel(next: PanelKey) { panel.value = next; void setPanelOpen(true); selectPanel(next) }
+
+/**
+ * 打开右侧「达人邀约」面板（应用中心已不再提供独立页，通知/外部入口统一走这里）。
+ * 指定店铺时先切到那家店；切换失败也要把面板打开，不静默什么都不做。
+ */
+async function openInvitePanel(storeId?: string | null): Promise<void> {
+  if (storeId && ws.displayedStoreId !== storeId) {
+    try { await ws.showStore(storeId) } catch { /* 店铺可能已删除：仍然切面板，由面板如实报错 */ }
+  }
+  openPanel('invite')
+}
+defineExpose({ openInvitePanel })
 function onBrowserKeydown(event: KeyboardEvent) {
   inputDiagnostic('keydown', describeKeyboardEvent(event))
   if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'b') { event.preventDefault(); togglePanel(); return }
@@ -1182,10 +1198,9 @@ onBeforeUnmount(() => {
   .dashboard-tabs-batch { position: absolute; right: 8px; top: 8px; z-index: 3; }
   .dashboard-browser-panel-tabs button { font-size: 9px; }
 }
-/* ===== 达人邀约侧栏重构（2026-10-21）：紧凑步骤导航 + 单步显示 + 日志折叠 =====
-   侧栏容器是 .invite-panel-body（InvitePanelView 不传 step 时启用内置导航）。
-   注意独立页的样式挂在 invite-page.css 的 .invite-page 下，两处作用域不同。 */
-.invite-panel-body .invite-panel-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 8px; }
+/* ===== 达人邀约侧栏（2026-10-25 起唯一入口）：紧凑步骤导航 + 单步显示 + 日志折叠 =====
+   应用中心的独立邀约页已下线，样式只保留侧栏这一处。 */
+.invite-panel-body .invite-panel-steps { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; margin-top: 8px; }
 .invite-panel-body .invite-panel-step { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 4px; border: 1px solid var(--dash-border); border-radius: 7px; background: var(--dash-surface); color: var(--dash-text-muted); font-size: 10px; font-weight: 600; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
 .invite-panel-body .invite-panel-step b { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--dash-border); color: var(--dash-text); font-size: 9px; }
 .invite-panel-body .invite-panel-step:hover { border-color: var(--dash-text-muted); }
@@ -1197,5 +1212,10 @@ onBeforeUnmount(() => {
 .invite-panel-body .invite-live-toggle:focus-visible { outline: 2px solid rgba(59,130,246,.55); outline-offset: 2px; border-radius: 4px; }
 .invite-panel-body .invite-live-caret { margin-left: auto; font-size: 9px; color: var(--dash-text-muted); }
 .invite-panel-body .invite-live-sec.collapsed { padding-bottom: 6px; }
+/* 邀约记录视图（2026-10-21 用户要求：不显示步骤，显示每位达人的处理结果） */
+.invite-panel-body .invite-live-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 4px; font-size: 10px; color: var(--dash-text-soft); }
+.invite-panel-body .log-line.log-ok { color: #027a48; }
+.invite-panel-body .log-line.log-skip { color: #b54708; }
+.invite-panel-body .log-line.log-fail { color: #b42318; }
 </style>
 

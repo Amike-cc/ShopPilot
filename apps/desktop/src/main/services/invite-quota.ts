@@ -56,17 +56,31 @@ export function getInviteQuota(storeId: string, platform: string): InviteQuota {
   } catch { used = 0 }
   try {
     /**
-     * 运行中/排队的批次：target_count 是"这一批计划发多少"，不是已发数。
-     * 只算今天创建的批次，避免昨天的长跑运行把今天的额度全占掉。
+     * 运行中/排队的批次：target_count 是"整批计划总量"，不是已发数。
+     *
+     * 旧实现只算"今天创建"的批次，且直接预留整个 target：
+     *   · 昨晚 23:50 起跑、今天继续发的批次 → reserved=0，今天可以再起一整额（跨天突破日上限）；
+     *   · 今天创建的批次已发 10/40 → used=10 且 reserved=40，重复占用（过早拦新批次）。
+     * 现在按"活动批次的剩余容量"预留：max(0, target_count - 该批次累计已发)，不再按创建日过滤。
      */
     const row = db.prepare(`
-      SELECT COALESCE(SUM(c.target_count), 0) AS n
+      SELECT COALESCE(SUM(
+        CASE WHEN c.target_count > COALESCE(rec.sent, 0)
+          THEN c.target_count - COALESCE(rec.sent, 0)
+          ELSE 0 END
+      ), 0) AS n
       FROM invite_campaigns c
       JOIN task_runs r ON r.id = c.run_id
+      LEFT JOIN (
+        SELECT campaign_id, COUNT(*) AS sent
+        FROM invite_records
+        WHERE campaign_id IS NOT NULL
+          AND status IN ('sent','inviting','accepted','rejected','expired')
+        GROUP BY campaign_id
+      ) rec ON rec.campaign_id = c.id
       WHERE c.store_id = ? AND c.platform = ?
-        AND c.created_at >= ?
         AND r.status IN ('queued','running','paused','waiting_confirmation')
-    `).get(storeId, platform, start) as { n?: number } | undefined
+    `).get(storeId, platform) as { n?: number } | undefined
     reserved = Number(row?.n) || 0
   } catch { reserved = 0 }
 
