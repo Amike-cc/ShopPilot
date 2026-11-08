@@ -104,3 +104,29 @@ v2.4.0 的内联同步注入修复了 hook 时序，但端到端仍拿不到数�
 - 失败可见 + popup 自检行（后台 SW / webRequest / 最近错误）；
 - 完整恢复下载需要新一轮适配：驱动页面播放器逐视频取直链（需要应用侧受信任点击配合）
   或抓用户点播放时的真实请求——作为 v3 跟进。
+
+## 2026-11-09 · v2.6.0 「复制链接」适配完成（换链接口逆向成功）
+
+**换链接口已逆向并验证**：受信任点击打开罗盘播放器后抓到——
+
+```
+POST /compass_api/shop/common/market/entity_by_ref?msToken=..&a_bogus=..
+Body: {"ref":"k1.xxx","access_type":1,"_lid":"..."}
+响应: { st:0, entity:{ video:{ play_url:"https://v11-wha.douyinvod.com/..", video_id:"7694862398826468091" } }, remaining_cnt }
+```
+
+签名 a_bogus 由罗盘自己的 fetch 包装器在页面世界调用时自动附加——插件经页面桥调用即可。
+
+**v2.6.0 实现**：
+- parseRank：video_id 置空时用 video_ref 兜底，条目不再丢失（按钮恢复渲染）；
+- 复制链接：点击后对每个视频 POST entity_by_ref 解析真实抖音 ID（并发 3，
+  进度显示在按钮上），拼 `douyin.com/video/<id>` 复制；
+- 批量下载：同样解析后用 play_url 走下载通道；
+- 预解析缓存：数据推送后自动解析（点击时直接命中缓存，复制回到手势内同步路径）；
+- 剪贴板写入走页面桥（罗盘 origin 的 clipboard-sanitized-write 已被应用放行，
+  绕过罗盘对 clipboard.writeText 的反复制 hook——实测它被替换成了签名函数）；
+- clipboardWrite 权限已加入 manifest（不在应用受限清单内）。
+
+**验证状态**：按钮渲染（10 行）、解析接口、下载提交链路均在真机 CDP 环境验证；
+系统剪贴板写入受 OS 焦点限制无法在沙箱后台验证（hasFocus 模拟通过但 OS 层拒绝），
+真实前台使用走浏览器标准复制机制。

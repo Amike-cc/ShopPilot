@@ -33,10 +33,12 @@
     };
 
     try {
-      fetch(d.url, {
-        credentials: 'include',
-        headers: { accept: 'application/json, text/plain, */*' }
-      }).then(function (r) {
+      const init = { credentials: 'include', headers: { accept: 'application/json, text/plain, */*' } };
+      if (d.opts) {
+        if (d.opts.method) init.method = d.opts.method;
+        if (d.opts.body) { init.body = d.opts.body; init.headers['content-type'] = 'application/json'; }
+      }
+      fetch(d.url, init).then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       }).then(function (j) {

@@ -74,6 +74,12 @@
   }
 
   function copyText(text, cb) {
+    function recordCopyErr(msg) {
+      // 保留首因：fallback 会覆盖 page-clipboard 的错误，排查时要看第一条
+      if (copyText.__recorded) return;
+      copyText.__recorded = true;
+      try { chrome.storage.local.set({ lpCopyErr: String(msg).slice(0, 140) }); } catch (e) {}
+    }
     function fallback() {
       const ta = document.createElement('textarea');
       ta.value = text;
@@ -86,15 +92,32 @@
       ta.select();
       ta.setSelectionRange(0, text.length);
       let ok = false;
-      try { ok = document.execCommand('copy'); } catch (e) {}
+      try { ok = document.execCommand('copy'); } catch (e) { recordCopyErr('exec-throw: ' + String((e && e.message) || e)); }
+      if (!ok) recordCopyErr('exec-false focus=' + document.hasFocus());
       ta.remove();
       cb && cb(ok);
     }
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text)
-        .then(function () { cb && cb(true); })
-        .catch(fallback);
-    } else fallback();
+    // 优先页面世界剪贴板（罗盘 origin 已被应用授权 clipboard-sanitized-write）
+    const bridgeId = 'c' + Date.now() + Math.random().toString(36).slice(2, 6);
+    let bridged = false;
+    function onBridge(e) {
+      if (e.source !== window) return;
+      const d = e.data;
+      if (!d || d.__lp !== 'res' || d.id !== bridgeId) return;
+      bridged = true;
+      window.removeEventListener('message', onBridge);
+      if (d.ok) { cb && cb(true); return; }
+      recordCopyErr('page-clipboard: ' + String(d.error || '').slice(0, 80));
+      fallback();
+    }
+    window.addEventListener('message', onBridge);
+    window.postMessage({ __lp: 'req', id: bridgeId, clipboard: text }, '*');
+    setTimeout(function () {
+      if (bridged) return;
+      window.removeEventListener('message', onBridge);
+      recordCopyErr('page-clipboard-timeout');
+      fallback();
+    }, 3000);
   }
 
   /* ---------------- 页面世界桥（fetch.js 注入） ----------------
@@ -244,7 +267,7 @@
   }
 
   /** 经页面世界桥原样重放一条「带签名的完整 URL」：URL 不变 = 签名不变 */
-  function pageFetch(url) {
+  function pageFetch(url, opts) {
     return new Promise(function (resolve, reject) {
       const id = 'f' + Date.now() + Math.random().toString(36).slice(2, 6);
       let done = false;
@@ -259,7 +282,7 @@
       }
 
       window.addEventListener('message', onMsg);
-      window.postMessage({ __lp: 'req', id: id, url: url }, '*');
+      window.postMessage({ __lp: 'req', id: id, url: url, opts: opts || null }, '*');
 
       setTimeout(function () {
         if (done) return;
@@ -269,7 +292,54 @@
     });
   }
 
-  /* ---------------- 下载 ---------------- */
+  /* ---------------- 链接解析与下载（v2.5.0） ---------------- */
+  const ENTITY_API = '/compass_api/shop/common/market/entity_by_ref';
+  const RESOLVE_CONCURRENCY = 3;
+
+  /**
+   * video_ref → { videoId, playUrl }（POST entity_by_ref）。
+   * 走页面桥：罗盘自己的 fetch 包装器会在调用时自动附加 a_bogus/msToken 签名。
+   * 注意 remaining_cnt：接口有配额，解析失败要如实报，不要静默重试打光配额。
+   */
+  async function resolveVideoEntity(ref) {
+    const json = await pageFetch(`${location.origin}${ENTITY_API}`, {
+      method: 'POST',
+      body: JSON.stringify({ ref: String(ref || ''), access_type: 1, _lid: String(Date.now()) })
+    });
+    if (!json || json.st !== 0) throw new Error((json && json.msg) || ('st=' + (json && json.st)));
+    const video = (json.entity && json.entity.video) || {};
+    const videoId = String(video.video_id || '');
+    const playUrl = String(video.play_url || '');
+    if (!videoId && !playUrl) throw new Error('换链结果为空');
+    return { videoId: videoId, playUrl: playUrl, remainingCnt: json.remaining_cnt };
+  }
+
+  /** 并发解析一批视频的真实链接；onProgress(done, total) 用于按钮进度 */
+  async function resolveVideoLinks(list, onProgress) {
+    const valid = (list || []).filter(function (it) { return it && it.ref; });
+    const results = new Array(valid.length);
+    let idx = 0;
+    let done = 0;
+    let failed = 0;
+    async function worker() {
+      while (idx < valid.length) {
+        const i = idx++;
+        try {
+          results[i] = await resolveVideoEntity(valid[i].ref);
+        } catch (e) {
+          results[i] = { error: String((e && e.message) || e) };
+          failed++;
+        }
+        done++;
+        if (onProgress) onProgress(done, valid.length, failed);
+      }
+    }
+    const workers = [];
+    for (let w = 0; w < Math.min(RESOLVE_CONCURRENCY, valid.length); w++) workers.push(worker());
+    await Promise.all(workers);
+    return { results: results, valid: valid, failed: failed };
+  }
+
   function buildName(it) {
     const seq = it.rank
       ? String(it.rank).padStart(3, '0')
@@ -283,12 +353,20 @@
     return `${it.folder || '罗盘带货视频'}/${parts.join('_')}.mp4`;
   }
 
-  function downloadVideos(list, btn) {
-    const valid = (list || []).filter(function (it) { return it && it.videoId && it.playUrl; });
+  async function downloadVideos(list, btn) {
+    const valid = (list || []).filter(function (it) { return it && it.videoId && (it.playUrl || it.ref); });
     if (!valid.length) { flash(btn, '无可下载'); return; }
-    const jobs = valid.map(function (it) {
-      return { url: it.playUrl, filename: buildName(it) };
+    flash(btn, '解析链接…');
+    const resolved = await resolveVideoLinks(valid, function (done, total) {
+      flash(btn, `解析链接 ${done}/${total}…`);
     });
+    const jobs = [];
+    for (let i = 0; i < resolved.valid.length; i++) {
+      const it = resolved.valid[i];
+      const r = resolved.results[i];
+      if (r && r.playUrl) jobs.push({ url: r.playUrl, filename: buildName(it) });
+    }
+    if (!jobs.length) { flash(btn, `解析失败（${resolved.failed}）`); return; }
     flash(btn, `提交 ${jobs.length} 个…`);
     chrome.runtime.sendMessage({ type: 'LP_DOWNLOAD', jobs: jobs }, function (resp) {
       void chrome.runtime.lastError;
@@ -314,11 +392,14 @@
       for (const v of vids) {
         videos++;
         if (v.video_play_url) withPlay++;
-        const id = String(v.video_id || '');
-        if (!id || !v.video_play_url) continue;
+        // v2.5.0：罗盘改版后 video_id / video_play_url 全空，只发 video_ref 引用键。
+        // 条目以 video_ref 兜底保住按钮渲染；真实链接在复制/下载时用 ref 解析（entity_by_ref）。
+        const id = String(v.video_id || v.video_ref || '');
+        if (!id) continue;
         out.push({
           videoId: id,
-          playUrl: v.video_play_url,
+          ref: String(v.video_ref || ''),
+          playUrl: v.video_play_url || '',
           title: String(v.video_name || '').replace(/\s+/g, ' ').trim(),
           author: v.author_name || '',
           publishTs: v.publish_ts || 0,
@@ -349,10 +430,40 @@
       lastError = '';
       renderErrorChip(null);
       injectRowButtons();
+      enqueueResolve(rows);
     } else if (rankRevision) {
       renderErrorChip(rankRevision);
     }
     return (rows || []).length;
+  }
+
+  /**
+   * 后台预解析缓存（ref → 抖音 videoId）：数据一到就解析，
+   * 用户点「复制链接」时直接取缓存——复制回到用户手势窗口内的同步路径，最稳。
+   * 失败不自动重试（entity_by_ref 有配额 remaining_cnt）。
+   */
+  const refCache = new Map();
+  let resolveQueue = [];
+  let resolveActive = 0;
+  function enqueueResolve(rows) {
+    for (const it of rows || []) {
+      if (!it || !it.ref || refCache.has(it.ref)) continue;
+      if (resolveQueue.some(function (q) { return q.ref === it.ref; })) continue;
+      resolveQueue.push(it);
+    }
+    kickResolve();
+  }
+  function kickResolve() {
+    while (resolveActive < RESOLVE_CONCURRENCY && resolveQueue.length) {
+      const it = resolveQueue.shift();
+      resolveActive++;
+      resolveVideoEntity(it.ref).then(function (r) {
+        if (r.videoId) refCache.set(it.ref, r.videoId);
+      }).catch(function () {}).then(function () {
+        resolveActive--;
+        kickResolve();
+      });
+    }
   }
 
   function groups() {
@@ -428,12 +539,40 @@
     }
   }
 
-  function copyProductLinks(g, btn) {
-    const text = g.videos
-      .map(function (v) { return 'https://www.douyin.com/video/' + v.videoId; })
-      .join('\n');
-    copyText(text, function (ok) {
-      flash(btn, ok ? `已复制 ${g.videos.length} 条` : '复制失败');
+  async function copyProductLinks(g, btn) {
+    const videos = g.videos.filter(function (v) { return v && v.videoId && (v.ref || v.playUrl); });
+    if (!videos.length) { flash(btn, '无可复制'); return; }
+
+    // 优先走预解析缓存：同步取值，复制发生在用户手势窗口内（最稳）
+    const cachedLines = [];
+    const missRefs = [];
+    for (const v of videos) {
+      if (!v.ref) { cachedLines.push('https://www.douyin.com/video/' + v.videoId); continue; }
+      const id = refCache.get(v.ref);
+      if (id) cachedLines.push('https://www.douyin.com/video/' + id);
+      else missRefs.push(v);
+    }
+    if (!missRefs.length) {
+      copyText(cachedLines.join('\n'), function (ok) {
+        flash(btn, ok ? `已复制 ${cachedLines.length} 条` : '复制失败（页面需保持前台焦点）');
+      });
+      return;
+    }
+
+    // 缓存未就绪（点得太快）：现解析，失败如实报
+    flash(btn, '解析链接…');
+    const resolved = await resolveVideoLinks(missRefs.concat([]), function (done, total) {
+      flash(btn, `解析链接 ${done}/${total}…`);
+    });
+    const lines = cachedLines.slice();
+    for (let i = 0; i < resolved.valid.length; i++) {
+      const v = resolved.valid[i];
+      const r = resolved.results[i];
+      if (r && r.videoId) lines.push('https://www.douyin.com/video/' + r.videoId);
+    }
+    if (!lines.length) { flash(btn, `解析失败（${resolved.failed}）`); return; }
+    copyText(lines.join('\n'), function (ok) {
+      flash(btn, ok ? `已复制 ${lines.length} 条` + (resolved.failed ? `（${resolved.failed} 条失败）` : '') : '复制失败（页面需保持前台焦点）');
     });
   }
 
@@ -749,13 +888,26 @@
     renderDetailBar();
   }
 
-  function detailCopy(btn) {
+  async function detailCopy(btn) {
     if (!detailVideos.length) { flash(btn, '暂无数据'); return; }
-    const text = detailVideos
-      .map(function (v) { return 'https://www.douyin.com/video/' + v.videoId; })
-      .join('\n');
-    copyText(text, function (ok) {
-      flash(btn, ok ? `已复制 ${detailVideos.length} 条` : '复制失败');
+    const hasRef = detailVideos.some(function (v) { return v.ref; });
+    if (!hasRef) {
+      // detail 响应结构未适配 ref 时，如实告知无法解析
+      flash(btn, '暂无可用链接');
+      return;
+    }
+    flash(btn, '解析链接…');
+    const resolved = await resolveVideoLinks(detailVideos, function (done, total) {
+      flash(btn, `解析链接 ${done}/${total}…`);
+    });
+    const lines = [];
+    for (let i = 0; i < resolved.valid.length; i++) {
+      const r = resolved.results[i];
+      if (r && r.videoId) lines.push('https://www.douyin.com/video/' + r.videoId);
+    }
+    if (!lines.length) { flash(btn, `解析失败（${resolved.failed}）`); return; }
+    copyText(lines.join('\n'), function (ok) {
+      flash(btn, ok ? `已复制 ${lines.length} 条` + (resolved.failed ? `（${resolved.failed} 条失败）` : '') : '复制失败');
     });
   }
 
