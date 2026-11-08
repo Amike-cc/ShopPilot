@@ -33,10 +33,37 @@ try {
 } catch (e) {}
 
 if (chrome.webRequest && chrome.webRequest.onBeforeRequest) {
+  // 带签名 URL 环形缓存（2026-11-08 v2.3.1）：罗盘接口强校验 a_bogus/msToken，
+  // 插件自己拼参数拿不到数据；页面自己的请求带完整签名——把它原样回放给页面桥即可。
+  // URL 不变 = 签名不变，短时间内重放有效；页面翻页/筛选会产生新 URL，取最新一条。
+  const seenUrls = { rank: [], detail: [] };
+  function recordUrl(kind, url) {
+    const arr = seenUrls[kind];
+    if (!arr.length || arr[0] !== url) {
+      arr.unshift(url);
+      if (arr.length > 20) arr.pop();
+    }
+    try {
+      chrome.storage.local.set({ lpUrlSeen: { kind: kind, at: Date.now(), urlPrefix: String(url).slice(0, 90) } });
+    } catch (e) {}
+  }
+
   chrome.webRequest.onBeforeRequest.addListener(
     function (d) {
       try {
         if (d.tabId < 0) return;
+        recordUrl('rank', d.url);
+      } catch (e) {}
+    },
+    { urls: ['https://compass.jinritemai.com/compass_api/shop/product/product_rank/video_bring_good*'] },
+    []
+  );
+
+  chrome.webRequest.onBeforeRequest.addListener(
+    function (d) {
+      try {
+        if (d.tabId < 0) return;
+        recordUrl('detail', d.url);
         const u = new URL(d.url);
         if (u.pathname.indexOf('/compete_product_detail/flow_source/flow_more') < 0) return;
         const q = u.searchParams;
@@ -67,6 +94,16 @@ if (chrome.webRequest && chrome.webRequest.onBeforeRequest) {
     { urls: ['https://compass.jinritemai.com/compass_api/shop/product/compete_product_detail/*'] },
     []
   );
+
+  // 内容脚本轮询：把最近一次带签名的完整 URL 给它（rank/detail 各一条）
+  try {
+    const prevOnMessage = chrome.runtime.onMessage;
+    prevOnMessage.addListener(function (msg, sender, reply) {
+      if (msg && msg.type === 'LP_GET_URLS') {
+        reply({ ok: true, rank: seenUrls.rank[0] || '', detail: seenUrls.detail[0] || '' });
+      }
+    });
+  } catch (e) {}
 }
 
 function persistStat() {

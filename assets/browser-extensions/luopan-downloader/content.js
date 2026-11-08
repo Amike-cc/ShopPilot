@@ -3,6 +3,10 @@
  * 按 URL 分流两种模式：
  *   rank   —— /shop/chance/product-rank         商品榜单 → 每行视频下方注入按钮
  *   detail —— /shop/chance/rank-product/detail  竞品详情 → 视频分析表格上方注入批量按钮
+ *
+ * 数据来源（v2.3.0，2026-11-08）：fetch.js 在页面世界 hook fetch/XHR，把罗盘页面
+ * 自己发出的接口响应推过来（__lp:'data'）。不再自己拼参数调接口——罗盘现在强校验
+ * a_bogus/msToken 签名（页面请求库自动附加），裸 fetch 只能拿到「成功但空」。
  */
 (function () {
   'use strict';
@@ -10,22 +14,8 @@
   if (window.__lpLoaded) return;
   window.__lpLoaded = true;
 
-  /* ---------------- 接口 ---------------- */
-  const RANK_API = '/compass_api/shop/product/product_rank/video_bring_good';
-  const DETAIL_API = '/compass_api/shop/product/compete_product_detail/flow_source/flow_more';
-
-  const RANK_PAGE_SIZE = 10;     // 榜单接口把 page_size 卡在 10
-  const RANK_MAX_PAGE = 20;      // 10 × 20 = 200 条
-  const DETAIL_PAGE_SIZE = 100;  // 竞品详情接口支持 100
-  const DETAIL_MAX_PAGE = 20;    // 上限 2000 条
-
-  const DEFAULT_CFG = {
-    industry_id: '4',
-    category_id: '1000003282,1000009114',
-    brand_type: '-1',
-    price_bin: '不限',
-    date_type: '21'
-  };
+  // 第一优先级：document_start 就把响应拦截装进页面世界，赶在页面首批请求之前
+  injectFetcher();
 
   /* ---------------- 状态 ---------------- */
   let mode = '';
@@ -34,22 +24,18 @@
   let detailPid = '';
 
   // rank
-  let cfg = Object.assign({}, DEFAULT_CFG);
-  const items = new Map();       // videoId -> item
+  const items = new Map();       // videoId -> item（页面推送逐页累积，只增不删）
   let loading = false;
-  let loadGen = 0;               // 每次加载的代号，用来打断上一轮
   let lastError = '';
+  // 罗盘接口改版检测（2026-11-08 实测）：play_url / video_id 全空、仅 video_ref 引用键
+  let rankRevision = '';
 
   // detail
   let detailVideos = [];
   let detailMeta = { begin: '', end: '', done: false, error: '' };
   let detailLoading = false;
-  let detailLoadedKey = '';
 
   /* ---------------- 通用工具 ---------------- */
-  function sleep(ms) {
-    return new Promise(function (r) { setTimeout(r, ms); });
-  }
 
   function urlParam(name) {
     try {
@@ -111,68 +97,153 @@
     } else fallback();
   }
 
-  /* ---------------- 日期：近 7 天（截止昨天） ---------------- */
-  function dateRange() {
-    const end = new Date();
-    end.setDate(end.getDate() - 1);
-    const begin = new Date(end);
-    begin.setDate(begin.getDate() - 6);
-    const f = function (d) {
-      const p = function (n) { return n < 10 ? '0' + n : '' + n; };
-      return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} 00:00:00`;
-    };
-    return { begin_date: f(begin), end_date: f(end) };
-  }
-
-  /* ---------------- 页面上下文请求通道 ---------------- */
-  /**
-   * 2026-11-08 修复「获取不到链接」：
-   * 原实现只有一条路——注入页面世界的 fetch.js（依赖 chrome-extension:// 的
-   * web_accessible_resources）。Electron 官方支持的 manifest 键清单里**没有**
-   * web_accessible_resources，注入的 <script> 加载不到资源，而原实现在这种情况下
-   * **静默返回**（loadRankAll 里 if (!ready) return），于是面板永远是 0 条、不报错。
-   *
-   * 现在的策略：
-   *   1. 页面世界桥仍先试（兼容真 Chrome 与「页面环境有风控差异」的场景）；
-   *   2. 桥不可用 / 超时 → 自动回退到 content script 直连同源接口（带 Cookie）；
-   *   3. 两条路的状态与最近一次错误写进 chrome.storage.local（lpDiagCs），popup 可见。
-   */
-  const diag = { bridge: 'unknown', lastError: '', at: 0 };
+  /* ---------------- 页面世界桥（fetch.js 注入） ----------------
+   * v2.3.0 起桥只负责「装响应拦截 hook」，不再承担主动请求：
+   * 罗盘接口强校验 a_bogus/msToken 签名（页面请求库自动附加），
+   * 插件裸 fetch 只能拿到「st=0 但空数据」或风控拒绝——这就是「获取不到链接」的根因。
+   * 数据一律来自页面响应推送（__lp:'data'）。 */
+  const diag = { lastError: '', at: 0, note: '' };
 
   function persistDiag() {
     try {
       diag.at = Date.now();
-      chrome.storage.local.set({ lpDiagCs: { bridge: diag.bridge, lastError: diag.lastError, at: diag.at } });
+      chrome.storage.local.set({ lpDiagCs: { lastError: diag.lastError, note: String(diag.note || ''), at: diag.at } });
     } catch (e) {}
   }
 
   function noteError(message) {
     diag.lastError = String(message || '');
     persistDiag();
-    renderErrorChip();
+  }
+
+  /**
+   * 页面世界引导（inline 同步注入源码）：
+   * 装响应拦截 hook 必须赶在页面 bundle 之前——<script src> 是**异步加载**的，
+   * 页面代码可能抢先捕获原生 fetch/XHR 引用，hook 就永远拦不到（v2.3.1 实测踩坑：
+   * __lpFetcher 有值但 hook 没生效，按钮永远不出现）。
+   * 用 function.toString() 拼成内联脚本，document_start 同步执行。
+   * 若页面 CSP 拦内联 → 退回 src 注入（真 Chrome 走这条路）。
+   */
+  function lpPageWorldBootstrap() {
+    try {
+      if (document.documentElement.dataset.lpHook === '1') return;
+      window.__lpFetcher = 'v2';
+      function post(payload) {
+        payload.__lp = 'data';
+        try { window.postMessage(payload, '*'); } catch (err) {}
+      }
+      function pickKind(url) {
+        const s = String(url || '');
+        if (s.indexOf('/compass_api/shop/product/product_rank/video_bring_good') >= 0) return 'rank';
+        if (s.indexOf('/compass_api/shop/product/compete_product_detail/flow_source/flow_more') >= 0) return 'detail';
+        return '';
+      }
+      // 主动请求通道（保留，当前主流程不依赖）
+      window.addEventListener('message', function (e) {
+        if (e.source !== window) return;
+        const d = e.data;
+        if (!d || d.__lp !== 'req') return;
+        const reply = function (payload) {
+          payload.__lp = 'res';
+          payload.id = d.id;
+          try { window.postMessage(payload, '*'); } catch (err) {}
+        };
+        try {
+          fetch(d.url, {
+            credentials: 'include',
+            headers: { accept: 'application/json, text/plain, */*' }
+          }).then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+          }).then(function (j) {
+            reply({ ok: true, data: j });
+          }).catch(function (err) {
+            reply({ ok: false, error: String((err && err.message) || err) });
+          });
+        } catch (err) {
+          reply({ ok: false, error: String(err) });
+        }
+      });
+      function safeWrap(obj, prop, wrapper) {
+        try { obj[prop] = wrapper; return; } catch (e) {}
+        try { Object.defineProperty(obj, prop, { value: wrapper, writable: true, configurable: true }); } catch (e2) {}
+      }
+      const origFetch = window.fetch;
+      if (typeof origFetch === 'function') {
+        safeWrap(window, 'fetch', function (input) {
+          const kind = pickKind((input && input.url) || input);
+          const p = origFetch.apply(this, arguments);
+          if (kind) {
+            p.then(function (r) {
+              try { r.clone().json().then(function (j) { post({ kind: kind, data: j }); }).catch(function () {}); } catch (e) {}
+            }).catch(function () {});
+          }
+          return p;
+        });
+      }
+      const XHR = window.XMLHttpRequest;
+      if (XHR && XHR.prototype && XHR.prototype.open) {
+        const origOpen = XHR.prototype.open;
+        const origSend = XHR.prototype.send;
+        safeWrap(XHR.prototype, 'open', function (method, url) {
+          try { this.__lpKind = pickKind(url); } catch (e) { this.__lpKind = ''; }
+          return origOpen.apply(this, arguments);
+        });
+        safeWrap(XHR.prototype, 'send', function () {
+          const self = this;
+          if (self.__lpKind) {
+            self.addEventListener('load', function () {
+              try {
+                const j = JSON.parse(self.responseText);
+                if (j) post({ kind: self.__lpKind, data: j });
+              } catch (e) {}
+            });
+          }
+          return origSend.apply(this, arguments);
+        });
+      }
+      document.documentElement.dataset.lpHook = '1';
+    } catch (e) {
+      try { document.documentElement.dataset.lpHookErr = String((e && e.message) || e).slice(0, 100); } catch (e2) {}
+    }
   }
 
   function injectFetcher() {
     return new Promise(function (resolve) {
-      if (window.__lpFetcher) return resolve({ ok: true, reason: 'already' });
-      if (typeof chrome === 'undefined' || !chrome.runtime || typeof chrome.runtime.getURL !== 'function') {
-        return resolve({ ok: false, reason: 'runtime.getURL 不可用' });
-      }
       try {
+        // 内联同步注入：执行完立刻能查标记
         const s = document.createElement('script');
-        s.src = chrome.runtime.getURL('fetch.js');
-        s.onload = function () { s.remove(); resolve({ ok: true, reason: 'injected' }); };
-        s.onerror = function () {
-          s.remove();
-          resolve({ ok: false, reason: 'fetch.js 资源加载被拦（本环境不支持 web_accessible_resources）' });
-        };
+        s.textContent = '(' + lpPageWorldBootstrap.toString() + ')();';
         (document.head || document.documentElement).appendChild(s);
+        if (document.documentElement.dataset.lpHook === '1') {
+          resolve({ ok: true, reason: 'inline' });
+          return;
+        }
+        // 内联被页面 CSP 拦 → 退回 src 注入
+        if (typeof chrome === 'undefined' || !chrome.runtime || typeof chrome.runtime.getURL !== 'function') {
+          resolve({ ok: false, reason: 'inline 被拦且 runtime.getURL 不可用' });
+          return;
+        }
+        const s2 = document.createElement('script');
+        s2.src = chrome.runtime.getURL('fetch.js');
+        s2.onload = function () {
+          s2.remove();
+          setTimeout(function () {
+            resolve({ ok: document.documentElement.dataset.lpHook === '1', reason: 'src' });
+          }, 300);
+        };
+        s2.onerror = function () {
+          s2.remove();
+          resolve({ ok: false, reason: 'inline 与 src 注入均失败' });
+        };
+        (document.head || document.documentElement).appendChild(s2);
       } catch (e) {
         resolve({ ok: false, reason: String((e && e.message) || e) });
       }
     });
   }
 
+  /** 经页面世界桥原样重放一条「带签名的完整 URL」：URL 不变 = 签名不变 */
   function pageFetch(url) {
     return new Promise(function (resolve, reject) {
       const id = 'f' + Date.now() + Math.random().toString(36).slice(2, 6);
@@ -196,44 +267,6 @@
         reject(new Error('请求超时'));
       }, 20000);
     });
-  }
-
-  /** content script 直连同源接口：与页面同源、带 Cookie，页面 CSP 不约束扩展的请求 */
-  async function isoFetchJson(url) {
-    const res = await fetch(url, {
-      credentials: 'include',
-      headers: { accept: 'application/json, text/plain, */*' }
-    });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    return res.json();
-  }
-
-  /**
-   * 统一入口：桥优先、直连兜底。
-   * 桥「注入失败」或「连续超时」后标记 failed，后续请求不再等 20 秒。
-   * 站点返回的业务错误（HTTP 200 但 st!=0、HTTP 4xx/5xx）不算桥故障，不回退。
-   */
-  async function apiFetch(url) {
-    if (diag.bridge !== 'failed') {
-      const ready = await injectFetcher();
-      if (ready.ok) {
-        try {
-          const json = await pageFetch(url);
-          if (diag.bridge !== 'ok') { diag.bridge = 'ok'; persistDiag(); renderErrorChip(); }
-          return json;
-        } catch (err) {
-          const msg = String((err && err.message) || err);
-          if (msg.indexOf('超时') < 0) throw err;   // 桥通了但接口报错：如实抛出
-          diag.bridge = 'failed';                   // 桥超时：本次起改走直连
-        }
-      } else {
-        diag.bridge = 'failed';
-        diag.bridgeReason = ready.reason;
-      }
-    }
-    const json = await isoFetchJson(url);
-    if (diag.bridge !== 'direct') { diag.bridge = 'direct'; persistDiag(); renderErrorChip(); }
-    return json;
   }
 
   /* ---------------- 下载 ---------------- */
@@ -264,13 +297,23 @@
   }
 
   /* ================= 模式一：商品榜单 ================= */
+  /**
+   * 数据来源（2026-11-08 v2.3.0）：不再自己拼参数调接口。
+   * 罗盘现在强校验 a_bogus/msToken 签名（由页面请求库在发请求时自动附加），
+   * 插件裸 fetch 只会拿到「st=0 但空数据」或风控拒绝——这就是「获取不到链接」的根因。
+   * 现在改为拦截页面自己的请求响应（fetch.js 推送 __lp:'data'）：
+   * 页面翻页、筛选、搜索都自动跟随，签名天然正确。
+   */
   function parseRank(json) {
     const out = [];
     const list = (json && json.data && json.data.data_result) || [];
+    let videos = 0, withPlay = 0;
     for (const prod of list) {
       const p = prod.product_info || {};
       const vids = prod.video_list || [];
       for (const v of vids) {
+        videos++;
+        if (v.video_play_url) withPlay++;
         const id = String(v.video_id || '');
         if (!id || !v.video_play_url) continue;
         out.push({
@@ -286,94 +329,30 @@
         });
       }
     }
+    // 改版判定：页面给了视频，但播放地址一条都没有 → 罗盘已把地址换成 video_ref 引用键
+    if (videos > 0 && withPlay === 0) {
+      rankRevision = '罗盘已改版：榜单接口不再直接下发播放地址（实测 2026-11-08：play_url 全空、video_id 置空、只发 video_ref 引用键）。插件暂无法取到下载链接，复制链接同样受影响；需要适配新版换链接口后恢复。';
+    } else if (videos > 0) {
+      rankRevision = '';
+    }
     return out;
   }
 
-  async function fetchRankPage(no) {
-    const params = Object.assign({}, cfg, dateRange(), {
-      page_no: String(no),
-      page_size: String(RANK_PAGE_SIZE),
-      rank_data_type: '1',
-      activity_id: ''
-    });
-    if (!params.search_info) params.search_info = '';
-
-    const qs = new URLSearchParams(params).toString();
-    const json = await apiFetch(`${location.origin}${RANK_API}?${qs}`);
-    if (!json || json.st !== 0) {
-      throw new Error((json && json.msg) || ('st=' + (json && json.st)));
+  /** 页面响应推送（fetch.js）→ 只增不删：页面翻页时每页 10 条陆续到达 */
+  function applyRankRows(rows) {
+    let added = 0;
+    for (const it of rows || []) {
+      if (!items.has(it.videoId)) added++;
+      items.set(it.videoId, it);
     }
-    return parseRank(json);
-  }
-
-  /**
-   * 拉取榜单数据。
-   * 关键点：每次调用都领一个代号 gen，旧循环发现代号变了就自己退出，
-   * 这样搜索时能立刻打断上一轮 20 页的抓取，不用干等。
-   * 结果先攒在 pending 里，按页逐步替换 items，绝不先清空（会瞬间掉按钮）。
-   */
-  async function loadRankAll() {
-    const gen = ++loadGen;
-    loading = true;
-    lastError = '';
-
-    // 无关键词 = 全量，结果可整体替换；有关键词 = 只增补，避免把已有数据冲掉
-    const fullMode = !String(cfg.search_info || '').trim();
-
-    const pending = new Map();
-    for (let p = 1; p <= RANK_MAX_PAGE; p++) {
-      if (gen !== loadGen) return;
-
-      let rows = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (gen !== loadGen) return;
-        try {
-          rows = await fetchRankPage(p);
-          break;
-        } catch (err) {
-          lastError = String((err && err.message) || err);
-          noteError(lastError);
-          renderErrorChip('罗盘下载：抓取失败 ' + lastError + (attempt < 2 ? '（重试中…）' : ''));
-          if (attempt < 2) await sleep(2500 * (attempt + 1));
-        }
-      }
-      if (gen !== loadGen) return;
-      if (rows === null) break;
-
-      for (const it of rows) {
-        if (!pending.has(it.videoId)) pending.set(it.videoId, it);
-      }
+    if ((rows || []).length) {
       lastError = '';
-
-      // 攒到一页就上一页：首页 10 个商品正好是屏幕上那 10 行，按钮立刻能用
-      applyRankRows(pending, fullMode);
-
-      if (!rows.length) break;
-      if (rows.length < RANK_PAGE_SIZE) break;
-    }
-
-    if (gen !== loadGen) return;
-    applyRankRows(pending, fullMode);
-    loading = false;
-    if (!items.size && lastError) {
-      renderErrorChip('罗盘下载：抓取失败 ' + lastError + '（检查是否已登录罗盘，或点插件弹窗「重新抓取」）');
-    } else {
       renderErrorChip(null);
+      injectRowButtons();
+    } else if (rankRevision) {
+      renderErrorChip(rankRevision);
     }
-    injectRowButtons();
-  }
-
-  /** fullMode 整体替换；搜索模式只补不删，保证按钮不会中途消失 */
-  function applyRankRows(pending, fullMode) {
-    if (fullMode) {
-      items.clear();
-      for (const [k, v] of pending) items.set(k, v);
-    } else {
-      for (const [k, v] of pending) {
-        if (!items.has(k)) items.set(k, v);
-      }
-    }
-    injectRowButtons();
+    return (rows || []).length;
   }
 
   function groups() {
@@ -458,7 +437,9 @@
     });
   }
 
-  /* ---------------- 跟随页面搜索框（仅榜单） ---------------- */
+  /* ---------------- 搜索框诊断（仅榜单） ----------------
+   * 搜索/筛选由罗盘页面自己重新请求，fetch.js 拦到新响应后数据自动跟随；
+   * 这里只剩诊断属性（data-lp-kw），不再触发主动抓取。 */
   function readPageKeyword() {
     try {
       const inputs = document.querySelectorAll('input[placeholder]');
@@ -472,30 +453,22 @@
   }
 
   function watchPageKeyword() {
-    let last = readPageKeyword();
-    let candidate = null;
-
     setInterval(function () {
       if (mode !== 'rank') return;
-      const kw = readPageKeyword();
-      if (kw === null) return;
-
       try {
         document.documentElement.setAttribute('data-lp-kw',
-          'seen=' + kw + ';last=' + (last || '') + ';cfg=' + (cfg.search_info || '') +
-          ';cand=' + (candidate || '') + ';loading=' + loading + ';items=' + items.size);
+          'kw=' + (readPageKeyword() || '') + ';loading=' + loading + ';items=' + items.size);
       } catch (e) {}
-
-      if (kw === last) { candidate = null; return; }
-      if (kw !== candidate) { candidate = kw; return; }   // 连续两轮相同才触发
-
-      last = kw;
-      candidate = null;
-      if (kw === (cfg.search_info || '')) return;
-
-      cfg.search_info = kw;
-      loadRankAll();      // 领新代号，旧的那轮会自动退出
     }, 1500);
+  }
+
+  /** 榜单等待提示：进入榜单页 12 秒仍无数据 → 引导用户切到「短视频榜」标签页 */
+  function startRankHintTimer() {
+    setTimeout(function () {
+      if (mode === 'rank' && items.size === 0 && !loading) {
+        renderErrorChip(rankRevision || '罗盘下载：未收到榜单数据。请点开上方「短视频榜」标签页（总榜没有带货视频列）——插件自动跟随页面真实请求，翻页/筛选都会同步');
+      }
+    }, 12000);
   }
 
   /* ================= 模式二：竞品详情 · 视频分析 ================= */
@@ -516,151 +489,50 @@
     };
   }
 
-  async function fetchDetailPage(params, pageNo) {
-    const q = new URLSearchParams({
-      product_id: params.product_id,
-      saleType: params.saleType || '0',
-      source_entrance: 'video',
-      date_type: params.date_type || '21',
-      end_date: params.end_date,
-      begin_date: params.begin_date,
-      activity_id: params.activity_id || '',
-      index_selected: params.index_selected || 'pay_amt,pay_ucnt,dh_product_click_ratio_uv,pay_cnt,pay_combo_cnt',
-      page_size: String(DETAIL_PAGE_SIZE),
-      page_no: String(pageNo),
-      sort_field: params.sort_field || 'pay_amt',
-      is_asc: params.is_asc || 'false'
-    });
-
-    const json = await apiFetch(`${location.origin}${DETAIL_API}?${q.toString()}`);
-    if (!json || json.st !== 0) {
-      throw new Error((json && json.msg) || ('st=' + (json && json.st)));
-    }
-    const arr = Array.isArray(json.data)
-      ? json.data
-      : ((json.data && json.data.data_result) || []);
-
+  /**
+   * 竞品详情的数据来源（v2.3.0）：与榜单一样走页面响应推送（fetch.js 拦截 flow_more）。
+   * 用户切筛选/翻页时罗盘自己会重发请求（带完整签名），推送自动到达，这里不再主动拉取。
+   */
+  function applyDetailRows(json) {
+    const arr = Array.isArray(json)
+      ? json
+      : ((json && json.data && json.data.data_result) || (Array.isArray(json && json.data) ? json.data : []));
     const base = detailVideos.length;
-    const out = [];
+    let added = 0;
     for (let i = 0; i < arr.length; i++) {
       const v = parseDetailItem(arr[i], base + i + 1);
-      if (v) out.push(v);
-    }
-    return out;
-  }
-
-  /** 优先用页面自己发出的请求参数（后台 webRequest 捕获），保证时间区间一致 */
-  function askBgParams() {
-    return new Promise(function (resolve) {
-      try {
-        chrome.runtime.sendMessage({ type: 'LP_DETAIL_PARAMS', productId: urlParam('product_id') },
-          function (resp) {
-            void chrome.runtime.lastError;
-            resolve((resp && resp.params) || null);
-          });
-      } catch (e) {
-        resolve(null);
+      if (v && !detailVideos.some(function (x) { return x.videoId === v.videoId; })) {
+        detailVideos.push(v);
+        added++;
       }
-    });
-  }
-
-  /** URL 上带的 date_value=起始秒,结束秒，比默认近 7 天更准 */
-  function urlDateRange() {
-    const raw = urlParam('date_value');
-    if (!raw) return null;
-    const parts = raw.split(',');
-    if (parts.length < 2) return null;
-    const a = parseInt(parts[0], 10);
-    const b = parseInt(parts[1], 10);
-    if (!a || !b) return null;
-    const f = function (ts) {
-      const d = new Date(ts * 1000);
-      const p = function (n) { return n < 10 ? '0' + n : '' + n; };
-      return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} 00:00:00`;
-    };
-    return { begin_date: f(a), end_date: f(b) };
-  }
-
-  async function resolveDetailParams() {
-    const pid = urlParam('product_id') || '';
-    const cap = await askBgParams();
-    if (cap && cap.begin_date && cap.end_date && (!pid || !cap.product_id || cap.product_id === pid)) {
-      return cap;
     }
-    const dr = urlDateRange() || dateRange();
-    return {
-      product_id: pid,
-      saleType: '0',
-      date_type: urlParam('date_type') || '21',
-      begin_date: dr.begin_date,
-      end_date: dr.end_date,
-      activity_id: ''
-    };
-  }
-
-  /** 按给定参数把所有分页拉完，返回是否拿到数据 */
-  async function fetchDetailAll(params) {
-    for (let p = 1; p <= DETAIL_MAX_PAGE; p++) {
-      let rows = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          rows = await fetchDetailPage(params, p);
-          break;
-        } catch (err) {
-          detailMeta.error = String((err && err.message) || err);
-          if (attempt < 2) await sleep(2000 * (attempt + 1));
-        }
-      }
-      if (rows === null) return false;
-      if (!rows.length) break;
-
-      for (const r of rows) detailVideos.push(r);
+    if (added) {
       detailMeta.error = '';
+      detailMeta.done = true;
       renderDetailBar();
-      if (rows.length < DETAIL_PAGE_SIZE) break;
-      await sleep(350);
+      injectDetailRowButtons();
+      renderErrorChip(null);
     }
-    return detailVideos.length > 0;
+    return added;
   }
 
-  async function loadDetail() {
-    if (detailLoading) return;
+  /** 进入竞品详情页：重置 UI，然后等页面响应推送；12 秒没数据就引导用户 */
+  function loadDetail() {
     detailLoading = true;
     detailMeta = { begin: '', end: '', done: false, error: '' };
     detailVideos = [];
     clearDetailRowButtons();
     renderDetailBar();
 
-    // 优先用页面自己的筛选参数（保证时间区间一致）
-    let params = await resolveDetailParams();
-    detailMeta.begin = params.begin_date || '';
-    detailMeta.end = params.end_date || '';
-    detailLoadedKey = filterKey(params);
-
-    let ok = await fetchDetailAll(params);
-
-    // 捕获到的参数可能已过期（例如换了商品），失败则退回默认近 7 天
-    if (!ok && detailMeta.error) {
-      const dr = dateRange();
-      params = {
-        product_id: params.product_id || urlParam('product_id') || '',
-        saleType: '0',
-        date_type: '21',
-        begin_date: dr.begin_date,
-        end_date: dr.end_date,
-        activity_id: ''
-      };
-      detailMeta.begin = params.begin_date;
-      detailMeta.end = params.end_date;
-      detailLoadedKey = filterKey(params);
-      detailVideos = [];
-      await fetchDetailAll(params);
-    }
-
-    detailLoading = false;
-    detailMeta.done = true;
-    renderDetailBar();
-    injectDetailRowButtons();
+    setTimeout(function () {
+      detailLoading = false;
+      if (mode !== 'detail') return;
+      if (detailVideos.length === 0) {
+        detailMeta.done = true;
+        renderDetailBar();
+        renderErrorChip('罗盘下载：未收到竞品视频数据。请打开「视频分析」标签页并翻一页（插件自动跟随页面真实请求）');
+      }
+    }, 12000);
   }
 
   /** 当前激活的主标签面板（商品概览 / 视频分析 …）的容器 */
@@ -982,8 +854,8 @@
       return;
     }
     if (msg.type === 'LP_RELOAD') {
-      if (mode === 'detail') loadDetail();
-      else { loadRankAll(); }
+      // v2.3.0：数据跟随页面自身请求，所以「重新抓取」= 刷新页面（页面会重新发带签名的请求）
+      location.reload();
       reply({ ok: true });
     } else if (msg.type === 'LP_STATS') {
       if (mode === 'detail') {
@@ -1002,6 +874,23 @@
     }
   });
 
+  /* ---------------- 页面响应推送（fetch.js 主通道，v2.3.0） ----------------
+   * 罗盘接口强校验 a_bogus/msToken 签名，插件自己发请求拿不到数据（「获取不到链接」根因）；
+   * fetch.js 在页面世界 hook fetch/XHR，把页面自己的请求响应原样推过来——
+   * 签名、分页、筛选全部天然正确。 */
+  window.addEventListener('message', function (e) {
+    if (e.source !== window) return;
+    const d = e.data;
+    if (!d || d.__lp !== 'data' || !d.kind) return;
+    try {
+      if (d.kind === 'rank') {
+        applyRankRows(parseRank(d.data));
+      } else if (d.kind === 'detail') {
+        applyDetailRows(d.data);
+      }
+    } catch (err) {}
+  });
+
   /* ---------------- 模式调度 ---------------- */
   function detectMode() {
     const p = location.pathname;
@@ -1011,9 +900,72 @@
   }
 
   function startRank() {
-    const wait = document.readyState === 'complete' ? 5000 : 7000;
-    setTimeout(loadRankAll, wait);
     watchPageKeyword();
+    startRankHintTimer();
+  }
+
+  /**
+   * 主通道（v2.3.1）：后台 webRequest 捕获页面自己发出的「带签名完整 URL」，
+   * 这里轮询取最新一条，经页面桥原样重放——URL 不变 = 签名不变。
+   * 页面翻页/筛选/搜索会产生新 URL，自动跟随；URL 没变就不重放。
+   */
+  let lastRankUrl = '';
+  let lastDetailUrl = '';
+  function pollPageUrls() {
+    setInterval(async function () {
+      if (mode !== 'rank' && mode !== 'detail') return;
+      let resp = null;
+      try {
+        resp = await new Promise(function (resolve) {
+          chrome.runtime.sendMessage({ type: 'LP_GET_URLS' }, function (r) {
+            void chrome.runtime.lastError;
+            resolve(r || null);
+          });
+        });
+      } catch (e) {
+        diag.note = 'getUrls-throw: ' + String((e && e.message) || e);
+        persistDiag();
+        return;
+      }
+      if (!resp || !resp.ok) {
+        diag.note = 'getUrls-empty';
+        persistDiag();
+        return;
+      }
+      diag.note = 'urls: rank=' + (resp.rank ? 'yes' : 'no') + ' detail=' + (resp.detail ? 'yes' : 'no') + ' mode=' + mode;
+      persistDiag();
+
+      if (mode === 'rank' && resp.rank && resp.rank !== lastRankUrl) {
+        lastRankUrl = resp.rank;
+        try {
+          const json = await pageFetch(resp.rank);
+          const n = applyRankRows(parseRank(json));
+          diag.note = 'replayed rank rows=' + n;
+          persistDiag();
+        } catch (e) {
+          noteError(String((e && e.message) || e));
+          diag.note = 'replay-failed: ' + String((e && e.message) || e).slice(0, 120);
+          persistDiag();
+          renderErrorChip('罗盘下载：重放页面请求失败 ' + String((e && e.message) || e).slice(0, 80));
+        }
+      }
+
+      if (mode === 'detail' && resp.detail && resp.detail !== lastDetailUrl) {
+        lastDetailUrl = resp.detail;
+        try {
+          const json = await pageFetch(resp.detail);
+          const n = applyDetailRows(json);
+          diag.note = 'replayed detail rows=' + n;
+          persistDiag();
+        } catch (e) {
+          noteError(String((e && e.message) || e));
+          diag.note = 'detail-replay-failed: ' + String((e && e.message) || e).slice(0, 120);
+          persistDiag();
+          detailMeta.error = String((e && e.message) || e);
+          renderDetailBar();
+        }
+      }
+    }, 2500);
   }
 
   function startDetail() {
@@ -1021,25 +973,7 @@
     if (detailBooted && pid === detailPid) return;
     detailBooted = true;
     detailPid = pid;
-    const wait = document.readyState === 'complete' ? 3500 : 5000;
-    setTimeout(loadDetail, wait);
-  }
-
-  /** 页面切换时间区间/商品后，后台会捕获到新参数，这里跟着重抓 */
-  function filterKey(p) {
-    return [p.product_id || '', p.date_type || '', p.begin_date || '', p.end_date || '', p.saleType || ''].join('|');
-  }
-
-  function watchDetailFilter() {
-    setInterval(async function () {
-      if (mode !== 'detail' || detailLoading) return;
-      const pid = urlParam('product_id') || '';
-      const cap = await askBgParams();
-      if (!cap) return;
-      if (pid && cap.product_id && cap.product_id !== pid) return;
-      const k = filterKey(cap);
-      if (k && k !== detailLoadedKey) loadDetail();
-    }, 3000);
+    loadDetail();
   }
 
   function tick() {
@@ -1053,7 +987,7 @@
     if (mode === 'rank') {
       try { injectRowButtons(); } catch (e) {}
     } else if (mode === 'detail') {
-      // 站内切换到别的竞品时，URL 变了但路由没刷新，这里补一次重抓
+      // 站内切换到别的竞品时，URL 变了但路由没刷新，这里补一次重置（数据仍由页面推送）
       const pid = urlParam('product_id') || '';
       if (pid && pid !== detailPid) { startDetail(); }
       try { injectDetailBar(); } catch (e) {}
@@ -1064,7 +998,7 @@
   function boot() {
     tick();
     setInterval(tick, 1800);
-    watchDetailFilter();
+    pollPageUrls();
   }
 
   if (document.readyState === 'loading') {
