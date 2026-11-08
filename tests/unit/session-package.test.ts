@@ -113,6 +113,47 @@ describe('会话包格式（§10.2）', () => {
   })
 })
 
+describe('会话包 v2：站点本地存储', () => {
+  const storage = [
+    { origin: 'https://fxg.jinritemai.com', items: [{ name: 'token', value: 'TOKEN_VALUE_9d1f7c3a5e2b8046' }] },
+    { origin: 'https://jinritemai.com', items: [{ name: 'shop', value: 'SHOP_VALUE_4a8c2f6d1e9b3570' }] }
+  ]
+
+  it('storage 随包往返，且密文里看不到值', () => {
+    const { file } = packSession('pw-12345678', { ...base, storage }, 30, 1700000000000)
+    const out = unpackSession('pw-12345678', file, 1700000000000)
+    expect(out.payload.storage).toEqual(storage)
+    expect(file.includes(Buffer.from('TOKEN_VALUE_9d1f7c3a5e2b8046'))).toBe(false)
+    expect(file.includes(Buffer.from('SHOP_VALUE_4a8c2f6d1e9b3570'))).toBe(false)
+    expect(file.includes(Buffer.from('fxg.jinritemai.com'))).toBe(false)
+  })
+
+  it('没有 storage 段时保持缺省（不凭空造一个空数组）', () => {
+    const { file } = packSession('pw-12345678', base, 30, 1700000000000)
+    const out = unpackSession('pw-12345678', file, 1700000000000)
+    expect(out.payload.storage).toBeUndefined()
+  })
+
+  it('v1 旧包仍能导入（用户手上没过期的包必须还能用）', () => {
+    const { file } = packSession('pw-12345678', base, 30, 1700000000000, { version: 1 })
+    const out = unpackSession('pw-12345678', file, 1700000000000)
+    expect(out.payload.v).toBe(1)
+    expect(out.payload.storage).toBeUndefined()
+    expect(out.payload.cookies).toHaveLength(2)
+  })
+
+  it('包内超大值在解包时被再收口一次（防止手工造包撑爆目标机）', () => {
+    const huge = 'z'.repeat(200 * 1024)
+    const { file } = packSession('pw-12345678', {
+      ...base,
+      storage: [{ origin: 'https://a.com', items: [{ name: 'huge', value: huge }, { name: 'ok', value: '1' }] }]
+    }, 30, 1700000000000)
+    const out = unpackSession('pw-12345678', file, 1700000000000)
+    expect(out.payload.storage).toHaveLength(1)
+    expect(out.payload.storage![0].items.map(item => item.name)).toEqual(['ok'])
+  })
+})
+
 function u32(n: number): Buffer {
   const b = Buffer.alloc(4)
   b.writeUInt32LE(n, 0)

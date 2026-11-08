@@ -1754,4 +1754,17 @@ onMounted(() => { void loadLinks(); void loadLocal() })
 .product-confirm h3{margin:0 0 10px;font-size:17px;color:var(--dash-text)}
 .product-confirm-text{margin:0;color:var(--dash-text);font-size:13px;line-height:1.7;white-space:pre-line}
 .product-confirm-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
+
+/* ============================================================
+   2026-11 表格可读性修正（追加覆盖）
+   实拍问题：① 状态/挂载列太窄，"就地""未挂载"被挤成竖排；② 操作列 6~7 个按钮
+   按内容宽度随机换行，右栏像被塞满的抽屉。这里把状态类文本钉成单行，
+   操作区改成定宽两列网格——按钮左对齐成列，不再参差。
+   ============================================================ */
+.status-chip,
+.product-orphan,
+.product-platform{white-space:nowrap}
+.product-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 6px;max-width:212px}
+.product-actions>button{justify-content:flex-start;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.product-table td{padding:9px 10px}
 </style>

@@ -53,15 +53,15 @@ const subtitle = computed(() => props.mode === 'ai' ? '访问当前已接入的 
 
 /** 图标底色：资源本身是浅色描边（为深色底准备），这里用 mask 着色，不改动图标文件 */
 const appTones: Record<AppTone, { bg: string; fg: string }> = {
-  violet: { bg: 'linear-gradient(150deg,#F1EBFF,#DFD3FF)', fg: '#6141E8' },
-  blue: { bg: 'linear-gradient(150deg,#EAF2FF,#D4E4FF)', fg: '#1D6FE8' },
-  cyan: { bg: 'linear-gradient(150deg,#E4F7FE,#C9EBFA)', fg: '#0A8FBF' },
-  orange: { bg: 'linear-gradient(150deg,#FFF2E5,#FFE1C6)', fg: '#CE6D0C' },
-  indigo: { bg: 'linear-gradient(150deg,#EAECFF,#D7DBFF)', fg: '#4453D6' },
-  green: { bg: 'linear-gradient(150deg,#E6F9F0,#CCEFDE)', fg: '#0C9A6A' },
-  pink: { bg: 'linear-gradient(150deg,#FFEBF5,#FFD5E8)', fg: '#CE2F85' },
-  slate: { bg: 'linear-gradient(150deg,#F0F3F9,#E1E7F1)', fg: '#5A6478' },
-  amber: { bg: 'linear-gradient(150deg,#FFF7E8,#FFE6BC)', fg: '#B26A00' }
+  violet: { bg: '#F3EFFF', fg: '#5340D9' },
+  blue: { bg: '#EAF2FF', fg: '#1D6FE8' },
+  cyan: { bg: '#E4F7FE', fg: '#0A7EA4' },
+  orange: { bg: '#FFF3E6', fg: '#B85E0A' },
+  indigo: { bg: '#EDEEFF', fg: '#4453D6' },
+  green: { bg: '#E7F8F0', fg: '#0C8A5F' },
+  pink: { bg: '#FFEDF5', fg: '#C02C7C' },
+  slate: { bg: '#F0F3F7', fg: '#54607A' },
+  amber: { bg: '#FFF7E6', fg: '#A56400' }
 }
 
 const appCategories: Array<{ key: AppCatKey; label: string }> = [
@@ -352,4 +352,34 @@ function iconMask(url: string): Record<string, string> {
 
 @media(max-width:1180px){.ac-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:860px){.ac-search{width:100%}.ac-views{margin-left:0}.ac-grid{grid-template-columns:1fr}.ac-hero{flex-wrap:wrap}.ac-hero .unified-button{margin-left:0}.ac-grid.is-list .ac-cat,.ac-grid.is-list .ac-foot{display:none}.ac-grid.is-list .ac-card h3{width:auto}}
+
+/* ============================================================
+   2026-11 统一风收敛（追加覆盖，不改上面的历史规则）
+   1) 推荐位去掉三层 radial+linear 渐变，改为品牌浅底实色；
+   2) 卡片 align-items:start：等高栅格会在短文案卡里留下大片空白；
+   3) 圆角/字号/图标底收敛到 tokens 的四档圆角与七档字阶。
+   ============================================================ */
+.ac-hero{border-color:var(--brand-border);border-radius:var(--r-lg);background:var(--brand-50);box-shadow:none}
+.ac-hero-pill{background:var(--success-soft);color:var(--success-text)}
+.ac-hero h2{font-size:var(--text-16);letter-spacing:-.02em}
+.ac-hero p{color:var(--ui-text-secondary);font-size:var(--text-12);line-height:var(--leading-snug)}
+.ac-hero-art{width:44px;height:44px}
+.ac-search{width:280px;height:32px;border-color:var(--ui-border-strong);border-radius:var(--r-sm);background:var(--ui-surface);box-shadow:none}
+.ac-search:focus-within{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-50)}
+.ac-chip{height:28px;border-radius:var(--r-sm);font-size:var(--text-12);font-weight:var(--weight-medium)}
+.ac-chip.on{border-color:var(--brand);background:var(--brand);box-shadow:none}
+.ac-views{padding:2px;border-radius:var(--r-sm);background:var(--ui-surface-sunken)}
+.ac-view{width:28px;height:24px;border-radius:var(--r-xs)}
+.ac-view.on{color:var(--brand-text);box-shadow:var(--e1)}
+.ac-section h2{font-size:var(--text-14)}
+.ac-grid{gap:var(--sp-3);align-items:start}
+.ac-card{padding:var(--sp-4);border-radius:var(--r-lg);box-shadow:var(--e1)}
+.ac-card:hover{border-color:var(--brand-border);box-shadow:var(--e2)}
+.ac-icon{width:38px;height:38px;border:0;border-radius:var(--r-md);box-shadow:none}
+.ac-icon i{width:19px;height:19px}
+.ac-card h3{font-size:var(--text-14);font-weight:var(--weight-semibold)}
+.ac-desc{min-height:0;font-size:var(--text-12);line-height:var(--leading-snug);-webkit-line-clamp:2}
+.ac-foot{padding-top:var(--sp-2);border-top-color:var(--ui-border);font-size:var(--text-11)}
+.ac-cat{border-radius:var(--r-xs);font-size:var(--text-11)}
+.ac-strip{color:var(--ui-text-muted);font-size:var(--text-11)}
 </style>

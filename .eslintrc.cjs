@@ -23,7 +23,10 @@ module.exports = {
     'artifacts/**',
     'logs/**',
     'wx-invite-test/**',
-    '.npm-cache/**'
+    '.npm-cache/**',
+    // 插件中心的内置扩展是第三方代码（随包发的成品），不按本仓库风格要求；
+    // 它们的安全边界由 extension-manifest.ts 的权限/注入规则把关，不靠 lint。
+    'assets/browser-extensions/**'
   ],
   rules: {
     'no-unused-vars': 'off', // 由 @typescript-eslint/no-unused-vars 接管

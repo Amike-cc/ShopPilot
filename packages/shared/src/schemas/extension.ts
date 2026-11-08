@@ -23,3 +23,11 @@ export const browserExtensionIdInputSchema = z.object({
 export const browserExtensionOpenDirSchema = z.object({
   id: browserExtensionIdSchema.optional()
 }).strict()
+
+/**
+ * 插件中心安装：Renderer 只传目录条目的 key（不是路径、不是 slug）。
+ * 目标目录由主进程按 key 确定性推导（`catalogSlug`），装不出第二份。
+ */
+export const browserExtensionCatalogInstallSchema = z.object({
+  key: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{2,39}$/, '插件条目 ID 不合法')
+}).strict()

@@ -9,11 +9,19 @@
  */
 
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto'
+import { sanitizeStorageEntries, type SessionStorageEntry } from '@shared/session-storage'
 
 export const MAGIC = 'SHSP'
-export const PKG_VERSION = 1
+/**
+ * v1：Cookie + 指纹配置；v2：追加站点 localStorage。
+ * 新包一律写 v2，但**必须能读 v1**——用户手上已经导出过的包没过期就还得能导入。
+ */
+export const PKG_VERSION = 2
+export const SUPPORTED_PKG_VERSIONS = [1, 2] as const
 export const SCRYPT = { N: 16384, r: 8, p: 1, keyLen: 32 }
 const MAXMEM = 64 * 1024 * 1024
+/** 包内站点数硬上限：正常导出最多 8 个，这里留一倍余量防止恶意包把内存吃满 */
+const MAX_STORAGE_ORIGINS = 16
 
 export interface SessionCookieEntry {
   name: string; domain: string; path: string; value: string
@@ -31,6 +39,8 @@ export interface SessionPackagePayload {
   expiresAt: number
   profile: Record<string, unknown> | null
   cookies: SessionCookieEntry[]
+  /** v2 起：站点 localStorage（v1 包没有该字段，按空数组处理） */
+  storage?: SessionStorageEntry[]
 }
 
 export type SessionPackageErrorCode = 'SESSION_IMPORT_INVALID' | 'SESSION_PACKAGE_EXPIRED'
@@ -58,16 +68,19 @@ export function packSession(
   password: string,
   payload: Omit<SessionPackagePayload, 'v' | 'exportedAt' | 'expiresAt'>,
   validDays: number,
-  now: number = Date.now()
+  now: number = Date.now(),
+  /** version 仅用于单测构造 v1 包，验证向后兼容；生产一律默认 PKG_VERSION。 */
+  opts: { version?: 1 | 2 } = {}
 ): { file: Buffer; expiresAt: number } {
+  const version = opts.version ?? PKG_VERSION
   const expiresAt = now + validDays * 24 * 3600 * 1000
-  const body: SessionPackagePayload = { v: PKG_VERSION, ...payload, exportedAt: now, expiresAt }
+  const body: SessionPackagePayload = { v: version, ...payload, exportedAt: now, expiresAt }
 
   const salt = randomBytes(32)
   const nonce = randomBytes(12)
   const key = deriveKey(password, salt, SCRYPT)
   const header = Buffer.from(JSON.stringify({
-    v: PKG_VERSION, kdf: 'scrypt', N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, keyLen: SCRYPT.keyLen,
+    v: version, kdf: 'scrypt', N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, keyLen: SCRYPT.keyLen,
     salt: salt.toString('base64'), nonce: nonce.toString('base64'),
     exportedAt: now, expiresAt, srcStoreName: body.srcStoreName, srcPlatform: body.srcPlatform
   }), 'utf8')
@@ -105,7 +118,9 @@ export function unpackSession(password: string, buf: Buffer, now: number = Date.
 
   let h: any
   try { h = JSON.parse(header.toString('utf8')) } catch { throw invalid('包头无法解析') }
-  if (h.v !== PKG_VERSION || h.kdf !== 'scrypt') throw invalid('不支持的包版本或 KDF')
+  if (!(SUPPORTED_PKG_VERSIONS as readonly number[]).includes(Number(h.v)) || h.kdf !== 'scrypt') {
+    throw invalid('不支持的包版本或 KDF')
+  }
   if (typeof h.N !== 'number' || typeof h.r !== 'number' || typeof h.p !== 'number' || typeof h.keyLen !== 'number') {
     throw invalid('缺少 KDF 参数')
   }
@@ -135,7 +150,13 @@ export function unpackSession(password: string, buf: Buffer, now: number = Date.
 
   let payload: SessionPackagePayload
   try { payload = JSON.parse(plain) } catch { throw invalid('载荷无法解析') }
-  if (payload.v !== PKG_VERSION) throw invalid('载荷版本异常')
+  // 包头与载荷版本必须一致：否则 AAD 保护的版本号与实际内容可以各说各话
+  if (Number(payload.v) !== Number(h.v)) throw invalid('载荷版本异常')
+  if (payload.storage !== undefined) {
+    if (!Array.isArray(payload.storage) || payload.storage.length > MAX_STORAGE_ORIGINS) throw invalid('本地存储段不合法')
+    // 二次收口：包可能是别人手工造的，超大值/超多站点在这里挡住，别等到写进目标店铺才发现
+    payload.storage = sanitizeStorageEntries(payload.storage).entries
+  }
   if (typeof payload.expiresAt !== 'number' || typeof h.expiresAt !== 'number') throw invalid('缺少有效期')
   // 有效期双重校验：明文头被 AAD 保护，载荷内再核一次，取更早者
   const effective = Math.min(payload.expiresAt, h.expiresAt)

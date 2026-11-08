@@ -1,0 +1,64 @@
+{
+  "manifest_version": 3,
+  "name": "三鱼带货视频下载",
+  "version": "2.1.9",
+  "description": "抖店罗盘：商品榜单短视频榜、竞品详情视频分析，一键复制链接与批量下载 mp4",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "https://compass.jinritemai.com/*",
+    "https://*.douyinvod.com/*",
+    "https://*.byteimg.com/*",
+    "https://*.douyinpic.com/*",
+    "https://*.zjcdn.com/*",
+    "https://*.bytecdn.cn/*",
+    "https://*.ibyteimg.com/*",
+    "https://*.douyin.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "三鱼带货视频下载",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "fetch.js"
+      ],
+      "matches": [
+        "https://compass.jinritemai.com/*"
+      ]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://compass.jinritemai.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "panel.css"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

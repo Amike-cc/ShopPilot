@@ -274,7 +274,12 @@ describe('guest id 就绪等待：读不到 ≠ 失败（用户实报回归）',
   })
 
   it('dom-ready 兜底再触发一次注册，且已挂上的直接跳过', () => {
-    expect(SURFACE).toContain('@dom-ready="handleWebviewAttach(item)"')
+    // 2026-11-08：dom-ready 改走 onWebviewDomReady（先套店铺缩放，再走同一套注册）。
+    // 断言跟随实现，但守住的还是同一件事：dom-ready 必须触发注册，且注册函数本身幂等。
+    expect(SURFACE).toContain('@dom-ready="onWebviewDomReady(item)"')
+    const wrapper = SURFACE.match(/function onWebviewDomReady\([\s\S]*?\n\}/)
+    expect(wrapper).toBeTruthy()
+    expect(wrapper![0]).toContain('handleWebviewAttach(item)')
     const fn = SURFACE.match(/async function handleWebviewAttach[\s\S]*?\n\}/)![0]
     expect(fn).toContain('if (webviewAttached(item)) return')
   })

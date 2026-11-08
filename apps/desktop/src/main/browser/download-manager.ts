@@ -4,13 +4,22 @@
  */
 
 import { getDatabase } from '../db/database'
-import { BrowserWindow, shell } from 'electron'
+import { BrowserWindow, shell, type DownloadItem } from 'electron'
 import { existsSync } from 'fs'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
+import { isTerminalDownloadState } from '@shared/browser-tools'
 
 /** 店铺级进行中下载计数。数据库状态用于历史展示，内存计数用于生命周期回收门禁。 */
 const activeDownloadsByStore = new Map<string, number>()
 const activeDownloadStoreById = new Map<string, string>()
+/**
+ * 进行中下载的 DownloadItem 句柄（2026-11-08）。
+ *
+ * 为什么必须留引用：`pause()/resume()/cancel()` 都是 DownloadItem 上的方法，而 will-download
+ * 回调结束后就没有别的入口能拿到它。只在内存里存、终态即删——重启后旧记录没有句柄，
+ * 界面据此只显示"打开文件夹"，不会给出点了没反应的控制按钮。
+ */
+const activeItems = new Map<string, DownloadItem>()
 
 function addActiveDownload(storeId: string): void {
   activeDownloadsByStore.set(storeId, (activeDownloadsByStore.get(storeId) || 0) + 1)
@@ -23,6 +32,7 @@ function removeActiveDownload(storeId: string): void {
 }
 
 function finishActiveDownload(downloadId: string): void {
+  activeItems.delete(downloadId)
   const storeId = activeDownloadStoreById.get(downloadId)
   if (!storeId) return
   activeDownloadStoreById.delete(downloadId)
@@ -163,6 +173,10 @@ export function updateDownloadState(
       SET state = ?, size_bytes = ?, completed_at = ?
       WHERE id = ?
     `).run(state, sizeBytes || null, now, downloadId)
+  } else if (sizeBytes === undefined) {
+    // 没带体积就只改状态：暂停/中断这类调用不该把已写入的 size_bytes 洗成 NULL
+    //（两个 updated 分支都不传 size，此前会把体积一路擦掉）
+    db.prepare('UPDATE downloads SET state = ? WHERE id = ?').run(state, downloadId)
   } else {
     db.prepare(`
       UPDATE downloads 
@@ -172,7 +186,125 @@ export function updateDownloadState(
   }
   // Electron 的 updated 事件可能先报 interrupted，随后 done 再报 cancelled；
   // 计数只允许从正数减到零，重复终态不会造成负数。
-  if (state !== 'progressing' && state !== 'in_progress') finishActiveDownload(downloadId)
+  // 暂停**不是**终态（2026-11-08）：暂停中的下载仍占着页面与句柄，不能释放，
+  // 否则用户点"继续"时句柄已经被回收，只能重下一遍。
+  if (isTerminalDownloadState(state)) finishActiveDownload(downloadId)
+}
+
+/**
+ * 登记进行中下载的句柄。will-download 里在 recordDownload 之后调用一次。
+ * 只存内存不落库：重启后旧记录没有句柄，控制按钮会按"进行中"的陈旧状态给出，
+ * 所以界面另外用 ACTIVE_DOWNLOAD_STATES 判定，并在主进程如实回 not-active。
+ */
+export function registerDownloadItem(downloadId: string, item: DownloadItem): void {
+  activeItems.set(downloadId, item)
+}
+
+export type DownloadControlResult =
+  | 'paused'
+  | 'already-paused'
+  | 'resumed'
+  | 'not-paused'
+  | 'cannot-resume'
+  | 'cancelled'
+  | 'not-active'
+
+/**
+ * 取"还活着"的下载句柄。
+ *
+ * 已经到终态的条目即便还留在 Map 里也不能再操控：DownloadItem 完成后调用
+ * pause/resume 无效甚至抛错，界面会表现为"点了没反应"——那比没有按钮更糟。
+ */
+function liveDownloadItem(downloadId: string): DownloadItem | null {
+  const item = activeItems.get(downloadId)
+  if (!item) return null
+  try {
+    // 暂停中的条目 getState() 仍是 progressing，但保守起见把 isPaused 也算"活着"，
+    // 否则某些版本上状态字段一变，暂停中的下载就再也点不了"继续"。
+    if (item.getState() !== 'progressing' && !item.isPaused()) {
+      activeItems.delete(downloadId)
+      return null
+    }
+  } catch {
+    activeItems.delete(downloadId)
+    return null
+  }
+  return item
+}
+
+/** DownloadItem 的 isPaused 在条目已销毁时会抛错，探测失败按"没暂停"处理。 */
+export function isItemPaused(item: DownloadItem): boolean {
+  try {
+    return item.isPaused()
+  } catch {
+    return false
+  }
+}
+
+function safeBytes(read: () => number): number {
+  try {
+    const value = read()
+    return Number.isFinite(value) && value > 0 ? value : 0
+  } catch {
+    return 0
+  }
+}
+
+function emitControlProgress(downloadId: string, state: 'paused' | 'progressing', item: DownloadItem): void {
+  emitDownloadProgress({
+    id: downloadId,
+    storeId: activeDownloadStoreById.get(downloadId) || '',
+    state,
+    receivedBytes: safeBytes(() => item.getReceivedBytes()),
+    totalBytes: safeBytes(() => item.getTotalBytes())
+  })
+}
+
+/** 暂停：只暂停传输，不取消、不丢已下载分片。 */
+export function pauseDownload(downloadId: string): DownloadControlResult {
+  const item = liveDownloadItem(downloadId)
+  if (!item) return 'not-active'
+  try {
+    if (item.isPaused()) return 'already-paused'
+    item.pause()
+  } catch {
+    return 'not-active'
+  }
+  updateDownloadState(downloadId, 'paused')
+  emitControlProgress(downloadId, 'paused', item)
+  return 'paused'
+}
+
+/**
+ * 继续。
+ * `canResume()` 为 false 表示服务端不支持 Range（或分片已不可用），此时 Electron 的
+ * resume() 只会从零开始或者无效——如实回 cannot-resume，由界面告诉用户"这条只能重下"。
+ */
+export function resumeDownload(downloadId: string): DownloadControlResult {
+  const item = liveDownloadItem(downloadId)
+  if (!item) return 'not-active'
+  try {
+    if (!item.isPaused()) return 'not-paused'
+    if (!item.canResume()) return 'cannot-resume'
+    item.resume()
+  } catch {
+    return 'not-active'
+  }
+  updateDownloadState(downloadId, 'progressing')
+  emitControlProgress(downloadId, 'progressing', item)
+  return 'resumed'
+}
+
+/** 取消：真正的取消由 done 事件收尾（写 cancelled + 通知界面），这里不重复写库。 */
+export function cancelDownload(downloadId: string): DownloadControlResult {
+  const item = liveDownloadItem(downloadId)
+  if (!item) return 'not-active'
+  try {
+    item.cancel()
+  } catch {
+    return 'not-active'
+  }
+  return 'cancelled'
 }
 
 /**

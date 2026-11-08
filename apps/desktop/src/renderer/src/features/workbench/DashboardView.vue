@@ -1,114 +1,155 @@
 <template>
-  <section :class="['dashboard-shell welcome', { 'image-studio-shell': activePage === 'image-studio' || activePage === 'graphic-sell', 'workspace-hidden': !props.active, 'mobile-nav-open': mobileNavOpen }]" data-test="dashboard-home">
-    <aside class="dashboard-sidebar sidebar" :class="{ collapsed: leftSidebarCollapsed, 'mobile-open': mobileNavOpen }" data-test="sidebar" aria-label="ShopPilot 主导航">
-      <div v-if="leftSidebarCollapsed && !mobileNavOpen" class="sidebar-rail">
-        <button type="button" class="rail-btn" data-test="sidebar-expand" title="展开左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(true)"><img :src="forwardIcon" alt="" /></button>
-        <button type="button" class="rail-btn btn-new" data-test="rail-new" title="添加店铺" @click="openStoreCreate"><img :src="addIcon" alt="" /></button>
-        <button type="button" class="rail-btn" data-test="rail-trash" title="回收站" @click="openTrash">
-          <img :src="utilityTrashIcon" alt="" />
+  <section
+    :class="['dashboard-shell', { 'image-studio-shell': activePage === 'image-studio' || activePage === 'graphic-sell', 'workspace-hidden': !props.active, 'mobile-nav-open': mobileNavOpen }]"
+    data-test="dashboard-home"
+  >
+    <!-- ============================ 左栏 ============================
+         2026-11 重构：由深色侧栏改为浅色统一风。导航分三组（主控 / 运营 / 工具），
+         店铺列表独立成区并支持搜索（>6 家时出现），底部只留设置与回收站。
+         收起态从"只有 4 个按钮"改为完整图标轨道——收起后仍能切页，不必先展开。 -->
+    <aside class="dashboard-sidebar sidebar" :class="['sb', { collapsed: leftSidebarCollapsed, 'mobile-open': mobileNavOpen }]" data-test="sidebar" aria-label="ShopPilot 主导航">
+      <div v-if="leftSidebarCollapsed && !mobileNavOpen" class="sb-rail sidebar-rail">
+        <button type="button" class="ui-icon-btn" data-test="sidebar-expand" title="展开左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(true)">
+          <AppIcon name="expand" :size="16" />
+        </button>
+        <div class="sb-rail-sep" aria-hidden="true"></div>
+        <button
+          v-for="item in navItems"
+          :key="item.key"
+          type="button"
+          class="ui-icon-btn sb-rail-btn"
+          :class="{ on: activeNav === item.label }"
+          :data-test="`nav-${item.key}`"
+          :title="item.label"
+          @click="handleNav(item)"
+        >
+          <AppIcon :name="item.icon" :size="17" />
+        </button>
+        <div class="sb-rail-sep" aria-hidden="true"></div>
+        <button type="button" class="ui-icon-btn sb-rail-btn btn-new" data-test="rail-new" title="添加店铺" @click="openStoreCreate">
+          <AppIcon name="plus" :size="17" />
+        </button>
+        <button type="button" class="ui-icon-btn sb-rail-btn" data-test="rail-trash" title="回收站" @click="openTrash">
+          <AppIcon name="trash" :size="17" />
           <span v-if="ws.trashStores.length" class="rail-badge" data-test="rail-trash-badge"></span>
         </button>
-        <button type="button" class="rail-btn" data-test="rail-settings" title="设置中心" @click="navigateTo('settings')"><img :src="settingsIcon" alt="" /></button>
+        <button type="button" class="ui-icon-btn sb-rail-btn" data-test="rail-settings" title="设置中心" @click="navigateTo('settings')">
+          <AppIcon name="settings" :size="17" />
+        </button>
       </div>
+
       <template v-else>
-      <div class="dashboard-brand">
-<div class="dashboard-brand-mark" aria-hidden="true"><img :src="brandMark" alt="" /></div>
-        <div class="dashboard-brand-copy">
-          <strong>ShopPilot</strong>
-          <span>多平台经营工作台</span>
-        </div>
-        <button type="button" class="sidebar-collapse" data-test="sidebar-collapse" title="收起左侧栏（Ctrl+Shift+E）" @click="setLeftSidebarOpen(false)"><img :src="backIcon" alt="" /></button>
-      </div>
-
-      <nav class="dashboard-nav" aria-label="主功能导航">
-        <template v-for="group in navGroups" :key="group.key">
-          <div v-if="group.title" class="nav-group-title">{{ group.title }}</div>
-          <button
-            v-for="item in group.items"
-            :key="item.label"
-            type="button"
-            :class="['dashboard-nav-item', { active: activeNav === item.label }]"
-            :data-test="`nav-${item.key}`"
-            :aria-current="activeNav === item.label ? 'page' : undefined"
-            @click="handleNav(item)"
-          >
-            <span class="nav-glyph" aria-hidden="true"><img v-if="item.icon" :src="item.icon" alt="" /> <span v-else>{{ item.glyph }}</span></span>
-            <span class="nav-label">{{ item.label }}</span>
-          </button>
-        </template>
-      </nav>
-
-      <div class="dashboard-store-area">
-        <div class="store-area-title">
-          <span>我的店铺</span>
-          <span class="store-count">{{ ws.stores.length }}</span>
-          <button type="button" class="add-store-button btn-new" title="添加店铺" @click="openStoreCreate"><img :src="addIcon" alt="" /></button>
-        </div>
-        <div class="store-area-body">
-          <div v-if="!ws.ready" class="sidebar-state">正在读取店铺…</div>
-          <div v-else-if="!ws.stores.length" class="sidebar-state">
-            <img class="sidebar-state-art" :src="emptyStoreArt" alt="暂无店铺" />
-            <span>暂无店铺</span>
-            <button type="button" class="inline-link" @click="navigateTo('stores')">添加第一家店铺</button>
+        <div class="sb-brand">
+          <img class="sb-mark" :src="brandMark" alt="" aria-hidden="true" />
+          <div class="sb-brand-copy">
+            <strong>ShopPilot</strong>
+            <span>多平台经营工作台</span>
           </div>
-          <div v-else class="store-groups">
+          <button
+            type="button"
+            class="ui-icon-btn sb-collapse"
+            data-test="sidebar-collapse"
+            title="收起左侧栏（Ctrl+Shift+E）"
+            @click="setLeftSidebarOpen(false)"
+          >
+            <AppIcon name="collapse" :size="15" />
+          </button>
+        </div>
+
+        <nav class="sb-nav" aria-label="主功能导航">
+          <div v-for="group in navGroups" :key="group.key" class="sb-group">
+            <div v-if="group.title" class="sb-group-title">{{ group.title }}</div>
             <button
-              v-for="store in ws.stores"
-              :key="store.id"
+              v-for="item in group.items"
+              :key="item.key"
               type="button"
-              :class="['dashboard-store-row', 'store-card', { displayed: ws.displayedStoreId === store.id }]"
-              data-test="store-card"
-              :data-store-id="store.id"
-              :title="`打开 ${store.name}`"
-              @click="openStoreFromPage(store.id)"
-              @contextmenu.prevent="openStoreContext(store, $event)"
+              :class="['sb-item', 'dashboard-nav-item', { active: activeNav === item.label }]"
+              :data-test="`nav-${item.key}`"
+              :aria-current="activeNav === item.label ? 'page' : undefined"
+              @click="handleNav(item)"
             >
-              <PlatformIcon :name="store.platform" :size="22" />
-              <span class="dashboard-store-name store-name">{{ store.name }}</span>
-              <!-- 客服未读红点（2026-10-16「实时检测店铺消息」）：哪家有新消息一眼看到 -->
-              <span
-                v-if="(ws.customerUnread[store.id] || 0) > 0"
-                class="unread-badge store-unread-badge"
-                data-test="store-unread"
-                :title="`客服未读 ${ws.customerUnread[store.id]} 条`"
-              >{{ ws.customerUnread[store.id] > 99 ? '99+' : ws.customerUnread[store.id] }}</span>
-              <span class="store-online-label"><i :class="['store-status-dot', statusClass(store.status)]" aria-hidden="true"></i>{{ statusLabel(store.status) }}</span>
-              <span
-                class="store-action"
-                role="button"
-                tabindex="0"
-                :title="`打开 ${store.name}`"
-                aria-label="打开浏览器"
-                @click.stop="openStoreFromPage(store.id)"
-                @keydown.enter.stop.prevent="openStoreFromPage(store.id)"
-                @keydown.space.stop.prevent="openStoreFromPage(store.id)"
-              ><img :src="openIcon" alt="" /></span>
+              <AppIcon :name="item.icon" :size="16" />
+              <span class="sb-item-label">{{ item.label }}</span>
             </button>
           </div>
-        </div>
-      </div>
+        </nav>
 
-      <div class="dashboard-sidebar-footer">
-        <button type="button" class="pro-card" @click="navigateTo('settings')">
-          <span class="pro-avatar" aria-hidden="true">SP</span>
-          <span class="pro-copy"><strong>ShopPilot Pro</strong><span class="pro-badge">专业版</span></span>
-          <span class="pro-arrow" aria-hidden="true"><img :src="forwardIcon" alt="" /></span>
-        </button>
-        <div class="foot-row">
+        <div class="sb-stores">
+          <div class="sb-stores-head">
+            <span class="sb-stores-title">我的店铺</span>
+            <span class="ui-badge">{{ ws.stores.length }}</span>
+            <button type="button" class="ui-icon-btn sb-add btn-new" title="添加店铺" aria-label="添加店铺" @click="openStoreCreate">
+              <AppIcon name="plus" :size="15" />
+            </button>
+          </div>
+          <label v-if="ws.stores.length > 6" class="sb-search">
+            <AppIcon name="search" :size="13" />
+            <input v-model="storeQuery" placeholder="搜索店铺" aria-label="搜索店铺">
+          </label>
+          <div class="sb-store-list">
+            <div v-if="!ws.ready" class="sb-hint">正在读取店铺…</div>
+            <div v-else-if="!ws.stores.length" class="sb-empty">
+              <div class="sb-empty-icon" aria-hidden="true"><AppIcon name="store" :size="20" /></div>
+              <span>还没有店铺</span>
+              <button type="button" class="ui-btn ui-btn--secondary ui-btn--sm" @click="openStoreCreate">
+                <AppIcon name="plus" :size="13" />添加店铺
+              </button>
+              <button type="button" class="sb-link" @click="navigateTo('stores')">去店铺管理看看</button>
+            </div>
+            <template v-else>
+              <button
+                v-for="store in visibleStores"
+                :key="store.id"
+                type="button"
+                :class="['sb-store', 'store-card', { displayed: ws.displayedStoreId === store.id }]"
+                data-test="store-card"
+                :data-store-id="store.id"
+                :title="`${store.platform} · ${statusLabel(store.status)}`"
+                @click="openStoreFromPage(store.id)"
+                @contextmenu.prevent="openStoreContext(store, $event)"
+              >
+                <PlatformIcon :name="store.platform" :size="16" />
+                <span class="sb-store-name">{{ store.name }}</span>
+                <span
+                  v-if="(ws.customerUnread[store.id] || 0) > 0"
+                  class="ui-badge ui-badge--danger unread-badge store-unread-badge"
+                  data-test="store-unread"
+                  :title="`客服未读 ${ws.customerUnread[store.id]} 条`"
+                >{{ ws.customerUnread[store.id] > 99 ? '99+' : ws.customerUnread[store.id] }}</span>
+                <span v-else-if="statusClass(store.status) !== 'online'" :class="['sb-store-warn', statusClass(store.status)]">{{ statusLabel(store.status) }}</span>
+                <!-- 正常只留一个状态点；异常才用文字说出来（安静时安静，出错时显眼） -->
+                <i v-if="statusClass(store.status) === 'online'" :class="['ui-dot', statusClass(store.status)]" :title="statusLabel(store.status)" aria-hidden="true"></i>
+                <!-- .store-action 是验收脚本用来"打开这家店"的锚点（custom-task / m1 / 邀约系列），
+                     保持 22×22 的真实尺寸与可点击：不能只留一个装饰图标。 -->
+                <span
+                  class="store-action"
+                  role="button"
+                  tabindex="-1"
+                  :title="`打开 ${store.name}`"
+                  aria-label="打开浏览器"
+                  @click.stop="openStoreFromPage(store.id)"
+                ><AppIcon name="arrow-right" :size="13" /></span>
+              </button>
+              <div v-if="!visibleStores.length" class="sb-hint">没有匹配「{{ storeQuery }}」的店铺</div>
+            </template>
+          </div>
+        </div>
+
+        <div class="sb-foot">
           <button
             type="button"
-            :class="['dashboard-nav-item', 'foot-btn', 'foot-settings', { active: activeNav === '设置中心' }]"
+            :class="['sb-item', 'sb-settings', { active: activeNav === '设置中心' }]"
             data-test="settings-open-btn"
-            @click="handleNav(settingsNav)"
+            @click="navigateTo('settings')"
           >
-            <span class="nav-glyph" aria-hidden="true"><img :src="settingsNav.icon" alt="" /></span>
-            <span class="nav-label">设置</span>
+            <AppIcon name="settings" :size="16" />
+            <span class="sb-item-label">设置</span>
           </button>
-          <button type="button" class="foot-btn foot-icon" data-test="trash-open" title="回收站" aria-label="回收站" @click="openTrash">
-            <img :src="utilityTrashIcon" alt="" /><span v-if="ws.trashStores.length" class="badge">{{ ws.trashStores.length }}</span>
+          <button type="button" class="ui-icon-btn sb-trash" data-test="trash-open" title="回收站" aria-label="回收站" @click="openTrash">
+            <AppIcon name="trash" :size="16" />
+            <span v-if="ws.trashStores.length" class="sb-trash-count">{{ ws.trashStores.length }}</span>
           </button>
         </div>
-      </div>
       </template>
     </aside>
 
@@ -134,15 +175,17 @@
         >
           <span></span><span></span><span></span>
         </button>
-        <div class="toolbar-crumb" aria-label="当前位置">
-          <span class="crumb-root">工作台</span>
-          <span class="crumb-sep" aria-hidden="true">/</span>
-          <span class="crumb-current">{{ pageTitle }}</span>
+
+        <div class="appbar-crumb" aria-label="当前位置">
+          <span>工作台</span>
+          <AppIcon name="chevron-right" :size="12" />
+          <strong>{{ pageTitle }}</strong>
         </div>
-        <div class="workspace-switcher" role="tablist" aria-label="工作区切换">
+
+        <div class="workspace-switch" role="tablist" aria-label="工作区切换">
           <button
             type="button"
-            class="workspace-tab active"
+            class="on"
             data-test="workspace-tab-workbench"
             role="tab"
             aria-selected="true"
@@ -151,12 +194,9 @@
             @pointerdown.stop
             @mousedown.stop
             @click.stop
-          >
-            <span>工作台</span>
-          </button>
+          >工作台</button>
           <button
             type="button"
-            class="workspace-tab"
             data-test="workspace-tab-customer-service"
             role="tab"
             aria-selected="false"
@@ -166,31 +206,57 @@
             @mousedown.stop
             @click.stop="emit('open-customer-service')"
           >
-            <span class="workspace-product-spark" aria-hidden="true">✦</span>
-            <span>电商客服</span>
-            <!-- 客服入口红点：所有店铺未读之和（实时检测事件驱动，不轮询界面） -->
-            <span v-if="customerUnreadTotal > 0" class="unread-badge" data-test="customer-service-unread" :title="`客服未读 ${customerUnreadTotal} 条`">{{ customerUnreadTotal > 99 ? '99+' : customerUnreadTotal }}</span>
+            电商客服
+            <span
+              v-if="customerUnreadTotal > 0"
+              class="ui-badge ui-badge--danger"
+              data-test="customer-service-unread"
+              :title="`客服未读 ${customerUnreadTotal} 条`"
+            >{{ customerUnreadTotal > 99 ? '99+' : customerUnreadTotal }}</span>
           </button>
         </div>
-        <div class="toolbar-actions">
-          <button type="button" class="toolbar-datetime" title="时间取自本机系统时钟" @click="showNotice('时间取自本机系统时钟；采集周期与调用记录都以它为准')">
-            <img class="dt-icon" :src="dateIcon" alt="" />{{ nowLabel }}<img class="dt-caret" :src="caretDownIcon" alt="" />
+
+        <div class="appbar-actions">
+          <button type="button" class="appbar-search" data-test="command-open" title="搜索功能与店铺（Ctrl+K）" @click="openCommandPalette">
+            <AppIcon name="search" :size="14" />
+            <span>搜索</span>
+            <kbd class="ui-kbd">Ctrl K</kbd>
           </button>
+          <!-- 原来是"看起来能点、点了只弹一句提示"的日期按钮；时钟是事实展示，不该伪装成菜单 -->
+          <time class="appbar-clock" :datetime="nowLabel" title="时间取自本机系统时钟">{{ nowLabel }}</time>
           <div class="notification-anchor">
-            <button type="button" class="toolbar-icon-button" data-test="notification-bell" :aria-expanded="notificationOpen" title="通知" @click="notificationOpen = !notificationOpen">
-              <img class="toolbar-action-icon" :src="notificationIcon" alt="" />
+            <button
+              type="button"
+              class="ui-icon-btn"
+              data-test="notification-bell"
+              :aria-expanded="notificationOpen"
+              title="通知"
+              aria-label="通知"
+              @click="notificationOpen = !notificationOpen"
+            >
+              <AppIcon name="bell" :size="17" />
               <i v-if="notificationCount" class="notification-dot" :aria-label="`有 ${notificationCount} 条通知`"></i>
             </button>
-            <div v-if="notificationOpen" class="notification-center" data-test="notification-center" role="dialog" aria-label="通知中心">
-              <header><strong>通知</strong><span>{{ notificationCount }} 条</span></header>
-              <div v-if="!notifications.length" class="notification-empty" data-test="notification-empty">暂无通知：达人邀约状态与客服未读会出现在这里。</div>
-              <button v-for="item in notifications" :key="item.id" type="button" class="notification-item" :class="'tone-' + item.tone" :data-test="'notification-item-' + item.id" @click="runNotification(item)">
-                <strong>{{ item.title }}</strong><span>{{ item.detail }}</span>
+            <div v-if="notificationOpen" class="notification-center ui-menu" data-test="notification-center" role="dialog" aria-label="通知中心">
+              <header class="notification-head"><strong>通知</strong><span>{{ notificationCount }} 条</span></header>
+              <div v-if="!notifications.length" class="notification-empty" data-test="notification-empty">
+                暂无通知。达人邀约状态与客服未读会出现在这里。
+              </div>
+              <button
+                v-for="item in notifications"
+                :key="item.id"
+                type="button"
+                class="notification-item"
+                :class="'tone-' + item.tone"
+                :data-test="'notification-item-' + item.id"
+                @click="runNotification(item)"
+              >
+                <strong>{{ item.title }}</strong>
+                <span>{{ item.detail }}</span>
               </button>
             </div>
           </div>
-          <button type="button" class="toolbar-icon-button" title="帮助（Ctrl+K 打开命令面板）" @click="showNotice('按 Ctrl+K 打开命令面板；店铺与设置入口在左栏与各页面内')"><img :src="helpIcon" alt="" /></button>
-          <span class="toolbar-avatar" aria-hidden="true" title="ShopPilot Pro">SP</span>
+          <span class="appbar-avatar" title="ShopPilot Pro · 本地账号">SP</span>
         </div>
       </header>
 
@@ -214,98 +280,212 @@
            曾经把页面链写成宿主后面的 v-else-if，导致"有店铺打开时所有页面都不渲染"
            （2026-10-19 集成验收实报）。 -->
       <template v-if="!browserHostActive">
-      <UnifiedStorePage v-if="activePage === 'stores'" @open-store="openStoreFromPage" />
-      <UnifiedDataPage v-else-if="activePage === 'analytics'" mode="analytics" @open-store="openStoreFromPage" />
-      <UnifiedDataPage v-else-if="activePage === 'invoices'" mode="invoices" @open-store="openStoreFromPage" />
-      <UnifiedDataPage v-else-if="activePage === 'tax'" mode="tax" @open-store="openStoreFromPage" />
-      <UnifiedSettingsPage v-else-if="activePage === 'settings'" :initial-tab="settingsTab" @close="closeSettings" />
-      <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" @busy-change="imageStudioBusy = $event" />
-      <UnifiedGraphicSellPage v-else-if="activePage === 'graphic-sell'" @go-home="navigateTo('overview')" @busy-change="graphicSellBusy = $event" />
-      <ProductManagementPage v-else-if="activePage === 'products'" @navigate="navigateTo" @open-store="openStoreFromPage" />
-      <UnifiedAppsPage v-else-if="activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-assistant="openAssistant" @open-invite="openCreatorInvite" />
-      <DashboardOverviewPage
-        v-else-if="activePage === 'overview'"
-        :invoice-todo-state="invoiceTodoState"
-        :pending-invoices="pendingInvoices"
-        @navigate="navigateTo"
-        @open-invoices="navigateTo('invoices')"
-        @open-assistant="openAssistant"
-        @notice="showNotice"
-        @refresh-invoice-todo="loadInvoiceTodo"
-      />
+        <UnifiedStorePage v-if="activePage === 'stores'" @open-store="openStoreFromPage" />
+        <UnifiedDataPage v-else-if="activePage === 'analytics'" mode="analytics" @open-store="openStoreFromPage" />
+        <UnifiedDataPage v-else-if="activePage === 'invoices'" mode="invoices" @open-store="openStoreFromPage" />
+        <UnifiedDataPage v-else-if="activePage === 'tax'" mode="tax" @open-store="openStoreFromPage" />
+        <UnifiedSettingsPage v-else-if="activePage === 'settings'" :initial-tab="settingsTab" @close="closeSettings" />
+        <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" @busy-change="imageStudioBusy = $event" />
+        <UnifiedGraphicSellPage v-else-if="activePage === 'graphic-sell'" @go-home="navigateTo('overview')" @busy-change="graphicSellBusy = $event" />
+        <ProductManagementPage v-else-if="activePage === 'products'" @navigate="navigateTo" @open-store="openStoreFromPage" />
+        <UnifiedAppsPage v-else-if="activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-assistant="openAssistant" @open-invite="openCreatorInvite" />
+        <DashboardOverviewPage
+          v-else-if="activePage === 'overview'"
+          :invoice-todo-state="invoiceTodoState"
+          :pending-invoices="pendingInvoices"
+          @navigate="navigateTo"
+          @open-invoices="navigateTo('invoices')"
+          @open-assistant="openAssistant"
+          @notice="showNotice"
+          @refresh-invoice-todo="loadInvoiceTodo"
+        />
       </template>
     </main>
 
-    <div v-if="storeContext.open && storeContext.store" class="dashboard-context-menu" data-test="store-ctx" :style="{ left: `${storeContext.x}px`, top: `${storeContext.y}px` }" @click.stop>
-      <button type="button" class="ctx-item" data-test="ctx-toggle" @click="storeContextAction('toggle')"><img :src="ws.openStoreIds.includes(storeContext.store.id) ? dashboardTrashIcon : dashboardBrowserIcon" alt="" />{{ ws.openStoreIds.includes(storeContext.store.id) ? '关闭浏览器' : '打开浏览器' }}</button>
-      <button type="button" class="ctx-item" data-test="ctx-standalone" :disabled="!canOpenStandalone" @click="storeContextAction('standalone')"><img :src="dashboardExternalIcon" alt="" />在独立窗口打开当前标签页</button>
-      <div class="ctx-sep"></div>
-      <button type="button" class="ctx-item" data-test="ctx-rename" @click="storeContextAction('rename')"><img :src="dashboardRenameIcon" alt="" />重命名…</button>
-      <button type="button" class="ctx-item" data-test="ctx-readname" @click="storeContextAction('readname')"><img :src="dashboardRenameIcon" alt="" />读取并更新店铺名（从页面）</button>
-      <button type="button" class="ctx-item" data-test="ctx-copycfg" :disabled="otherStoreOptions.length === 0" @click="storeContextAction('copycfg')"><img :src="dashboardCopyIcon" alt="" />复制环境配置到其他店铺…</button>
-      <button type="button" class="ctx-item" data-test="ctx-copyid" @click="storeContextAction('copyid')"><img :src="dashboardCopyIcon" alt="" />复制店铺 ID</button>
-      <div class="ctx-sep"></div>
-      <button type="button" class="ctx-item danger" data-test="ctx-trash" @click="storeContextAction('trash')"><img :src="dashboardTrashIcon" alt="" />移入回收站</button>
+    <!-- 店铺右键菜单 -->
+    <div
+      v-if="storeContext.open && storeContext.store"
+      class="dashboard-context-menu ui-menu"
+      data-test="store-ctx"
+      role="menu"
+      :style="{ left: `${storeContext.x}px`, top: `${storeContext.y}px` }"
+      @click.stop
+    >
+      <div class="ui-menu__label">{{ storeContext.store.name }}</div>
+      <button type="button" class="ui-menu__item" data-test="ctx-toggle" role="menuitem" @click="storeContextAction('toggle')">
+        <AppIcon :name="ws.openStoreIds.includes(storeContext.store.id) ? 'stop' : 'panel'" :size="14" />
+        {{ ws.openStoreIds.includes(storeContext.store.id) ? '关闭浏览器' : '打开浏览器' }}
+      </button>
+      <button type="button" class="ui-menu__item" data-test="ctx-standalone" role="menuitem" :disabled="!canOpenStandalone" @click="storeContextAction('standalone')">
+        <AppIcon name="external" :size="14" />在独立窗口打开当前标签页
+      </button>
+      <div class="ui-menu__sep"></div>
+      <button type="button" class="ui-menu__item" data-test="ctx-rename" role="menuitem" @click="storeContextAction('rename')">
+        <AppIcon name="edit" :size="14" />重命名…
+      </button>
+      <button type="button" class="ui-menu__item" data-test="ctx-readname" role="menuitem" @click="storeContextAction('readname')">
+        <AppIcon name="refresh" :size="14" />读取并更新店铺名（从页面）
+      </button>
+      <button type="button" class="ui-menu__item" data-test="ctx-copycfg" role="menuitem" :disabled="otherStoreOptions.length === 0" @click="storeContextAction('copycfg')">
+        <AppIcon name="copy" :size="14" />复制环境配置到其他店铺…
+      </button>
+      <button type="button" class="ui-menu__item" data-test="ctx-copyid" role="menuitem" @click="storeContextAction('copyid')">
+        <AppIcon name="tag" :size="14" />复制店铺 ID
+      </button>
+      <div class="ui-menu__sep"></div>
+      <button type="button" class="ui-menu__item ui-menu__item--danger" data-test="ctx-trash" role="menuitem" @click="storeContextAction('trash')">
+        <AppIcon name="trash" :size="14" />移入回收站
+      </button>
     </div>
 
-    <div v-if="renameDialog.open" class="dashboard-overlay" data-test="rename-dialog" @click.self="renameDialog.open = false">
-      <section class="dashboard-dialog" role="dialog" aria-modal="true" aria-label="重命名店铺">
-        <h2>重命名店铺</h2>
-        <input v-model="renameDialog.value" data-test="rename-input" maxlength="60" placeholder="店铺名称" @keydown.enter="saveStoreRename" />
-        <div class="dashboard-dialog-actions"><button type="button" class="unified-button" @click="renameDialog.open = false">取消</button><button type="button" class="unified-button primary" data-test="rename-save" :disabled="!renameDialog.value.trim()" @click="saveStoreRename">保存</button></div>
+    <!-- 重命名 -->
+    <div v-if="renameDialog.open" class="ui-overlay" data-test="rename-dialog" @click.self="renameDialog.open = false">
+      <section class="ui-dialog" role="dialog" aria-modal="true" aria-label="重命名店铺">
+        <div class="ui-dialog__head">
+          <div><h2>重命名店铺</h2><p>只改本机显示名，不影响平台店铺名称。</p></div>
+          <button type="button" class="ui-icon-btn" aria-label="关闭" @click="renameDialog.open = false"><AppIcon name="close" :size="15" /></button>
+        </div>
+        <div class="ui-dialog__body">
+          <input v-model="renameDialog.value" class="ui-input" data-test="rename-input" maxlength="60" placeholder="店铺名称" @keydown.enter="saveStoreRename">
+        </div>
+        <div class="ui-dialog__foot">
+          <button type="button" class="ui-btn ui-btn--secondary" @click="renameDialog.open = false">取消</button>
+          <button type="button" class="ui-btn ui-btn--primary" data-test="rename-save" :disabled="!renameDialog.value.trim()" @click="saveStoreRename">保存</button>
+        </div>
       </section>
     </div>
 
-    <div v-if="copyConfigDialog.open" class="dashboard-overlay" data-test="copy-config-dialog" @click.self="copyConfigDialog.open = false">
-      <section class="dashboard-dialog" role="dialog" aria-modal="true" aria-label="复制环境配置">
-        <h2>复制环境配置</h2>
-        <p class="dashboard-dialog-note">只复制环境指纹配置，不含 Cookie 会话和代理凭据。</p>
-        <label v-for="store in otherStoreOptions" :key="store.id" class="store-pick"><input v-model="copyConfigDialog.targets" type="checkbox" :value="store.id" data-test="pick-target" /><span>{{ store.name }}</span></label>
-        <div class="dashboard-dialog-actions"><button type="button" class="unified-button" @click="copyConfigDialog.open = false">取消</button><button type="button" class="unified-button primary" data-test="copy-apply" :disabled="!copyConfigDialog.targets.length" @click="applyStoreConfigCopy">复制到选中店铺</button></div>
+    <!-- 复制环境配置 -->
+    <div v-if="copyConfigDialog.open" class="ui-overlay" data-test="copy-config-dialog" @click.self="copyConfigDialog.open = false">
+      <section class="ui-dialog" role="dialog" aria-modal="true" aria-label="复制环境配置">
+        <div class="ui-dialog__head">
+          <div><h2>复制环境配置</h2><p>只复制环境指纹配置，不含 Cookie 会话和代理凭据。</p></div>
+          <button type="button" class="ui-icon-btn" aria-label="关闭" @click="copyConfigDialog.open = false"><AppIcon name="close" :size="15" /></button>
+        </div>
+        <div class="ui-dialog__body">
+          <div class="pick-list">
+            <label v-for="store in otherStoreOptions" :key="store.id" class="pick-row">
+              <input v-model="copyConfigDialog.targets" type="checkbox" :value="store.id" data-test="pick-target">
+              <PlatformIcon :name="store.platform" :size="15" />
+              <span>{{ store.name }}</span>
+            </label>
+          </div>
+        </div>
+        <div class="ui-dialog__foot">
+          <button type="button" class="ui-btn ui-btn--secondary" @click="copyConfigDialog.open = false">取消</button>
+          <button type="button" class="ui-btn ui-btn--primary" data-test="copy-apply" :disabled="!copyConfigDialog.targets.length" @click="applyStoreConfigCopy">复制到选中店铺</button>
+        </div>
       </section>
     </div>
 
-    <div v-if="confirmDialog.open" class="dashboard-overlay" data-test="confirm-dialog" @click.self="dismissConfirmDialog">
-      <section class="dashboard-dialog" role="dialog" aria-modal="true" aria-label="确认操作">
-        <h2>{{ confirmDialog.title }}</h2><p class="dashboard-dialog-note">{{ confirmDialog.message }}</p>
-        <div class="dashboard-dialog-actions"><button type="button" class="unified-button" @click="dismissConfirmDialog">取消</button><button type="button" class="unified-button danger" data-test="confirm-ok" @click="runConfirmDialog">确认</button></div>
+    <!-- 通用确认 -->
+    <div v-if="confirmDialog.open" class="ui-overlay" data-test="confirm-dialog" @click.self="dismissConfirmDialog">
+      <section class="ui-dialog" role="alertdialog" aria-modal="true" aria-label="确认操作">
+        <div class="ui-dialog__head">
+          <div><h2>{{ confirmDialog.title }}</h2><p>{{ confirmDialog.message }}</p></div>
+        </div>
+        <div class="ui-dialog__foot">
+          <button type="button" class="ui-btn ui-btn--secondary" @click="dismissConfirmDialog">取消</button>
+          <button type="button" class="ui-btn ui-btn--danger-solid" data-test="confirm-ok" @click="runConfirmDialog">确认</button>
+        </div>
       </section>
     </div>
 
-    <div v-if="createStoreDialog.open" class="modal-mask" data-test="store-create-dialog" @click.self="createStoreDialog.open = false">
-      <form class="modal store-create-modal" @submit.prevent="submitStoreCreate">
-        <h2>添加店铺</h2>
-        <label class="modal-field">店铺名称<input v-model="createStoreDialog.name" data-test="store-name" required placeholder="例如：美国主站" /></label>
-        <label class="modal-field">平台<select v-model="createStoreDialog.platform" data-test="platform-select" data-unified-test="store-platform" @change="onCreatePlatformChange"><option v-for="platform in availablePlatforms" :key="platform.name" :value="platform.name">{{ platform.name }}</option><option value="其他">其他（自定义平台）</option></select></label>
-        <label class="modal-field">后台地址<input v-model="createStoreDialog.adminUrl" data-test="admin-url" required placeholder="https://…" /><span v-if="createStoreDialog.adminUrl" class="field-note">已按所选平台填入默认后台地址，可自行修改</span></label>
-        <div v-if="createStoreError" class="dashboard-dialog-note error-state">{{ createStoreError }}</div>
-        <div class="modal-actions"><button type="button" class="btn-ghost" @click="createStoreDialog.open = false">取消</button><button type="submit" class="btn-primary" :disabled="createStoreBusy || !createStoreDialog.name.trim() || !createStoreDialog.adminUrl.trim()">{{ createStoreBusy ? '创建中…' : '创建' }}</button></div>
+    <!-- 添加店铺 -->
+    <div v-if="createStoreDialog.open" class="ui-overlay" data-test="store-create-dialog" @click.self="createStoreDialog.open = false">
+      <form class="ui-dialog" @submit.prevent="submitStoreCreate">
+        <div class="ui-dialog__head">
+          <div><h2>添加店铺</h2><p>创建后会为这家店分配独立的浏览器会话与环境配置。</p></div>
+          <button type="button" class="ui-icon-btn" aria-label="关闭" @click="createStoreDialog.open = false"><AppIcon name="close" :size="15" /></button>
+        </div>
+        <div class="ui-dialog__body dialog-form">
+          <label class="ui-field">
+            <span class="ui-field__label">店铺名称</span>
+            <input v-model="createStoreDialog.name" class="ui-input" data-test="store-name" required placeholder="例如：美国主站">
+          </label>
+          <label class="ui-field">
+            <span class="ui-field__label">平台</span>
+            <select v-model="createStoreDialog.platform" class="ui-select" data-test="platform-select" data-unified-test="store-platform" @change="onCreatePlatformChange">
+              <option v-for="platform in availablePlatforms" :key="platform.name" :value="platform.name">{{ platform.name }}</option>
+              <option value="其他">其他（自定义平台）</option>
+            </select>
+          </label>
+          <label class="ui-field">
+            <span class="ui-field__label">后台地址</span>
+            <input v-model="createStoreDialog.adminUrl" class="ui-input" data-test="admin-url" required placeholder="https://…">
+            <span v-if="createStoreDialog.adminUrl" class="ui-field__hint">已按所选平台填入默认后台地址，可自行修改</span>
+          </label>
+          <div v-if="createStoreError" class="ui-notice ui-notice--error" role="alert">{{ createStoreError }}</div>
+        </div>
+        <!-- modal-actions / btn-primary 是 m1 验收脚本点「创建」用的类名锚点，保留别名不改脚本 -->
+        <div class="ui-dialog__foot modal-actions">
+          <button type="button" class="ui-btn ui-btn--secondary btn-ghost" @click="createStoreDialog.open = false">取消</button>
+          <button type="submit" class="ui-btn ui-btn--primary btn-primary" :disabled="createStoreBusy || !createStoreDialog.name.trim() || !createStoreDialog.adminUrl.trim()">
+            {{ createStoreBusy ? '创建中…' : '创建' }}
+          </button>
+        </div>
       </form>
     </div>
 
-    <div v-if="ws.trashOpen" class="modal-mask" data-test="trash-dialog" @click.self="closeTrash">
-      <div class="modal" role="dialog" aria-modal="true" aria-label="回收站">
-        <h2>回收站</h2>
-        <div v-if="!ws.trashStores.length" class="empty-hint">回收站是空的</div>
-        <div v-for="trashStore in ws.trashStores" :key="trashStore.id" class="trash-row">
-          <PlatformIcon :name="trashStore.platform" :size="28" />
-          <div class="trash-meta"><div>{{ trashStore.name }}</div><div class="row-sub">{{ trashStore.platform }}</div></div>
-          <button type="button" class="btn-ghost sm" @click="ws.restoreStore(trashStore.id)"><img class="inline-action-icon" :src="dashboardRestoreIcon" alt="" />恢复</button>
-          <button type="button" class="btn-danger sm" @click="confirmPurge(trashStore)"><img class="inline-action-icon" :src="dashboardPurgeIcon" alt="" />彻底删除</button>
+    <!-- 回收站 -->
+    <div v-if="ws.trashOpen" class="ui-overlay" data-test="trash-dialog" @click.self="closeTrash">
+      <div class="ui-dialog ui-dialog--wide" role="dialog" aria-modal="true" aria-label="回收站">
+        <div class="ui-dialog__head">
+          <div><h2>回收站</h2><p>移入回收站的店铺会保留会话与环境配置，可随时恢复。</p></div>
+          <button type="button" class="ui-icon-btn" aria-label="关闭" @click="closeTrash"><AppIcon name="close" :size="15" /></button>
         </div>
-        <div class="modal-actions"><button type="button" class="btn-ghost" @click="closeTrash">关闭</button></div>
+        <div class="ui-dialog__body">
+          <div v-if="!ws.trashStores.length" class="ui-empty ui-empty--compact">
+            <div class="ui-empty__icon"><AppIcon name="trash" :size="20" /></div>
+            <strong class="ui-empty__title">回收站是空的</strong>
+            <span class="ui-empty__desc">被移入回收站的店铺会出现在这里，可恢复或彻底删除。</span>
+          </div>
+          <div v-for="trashStore in ws.trashStores" :key="trashStore.id" class="trash-row">
+            <PlatformIcon :name="trashStore.platform" :size="22" />
+            <div class="trash-meta">
+              <div>{{ trashStore.name }}</div>
+              <div class="ui-row__sub">{{ trashStore.platform }}</div>
+            </div>
+            <button type="button" class="ui-btn ui-btn--secondary ui-btn--sm" @click="ws.restoreStore(trashStore.id)">
+              <AppIcon name="arrow-left" :size="13" />恢复
+            </button>
+            <button type="button" class="ui-btn ui-btn--danger ui-btn--sm" @click="confirmPurge(trashStore)">
+              <AppIcon name="trash" :size="13" />彻底删除
+            </button>
+          </div>
+        </div>
+        <div class="ui-dialog__foot">
+          <button type="button" class="ui-btn ui-btn--secondary" @click="closeTrash">关闭</button>
+        </div>
       </div>
     </div>
 
-    <div v-if="notice" class="dashboard-notice" role="status">{{ notice }}</div>
-    <div class="dashboard-toast-host" aria-live="polite" aria-atomic="false">
-      <div v-for="toast in ws.toasts" :key="toast.id" :class="['dashboard-toast', 'toast', toast.kind]">{{ toast.text }}</div>
+    <div v-if="notice" class="appbar-notice" role="status">
+      <AppIcon name="info" :size="14" />{{ notice }}
+    </div>
+    <div class="ui-toast-host" aria-live="polite" aria-atomic="false">
+      <div
+        v-for="toast in ws.toasts"
+        :key="toast.id"
+        :class="['ui-toast', 'toast', toast.kind === 'error' ? 'ui-toast--error' : toast.kind === 'success' ? 'ui-toast--success' : '']"
+      >{{ toast.text }}</div>
     </div>
 
+    <!-- 命令面板 -->
     <div v-if="commandOpen" class="command-backdrop" @click.self="commandOpen = false">
       <section class="command-palette" role="dialog" aria-modal="true" aria-label="全局搜索">
-        <div class="command-search"><img class="command-search-icon" :src="observeIcon" alt="" /><input ref="commandInput" v-model="globalQuery" autofocus placeholder="搜索功能、店铺或达人邀约…" @keydown.esc="commandOpen = false" /></div>
-        <div v-if="commandResults.length" class="command-results"><button v-for="result in commandResults" :key="result.key" type="button" @click="runCommand(result)"><span class="command-result-icon"><img :src="result.icon" alt="" /></span><span><strong>{{ result.label }}</strong><small>{{ result.description }}</small></span><kbd>↵</kbd></button></div>
+        <div class="command-search">
+          <AppIcon name="search" :size="17" />
+          <input ref="commandInput" v-model="globalQuery" autofocus placeholder="搜索功能、店铺或达人邀约…" aria-label="搜索功能与店铺" @keydown.esc="commandOpen = false">
+          <kbd class="ui-kbd">Esc</kbd>
+        </div>
+        <div v-if="commandResults.length" class="command-results">
+          <button v-for="result in commandResults" :key="result.key" type="button" class="command-result" @click="runCommand(result)">
+            <span class="command-result-icon"><AppIcon :name="result.icon" :size="16" /></span>
+            <span class="command-result-copy"><strong>{{ result.label }}</strong><small>{{ result.description }}</small></span>
+            <AppIcon name="arrow-right" :size="14" />
+          </button>
+        </div>
         <div v-else class="command-empty">没有匹配的功能或店铺</div>
       </section>
     </div>
@@ -320,6 +500,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import PlatformIcon from '../../components/PlatformIcon.vue'
+import AppIcon from '../../components/ui/AppIcon.vue'
 import AgentDock from '../agent/AgentDock.vue'
 import DashboardBrowserSurface from './DashboardBrowserSurface.vue'
 // 首屏按需加载：这些页面级重资产（图片工作台的图片资源、数据中心/设置/商品/邀约）只在用户真正
@@ -336,34 +517,7 @@ import { waitForWorkspaceReady } from './use-dashboard-overview'
 import { buildWorkbenchNotifications, type WorkbenchNotificationItem } from './notification-center'
 import { useAgentStore } from '../../stores/agent'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
-import homeIcon from '../../assets/icons/nav-home.svg'
-import productsIcon from '../../assets/icons/nav-products.svg'
-import storeIcon from '../../assets/icons/nav-store.svg'
-import aiIcon from '../../assets/icons/nav-ai.svg'
-import analyticsIcon from '../../assets/icons/nav-analytics.svg'
-import invoicesIcon from '../../assets/icons/app-invoices.svg'
-import taxIcon from '../../assets/icons/app-tax.svg'
-import appsIcon from '../../assets/icons/nav-apps.svg'
-import settingsIcon from '../../assets/icons/nav-settings.svg'
-import utilityTrashIcon from '../../assets/icons/utility-trash.svg'
-import notificationIcon from '../../assets/icons/utility-notifications.svg'
-import brandMark from '../../assets/generated/shopilot-logo-generated.png'
-import dateIcon from '../../assets/generated/ui-icons/date.png'
-import helpIcon from '../../assets/generated/ui-icons/help.png'
-import addIcon from '../../assets/generated/ui-icons/add.png'
-import openIcon from '../../assets/generated/ui-icons/open.png'
-import observeIcon from '../../assets/generated/ui-icons/observe.png'
-import forwardIcon from '../../assets/generated/ui-icons/forward-gen.png'
-import backIcon from '../../assets/generated/ui-icons/back-gen.png'
-import caretDownIcon from '../../assets/generated/ui-icons/caret-down-gen.png'
-import dashboardBrowserIcon from '../../assets/generated/ui-icons/dashboard-browser-window-gen.png'
-import dashboardExternalIcon from '../../assets/generated/ui-icons/dashboard-external-window-gen.png'
-import dashboardRenameIcon from '../../assets/generated/ui-icons/dashboard-rename-gen.png'
-import dashboardCopyIcon from '../../assets/generated/ui-icons/dashboard-copy-gen.png'
-import dashboardTrashIcon from '../../assets/generated/ui-icons/dashboard-trash-gen.png'
-import dashboardRestoreIcon from '../../assets/generated/ui-icons/dashboard-restore-gen.png'
-import dashboardPurgeIcon from '../../assets/generated/ui-icons/dashboard-purge-gen.png'
-import emptyStoreArt from '../../assets/ui/dashboard/empty-store.png'
+import brandMark from '../../assets/brand/shopilot-mark.svg'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { storeStatusLabel } from '@shared/enums/store-status'
 
@@ -377,25 +531,35 @@ const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true }
 
 const ws = useWorkspaceStore()
 const agent = useAgentStore()
-const navItems = [
-  { key: 'overview', label: '经营总览', glyph: '⌂', icon: homeIcon },
-  { key: 'products', label: '商品管理', glyph: '◈', icon: productsIcon },
-  { key: 'stores', label: '店铺管理', glyph: '▣', icon: storeIcon },
-  { key: 'ai', label: 'AI 创作', glyph: '✦', icon: aiIcon },
-  { key: 'analytics', label: '数据分析', glyph: '◫', icon: analyticsIcon },
-  { key: 'invoices', label: '发票中心', glyph: '▤', icon: invoicesIcon },
-  { key: 'tax', label: '涉税信息', glyph: '税', icon: taxIcon },
-  { key: 'apps', label: '应用中心', glyph: '⊞', icon: appsIcon }
+/**
+ * 导航模型（2026-11 重构）：icon 改为 AppIcon 的名字，不再依赖 15–20px 的 PNG。
+ * 分组按"一天里的使用顺序"排：主控台（看与管）→ 运营（对账与报送）→ 工具（创作与入口）。
+ */
+type NavItem = { key: string; label: string; icon: string }
+const navItems: NavItem[] = [
+  { key: 'overview', label: '经营总览', icon: 'home' },
+  { key: 'products', label: '商品管理', icon: 'box' },
+  { key: 'stores', label: '店铺管理', icon: 'store' },
+  { key: 'analytics', label: '数据分析', icon: 'chart' },
+  { key: 'invoices', label: '发票中心', icon: 'receipt' },
+  { key: 'tax', label: '涉税信息', icon: 'percent' },
+  { key: 'ai', label: 'AI 创作', icon: 'sparkles' },
+  { key: 'apps', label: '应用中心', icon: 'grid' }
 ]
 const activeNav = ref('经营总览')
-/** 侧栏导航分组（主功能区三项 + 「智能运营」四项；设置单独落在左下角） */
+/** 侧栏导航分组（主控台三项 / 运营三项 / 工具两项；设置单独落在左下角） */
 const navGroups = computed(() => [
   { key: 'main', title: '', items: navItems.filter(item => ['经营总览', '商品管理', '店铺管理'].includes(item.label)) },
-  { key: 'smart', title: '智能运营', items: navItems.filter(item => ['AI 创作', '数据分析', '发票中心', '涉税信息', '应用中心'].includes(item.label)) }
+  { key: 'ops', title: '运营', items: navItems.filter(item => ['数据分析', '发票中心', '涉税信息'].includes(item.label)) },
+  { key: 'tools', title: '工具', items: navItems.filter(item => ['AI 创作', '应用中心'].includes(item.label)) }
 ])
-/** 左下角「设置」入口（设计稿放在侧栏底部，不在主分组里；仍用 .dashboard-nav-item 语义保证高亮与跳转一致） */
-const settingsNav = { label: '设置中心', glyph: '⚙', icon: settingsIcon }
-/** 顶栏面包屑右侧的当前页名（与导航标签同源，不另造一套文案） */
+/** 店铺搜索：只在店铺多到列表要滚的时候出现，少店铺时不占一行 */
+const storeQuery = ref('')
+const visibleStores = computed(() => {
+  const keyword = storeQuery.value.trim().toLowerCase()
+  if (!keyword) return ws.stores
+  return ws.stores.filter(store => `${store.name} ${store.platform}`.toLowerCase().includes(keyword))
+})
 const PAGE_TITLES: Record<string, string> = {
   overview: '经营总览', browser: '店铺工作台', products: '商品管理', stores: '店铺管理',
   ai: 'AI 创作', analytics: '数据分析', invoices: '发票中心', tax: '涉税信息', apps: '应用中心', settings: '设置中心',
@@ -415,7 +579,7 @@ let clockTimer: number | undefined
 function tickClock() {
   const d = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
-  nowLabel.value = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  nowLabel.value = `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 type DashboardPage = 'overview' | 'browser' | 'products' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'image-studio' | 'graphic-sell'
 type SettingsTab = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'
@@ -779,10 +943,10 @@ function openCommandPalette() { commandOpen.value = true; nextTick(() => command
 const commandResults = computed(() => {
   const query = globalQuery.value.trim().toLowerCase()
   const results = [
-    { key: 'home', icon: homeIcon, label: '经营总览', description: '回到经营总览', action: () => navigateTo('overview') },
-    { key: 'trend', icon: analyticsIcon, label: '销售趋势', description: '打开数据分析页面', action: () => navigateTo('analytics') },
-    { key: 'settings', icon: settingsIcon, label: '设置中心', description: '打开统一设置页面', action: () => navigateTo('settings') },
-    ...ws.stores.map(store => ({ key: `store-${store.id}`, icon: storeIcon, label: store.name, description: `${store.platform} · 打开店铺浏览器`, action: () => openStoreFromPage(store.id) }))
+    { key: 'home', icon: 'home', label: '经营总览', description: '回到经营总览', action: () => navigateTo('overview') },
+    { key: 'trend', icon: 'chart', label: '销售趋势', description: '打开数据分析页面', action: () => navigateTo('analytics') },
+    { key: 'settings', icon: 'settings', label: '设置中心', description: '打开统一设置页面', action: () => navigateTo('settings') },
+    ...ws.stores.map(store => ({ key: `store-${store.id}`, icon: 'store', label: store.name, description: `${store.platform} · 打开店铺浏览器`, action: () => openStoreFromPage(store.id) }))
   ]
   return query ? results.filter(item => `${item.label} ${item.description}`.toLowerCase().includes(query)).slice(0, 8) : results.slice(0, 6)
 })
@@ -869,155 +1033,434 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 
 <style scoped>
 /* ============================================================================
-   统一工作台 · 浅色主题（2026-09-28 按设计稿重制）
-   设计令牌（--dash-*）在这一层定义：页面/卡片/描边/文字 + 品牌紫与语义色。
-   子页面（店铺工作台、数据中心、设置…）沿用同一套令牌，改一处全站一致。
+   统一工作台外壳 · 浅色统一风（2026-11 重构）
+   设计令牌全部来自 styles/tokens.css；本文件只写"外壳自己的布局"。
+   规则：不允许出现硬编码颜色（除透明遮罩），不允许新增圆角/阴影档位。
    ========================================================================== */
+
 .dashboard-shell {
-  --dash-bg: #f5f7fb;
-  --dash-bg-soft: #ffffff;
-  --dash-card: #ffffff;
-  --dash-card-hover: #f7f9fd;
-  --dash-border: #e9edf5;
-  --dash-border-strong: #dbe2ee;
-  --dash-text: #0f1729;
-  --dash-text-soft: #4a5568;
-  /* muted 灰原为 #98a2b3：在白底上只有 2.58:1、在浅灰卡底上 2.2:1，用户实报「字体颜色看不清」。
-     2026-10-02 全应用巡检（641 个文字节点）后统一提到 AA 之上——这是浅色主题里用量最大的一个 token。 */
-  --dash-text-muted: #5b6472;
-  --dash-purple: #7c5cff;
-  --dash-blue: #2e90fa;
-  --dash-cyan: #06aed4;
-  --dash-green: #12b76a;
-  --dash-orange: #f79009;
-  --dash-red: #f04438;
-  /* 文字专用的深色变体：上面几个是**装饰色**（点/条/边框），当文字色用时对比度不够
-     （红 3.76:1、紫 4.35:1、青 2.22:1），所以文字一律走这三个，装饰仍用原色。 */
-  --dash-red-text: #d92d20;
-  --dash-purple-text: #5b3df5;
-  --dash-cyan-text: #0e7490;
-  --dash-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 10px 28px rgba(16, 24, 40, .06);
   display: flex;
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  color: var(--dash-text);
-  background: var(--dash-bg);
-  font-size: 13px;
+  background: var(--ui-canvas);
+  color: var(--ui-text);
+  font-size: var(--text-13);
 }
-.dashboard-shell.welcome { align-items: stretch; justify-content: flex-start; -webkit-app-region: no-drag; }
-.dashboard-shell.workspace-hidden { position: absolute; inset: 0; z-index: 0; opacity: 0; pointer-events: none; }
+.dashboard-shell.workspace-hidden {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+/* 图片工作台自带顶部工具条：隐藏外壳顶栏，但左导航必须保留（image-studio-parity 测试钉住） */
 .image-studio-shell .dashboard-toolbar { display: none; }
-.dashboard-shell button, .dashboard-shell input, .dashboard-shell select { font: inherit; }
-/* 兜底文字色用 :where() 压低优先级：否则会把各按钮自己声明的颜色盖掉
-   （例如 AI 卡的白底紫字按钮会变成白底白字，实测踩过） */
-.dashboard-shell :where(button) { color: var(--dash-text-soft); }
-.dashboard-shell h1, .dashboard-shell h2, .dashboard-shell h3 { font-weight: 700; letter-spacing: -.01em; }
 
-/* ---------------- 左侧栏（设计稿是**深色**侧栏 + 浅色内容区） ---------------- */
+/* ---------------- 左栏 ---------------- */
 .dashboard-sidebar {
-  --side-bg: #0b1120;
-  --side-surface: rgba(255, 255, 255, .05);
-  --side-surface-hover: rgba(255, 255, 255, .09);
-  --side-border: rgba(255, 255, 255, .07);
-  --side-text: #e8edf7;
-  --side-text-soft: #b6c0d4;
-  --side-text-muted: #7c8aa3;
-  width: 248px; min-width: 248px; display: flex; flex-direction: column;
-  border-right: 1px solid var(--side-border); background: var(--side-bg); color: var(--side-text-soft);
-  transition: width .18s ease, min-width .18s ease;
+  display: flex;
+  width: var(--shell-sidebar-w);
+  min-width: var(--shell-sidebar-w);
+  flex-direction: column;
+  border-right: 1px solid var(--ui-border);
+  background: var(--ui-surface);
+  color: var(--ui-text-secondary);
+  transition:
+    width var(--dur-base) var(--ease),
+    min-width var(--dur-base) var(--ease);
 }
-.dashboard-shell.picker-mode .dashboard-sidebar { width: 0; min-width: 0; overflow: hidden; border-right: 0; }
-.dashboard-sidebar.collapsed { width: 60px; min-width: 60px; }
-.sidebar-collapse { display:grid;place-items:center;margin-left: auto; width: 24px; height: 24px; flex: 0 0 auto; border: 0; border-radius: 6px; background: transparent; color: var(--side-text-muted); cursor: pointer; line-height: 1; }.sidebar-collapse img { width:15px;height:15px;object-fit:contain; }
-.sidebar-collapse:hover, .sidebar-collapse:focus-visible { background: var(--side-surface); color: #fff; outline: none; }
-.sidebar-rail { display: flex; height: 100%; flex-direction: column; align-items: center; gap: 6px; padding: 14px 0 12px; -webkit-app-region: drag; }
-.sidebar-rail .rail-btn { position: relative; display: inline-flex; width: 34px; height: 34px; align-items: center; justify-content: center; border: 0; border-radius: 9px; background: transparent; color: var(--side-text-soft); cursor: pointer; font-size: 16px; -webkit-app-region: no-drag; }
-.sidebar-rail .rail-btn:hover, .sidebar-rail .rail-btn:focus-visible { background: var(--side-surface); color: #fff; outline: none; }.sidebar-rail .rail-btn img { width: 18px; height: 18px; object-fit: contain; }
-.sidebar-rail .rail-btn:first-child { margin-bottom: 4px; font-size: 19px; }
-.rail-badge { position: absolute; top: 5px; right: 4px; width: 7px; height: 7px; border: 1px solid var(--side-bg); border-radius: 50%; background: #fb5470; }
-.dashboard-brand { height: 74px; display: flex; align-items: center; gap: 11px; padding: 16px 16px 10px; }
-.dashboard-brand-mark {
-  display: flex; width: 40px; height: 40px; align-items: center; justify-content: center; flex: 0 0 40px;
-  border-radius: 12px; background: var(--brand-gradient); box-shadow: 0 8px 18px rgba(124, 92, 255, .42);
-  color: #fff; font-size: 19px; font-weight: 800;
+.dashboard-sidebar.collapsed {
+  width: var(--shell-sidebar-collapsed-w);
+  min-width: var(--shell-sidebar-collapsed-w);
 }
-.dashboard-brand-mark img { width: 32px; height: 32px; object-fit: contain; }
-.dashboard-brand-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-.dashboard-brand-copy strong { color: #fff; font-size: 16px; letter-spacing: -.02em; }
-.dashboard-brand-copy span { color: var(--side-text-muted); font-size: 10.5px; white-space: nowrap; }
-.dashboard-nav { display: flex; flex-direction: column; gap: 2px; padding: 6px 12px 10px; }
-.nav-group-title { padding: 12px 10px 6px; color: var(--side-text-muted); font-size: 10.5px; font-weight: 600; letter-spacing: .08em; }
-.dashboard-nav-item {
-  position: relative; display: flex; width: 100%; align-items: center; gap: 11px; height: 42px; padding: 0 12px;
-  border: 0; border-radius: 11px; background: transparent; color: var(--side-text-soft); text-align: left; cursor: pointer;
-  font-size: 13px; transition: background .16s, color .16s, box-shadow .16s;
-}
-.dashboard-nav-item:hover, .dashboard-nav-item:focus-visible { background: var(--side-surface); color: #fff; outline: none; }
-.dashboard-nav-item.active { background: var(--brand-gradient); color: #fff; box-shadow: 0 10px 22px rgba(124, 92, 255, .38); }
-.nav-glyph { display: inline-flex; width: 20px; height: 20px; flex: 0 0 20px; align-items: center; justify-content: center; color: currentColor; font-size: 16px; line-height: 1; text-align: center; opacity: .95; overflow: hidden; border-radius: 6px; }
-.nav-glyph img { display: block; width: 20px; height: 20px; object-fit: contain; }
-.nav-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dashboard-store-area { min-height: 0; flex: 1; display: flex; flex-direction: column; border-top: 1px solid var(--side-border); margin-top: 4px; padding: 12px 12px 0; }
-.store-area-title { display: flex; align-items: center; gap: 7px; padding: 2px 4px 10px; color: #cfd7e6; font-size: 12px; font-weight: 600; }
-.store-count { display: inline-flex; min-width: 18px; height: 18px; align-items: center; justify-content: center; padding: 0 5px; border-radius: 6px; background: var(--side-surface); color: var(--side-text-soft); font-size: 10.5px; font-weight: 600; }
-.add-store-button { margin-left: auto; width: 24px; height: 24px; flex: 0 0 auto; border: 0; border-radius: 7px; background: rgba(124, 92, 255, .22); color: #c3b2ff; font-size: 16px; line-height: 1; cursor: pointer; }
-.add-store-button:hover, .add-store-button:focus-visible { background: rgba(124, 92, 255, .34); color: #fff; outline: none; }
-.store-area-body { min-height: 0; flex: 1; display: flex; flex-direction: column; }
-.sidebar-state { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 16px 8px; color: var(--side-text-muted); font-size: 11.5px; text-align: center; }
-.sidebar-state-art { display: block; width: 74px; height: 58px; object-fit: cover; border-radius: 10px; opacity: .9; }
-.inline-link { border: 0; background: transparent; color: #b9a6ff; cursor: pointer; font-size: 11.5px; }
-.inline-link:hover { text-decoration: underline; }
-.store-groups { min-height: 0; overflow-y: auto; padding: 0 0 10px; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .16) transparent; }
-.dashboard-store-row {
-  display: flex; width: 100%; align-items: center; gap: 9px; height: 44px; padding: 0 8px;
-  border: 0; border-radius: 11px; background: transparent; color: var(--side-text-soft); text-align: left; cursor: pointer;
-}
-.dashboard-store-row:hover, .dashboard-store-row:focus-visible { background: var(--side-surface); outline: none; }
-.dashboard-store-row.displayed { background: rgba(124, 92, 255, .18); color: #fff; }
-.dashboard-store-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--side-text); }
-.store-online-label { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; color: #38d39f; font-size: 11px; }
-/* 客服未读红点：侧栏客服入口与对应店铺行共用（不抢焦点、不改变行高） */
-.unread-badge { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; background: #ff4d4f; color: #fff; font-size: 10.5px; line-height: 1; font-weight: 600; }
-.store-unread-badge { margin-left: 4px; }
-.store-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--side-text-muted); }
-.store-status-dot.online { background: #38d39f; box-shadow: 0 0 0 3px rgba(56, 211, 159, .18); }
-.store-status-dot.warning { background: #f5b457; }
-.store-status-dot.offline { background: #ff7d8a; }
-.store-online-label:has(.store-status-dot.warning) { color: #f5b457; }
-.store-online-label:has(.store-status-dot.offline) { color: #ff7d8a; }
-.store-action { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; flex: 0 0 auto; border-radius: 6px; color: var(--side-text-muted); font-size: 9px; opacity: 0; transition: opacity .15s, background .15s, color .15s; }
-.dashboard-store-row:hover .store-action, .dashboard-store-row:focus-within .store-action { opacity: 1; }
-.store-action:hover, .store-action:focus-visible { background: rgba(124, 92, 255, .3); color: #fff; outline: none; }
-.dashboard-sidebar-footer { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 14px; border-top: 1px solid var(--side-border); }
-.pro-card { display: flex; width: 100%; align-items: center; gap: 9px; padding: 10px 11px; border: 0; border-radius: 12px; background: var(--side-surface); cursor: pointer; text-align: left; }
-.pro-card:hover, .pro-card:focus-visible { background: var(--side-surface-hover); outline: none; }
-.pro-avatar { display: inline-flex; width: 30px; height: 30px; flex: 0 0 30px; align-items: center; justify-content: center; border-radius: 50%; background: var(--brand-gradient); color: #fff; font-size: 10px; font-weight: 800; }
-.pro-copy { display: flex; min-width: 0; flex: 1; align-items: center; gap: 6px; }
-.pro-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; font-size: 12.5px; }
-.pro-badge { padding: 2px 6px; border-radius: 6px; background: #f5c451; color: #3a2c0c; font-size: 10px; font-weight: 600; }
-.pro-arrow img { width:14px;height:14px;object-fit:contain; }.pro-arrow { color: var(--side-text-muted); font-size: 16px; }
-.foot-btn { display: flex; width: 100%; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: var(--side-text-soft); cursor: pointer; font-size: 12.5px; text-align: left; }
-.foot-btn:hover, .foot-btn:focus-visible { background: var(--side-surface); color: #fff; outline: none; }
-.foot-btn.foot-settings.active { background: rgba(124, 92, 255, .24); color: #cbbcff; }
-.foot-btn .badge { min-width: 16px; margin-left: auto; padding: 1px 6px; border-radius: 10px; background: rgba(240, 68, 56, .24); color: #ffb4ae; text-align: center; font-size: 10px; }
-.foot-row { display: flex; align-items: center; gap: 6px; }
-.foot-row .foot-settings { flex: 1; min-width: 0; }
-.foot-icon { position: relative; width: 36px; flex: 0 0 36px; justify-content: center; padding: 0; font-size: 13px; }
-.foot-icon img { width: 17px; height: 17px; object-fit: contain; }.foot-icon .badge { position: absolute; top: 3px; right: 1px; min-width: 14px; margin: 0; padding: 0 4px; font-size: 9.5px; }
-.storage-status.connected { color: #38d39f; }
 
-/* ---------------- 主区域 + 顶栏 ---------------- */
-.dashboard-main { position: relative; min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--dash-bg); }
-.dashboard-browser-host { min-width: 0; min-height: 0; flex: 1 1 auto; display: flex; }
+/* 品牌区 */
+.sb-brand {
+  display: flex;
+  height: var(--shell-toolbar-h);
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid transparent;
+}
+.sb-mark {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: var(--r-sm);
+  object-fit: contain;
+}
+.sb-brand-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0;
+  line-height: 1.25;
+}
+.sb-brand-copy strong {
+  color: var(--ui-text);
+  font-size: var(--text-14);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+}
+.sb-brand-copy span {
+  color: var(--ui-text-muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.sb-collapse {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.dashboard-sidebar:hover .sb-collapse,
+.sb-collapse:focus-visible {
+  opacity: 1;
+}
+
+/* 导航 */
+.sb-nav {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--sp-1) 8px var(--sp-2);
+  overflow-y: auto;
+}
+.sb-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sb-group-title {
+  padding: 12px 8px 4px;
+  color: var(--ui-text-muted);
+  font-size: 10.5px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+}
+.sb-item {
+  display: flex;
+  width: 100%;
+  height: 34px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ui-text-secondary);
+  font-size: var(--text-13);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.sb-item .ui-icon {
+  color: var(--ui-text-muted);
+  transition: color var(--dur-fast) var(--ease);
+}
+.sb-item:hover {
+  background: var(--ui-surface-sunken);
+  color: var(--ui-text);
+}
+.sb-item:hover .ui-icon {
+  color: var(--ui-text-secondary);
+}
+.sb-item.active {
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  font-weight: var(--weight-semibold);
+}
+.sb-item.active .ui-icon {
+  color: var(--brand);
+}
+.sb-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 店铺区 */
+.sb-stores {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--ui-border);
+}
+.sb-stores-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 2px 0 6px;
+}
+.sb-stores-title {
+  color: var(--ui-text-muted);
+  font-size: var(--text-11);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+}
+.sb-add {
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  border-radius: var(--r-xs);
+}
+.sb-search {
+  display: flex;
+  height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: var(--r-xs);
+  background: var(--ui-surface-sunken);
+  color: var(--ui-text-muted);
+}
+.sb-search input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text);
+  font-size: var(--text-12);
+  outline: none;
+}
+.sb-search input::placeholder {
+  color: var(--ui-text-disabled);
+}
+.sb-store-list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+}
+.sb-store {
+  display: flex;
+  width: 100%;
+  height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--ui-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.sb-store:hover {
+  background: var(--ui-surface-sunken);
+}
+.sb-store.displayed {
+  background: var(--brand-soft);
+}
+.sb-store.displayed .sb-store-name {
+  color: var(--brand-text);
+  font-weight: var(--weight-semibold);
+}
+.sb-store-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--ui-text);
+  font-size: var(--text-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb-store-warn {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+.sb-store-warn.warning {
+  color: var(--warning-text);
+}
+.sb-store-warn.offline {
+  color: var(--danger-text);
+}
+.sb-store .ui-dot {
+  margin-left: 1px;
+}
+.store-action {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-xs);
+  color: var(--ui-text-disabled);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.sb-store:hover .store-action,
+.sb-store.displayed .store-action,
+.store-action:focus-visible {
+  opacity: 1;
+}
+.store-action:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+/* 客服未读红点：固定 16px 高，绝不参与行高计算（契约见 customer-message-alert.test.ts）。
+   侧栏店铺行与顶部「电商客服」页签共用同一套尺寸，避免两处红点一高一矮。 */
+.unread-badge {
+  display: inline-flex;
+  height: 16px;
+  min-width: 16px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  font-size: 10.5px;
+  line-height: 1;
+}
+.store-unread-badge {
+  margin-left: 2px;
+  flex: 0 0 auto;
+}
+.sb-hint {
+  padding: 10px 8px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-12);
+  line-height: var(--leading-snug);
+}
+.sb-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 10px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-12);
+  text-align: center;
+}
+.sb-empty-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: var(--r-md);
+  background: var(--ui-surface-sunken);
+  color: var(--ui-text-disabled);
+}
+.sb-link {
+  border: 0;
+  background: none;
+  color: var(--brand-text);
+  font-size: var(--text-11);
+  cursor: pointer;
+}
+.sb-link:hover {
+  text-decoration: underline;
+}
+
+/* 左栏底部 */
+.sb-foot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px;
+  border-top: 1px solid var(--ui-border);
+}
+.sb-settings {
+  flex: 1;
+}
+.sb-trash {
+  position: relative;
+  flex: 0 0 auto;
+}
+.sb-trash-count {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border: 1.5px solid var(--ui-surface);
+  border-radius: var(--r-full);
+  background: var(--danger);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: var(--weight-semibold);
+  line-height: 11px;
+  text-align: center;
+}
+
+/* 收起态轨道 */
+.sb-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 0;
+  overflow-y: auto;
+  -webkit-app-region: drag;
+}
+.sb-rail .ui-icon-btn {
+  -webkit-app-region: no-drag;
+}
+.sb-rail-sep {
+  width: 20px;
+  height: 1px;
+  margin: 6px 0;
+  flex: 0 0 auto;
+  background: var(--ui-border);
+}
+.sb-rail-btn {
+  width: 36px;
+  height: 34px;
+  border-radius: var(--r-sm);
+}
+.sb-rail-btn.on {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.rail-badge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+/* ---------------- 主区 ---------------- */
+.dashboard-main {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--ui-canvas);
+}
+.dashboard-browser-host {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
 /* 非当前页：脱离布局流并隐藏视觉/命中，但保留真实尺寸 —— guest 自认可见才会继续渲染，
    渲染层重进浏览器页时也就不需要重建页面（重建 = 丢状态 + 重新登录流程）。 */
 .dashboard-browser-host:not(.active) {
-  /* Electron 的 <webview> 是独立合成层；opacity/pointer-events 只影响 DOM 命中，
-     在部分 Windows GPU 路径仍可能留下覆盖层。把宿主移出渲染区域可以可靠释放
-     鼠标命中，同时不销毁 guest、标签页或 persist 分区，所以登录态和页面状态继续长活。 */
   position: absolute;
   inset: 0;
   z-index: 0;
@@ -1026,407 +1469,496 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
   transform: translate3d(-200vw, 0, 0);
   will-change: transform;
 }
-.dashboard-browser-host > :deep(.dashboard-browser-surface) { min-width: 0; min-height: 0; flex: 1 1 auto; }
-/* 顶部栏与右上角原生窗口按钮（WCO，高 38px）共存：
-   · 右侧留出 148px：原生按钮是画在页面之上的覆盖层，不留白就会压住头像；
-   · 底色固定为 #ffffff，且与 App.vue 的 TOOLBAR_BG 保持同一色值（overlay 是不透明覆盖层）。 */
+.dashboard-browser-host > :deep(.dashboard-browser-surface) {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+/* ---------------- 顶栏 ----------------
+   与右上角原生窗口按钮（WCO，高 38px）共存：
+   · 右侧留出 148px：原生按钮画在页面之上，不留白会压住内容；
+   · 底色固定 #ffffff，与 App.vue 的 TOOLBAR_BG 保持同一色值（overlay 是不透明覆盖层）。 */
 .dashboard-toolbar {
-  position: relative; z-index: 10; display: flex; align-items: center; gap: 16px; height: 64px; flex: 0 0 64px;
-  padding: 0 148px 0 22px; border-bottom: 1px solid var(--dash-border); background: #ffffff;
+  position: relative;
+  z-index: var(--z-sticky);
+  display: flex;
+  height: var(--shell-toolbar-h);
+  flex: 0 0 var(--shell-toolbar-h);
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 148px 0 18px;
+  border-bottom: 1px solid var(--ui-border);
+  background: #ffffff;
   -webkit-app-region: drag;
 }
-.toolbar-crumb { display: flex; align-items: center; gap: 8px; color: var(--dash-text-muted); font-size: 13px; }
-/* 面包屑根节点原本继承 toolbar-crumb 的 muted 灰（#98a2b3 → 白底 2.58:1，实测看不清）。
-   2026-10-02 用户实报"字体颜色看不清楚"后统一提到 AA 之上。 */
-.crumb-root { color: var(--dash-text-soft); }
-.crumb-current { color: var(--dash-text); font-weight: 600; }
-/* 分隔符是纯装饰（aria-hidden），但太浅会在浅底上看不见；给到 AA 之上最省事 */
-.crumb-sep { color: #64748b; }
-.workspace-switcher {
+.dashboard-toolbar button,
+.dashboard-toolbar input,
+.dashboard-toolbar select {
+  -webkit-app-region: no-drag;
+}
+.appbar-crumb {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-12);
+  white-space: nowrap;
+}
+.appbar-crumb strong {
+  color: var(--ui-text);
+  font-size: var(--text-13);
+  font-weight: var(--weight-semibold);
+}
+
+/* 工作区切换：居中，像"同一窗口里的两块屏" */
+.workspace-switch {
   position: absolute;
-  z-index: 11;
   top: 50%;
   left: 50%;
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--dash-border);
-  border-radius: 11px;
-  background: #f7f8fc;
-  box-shadow: 0 1px 3px rgba(16, 24, 40, .04);
-  -webkit-app-region: no-drag;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  background: var(--ui-surface-sunken);
   transform: translate(-50%, -50%);
 }
-.workspace-tab {
+.workspace-switch > button {
   display: inline-flex;
-  min-height: 28px;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--ui-text-muted);
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+.workspace-switch > button:hover {
+  color: var(--ui-text);
+}
+.workspace-switch > button.on {
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  box-shadow: var(--e1);
+}
+
+.appbar-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.appbar-search {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 9px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--r-sm);
+  background: var(--ui-surface);
+  color: var(--ui-text-muted);
+  font-size: var(--text-12);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+.appbar-search:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-surface-subtle);
+}
+.appbar-search .ui-kbd {
+  margin-left: 8px;
+}
+.appbar-clock {
+  padding: 0 4px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-12);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.appbar-avatar {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.02em;
+}
+
+/* 通知中心 */
+.notification-anchor {
+  position: relative;
+  display: inline-flex;
+}
+.notification-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.notification-center {
+  top: 36px;
+  right: 0;
+  display: flex;
+  width: 322px;
+  max-height: 380px;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  padding: 6px;
+  box-shadow: var(--e3);
+}
+.notification-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-text-muted);
+  font-size: var(--text-11);
+}
+.notification-head strong {
+  color: var(--ui-text);
+  font-size: var(--text-12);
+}
+.notification-item {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.notification-item:hover {
+  background: var(--ui-surface-sunken);
+}
+.notification-item strong {
+  color: var(--ui-text);
+  font-size: var(--text-12);
+  font-weight: var(--weight-semibold);
+}
+.notification-item span {
+  color: var(--ui-text-muted);
+  font-size: var(--text-11);
+  line-height: var(--leading-snug);
+}
+.notification-item.tone-error strong {
+  color: var(--danger-text);
+}
+.notification-item.tone-warning strong {
+  color: var(--warning-text);
+}
+.notification-empty {
+  padding: 16px 10px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-11);
+  line-height: var(--leading-normal);
+}
+
+/* ---------------- 弹层补充 ---------------- */
+.dashboard-context-menu {
+  position: fixed;
+  min-width: 208px;
+  padding: 4px;
+}
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-top: 2px;
+}
+.pick-list {
+  display: flex;
+  max-height: 240px;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  padding: 2px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--r-sm);
+}
+.pick-row {
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: var(--r-xs);
+  color: var(--ui-text-secondary);
+  font-size: var(--text-12);
+  cursor: pointer;
+}
+.pick-row:hover {
+  background: var(--ui-surface-sunken);
+}
+.pick-row input {
+  accent-color: var(--brand);
+}
+.trash-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px;
+  border-radius: var(--r-sm);
+}
+.trash-row:hover {
+  background: var(--ui-surface-subtle);
+}
+.trash-meta {
+  min-width: 0;
+  flex: 1;
+  color: var(--ui-text);
+  font-size: var(--text-13);
+}
+
+/* 顶栏临时提示（不阻断操作的事实说明） */
+.appbar-notice {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: var(--z-toast);
+  display: inline-flex;
+  max-width: 460px;
   align-items: center;
   gap: 7px;
-  padding: 0 13px;
+  padding: 8px 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--r-full);
+  background: var(--ui-surface);
+  box-shadow: var(--e2);
+  color: var(--ui-text-secondary);
+  font-size: var(--text-12);
+  transform: translateX(-50%);
+  animation: ui-slide-up var(--dur-base) var(--ease);
+}
+
+/* 命令面板 */
+.command-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  justify-content: center;
+  padding-top: 12vh;
+  background: rgba(16, 24, 40, 0.32);
+  backdrop-filter: blur(3px);
+  animation: ui-fade-in var(--dur-fast) var(--ease);
+}
+.command-palette {
+  display: flex;
+  width: min(560px, calc(100vw - 48px));
+  max-height: 440px;
+  flex-direction: column;
+  align-self: flex-start;
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--r-lg);
+  background: var(--ui-surface);
+  box-shadow: var(--e3);
+  animation: ui-pop-in var(--dur-base) var(--ease);
+}
+.command-search {
+  display: flex;
+  height: 46px;
+  flex: 0 0 46px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-text-muted);
+}
+.command-search input {
+  min-width: 0;
+  flex: 1;
   border: 0;
-  border-radius: 8px;
   background: transparent;
-  color: var(--dash-text-soft);
+  color: var(--ui-text);
+  font-size: var(--text-14);
+  outline: none;
+}
+.command-search input::placeholder {
+  color: var(--ui-text-disabled);
+}
+.command-results {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  padding: 6px;
+}
+.command-result {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  text-align: left;
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
+}
+.command-result:hover,
+.command-result:focus-visible {
+  background: var(--ui-surface-sunken);
+}
+.command-result-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border-radius: var(--r-xs);
+  background: var(--ui-surface-sunken);
+  color: var(--ui-text-secondary);
+}
+.command-result-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+.command-result-copy strong {
+  color: var(--ui-text);
+  font-size: var(--text-13);
+  font-weight: var(--weight-medium);
+}
+.command-result-copy small {
+  overflow: hidden;
+  color: var(--ui-text-muted);
+  font-size: var(--text-11);
+  text-overflow: ellipsis;
   white-space: nowrap;
-  transition: background .16s, color .16s, box-shadow .16s;
 }
-.workspace-tab:hover, .workspace-tab:focus-visible {
-  background: #fff;
-  color: var(--dash-text);
-  box-shadow: 0 2px 8px rgba(16, 24, 40, .08);
+.command-empty {
+  padding: 26px 16px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-12);
+  text-align: center;
 }
-.workspace-tab:focus-visible { outline: 2px solid rgba(124, 92, 255, .42); outline-offset: 1px; }
-.workspace-tab.active { background: #fff; color: var(--dash-text); box-shadow: 0 2px 8px rgba(16, 24, 40, .08); }
-.workspace-product-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dash-purple); box-shadow: 0 0 0 3px rgba(124, 92, 255, .14); }
-.workspace-product-spark { color: var(--dash-purple); font-size: 14px; line-height: 1; }
-.toolbar-actions { display: flex; min-width: 0; align-items: center; gap: 10px; margin-left: auto; -webkit-app-region: no-drag; }
-.toolbar-datetime { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border: 1px solid var(--dash-border); border-radius: 11px; background: #fff; color: var(--dash-text-soft); font-size: 12.5px; }
-.dt-icon { width: 18px; height: 18px; object-fit: contain; }
-.dt-caret { width:13px;height:13px;margin-left: 2px;object-fit:contain; }
-.toolbar-icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: 0; border-radius: 10px; background: transparent; color: var(--dash-text-soft); font-size: 16px; cursor: pointer; }.toolbar-icon-button img { width: 20px; height: 20px; object-fit: contain; }
-.toolbar-icon-button:hover, .toolbar-icon-button:focus-visible { background: #f2f4f8; color: var(--dash-text); outline: none; }
-.notification-anchor { position: relative; display: inline-flex; }
-.notification-center { position: absolute; top: 42px; right: 0; z-index: 80; display: flex; width: 320px; max-height: 380px; flex-direction: column; gap: 2px; overflow: auto; padding: 8px; border: 1px solid var(--dash-border); border-radius: 12px; background: #fff; box-shadow: 0 18px 40px rgba(16, 24, 40, .18); }
-.notification-center header { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 8px; color: var(--dash-text-muted); font-size: 11px; }
-.notification-center header strong { color: var(--dash-text); font-size: 12px; }
-.notification-item { display: flex; width: 100%; flex-direction: column; gap: 3px; padding: 9px 10px; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
-.notification-item:hover, .notification-item:focus-visible { background: #f4f5f7; outline: none; }
-.notification-item strong { color: var(--dash-text); font-size: 12px; font-weight: 600; }
-.notification-item span { color: var(--dash-text-muted); font-size: 11px; line-height: 1.5; }
-.notification-item.tone-error strong { color: #b42318; }
-.notification-item.tone-warning strong { color: #b54708; }
-.notification-empty { padding: 14px 10px; color: var(--dash-text-muted); font-size: 11px; line-height: 1.6; }
-.notification-dot { position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border: 1.5px solid #fff; border-radius: 50%; background: #fb5470; }
-.toolbar-avatar { display: inline-flex; width: 34px; height: 34px; align-items: center; justify-content: center; border-radius: 50%; background: var(--brand-gradient); color: #fff; font-size: 11px; font-weight: 800; }
 
-/* ---------------- 经营总览 ---------------- */
-.overview-page { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding: 20px 22px 26px; scrollbar-width: thin; scrollbar-color: #d8dfea transparent; }
-.dashboard-eyebrow { color: var(--dash-text-muted); font-size: 10.5px; font-weight: 600; letter-spacing: .16em; }
-.ov-title-row { display: flex; align-items: center; gap: 12px; }
-/* 刷新按钮挂在「销售概览」标题后面，直接挨着它要刷新的那张卡，不再占页面头部一行。 */
-.ov-refresh { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 14px; border: 0; border-radius: 10px; background: var(--brand-gradient); color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; box-shadow: 0 8px 18px rgba(124, 92, 255, .34); }
-.ov-refresh:hover:not(:disabled), .ov-refresh:focus-visible { filter: brightness(1.05); outline: none; }
-.ov-refresh:disabled { cursor: wait; opacity: .72; }
-.dashboard-error { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; padding: 10px 13px; border: 1px solid rgba(240, 68, 56, .28); border-radius: 12px; background: #fef3f2; color: #b42318; font-size: 12px; }
-.dashboard-error .state-icon { display: inline-flex; width: 22px; height: 22px; object-fit: contain; }
-.refresh-icon { width: 17px; height: 17px; object-fit: contain; }
-.btn-new img { width: 18px; height: 18px; object-fit: contain; }.store-action img { width: 16px; height: 16px; object-fit: contain; }.command-search-icon { width: 20px; height: 20px; object-fit: contain; }
-.dashboard-error button, .error-state button { margin-left: auto; border: 0; background: transparent; color: #b42318; text-decoration: underline; cursor: pointer; }
-
-.ov-grid { display: grid; grid-template-columns: minmax(0, 1fr) 336px; gap: 16px; align-items: start; }
-.ov-col-main, .ov-col-rail { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
-.ov-card { position: relative; padding: 18px; border: 1px solid var(--dash-border); border-radius: 18px; background: var(--dash-card); box-shadow: var(--dash-shadow); }
-.ov-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.ov-card-title { display: flex; flex-direction: column; gap: 3px; }
-.ov-card-title h2 { font-size: 15.5px; }
-.ov-card-title span { color: var(--dash-text-muted); font-size: 11.5px; }
-.ov-card-tools { display: flex; align-items: center; gap: 10px; }
-.ov-card-caption { margin: 12px 0 0; color: var(--dash-text-muted); font-size: 11.5px; line-height: 1.5; }
-.period-tabs { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 11px; background: #f2f4f8; }
-.period-tabs button { height: 30px; padding: 0 13px; border: 0; border-radius: 9px; background: transparent; color: var(--dash-text-soft); cursor: pointer; font-size: 12px; }
-.period-tabs button:hover, .period-tabs button:focus-visible { color: var(--dash-text); outline: none; }
-.period-tabs button.active { background: var(--brand-gradient); color: #fff; box-shadow: 0 6px 14px rgba(124, 92, 255, .3); }
-.platform-select { height: 36px; padding: 0 12px; border: 1px solid var(--dash-border); border-radius: 11px; outline: none; background: #fff; color: var(--dash-text-soft); font-size: 12px; cursor: pointer; }
-.platform-select:focus { border-color: rgba(124, 92, 255, .6); box-shadow: 0 0 0 3px rgba(124, 92, 255, .1); }
-
-.ov-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; padding-bottom: 6px; }
-.ov-kpi { display: flex; min-width: 0; flex-direction: column; gap: 6px; padding: 2px 8px 2px 12px; border-left: 3px solid var(--dash-border-strong); border-radius: 3px; }
-.ov-kpi.tone-purple { border-left-color: var(--dash-purple); }
-.ov-kpi.tone-blue { border-left-color: var(--dash-blue); }
-.ov-kpi.tone-red { border-left-color: var(--dash-red); }
-.ov-kpi.tone-amber { border-left-color: #fda29b; }
-.ov-kpi.tone-yellow { border-left-color: var(--dash-orange); }
-.ov-kpi.tone-green { border-left-color: var(--dash-green); }
-.kpi-label { color: var(--dash-text-muted); font-size: 12px; }
-.kpi-value { overflow: hidden; color: var(--dash-text); font-size: 25px; font-weight: 750; letter-spacing: -.03em; text-overflow: ellipsis; white-space: nowrap; }
-.kpi-value.placeholder { color: var(--dash-text-muted); font-weight: 500; }
-.delta-icon { width:13px;height:13px;vertical-align:-2px;object-fit:contain; }.kpi-delta { font-size: 11.5px; font-weight: 600; }
-.kpi-delta.up { color: var(--dash-green); }
-.kpi-delta.down { color: var(--dash-red-text); }
-.kpi-delta.muted { color: var(--dash-text-muted); font-weight: 400; }
-
-.trend-chart-wrap { position: relative; margin-top: 8px; }
-.trend-chart { display: block; width: 100%; height: 268px; overflow: visible; }
-.chart-grid line { stroke: #eef1f7; stroke-width: 1; }
-.chart-y-label, .chart-x-label { fill: var(--dash-text-muted); font-size: 11px; }
-.chart-line { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
-.gmv-line { stroke: var(--dash-purple); }
-.order-line { stroke: var(--dash-blue); }
-.chart-area { opacity: .9; }
-.gmv-area { fill: url(#gmv-fill); }
-.chart-point { stroke: #fff; stroke-width: 2; cursor: crosshair; }
-.gmv-point { fill: var(--dash-purple); }
-.order-point { fill: var(--dash-blue); }
-.chart-guide { stroke: #cbd5e1; stroke-width: 1; stroke-dasharray: 4 4; }
-.chart-hover-dot { stroke: #fff; stroke-width: 2; }
-.chart-hover-dot.gmv { fill: var(--dash-purple); }
-.chart-hover-dot.orders { fill: var(--dash-blue); }
-.chart-legend { display: flex; align-items: center; justify-content: center; gap: 22px; padding: 12px 4px 0; color: var(--dash-text-soft); font-size: 12px; }
-.chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.legend-dot, .tooltip-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
-.legend-dot.gmv, .tooltip-dot.gmv { background: var(--dash-purple); }
-.legend-dot.orders, .tooltip-dot.orders { background: var(--dash-blue); }
-.trend-tooltip { position: absolute; top: 12px; transform: translateX(-50%); min-width: 186px; padding: 12px 14px; border: 1px solid rgba(255, 255, 255, .16); border-radius: 12px; background: #1b2740; box-shadow: 0 18px 40px rgba(6, 11, 22, .5); pointer-events: none; z-index: 3; }
-.trend-tooltip strong { display: block; padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, .1); color: #fff; font-size: 11.5px; }
-.trend-tooltip span { display: flex; align-items: center; gap: 8px; padding-top: 6px; color: rgba(232, 237, 247, .78); font-size: 11.5px; }
-.trend-tooltip b { margin-left: auto; color: #fff; font-size: 12px; }
-
-/* 销售概览是设计稿里的深色 hero 卡：在浅色页面上单独反色。这里就地覆盖 --dash-* 变量，
-   卡片内部的标题、KPI、图表、图例、悬浮卡都跟着翻成浅色字，不需要逐个选择器改色。 */
-.ov-card-dark {
-  --dash-card: #131d33;
-  --dash-text: #ffffff;
-  --dash-text-soft: rgba(232, 237, 247, .78);
-  --dash-text-muted: rgba(232, 237, 247, .56);
-  --dash-border: rgba(255, 255, 255, .1);
-  --dash-border-strong: rgba(255, 255, 255, .18);
-  --dash-green: #34d399;
-  --dash-red: #ff8a80;
-  /* 标题颜色是外层（.dashboard-shell / body）算好的「近黑」继承下来的，卡内改 --dash-text
-     影响不到已经解析过的继承值，所以这里直接给标题和卡片本体重新指定一次。 */
-  --color-text-primary: #ffffff;
-  --color-text-secondary: rgba(232, 237, 247, .78);
-  --color-text-muted: rgba(232, 237, 247, .56);
-  color: var(--dash-text);
-  border-color: rgba(255, 255, 255, .07);
-  background: linear-gradient(158deg, #16203a 0%, #111a2e 55%, #0e1626 100%);
-  box-shadow: 0 22px 48px rgba(11, 17, 32, .26);
-}
-/* 卡片本体的 color 用了 var(--dash-text)，但标题是从外层继承下来的「近黑」，得单独覆盖一次。 */
-.ov-card-dark h1, .ov-card-dark h2, .ov-card-dark h3 { color: var(--dash-text); }
-.ov-card-dark .period-tabs { background: rgba(255, 255, 255, .07); }
-.ov-card-dark .period-tabs button { color: rgba(232, 237, 247, .72); }
-.ov-card-dark .period-tabs button:hover, .ov-card-dark .period-tabs button:focus-visible { color: #fff; }
-.ov-card-dark .period-tabs button.active { color: #fff; }
-.ov-card-dark .platform-select { border-color: rgba(255, 255, 255, .12); background: rgba(255, 255, 255, .07); color: #e8edf7; }
-.ov-card-dark .platform-select option { color: #0f1729; }
-.ov-card-dark .chart-grid line { stroke: rgba(255, 255, 255, .07); }
-.ov-card-dark .chart-grid-v { stroke: rgba(255, 255, 255, .05); stroke-width: 1; }
-.ov-card-dark .chart-point, .ov-card-dark .chart-hover-dot { stroke: #111a2e; }
-.ov-card-dark .chart-guide { stroke: rgba(255, 255, 255, .3); }
-.ov-card-dark .gmv-line { stroke: #9b7cff; }
-.ov-card-dark .order-line { stroke: #4d9bff; }
-.ov-card-dark .gmv-point { fill: #9b7cff; }
-.ov-card-dark .order-point { fill: #4d9bff; }
-.ov-card-dark .chart-hover-dot.gmv { fill: #9b7cff; }
-.ov-card-dark .chart-hover-dot.orders { fill: #4d9bff; }
-.ov-card-dark .empty-chart-icon { border-color: rgba(255, 255, 255, .16); color: rgba(232, 237, 247, .5); }
-.ov-card-dark .section-state { color: rgba(232, 237, 247, .58); }
-.ov-card-dark .section-state strong { color: rgba(232, 237, 247, .82); }
-.section-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--dash-text-muted); text-align: center; }
-.section-state strong { color: var(--dash-text-soft); font-size: 12.5px; font-weight: 600; }
-.chart-state { height: 268px; }
-.empty-chart-icon { display: inline-flex; width: 36px; height: 36px; align-items: center; justify-content: center; border: 1px solid var(--dash-border); border-radius: 11px; color: var(--dash-text-muted); font-size: 20px; }
-.dashboard-state-art { display: block; width: 86px; height: 64px; object-fit: cover; border-radius: 12px; opacity: .88; }
-.analytics-state-art { width: 112px; height: 78px; }
-.compact-state-art { width: 62px; height: 48px; }
-.loader { width: 16px; height: 16px; border: 2px solid #e3e8f1; border-top-color: var(--dash-purple); border-radius: 50%; animation: dashboard-spin .8s linear infinite; }
-@keyframes dashboard-spin { to { transform: rotate(360deg); } }
-.error-state { color: var(--dash-red-text); }
-
-.shortcut-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-/* 设计稿排版：图标在左、标题/副标题在右，按钮在文字下方（不是图标下方） */
-.shortcut-tile { display: grid; grid-template-columns: 44px minmax(0, 1fr); grid-template-rows: auto auto; gap: 10px 12px; align-items: start; min-width: 0; padding: 14px; border: 1px solid transparent; border-radius: 16px; background: #f7f9fd; }
-.shortcut-tile.tone-purple { background: #f6f3ff; border-color: #ece5ff; }
-.shortcut-tile.tone-blue { background: #f2f7ff; border-color: #e3eeff; }
-.shortcut-tile.tone-teal { background: #eefaf7; border-color: #dcf3ee; }
-.shortcut-tile.tone-rose { background: #fff3f4; border-color: #ffe4e8; }
-.shortcut-tile.disabled { opacity: .96; }
-.tile-icon img { width: 23px; height: 23px; object-fit: contain; }.tile-icon { grid-row: 1; grid-column: 1; display: inline-flex; width: 44px; height: 44px; align-items: center; justify-content: center; border-radius: 13px; background: var(--brand-gradient); color: #fff; font-size: 19px; }
-.shortcut-tile.tone-blue .tile-icon { background: linear-gradient(135deg, #3f9bff, #1f6fea); }
-.shortcut-tile.tone-teal .tile-icon { background: linear-gradient(135deg, #21c8a8, #0e9f8c); }
-.shortcut-tile.tone-rose .tile-icon { background: linear-gradient(135deg, #ff8a8a, #ef4a5f); }
-.tile-copy { grid-row: 1; grid-column: 2; display: flex; min-width: 0; flex-direction: column; gap: 5px; }
-.tile-copy strong { overflow: hidden; color: var(--dash-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.tile-copy small { overflow: hidden; color: var(--dash-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.inline-action-icon { width:14px;height:14px;object-fit:contain;vertical-align:-2px; }
-.tile-action { grid-row: 2; grid-column: 2; align-self: start; justify-self: start; min-height: 34px; padding: 0 15px; border: 0; border-radius: 10px; background: var(--brand-gradient); color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }
-.tile-action:hover:not(:disabled), .tile-action:focus-visible { filter: brightness(1.05); outline: none; }
-.tile-action:disabled { background: #eef1f7; color: var(--dash-text-muted); cursor: not-allowed; font-weight: 500; }
-
-/* ---------------- 右栏：平台同步 / AI 助手 / 待办 ---------------- */
-.ov-pill { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
-.ov-pill.success { background: #ecfdf3; color: #027a48; }
-.ov-pill.info { background: #eef2f7; color: #475467; }
-.ov-empty { padding: 16px 2px; color: var(--dash-text-muted); font-size: 12px; text-align: center; }
-.ov-link img { width:14px;height:14px;object-fit:contain; }.ov-link { display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin-top: 10px; padding-top: 12px; width: 100%; border: 0; border-top: 1px solid #f2f4f8; background: transparent; color: var(--dash-purple-text); cursor: pointer; font-size: 12.5px; font-weight: 600; }
-.ov-link.inline { width: auto; margin: 0; padding: 0; border: 0; font-size: 12px; }
-.ov-link:hover, .ov-link:focus-visible { color: #5b3df5; outline: none; }
-.sync-row { display: flex; align-items: center; gap: 11px; padding: 11px 0; border-bottom: 1px solid #f4f6fa; }
-.sync-row:last-of-type { border-bottom: 0; }
-.sync-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
-.sync-copy strong { color: var(--dash-text); font-size: 13px; }
-.sync-copy span { color: var(--dash-text-muted); font-size: 11.5px; }
-.sync-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
-.sync-meta strong { display: inline-flex; align-items: center; gap: 5px; color: var(--dash-green); font-size: 12px; }
-.sync-meta:has(.sync-dot.offline) strong { color: var(--dash-red-text); }
-.sync-meta:has(.sync-dot.login) strong { color: var(--dash-orange); }
-.sync-meta small { color: var(--dash-text-muted); font-size: 11px; white-space: nowrap; }
-.sync-dot { display: none; }
-.ov-ai { overflow: hidden; border: 0; background: linear-gradient(125deg, #2b2170 0%, #3a2a92 42%, #1b1748 100%); color: #fff; }
-.ov-ai-glow { position: absolute; top: -46px; right: -30px; width: 190px; height: 190px; border-radius: 50%; background: radial-gradient(circle, rgba(164, 120, 255, .85), rgba(124, 92, 255, .18) 55%, transparent 72%); filter: blur(2px); }
-.ov-ai-copy { position: relative; display: flex; flex-direction: column; gap: 8px; }
-.ov-ai-copy h2 { display: flex; align-items: center; gap: 8px; color: #fff; font-size: 16px; }
-.ov-ai-copy p { color: rgba(255, 255, 255, .76); font-size: 12px; }
-.ov-ai-button .inline-action-icon { width:14px;height:14px;object-fit:contain; }.ov-ai-button { display: inline-flex; align-self: flex-start; align-items: center; gap: 8px; margin-top: 4px; height: 36px; padding: 0 16px; border: 0; border-radius: 11px; background: #fff; color: #3a2a92; cursor: pointer; font-size: 12.5px; font-weight: 700; }
-.ov-ai-button:hover, .ov-ai-button:focus-visible { background: #f3efff; outline: none; }
-.todo-list { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 0; padding: 0; list-style: none; }
-.todo-item { display: flex; align-items: center; gap: 10px; padding: 9px 2px; }
-.todo-item.clickable { cursor: pointer; border-radius: 7px; }
-.todo-item.clickable:hover, .todo-item.clickable:focus-visible { background: var(--dash-card-hover); outline: none; }
-.todo-check { width: 18px; height: 18px; flex: 0 0 18px; border: 1.5px solid #cfd8e6; border-radius: 50%; }
-.todo-title { min-width: 0; flex: 1; overflow: hidden; color: var(--dash-text); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
-.todo-chip { flex: 0 0 auto; padding: 3px 9px; border-radius: 8px; font-size: 11px; font-weight: 600; }
-.todo-chip.urgent { background: #fff4e5; color: #b54708; }
-.todo-chip.info { background: #eef4ff; color: #1d4ed8; }
-/* 概览卡只展示待开发票状态，点击后进入发票中心核对。 */
-
-/* ---------------- 弹窗 / 菜单 / 提示 ---------------- */
-.dashboard-context-menu { position: fixed; z-index: 220; width: 252px; padding: 6px; border: 1px solid var(--dash-border-strong); border-radius: 14px; background: #fff; box-shadow: var(--shadow-pop); }
-.ctx-item { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 31px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--dash-text-soft); text-align: left; cursor: pointer; font-size: 12px; }
-.ctx-item img { width: 15px; height: 15px; flex: 0 0 15px; object-fit: contain; }
-.ctx-item:hover, .ctx-item:focus-visible { background: #f2f4f8; color: var(--dash-text); outline: none; }
-.ctx-item:disabled { cursor: not-allowed; opacity: .45; }
-.ctx-item.danger:hover { background: #fef3f2; color: #b42318; }
-.ctx-sep { height: 1px; margin: 5px 4px; background: var(--dash-border); }
-.dashboard-overlay { position: fixed; inset: 0; z-index: 230; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(15, 23, 41, .38); backdrop-filter: blur(3px); }
-.dashboard-dialog { width: min(480px, 100%); padding: 20px; border: 1px solid var(--dash-border); border-radius: 18px; background: #fff; box-shadow: var(--shadow-pop); }
-.dashboard-dialog h2 { margin: 0 0 14px; font-size: 17px; }
-.dashboard-dialog input { width: 100%; min-height: 36px; box-sizing: border-box; padding: 0 11px; border: 1px solid var(--dash-border); border-radius: 10px; outline: none; background: #f7f9fd; color: var(--dash-text); }
-.dashboard-dialog input:focus { border-color: rgba(124, 92, 255, .6); background: #fff; box-shadow: 0 0 0 3px rgba(124, 92, 255, .1); }
-.dashboard-dialog-note { margin: 0 0 14px; color: var(--dash-text-muted); font-size: 12px; line-height: 1.6; }
-.dashboard-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-.store-pick { display: flex; align-items: center; gap: 8px; min-height: 32px; color: var(--dash-text-soft); font-size: 12px; }
-.store-pick input { width: auto; min-height: 0; }
-.modal-mask { position: fixed; inset: 0; z-index: 236; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(15, 23, 41, .38); backdrop-filter: blur(3px); }
-.modal { width: min(560px, calc(100vw - 48px)); max-height: min(680px, calc(100vh - 48px)); overflow: auto; padding: 20px; border: 1px solid var(--dash-border); border-radius: 18px; background: #fff; box-shadow: var(--shadow-pop); }
-.modal h2 { margin: 0 0 14px; font-size: 17px; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
-.btn-ghost, .btn-danger { min-height: 32px; padding: 0 13px; border: 1px solid var(--dash-border); border-radius: 9px; background: #fff; color: var(--dash-text-soft); cursor: pointer; font-size: 12px; }
-.btn-ghost:hover, .btn-ghost:focus-visible { border-color: rgba(124, 92, 255, .5); color: var(--dash-text); outline: none; }
-.btn-danger { border-color: rgba(240, 68, 56, .35); color: #b42318; }
-.btn-danger:hover, .btn-danger:focus-visible { background: #fef3f2; outline: none; }
-.btn-ghost.sm, .btn-danger.sm { min-height: 26px; padding: 0 9px; font-size: 11px; }
-.trash-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--dash-border); }
-.trash-meta { min-width: 0; flex: 1; color: var(--dash-text-soft); font-size: 12px; }
-.store-create-modal { width: min(520px, calc(100vw - 48px)); }
-.modal-field { display: flex; flex-direction: column; gap: 6px; margin: 11px 0; color: var(--dash-text-soft); font-size: 12px; }
-.modal-field input, .modal-field select { box-sizing: border-box; width: 100%; min-height: 36px; padding: 0 10px; border: 1px solid var(--dash-border); border-radius: 10px; outline: none; background: #f7f9fd; color: var(--dash-text); }
-.modal-field input:focus, .modal-field select:focus { border-color: rgba(124, 92, 255, .6); background: #fff; box-shadow: 0 0 0 3px rgba(124, 92, 255, .1); }
-.btn-primary { min-height: 32px; padding: 0 15px; border: 0; border-radius: 9px; background: var(--brand-gradient); color: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }
-.btn-primary:disabled { cursor: not-allowed; opacity: .55; }
-.unified-button { min-height: 32px; padding: 0 13px; border: 1px solid var(--dash-border); border-radius: 9px; background: #fff; color: var(--dash-text-soft); cursor: pointer; font-size: 12px; }
-.unified-button:hover, .unified-button:focus-visible { border-color: rgba(124, 92, 255, .5); color: var(--dash-text); outline: none; }
-.unified-button.primary { border: 0; background: var(--brand-gradient); color: #fff; font-weight: 600; }
-.unified-button.danger { border-color: rgba(240, 68, 56, .35); color: #b42318; }
-.unified-button:disabled { cursor: not-allowed; opacity: .55; }
-.dashboard-notice { position: fixed; right: 25px; bottom: 24px; z-index: 240; max-width: 340px; padding: 11px 15px; border: 1px solid var(--dash-border); border-radius: 12px; background: #fff; box-shadow: var(--shadow-pop); color: var(--dash-text); font-size: 12px; }
-.dashboard-toast-host { position: fixed; right: 25px; bottom: 24px; z-index: 245; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: min(420px, calc(100vw - 50px)); pointer-events: none; }
-.dashboard-toast { padding: 11px 15px; border: 1px solid var(--dash-border); border-radius: 12px; background: #fff; box-shadow: var(--shadow-pop); color: var(--dash-text-soft); font-size: 12px; }
-.dashboard-toast.success { border-color: rgba(18, 183, 106, .35); color: #027a48; }
-.dashboard-toast.error { border-color: rgba(240, 68, 56, .35); color: #b42318; }
-.command-backdrop { position: fixed; inset: 0; z-index: 170; display: flex; align-items: flex-start; justify-content: center; padding-top: 92px; background: rgba(15, 23, 41, .32); backdrop-filter: blur(2px); }
-.command-palette { width: min(560px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--dash-border); border-radius: 16px; background: #fff; box-shadow: var(--shadow-pop); }
-.command-search { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--dash-border); color: var(--dash-text-muted); }
-.command-search input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--dash-text); font-size: 13px; }
-.command-results { display: flex; max-height: 330px; flex-direction: column; overflow-y: auto; padding: 7px; }
-.command-results button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: 10px; background: transparent; text-align: left; cursor: pointer; }
-.command-results button:hover, .command-results button:focus-visible { background: #f2f4f8; outline: none; }
-.command-result-icon img { width: 16px; height: 16px; object-fit: contain; }.toolbar-action-icon { width: 17px; height: 17px; object-fit: contain; }.command-result-icon { display: flex; width: 28px; height: 28px; align-items: center; justify-content: center; border-radius: 8px; background: var(--brand-soft); color: var(--dash-purple); }
-.command-results button span:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 2px; }
-.command-results strong { color: var(--dash-text); font-size: 12px; }
-.command-results small { color: var(--dash-text-muted); font-size: 11px; }
-.command-results kbd { color: var(--dash-text-muted); }
-.command-empty { padding: 28px; color: var(--dash-text-muted); text-align: center; font-size: 12px; }
-
-/* 窄屏导航：完整侧栏变成抽屉，保留店铺列表和设置入口，避免只剩无法识别的图标。 */
-.mobile-nav-toggle { display: none; width: 34px; height: 34px; flex: 0 0 34px; align-items: center; justify-content: center; flex-direction: column; gap: 4px; border: 1px solid var(--dash-border); border-radius: 9px; background: #fff; cursor: pointer; -webkit-app-region: no-drag; }
-.mobile-nav-toggle span { display: block; width: 15px; height: 1.5px; border-radius: 2px; background: var(--dash-text-soft); }
-.mobile-nav-toggle:hover, .mobile-nav-toggle:focus-visible { border-color: rgba(124, 92, 255, .55); outline: none; box-shadow: 0 0 0 3px rgba(124, 92, 255, .1); }
-.mobile-sidebar-backdrop { display: none; }
-
-/* ---------------- 响应式 ---------------- */
-@media (max-width: 1380px) {
-  .dashboard-sidebar { width: 228px; min-width: 228px; }
-  .ov-grid { grid-template-columns: minmax(0, 1fr) 300px; }
-  .kpi-value { font-size: 21px; }
-  .shortcut-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* ---------- 窄屏 ---------- */
+@media (max-width: 1360px) {
+  .appbar-clock {
+    display: none;
+  }
 }
 @media (max-width: 1180px) {
-  .ov-grid { grid-template-columns: minmax(0, 1fr); }
-  .ov-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 16px; }
+  .dashboard-sidebar {
+    width: 220px;
+    min-width: 220px;
+  }
+  .appbar-search span,
+  .appbar-search .ui-kbd {
+    display: none;
+  }
+  .appbar-search {
+    width: 30px;
+    justify-content: center;
+    padding: 0;
+  }
 }
-@media (max-width: 900px) {
-  .dashboard-sidebar { width: 62px; min-width: 62px; }
-  .dashboard-brand-copy, .nav-label, .nav-group-title, .dashboard-store-area, .pro-copy, .pro-arrow { display: none; }
-  .dashboard-nav { padding: 8px; }
-  .dashboard-nav-item { justify-content: center; padding: 0; }
-  .dashboard-sidebar-footer { padding: 8px; }
-  .ov-card-head { flex-direction: column; align-items: flex-start; }
-  .shortcut-grid { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 980px) {
+  .dashboard-sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: var(--z-overlay);
+    width: 248px;
+    min-width: 248px;
+    box-shadow: var(--e3);
+    transform: translateX(-100%);
+    transition: transform var(--dur-base) var(--ease);
+  }
+  .dashboard-sidebar.mobile-open {
+    transform: none;
+  }
+  .mobile-sidebar-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: calc(var(--z-overlay) - 1);
+    border: 0;
+    background: rgba(16, 24, 40, 0.32);
+  }
+  .dashboard-toolbar {
+    padding-left: 12px;
+  }
+  .workspace-switch {
+    position: static;
+    transform: none;
+    margin-left: auto;
+  }
+  .appbar-actions {
+    margin-left: 0;
+  }
 }
-@media (max-width: 720px) {
-  .dashboard-shell { position: relative; }
-  .dashboard-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 160; width: min(286px, 86vw); min-width: min(286px, 86vw); transform: translateX(-105%); transition: transform .2s ease; box-shadow: 18px 0 46px rgba(15, 23, 41, .25); }
-  .dashboard-shell.mobile-nav-open .dashboard-sidebar { transform: translateX(0); }
-  .dashboard-shell.mobile-nav-open .dashboard-sidebar.collapsed { width: min(286px, 86vw); min-width: min(286px, 86vw); }
-  .dashboard-shell.mobile-nav-open .dashboard-brand-copy { display: flex; }
-  .dashboard-shell.mobile-nav-open .nav-label { display: inline; }
-  .dashboard-shell.mobile-nav-open .nav-group-title { display: block; }
-  .dashboard-shell.mobile-nav-open .dashboard-store-area { display: flex; }
-  .dashboard-shell.mobile-nav-open .pro-copy { display: flex; }
-  .dashboard-shell.mobile-nav-open .pro-arrow { display: inline; }
-  .dashboard-shell.mobile-nav-open .dashboard-nav-item { justify-content: flex-start; padding: 0 12px; }
-  .dashboard-shell.mobile-nav-open .dashboard-store-area { display: flex; }
-  .dashboard-shell.mobile-nav-open .sidebar-rail { display: none; }
-  .mobile-sidebar-backdrop { position: fixed; inset: 0; z-index: 150; display: block; border: 0; background: rgba(15, 23, 41, .42); backdrop-filter: blur(2px); cursor: pointer; }
-  .dashboard-toolbar { height: 56px; flex-basis: 56px; gap: 8px; padding: 0 12px; }
-  .mobile-nav-toggle { display: inline-flex; }
-  .toolbar-crumb { min-width: 0; flex: 1 1 auto; gap: 4px; font-size: 12px; }
-  .crumb-root, .crumb-sep { display: none; }
-  .crumb-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .workspace-switcher { position: static; flex: 0 0 auto; max-width: 138px; overflow-x: auto; transform: none; scrollbar-width: none; }
-  .workspace-switcher::-webkit-scrollbar { display: none; }
-  .workspace-tab { min-height: 30px; padding: 0 8px; font-size: 11px; }
-  .toolbar-actions { flex: 0 0 auto; gap: 2px; }
-  .toolbar-datetime { display: none; }
-  .toolbar-icon-button { width: 32px; height: 32px; }
-  .toolbar-avatar { width: 30px; height: 30px; }
-  .notification-center { position: fixed; top: 60px; right: 10px; width: min(320px, calc(100vw - 20px)); }
-  .overview-page { padding: 14px 12px 24px; }
-  .ov-card { padding: 14px; border-radius: 14px; }
-  .ov-card-head { gap: 10px; }
-  .ov-card-tools { width: 100%; min-width: 0; flex-wrap: wrap; }
-  .period-tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
-  .period-tabs::-webkit-scrollbar { display: none; }
-  .period-tabs button { min-width: 58px; padding: 0 9px; }
-  .platform-select { flex: 1 1 140px; min-width: 0; }
-  .ov-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px 9px; }
-  .ov-kpi { padding-left: 9px; }
-  .kpi-value { font-size: 20px; }
-  .dashboard-error { align-items: flex-start; flex-wrap: wrap; }
-  .dashboard-error button { margin-left: auto; }
-  .dashboard-dialog, .modal { width: min(100%, calc(100vw - 24px)); padding: 16px; }
-  .modal-mask, .dashboard-overlay { padding: 12px; }
-  .modal-actions, .dashboard-dialog-actions { flex-wrap: wrap; }
-  .modal-actions > *, .dashboard-dialog-actions > * { min-height: 40px; flex: 1 1 120px; }
-  .dashboard-toast-host { right: 12px; bottom: 12px; max-width: calc(100vw - 24px); }
+@media (min-width: 981px) {
+  .mobile-nav-toggle,
+  .mobile-sidebar-backdrop {
+    display: none;
+  }
 }
-@media (max-width: 480px) {
-  .dashboard-toolbar { gap: 6px; }
-  .workspace-switcher { max-width: 108px; }
-  .workspace-tab { padding: 0 7px; }
-  .workspace-tab > span:last-child { max-width: 58px; overflow: hidden; text-overflow: ellipsis; }
-  .toolbar-icon-button { width: 30px; }
-  .toolbar-avatar { display: none; }
-  .ov-kpis { gap: 11px 7px; }
-  .kpi-value { font-size: 18px; }
-  .ov-title-row { align-items: flex-start; flex-direction: column; gap: 8px; }
-  .ov-refresh { width: 100%; justify-content: center; }
-  .shortcut-tile { padding: 12px; }
+@media (max-width: 760px) {
+  /* 这里不能再动 padding-right：原生窗口按钮（WCO）在窄窗口里照样画在右上角，
+     收掉留白就会重新压住顶栏右侧的操作（titlebar-toolbar-boundary 测试钉住这一点）。 */
+  .appbar-crumb {
+    display: none;
+  }
+}
+
+/* 窄屏汉堡按钮 */
+.mobile-nav-toggle {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  cursor: pointer;
+}
+.mobile-nav-toggle span {
+  display: block;
+  width: 15px;
+  height: 1.6px;
+  border-radius: 2px;
+  background: var(--ui-text-secondary);
+}
+.mobile-nav-toggle:hover {
+  background: var(--ui-surface-sunken);
 }
 </style>

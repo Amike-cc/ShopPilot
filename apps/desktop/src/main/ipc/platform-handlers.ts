@@ -7,8 +7,10 @@ import { ERROR_CODES } from '@shared/errors/error-codes'
 import { shopSessionStatusInputSchema } from '@shared/schemas/shop-session'
 import * as ShopSessionManager from '../browser/shop-session-manager'
 import { detectStoreLoginStatus } from '../platform-adapters/platform-login-service'
+import { batchCheckStoreLogin } from '../services/batch-login-check'
 import { emitToRenderer } from '../browser/window-manager'
 import { randomUUID } from 'crypto'
+import { z } from 'zod'
 import { ipcOk as ok, ipcFail as err } from './envelope'
 
 function rid(): string { return randomUUID() }
@@ -21,6 +23,11 @@ function detectionError(error: unknown, requestId: string): IPCResult {
 }
 
 const handle = familyHandle('平台登录状态')
+
+/** 批量登录检测的入参：最多 50 个 id（主进程内再截到 20 家真正去查） */
+const batchLoginInputSchema = z.object({
+  storeIds: z.array(z.string().trim().min(1).max(200)).min(1).max(50)
+}).strict()
 
 export function registerPlatformHandlers(): void {
   handle(IPC_CHANNELS.SESSION_CHECK_LOGIN_STATUS, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
@@ -47,6 +54,19 @@ export function registerPlatformHandlers(): void {
       // 这里返回的仍是第一阶段安全摘要；platformLogin 只含安全结果字段。
       const session = ShopSessionManager.getSessionStatus(parsed.data.storeId)
       return ok({ ...session, platformLogin: result }, requestId)
+    } catch (error) {
+      return detectionError(error, requestId)
+    }
+  })
+
+  // 批量登录检测（2026-11-08）：串行逐店后台拉起 → 检测 → 关掉自己开的。
+  // 返回里的 SKIPPED/UNKNOWN 与"未登录"分开，绝不把"没拿到证据"报成"未登录"。
+  handle(IPC_CHANNELS.SESSION_BATCH_LOGIN, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
+    const requestId = rid()
+    const parsed = batchLoginInputSchema.safeParse(input)
+    if (!parsed.success) return err(ERROR_CODES.INVALID_ARGUMENT.code, 'storeIds 无效（1–50 个非空字符串）', requestId)
+    try {
+      return ok(await batchCheckStoreLogin(parsed.data.storeIds), requestId)
     } catch (error) {
       return detectionError(error, requestId)
     }

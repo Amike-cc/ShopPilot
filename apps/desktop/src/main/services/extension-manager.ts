@@ -266,6 +266,76 @@ export function importExtensionFromDirectory(sourceDir: string): BrowserExtensio
   return toItem(installed, readConfig())
 }
 
+/**
+ * 插件中心安装（2026-11-08）：与本地导入共用同一套校验/复制/审计，
+ * 区别只有一个——**slug 由条目 key 确定性推导**（不存在则新建、存在则覆盖），
+ * 重复点「安装」不会装出第二份，升级内置插件也是同一条路。
+ */
+export function installExtensionFromDirectory(sourceDir: string, slug: string): BrowserExtensionItem {
+  if (!SLUG_PATTERN.test(slug)) throw new Error('EXTENSION_NOT_FOUND: 扩展 ID 不合法')
+  const source = resolve(sourceDir)
+  if (!existsSync(source) || !statSync(source).isDirectory()) throw new Error('EXTENSION_INVALID: 插件目录不存在')
+  const read = readManifest(source)
+  if (!read.manifest) throw new Error(`${read.code || 'EXTENSION_INVALID'}: ${read.message || 'manifest 校验失败'}`)
+  const scanned = scanSource(source)
+  if (!scanned.files.some(file => file === join(source, 'manifest.json'))) throw new Error('EXTENSION_INVALID: 缺少 manifest.json')
+
+  const root = getExtensionsRoot()
+  const target = resolve(root, slug)
+  if (!target.startsWith(resolve(root) + sep)) throw new Error('EXTENSION_NOT_FOUND: 路径不合法')
+  mkdirSync(root, { recursive: true })
+  // 覆盖安装：先把旧副本从会话里卸掉再删目录，否则 Chromium 还持有文件句柄（Windows 会拒绝删除）
+  removeFromSessions(slug)
+  loadErrors.delete(slug)
+  try {
+    if (existsSync(target)) rmSync(target, { recursive: true, force: true })
+  } catch {
+    throw new Error('EXTENSION_INVALID: 旧版本文件被占用，请先停用该插件后重试')
+  }
+  try {
+    mkdirSync(target)
+    for (const file of scanned.files) {
+      const rel = relative(source, file)
+      if (rel.startsWith('..') || rel.includes(`..${sep}`)) throw new Error('EXTENSION_INVALID: 路径穿越')
+      const dest = join(target, rel)
+      mkdirSync(dirname(dest), { recursive: true })
+      copyFileSync(file, dest)
+    }
+  } catch (error) {
+    try { rmSync(target, { recursive: true, force: true }) } catch { /* 清理失败不影响原错误 */ }
+    throw error
+  }
+  const installed = scanInstalled().find(item => item.slug === slug)
+  if (!installed?.manifest) {
+    try { rmSync(target, { recursive: true, force: true }) } catch { /* ignore */ }
+    throw new Error('EXTENSION_INVALID: 复制后的清单校验失败')
+  }
+  writeAudit('extension.install', 'success', { requestId: slug })
+  logMain('info', `[extensions] 插件中心安装 ${slug}（${installed.manifest.name}@${installed.manifest.version}）`)
+  return toItem(installed, readConfig())
+}
+
+/**
+ * 只读探测一个扩展源目录（插件中心列目录时用）：
+ * 返回校验后的清单摘要与体积，不复制、不落盘。
+ */
+export function inspectExtensionSource(dir: string): {
+  manifest: NormalizedExtensionManifest | null
+  sizeBytes: number
+  code?: string
+  message?: string
+} {
+  const read = readManifest(dir)
+  let sizeBytes = 0
+  try {
+    sizeBytes = scanSource(dir).bytes
+  } catch (error) {
+    const failure = extensionFailure(error)
+    return { manifest: null, sizeBytes: 0, code: failure.code, message: failure.message }
+  }
+  return { manifest: read.manifest, sizeBytes, code: read.code, message: read.message }
+}
+
 /** 把已启用的扩展加载到店铺 Session；失败只标记，不抛出。 */
 export async function applyToSession(storeId: string, session: Session): Promise<void> {
   let runtime = sessions.get(storeId)

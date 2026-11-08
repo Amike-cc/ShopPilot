@@ -110,7 +110,12 @@ const api = {
   // 下载
   download: {
     list: (storeId: string, limit?: number): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.DOWNLOAD_LIST, { storeId, limit }),
-    showInFolder: (downloadId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.DOWNLOAD_SHOW_IN_FOLDER, { downloadId })
+    showInFolder: (downloadId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.DOWNLOAD_SHOW_IN_FOLDER, { downloadId }),
+    // 进行中下载的控制（2026-11-08）：只对主进程里仍在跑的实例生效，
+    // 历史记录会返回 not-active，界面据此提示"该记录已结束，无法继续"。
+    pause: (downloadId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.DOWNLOAD_PAUSE, { downloadId }),
+    resume: (downloadId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.DOWNLOAD_RESUME, { downloadId }),
+    cancel: (downloadId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.DOWNLOAD_CANCEL, { downloadId })
   },
 
   // 环境配置 - §6.6
@@ -174,7 +179,10 @@ const api = {
     remove: (id: string) => invoke(IPC_CHANNELS.EXTENSION_REMOVE, { id }),
     reload: (id: string) => invoke(IPC_CHANNELS.EXTENSION_RELOAD, { id }),
     /** 打开扩展目录（不带 id 打开管理根目录），方便自己写插件后直接编辑并重载 */
-    openDir: (id?: string) => invoke(IPC_CHANNELS.EXTENSION_OPEN_DIR, id ? { id } : {})
+    openDir: (id?: string) => invoke(IPC_CHANNELS.EXTENSION_OPEN_DIR, id ? { id } : {}),
+    /** 插件中心：内置目录（随安装包发）；只传条目 key，不传路径 */
+    catalog: () => invoke(IPC_CHANNELS.EXTENSION_CATALOG_LIST),
+    installFromCatalog: (key: string) => invoke(IPC_CHANNELS.EXTENSION_CATALOG_INSTALL, { key })
   },
 
   // 代理 - §6.3（渲染层可传明文凭据，Main 立即加密保管，绝不回显）
@@ -194,6 +202,9 @@ const api = {
     status: (storeId: string) => invoke(IPC_CHANNELS.SESSION_STATUS, { storeId }),
     checkLoginStatus: (storeId: string) =>
       invoke(IPC_CHANNELS.SESSION_CHECK_LOGIN_STATUS, { storeId }),
+    /** 批量登录检测（串行，最多 20 家）：未检测/未识别与"未登录"分开返回 */
+    batchCheckLogin: (storeIds: string[]) =>
+      invoke(IPC_CHANNELS.SESSION_BATCH_LOGIN, { storeIds }),
     export: (storeId: string, outputPath?: string, validDays?: number) =>
       invoke(IPC_CHANNELS.SESSION_EXPORT, { storeId, outputPath, validDays }),
     import: (storeId: string, filePath?: string, pickFile?: boolean) =>

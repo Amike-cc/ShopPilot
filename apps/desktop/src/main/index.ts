@@ -14,7 +14,7 @@ import {
   CUSTOMER_SERVICE_WEBVIEW_PLACEHOLDER_SOURCE,
   isAllowedCustomerServiceUrl
 } from '@shared/contracts/customer-service'
-import { initDatabase, closeDatabase, getDatabasePath } from './db/database'
+import { initDatabase, closeDatabase, getDatabase, getDatabasePath } from './db/database'
 import { registerStoreHandlers } from './ipc/store-handlers'
 import { registerBrowserHandlers } from './ipc/browser-handlers'
 import { registerInviteHandlers } from './ipc/invite-handlers'
@@ -40,7 +40,7 @@ import { registerCustomerServiceHandlers } from './ipc/customer-service-handlers
 import { scheduleStartupCheck } from './services/update-manager'
 import { installLockGate, startBackgroundServices } from './services/bg-services'
 import * as Security from './services/security-manager'
-import { setBrowserHostWindow, setBrowserViewsVisible, emitToRenderer } from './browser/window-manager'
+import { setBrowserHostWindow, setBrowserViewsVisible, setStoreWarmCacheLimit, emitToRenderer } from './browser/window-manager'
 import { customerMessageMonitor } from './services/customer-message-monitor'
 import { clearProxyAuthTracking, applyDefaultSessionPermissions, registerCustomerServiceWebContents } from './browser/session-manager'
 import { verifyStoreFingerprint, registerFingerprintTarget, unregisterFingerprintTarget } from './browser/fingerprint-injector'
@@ -523,6 +523,16 @@ async function initialize(): Promise<void> {
     console.log('Initializing database...')
     initDatabase()
     console.log('Database initialized successfully')
+
+    // 后台保活店铺数（2026-11-08）：默认 1 家，设置中心可调到 1–4。
+    // 读失败/值非法都回落默认值——这项只影响内存策略，不该阻断启动。
+    try {
+      const row = getDatabase().prepare("SELECT value_json FROM app_settings WHERE key = 'browser.warmStoreLimit'").get() as { value_json?: string } | undefined
+      const saved = row?.value_json ? JSON.parse(row.value_json) : null
+      setStoreWarmCacheLimit(saved ?? 1)
+    } catch (e: any) {
+      logMain('warn', `[browser] 读取后台保活设置失败，按 1 家处理: ${String(e?.message || e).slice(0, 120)}`)
+    }
 
     // 应用锁门禁必须在所有业务通道注册之前挂上（统一包装 ipcMain.handle）
     installLockGate()

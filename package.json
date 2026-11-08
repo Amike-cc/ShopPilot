@@ -43,6 +43,7 @@
     "test:invite-live-log": "node tools/acceptance/invite-live-log-verify.js",
     "test:invite-v2-smoke": "node tools/acceptance/creator-invite-smoke.js",
     "test:custom-realclick": "node tools/acceptance/custom-task-real-click-verify.js",
+    "test:browser-tools": "node tools/acceptance/browser-tools-cdp-verify.js",
     "test:webview-attach": "node tools/acceptance/webview-attach-local-verify.js"
   },
   "dependencies": {

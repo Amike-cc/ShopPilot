@@ -53,7 +53,32 @@
         <img :src="searchIcon" alt="" />
         <input v-model="urlDraft" spellcheck="false" @keydown.enter="submitUrl" />
       </label>
+      <div v-if="activeWebviewKey" class="browser-zoom" data-test="browser-zoom">
+        <button type="button" class="browser-zoom-btn" title="缩小（Ctrl+-）" aria-label="缩小页面" @click="zoomBy('out')">−</button>
+        <button type="button" class="browser-zoom-value" :title="`当前缩放 ${zoomLabel}，点击复位 100%`" data-test="browser-zoom-value" @click="zoomBy('reset')">{{ zoomLabel }}</button>
+        <button type="button" class="browser-zoom-btn" title="放大（Ctrl+=）" aria-label="放大页面" @click="zoomBy('in')">+</button>
+      </div>
       <span class="dashboard-browser-hint">页面内嵌 · 每店独立会话</span>
+    </div>
+
+    <!-- 页面内查找（2026-11-08）：Ctrl+F 打开，Enter/Shift+Enter 跳转，Esc 关闭。
+         只作用于当前活动标签页的 guest；切换店铺/标签自动收起（否则计数会指向另一个页面）。 -->
+    <div v-if="findOpen" class="browser-find-bar" data-test="browser-find-bar" role="search">
+      <input
+        ref="findInput"
+        v-model="findQuery"
+        class="browser-find-input"
+        type="text"
+        placeholder="在当前页面查找"
+        aria-label="在当前页面查找"
+        data-test="browser-find-input"
+        @input="runFind(false, false)"
+        @keydown="onFindKeydown"
+      />
+      <span class="browser-find-count" data-test="browser-find-count">{{ findCountLabel }}</span>
+      <button type="button" class="browser-find-btn" title="上一个（Shift+Enter）" aria-label="上一个命中" :disabled="!findHasQuery" @click="stepFind(false)">↑</button>
+      <button type="button" class="browser-find-btn" title="下一个（Enter）" aria-label="下一个命中" :disabled="!findHasQuery" @click="stepFind(true)">↓</button>
+      <button type="button" class="browser-find-btn close" title="关闭（Esc）" aria-label="关闭查找" @click="closeFind">×</button>
     </div>
 
     <div class="dashboard-browser-body">
@@ -72,7 +97,8 @@
             :aria-label="`${item.storeName} · ${item.tabTitle || '新标签页'}`"
             allowpopups
             @did-attach="handleWebviewAttach(item)"
-            @dom-ready="handleWebviewAttach(item)"
+            @dom-ready="onWebviewDomReady(item)"
+            @found-in-page="onFoundInPage"
             @did-fail-load="handleWebviewFailure(item, $event)"
             @did-finish-load="clearWebviewError(item)"
             @destroyed="handleWebviewDestroyed(item)"
@@ -146,10 +172,17 @@
         <div v-else-if="panel === 'downloads'" class="dashboard-browser-panel-body">
           <div class="browser-panel-heading"><strong>下载</strong><button type="button" @click="ws.refreshDownloads()"><img class="button-icon" :src="workspaceRefreshIcon" alt="" />刷新</button></div>
           <div v-if="!ws.downloads.length" class="browser-panel-empty"><img class="browser-state-art" :src="downloadsArt" alt="暂无下载" /><span>暂无下载</span></div>
-          <button v-for="download in ws.downloads" :key="download.id" type="button" class="browser-panel-row" @click="showInFolder(download.id)">
-            <span class="browser-panel-row-copy"><strong :title="download.fileName">{{ download.fileName || '未命名文件' }}</strong><small>{{ downloadState(download.state) }}<template v-if="download.sizeBytes"> · {{ formatSize(download.sizeBytes) }}</template></small></span>
-            <span class="browser-panel-row-action"><img :src="openIcon" alt="" /></span>
-          </button>
+          <div v-for="download in ws.downloads" :key="download.id" class="browser-panel-row download-row">
+            <button type="button" class="browser-download-main" :title="`在文件夹中显示：${download.fileName || '未命名文件'}`" @click="showInFolder(download.id)">
+              <span class="browser-panel-row-copy"><strong :title="download.fileName">{{ download.fileName || '未命名文件' }}</strong><small>{{ downloadState(download.state) }}<template v-if="download.sizeBytes"> · {{ formatSize(download.sizeBytes) }}</template></small></span>
+            </button>
+            <!-- 进行中（含暂停）才给控制按钮：已完成的记录没有句柄，点了只会得到 not-active -->
+            <span v-if="canControlDownload(download.state)" class="browser-download-actions">
+              <button type="button" class="browser-download-action" data-test="download-pause-resume" :disabled="downloadBusy.includes(download.id)" @click="controlDownload(download.id, download.state === 'paused' ? 'resume' : 'pause')">{{ download.state === 'paused' ? '继续' : '暂停' }}</button>
+              <button type="button" class="browser-download-action danger" data-test="download-cancel" :disabled="downloadBusy.includes(download.id)" @click="controlDownload(download.id, 'cancel')">取消</button>
+            </span>
+            <span v-else class="browser-panel-row-action"><img :src="openIcon" alt="" /></span>
+          </div>
         </div>
 
         <div v-else-if="panel === 'env'" class="dashboard-browser-panel-body panel-body env-body">
@@ -284,7 +317,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import bookmarksArt from '../../assets/ui/browser/bookmarks.png'
 import downloadsArt from '../../assets/ui/browser/downloads.png'
@@ -323,6 +356,8 @@ import { canCheckLogin, describeLoginCheckResult, loginCheckBlockedReason, login
 import { BROWSER_VIEW_STATE_SENTENCE, classifyLoadFailure } from '@shared/view-state'
 import { looksLikePlaceholderStoreName } from '@shared/store-name'
 import { platformHomeUrl } from '@shared/constants/platforms'
+// 页面内工具的口径（缩放档位 / 下载状态 / 查找计数）与主进程、单测同源
+import { DEFAULT_ZOOM_FACTOR, canControlDownload, clampZoomFactor, downloadStateLabel, formatFindProgress, formatZoomPercent, stepZoomFactor } from '@shared/browser-tools'
 import { useBrowserTabs } from './use-browser-tabs'
 
 import { useCreatorInvite } from './use-creator-invite'
@@ -423,6 +458,221 @@ const ckSearch = ref('')
 const secBusy = ref(false)
 const confirmations = computed(() => Object.values(ws.confirmations).filter(Boolean))
 
+// ---------------- 页面内查找与缩放（2026-11-08）----------------
+//
+// 两条能力都只作用于「当前显示店铺的当前标签页」——不是所有 guest：
+//   · 查找：`<webview>.findInPage` 作用于该 guest，切标签后原命中高亮会留在旧页面上，
+//     所以切换时主动 stopFindInPage 并收起查找条；
+//   · 缩放：Chromium 的缩放是按 origin 记的，换站会回落，所以每次 dom-ready 都重新套一次，
+//     并按店铺持久化到 localStorage（用户换店回来还是他调过的比例）。
+const findOpen = ref(false)
+const findQuery = ref('')
+const findInput = ref<HTMLInputElement | null>(null)
+const findMatches = ref(0)
+const findActiveOrdinal = ref(0)
+const findCountLabel = computed(() => formatFindProgress(findMatches.value, findActiveOrdinal.value))
+const findHasQuery = computed(() => findQuery.value.trim().length > 0)
+
+const zoomFactor = ref(DEFAULT_ZOOM_FACTOR)
+const zoomLabel = computed(() => formatZoomPercent(zoomFactor.value))
+
+/** 当前活动 guest 的登记键（storeId:tabId），与 openWebviews 的 key 同构 */
+const activeWebviewKey = computed(() => {
+  const storeId = ws.displayedStoreId
+  const tabId = ws.activeTab?.id
+  return storeId && tabId ? `${storeId}:${tabId}` : ''
+})
+
+function activeWebviewEl(): any | null {
+  const key = activeWebviewKey.value
+  if (!key) return null
+  return webviewEls.get(key) || null
+}
+
+/* ----- 缩放 ----- */
+
+function zoomStorageKey(storeId: string): string {
+  return `shopilot:zoom:${storeId}`
+}
+
+/** 读该店上次的缩放；脏数据一律回落 100%（clampZoomFactor 负责） */
+function readSavedZoom(storeId: string): number {
+  try {
+    return clampZoomFactor(window.localStorage.getItem(zoomStorageKey(storeId)))
+  } catch {
+    return DEFAULT_ZOOM_FACTOR
+  }
+}
+
+function applyZoom(factor: number): void {
+  const next = clampZoomFactor(factor)
+  const el = activeWebviewEl()
+  if (el) {
+    try { el.setZoomFactor(next) } catch { /* guest 未 attach：等 dom-ready 再套 */ }
+  }
+  zoomFactor.value = next
+  const storeId = ws.displayedStoreId
+  if (!storeId) return
+  try { window.localStorage.setItem(zoomStorageKey(storeId), String(next)) } catch { /* 存储不可用不影响本次缩放 */ }
+}
+
+/** 工具条按钮与快捷键共用同一条路径：档位增减 → 复位 */
+function zoomBy(action: 'in' | 'out' | 'reset'): void {
+  if (!activeWebviewKey.value) return
+  if (action === 'reset') { applyZoom(DEFAULT_ZOOM_FACTOR); return }
+  applyZoom(stepZoomFactor(zoomFactor.value, action === 'in' ? 1 : -1))
+}
+
+/** 从真实 guest 反向同步一次（页面自己按了 Ctrl+滚轮时，工具条不至于停在旧百分比） */
+function syncZoomFromElement(): void {
+  const saved = ws.displayedStoreId ? readSavedZoom(ws.displayedStoreId) : DEFAULT_ZOOM_FACTOR
+  const el = activeWebviewEl()
+  if (!el) {
+    zoomFactor.value = saved
+    return
+  }
+  // 刚切过去的元素常常还没 attach：读不到就回落到该店已保存的档位，
+  // 不能让工具条继续显示上一家店的百分比（那会让用户以为缩放没生效）。
+  try { zoomFactor.value = clampZoomFactor(el.getZoomFactor()) } catch { zoomFactor.value = saved }
+}
+
+/** 每次文档加载完成都重新套一次：Chromium 的缩放按 origin 记忆，换站会回落 */
+function applySavedZoom(item: OpenWebviewEntry): void {
+  const el = webviewEls.get(item.key)
+  if (!el) return
+  const factor = readSavedZoom(item.storeId)
+  try { el.setZoomFactor(factor) } catch { /* 元素刚挂上时可能还没 attach */ }
+  if (item.storeId === ws.displayedStoreId && item.tabId === ws.activeTab?.id) zoomFactor.value = factor
+}
+
+function onWebviewDomReady(item: OpenWebviewEntry): void {
+  applySavedZoom(item)
+  void handleWebviewAttach(item)
+}
+
+/* ----- 查找 ----- */
+
+function runFind(forward: boolean, findNext: boolean): void {
+  const el = activeWebviewEl()
+  const text = findQuery.value
+  if (!el || !text) {
+    findMatches.value = 0
+    findActiveOrdinal.value = 0
+    return
+  }
+  try {
+    // findNext=false：文本变化时从头找；true：在当前结果上跳上/下一个
+    el.findInPage(text, { forward, findNext })
+  } catch { /* guest 未 attach：输入框仍可用，等页面就绪再查 */ }
+}
+
+function stepFind(forward: boolean): void {
+  if (!findHasQuery.value) return
+  runFind(forward, true)
+}
+
+function stopFind(action: 'clearSelection' | 'keepSelection' | 'activateSelection' = 'clearSelection'): void {
+  const el = activeWebviewEl()
+  if (!el) return
+  try { el.stopFindInPage(action) } catch { /* 未 attach / 已卸载 */ }
+}
+
+function onFoundInPage(event: any): void {
+  // 多标签会共用这个监听：只认当前活动元素，否则 A 店的命中数会显示到 B 店页面上
+  const el = activeWebviewEl()
+  if (!el || event?.target !== el) return
+  const result = event?.result || {}
+  findMatches.value = Number(result.matches) || 0
+  findActiveOrdinal.value = Number(result.activeMatchOrdinal) || 0
+}
+
+function openFind(): void {
+  if (!activeWebviewKey.value) return
+  findOpen.value = true
+  // 再次 Ctrl+F：把焦点交回输入框并全选，符合浏览器习惯（不用先点一下）
+  nextTick(() => { findInput.value?.focus(); findInput.value?.select() })
+}
+
+function closeFind(): void {
+  findOpen.value = false
+  stopFind('clearSelection')
+  findMatches.value = 0
+  findActiveOrdinal.value = 0
+  findQuery.value = ''
+}
+
+function onFindKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') { event.preventDefault(); closeFind(); return }
+  if (event.key === 'Enter') { event.preventDefault(); stepFind(!event.shiftKey) }
+}
+
+/* ----- 快捷键（页面内的由主进程 before-input-event 转发，这里处理焦点在界面上时）----- */
+
+function onFindRequested(payload: { storeId?: string }): void {
+  if (!props.active) return
+  if (payload?.storeId && payload.storeId !== ws.displayedStoreId) return
+  openFind()
+}
+
+function onZoomCommand(payload: { storeId?: string; action?: string }): void {
+  if (!props.active) return
+  if (payload?.storeId && payload.storeId !== ws.displayedStoreId) return
+  zoomBy(payload.action === 'out' ? 'out' : payload.action === 'reset' ? 'reset' : 'in')
+}
+
+function onWindowKeydown(event: KeyboardEvent): void {
+  if (!props.active) return
+  if (!(event.ctrlKey || event.metaKey)) {
+    // Esc 只在查找条开着时收口，避免抢走地址栏/对话框自己的 Esc 语义
+    if (event.key === 'Escape' && findOpen.value) { event.preventDefault(); closeFind() }
+    return
+  }
+  const key = event.key.toLowerCase()
+  if (key === 'f') { event.preventDefault(); openFind(); return }
+  if (!activeWebviewKey.value) return
+  if (key === '=' || key === '+') { event.preventDefault(); zoomBy('in') }
+  else if (key === '-') { event.preventDefault(); zoomBy('out') }
+  else if (key === '0') { event.preventDefault(); zoomBy('reset') }
+}
+
+// 换店/换标签：查找必须收口（否则计数与高亮指向另一个页面），缩放跟随新店
+watch(activeWebviewKey, () => {
+  if (findOpen.value) closeFind()
+  syncZoomFromElement()
+})
+
+/* ----- 下载控制（暂停 / 继续 / 取消）----- */
+
+const downloadBusy = ref<string[]>([])
+
+function downloadControlMessage(result: string): { text: string; kind: 'info' | 'error' } | null {
+  if (result === 'paused') return { text: '已暂停下载', kind: 'info' }
+  if (result === 'resumed') return { text: '已继续下载', kind: 'info' }
+  if (result === 'cannot-resume') return { text: '该下载源不支持断点续传，只能重新下载', kind: 'error' }
+  if (result === 'not-active') return { text: '该下载已结束或已不在本进程中，无法继续', kind: 'info' }
+  return null
+}
+
+async function controlDownload(downloadId: string, action: 'pause' | 'resume' | 'cancel'): Promise<void> {
+  if (downloadBusy.value.includes(downloadId)) return
+  downloadBusy.value = [...downloadBusy.value, downloadId]
+  try {
+    const response = await window.shopilot.download[action](downloadId)
+    if (!response.ok) {
+      ws.toast('下载控制失败：' + (response.error?.message || '未知原因'), 'error')
+      return
+    }
+    const result = String((response.data as { result?: string } | null)?.result || '')
+    const message = downloadControlMessage(result)
+    if (message) ws.toast(message.text, message.kind)
+    await ws.refreshDownloads()
+  } catch {
+    ws.toast('下载控制请求异常', 'error')
+  } finally {
+    downloadBusy.value = downloadBusy.value.filter(id => id !== downloadId)
+  }
+}
+
 /**
  * 店铺页面 = 主窗口 Renderer DOM 里的真实 Electron `<webview>`，每个打开店铺保留当前活动页一个。
  *
@@ -471,6 +721,7 @@ const openWebviews = computed<OpenWebviewEntry[]>(() => {
 // 组件只保留模板与布局；这里传入活动 guest 列表与诊断动作用到的面板入口。
 const webviews = useStoreWebviews({ openWebviews, selectPanel, refreshEnvironment, platformHomeUrls })
 const {
+  webviewEls,
   webviewFailures,
   webviewAttached,
   diagnosticsCollapsed,
@@ -679,7 +930,8 @@ function formatSize(value: number) {
 }
 
 function downloadState(value: string) {
-  return ({ completed: '已完成', in_progress: '下载中', cancelled: '已取消', interrupted: '中断' } as Record<string, string>)[value] || value || '未知状态'
+  // 文案与主进程/单测同源（@shared/browser-tools）：paused 这类新状态不再各写一份映射
+  return downloadStateLabel(value)
 }
 
 // ---------- 主动检测登录状态（session.checkLoginStatus / SESSION_EXPIRED）----------
@@ -862,14 +1114,36 @@ async function refreshCookies() {
   if (result.ok) { cookies.value = result.data?.items || []; cookiesTotal.value = result.data?.total || 0 }
 }
 
+/**
+ * 会话包里的「本地存储」摘要（2026-11-08）。
+ * 只说实际发生了什么：带上了几站几项、多少因超限没带、多少站点读取失败——
+ * 不把"部分成功"写成一句笼统的"已导出"。
+ */
+function describeStorage(data: any, action: '导出' | '导入'): { text: string; partial: boolean } {
+  const origins = Number(data?.storageOrigins || 0)
+  const items = Number(data?.storageItems || 0)
+  const skipped = Number(data?.storageSkipped || 0) + Number(data?.storageSkippedOrigins || 0)
+  const failed = Number(data?.storageFailedOrigins || 0)
+  const parts: string[] = []
+  if (items > 0) parts.push(`${origins} 个站点 ${items} 项本地存储`)
+  if (action === '导出' && skipped > 0) parts.push(`${skipped} 项超出上限未打包`)
+  if (failed > 0) parts.push(`${failed} 个站点${action === '导出' ? '读取失败' : '写入失败'}`)
+  return { text: parts.join('，'), partial: skipped > 0 || failed > 0 }
+}
+
 async function exportSession() {
   const storeId = ws.displayedStoreId
   if (!storeId) return
   secBusy.value = true
   const result = await window.shopilot.session.export(storeId)
   secBusy.value = false
-  if (result.ok) ws.toast(`会话包已导出（${result.data.cookieCount} 条 Cookie，有效期至 ${new Date(result.data.expiresAt).toLocaleDateString()}）`, 'success')
-  else if (result.error.code !== 'SESSION_CANCELLED') ws.toast(`导出失败：${result.error.message}`, 'error')
+  if (result.ok) {
+    const storage = describeStorage(result.data, '导出')
+    ws.toast(
+      `会话包已导出（${result.data.cookieCount} 条 Cookie${storage.text ? ' · ' + storage.text : ''}，有效期至 ${new Date(result.data.expiresAt).toLocaleDateString()}）`,
+      storage.partial ? 'info' : 'success'
+    )
+  } else if (result.error.code !== 'SESSION_CANCELLED') ws.toast(`导出失败：${result.error.message}`, 'error')
   if (result.ok) void refreshCookies()
 }
 
@@ -879,8 +1153,13 @@ async function importSession() {
   secBusy.value = true
   const result = await window.shopilot.session.import(storeId, '', true)
   secBusy.value = false
-  if (result.ok) ws.toast(`会话已导入：${result.data.imported} 条 Cookie 生效${result.data.failed ? `（${result.data.failed} 条失败）` : ''}`, 'success')
-  else if (result.error.code !== 'SESSION_CANCELLED') ws.toast(`导入失败：${result.error.message}`, 'error')
+  if (result.ok) {
+    const storage = describeStorage(result.data, '导入')
+    ws.toast(
+      `会话已导入：${result.data.imported} 条 Cookie 生效${result.data.failed ? `（${result.data.failed} 条失败）` : ''}${storage.text ? ' · ' + storage.text : ''}`,
+      storage.partial ? 'info' : 'success'
+    )
+  } else if (result.error.code !== 'SESSION_CANCELLED') ws.toast(`导入失败：${result.error.message}`, 'error')
   void refreshCookies()
 }
 
@@ -955,9 +1234,13 @@ onMounted(async () => {
   if (saved.ok && saved.data?.value === true) panelOpen.value = false
   window.addEventListener('keydown', onBrowserKeydown)
   window.addEventListener('keyup', onBrowserKeyup)
+  window.addEventListener('keydown', onWindowKeydown)
   document.addEventListener('mousedown', onTabMenuOutside)
   window.shopilot.on(EVENT_CHANNELS.BROWSER_TAB_CLOSE_REQUESTED, onTabCloseRequested)
   window.shopilot.on(EVENT_CHANNELS.SESSION_EXPIRED, onSessionExpired)
+  // 焦点在店铺页面里时按键由主进程 before-input-event 转发（页面脚本吞不掉）
+  window.shopilot.on(EVENT_CHANNELS.BROWSER_FIND_REQUESTED, onFindRequested)
+  window.shopilot.on(EVENT_CHANNELS.BROWSER_ZOOM_COMMAND, onZoomCommand)
   void ws.refreshTasks()
   void ws.refreshSecurity()
   void refreshPlatformHomeUrls()
@@ -974,9 +1257,12 @@ onBeforeUnmount(() => {
   pendingPanelConfirmation.value = null
   window.removeEventListener('keydown', onBrowserKeydown)
   window.removeEventListener('keyup', onBrowserKeyup)
+  window.removeEventListener('keydown', onWindowKeydown)
   document.removeEventListener('mousedown', onTabMenuOutside)
   window.shopilot.off(EVENT_CHANNELS.BROWSER_TAB_CLOSE_REQUESTED, onTabCloseRequested)
   window.shopilot.off(EVENT_CHANNELS.SESSION_EXPIRED, onSessionExpired)
+  window.shopilot.off(EVENT_CHANNELS.BROWSER_FIND_REQUESTED, onFindRequested)
+  window.shopilot.off(EVENT_CHANNELS.BROWSER_ZOOM_COMMAND, onZoomCommand)
 })
 </script>
 
@@ -1131,6 +1417,35 @@ onBeforeUnmount(() => {
 .browser-panel-row-copy small { overflow: hidden; color: var(--dash-text-muted); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .browser-panel-row-action { display:grid;place-items:center; flex: 0 0 auto; border: 0; background: transparent; color: var(--dash-text-muted); cursor: pointer; }.browser-panel-row-action img { width:15px;height:15px;object-fit:contain; }
 .browser-panel-row-action:hover { color: var(--dash-text); }
+
+/* ---- 下载行的控制按钮（2026-11-08）----
+   整行不能再做成 <button>：暂停/取消是嵌套按钮，HTML 不合法且点击会冒泡到"打开文件夹"。
+   改成 div 容器 + 主区域按钮 + 右侧操作区。 */
+.download-row { cursor: default; padding-right: 0; }
+.browser-download-main { display: flex; flex: 1; min-width: 0; align-items: center; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.browser-download-main:focus-visible { outline: 2px solid #6d4aff; outline-offset: 2px; border-radius: 6px; }
+.browser-download-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+.browser-download-action { padding: 2px 6px; border: 1px solid rgba(111,137,177,.24); border-radius: 6px; background: #fff; color: var(--dash-text-soft); font-size: 10px; line-height: 1.6; cursor: pointer; }
+.browser-download-action:hover:not(:disabled) { border-color: rgba(109,74,255,.5); color: var(--dash-text); }
+.browser-download-action.danger:hover:not(:disabled) { border-color: rgba(239,106,123,.6); color: #c0392b; }
+.browser-download-action:disabled { cursor: default; opacity: .55; }
+
+/* ---- 地址栏缩放控件 ---- */
+.browser-zoom { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: 0 2px; border: 1px solid var(--dash-border); border-radius: 8px; background: #f7f9fd; }
+.browser-zoom-btn { width: 20px; height: 24px; padding: 0; border: 0; background: transparent; color: var(--dash-text-soft); font-size: 13px; line-height: 1; cursor: pointer; }
+.browser-zoom-btn:hover { color: var(--dash-text); }
+.browser-zoom-value { min-width: 38px; padding: 0 2px; border: 0; background: transparent; color: var(--dash-text-soft); font-size: 10px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.browser-zoom-value:hover { color: var(--dash-text); }
+
+/* ---- 页面内查找条 ---- */
+.browser-find-bar { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--dash-border); border-radius: 10px; background: #fff; }
+.browser-find-input { flex: 1; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid rgba(111,137,177,.24); border-radius: 7px; background: #f7f9fd; color: var(--dash-text); font-size: 12px; }
+.browser-find-input:focus { outline: none; border-color: rgba(109,74,255,.55); background: #fff; }
+.browser-find-count { flex: 0 0 auto; min-width: 44px; text-align: right; color: var(--dash-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.browser-find-btn { width: 26px; height: 26px; padding: 0; border: 1px solid rgba(111,137,177,.24); border-radius: 7px; background: #fff; color: var(--dash-text-soft); font-size: 12px; line-height: 1; cursor: pointer; }
+.browser-find-btn:hover:not(:disabled) { border-color: rgba(109,74,255,.5); color: var(--dash-text); }
+.browser-find-btn:disabled { cursor: default; opacity: .45; }
+.browser-find-btn.close { font-size: 14px; }
 .browser-env-card { display: flex; min-height: 42px; flex-direction: column; justify-content: center; gap: 4px; margin-bottom: 7px; padding: 8px 9px; border: 1px solid rgba(111,137,177,.13); border-radius: 8px; background: #f7f9fd; }
 .browser-env-card span, .browser-env-card small { color: var(--dash-text-muted); font-size: 10px; }
 .browser-env-card strong { color: var(--dash-text-soft); font-size: 11px; }
@@ -1217,5 +1532,104 @@ onBeforeUnmount(() => {
 .invite-panel-body .log-line.log-ok { color: #027a48; }
 .invite-panel-body .log-line.log-skip { color: #b54708; }
 .invite-panel-body .log-line.log-fail { color: #b42318; }
+
+/* ============================================================================
+   2026-11 统一风收敛（追加覆盖，不动任何类名与锚点）
+   标签栏与地址栏是仅次于左栏的高频区域，原样式是"顶部圆角标签 + 蓝色描边"的老式浏览器皮肤，
+   与新的浅色外壳不是一套语言。这里只改视觉：
+     · 标签改成整块圆角药丸，选中=白底+描边+1px 上浮，未选中=透明；
+     · 地址栏压到 34px，按钮 26px 见方并带 hover 底；
+     · 地址输入框白底、12px 字，hint 在窄屏隐藏。
+   ========================================================================== */
+.dashboard-browser-tabs {
+  gap: 4px;
+  min-height: 38px;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-surface);
+}
+.dashboard-browser-tab {
+  min-width: 132px;
+  max-width: 232px;
+  height: 30px;
+  align-self: center;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ui-text-muted);
+  font-size: var(--text-12);
+}
+.dashboard-browser-tab:hover {
+  background: var(--ui-surface-sunken);
+  color: var(--ui-text);
+}
+.dashboard-browser-tab.active {
+  border-color: var(--ui-border);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  box-shadow: var(--e1);
+}
+.dashboard-browser-tab.multi-selected {
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
+  color: var(--brand-text);
+}
+.dashboard-browser-tab.multi-selected.active {
+  background: var(--ui-surface);
+}
+.dashboard-browser-tab-add,
+.dashboard-browser-panel-toggle {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  border-radius: var(--r-xs);
+}
+.dashboard-browser-tab-add:hover,
+.dashboard-browser-panel-toggle:hover {
+  background: var(--ui-surface-sunken);
+}
+.dashboard-browser-address {
+  min-height: 40px;
+  gap: 4px;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 1px solid var(--ui-border);
+  border-radius: 0;
+  background: var(--ui-surface);
+}
+.browser-nav-button {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-xs);
+}
+.browser-nav-button:hover {
+  background: var(--ui-surface-sunken);
+}
+.dashboard-browser-url {
+  height: 28px;
+  margin: 0 6px;
+  border-color: var(--ui-border);
+  border-radius: var(--r-sm);
+  background: var(--ui-surface-sunken);
+}
+.dashboard-browser-url:focus-within {
+  border-color: var(--brand);
+  background: var(--ui-surface);
+  box-shadow: 0 0 0 3px var(--brand-50);
+}
+.dashboard-browser-url input {
+  font-size: var(--text-12);
+  color: var(--ui-text);
+}
+.dashboard-browser-hint {
+  padding-right: 4px;
+  font-size: var(--text-11);
+}
+@media (max-width: 1280px) {
+  .dashboard-browser-hint {
+    display: none;
+  }
+}
 </style>
 

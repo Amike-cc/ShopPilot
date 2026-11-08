@@ -11,7 +11,7 @@ export type AuditAction =
   | 'store.create' | 'store.archive' | 'store.restore' | 'store.deletePermanent' | 'store.purge'
   | 'browser.clearData' | 'browser.partition.clean' | 'session.export' | 'session.import'
   | 'proxy.create' | 'proxy.delete' | 'proxy.bind'
-  | 'extension.import' | 'extension.enable' | 'extension.disable' | 'extension.master' | 'extension.remove' | 'extension.reload' | 'extension.openDir'
+  | 'extension.import' | 'extension.install' | 'extension.enable' | 'extension.disable' | 'extension.master' | 'extension.remove' | 'extension.reload' | 'extension.openDir'
   | 'profile.update' | 'profile.lock' | 'profile.unlock' | 'profile.copyConfig'
   | 'security.lock' | 'security.unlock' | 'security.setPassword' | 'security.removePassword'
   | 'backup.create' | 'backup.restore'

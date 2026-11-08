@@ -46,6 +46,11 @@ electronDist: node_modules/electron/dist
 extraResources:
   - from: build/icon.ico
     to: icon.ico
+  # 插件中心：内置扩展目录（catalog.json + 各插件子目录）。
+  # 放 asar 外：安装时要递归读文件再复制到 userData，避免 asar 虚拟文件系统在
+  # lstat/copy 上的边界行为；同时也让"装了什么"可以直接在安装目录里核对。
+  - from: assets/browser-extensions
+    to: browser-extensions
 # 原生模块必须解出 asar 才能被 require 加载。
 # 这里的通配仍然覆盖 better-sqlite3 整包，但 files 里已把 deps/ 与非 win32-x64 的
 # prebuilds 排除在打包之外（不进 asar 也就不进 asar.unpacked）；

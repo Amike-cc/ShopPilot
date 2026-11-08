@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "key": "luopan-downloader",
+      "dir": "luopan-downloader",
+      "name": "三鱼带货视频下载",
+      "summary": "抖店罗盘商品榜单/竞品详情：一键复制链接、批量下载带货视频 mp4",
+      "description": "在抖店罗盘（compass.jinritemai.com）的商品榜单与竞品详情页注入下载按钮：可复制视频链接，也可批量下载 mp4。\n\nShopPilot 适配说明：原版依赖 chrome.downloads（Electron 未实现）与 downloads 权限（应用安全边界硬阻断），本内置版本改为「后台拉流 → 页面触发下载」通道，最终由 ShopPilot 的下载管理器落盘，并沿用应用统一的保存位置规则。\n\n使用前提：店铺会话里已登录罗盘（首次需在应用内登录一次）。",
+      "tags": ["抖店", "罗盘", "视频下载"]
+    }
+  ]
+}

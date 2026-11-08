@@ -7,6 +7,7 @@
         <p>统一管理店铺、平台、登录态和本地浏览器工作区。</p>
       </div>
       <div class="unified-page-actions">
+        <button type="button" class="unified-button ghost" data-test="store-batch-login" :disabled="!bridgeAvailable || batchRunning || !ws.stores.length" @click="runBatchLogin">{{ batchRunning ? `检测中 ${batchDone}/${batchTotal}` : '批量检测登录' }}</button>
         <button type="button" class="unified-button ghost" :disabled="!bridgeAvailable" @click="refresh"><img class="button-art" :src="refreshGenIcon" alt="" />刷新</button>
         <button type="button" class="unified-button primary" :disabled="!bridgeAvailable" @click="openCreate"><img class="button-art" :src="addIcon" alt="" />添加店铺</button>
       </div>
@@ -23,6 +24,12 @@
         <button type="button" :class="{ active: view === 'active' }" @click="view = 'active'">在用店铺</button>
         <button type="button" :disabled="!bridgeAvailable" :class="{ active: view === 'trash' }" @click="showTrash">回收站 <span>{{ ws.trashStores.length }}</span></button>
       </div>
+    </div>
+
+    <!-- 批量登录检测结果（2026-11-08）：未检测/未识别与"未登录"分开写，别让用户白跑重登 -->
+    <div v-if="batchItems.length" class="unified-alert" :class="{ error: batchHasIssues, info: !batchHasIssues }" data-test="store-batch-login-result">
+      <span>{{ batchText }}</span>
+      <span v-if="batchNeedsLogin.length" class="batch-login-detail" data-test="store-batch-login-needs">需处理：{{ batchNeedsLogin.join('、') }}</span>
     </div>
 
     <div v-if="!bridgeAvailable" class="unified-alert error" role="alert">原生桥接不可用（纯渲染预览模式）：店铺数据无法加载</div>
@@ -77,6 +84,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import { storeStatusLabel } from '@shared/enums/store-status'
+import { batchLoginSummaryText, summarizeBatchLogin } from '@shared/batch-login'
 import addIcon from '../../assets/generated/ui-icons/add.png'
 import searchIcon from '../../assets/generated/ui-icons/search.png'
 import closeIcon from '../../assets/generated/ui-icons/close.png'
@@ -113,8 +121,70 @@ const filteredStores = computed(() => ws.stores.filter(store => {
   return matchesQuery && (!platformFilter.value || store.platform === platformFilter.value)
 }))
 
-function shortUrl(value: string) { try { return new URL(value).host } catch { return value || '未配置后台地址' } }
-function statusLabel(value: string) { return storeStatusLabel(value) }
+/* ---------------- 批量登录检测（2026-11-08） ----------------
+ * 逐店调一次主进程（不是一次塞 N 家）：这样进度是真实的，而且每家用完的隐藏页
+ * 立刻归还，不会同时挂着 N 个 guest。超过 20 家只查前 20 家（主进程上限同值）。
+ */
+const BATCH_LOGIN_LIMIT = 20
+interface BatchLoginRow {
+  storeId: string
+  storeName: string
+  platform: string
+  status: string
+  reasonCode: string | null
+  safeMessage: string | null
+  skippedReason: string | null
+}
+const batchRunning = ref(false)
+const batchDone = ref(0)
+const batchTotal = ref(0)
+const batchItems = ref<BatchLoginRow[]>([])
+const batchSummary = computed(() => summarizeBatchLogin(batchItems.value))
+const batchText = computed(() => batchLoginSummaryText(batchSummary.value))
+const batchNeedsLogin = computed(() => batchItems.value
+  .filter(item => item.status === 'LOGIN_REQUIRED' || item.status === 'VERIFY_REQUIRED')
+  .map(item => item.storeName))
+const batchHasIssues = computed(() => batchSummary.value.needsLogin > 0
+  || batchSummary.value.verify > 0
+  || batchSummary.value.error > 0
+  || batchSummary.value.skipped > 0)
+
+async function runBatchLogin(): Promise<void> {
+  if (!bridgeAvailable || batchRunning.value) return
+  const targets = filteredStores.value.filter(store => store.status !== 'archived').slice(0, BATCH_LOGIN_LIMIT)
+  if (!targets.length) return
+  batchRunning.value = true
+  batchTotal.value = targets.length
+  batchDone.value = 0
+  batchItems.value = []
+  try {
+    for (const store of targets) {
+      try {
+        const response = await window.shopilot.session.batchCheckLogin([store.id])
+        if (response.ok) {
+          batchItems.value = [...batchItems.value, ...((response.data?.items || []) as BatchLoginRow[])]
+        } else {
+          batchItems.value = [...batchItems.value, {
+            storeId: store.id, storeName: store.name, platform: store.platform,
+            status: 'ERROR', reasonCode: null, safeMessage: response.error?.message || '检测失败', skippedReason: null
+          }]
+        }
+      } catch (error) {
+        batchItems.value = [...batchItems.value, {
+          storeId: store.id, storeName: store.name, platform: store.platform,
+          status: 'ERROR', reasonCode: null, safeMessage: String((error as Error)?.message || error), skippedReason: null
+        }]
+      }
+      batchDone.value = batchItems.value.length
+    }
+    // 检测只按**明确证据**更新店铺状态：刷新后卡片徽标才会跟着变
+    await ws.refreshStores()
+  } finally {
+    batchRunning.value = false
+  }
+}
+
+function shortUrl(value: string) { try { return new URL(value).host } catch { return value || '未配置后台地址' } }function statusLabel(value: string) { return storeStatusLabel(value) }
 function statusClass(value: string) { return value === 'online' ? 'online' : ['needs_login', 'proxy_error'].includes(value) ? 'warning' : 'offline' }
 function openCreate() { createError.value = ''; createOpen.value = true }
 function showTrash() { view.value = 'trash'; if (bridgeAvailable) void ws.refreshTrash() }
@@ -182,4 +252,6 @@ onMounted(() => { if (bridgeAvailable) { refresh(); void ws.refreshTrash() } els
 .unified-page { min-width: 0; min-height: 0; height: 100%; overflow: auto; padding: 22px 24px 32px; color: var(--dash-text); }
 .unified-page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:18px; }.unified-page-head h1 { margin:5px 0 7px; font-size:25px; }.unified-page-head p { margin:0; color:var(--dash-text-muted); font-size:12px; }.unified-page-actions,.unified-card-actions { display:flex; align-items:center; gap:8px; }.unified-button { display:inline-flex; align-items:center; gap:5px; min-height:32px; padding:0 13px; border:1px solid var(--dash-border); border-radius:9px; background:#ffffff; color:var(--dash-text-soft); cursor:pointer; }.button-art { width:16px; height:16px; object-fit:contain; }.unified-button:hover,.unified-button:focus-visible { border-color:rgba(151,120,255,.7); color:var(--dash-text); outline:none; }.unified-button.primary { border-color:#5b3df5; background:#6d4aff; color:#ffffff; }.unified-button.danger { border-color:rgba(217,45,32,.35); color:#d92d20; }.unified-button:disabled { opacity:.55; cursor:not-allowed; }.unified-toolbar-card { display:flex; align-items:center; gap:10px; padding:12px; margin-bottom:14px; border:1px solid var(--dash-border); border-radius:12px; background:#ffffff; }.unified-search img { width:17px; height:17px; object-fit:contain; flex:0 0 auto; }.unified-search { display:flex; align-items:center; gap:7px; min-width:260px; flex:1; height:34px; padding:0 10px; border:1px solid var(--dash-border); border-radius:8px; background:#f7f9fd; color:var(--dash-text-muted); }.unified-search input,.unified-toolbar-card select,.unified-dialog input,.unified-dialog select,.unified-dialog textarea { min-width:0; border:0; outline:0; background:transparent; color:var(--dash-text-soft); }.unified-toolbar-card select { height:34px; padding:0 8px; border:1px solid var(--dash-border); border-radius:8px; background:#ffffff; }.unified-segment { display:flex; gap:3px; padding:3px; border-radius:9px; background:#ebeced; }.unified-segment button { height:28px; padding:0 10px; border:0; border-radius:6px; background:transparent; color:var(--dash-text-muted); cursor:pointer; }.unified-segment button.active { background:rgba(120,85,238,.35); color:#4c1d95; }.unified-segment span { color:var(--dash-cyan-text); }.unified-card-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }.unified-store-card { padding:15px; border:1px solid var(--dash-border); border-radius:13px; background:#ecedef; box-shadow:0 12px 28px rgba(0,0,0,.12); }.unified-store-card:hover { border-color:var(--dash-border-strong); transform:translateY(-1px); }.unified-store-card-head { display:flex; align-items:center; gap:10px; min-width:0; }.unified-store-card-head > div { min-width:0; flex:1; }.unified-store-card-head strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.unified-store-card-head small { display:block; margin-top:4px; color:var(--dash-text-muted); font-size:10px; }.unified-status { display:flex; align-items:center; gap:4px; flex:0 0 auto; color:var(--dash-text-muted); font-size:10px; }.unified-status i { width:7px; height:7px; border-radius:50%; background:#64748b; }.unified-status.online { color:#027a48; }.unified-status.online i { background:#12b76a; }.unified-status.warning { color:#b54708; }.unified-status.warning i { background:#f9f0eb; }.unified-store-meta { display:flex; flex-direction:column; gap:6px; margin:16px 0; color:var(--dash-text-muted); font-size:11px; }.unified-icon-button { display:grid; place-items:center; width:30px; height:30px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--dash-text-muted); cursor:pointer; }.unified-icon-button img { width:16px; height:16px; object-fit:contain; }.unified-icon-button:hover,.unified-icon-button:focus-visible { border-color:rgba(255,120,135,.45); color:#f04438; outline:none; }.unified-muted { min-height:30px; margin:13px 0; color:var(--dash-text-muted); font-size:11px; }.unified-empty,.unified-state { display:flex; min-height:190px; align-items:center; justify-content:center; gap:12px; flex-direction:column; color:var(--dash-text-muted); border:1px dashed var(--dash-border); border-radius:13px; background:#ececee; }.unified-alert { padding:10px 12px; border-radius:9px; margin-bottom:12px; font-size:12px; }.unified-alert.error { border:1px solid rgba(239,99,119,.35); background:rgba(117,37,58,.2); color:#b42318; }.unified-alert button { margin-left:9px; border:0; background:transparent; color:#fff; cursor:pointer; text-decoration:underline; }.unified-overlay { position:fixed; inset:0; z-index:110; display:flex; align-items:center; justify-content:center; padding:24px; background:rgba(15, 23, 41, .38); backdrop-filter:blur(7px); }.unified-dialog { width:min(560px,100%); max-height:calc(100vh - 40px); overflow:auto; padding:20px; border:1px solid var(--dash-border-strong); border-radius:16px; background:#ffffff; box-shadow:0 24px 80px rgba(0,0,0,.45); }.unified-dialog-head { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:15px; }.unified-dialog h2 { margin:4px 0 0; }.unified-dialog label { display:flex; flex-direction:column; gap:6px; margin:11px 0; color:var(--dash-text-soft); font-size:12px; }.unified-dialog input,.unified-dialog select,.unified-dialog textarea { width:100%; min-height:34px; padding:0 10px; border:1px solid var(--dash-border); border-radius:8px; background:#f7f9fd; }.unified-dialog textarea { padding:8px 10px; resize:vertical; }.unified-dialog input:focus,.unified-dialog select:focus,.unified-dialog textarea:focus { border-color:rgba(145,113,255,.78); box-shadow:0 0 0 2px rgba(145,113,255,.14); }.unified-dialog-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }.inline-link { border:0; background:transparent; color:#5b3df5; cursor:pointer; }.loader { width:18px; height:18px; border:2px solid rgba(163,143,255,.2); border-top-color:#7c5cff; border-radius:50%; animation:spin .8s linear infinite; }@keyframes spin{to{transform:rotate(360deg)}}
 @media (max-width:900px){.unified-page{padding:16px}.unified-toolbar-card{flex-wrap:wrap}.unified-search{min-width:100%}.unified-segment{margin-left:auto}}
+.unified-alert.info { border:1px solid rgba(76,157,255,.23); background:rgba(33,91,158,.08); color:var(--dash-text-soft); }
+.batch-login-detail { display:block; margin-top:5px; color:var(--dash-text-muted); }
 </style>

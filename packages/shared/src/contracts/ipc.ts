@@ -42,6 +42,7 @@ import type {
   browserViewsObscuredSchema
 } from '../schemas/browser'
 import type {
+  browserExtensionCatalogInstallSchema,
   browserExtensionIdInputSchema,
   browserExtensionOpenDirSchema,
   browserExtensionSetEnabledSchema,
@@ -61,6 +62,8 @@ import type {
   salesMetricsRunsQuerySchema
 } from '../schemas/sales-metrics'
 import type {
+  BrowserExtensionCatalogInstallResult,
+  BrowserExtensionCatalogResult,
   BrowserExtensionImportResult,
   BrowserExtensionListResult,
   BrowserExtensionOpenDirResult
@@ -193,6 +196,11 @@ export const IPC_CHANNELS = {
   // 下载 - §6.2
   DOWNLOAD_LIST: 'download:list',
   DOWNLOAD_SHOW_IN_FOLDER: 'download:showInFolder',
+  // 进行中下载的暂停/继续/取消（2026-11-08）：大文件与视频下到一半失败只能整份重来，
+  // 三条通道接的是 Electron DownloadItem 的 pause/resume/cancel，不重新发请求。
+  DOWNLOAD_PAUSE: 'download:pause',
+  DOWNLOAD_RESUME: 'download:resume',
+  DOWNLOAD_CANCEL: 'download:cancel',
 
   // 代理和网络 - §6.3
   PROXY_TEST: 'proxy:test',
@@ -208,6 +216,8 @@ export const IPC_CHANNELS = {
   SESSION_STATUS: 'session:status',
   /** 主进程按当前店铺页面执行一次受限平台登录检测；只返回安全摘要。 */
   SESSION_CHECK_LOGIN_STATUS: 'session:checkLoginStatus',
+  /** 批量登录检测（2026-11-08）：逐店后台拉起 → 检测 → 关掉自己开的；串行，最多 20 家 */
+  SESSION_BATCH_LOGIN: 'session:batchCheckLogin',
   SESSION_EXPORT: 'session:export',
   SESSION_IMPORT: 'session:import',
   SESSION_COOKIES: 'session:cookies',
@@ -432,6 +442,9 @@ export const IPC_CHANNELS = {
   EXTENSION_REMOVE: 'extensions:remove',
   EXTENSION_RELOAD: 'extensions:reload',
   EXTENSION_OPEN_DIR: 'extensions:openDir',
+  // 插件中心（随包发的中介目录，2026-11-08）：列出可选插件、按条目安装
+  EXTENSION_CATALOG_LIST: 'extensions:catalog:list',
+  EXTENSION_CATALOG_INSTALL: 'extensions:catalog:install',
 
   // 窗口装饰 - §17（titleBarStyle:'hidden' 融合顶栏：右上角原生窗口按钮
   // overlay 颜色需随 UI 状态切换 —— 欢迎页/工作台/应用锁三种底色）
@@ -494,6 +507,13 @@ export const EVENT_CHANNELS = {
   BROWSER_LOADING_CHANGED: 'browser:loadingChanged',
   BROWSER_DOWNLOAD_CREATED: 'browser:downloadCreated',
   BROWSER_DOWNLOAD_PROGRESS: 'browser:downloadProgress',
+  /**
+   * 页面内工具快捷键（2026-11-08）：焦点在店铺页面里时，keydown 会被页面脚本吞掉，
+   * 只有 `before-input-event` 能拦到。主进程不自己开查找条/改缩放——那是渲染层的事，
+   * 这里只把「用户按了什么」如实转发过去（同 BROWSER_TAB_CLOSE_REQUESTED 的思路）。
+   */
+  BROWSER_FIND_REQUESTED: 'browser:findRequested',
+  BROWSER_ZOOM_COMMAND: 'browser:zoomCommand',
   BROWSER_CRASHED: 'browser:crashed',
   /**
    * 店铺页面内的批量关闭快捷键（Ctrl+Shift+W 全部 / Ctrl+Alt+W 其他）。
@@ -752,6 +772,21 @@ export interface IpcContract {
     req: { storeId: string }
     res: ShopSessionStatusSummary & { platformLogin: PlatformLoginResult }
   }
+  /** 批量登录检测：串行最多 20 家；SKIPPED/UNKNOWN 与"未登录"分开返回 */
+  'session:batchCheckLogin': {
+    req: { storeIds: string[] }
+    res: {
+      items: Array<{
+        storeId: string
+        storeName: string
+        platform: string
+        status: string
+        reasonCode: string | null
+        safeMessage: string | null
+        skippedReason: string | null
+      }>
+    }
+  }
   'session:export': {
     req: { storeId: string; outputPath?: string; validDays?: number }
     res: IpcUnresolved
@@ -857,6 +892,12 @@ export interface IpcContract {
   'extensions:openDir': {
     req: z.input<typeof browserExtensionOpenDirSchema>
     res: BrowserExtensionOpenDirResult
+  }
+  // 插件中心（2026-11-08）：内置目录随包发，安装只传条目 key（不传路径）
+  'extensions:catalog:list': { req: void; res: BrowserExtensionCatalogResult }
+  'extensions:catalog:install': {
+    req: z.input<typeof browserExtensionCatalogInstallSchema>
+    res: BrowserExtensionCatalogInstallResult
   }
 
   // ------------------------------ 缓存清理与软件自检 ------------------------------

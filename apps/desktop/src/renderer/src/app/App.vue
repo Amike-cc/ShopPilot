@@ -8,22 +8,32 @@
       @back-commerce="customerServiceOpen = false"
     />
     <!-- 应用锁 overlay（§6.5/§189）：WebContentsView 已由主进程摘除，此层覆盖全屏 -->
-    <div v-if="ws.appLocked" class="lock-overlay">
-      <div class="lock-box">
-        <div class="lock-ico"><img :src="lockIcon" alt="" /></div>
-        <h2>ShopPilot 已锁定</h2>
+    <div v-if="ws.appLocked" class="lock-overlay" role="dialog" aria-modal="true" aria-label="应用已锁定">
+      <div class="lock-card">
+        <div class="lock-mark" aria-hidden="true"><AppIcon name="lock" :size="22" :stroke="1.8" /></div>
+        <h1>ShopPilot 已锁定</h1>
         <p>输入主密码解锁继续</p>
-        <input
-          v-model="cred"
-          type="password"
-          placeholder="主密码"
-          data-test="unlock-input"
-          @keydown.enter="doUnlock"
+        <label class="lock-field">
+          <span class="sr-only">主密码</span>
+          <input
+            v-model="cred"
+            type="password"
+            placeholder="主密码"
+            autocomplete="current-password"
+            data-test="unlock-input"
+            @keydown.enter="doUnlock"
+          >
+        </label>
+        <div v-if="unlockErr" class="lock-err" role="alert">{{ unlockErr }}</div>
+        <button
+          class="ui-btn ui-btn--primary ui-btn--lg ui-btn--block"
+          :disabled="!cred || unlocking"
+          data-test="unlock-btn"
+          @click="doUnlock"
         >
-        <div v-if="unlockErr" class="lock-err">{{ unlockErr }}</div>
-        <button class="lock-btn" :disabled="!cred || unlocking" data-test="unlock-btn" @click="doUnlock">
           {{ unlocking ? '解锁中…' : '解锁' }}
         </button>
+        <p class="lock-foot"><AppIcon name="shield" :size="13" /> 快捷键 Ctrl+Shift+L 可随时重新锁定</p>
       </div>
     </div>
   </div>
@@ -34,8 +44,8 @@
 import { ref, watch, onBeforeUnmount } from 'vue'
 import DashboardView from '../features/workbench/DashboardView.vue'
 import CustomerServiceWorkspace from '../features/customer-service/CustomerServiceWorkspace.vue'
+import AppIcon from '../components/ui/AppIcon.vue'
 import { useWorkspaceStore } from '../stores/workspace'
-import lockIcon from '../assets/generated/ui-icons/lock.png'
 
 const ws = useWorkspaceStore()
 const cred = ref('')
@@ -45,12 +55,12 @@ const customerServiceOpen = ref(false)
 
 // §17 顶部融合标题栏：右上角原生窗口按钮（WCO）overlay 是不透明覆盖层，
 // 底色必须与它覆盖的那块 UI **完全一致**，否则右上角会显示成一块多余的色块。
-// 统一工作台里 WCO（高 38px）落在白色的 .dashboard-toolbar 上（该行已为它右侧留出 148px），
-// 所以这里返回的就是工具栏底色 —— 必须与 DashboardView.vue 里 .dashboard-toolbar 的
+// 统一工作台里 WCO（高 38px）落在白色的 .appbar 上（该行已为它右侧留出 148px），
+// 所以这里返回的就是顶栏底色 —— 必须与 DashboardView.vue 里 .appbar 的
 // background 保持同一个十六进制（改一处要改两处）。
 const TOOLBAR_BG = '#ffffff'
 function titlebarOverlayColor(): string {
-  if (ws.appLocked) return '#101218'
+  if (ws.appLocked) return '#0e1117'
   return TOOLBAR_BG
 }
 watch(
@@ -92,118 +102,91 @@ onBeforeUnmount(() => {
 })
 </script>
 
-<style>
-/* §17 UI 实现规范 - 浅色主题（2026-09-28 按设计稿重制）
-   设计令牌集中在这里：页面/卡片/描边/文字四层 + 品牌色与语义色。
-   其它页面（工作台、数据中心、设置…）都引用这些变量，改一处全站一致。 */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-:root {
-  --color-bg-primary: #f5f7fb;
-  --color-bg-secondary: #ffffff;
-  --color-bg-tertiary: #f2f4f8;
-  --color-bg-elevated: #ffffff;
-  --color-border: #e9edf5;
-  --color-border-strong: #dbe2ee;
-  --color-text-primary: #0f1729;
-  --color-text-secondary: #4a5568;
-  --color-text-muted: #98a2b3;
-  --color-primary: #7c5cff;
-  --color-primary-strong: #5b3df5;
-  --color-success: #12b76a;
-  --color-warning: #f79009;
-  --color-error: #f04438;
-  --radius: 16px;
-  --radius-sm: 10px;
-  /* 品牌渐变（选中导航、主按钮）与卡片阴影 */
-  --brand-gradient: linear-gradient(135deg, #8b5cff 0%, #6a3cf0 100%);
-  --brand-soft: rgba(124, 92, 255, .1);
-  --shadow-card: 0 1px 2px rgba(16, 24, 40, .04), 0 10px 28px rgba(16, 24, 40, .06);
-  --shadow-pop: 0 12px 32px rgba(16, 24, 40, .12);
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  font-size: 14px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  user-select: none;
-}
-
-/* 应用内容由工作台及各页面自己的滚动容器承载，根文档不能再生成第二条滚动条。 */
-html,
-body,
-#app {
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-}
-
-button {
-  font-family: inherit;
-  cursor: pointer;
-  border: none;
-  background: none;
-  color: inherit;
-}
-
-input {
-  font-family: inherit;
-}
-
+<style scoped>
 .app-shell {
   width: 100%;
   height: 100vh;
   overflow: hidden;
 }
 
+/* 锁定层：把界面压暗并模糊，形成"内容还在、但不可达"的明确语义 */
 .lock-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
-  background: rgba(16, 18, 24, 0.97);
-  backdrop-filter: blur(10px);
+  z-index: var(--z-lock);
+  display: grid;
+  place-items: center;
+  background: rgba(14, 17, 23, 0.72);
+  backdrop-filter: blur(14px) saturate(0.6);
+  animation: ui-fade-in var(--dur-base) var(--ease);
+}
+.lock-card {
   display: flex;
+  width: 336px;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-}
-.lock-box {
-  width: 320px;
-  padding: 28px 26px;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  padding: 28px 26px 22px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--r-xl);
+  background: var(--ui-surface);
+  box-shadow: var(--e3);
   text-align: center;
+  animation: ui-pop-in var(--dur-slow) var(--ease);
 }
-.lock-ico { width: 64px; height: 64px; margin: 0 auto 10px; }.lock-ico img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.lock-box h2 { font-size: 16px; margin-bottom: 4px; }
-.lock-box p { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 16px; }
-.lock-box input {
+.lock-mark {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  margin-bottom: 12px;
+  border-radius: var(--r-lg);
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.lock-card h1 {
+  font-size: var(--text-16);
+  font-weight: var(--weight-semibold);
+}
+.lock-card > p {
+  margin: 4px 0 18px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-12);
+}
+.lock-field {
   width: 100%;
-  padding: 9px 11px;
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-primary);
-  font-size: 13px;
   margin-bottom: 8px;
-  outline: none;
 }
-.lock-box input:focus { border-color: var(--color-primary); }
-.lock-err { font-size: 12px; color: var(--color-error); margin-bottom: 8px; }
-.lock-btn {
+.lock-field input {
   width: 100%;
-  padding: 9px 0;
-  background: var(--color-primary);
-  border-radius: var(--radius-sm);
-  color: #fff;
-  font-size: 13px;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: var(--r-sm);
+  background: var(--ui-surface);
+  font-size: var(--text-13);
+  text-align: center;
+  letter-spacing: 0.2em;
+  outline: none;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
-.lock-btn:disabled { opacity: 0.5; cursor: default; }
+.lock-field input:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-50);
+}
+.lock-err {
+  width: 100%;
+  margin-bottom: 8px;
+  color: var(--danger-text);
+  font-size: var(--text-12);
+}
+.lock-foot {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 16px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-11);
+}
 </style>

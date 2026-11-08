@@ -53,7 +53,7 @@ const PROFILE = {
 }
 
 /** 把注入脚本跑在一个只有 navigator/screen/window + 可选 DOM 桩的沙箱里 */
-function runScript(profile: Record<string, unknown>, extra: Record<string, unknown> = {}): { navigator: any; screen: any; canvas: any } {
+function runScript(profile: Record<string, unknown>, extra: Record<string, unknown> = {}): { navigator: any; screen: any; window: any; canvas: any } {
   const sandbox = {
     navigator: {} as Record<string, unknown>,
     screen: {} as Record<string, unknown>,
@@ -65,7 +65,7 @@ function runScript(profile: Record<string, unknown>, extra: Record<string, unkno
   // 真实环境里每个文档有各自的 globalThis；单测共用 Node 全局，所以要手动复位"只装一次"的守卫
   delete (globalThis as unknown as Record<string, unknown>).__fpReady
   fn(sandbox.navigator, sandbox.screen, sandbox.window, ...Object.values(extra))
-  return { navigator: sandbox.navigator, screen: sandbox.screen, canvas: (extra.HTMLCanvasElement as any)?.prototype }
+  return { navigator: sandbox.navigator, screen: sandbox.screen, window: sandbox.window, canvas: (extra.HTMLCanvasElement as any)?.prototype }
 }
 
 /** 极简 canvas 桩：16×4 像素，getImageData 返回给定像素的副本 */
@@ -363,5 +363,67 @@ describe('注入时机：走 CDP document-start，而不是等 dom-ready', () =>
     expect(wc.executeJavaScript).toHaveBeenCalled()
     expect(logMain).toHaveBeenCalled()
     unregisterFingerprintTarget('store-3', 'tab-3')
+  })
+})
+
+describe('WebGPU 与 devicePixelRatio（2026-11-08 加固）', () => {
+  interface FakeAdapterInfo { vendor: string; architecture: string; description: string }
+  interface FakeGpuCtor {
+    new (): { requestAdapter: () => Promise<{ info: FakeAdapterInfo }> }
+    prototype: { requestAdapter: (this: unknown) => Promise<{ info: FakeAdapterInfo }> }
+  }
+
+  /** 最小 WebGPU 桩：adapter.info 是宿主真值，用来验证被改写成"与 WebGL 同源" */
+  function gpuStub(): FakeGpuCtor {
+    class FakeAdapter {
+      info: FakeAdapterInfo = { vendor: 'real-vendor', architecture: 'real-arch', description: 'real' }
+    }
+    return class FakeGPU {
+      requestAdapter(): Promise<{ info: FakeAdapterInfo }> { return Promise.resolve(new FakeAdapter()) }
+    }
+  }
+
+  it('NVIDIA 档案下 adapter.info 报 nvidia/ampere，而不是宿主真值', async () => {
+    const GPU = gpuStub()
+    runScript(PROFILE, { GPU })
+    const adapter = await new GPU().requestAdapter()
+    expect(adapter.info.vendor).toBe('nvidia')
+    expect(adapter.info.architecture).toBe('ampere')
+    expect(adapter.info.description).toBe('')
+  })
+
+  it('AMD 档案映射 rdna-2（不把 AMD 报成 intel）', async () => {
+    const GPU = gpuStub()
+    runScript({ ...PROFILE, webglVendor: 'Google Inc. (AMD)', webglRenderer: 'ANGLE (AMD, AMD Radeon RX 6800, D3D11)' }, { GPU })
+    const adapter = await new GPU().requestAdapter()
+    expect(adapter.info.vendor).toBe('amd')
+    expect(adapter.info.architecture).toBe('rdna-2')
+  })
+
+  it('无法识别的厂商回落 intel，但仍保持"有值且同源"，不返回宿主串', async () => {
+    const GPU = gpuStub()
+    runScript({ ...PROFILE, webglVendor: 'Unknown', webglRenderer: 'Mystery Graphics' }, { GPU })
+    const adapter = await new GPU().requestAdapter()
+    expect(adapter.info.vendor).toBe('intel')
+    expect(adapter.info.vendor).not.toBe('real-vendor')
+  })
+
+  it('requestAdapter 自身也伪装成原生（toString 不暴露补丁）', () => {
+    const GPU = gpuStub()
+    runScript(PROFILE, { GPU })
+    expect(String(GPU.prototype.requestAdapter)).toContain('[native code]')
+  })
+
+  it('宿主没有 WebGPU 时不做任何事（不伪造 GPU 存在）', () => {
+    const { window: win } = runScript(PROFILE)
+    expect(win.GPU).toBeUndefined()
+  })
+
+  it('devicePixelRatio 用 readLive 跟随宿主真值，不许改成常量（高分屏仍要报 1.25）', () => {
+    // 注入器确实会 define 它，但那是一条**透传实时值**的 getter（readLive），不是常量：
+    // 本轮曾想把它对齐成 1，被既有的"视口跟随窗口"用例挡下——高分屏改常量会让页面按错误倍率渲染。
+    const line = INJECTOR.split('\n').find(text => text.includes("'devicePixelRatio'") && text.includes('define(')) || ''
+    expect(line).toContain('readLive')
+    expect(line).not.toContain('=> 1')
   })
 })

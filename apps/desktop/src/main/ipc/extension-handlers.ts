@@ -11,17 +11,21 @@ import { randomUUID } from 'crypto'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import type {
+  BrowserExtensionCatalogInstallResult,
+  BrowserExtensionCatalogResult,
   BrowserExtensionImportResult,
   BrowserExtensionListResult,
   BrowserExtensionOpenDirResult
 } from '@shared/contracts/extensions'
 import {
+  browserExtensionCatalogInstallSchema,
   browserExtensionIdInputSchema,
   browserExtensionOpenDirSchema,
   browserExtensionSetEnabledSchema,
   browserExtensionSetMasterSchema
 } from '@shared/schemas/extension'
 import * as ExtensionManager from '../services/extension-manager'
+import * as ExtensionCatalog from '../services/extension-catalog'
 import { acceptanceHooksEnabled } from '../services/acceptance-gate'
 import { writeAudit } from '../services/audit-logger'
 import { getOpenStoreIds, getStoreTabs, getTabWebContents } from '../browser/window-manager'
@@ -62,6 +66,36 @@ function reloadOpenStoreTabs(): void {
 }
 
 export function registerExtensionHandlers(): void {
+  /**
+   * 插件中心（2026-11-08）：列出随包发的内置插件目录。
+   * 只读；仍然走 familyHandle（可信渲染层 + 应用锁门禁）。
+   */
+  handle(IPC_CHANNELS.EXTENSION_CATALOG_LIST, async (): Promise<IPCResult<BrowserExtensionCatalogResult>> => {
+    const requestId = randomUUID()
+    try {
+      return ipcOk(ExtensionCatalog.listCatalog(), requestId)
+    } catch (error) {
+      return extensionError(error, requestId)
+    }
+  })
+
+  /**
+   * 插件中心安装：Renderer 只传条目 key（不传路径）。
+   * 安装目录由 key 确定性推导，重复安装 = 覆盖升级；装完即启用并重载已打开店铺标签。
+   */
+  handle(IPC_CHANNELS.EXTENSION_CATALOG_INSTALL, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult<BrowserExtensionCatalogInstallResult>> => {
+    const requestId = randomUUID()
+    const parsed = browserExtensionCatalogInstallSchema.safeParse(input)
+    if (!parsed.success) return ipcFail('INVALID_ARGUMENT', '插件条目参数不合法', requestId)
+    try {
+      const result = await ExtensionCatalog.installCatalogEntry(parsed.data.key)
+      reloadOpenStoreTabs()
+      return ipcOk(result, requestId)
+    } catch (error) {
+      return extensionError(error, requestId)
+    }
+  })
+
   handle(IPC_CHANNELS.EXTENSION_LIST, async (): Promise<IPCResult<BrowserExtensionListResult>> => {
     const requestId = randomUUID()
     try {

@@ -4,8 +4,9 @@
  * | UA-CH 头     → webRequest.onBeforeSendHeaders 成对改写（禁止只改 UA 造成矛盾）
  * | 时区         → CDP Emulation.setTimezoneOverride（webContents.debugger；attach 仅限本应用创建的 WebContents）
  * | 语言         → UA acceptLanguages + 主世界注入 navigator.language(s)
- * | 屏幕/色深/CPU→ 主世界注入覆盖 navigator/screen 只读属性
+ * | 屏幕/色深/CPU→ 主世界注入覆盖 navigator/screen 只读属性（devicePixelRatio 刻意保留宿主真值）
  * | WebGL 展示   → 主世界注入 patch getParameter
+ * | WebGPU 信息  → 主世界注入 patch GPU.requestAdapter 返回的 adapter.info（与 WebGL 同源）
  * 任一机制失败 → 该字段如实标记"未验证"，不伪造。
  */
 
@@ -310,6 +311,45 @@ export function buildInjectScript(o: FpOverrides): string {
       if (gl1 && gl1.prototype) patch(gl1.prototype);
       if (gl2 && gl2.prototype) patch(gl2.prototype);
     }
+    // ①b WebGPU 适配器信息（2026-11-08）：近两年最省事的 GPU 指纹就是 adapter.info。
+    //     只改 WebGL 的 UNMASKED_VENDOR/RENDERER 而不改这里，两边会互相矛盾——
+    //     WebGL 说 NVIDIA RTX 3060、adapter.info 说 SwiftShader，一眼假。
+    //     只改信息字段，不动 features/limits，也不伪造 navigator.gpu 的存在与否。
+    if (P.webglVendor || P.webglRenderer) {
+      try {
+        const GPUClass = window.GPU || (typeof GPU !== 'undefined' ? GPU : null);
+        if (GPUClass && GPUClass.prototype && typeof GPUClass.prototype.requestAdapter === 'function') {
+          const rawName = String(P.webglRenderer || P.webglVendor || '').toLowerCase();
+          let gpuVendor = 'intel';
+          let gpuArch = 'gen-12lp';
+          if (rawName.indexOf('nvidia') >= 0) { gpuVendor = 'nvidia'; gpuArch = 'ampere' }
+          else if (rawName.indexOf('amd') >= 0 || rawName.indexOf('radeon') >= 0) { gpuVendor = 'amd'; gpuArch = 'rdna-2' }
+          else if (rawName.indexOf('apple') >= 0) { gpuVendor = 'apple'; gpuArch = 'apple-m1' }
+          const origRequest = GPUClass.prototype.requestAdapter;
+          const patchedRequest = mask(function () {
+            const args = arguments;
+            const self = this;
+            return Promise.resolve(origRequest.apply(self, args)).then(function (adapter) {
+              if (!adapter) return adapter;
+              try {
+                Object.defineProperty(adapter, 'info', {
+                  get: function () {
+                    return { vendor: gpuVendor, architecture: gpuArch, device: '', description: '' };
+                  },
+                  configurable: true, enumerable: true
+                });
+              } catch (e) {}
+              return adapter;
+            });
+          }, 'requestAdapter');
+          try { Object.defineProperty(GPUClass.prototype, 'requestAdapter', { value: patchedRequest, writable: true, configurable: true }); } catch (e) {}
+        }
+      } catch (e) {}
+    }
+    // ①c devicePixelRatio 刻意**不注入**：它是宿主当前缩放的真实值，且必须随窗口/显示器变化
+    //     （既有验收要求 150% 缩放下仍报 1.25）。硬改成 1 会让高分屏页面按错误倍率渲染，
+    //     而"1920 逻辑像素 + 1.25 倍"本身是合法组合，不构成矛盾。
+    //     屏幕尺寸与 DPR 的自洽由"screen 用逻辑像素"这一口径保证。
     // ② canvas / audio 噪声（2026-10-16 审查 P0：此前完全没有噪声，画布与音频指纹就是宿主真值）。
     //    种子由主进程按 storeId 派生：**同店每次渲染都一样**（否则页面自己前后对比就能发现），
     //    **跨店不同**（否则多店仍可被并成一个实体）。只扰动"读出来的数据"，

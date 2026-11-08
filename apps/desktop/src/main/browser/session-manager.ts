@@ -9,7 +9,7 @@ import { storeSessionPartition } from '@shared/contracts/shop-session'
 import { getDatabase } from '../db/database'
 import { join, parse } from 'path'
 import { mkdirSync, existsSync } from 'fs'
-import { recordDownload, updateDownloadState, emitDownloadCreated, emitDownloadProgress } from './download-manager'
+import { recordDownload, registerDownloadItem, isItemPaused, updateDownloadState, emitDownloadCreated, emitDownloadProgress } from './download-manager'
 import { getProxyCredentials } from '../services/credential-store'
 import { writeAudit } from '../services/audit-logger'
 import { logMain } from '../services/logger'
@@ -490,8 +490,20 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
           }
           item.setSavePath(target)
           const downloadId = recordDownload(storeId, fileName, target, pageUrl)
+          // 留住句柄，面板上的暂停/继续/取消才有可操控的对象（2026-11-08）
+          registerDownloadItem(downloadId, item)
           emitDownloadCreated({ id: downloadId, storeId, fileName, filePath: target })
           item.on('updated', (_e2, state) => {
+            // 暂停时以 isPaused 为准：某些版本仍报 progressing，个别场景会报 interrupted。
+            // 一律按 state 写就会把"暂停"记成"中断"，界面上的「继续」当场消失（2026-11-08）。
+            if (isItemPaused(item)) {
+              updateDownloadState(downloadId, 'paused')
+              emitDownloadProgress({
+                id: downloadId, storeId, state: 'paused',
+                receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes()
+              })
+              return
+            }
             if (state !== 'progressing') updateDownloadState(downloadId, 'interrupted')
             emitDownloadProgress({
               id: downloadId, storeId,
@@ -577,10 +589,21 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
       item.setSavePath(target)
 
       const downloadId = recordDownload(storeId, fileName, target, pageUrl)
+      // 留住句柄，面板上的暂停/继续/取消才有可操控的对象（2026-11-08）
+      registerDownloadItem(downloadId, item)
       // 新下载要让界面立刻看到（此前 BROWSER_DOWNLOAD_CREATED 两侧皆空＝死事件）
       emitDownloadCreated({ id: downloadId, storeId, fileName, filePath: target })
 
       item.on('updated', (_e2, state) => {
+        // 暂停时以 isPaused 为准：否则一暂停就被写成"中断"，「继续」按钮直接消失（2026-11-08）
+        if (isItemPaused(item)) {
+          updateDownloadState(downloadId, 'paused')
+          emitDownloadProgress({
+            id: downloadId, storeId, state: 'paused',
+            receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes()
+          })
+          return
+        }
         if (state !== 'progressing') updateDownloadState(downloadId, 'interrupted')
         emitDownloadProgress({
           id: downloadId, storeId,

@@ -112,11 +112,37 @@
       </section>
       <section v-else-if="activeTab === 'extensions'" class="settings-section" data-test="settings-extensions" data-unified-test="unified-settings-extensions">
         <div class="settings-section-head">
-          <div><h2>浏览器扩展</h2><p>只支持本地解包扩展（包含 manifest.json 的文件夹），不支持 Chrome 商店与 .crx。导入会复制到应用管理目录：自己写插件时用「目录」打开副本编辑，改完点「重载」生效。扩展可以读取和修改店铺页面内容，请只导入你自己编写或可信来源的代码。</p></div>
+          <div><h2>浏览器扩展</h2><p>上方「插件中心」是随应用内置的插件，可一键安装；下方也可导入本地解包扩展（包含 manifest.json 的文件夹），不支持 Chrome 商店与 .crx。导入/安装都会复制到应用管理目录：自己写插件时用「目录」打开副本编辑，改完点「重载」生效。扩展可以读取和修改店铺页面内容，请只安装你自己编写或可信来源的代码。</p></div>
           <div class="settings-head-actions-row">
             <button type="button" class="unified-button ghost" data-test="extensions-open-root" :disabled="extensionsBusy" @click="openExtensionDir()">打开扩展目录</button>
             <button type="button" class="unified-button primary" data-test="extensions-import" :disabled="extensionsBusy" @click="importExtension">导入扩展文件夹</button>
           </div>
+        </div>
+        <div class="settings-group" data-test="extensions-catalog">
+          <div class="settings-group-head"><h3>插件中心</h3><span>随应用内置、离线可装。点「安装」会复制到本机并立即启用；扩展能读写店铺页面，只装你信任的插件。</span></div>
+          <div v-if="catalogLoading" class="settings-note" role="status">正在读取插件目录…</div>
+          <div v-else-if="catalogError" class="settings-note error" data-test="extensions-catalog-error">{{ catalogError }}</div>
+          <div v-else-if="!catalogEntries.length" class="settings-note" data-test="extensions-catalog-empty">当前版本没有内置插件。</div>
+          <div v-else class="extension-catalog-grid" data-test="extensions-catalog-grid">
+            <article v-for="entry in catalogEntries" :key="entry.key" class="extension-card" :data-test="'extension-card-' + entry.key">
+              <div class="extension-card-head">
+                <strong>{{ entry.name }}</strong>
+                <em>v{{ entry.version }}</em>
+              </div>
+              <p class="extension-card-summary">{{ entry.summary }}</p>
+              <div class="extension-card-meta">
+                <span>{{ entry.permissions.length ? entry.permissions.join(' / ') : '无声明权限' }}</span>
+                <span>{{ formatBytes(entry.sizeBytes) }}</span>
+                <span v-for="tag in entry.tags" :key="tag" class="extension-tag">{{ tag }}</span>
+              </div>
+              <div class="extension-card-actions">
+                <button type="button" class="unified-button primary" :data-test="'extensions-catalog-install-' + entry.key" :disabled="extensionsBusy || !!entry.invalidReason" @click="installCatalogEntry(entry)">{{ entry.installed ? '重新安装' : '安装' }}</button>
+                <span v-if="entry.installed" class="extension-card-state" :data-test="'extensions-catalog-state-' + entry.key">{{ catalogStateLabel(entry) }}</span>
+                <span v-if="entry.invalidReason" class="extension-error">{{ entry.invalidReason }}</span>
+              </div>
+            </article>
+          </div>
+          <p v-if="catalogMasterOff && catalogEntries.some(entry => entry.installed)" class="settings-hint" data-test="extensions-catalog-master-hint">插件已装好并启用，但「启用浏览器扩展」总开关是关的——打开下面的总开关后才会加载进店铺页面。</p>
         </div>
         <div class="settings-group">
           <div class="settings-group-head"><h3>总开关（实验性）</h3><span>关闭会立即卸载所有扩展并重载已打开的店铺页；开启后，新打开的店铺会加载已启用的扩展。</span></div>
@@ -153,6 +179,26 @@
             <span class="settings-check-state" data-test="maintenance-auto-collect-state">{{ !collectionLoaded ? '读取中…' : (collectionEnabled ? '已开启 · 按任务周期自动采集' : '已关闭 · 只手动采集') }}</span>
           </div>
           <p class="settings-hint">影响发票采集（每 3 小时）与店铺采集计划；关闭时定时任务不自动触发，「立即采集」仍可手动使用。</p>
+        </div>
+        <div class="settings-group" data-test="maintenance-warm-limit">
+          <div class="settings-group-head"><h3>多店保活</h3><span>后台保留几家店铺常驻内存；切回这些店铺不会重新加载页面</span></div>
+          <div class="settings-field-row">
+            <span class="settings-check">后台保活店铺数</span>
+            <div class="settings-actions">
+              <button
+                v-for="n in warmLimitOptions"
+                :key="n"
+                type="button"
+                class="unified-button"
+                :class="{ primary: warmLimit === n }"
+                :data-test="`maintenance-warm-${n}`"
+                :aria-pressed="warmLimit === n"
+                :disabled="warmLimitSaving"
+                @click="applyWarmLimit(n)"
+              >{{ n }} 家</button>
+            </div>
+          </div>
+          <p class="settings-hint" data-test="maintenance-warm-hint">{{ warmLimitHint }}</p>
         </div>
         <div class="settings-group" data-test="maintenance-backup">
           <div class="settings-group-head"><h3>备份与恢复</h3><span>备份含校验和；恢复失败绝不覆盖现有数据</span></div>
@@ -255,7 +301,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import type { BrowserExtensionItem, BrowserExtensionListResult } from '@shared/contracts/extensions'
+import { WARM_STORE_LIMITS, clampWarmStoreLimit, warmStoreLimitLabel } from '@shared/browser-tools'
+import type { BrowserExtensionCatalogInstallResult, BrowserExtensionCatalogItem, BrowserExtensionCatalogResult, BrowserExtensionItem, BrowserExtensionListResult } from '@shared/contracts/extensions'
 import { platformHomeUrl } from '@shared/constants/platforms'
 import { useWorkspaceStore } from '../../stores/workspace'
 import settingsIcon from '../../assets/icons/nav-settings.svg'
@@ -361,6 +408,12 @@ let savedIdleMinutes = 0
 const collectionEnabled = ref(false)
 const collectionLoaded = ref(false)
 const collectionSaving = ref(false)
+/** 后台保活店铺数（2026-11-08）：1–4 家，默认 1；写入后主进程立刻重排回收队列 */
+const WARM_LIMIT_SETTING = 'browser.warmStoreLimit'
+const warmLimit = ref<number>(WARM_STORE_LIMITS.defaultValue)
+const warmLimitSaving = ref(false)
+const warmLimitOptions = [1, 2, 3, 4]
+const warmLimitHint = computed(() => `当前 ${warmStoreLimitLabel(warmLimit.value)}。每多保活一家约多占 ${WARM_STORE_LIMITS.estimatedMbPerStore}MB；正在跑任务、采集或邀约的店铺不受此上限影响，不会被回收。`)
 const maintenanceLoading = ref(false)
 const maintenanceLoadError = ref('')
 const maintenanceMsg = ref('')
@@ -614,7 +667,10 @@ function selectTab(tab: TabKey) {
   if (tab === 'ai' && !aiLoaded.value && !aiConfigLoading.value) void loadAi()
   if (tab === 'ai' && !imageTextLoaded.value && !imageTextConfigLoading.value) void loadImageTextAi()
   if (tab === 'security' && !securityLoaded.value && !securityLoading.value) void loadSecurity()
-  if (tab === 'extensions' && !extensionsLoaded.value && !extensionsLoading.value) void loadExtensions()
+  if (tab === 'extensions') {
+    if (!extensionsLoaded.value && !extensionsLoading.value) void loadExtensions()
+    if (!catalogLoaded.value && !catalogLoading.value) void loadCatalog()
+  }
   if (tab === 'maintenance' && !collectionLoaded.value && !maintenanceLoading.value) void loadMaintenance()
   if (tab === 'about' && !updateLoaded.value && !updateLoading.value) void loadUpdate()
 }
@@ -913,6 +969,56 @@ const extensionsLoaded = ref(false)
 const extensionsBusy = ref(false)
 const extensionsError = ref('')
 
+// ---------- 插件中心（内置目录，2026-11-08）----------
+const catalogEntries = ref<BrowserExtensionCatalogItem[]>([])
+const catalogLoading = ref(false)
+const catalogLoaded = ref(false)
+const catalogError = ref('')
+/** 总开关关着时，装好的插件还不会生效——界面必须说清楚，而不是让用户以为装了没用 */
+const catalogMasterOff = computed(() => !extensionsMaster.value)
+
+function catalogStateLabel(entry: BrowserExtensionCatalogItem): string {
+  if (!entry.installed) return ''
+  return entry.enabled ? '已安装 · 已启用' : '已安装 · 未启用'
+}
+
+async function loadCatalog(): Promise<void> {
+  catalogLoading.value = true
+  catalogError.value = ''
+  try {
+    const result = await window.shopilot.extensions.catalog()
+    if (!result.ok) throw new Error(responseError(result, '读取插件目录失败'))
+    const data = result.data as BrowserExtensionCatalogResult
+    catalogEntries.value = Array.isArray(data?.entries) ? data.entries : []
+    catalogLoaded.value = true
+    if (data?.sourceError) catalogError.value = data.sourceError
+  } catch (error) {
+    catalogLoaded.value = false
+    catalogError.value = '读取插件目录失败：' + String((error as Error)?.message || error)
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+async function installCatalogEntry(entry: BrowserExtensionCatalogItem): Promise<void> {
+  extensionsBusy.value = true
+  extensionsError.value = ''
+  try {
+    const result = await window.shopilot.extensions.installFromCatalog(entry.key)
+    if (!result.ok) throw new Error(responseError(result, '安装插件失败'))
+    const data = result.data as BrowserExtensionCatalogInstallResult
+    applyExtensions(data?.list)
+    await loadCatalog()
+    flashSavedMessage(data?.masterOff
+      ? `已安装「${entry.name}」；打开下面的扩展总开关后才会生效`
+      : `已安装并启用「${entry.name}」`)
+  } catch (error) {
+    extensionsError.value = String((error as Error)?.message || error)
+  } finally {
+    extensionsBusy.value = false
+  }
+}
+
 function extensionStatusLabel(item: BrowserExtensionItem): string {
   return ({
     loaded: '已加载',
@@ -1031,9 +1137,10 @@ async function loadMaintenance(): Promise<void> {
   maintenanceLoadError.value = ''
   const errors: string[] = []
   try {
-    const [collection, backupList] = await Promise.all([
+    const [collection, backupList, warm] = await Promise.all([
       window.shopilot.settings.get(AUTO_COLLECTION_SETTING),
-      window.shopilot.backup.list()
+      window.shopilot.backup.list(),
+      window.shopilot.settings.get(WARM_LIMIT_SETTING)
     ])
     if (collection.ok) {
       collectionEnabled.value = parseAutoCollectionEnabled(collection.data?.value)
@@ -1042,6 +1149,9 @@ async function loadMaintenance(): Promise<void> {
       collectionLoaded.value = false
       errors.push('采集总开关：' + responseError(collection, '读取失败'))
     }
+    // 没存过或值非法都回落默认 1 家（与主进程启动读取同一口径：clamp 到 1–4）
+    if (warm.ok) warmLimit.value = clampWarmStoreLimit(warm.data?.value)
+    else errors.push('多店保活：' + responseError(warm, '读取失败'))
     if (backupList.ok) backups.value = ((backupList.data || []) as typeof backups.value).slice(0, 5)
     else errors.push('备份列表：' + responseError(backupList, '读取失败'))
   } catch (error) {
@@ -1077,8 +1187,29 @@ async function applyCollectionSwitch(): Promise<void> {
   }
 }
 
-function formatBackupTime(value: unknown): string {
-  const time = Number(value)
+/**
+ * 后台保活店铺数（2026-11-08）。
+ * 只写设置中心这一条通道：主进程收到键后立刻调 setStoreWarmCacheLimit 重排回收队列，
+ * 不需要重启应用；这里不做乐观更新，保存成功才改按钮选中态。
+ */
+async function applyWarmLimit(limit: number): Promise<void> {
+  const next = clampWarmStoreLimit(limit)
+  if (warmLimitSaving.value || warmLimit.value === next) return
+  warmLimitSaving.value = true
+  maintenanceMsg.value = ''
+  try {
+    const result = await window.shopilot.settings.set(WARM_LIMIT_SETTING, next)
+    if (!result.ok) throw new Error(responseError(result, '保存失败'))
+    warmLimit.value = next
+    maintenanceSay(`后台保活店铺数已设为 ${next} 家（${warmStoreLimitLabel(next)}）`, true)
+  } catch (error) {
+    maintenanceSay('保存后台保活设置失败：' + String((error as Error)?.message || error), false)
+  } finally {
+    warmLimitSaving.value = false
+  }
+}
+
+function formatBackupTime(value: unknown): string {  const time = Number(value)
   if (!Number.isFinite(time) || time <= 0) return '—'
   return new Date(time).toLocaleString()
 }
@@ -1807,6 +1938,16 @@ onBeforeUnmount(() => {
 .about-grid>div{border:1px solid #eef1f6;background:#fafbfd}
 .about-grid select{height:30px}
 .extension-row{align-items:flex-start}
+.extension-catalog-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.extension-card{display:flex;flex-direction:column;gap:6px;padding:11px 12px;border:1px solid var(--dash-border);border-radius:9px;background:var(--dash-surface)}
+.extension-card-head{display:flex;align-items:baseline;gap:6px}
+.extension-card-head strong{font-size:12px;color:var(--dash-text)}
+.extension-card-head em{font-style:normal;font-size:10px;color:var(--dash-text-muted)}
+.extension-card-summary{margin:0;font-size:10.5px;line-height:1.55;color:var(--dash-text-soft)}
+.extension-card-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:9.5px;color:var(--dash-text-muted)}
+.extension-tag{padding:1px 6px;border-radius:999px;background:rgba(59,130,246,.1);color:#1d4ed8}
+.extension-card-actions{display:flex;align-items:center;gap:8px;margin-top:2px}
+.extension-card-state{font-size:10px;color:var(--dash-text-muted)}
 .extension-copy{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
 .extension-title{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--dash-text);font-size:12px}
 .extension-title b{color:var(--dash-text-muted);font-size:10px;font-weight:500}
@@ -1815,4 +1956,27 @@ onBeforeUnmount(() => {
 .extension-error{color:#b42318;font-size:10px;line-height:1.5;overflow-wrap:anywhere}
 .extension-row .unified-button{flex:none;margin-top:2px}
 @media(max-width:820px){.settings-group-head{flex-direction:column;gap:2px}.maintenance-backup-row{flex-wrap:wrap}.maintenance-backup-row .unified-button{margin-left:0}}
+
+/* ============================================================
+   2026-11 统一风收敛（追加覆盖）
+   设置页原本自带一层紫色径向渐变底 + 多个渐变卡片，和新的浅色外壳冲突。
+   这里统一成：页面底=画布色，卡片=白底 1px 描边，圆角与字号走 tokens。
+   ============================================================ */
+.unified-settings-page{background:transparent}
+.settings-hero{border-color:var(--ui-border);border-radius:var(--r-xl);background:var(--ui-surface);box-shadow:var(--e1)}
+.settings-hero:after{display:none}
+.settings-title-icon{border:1px solid var(--brand-border);border-radius:var(--r-md);background:var(--brand-50);box-shadow:none}
+.settings-nav{border-color:var(--ui-border);border-radius:var(--r-lg);background:var(--ui-surface);box-shadow:var(--e1)}
+.settings-nav button{border-radius:var(--r-sm);font-size:var(--text-13)}
+.settings-nav button.active{border-color:var(--brand-border);background:var(--brand-50);color:var(--brand-text)}
+.settings-nav span{color:var(--brand)}
+.settings-section{border-color:var(--ui-border);border-radius:var(--r-lg);box-shadow:var(--e1)}
+.settings-section h2{font-size:var(--text-16)}
+.settings-section p{font-size:var(--text-12)}
+.ai-config-summary{border-color:var(--ui-border);border-radius:var(--r-md);background:var(--ui-surface-subtle);box-shadow:none}
+.ai-config-card{border-radius:var(--r-lg);background:var(--ui-surface);box-shadow:var(--e1)}
+.ai-config-card::before{display:none}
+.settings-note{border-radius:var(--r-sm);background:var(--ui-surface-subtle)}
+.about-mark{border-radius:var(--r-md);background:var(--brand);box-shadow:none}
+.about-grid>div{background:var(--ui-surface-subtle)}
 </style>

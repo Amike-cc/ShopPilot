@@ -23,6 +23,7 @@ import { getDatabase } from '../db/database'
 import { getStore, updateStoreStatus, updateStoreLastActive } from '../stores/store-manager'
 import { onStoreStatusChanged } from '../stores/store-status-bus'
 import { StoreStatus } from '@shared/enums/store-status'
+import { clampWarmStoreLimit } from '@shared/browser-tools'
 import { assertNavigableUrl } from '@shared/navigation'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import { classifyLoadFailure, formatViewUrl } from '@shared/view-state'
@@ -98,8 +99,30 @@ function closeStoreWhenIdle(storeId: string): void {
   idleCloseTimers.set(storeId, timer)
 }
 
+/**
+ * 后台温缓存店铺数上限（2026-11-08 起可在设置中心调整，默认 1 家）。
+ * 调大 = 切店更快，但每家常驻 ~150MB；调小 = 更快释放内存。
+ */
+let storeWarmCacheLimit: number = STORE_WARM_CACHE_LIMIT
+
+export function getStoreWarmCacheLimit(): number {
+  return storeWarmCacheLimit
+}
+
+/** 写入新上限并立即重排回收队列；返回真正生效的值（越界由 clamp 收口）。 */
+export function setStoreWarmCacheLimit(limit: unknown): number {
+  const next = clampWarmStoreLimit(limit)
+  if (next === storeWarmCacheLimit) return next
+  storeWarmCacheLimit = next
+  logMain('info', `[browser] 后台保活店铺数调整为 ${next} 家`)
+  // 调小：超出的店铺要从"温"降级，进入冷休眠倒计时；
+  // 调大：本来快被回收的店铺重新纳入温缓存，必须重新调度一次。
+  scheduleAllStoreReaps()
+  return next
+}
+
 function getWarmStoreIdsForReap(): Set<string> {
-  return new Set(storeLifecycle.getWarmStoreIds(displayedStoreId, STORE_WARM_CACHE_LIMIT))
+  return new Set(storeLifecycle.getWarmStoreIds(displayedStoreId, storeWarmCacheLimit))
 }
 
 function scheduleStoreReap(storeId: string): void {
@@ -811,6 +834,7 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
   }))
   attachStoreReloadShortcuts(wc)
   attachTabCloseShortcuts(wc, tab.storeId, tab.id)
+  attachBrowserToolShortcuts(wc, tab.storeId, tab.id)
   wc.on('did-navigate', (_e, newUrl) => {
     // guest 挂载时 Chromium 会先落一次 about:blank：那不是用户的导航目标，**不许**拿它覆盖
     // 刚恢复出来的真实 URL —— 否则 registerWebview 依 tab.url 算出的 pendingUrl 会变成
@@ -1355,6 +1379,49 @@ function attachTabCloseShortcuts(wc: Electron.WebContents, storeId: string, tabI
     } catch (err) {
       logMain('warn', `store close-tab shortcut failed tab=${wc.id}: ${String(err)}`)
     }
+  })
+}
+
+/**
+ * 页面内「浏览工具」快捷键（2026-11-08）：页面内查找与缩放。
+ *
+ *   Ctrl+F        打开页面内查找条
+ *   Ctrl+= / +    放大一档
+ *   Ctrl+-        缩小一档
+ *   Ctrl+0        复位 100%
+ *
+ * 和重载/关标签同一个理由：焦点在 guest 里时，keydown 会被页面脚本吞掉（平台后台
+ * 普遍注册了自己的快捷键），只有 before-input-event 能在页面之前拦到。
+ * 主进程不自己改缩放：缩放要按店铺记忆、还要同步工具条百分比，那是渲染层的状态；
+ * 这里只把「用户按了什么」如实转发（与 BROWSER_TAB_CLOSE_REQUESTED 同构）。
+ */
+function attachBrowserToolShortcuts(wc: Electron.WebContents, storeId: string, tabId: string): void {
+  wc.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    // 按住不放会连发 keyDown：查找条若跟着连开/缩放跟着连跳，手感会很差
+    if (input.isAutoRepeat) return
+    const mod = process.platform === 'darwin' ? input.meta : input.control
+    if (!mod) return
+    // code（物理键位）优先，避免非拉丁布局下 key 不是 f / = / - 而漏判；缺失时退回 key
+    const code = String(input.code || '')
+    const key = String(input.key || '').toLowerCase()
+
+    if (code === 'KeyF' || key === 'f') {
+      event.preventDefault()
+      emitToRenderer(EVENT_CHANNELS.BROWSER_FIND_REQUESTED, { storeId, tabId })
+      return
+    }
+
+    const zoomIn = code === 'Equal' || code === 'NumpadAdd' || key === '+' || key === '='
+    const zoomOut = code === 'Minus' || code === 'NumpadSubtract' || key === '-'
+    const reset = code === 'Digit0' || code === 'Numpad0' || key === '0'
+    if (!zoomIn && !zoomOut && !reset) return
+    event.preventDefault()
+    emitToRenderer(EVENT_CHANNELS.BROWSER_ZOOM_COMMAND, {
+      storeId,
+      tabId,
+      action: zoomIn ? 'in' : zoomOut ? 'out' : 'reset'
+    })
   })
 }
 

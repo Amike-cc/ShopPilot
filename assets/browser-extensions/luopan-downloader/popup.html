@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 240px;
+      margin: 0;
+      padding: 14px;
+      font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      color: #1f2329;
+      background: #fff;
+    }
+    h1 { font-size: 14px; margin: 0 0 4px; }
+    .brand { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .brand img { width: 28px; height: 28px; display: block; }
+    .brand h1 { margin: 0; }
+    .sub { color: #8a9099; font-size: 11px; margin-bottom: 12px; }
+    .row {
+      display: flex; justify-content: space-between;
+      font-size: 12px; padding: 5px 0; border-bottom: 1px solid #f2f3f5;
+    }
+    .row span:last-child { color: #3370ff; font-weight: 600; }
+    .btns { display: flex; gap: 8px; margin-top: 12px; }
+    button {
+      flex: 1; height: 30px; border: 1px solid #dcdfe6; background: #fff;
+      border-radius: 6px; font-size: 12px; cursor: pointer; color: #1f2329;
+    }
+    button:hover { border-color: #3370ff; color: #3370ff; }
+    .tip { margin-top: 12px; font-size: 11px; color: #8a9099; line-height: 1.7; }
+  </style>
+</head>
+<body>
+  <div class="brand">
+    <img src="icons/icon48.png" alt="">
+    <h1>三鱼带货视频下载</h1>
+  </div>
+  <div class="sub" id="sub">compass.jinritemai.com</div>
+
+  <div class="row"><span id="labP">已抓取商品</span><span id="products">-</span></div>
+  <div class="row"><span>已抓取视频</span><span id="videos">-</span></div>
+  <div class="row"><span>下载成功</span><span id="done">-</span></div>
+  <div class="row"><span>下载失败</span><span id="fail">-</span></div>
+
+  <div class="btns">
+    <button id="reload">重新抓取</button>
+  </div>
+
+  <div class="tip">
+    商品榜单 · 短视频榜：每行视频下有「复制链接 / 批量下载」。<br>
+    竞品详情 · 视频分析：表格上方有「批量复制 / 批量下载」。
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

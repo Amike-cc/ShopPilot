@@ -13,6 +13,7 @@ import * as ProfileManager from '../stores/profile-manager'
 import * as StoreManager from '../stores/store-manager'
 import * as TaskStore from '../tasks/task-store'
 import { verifyStoreFingerprint } from '../browser/fingerprint-injector'
+import { setStoreWarmCacheLimit } from '../browser/window-manager'
 import { getDatabase } from '../db/database'
 import { writeAudit, queryAudit } from '../services/audit-logger'
 import { auditQueryFilterSchema } from '@shared/schemas/audit'
@@ -80,8 +81,9 @@ const SETTING_VALUE_MAX_BYTES = 64 * 1024
  * - invite.*           邀约配置（配置树 / 广场地址 / 按店铺配置）
  * - security.idleMinutes 空闲自动锁定分钟数（应用锁的其它键仍被挡在门外）
  * - collection.*       采集口径（如 collection.autoEnabled 自动采集总开关，默认关）
+ * - browser.*          浏览器内存策略（如 browser.warmStoreLimit 后台保活店铺数 1–4）
  */
-const SETTING_ALLOW_PREFIXES = ['ui.', 'update.', 'platform.homeUrls', 'invite.', 'security.idleMinutes', 'collection.']
+const SETTING_ALLOW_PREFIXES = ['ui.', 'update.', 'platform.homeUrls', 'invite.', 'security.idleMinutes', 'collection.', 'browser.']
 
 /** 前三段属于"非敏感但需要说明"的越权尝试；其余不在白名单里的一律按参数错误返回 */
 const SETTING_SENSITIVE_PREFIXES = ['securi', 'ai_cred', 'ai.', 'proxy_cred', 'agent.']
@@ -385,6 +387,12 @@ export function registerProfileAndMiscHandlers(): void {
       // 每次写入留痕：设置项直接决定主进程行为，事后要能查到写过哪个键；
       // 只记键名与体积，值可能含业务数据（如店铺名单）不落日志
       logMain('info', `[settings] set key=${key.value} bytes=${Buffer.byteLength(value.json, 'utf8')}`)
+
+      // 立刻生效的内存策略（2026-11-08）：写库只是持久化，真正决定回收队列的是主进程里的值。
+      // 越界值由 setStoreWarmCacheLimit 内部 clamp（1–4），这里不重复校验。
+      if (key.value === 'browser.warmStoreLimit') {
+        try { setStoreWarmCacheLimit(JSON.parse(value.json)) } catch { /* 值非法：保持原值，下面照常返回成功 */ }
+      }
       return success({ success: true }, requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)

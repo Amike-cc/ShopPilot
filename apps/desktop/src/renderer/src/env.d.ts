@@ -13,7 +13,7 @@ import type {
   SalesMetricsRunListResult
 } from '@shared/contracts/sales-metrics'
 import type { AgentUiState } from '@shared/schemas/agent'
-import type { BrowserExtensionImportResult, BrowserExtensionListResult, BrowserExtensionOpenDirResult } from '@shared/contracts/extensions'
+import type { BrowserExtensionCatalogInstallResult, BrowserExtensionCatalogResult, BrowserExtensionImportResult, BrowserExtensionListResult, BrowserExtensionOpenDirResult } from '@shared/contracts/extensions'
 
 export interface TabInfo {
   id: string
@@ -96,6 +96,10 @@ declare global {
       download: {
         list: (storeId: string, limit?: number) => Promise<IPCResult>
         showInFolder: (downloadId: string) => Promise<IPCResult>
+        /** 进行中下载的暂停/继续/取消；历史记录会返回 result='not-active' */
+        pause: (downloadId: string) => Promise<IPCResult>
+        resume: (downloadId: string) => Promise<IPCResult>
+        cancel: (downloadId: string) => Promise<IPCResult>
       }
       profile: {
         get: (storeId: string) => Promise<IPCResult>
@@ -138,6 +142,9 @@ declare global {
         remove: (id: string) => Promise<IPCResult<BrowserExtensionListResult>>
         reload: (id: string) => Promise<IPCResult<BrowserExtensionListResult>>
         openDir: (id?: string) => Promise<IPCResult<BrowserExtensionOpenDirResult>>
+        /** 插件中心：内置目录（随安装包发） */
+        catalog: () => Promise<IPCResult<BrowserExtensionCatalogResult>>
+        installFromCatalog: (key: string) => Promise<IPCResult<BrowserExtensionCatalogInstallResult>>
       }
       proxy: {
         test: (proxyDraft: any, proxyId?: string) => Promise<IPCResult>
@@ -152,6 +159,8 @@ declare global {
       session: {
         status: (storeId: string) => Promise<IPCResult>
         checkLoginStatus: (storeId: string) => Promise<IPCResult>
+        /** 批量登录检测：串行最多 20 家，返回 items（含 SKIPPED/UNKNOWN 原因） */
+        batchCheckLogin: (storeIds: string[]) => Promise<IPCResult>
         export: (storeId: string, outputPath?: string, validDays?: number) => Promise<IPCResult>
         import: (storeId: string, filePath?: string, pickFile?: boolean) => Promise<IPCResult>
         cookies: (storeId: string, search?: string) => Promise<IPCResult>

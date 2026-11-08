@@ -1,0 +1,207 @@
+/**
+ * ShopPilot Design Tokens v2（2026-11-08）
+ *
+ * 全站唯一的设计变量来源。三个层次：
+ *   1) --ui-*  ：新组件（外壳、总览、应用中心、组件库）使用的语义令牌；
+ *   2) --brand-*：品牌色阶，只在这一处定义，禁止再出现 #6d4aff / #7c5cff / #5b3df5 等散装紫；
+ *   3) --dash-*：旧页面沿用的兼容别名，全部指向 --ui-*，改这里即可全站换肤。
+ *
+ * 约束（改之前先读）：
+ *   · 颜色只允许用令牌。需要新色先加令牌，再引用。
+ *   · 字号只允许用 --text-* 七档；中文正文最小 12px（10.5px 在 100% 缩放的 Windows 上不可读）。
+ *   · 间距只允许 4 的倍数（--sp-*）。
+ *   · 圆角只用四档：6 控件内小件 / 8 控件 / 12 卡片 / 16 浮层。
+ *   · 阴影只用三档，且一律中性黑透明，不用彩色辉光（紫光是最明显的"AI 味"）。
+ */
+
+:root {
+  /* ---------------- 品牌色阶（单一紫，克制使用：一屏紫色面积 ≤ 8%） ---------------- */
+  --brand-50: #f5f3ff;
+  --brand-100: #ebe6ff;
+  --brand-200: #d8cfff;
+  --brand-300: #bcacff;
+  --brand-400: #9a83fb;
+  --brand-500: #7b5cf5;
+  --brand-600: #6244e8;
+  --brand-700: #4f35cc;
+  --brand-800: #3d2aa0;
+
+  --brand: var(--brand-600);
+  --brand-hover: var(--brand-700);
+  --brand-active: var(--brand-800);
+  --brand-soft: var(--brand-50);
+  --brand-soft-hover: var(--brand-100);
+  --brand-border: var(--brand-200);
+  /* 文字场景下需要 4.5:1 以上的深色变体（品牌紫本身在白底约 6.3:1，浅色底上要再用 700） */
+  --brand-text: var(--brand-700);
+
+  /* ---------------- 中性色（冷灰，非纯灰，避免"发脏"） ---------------- */
+  --ui-white: #ffffff;
+  --ui-canvas: #f6f7f9; /* 页面底 */
+  --ui-surface: #ffffff; /* 卡片 */
+  --ui-surface-subtle: #fafbfc; /* 表头 / 次级卡 */
+  --ui-surface-sunken: #f1f3f6; /* 内嵌槽 / hover 底 */
+
+  --ui-border: #e7eaf0;
+  --ui-border-strong: #d7dce6;
+  --ui-border-focus: #a992ff;
+
+  --ui-text: #141a24; /* 标题 */
+  --ui-text-secondary: #4e5766; /* 正文 */
+  --ui-text-muted: #6b7484; /* 辅助说明：白底 4.9:1、灰底 4.6:1，均过 AA */
+  --ui-text-disabled: #a2a9b6;
+  --ui-text-inverse: #ffffff;
+
+  /* ---------------- 语义色（每个都有 soft 底 / 深色文字 / 主色三档） ---------------- */
+  --success: #0f9d63;
+  --success-soft: #e9f9f1;
+  --success-text: #067647;
+  --success-border: #b7e8d0;
+
+  --warning: #d97706;
+  --warning-soft: #fff6e5;
+  --warning-text: #8a4b00;
+  --warning-border: #f3d9a8;
+
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --danger-text: #b42318;
+  --danger-border: #f6cfcf;
+
+  --info: #2563eb;
+  --info-soft: #eff5ff;
+  --info-text: #1d4ed8;
+  --info-border: #cadcfb;
+
+  /* 指标涨跌：增长用绿、下降用红（经营指标，非股票行情，故不用"涨红跌绿"） */
+  --delta-up: var(--success-text);
+  --delta-down: var(--danger-text);
+
+  /* ---------------- 字体 ---------------- */
+  --font-sans:
+    'Segoe UI Variable Text', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB',
+    'Helvetica Neue', Arial, sans-serif;
+  --font-num:
+    'Segoe UI Variable Display', 'Segoe UI', 'DIN Alternate', 'Helvetica Neue',
+    Arial, sans-serif;
+
+  --text-11: 11px; /* 仅限徽章 / 眉标 / 表格密集数字 */
+  --text-12: 12px; /* 辅助说明、表格单元格 */
+  --text-13: 13px; /* 正文基准 */
+  --text-14: 14px; /* 卡片标题、表单控件 */
+  --text-16: 16px; /* 区块标题 */
+  --text-20: 20px; /* 页面标题 */
+  --text-24: 24px; /* 大标题 / KPI */
+  --text-28: 28px; /* KPI 主指标 */
+
+  --leading-tight: 1.25;
+  --leading-snug: 1.4;
+  --leading-normal: 1.6; /* 中文正文 */
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ---------------- 间距（4pt） ---------------- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* ---------------- 圆角 ---------------- */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-full: 999px;
+
+  /* ---------------- 阴影（中性黑，无彩色辉光） ---------------- */
+  --e1: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --e2: 0 1px 3px rgba(16, 24, 40, 0.06), 0 8px 24px -8px rgba(16, 24, 40, 0.1);
+  --e3: 0 12px 40px -8px rgba(16, 24, 40, 0.18), 0 2px 8px rgba(16, 24, 40, 0.06);
+
+  /* ---------------- 动效 ---------------- */
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  /* ---------------- 层级 ---------------- */
+  --z-sticky: 10;
+  --z-dropdown: 100;
+  --z-overlay: 900;
+  --z-modal: 1000;
+  --z-toast: 1100;
+  --z-lock: 9999;
+
+  /* ---------------- 布局 ---------------- */
+  --shell-sidebar-w: 236px;
+  --shell-sidebar-collapsed-w: 64px;
+  --shell-toolbar-h: 56px;
+  --content-max: 1440px;
+
+  /* ================================================================================
+     兼容层：旧页面（--dash-*）全部指向新令牌。
+     下面这些变量名在 6 个页面里被引用了 ~500 次，保留名字可避免逐行改写。
+     ================================================================================ */
+  --dash-bg: var(--ui-canvas);
+  --dash-bg-soft: var(--ui-surface);
+  --dash-card: var(--ui-surface);
+  --dash-card-hover: var(--ui-surface-subtle);
+  --dash-surface: var(--ui-surface-subtle);
+  --dash-border: var(--ui-border);
+  --dash-border-strong: var(--ui-border-strong);
+  --dash-text: var(--ui-text);
+  --dash-text-soft: var(--ui-text-secondary);
+  --dash-text-muted: var(--ui-text-muted);
+  --dash-purple: var(--brand);
+  --dash-purple-text: var(--brand-text);
+  --dash-blue: #2e7cf6;
+  --dash-cyan: #0891b2;
+  --dash-cyan-text: #0e7490;
+  --dash-green: var(--success);
+  --dash-orange: var(--warning);
+  --dash-red: var(--danger);
+  --dash-red-text: var(--danger-text);
+  --dash-shadow: var(--e2);
+  --radius: var(--r-xl);
+  --radius-sm: var(--r-md);
+
+  /* 旧代码里大量 `background: var(--brand-gradient)`。这里把它降级为**纯色**：
+     一次改动即可把全站的紫色渐变按钮/选中态收敛成克制的实色，无需逐处修改。 */
+  --brand-gradient: var(--brand);
+  --brand-soft-legacy: rgba(98, 68, 232, 0.1);
+  --shadow-card: var(--e1);
+  --shadow-pop: var(--e3);
+
+  /* 侧栏（2026-11 由深色改为浅色统一风） */
+  --side-bg: var(--ui-surface);
+  --side-surface: var(--ui-surface-sunken);
+  --side-surface-hover: #eaedf3;
+  --side-border: var(--ui-border);
+  --side-text: var(--ui-text);
+  --side-text-soft: var(--ui-text-secondary);
+  --side-text-muted: var(--ui-text-muted);
+}
+
+/* 深色主题预留（当前产品只发布浅色；令牌齐备后再开，不需要改组件） */
+[data-theme='dark'] {
+  --ui-canvas: #0f131a;
+  --ui-surface: #161b24;
+  --ui-surface-subtle: #1b212c;
+  --ui-surface-sunken: #1f2632;
+  --ui-border: #262d3a;
+  --ui-border-strong: #333c4c;
+  --ui-text: #eef2f7;
+  --ui-text-secondary: #c2cad6;
+  --ui-text-muted: #949dac;
+  --ui-text-disabled: #66707f;
+  --side-bg: #161b24;
+}

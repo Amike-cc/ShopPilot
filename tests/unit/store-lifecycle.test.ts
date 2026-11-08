@@ -44,6 +44,22 @@ describe('店铺浏览器生命周期策略', () => {
     expect(lifecycle.getColdCandidates('store_b', DEFAULT_STORE_COLD_SLEEP_AFTER_MS)).toEqual(['store_a'])
   })
 
+  it('保活档位可调：上限 2 时保留最近两家，第三家才进入冷休眠', () => {
+    const lifecycle = new StoreLifecycleRegistry()
+    lifecycle.used('store_a', 'displayed', 100)
+    lifecycle.used('store_b', 'displayed', 200)
+    lifecycle.used('store_c', 'displayed', 300)
+    lifecycle.used('store_d', 'displayed', 400)
+
+    expect(lifecycle.getWarmStoreIds('store_d', 2)).toEqual(['store_c', 'store_b'])
+
+    const idleAt = 400 + DEFAULT_STORE_COLD_SLEEP_AFTER_MS
+    // 上限 2：只有各家都空闲后 a 会被回收，b/c 仍温热
+    expect(lifecycle.getColdCandidates('store_d', idleAt, DEFAULT_STORE_COLD_SLEEP_AFTER_MS, new Set(), 2)).toEqual(['store_a'])
+    // 默认上限 1：b 也一起进入冷休眠候选（排序按 lastUsedAt 升序）
+    expect(lifecycle.getColdCandidates('store_d', idleAt)).toEqual(['store_a', 'store_b'])
+  })
+
   it('关闭店铺后不再出现在策略记录中', () => {
     const lifecycle = new StoreLifecycleRegistry()
     lifecycle.used('store_a', 'displayed', 100)
