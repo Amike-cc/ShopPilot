@@ -17,40 +17,57 @@ let stat = { total: 0, done: 0, failed: 0 };
 /* ---------------- 竞品详情：记录页面真实参数 ---------------- */
 const detailParams = new Map();   // tabId -> params
 
-chrome.webRequest.onBeforeRequest.addListener(
-  function (d) {
-    try {
-      if (d.tabId < 0) return;
-      const u = new URL(d.url);
-      if (u.pathname.indexOf('/compete_product_detail/flow_source/flow_more') < 0) return;
-      const q = u.searchParams;
-      if (q.get('source_entrance') !== 'video') return;
-      // 插件自己的请求用 page_size=100，页面自己的是 10，只记录页面的
-      const ps = parseInt(q.get('page_size') || '0', 10);
-      if (ps >= 100) return;
+/* 启动自检（2026-11-08）：把「SW 活着、哪些 API 在」写进 storage，popup 可见。
+ * 之前如果这里的顶层代码抛错，整个 SW 直接死掉，onMessage 一个都收不到——
+ * 症状是"插件像没装一样"，且不留任何痕迹。 */
+try {
+  chrome.storage.local.set({
+    lpDiagSw: {
+      sw: true,
+      webRequest: !!(chrome.webRequest && chrome.webRequest.onBeforeRequest),
+      tabs: !!chrome.tabs,
+      storage: !!chrome.storage,
+      at: Date.now()
+    }
+  });
+} catch (e) {}
 
-      detailParams.set(d.tabId, {
-        product_id: q.get('product_id') || '',
-        saleType: q.get('saleType') || '0',
-        date_type: q.get('date_type') || '21',
-        begin_date: q.get('begin_date') || '',
-        end_date: q.get('end_date') || '',
-        activity_id: q.get('activity_id') || '',
-        index_selected: q.get('index_selected') || '',
-        sort_field: q.get('sort_field') || 'pay_amt',
-        is_asc: q.get('is_asc') || 'false',
-        ts: Date.now()
-      });
+if (chrome.webRequest && chrome.webRequest.onBeforeRequest) {
+  chrome.webRequest.onBeforeRequest.addListener(
+    function (d) {
+      try {
+        if (d.tabId < 0) return;
+        const u = new URL(d.url);
+        if (u.pathname.indexOf('/compete_product_detail/flow_source/flow_more') < 0) return;
+        const q = u.searchParams;
+        if (q.get('source_entrance') !== 'video') return;
+        // 插件自己的请求用 page_size=100，页面自己的是 10，只记录页面的
+        const ps = parseInt(q.get('page_size') || '0', 10);
+        if (ps >= 100) return;
 
-      if (detailParams.size > 60) {
-        const oldest = detailParams.keys().next().value;
-        detailParams.delete(oldest);
-      }
-    } catch (e) {}
-  },
-  { urls: ['https://compass.jinritemai.com/compass_api/shop/product/compete_product_detail/*'] },
-  []
-);
+        detailParams.set(d.tabId, {
+          product_id: q.get('product_id') || '',
+          saleType: q.get('saleType') || '0',
+          date_type: q.get('date_type') || '21',
+          begin_date: q.get('begin_date') || '',
+          end_date: q.get('end_date') || '',
+          activity_id: q.get('activity_id') || '',
+          index_selected: q.get('index_selected') || '',
+          sort_field: q.get('sort_field') || 'pay_amt',
+          is_asc: q.get('is_asc') || 'false',
+          ts: Date.now()
+        });
+
+        if (detailParams.size > 60) {
+          const oldest = detailParams.keys().next().value;
+          detailParams.delete(oldest);
+        }
+      } catch (e) {}
+    },
+    { urls: ['https://compass.jinritemai.com/compass_api/shop/product/compete_product_detail/*'] },
+    []
+  );
+}
 
 function persistStat() {
   try { chrome.storage.local.set({ lpStat: stat }); } catch (e) {}

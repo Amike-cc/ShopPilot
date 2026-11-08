@@ -73,6 +73,20 @@
     }, 1800);
   }
 
+  /** 抓取失败的可见提示。此前失败是静默的——用户只看到"没有按钮"，不知道为什么。 */
+  function renderErrorChip(text) {
+    try {
+      let chip = document.querySelector('.lp-errchip');
+      if (!text) { if (chip) chip.remove(); return; }
+      if (!chip) {
+        chip = document.createElement('div');
+        chip.className = 'lp-errchip';
+        (document.body || document.documentElement).appendChild(chip);
+      }
+      chip.textContent = String(text).slice(0, 200);
+    } catch (e) {}
+  }
+
   function copyText(text, cb) {
     function fallback() {
       const ta = document.createElement('textarea');
@@ -111,17 +125,50 @@
   }
 
   /* ---------------- 页面上下文请求通道 ---------------- */
+  /**
+   * 2026-11-08 修复「获取不到链接」：
+   * 原实现只有一条路——注入页面世界的 fetch.js（依赖 chrome-extension:// 的
+   * web_accessible_resources）。Electron 官方支持的 manifest 键清单里**没有**
+   * web_accessible_resources，注入的 <script> 加载不到资源，而原实现在这种情况下
+   * **静默返回**（loadRankAll 里 if (!ready) return），于是面板永远是 0 条、不报错。
+   *
+   * 现在的策略：
+   *   1. 页面世界桥仍先试（兼容真 Chrome 与「页面环境有风控差异」的场景）；
+   *   2. 桥不可用 / 超时 → 自动回退到 content script 直连同源接口（带 Cookie）；
+   *   3. 两条路的状态与最近一次错误写进 chrome.storage.local（lpDiagCs），popup 可见。
+   */
+  const diag = { bridge: 'unknown', lastError: '', at: 0 };
+
+  function persistDiag() {
+    try {
+      diag.at = Date.now();
+      chrome.storage.local.set({ lpDiagCs: { bridge: diag.bridge, lastError: diag.lastError, at: diag.at } });
+    } catch (e) {}
+  }
+
+  function noteError(message) {
+    diag.lastError = String(message || '');
+    persistDiag();
+    renderErrorChip();
+  }
+
   function injectFetcher() {
     return new Promise(function (resolve) {
-      if (window.__lpFetcher) return resolve(true);
+      if (window.__lpFetcher) return resolve({ ok: true, reason: 'already' });
+      if (typeof chrome === 'undefined' || !chrome.runtime || typeof chrome.runtime.getURL !== 'function') {
+        return resolve({ ok: false, reason: 'runtime.getURL 不可用' });
+      }
       try {
         const s = document.createElement('script');
         s.src = chrome.runtime.getURL('fetch.js');
-        s.onload = function () { s.remove(); resolve(true); };
-        s.onerror = function () { resolve(false); };
+        s.onload = function () { s.remove(); resolve({ ok: true, reason: 'injected' }); };
+        s.onerror = function () {
+          s.remove();
+          resolve({ ok: false, reason: 'fetch.js 资源加载被拦（本环境不支持 web_accessible_resources）' });
+        };
         (document.head || document.documentElement).appendChild(s);
       } catch (e) {
-        resolve(false);
+        resolve({ ok: false, reason: String((e && e.message) || e) });
       }
     });
   }
@@ -149,6 +196,44 @@
         reject(new Error('请求超时'));
       }, 20000);
     });
+  }
+
+  /** content script 直连同源接口：与页面同源、带 Cookie，页面 CSP 不约束扩展的请求 */
+  async function isoFetchJson(url) {
+    const res = await fetch(url, {
+      credentials: 'include',
+      headers: { accept: 'application/json, text/plain, */*' }
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }
+
+  /**
+   * 统一入口：桥优先、直连兜底。
+   * 桥「注入失败」或「连续超时」后标记 failed，后续请求不再等 20 秒。
+   * 站点返回的业务错误（HTTP 200 但 st!=0、HTTP 4xx/5xx）不算桥故障，不回退。
+   */
+  async function apiFetch(url) {
+    if (diag.bridge !== 'failed') {
+      const ready = await injectFetcher();
+      if (ready.ok) {
+        try {
+          const json = await pageFetch(url);
+          if (diag.bridge !== 'ok') { diag.bridge = 'ok'; persistDiag(); renderErrorChip(); }
+          return json;
+        } catch (err) {
+          const msg = String((err && err.message) || err);
+          if (msg.indexOf('超时') < 0) throw err;   // 桥通了但接口报错：如实抛出
+          diag.bridge = 'failed';                   // 桥超时：本次起改走直连
+        }
+      } else {
+        diag.bridge = 'failed';
+        diag.bridgeReason = ready.reason;
+      }
+    }
+    const json = await isoFetchJson(url);
+    if (diag.bridge !== 'direct') { diag.bridge = 'direct'; persistDiag(); renderErrorChip(); }
+    return json;
   }
 
   /* ---------------- 下载 ---------------- */
@@ -214,7 +299,7 @@
     if (!params.search_info) params.search_info = '';
 
     const qs = new URLSearchParams(params).toString();
-    const json = await pageFetch(`${location.origin}${RANK_API}?${qs}`);
+    const json = await apiFetch(`${location.origin}${RANK_API}?${qs}`);
     if (!json || json.st !== 0) {
       throw new Error((json && json.msg) || ('st=' + (json && json.st)));
     }
@@ -235,10 +320,6 @@
     // 无关键词 = 全量，结果可整体替换；有关键词 = 只增补，避免把已有数据冲掉
     const fullMode = !String(cfg.search_info || '').trim();
 
-    const ready = await injectFetcher();
-    if (gen !== loadGen) return;
-    if (!ready) { loading = false; return; }
-
     const pending = new Map();
     for (let p = 1; p <= RANK_MAX_PAGE; p++) {
       if (gen !== loadGen) return;
@@ -251,6 +332,8 @@
           break;
         } catch (err) {
           lastError = String((err && err.message) || err);
+          noteError(lastError);
+          renderErrorChip('罗盘下载：抓取失败 ' + lastError + (attempt < 2 ? '（重试中…）' : ''));
           if (attempt < 2) await sleep(2500 * (attempt + 1));
         }
       }
@@ -272,6 +355,11 @@
     if (gen !== loadGen) return;
     applyRankRows(pending, fullMode);
     loading = false;
+    if (!items.size && lastError) {
+      renderErrorChip('罗盘下载：抓取失败 ' + lastError + '（检查是否已登录罗盘，或点插件弹窗「重新抓取」）');
+    } else {
+      renderErrorChip(null);
+    }
     injectRowButtons();
   }
 
@@ -444,7 +532,7 @@
       is_asc: params.is_asc || 'false'
     });
 
-    const json = await pageFetch(`${location.origin}${DETAIL_API}?${q.toString()}`);
+    const json = await apiFetch(`${location.origin}${DETAIL_API}?${q.toString()}`);
     if (!json || json.st !== 0) {
       throw new Error((json && json.msg) || ('st=' + (json && json.st)));
     }
@@ -542,9 +630,6 @@
     detailVideos = [];
     clearDetailRowButtons();
     renderDetailBar();
-
-    const ready = await injectFetcher();
-    if (!ready) { detailLoading = false; return; }
 
     // 优先用页面自己的筛选参数（保证时间区间一致）
     let params = await resolveDetailParams();

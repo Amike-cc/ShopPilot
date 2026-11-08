@@ -36,6 +36,25 @@ function refresh() {
     document.getElementById('done').textContent = cfg.lpStat.done || 0;
     document.getElementById('fail').textContent = cfg.lpStat.failed || 0;
   });
+  refreshDiag();
+}
+
+/** 自检行（2026-11-08）：后台 SW 是否活着、取数走的是哪条通道、最近一次错误 */
+function refreshDiag() {
+  chrome.storage.local.get({ lpDiagSw: null, lpDiagCs: null }, function (cfg) {
+    const el = document.getElementById('diag');
+    if (!el) return;
+    const sw = cfg.lpDiagSw;
+    const cs = cfg.lpDiagCs;
+    const parts = [];
+    parts.push('后台：' + (sw && sw.sw ? '正常' : '未启动'));
+    parts.push('webRequest：' + (sw ? (sw.webRequest ? '可用' : '不可用') : '-'));
+    if (cs && cs.bridge) {
+      parts.push('取数：' + (cs.bridge === 'direct' ? '直连' : cs.bridge === 'ok' ? '页面桥' : cs.bridge));
+    }
+    if (cs && cs.lastError) parts.push('最近错误：' + String(cs.lastError).slice(0, 60));
+    el.textContent = parts.join(' · ');
+  });
 }
 
 document.getElementById('reload').addEventListener('click', function () {
