@@ -1,3 +1,17 @@
+# ShopPilot 0.9.14 变更说明（店铺状态机补齐：启动中 / 代理异常）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
+
+## 本次更新
+
+- 打开从未确认在线/未登录的店铺时写入 `launching`（启动中）；主框架成功加载或失败后回到 `offline`，登录检测再决定 `online` / `needs_login`。
+- 主框架加载失败原因含 `proxy` / `tunnel` / `auth` 时写入 `proxy_error`，店铺徽标显示「代理异常」；成功加载后清除。
+- 失败加载后的错误页可能补发 `did-finish-load`，用 URL 标记跳过那一次清理，避免刚写入的 `proxy_error` 被立刻抹掉。
+- 状态推进仍只在主进程做，`updateStoreStatus` 统一发事件，界面三处文案继续共用 `store-status` 枚举。
+- 新增 `proxy-load-failure` 单测；`store-management-cdp-verify.js` 扩到 22 项（不可达 SOCKS5 → 店铺状态 `proxy_error`）。
+
+---
+
 # ShopPilot 0.9.13 变更说明（备份保留份数可配并立即清理）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。

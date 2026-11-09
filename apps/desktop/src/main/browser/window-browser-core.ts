@@ -26,7 +26,7 @@ import { StoreStatus } from '@shared/enums/store-status'
 import { clampWarmStoreLimit } from '@shared/browser-tools'
 import { assertNavigableUrl } from '@shared/navigation'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
-import { classifyLoadFailure, formatViewUrl } from '@shared/view-state'
+import { classifyLoadFailure, formatViewUrl, isProxyLoadFailure } from '@shared/view-state'
 import { logMain } from '../services/logger'
 import { isStoreDownloadActive } from './download-manager'
 import { planTabClose } from './tab-close-plan'
@@ -334,6 +334,12 @@ export function openStoreBrowser(storeId: string, opts: { display?: boolean; sou
     browserStates.set(storeId, state)
     storeLifecycle.opened(storeId)
     try {
+      // 启动中是**店铺级**瞬态：只在从未确认在线/未登录的店铺上标记，
+      // 成功加载后回 offline，登录检测再决定 online/needs_login；失败回 offline。
+      const currentStatus = getStore(storeId)?.status
+      if (currentStatus === StoreStatus.OFFLINE || currentStatus === StoreStatus.INCOMPLETE || currentStatus === StoreStatus.PROXY_ERROR) {
+        updateStoreStatus(storeId, StoreStatus.LAUNCHING)
+      }
       createFreshStoreTab(storeId)
       // 打开浏览器只代表 Session 已建立，不能据此推断平台已登录——但**同样不能据此断言未登录**。
       // 只有平台适配器给出明确证据才会切换为 online / needs_login（见 markBrowserWindowState）。
@@ -342,6 +348,9 @@ export function openStoreBrowser(storeId: string, opts: { display?: boolean; sou
       queueMicrotask(() => storeOpenListeners.forEach(cb => { try { cb(storeId) } catch { /* ignore */ } }))
     } catch (error) {
       // 目标店铺打开失败时回滚半初始化状态，保留调用方当前显示店铺和其 guest。
+      try {
+        if (getStore(storeId)?.status === StoreStatus.LAUNCHING) updateStoreStatus(storeId, StoreStatus.OFFLINE)
+      } catch { /* 店铺已删除 */ }
       browserStates.delete(storeId)
       storeLifecycle.forget(storeId)
       clearStoreReapTimer(storeId)
@@ -867,6 +876,22 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
     }
     scheduleLoginDetection(tab.storeId)
   })
+  wc.on('did-finish-load', () => {
+    // 主框架成功加载 → 启动中/之前的代理异常都已结束；回到 offline，
+    // 登录检测会再决定 online/needs_login。
+    // 但失败加载后的错误页也可能补发 finish：用 URL 标记跳过那一次，别把刚写的 proxy_error 抹掉。
+    let finishedUrl = ''
+    try { finishedUrl = wc.getURL() } catch { /* ignore */ }
+    if (!failedLoadUrls.delete(finishedUrl)) {
+      try {
+        const status = getStore(tab.storeId)?.status
+        if (status === StoreStatus.PROXY_ERROR || status === StoreStatus.LAUNCHING) {
+          updateStoreStatus(tab.storeId, StoreStatus.OFFLINE)
+        }
+      } catch { /* 店铺已删除时忽略 */ }
+    }
+    scheduleLoginDetection(tab.storeId)
+  })
   wc.on('did-start-loading', () => {
     if (displayedStoreId === tab.storeId) emit(EVENT_CHANNELS.BROWSER_LOADING_CHANGED, { storeId: tab.storeId, tabId: tab.id, isLoading: true })
   })
@@ -880,6 +905,17 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
   wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
     const reason = classifyLoadFailure({ errorCode: code, errorDescription: desc, isMainFrame })
     if (!reason) return
+    // 代理/隧道/认证类失败是店铺级问题：写进状态机，让店铺徽标显示「代理异常」，
+    // 而不是只留一条日志。did-finish-load 成功后会清回 offline。
+    if (isMainFrame && isProxyLoadFailure(desc)) {
+      failedLoadUrls.add(String(url || ''))
+      try { updateStoreStatus(tab.storeId, StoreStatus.PROXY_ERROR) } catch { /* 店铺已删除 */ }
+    } else if (isMainFrame) {
+      // 非代理类整页失败也要结束「启动中」，否则徽标会一直停在启动中。
+      try {
+        if (getStore(tab.storeId)?.status === StoreStatus.LAUNCHING) updateStoreStatus(tab.storeId, StoreStatus.OFFLINE)
+      } catch { /* 店铺已删除 */ }
+    }
     logMain('warn', `[webview] load failed store=${tab.storeId.slice(0, 16)} tab=${tab.id.slice(0, 16)} code=${code} reason=${reason.slice(0, 120)} url=${formatViewUrl(url).slice(0, 120)}`)
   })
   wc.on('render-process-gone', (_e, details) => {
@@ -916,6 +952,12 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
 }
 
 const loginDetectionTimers = new Map<string, ReturnType<typeof setTimeout>>()
+/**
+ * 失败加载的 URL 标记（2026-11-10）：Electron 在主框架加载失败后还可能补发
+ * did-finish-load（错误页），如果无条件在那里清 proxy_error，刚写进去的状态会被立刻抹掉。
+ * 失败时记下 URL，错误页那次 finish 消费标记并跳过清理；下一次真正成功的加载才清。
+ */
+const failedLoadUrls = new Set<string>()
 
 /** 页面完成导航后自动复核登录态；未确认登录的店铺保持 offline。 */
 function scheduleLoginDetection(storeId: string, delayMs = 300): void {

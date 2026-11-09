@@ -123,11 +123,13 @@ describe('窗口开/关不得无证据写 offline（源码级约定）', () => {
     .map(f => readFileSync(resolve('apps/desktop/src/main/browser', f), 'utf8'))
     .join('\n')
 
-  it('全文件只有一处 offline 写入，且必须带"从未确认过登录"（incomplete）守卫', () => {
+  it('每处 offline 写入都必须带状态守卫（incomplete / launching）', () => {
     const writes = WINDOW_MANAGER.match(/updateStoreStatus\(storeId, StoreStatus\.OFFLINE\)/g) || []
-    expect(writes).toHaveLength(1)
-    // 唯一那处必须紧跟 INCOMPLETE 判断（§9.1 的 incomplete -> offline）
+    expect(writes).toHaveLength(2)
+    // 入口：§9.1 的 incomplete -> offline
     expect(WINDOW_MANAGER).toMatch(/current === StoreStatus\.INCOMPLETE\)\s*updateStoreStatus\(storeId, StoreStatus\.OFFLINE\)/)
+    // 启动失败回滚：只把刚写进去的 launching 收回 offline
+    expect(WINDOW_MANAGER).toMatch(/getStore\(storeId\)\?\.status === StoreStatus\.LAUNCHING\)\s*updateStoreStatus\(storeId, StoreStatus\.OFFLINE\)/)
     // 打开浏览器走的是这个受守卫的入口；关闭浏览器**不写**状态
     expect(WINDOW_MANAGER).toContain('markBrowserWindowState(storeId)')
   })

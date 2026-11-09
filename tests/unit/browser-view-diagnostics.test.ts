@@ -317,7 +317,8 @@ describe('guest id 就绪等待：读不到 ≠ 失败（用户实报回归）',
     expect(WINDOW_MANAGER).toContain('function createFreshStoreTab')
     expect(WINDOW_MANAGER).toContain('SELECT admin_url FROM stores WHERE id = ?')
     // 打开店铺走的是建干净首页那条路
-    expect(WINDOW_MANAGER).toMatch(/try \{\s*\n\s+createFreshStoreTab\(storeId\)/)
+    const openFn = WINDOW_MANAGER.match(/export function openStoreBrowser[\s\S]*?\n\}/)
+    expect(openFn?.[0]).toContain('createFreshStoreTab(storeId)')
   })
 
   it('离开店铺就关干净：被任务占用时不打断，等空了再关', () => {

@@ -90,6 +90,15 @@ export function classifyLoadFailure(event: {
 }
 
 /**
+ * 代理类加载失败（2026-11-10）：主框架加载失败的原因里出现 proxy / tunnel / auth
+ * 才归为店铺级「代理异常」。普通 DNS/连接拒绝不在此列——那是目标站点或网络问题，
+ * 不是代理凭证/隧道问题。
+ */
+export function isProxyLoadFailure(errorDescription: unknown): boolean {
+  return /proxy|tunnel|authentication|invalid_auth/i.test(String(errorDescription ?? ''))
+}
+
+/**
  * 视图地址的可读展示：**去掉查询串**（token / 重定向参数不进界面与日志），
  * 非 http(s) 地址给可读文案而不是 `origin + pathname` 拼出来的垃圾串。
  *

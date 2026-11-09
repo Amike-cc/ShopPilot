@@ -345,6 +345,21 @@ async function main() {
     await sleep(600)
     const keepSeven = await ui.eval(`return await window.shopilot.settings.get('backup.retentionKeep')`)
     check('备份保留份数恢复 7', keepSeven.ok && Number(keepSeven.data?.value) === 7)
+
+    // 代理不可达 → 主框架加载失败应把店铺状态写成 proxy_error（不再是只留日志）
+    const badProxy = await ui.eval(`return await window.shopilot.proxy.create({ type: 'socks5', host: '127.0.0.1', port: 9, label: '代理状态验收' })`)
+    const proxyStore = await ui.eval(`return await window.shopilot.store.create({ name: '代理异常验收店', platform: '抖店', adminUrl: 'https://fxg.jinritemai.com' })`)
+    if (badProxy.ok && proxyStore.ok) {
+      await ui.eval(`return await window.shopilot.proxy.bind(${JSON.stringify(proxyStore.data.id)}, ${JSON.stringify(badProxy.data.id)})`)
+      await ui.eval(`return await window.shopilot.browser.open(${JSON.stringify(proxyStore.data.id)})`)
+      await sleep(6000)
+      const proxyStatusList = await ui.eval(`return await window.shopilot.store.list()`)
+      const proxyStatus = proxyStatusList.ok ? proxyStatusList.data.find(item => item.id === proxyStore.data.id)?.status : null
+      check('代理不可达时店铺状态为 proxy_error', proxyStatus === 'proxy_error', JSON.stringify({ status: proxyStatus }))
+      await ui.eval(`return await window.shopilot.proxy.delete(${JSON.stringify(badProxy.data.id)})`)
+    } else {
+      check('代理不可达时店铺状态为 proxy_error', false, '创建代理或店铺失败')
+    }
   } finally {
     if (ui) ui.close()
     try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* ignore */ }
