@@ -437,6 +437,10 @@ export const IPC_CHANNELS = {
   MAINTENANCE_CLEAR_APP_CACHE: 'maintenance:clearAppCache',
   MAINTENANCE_CLEAR_BROWSER_CACHE: 'maintenance:clearBrowserCache',
   MAINTENANCE_SOFTWARE_DIAGNOSTICS: 'maintenance:softwareDiagnostics',
+  /** 本机存储路径（数据/数据库/日志/备份），只读，不返回文件内容 */
+  MAINTENANCE_PATHS: 'maintenance:paths',
+  /** 在系统文件管理器中打开数据/日志/备份目录 */
+  MAINTENANCE_OPEN_DIR: 'maintenance:openDir',
 
   // 浏览器扩展（本地解包，实验性；2026-10-17）
   EXTENSION_LIST: 'extensions:list',
@@ -908,6 +912,8 @@ export interface IpcContract {
   'maintenance:clearAppCache': { req: void; res: CacheClearResult }
   'maintenance:clearBrowserCache': { req: void; res: CacheClearResult }
   'maintenance:softwareDiagnostics': { req: void; res: SoftwareDiagnosticsReport }
+  'maintenance:paths': { req: void; res: { dataDir: string; databasePath: string; logsDir: string; backupsDir: string } }
+  'maintenance:openDir': { req: { target: 'data' | 'logs' | 'backups' }; res: { path: string } }
 
   // ------------------------------ 应用锁 §6.5 ------------------------------
   'security:status': { req: void; res: IpcLockStatus }

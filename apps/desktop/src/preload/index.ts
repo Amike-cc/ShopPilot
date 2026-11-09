@@ -171,7 +171,11 @@ const api = {
     /** 清除浏览器缓存：所有店铺分区的网页缓存，Cookie 与站点存储保留 */
     clearBrowserCache: () => invoke(IPC_CHANNELS.MAINTENANCE_CLEAR_BROWSER_CACHE),
     /** 诊断软件：只读自检，逐项返回事实与下一步 */
-    softwareDiagnostics: () => invoke(IPC_CHANNELS.MAINTENANCE_SOFTWARE_DIAGNOSTICS)
+    softwareDiagnostics: () => invoke(IPC_CHANNELS.MAINTENANCE_SOFTWARE_DIAGNOSTICS),
+    /** 存储位置：数据/数据库/日志/备份目录（只读路径） */
+    paths: () => invoke(IPC_CHANNELS.MAINTENANCE_PATHS),
+    /** 在系统文件管理器中打开白名单目录（data/logs/backups） */
+    openDir: (target: 'data' | 'logs' | 'backups') => invoke(IPC_CHANNELS.MAINTENANCE_OPEN_DIR, { target })
   },
 
   // 浏览器扩展（本地解包，实验性）：导入路径只能由主进程目录选择框产生（契约域 extensions:*）

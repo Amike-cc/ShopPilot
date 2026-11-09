@@ -135,6 +135,8 @@ declare global {
         clearAppCache: () => Promise<IPCResult>
         clearBrowserCache: () => Promise<IPCResult>
         softwareDiagnostics: () => Promise<IPCResult>
+        paths: () => Promise<IPCResult>
+        openDir: (target: 'data' | 'logs' | 'backups') => Promise<IPCResult>
       }
       extensions: {
         list: () => Promise<IPCResult<BrowserExtensionListResult>>

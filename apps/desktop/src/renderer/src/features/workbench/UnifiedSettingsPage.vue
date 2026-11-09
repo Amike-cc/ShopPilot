@@ -191,6 +191,16 @@
           </div>
           <div v-else class="settings-hint" data-test="maintenance-backup-empty">{{ backupBusy ? '正在备份…' : '暂无备份记录，点「立即备份数据库」创建第一个。' }}</div>
         </div>
+        <div class="settings-group" data-test="maintenance-storage">
+          <div class="settings-group-head"><h3>存储位置</h3><span>数据库、日志与备份都在本机；这里只打开目录，不上传任何文件</span></div>
+          <p class="settings-hint settings-path" data-test="maintenance-path-db">数据库：{{ storagePathInfo?.databasePath || '读取中…' }}</p>
+          <p class="settings-hint settings-path" data-test="maintenance-path-logs">日志：{{ storagePathInfo?.logsDir || '读取中…' }}</p>
+          <div class="settings-actions">
+            <button type="button" class="unified-button" data-test="maintenance-open-data" :disabled="storagePathBusy" @click="openStorageDir('data')"><img class="button-icon" :src="forwardIcon" alt="" />打开数据目录</button>
+            <button type="button" class="unified-button" data-test="maintenance-open-logs" :disabled="storagePathBusy" @click="openStorageDir('logs')"><img class="button-icon" :src="forwardIcon" alt="" />打开日志目录</button>
+            <button type="button" class="unified-button" data-test="maintenance-open-backups" :disabled="storagePathBusy" @click="openStorageDir('backups')"><img class="button-icon" :src="forwardIcon" alt="" />打开备份目录</button>
+          </div>
+        </div>
         <div class="settings-group" data-test="maintenance-diagnostics">
           <div class="settings-group-head"><h3>诊断与审计</h3><span>诊断包只含版本、系统、迁移版本、代理体检与脱敏日志，不含会话 Cookie、密码或订单原文</span></div>
           <div class="settings-actions">
@@ -409,6 +419,8 @@ const maintenanceMsg = ref('')
 const maintenanceMsgOk = ref(false)
 const backups = ref<Array<{ id: string; sizeBytes?: number; createdAt?: number; restoreStatus?: string | null }>>([])
 const backupBusy = ref(false)
+const storagePathInfo = ref<{ dataDir: string; databasePath: string; logsDir: string; backupsDir: string } | null>(null)
+const storagePathBusy = ref(false)
 const diagBusy = ref(false)
 const auditBusy = ref(false)
 const memoryBusy = ref(false)
@@ -1075,11 +1087,12 @@ async function loadMaintenance(): Promise<void> {
   maintenanceLoadError.value = ''
   const errors: string[] = []
   try {
-    const [collection, backupList, warm, autoBackup] = await Promise.all([
+    const [collection, backupList, warm, autoBackup, paths] = await Promise.all([
       window.shopilot.settings.get(AUTO_COLLECTION_SETTING),
       window.shopilot.backup.list(),
       window.shopilot.settings.get(WARM_LIMIT_SETTING),
-      window.shopilot.settings.get(AUTO_BACKUP_SETTING)
+      window.shopilot.settings.get(AUTO_BACKUP_SETTING),
+      window.shopilot.maintenance.paths()
     ])
     if (collection.ok) {
       collectionEnabled.value = parseAutoCollectionEnabled(collection.data?.value)
@@ -1101,6 +1114,8 @@ async function loadMaintenance(): Promise<void> {
     }
     if (backupList.ok) backups.value = (backupList.data || []) as typeof backups.value
     else errors.push('备份列表：' + responseError(backupList, '读取失败'))
+    if (paths.ok) storagePathInfo.value = paths.data as typeof storagePathInfo.value
+    else errors.push('存储位置：' + responseError(paths, '读取失败'))
   } catch (error) {
     errors.push(String((error as Error)?.message || error))
   } finally {
@@ -1112,6 +1127,22 @@ async function loadMaintenance(): Promise<void> {
 async function refreshBackups(): Promise<void> {
   const result = await window.shopilot.backup.list()
   if (result.ok) backups.value = (result.data || []) as typeof backups.value
+}
+
+/** 在系统文件管理器中打开数据/日志/备份目录；只传白名单 target，主进程不接受任意路径。 */
+async function openStorageDir(target: 'data' | 'logs' | 'backups'): Promise<void> {
+  if (storagePathBusy.value) return
+  storagePathBusy.value = true
+  maintenanceMsg.value = ''
+  try {
+    const result = await window.shopilot.maintenance.openDir(target)
+    if (!result.ok) throw new Error(responseError(result, '打开目录失败'))
+    maintenanceSay(`已打开目录：${result.data?.path || target}`, true)
+  } catch (error) {
+    maintenanceSay('打开目录失败：' + String((error as Error)?.message || error), false)
+  } finally {
+    storagePathBusy.value = false
+  }
 }
 
 /**
@@ -1946,4 +1977,5 @@ onBeforeUnmount(() => {
 .settings-note{border-radius:var(--r-sm);background:var(--ui-surface-subtle)}
 .about-mark{border-radius:var(--r-md);background:var(--brand);box-shadow:none}
 .about-grid>div{background:var(--ui-surface-subtle)}
+.settings-path{overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px}
 </style>
