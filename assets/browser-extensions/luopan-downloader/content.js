@@ -27,8 +27,6 @@
   const items = new Map();       // videoId -> item（页面推送逐页累积，只增不删）
   let loading = false;
   let lastError = '';
-  // 罗盘接口改版检测（2026-11-08 实测）：play_url / video_id 全空、仅 video_ref 引用键
-  let rankRevision = '';
 
   // detail
   let detailVideos = [];
@@ -121,11 +119,17 @@
   }
 
   /* ---------------- 页面世界桥（fetch.js 注入） ----------------
-   * v2.3.0 起桥只负责「装响应拦截 hook」，不再承担主动请求：
-   * 罗盘接口强校验 a_bogus/msToken 签名（页面请求库自动附加），
-   * 插件裸 fetch 只能拿到「st=0 但空数据」或风控拒绝——这就是「获取不到链接」的根因。
-   * 数据一律来自页面响应推送（__lp:'data'）。 */
+   * v2.7.0 主通道：经页面桥**主动请求**罗盘接口。2026-11-09 实测：
+   * 页面世界的 window.fetch 就是罗盘自己的签名包装器（rG，自动附加 a_bogus/msToken），
+   * 桥转发的请求天然带签名——榜单/详情/换链三个接口重放全部拿到完整数据。
+   * 旧「hook 推送」架构依赖 document_start 时序竞态（页面 bundle 抢先捕获原生引用就全盲），
+   * 时灵时不灵；推送通道保留作补充（页面翻页/筛选时的新数据自动跟随）。 */
   const diag = { lastError: '', at: 0, note: '' };
+
+  /** 分页请求间的小停顿，减轻服务端压力 */
+  function sleep(ms) {
+    return new Promise(function (r) { setTimeout(r, ms); });
+  }
 
   function persistDiag() {
     try {
@@ -151,6 +155,14 @@
     try {
       if (document.documentElement.dataset.lpHook === '1') return;
       window.__lpFetcher = 'v2';
+      // 抢先绑定原生剪贴板写入：罗盘 bundle 稍后会把 clipboard.writeText 换成自己的
+      // 签名函数（实测经它写入必抛 "reading 'url'"）——document_start 时它还没动手，
+      // 这里 bind 住的是真原生引用，桥写入走它即可绕开反复制。
+      try {
+        window.__lpNativeClipWrite = (navigator.clipboard && navigator.clipboard.writeText)
+          ? navigator.clipboard.writeText.bind(navigator.clipboard)
+          : null;
+      } catch (e0) { window.__lpNativeClipWrite = null; }
       function post(payload) {
         payload.__lp = 'data';
         try { window.postMessage(payload, '*'); } catch (err) {}
@@ -161,7 +173,7 @@
         if (s.indexOf('/compass_api/shop/product/compete_product_detail/flow_source/flow_more') >= 0) return 'detail';
         return '';
       }
-      // 主动请求通道（保留，当前主流程不依赖）
+      // 主动请求通道 + 剪贴板写入通道
       window.addEventListener('message', function (e) {
         if (e.source !== window) return;
         const d = e.data;
@@ -171,11 +183,40 @@
           payload.id = d.id;
           try { window.postMessage(payload, '*'); } catch (err) {}
         };
+        if (d.clipboard) {
+          // 剪贴板写入走页面世界，两道保险：
+          // ① 原生 writeText 引用（document_start 抢先绑定，绕开罗盘的反复制 hook）；
+          // ② execCommand 经典路径（罗盘没 hook 它；真实用户点击自带 activation + 焦点）。
+          const text = String(d.clipboard);
+          const done = function (ok, err) { ok ? reply({ ok: true }) : reply({ ok: false, error: String(err || '') }); };
+          const viaExec = function () {
+            try {
+              const ta = document.createElement('textarea');
+              ta.value = text;
+              ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+              ta.setAttribute('readonly', '');
+              document.body.appendChild(ta);
+              ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+              let ok = false;
+              try { ok = document.execCommand('copy'); } catch (e) {}
+              ta.remove();
+              if (ok) done(true); else done(false, 'page execCommand 失败');
+            } catch (e) { done(false, String((e && e.message) || e)); }
+          };
+          const write = window.__lpNativeClipWrite ||
+            ((navigator.clipboard && navigator.clipboard.writeText) ? navigator.clipboard.writeText.bind(navigator.clipboard) : null);
+          if (write) {
+            write(text).then(function () { done(true); }).catch(function () { viaExec(); });
+          } else viaExec();
+          return;
+        }
         try {
-          fetch(d.url, {
-            credentials: 'include',
-            headers: { accept: 'application/json, text/plain, */*' }
-          }).then(function (r) {
+          const init = { credentials: 'include', headers: { accept: 'application/json, text/plain, */*' } };
+          if (d.opts) {
+            if (d.opts.method) init.method = d.opts.method;
+            if (d.opts.body) { init.body = d.opts.body; init.headers['content-type'] = 'application/json'; }
+          }
+          fetch(d.url, init).then(function (r) {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();
           }).then(function (j) {
@@ -326,6 +367,7 @@
         const i = idx++;
         try {
           results[i] = await resolveVideoEntity(valid[i].ref);
+          if (results[i].videoId) refCache.set(valid[i].ref, results[i].videoId);
         } catch (e) {
           results[i] = { error: String((e && e.message) || e) };
           failed++;
@@ -385,13 +427,10 @@
   function parseRank(json) {
     const out = [];
     const list = (json && json.data && json.data.data_result) || [];
-    let videos = 0, withPlay = 0;
     for (const prod of list) {
       const p = prod.product_info || {};
       const vids = prod.video_list || [];
       for (const v of vids) {
-        videos++;
-        if (v.video_play_url) withPlay++;
         // v2.5.0：罗盘改版后 video_id / video_play_url 全空，只发 video_ref 引用键。
         // 条目以 video_ref 兜底保住按钮渲染；真实链接在复制/下载时用 ref 解析（entity_by_ref）。
         const id = String(v.video_id || v.video_ref || '');
@@ -410,61 +449,148 @@
         });
       }
     }
-    // 改版判定：页面给了视频，但播放地址一条都没有 → 罗盘已把地址换成 video_ref 引用键
-    if (videos > 0 && withPlay === 0) {
-      rankRevision = '罗盘已改版：榜单接口不再直接下发播放地址（实测 2026-11-08：play_url 全空、video_id 置空、只发 video_ref 引用键）。插件暂无法取到下载链接，复制链接同样受影响；需要适配新版换链接口后恢复。';
-    } else if (videos > 0) {
-      rankRevision = '';
-    }
     return out;
   }
 
-  /** 页面响应推送（fetch.js）→ 只增不删：页面翻页时每页 10 条陆续到达 */
+  /* ---------------- 主动拉取（v2.7.0 主通道） ----------------
+   * 经页面桥重放接口 = 调用罗盘自己的签名包装器，签名自动附加（2026-11-09 实测三接口全通）。
+   * 不再依赖 hook 时序竞态；页面推送通道保留作补充。 */
+  const RANK_API = '/compass_api/shop/product/product_rank/video_bring_good';
+  const DETAIL_API = '/compass_api/shop/product/compete_product_detail/flow_source/flow_more';
+  const RANK_PAGE_SIZE = 10;     // 榜单接口把 page_size 卡在 10
+  const RANK_MAX_PAGE = 20;      // 10 × 20 = 200 条
+  const DETAIL_PAGE_SIZE = 10;   // 改版后实测 10 可用（100 未验证，不用赌）
+  const DETAIL_MAX_PAGE = 50;    // 上限 500 条
+  const DEFAULT_CFG = {
+    industry_id: '4',
+    category_id: '1000003282,1000009114',
+    brand_type: '-1',
+    price_bin: '不限',
+    date_type: '21'
+  };
+
+  /** 近 7 天（截止昨天）——罗盘默认区间 */
+  function dateRange() {
+    const end = new Date();
+    end.setDate(end.getDate() - 1);
+    const begin = new Date(end);
+    begin.setDate(begin.getDate() - 6);
+    const f = function (d) {
+      const p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} 00:00:00`;
+    };
+    return { begin_date: f(begin), end_date: f(end) };
+  }
+
+  /** 页面头部展示的日期区间（如 2026/11/02 - 2026/11/08）优先，保证与用户所见一致 */
+  function readPageDateRange() {
+    try {
+      const m = (document.body.innerText || '').match(/(\d{4}\/\d{2}\/\d{2})\s*-\s*(\d{4}\/\d{2}\/\d{2})/);
+      if (m) return { begin_date: m[1] + ' 00:00:00', end_date: m[2] + ' 00:00:00' };
+    } catch (e) {}
+    return null;
+  }
+
+  /** 详情页 URL 自带的 date_value=起始秒,结束秒 */
+  function urlDateRange() {
+    const raw = urlParam('date_value');
+    if (!raw) return null;
+    const parts = raw.split(',');
+    if (parts.length < 2) return null;
+    const a = parseInt(parts[0], 10);
+    const b = parseInt(parts[1], 10);
+    if (!a || !b) return null;
+    const f = function (ts) {
+      const d = new Date(ts * 1000);
+      const p = function (n) { return n < 10 ? '0' + n : '' + n; };
+      return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} 00:00:00`;
+    };
+    return { begin_date: f(a), end_date: f(b) };
+  }
+
+  async function fetchRankPage(no, params) {
+    const qs = new URLSearchParams(Object.assign({}, params, {
+      page_no: String(no),
+      page_size: String(RANK_PAGE_SIZE),
+      rank_data_type: '1',
+      activity_id: ''
+    })).toString();
+    const json = await pageFetch(`${location.origin}${RANK_API}?${qs}`);
+    if (!json || json.st !== 0) throw new Error((json && json.msg) || ('st=' + (json && json.st)));
+    return parseRank(json);
+  }
+
+  async function loadRankAll() {
+    if (loading) return;
+    loading = true;
+    lastError = '';
+    try {
+      const ready = await injectFetcher();
+      if (!ready.ok) throw new Error('页面桥初始化失败（' + ready.reason + '）');
+      const dr = readPageDateRange() || dateRange();
+      const kw = readPageKeyword();
+      const params = Object.assign({}, DEFAULT_CFG, dr, { search_info: kw || '' });
+      let emptyStreak = 0;
+      for (let p = 1; p <= RANK_MAX_PAGE; p++) {
+        let rows = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try { rows = await fetchRankPage(p, params); break; }
+          catch (err) { lastError = String((err && err.message) || err); if (!attempt) await sleep(1200); }
+        }
+        if (rows === null) break;
+        applyRankRows(rows);
+        emptyStreak = rows.length ? 0 : emptyStreak + 1;
+        if (emptyStreak >= 2) break;          // 连续两页没有有效视频行，后面基本也不会有
+        if (rows.length < RANK_PAGE_SIZE) break;
+        await sleep(300);
+      }
+    } finally {
+      loading = false;
+    }
+    if (!items.size) {
+      renderErrorChip('罗盘下载：抓取失败' + (lastError ? '：' + lastError : '') + '（请确认已登录罗盘；点插件弹窗「重新抓取」重试）');
+    } else {
+      renderErrorChip(null);
+    }
+  }
+
+  async function fetchDetailPage(pid, dr, pageNo) {
+    const q = new URLSearchParams({
+      product_id: pid,
+      saleType: '0',
+      source_entrance: 'video',
+      date_type: urlParam('date_type') || '21',
+      begin_date: dr.begin_date,
+      end_date: dr.end_date,
+      activity_id: urlParam('activity_id') || '',
+      index_selected: 'pay_amt,pay_ucnt,dh_product_click_ratio_uv,pay_cnt,pay_combo_cnt',
+      page_size: String(DETAIL_PAGE_SIZE),
+      page_no: String(pageNo),
+      sort_field: urlParam('sort_field') || 'pay_amt',
+      is_asc: urlParam('is_asc') || 'false'
+    });
+    const json = await pageFetch(`${location.origin}${DETAIL_API}?${q.toString()}`);
+    if (!json || json.st !== 0) throw new Error((json && json.msg) || ('st=' + (json && json.st)));
+    return json;
+  }
+
+  /** 数据入库（主动拉取与页面推送共用）→ 只增不删，保证按钮不中途消失 */
   function applyRankRows(rows) {
     let added = 0;
     for (const it of rows || []) {
       if (!items.has(it.videoId)) added++;
       items.set(it.videoId, it);
     }
-    if ((rows || []).length) {
+    if (added) {
       lastError = '';
       renderErrorChip(null);
       injectRowButtons();
-      enqueueResolve(rows);
-    } else if (rankRevision) {
-      renderErrorChip(rankRevision);
     }
-    return (rows || []).length;
+    return added;
   }
 
-  /**
-   * 后台预解析缓存（ref → 抖音 videoId）：数据一到就解析，
-   * 用户点「复制链接」时直接取缓存——复制回到用户手势窗口内的同步路径，最稳。
-   * 失败不自动重试（entity_by_ref 有配额 remaining_cnt）。
-   */
+  /** ref → 抖音 videoId 的按需缓存：复制/下载解析成功后写入，后续点击直接命中 */
   const refCache = new Map();
-  let resolveQueue = [];
-  let resolveActive = 0;
-  function enqueueResolve(rows) {
-    for (const it of rows || []) {
-      if (!it || !it.ref || refCache.has(it.ref)) continue;
-      if (resolveQueue.some(function (q) { return q.ref === it.ref; })) continue;
-      resolveQueue.push(it);
-    }
-    kickResolve();
-  }
-  function kickResolve() {
-    while (resolveActive < RESOLVE_CONCURRENCY && resolveQueue.length) {
-      const it = resolveQueue.shift();
-      resolveActive++;
-      resolveVideoEntity(it.ref).then(function (r) {
-        if (r.videoId) refCache.set(it.ref, r.videoId);
-      }).catch(function () {}).then(function () {
-        resolveActive--;
-        kickResolve();
-      });
-    }
-  }
 
   function groups() {
     const map = new Map();
@@ -553,6 +679,7 @@
       else missRefs.push(v);
     }
     if (!missRefs.length) {
+      try { chrome.storage.local.set({ lpLastCopy: cachedLines.join('\n') }); } catch (e) {}
       copyText(cachedLines.join('\n'), function (ok) {
         flash(btn, ok ? `已复制 ${cachedLines.length} 条` : '复制失败（页面需保持前台焦点）');
       });
@@ -571,6 +698,7 @@
       if (r && r.videoId) lines.push('https://www.douyin.com/video/' + r.videoId);
     }
     if (!lines.length) { flash(btn, `解析失败（${resolved.failed}）`); return; }
+    try { chrome.storage.local.set({ lpLastCopy: lines.join('\n') }); } catch (e) {}
     copyText(lines.join('\n'), function (ok) {
       flash(btn, ok ? `已复制 ${lines.length} 条` + (resolved.failed ? `（${resolved.failed} 条失败）` : '') : '复制失败（页面需保持前台焦点）');
     });
@@ -601,11 +729,11 @@
     }, 1500);
   }
 
-  /** 榜单等待提示：进入榜单页 12 秒仍无数据 → 引导用户切到「短视频榜」标签页 */
+  /** 榜单兜底提示：主动拉取完成后仍无数据才显示（正常情况下按钮会先出现） */
   function startRankHintTimer() {
     setTimeout(function () {
       if (mode === 'rank' && items.size === 0 && !loading) {
-        renderErrorChip(rankRevision || '罗盘下载：未收到榜单数据。请点开上方「短视频榜」标签页（总榜没有带货视频列）——插件自动跟随页面真实请求，翻页/筛选都会同步');
+        renderErrorChip('罗盘下载：未获取到榜单数据' + (lastError ? '：' + lastError : '') + '。请确认已登录罗盘，或点插件弹窗「重新抓取」重试');
       }
     }, 12000);
   }
@@ -615,11 +743,14 @@
     const b = (it && it.base_info) || {};
     const v = b.video_base_info || {};
     const a = v.author_info || {};
-    const id = String(v.video_id || '');
-    if (!id || !v.video_url) return null;
+    // v2.7.0：详情接口改版后 video_id / video_url 全空（video_url 键整个消失），只有 video_ref
+    // 引用键——以 ref 兜底，真实链接在复制/下载时解析（entity_by_ref，页面桥自动签名）。
+    const id = String(v.video_id || v.video_ref || '');
+    if (!id) return null;
     return {
       videoId: id,
-      playUrl: v.video_url,
+      ref: String(v.video_ref || ''),
+      playUrl: String(v.video_url || ''),
       title: String(v.video_title || '').replace(/\s+/g, ' ').trim(),
       author: a.author_nick_name || '',
       publishTs: v.publish_time || 0,
@@ -655,7 +786,10 @@
     return added;
   }
 
-  /** 进入竞品详情页：重置 UI，然后等页面响应推送；12 秒没数据就引导用户 */
+  /**
+   * 进入竞品详情页（v2.7.0）：重置 UI 后**主动**经页面桥分页拉取 flow_more
+   * （签名由页面世界的罗盘包装器自动附加，实测 st=0 + 10 行）。页面推送仍作为补充来源。
+   */
   function loadDetail() {
     detailLoading = true;
     detailMeta = { begin: '', end: '', done: false, error: '' };
@@ -663,15 +797,39 @@
     clearDetailRowButtons();
     renderDetailBar();
 
-    setTimeout(function () {
-      detailLoading = false;
-      if (mode !== 'detail') return;
-      if (detailVideos.length === 0) {
+    (async function () {
+      const pid = urlParam('product_id') || '';
+      try {
+        if (!pid) throw new Error('URL 缺少 product_id');
+        const dr = urlDateRange() || readPageDateRange() || dateRange();
+        detailMeta.begin = dr.begin_date;
+        detailMeta.end = dr.end_date;
+        const ready = await injectFetcher();
+        if (!ready.ok) throw new Error('页面桥初始化失败（' + ready.reason + '）');
+
+        for (let p = 1; p <= DETAIL_MAX_PAGE; p++) {
+          const json = await fetchDetailPage(pid, dr, p);
+          const added = applyDetailRows(json);
+          renderDetailBar();
+          if (!added) break;                 // 空页=到底
+          if (added < DETAIL_PAGE_SIZE) break;
+          await sleep(300);
+        }
+        detailMeta.error = '';
+      } catch (err) {
+        detailMeta.error = String((err && err.message) || err);
+      } finally {
+        detailLoading = false;
         detailMeta.done = true;
         renderDetailBar();
-        renderErrorChip('罗盘下载：未收到竞品视频数据。请打开「视频分析」标签页并翻一页（插件自动跟随页面真实请求）');
+        injectDetailRowButtons();
+        if (!detailVideos.length) {
+          renderErrorChip('罗盘下载：竞品视频抓取失败' + (detailMeta.error ? '：' + detailMeta.error : '') + '（打开「视频分析」标签页翻一页可重试）');
+        } else {
+          renderErrorChip(null);
+        }
       }
-    }, 12000);
+    })();
   }
 
   /** 当前激活的主标签面板（商品概览 / 视频分析 …）的容器 */
@@ -906,6 +1064,7 @@
       if (r && r.videoId) lines.push('https://www.douyin.com/video/' + r.videoId);
     }
     if (!lines.length) { flash(btn, `解析失败（${resolved.failed}）`); return; }
+    try { chrome.storage.local.set({ lpLastCopy: lines.join('\n') }); } catch (e) {}
     copyText(lines.join('\n'), function (ok) {
       flash(btn, ok ? `已复制 ${lines.length} 条` + (resolved.failed ? `（${resolved.failed} 条失败）` : '') : '复制失败');
     });
@@ -1052,72 +1211,9 @@
   }
 
   function startRank() {
+    loadRankAll();          // v2.7.0：主动经页面桥拉取（不再等页面推送）
     watchPageKeyword();
     startRankHintTimer();
-  }
-
-  /**
-   * 主通道（v2.3.1）：后台 webRequest 捕获页面自己发出的「带签名完整 URL」，
-   * 这里轮询取最新一条，经页面桥原样重放——URL 不变 = 签名不变。
-   * 页面翻页/筛选/搜索会产生新 URL，自动跟随；URL 没变就不重放。
-   */
-  let lastRankUrl = '';
-  let lastDetailUrl = '';
-  function pollPageUrls() {
-    setInterval(async function () {
-      if (mode !== 'rank' && mode !== 'detail') return;
-      let resp = null;
-      try {
-        resp = await new Promise(function (resolve) {
-          chrome.runtime.sendMessage({ type: 'LP_GET_URLS' }, function (r) {
-            void chrome.runtime.lastError;
-            resolve(r || null);
-          });
-        });
-      } catch (e) {
-        diag.note = 'getUrls-throw: ' + String((e && e.message) || e);
-        persistDiag();
-        return;
-      }
-      if (!resp || !resp.ok) {
-        diag.note = 'getUrls-empty';
-        persistDiag();
-        return;
-      }
-      diag.note = 'urls: rank=' + (resp.rank ? 'yes' : 'no') + ' detail=' + (resp.detail ? 'yes' : 'no') + ' mode=' + mode;
-      persistDiag();
-
-      if (mode === 'rank' && resp.rank && resp.rank !== lastRankUrl) {
-        lastRankUrl = resp.rank;
-        try {
-          const json = await pageFetch(resp.rank);
-          const n = applyRankRows(parseRank(json));
-          diag.note = 'replayed rank rows=' + n;
-          persistDiag();
-        } catch (e) {
-          noteError(String((e && e.message) || e));
-          diag.note = 'replay-failed: ' + String((e && e.message) || e).slice(0, 120);
-          persistDiag();
-          renderErrorChip('罗盘下载：重放页面请求失败 ' + String((e && e.message) || e).slice(0, 80));
-        }
-      }
-
-      if (mode === 'detail' && resp.detail && resp.detail !== lastDetailUrl) {
-        lastDetailUrl = resp.detail;
-        try {
-          const json = await pageFetch(resp.detail);
-          const n = applyDetailRows(json);
-          diag.note = 'replayed detail rows=' + n;
-          persistDiag();
-        } catch (e) {
-          noteError(String((e && e.message) || e));
-          diag.note = 'detail-replay-failed: ' + String((e && e.message) || e).slice(0, 120);
-          persistDiag();
-          detailMeta.error = String((e && e.message) || e);
-          renderDetailBar();
-        }
-      }
-    }, 2500);
   }
 
   function startDetail() {
@@ -1139,7 +1235,7 @@
     if (mode === 'rank') {
       try { injectRowButtons(); } catch (e) {}
     } else if (mode === 'detail') {
-      // 站内切换到别的竞品时，URL 变了但路由没刷新，这里补一次重置（数据仍由页面推送）
+      // 站内切换到别的竞品时，URL 变了但路由没刷新，这里补一次重置（重新主动拉取）
       const pid = urlParam('product_id') || '';
       if (pid && pid !== detailPid) { startDetail(); }
       try { injectDetailBar(); } catch (e) {}
@@ -1150,7 +1246,6 @@
   function boot() {
     tick();
     setInterval(tick, 1800);
-    pollPageUrls();
   }
 
   if (document.readyState === 'loading') {

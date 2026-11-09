@@ -14,6 +14,12 @@
   'use strict';
   if (window.__lpFetcher) return;
   window.__lpFetcher = 'v2';
+  // 抢先绑定原生剪贴板写入（罗盘稍后会把 clipboard.writeText 换成自己的签名函数）
+  try {
+    window.__lpNativeClipWrite = (navigator.clipboard && navigator.clipboard.writeText)
+      ? navigator.clipboard.writeText.bind(navigator.clipboard)
+      : null;
+  } catch (e0) { window.__lpNativeClipWrite = null; }
 
   function post(payload) {
     payload.__lp = 'data';
@@ -31,6 +37,31 @@
       payload.id = d.id;
       try { window.postMessage(payload, '*'); } catch (err) {}
     };
+    if (d.clipboard) {
+      // 剪贴板写入走页面世界，两道保险：原生 writeText 引用 + execCommand 经典路径
+      const text = String(d.clipboard);
+      const done = function (ok, err) { ok ? reply({ ok: true }) : reply({ ok: false, error: String(err || '') }); };
+      const viaExec = function () {
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+          ta.setAttribute('readonly', '');
+          document.body.appendChild(ta);
+          ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
+          let ok = false;
+          try { ok = document.execCommand('copy'); } catch (e) {}
+          ta.remove();
+          if (ok) done(true); else done(false, 'page execCommand 失败');
+        } catch (e) { done(false, String((e && e.message) || e)); }
+      };
+      const write = window.__lpNativeClipWrite ||
+        ((navigator.clipboard && navigator.clipboard.writeText) ? navigator.clipboard.writeText.bind(navigator.clipboard) : null);
+      if (write) {
+        write(text).then(function () { done(true); }).catch(function () { viaExec(); });
+      } else viaExec();
+      return;
+    }
 
     try {
       const init = { credentials: 'include', headers: { accept: 'application/json, text/plain, */*' } };
