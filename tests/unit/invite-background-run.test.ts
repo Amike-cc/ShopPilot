@@ -95,7 +95,7 @@ describe('任务类型注册表：引擎只认 surface 与钩子', () => {
 })
 
 describe('入口收敛：只剩店铺浏览器右侧边栏（2026-10-25）', () => {
-  it('应用中心不再有达人邀约卡片与路由', () => {
+  it('应用商城不再有达人邀约卡片与路由', () => {
     expect(APPS).not.toContain("page: 'creator-invite'")
     expect(DASHBOARD).not.toContain('CreatorInvitePage')
     expect(DASHBOARD).not.toContain("navigateTo('creator-invite')")

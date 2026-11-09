@@ -27,7 +27,7 @@ const PAGES = [
   { key: 'invoices', label: '发票中心' },
   { key: 'tax', label: '涉税信息' },
   { key: 'apps', label: 'AI 创作' },
-  { key: 'app-center', label: '应用中心' },
+  { key: 'app-center', label: '应用商城' },
   { key: 'settings', label: '设置中心', via: 'data-test' }
 ]
 

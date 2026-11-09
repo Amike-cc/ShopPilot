@@ -112,13 +112,13 @@
       </section>
       <section v-else-if="activeTab === 'extensions'" class="settings-section" data-test="settings-extensions" data-unified-test="unified-settings-extensions">
         <div class="settings-section-head">
-          <div><h2>浏览器扩展</h2><p>内置插件已移到「应用中心 → 插件」安装与启停；这里用于导入本地解包扩展（包含 manifest.json 的文件夹），不支持 Chrome 商店与 .crx。导入会复制到应用管理目录：自己写插件时用「目录」打开副本编辑，改完点「重载」生效。扩展可以读取和修改店铺页面内容，请只安装你自己编写或可信来源的代码。</p></div>
+          <div><h2>浏览器扩展</h2><p>内置插件已移到「应用商城 → 插件」安装与启停；这里用于导入本地解包扩展（包含 manifest.json 的文件夹），不支持 Chrome 商店与 .crx。导入会复制到应用管理目录：自己写插件时用「目录」打开副本编辑，改完点「重载」生效。扩展可以读取和修改店铺页面内容，请只安装你自己编写或可信来源的代码。</p></div>
           <div class="settings-head-actions-row">
             <button type="button" class="unified-button ghost" data-test="extensions-open-root" :disabled="extensionsBusy" @click="openExtensionDir()">打开扩展目录</button>
             <button type="button" class="unified-button primary" data-test="extensions-import" :disabled="extensionsBusy" @click="importExtension">导入扩展文件夹</button>
           </div>
         </div>
-        <div class="settings-note" data-test="extensions-catalog-moved">插件中心已移到「应用中心 → 插件」：内置插件的安装、启停与重载都在那里；本地导入与删除仍在本页。</div>
+        <div class="settings-note" data-test="extensions-catalog-moved">插件中心已移到「应用商城 → 插件」：内置插件的安装、启停与重载都在那里；本地导入与删除仍在本页。</div>
         <div class="settings-group">
           <div class="settings-group-head"><h3>总开关（实验性）</h3><span>关闭会立即卸载所有扩展并重载已打开的店铺页；开启后，新打开的店铺会加载已启用的扩展。</span></div>
           <div class="settings-field-row maintenance-toggle-row">

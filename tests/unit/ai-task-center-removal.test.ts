@@ -17,7 +17,7 @@ describe('AI 任务中心用户界面移除', () => {
     expect(DASHBOARD).not.toContain("navigateTo('tasks')")
   })
 
-  it('应用中心不再展示 AI 任务中心卡片', () => {
+  it('应用商城不再展示 AI 任务中心卡片', () => {
     expect(APPS).not.toContain('AI 任务中心')
     expect(APPS).not.toContain("page: 'tasks'")
     expect(APPS).not.toContain('tasksAppIcon')

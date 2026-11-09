@@ -157,15 +157,15 @@ async function main() {
     const fromCard = await cdp.evaluate(`return !!document.querySelector('[data-test="unified-products-page"]')`)
     check('点击 AI 创作页发布卡片 → 商品管理页', fromCard === true)
 
-    // 3) 应用中心：设置卡片文案不再宣称已移除的 Agent/技能/插件
-    await nav('应用中心')
+    // 3) 应用商城：设置卡片文案不再宣称已移除的 Agent/技能/插件
+    await nav('应用商城')
     await sleep(UI_WAIT + 250)
     const apps = await cdp.evaluate(`
       const page = document.querySelector('[data-test="unified-apps-page"]')
       const text = page ? page.innerText : ''
       return { page: !!page, staleSettings: /Agent.*技能|技能.*插件/.test(text), hasPublish: /批量发布商品/.test(text) }
     `)
-    check('应用中心渲染且不再出现已移除的 Agent/技能/插件描述', apps.page === true && apps.staleSettings === false, JSON.stringify(apps))
+    check('应用商城渲染且不再出现已移除的 Agent/技能/插件描述', apps.page === true && apps.staleSettings === false, JSON.stringify(apps))
 
     // 4) 通知中心：不再是一句「暂未接入独立页面」；空状态如实说明来源，Esc 可关闭
     await nav('经营总览')

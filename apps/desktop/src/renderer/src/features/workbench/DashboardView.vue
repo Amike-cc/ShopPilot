@@ -544,14 +544,14 @@ const navItems: NavItem[] = [
   { key: 'invoices', label: '发票中心', icon: 'receipt' },
   { key: 'tax', label: '涉税信息', icon: 'percent' },
   { key: 'ai', label: 'AI 创作', icon: 'sparkles' },
-  { key: 'apps', label: '应用中心', icon: 'grid' }
+  { key: 'apps', label: '应用商城', icon: 'grid' }
 ]
 const activeNav = ref('经营总览')
 /** 侧栏导航分组（主控台三项 / 运营三项 / 工具两项；设置单独落在左下角） */
 const navGroups = computed(() => [
   { key: 'main', title: '', items: navItems.filter(item => ['经营总览', '商品管理', '店铺管理'].includes(item.label)) },
   { key: 'ops', title: '运营', items: navItems.filter(item => ['数据分析', '发票中心', '涉税信息'].includes(item.label)) },
-  { key: 'tools', title: '工具', items: navItems.filter(item => ['AI 创作', '应用中心'].includes(item.label)) }
+  { key: 'tools', title: '工具', items: navItems.filter(item => ['AI 创作', '应用商城'].includes(item.label)) }
 ])
 /** 店铺搜索：只在店铺多到列表要滚的时候出现，少店铺时不占一行 */
 const storeQuery = ref('')
@@ -562,7 +562,7 @@ const visibleStores = computed(() => {
 })
 const PAGE_TITLES: Record<string, string> = {
   overview: '经营总览', browser: '店铺工作台', products: '商品管理', stores: '店铺管理',
-  ai: 'AI 创作', analytics: '数据分析', invoices: '发票中心', tax: '涉税信息', apps: '应用中心', settings: '设置中心',
+  ai: 'AI 创作', analytics: '数据分析', invoices: '发票中心', tax: '涉税信息', apps: '应用商城', settings: '设置中心',
   'image-studio': '图片工作台', 'graphic-sell': '图文带货'
 }
 const pageTitle = computed(() => PAGE_TITLES[activePage.value] || '经营总览')
@@ -691,7 +691,7 @@ function showNotice(message: string) { notice.value = message; if (noticeTimer) 
 function handleNav(item: { label: string }) {
   const pageByLabel: Record<string, DashboardPage> = {
     '经营总览': 'overview', '商品管理': 'products', '店铺管理': 'stores',
-    'AI 创作': 'ai', '数据分析': 'analytics', '发票中心': 'invoices', '涉税信息': 'tax', '应用中心': 'apps', '设置中心': 'settings'
+    'AI 创作': 'ai', '数据分析': 'analytics', '发票中心': 'invoices', '涉税信息': 'tax', '应用商城': 'apps', '设置中心': 'settings'
   }
   mobileNavOpen.value = false
   navigateTo(pageByLabel[item.label] || 'overview')
@@ -749,7 +749,7 @@ function navigateTo(page: DashboardPage) {
   else if (page === 'analytics') activeNav.value = '数据分析'
   else if (page === 'invoices') activeNav.value = '发票中心'
   else if (page === 'tax') activeNav.value = '涉税信息'
-  else if (page === 'apps') activeNav.value = '应用中心'
+  else if (page === 'apps') activeNav.value = '应用商城'
   else if (page === 'image-studio' || page === 'graphic-sell') activeNav.value = 'AI 创作'
 }
 /** 设置中心页签白名单：环境面板等入口只允许跳到已知页签，未知值回落到默认「平台入口」 */

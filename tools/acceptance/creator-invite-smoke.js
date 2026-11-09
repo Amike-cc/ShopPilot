@@ -2,7 +2,7 @@
  * 达人邀约 v2 冒烟验收（2026-10-19）
  *
  * 目标：在**真实 Electron 主窗口**里走一遍：
- *   应用中心 → 达人邀约卡片 → 独立模块页 → 页面数据 IPC → 就地配置面板。
+ *   应用商城 → 达人邀约卡片 → 独立模块页 → 页面数据 IPC → 就地配置面板。
  * 不触碰平台页面、不发送任何邀约；只验证路由、迁移 v33、preload/IPC、空态，
  * 以及「邀约在后端隐藏窗口运行、不占用户标签页」这条产品红线。
  *
@@ -84,8 +84,8 @@ async function main() {
     if (!client) throw new Error('主窗口未就绪')
 
     /**
-     * 应用中心已下线达人邀约（2026-10-25 用户要求：只保留店铺浏览器右侧边栏）。
-     * 断言：应用中心不再出现该卡片。
+     * 应用商城已下线达人邀约（2026-10-25 用户要求：只保留店铺浏览器右侧边栏）。
+     * 断言：应用商城不再出现该卡片。
      */
     const apps = await client.eval(`
       const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -93,7 +93,7 @@ async function main() {
         if (document.querySelector('[data-test="dashboard-home"]')) break;
         await wait(250);
       }
-      const item = [...document.querySelectorAll('.dashboard-nav-item')].find(el => String(el.textContent || '').includes('应用中心'));
+      const item = [...document.querySelectorAll('.dashboard-nav-item')].find(el => String(el.textContent || '').includes('应用商城'));
       if (!item) return { ok: false, reason: 'no-apps-nav', text: document.body.innerText.slice(0, 400) };
       item.click();
       await wait(700);
@@ -104,7 +104,7 @@ async function main() {
         cards
       };
     `)
-    checker.check('应用中心已下线「达人邀约」入口', apps.ok === true && apps.hasInvite === false, JSON.stringify(apps))
+    checker.check('应用商城已下线「达人邀约」入口', apps.ok === true && apps.hasInvite === false, JSON.stringify(apps))
 
     /**
      * 唯一入口：店铺浏览器右侧「达人邀约」面板。

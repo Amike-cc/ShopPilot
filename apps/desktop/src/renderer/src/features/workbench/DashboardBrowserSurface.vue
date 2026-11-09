@@ -253,7 +253,7 @@
         <div v-else class="dashboard-browser-panel-body invite-panel-body">
           <div class="browser-panel-heading"><strong>达人邀约</strong><button type="button" @click="inviteController.refreshInvite()"><img class="button-icon" :src="browserRefreshIcon" alt="" />刷新</button></div>
           <!--
-            配置 + 实时日志是独立组件：同一份视图也用在「应用中心 → 达人邀约」独立页。
+            配置 + 实时日志是独立组件：同一份视图也用在「应用商城 → 达人邀约」独立页。
             达人邀约在后端隐藏窗口运行，这里只是配置入口，不再承担"打开店铺浏览器"的前置条件。
           -->
           <InvitePanelView v-if="ws.displayedStoreId" :controller="inviteController" @started="onInviteStarted" />
@@ -887,7 +887,7 @@ async function setPanelOpen(next: boolean) {
 function openPanel(next: PanelKey) { panel.value = next; void setPanelOpen(true); selectPanel(next) }
 
 /**
- * 打开右侧「达人邀约」面板（应用中心已不再提供独立页，通知/外部入口统一走这里）。
+ * 打开右侧「达人邀约」面板（应用商城已不再提供独立页，通知/外部入口统一走这里）。
  * 指定店铺时先切到那家店；切换失败也要把面板打开，不静默什么都不做。
  */
 async function openInvitePanel(storeId?: string | null): Promise<void> {
@@ -1514,7 +1514,7 @@ onBeforeUnmount(() => {
   .dashboard-browser-panel-tabs button { font-size: 9px; }
 }
 /* ===== 达人邀约侧栏（2026-10-25 起唯一入口）：紧凑步骤导航 + 单步显示 + 日志折叠 =====
-   应用中心的独立邀约页已下线，样式只保留侧栏这一处。 */
+   应用商城的独立邀约页已下线，样式只保留侧栏这一处。 */
 .invite-panel-body .invite-panel-steps { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; margin-top: 8px; }
 .invite-panel-body .invite-panel-step { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 4px; border: 1px solid var(--dash-border); border-radius: 7px; background: var(--dash-surface); color: var(--dash-text-muted); font-size: 10px; font-weight: 600; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
 .invite-panel-body .invite-panel-step b { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--dash-border); color: var(--dash-text); font-size: 9px; }

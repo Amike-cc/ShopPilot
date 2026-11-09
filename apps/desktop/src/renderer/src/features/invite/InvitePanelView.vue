@@ -226,7 +226,7 @@
 <script setup lang="ts">
 /**
  * 达人邀约配置 + 运行记录的**唯一视图**（2026-10-25 起只剩店铺浏览器右侧栏；
- * 应用中心的独立邀约页已下线）。视图只接收 `useCreatorInvite` 的返回值，
+ * 应用商城的独立邀约页已下线）。视图只接收 `useCreatorInvite` 的返回值，
  * 不自己读写 IPC——状态、校验、启动口径只有一份，验收脚本引用的 data-test 锚点全部保留。
  */
 import { computed, nextTick, ref, watch } from 'vue'
@@ -332,7 +332,7 @@ function inviteLogToneClass(text: string): string {
 
 /**
  * 步骤显示逻辑（2026-10-25 起只剩侧栏）：
- * 应用中心的独立邀约页已下线，本视图只嵌在店铺浏览器右侧栏（窄容器），
+ * 应用商城的独立邀约页已下线，本视图只嵌在店铺浏览器右侧栏（窄容器），
  * 所以固定用内置的紧凑步骤导航、单步显示，不再接受外部 step/layout。
  *
  * 2026-11-01 修复：改版时删掉了 `activeStep` 定义但模板仍在引用，导致步骤不高亮、

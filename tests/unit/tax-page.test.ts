@@ -25,7 +25,7 @@ describe('涉税信息独立页面与功能模块', () => {
     expect(DATA_PAGE).toContain('data-test="invoice-coverage"')
   })
 
-  it('应用中心也把涉税信息作为可直达功能模块', () => {
+  it('应用商城也把涉税信息作为可直达功能模块', () => {
     expect(APPS_PAGE).toContain("key: 'tax', label: '涉税信息'")
     expect(APPS_PAGE).toContain("page: 'tax'")
   })
