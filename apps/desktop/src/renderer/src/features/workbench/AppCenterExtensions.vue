@@ -7,6 +7,7 @@
  * 数据全部来自主进程现有 IPC，不在渲染层猜状态。
  */
 import { computed, onMounted, ref } from 'vue'
+import { isNewerVersion } from '@shared/version-compare'
 import type {
   BrowserExtensionCatalogItem,
   BrowserExtensionCatalogResult,
@@ -25,6 +26,15 @@ const notice = ref('')
 const installedCount = computed(() => extensions.value.length)
 const enabledCount = computed(() => extensions.value.filter((item) => item.enabled).length)
 const masterOff = computed(() => !master.value)
+/** 内置目录版本 vs 本机已装清单版本：只做本地对比，不联网检查。 */
+const installedVersionById = computed(() => new Map(extensions.value.map(item => [item.id, item.version])))
+function installedVersion(entry: BrowserExtensionCatalogItem): string {
+  return installedVersionById.value.get(entry.id) || ''
+}
+function updateAvailable(entry: BrowserExtensionCatalogItem): boolean {
+  const current = installedVersion(entry)
+  return !!current && isNewerVersion(entry.version, current)
+}
 
 const STATUS_LABEL: Record<string, string> = {
   loaded: '已加载',
@@ -224,6 +234,7 @@ onMounted(() => { void refresh() })
               <h3>{{ entry.name }}</h3>
               <span class="ace-version">v{{ entry.version }}</span>
               <span v-if="entry.installed" class="ace-badge" :class="{ on: entry.enabled }">{{ entry.enabled ? '已启用' : '已安装' }}</span>
+              <span v-if="updateAvailable(entry)" class="ace-badge update" data-test="apps-plugin-update-badge">可更新 v{{ installedVersion(entry) }} → v{{ entry.version }}</span>
             </div>
             <p>{{ entry.summary }}</p>
             <div class="ace-meta">
@@ -237,10 +248,10 @@ onMounted(() => { void refresh() })
               type="button"
               class="ace-btn primary"
               :data-test="'apps-plugin-install-' + entry.key"
-              :title="entry.installed ? '从应用内置目录重新复制安装' : '从应用内置目录复制安装，无需联网'"
+              :title="updateAvailable(entry) ? `本机 v${installedVersion(entry)}，内置目录 v${entry.version}；点击覆盖安装内置新版本` : entry.installed ? '从应用内置目录重新复制安装' : '从应用内置目录复制安装，无需联网'"
               :disabled="!!busyKey || !!entry.invalidReason"
               @click="install(entry)"
-            >{{ busyKey === 'install:' + entry.key ? '安装中…' : entry.installed ? '重新安装' : '下载安装' }}</button>
+            >{{ busyKey === 'install:' + entry.key ? '安装中…' : updateAvailable(entry) ? '更新到 v' + entry.version : entry.installed ? '重新安装' : '下载安装' }}</button>
             <span v-if="entry.invalidReason" class="ace-error">{{ entry.invalidReason }}</span>
           </div>
         </div>
@@ -303,6 +314,7 @@ onMounted(() => { void refresh() })
 .ace-version{color:var(--ui-text-muted);font-size:var(--text-11);font-variant-numeric:tabular-nums}
 .ace-badge{padding:1px 7px;border-radius:999px;background:var(--ui-border);color:var(--ui-text-muted);font-size:var(--text-11);font-weight:var(--weight-medium)}
 .ace-badge.on{background:var(--success-soft);color:var(--success-text)}
+.ace-badge.update{background:#fff4e5;color:#b54708}
 .ace-card-copy p{margin:4px 0 6px;color:var(--ui-text-muted);font-size:var(--text-12);line-height:var(--leading-snug)}
 .ace-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--ui-text-muted);font-size:var(--text-11)}
 .ace-tag{padding:1px 6px;border-radius:var(--r-xs);background:var(--ui-border);color:var(--ui-text-secondary)}
