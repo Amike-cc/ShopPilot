@@ -589,19 +589,30 @@
     'msToken', 'a_bogus', 'verifyFp', 'fp', '_lid', 't'];
 
   /** 从 performance 资源条目里取最近一次接口请求（同源，含类目/筛选/周期） */
-  function latestRequestEntry(apiPath) {
+  /**
+   * 页面资源里的接口请求。ownOnly=true 只要**页面自己**发的（带 verifyFp/fp）——
+   * 插件经页面桥的请求也会进 resource timing，用错了会把插件的分页请求当成页面参数。
+   */
+  function latestRequestEntry(apiPath, ownOnly) {
     try {
       const entries = performance.getEntriesByType('resource');
       for (let i = entries.length - 1; i >= 0; i--) {
         const e = entries[i];
-        if (e && e.name && e.name.indexOf(apiPath) >= 0) return e;
+        if (!e || !e.name || e.name.indexOf(apiPath) < 0) continue;
+        if (ownOnly) {
+          try {
+            const u = new URL(e.name);
+            if (!u.searchParams.get('verifyFp') && !u.searchParams.get('fp')) continue;
+          } catch (err) { continue; }
+        }
+        return e;
       }
     } catch (e) {}
     return null;
   }
 
-  function latestRequestParams(apiPath) {
-    const entry = latestRequestEntry(apiPath);
+  function latestRequestParams(apiPath, ownOnly) {
+    const entry = latestRequestEntry(apiPath, ownOnly);
     if (!entry) return null;
     try {
       const u = new URL(entry.name);
@@ -615,7 +626,7 @@
 
   /** 页面最近一次榜单请求里的业务参数（剔除分页与签名） */
   function pageRankParams() {
-    const p = latestRequestParams(RANK_API);
+    const p = latestRequestParams(RANK_API, true);
     const out = {};
     if (!p) return out;
     Object.keys(p).forEach(function (k) {
@@ -656,6 +667,8 @@
 
   /** 详情周期：页面最近一次 flow_more 请求自带的区间最准，其次 URL，最后才猜 */
   function detailDateRange() {
+    const own = latestRequestParams(DETAIL_API, true);
+    if (own && own.begin_date && own.end_date) return { begin_date: own.begin_date, end_date: own.end_date };
     const p = latestRequestParams(DETAIL_API);
     if (p && p.begin_date && p.end_date) return { begin_date: p.begin_date, end_date: p.end_date };
     return urlDateRange() || readPageDateRange() || dateRange();
@@ -754,7 +767,7 @@
 
   async function fetchDetailPage(pid, dr, pageNo, pageSize) {
     // 页面最近一次 flow_more 请求的参数优先（列集合/排序/周期都以页面为准）
-    const req = latestRequestParams(DETAIL_API) || {};
+    const req = latestRequestParams(DETAIL_API, true) || latestRequestParams(DETAIL_API) || {};
     const q = new URLSearchParams({
       product_id: pid,
       saleType: urlParam('saleType') || req.saleType || '0',
@@ -945,10 +958,10 @@
 
   function syncRankSource() {
     if (mode !== 'rank' || loading) return;
-    const entry = latestRequestEntry(RANK_API);
+    const entry = latestRequestEntry(RANK_API, true);
     // 只认「晚于上一次拉取」的页面请求：自己拉取的请求不能让这里反复触发
     if (!entry || entry.startTime <= rankLoadAt) return;
-    const p = latestRequestParams(RANK_API);
+    const p = latestRequestParams(RANK_API, true);
     if (!p) return;
     const sig = paramsSignature(p);
     if (sig === rankSig) return;
@@ -1059,17 +1072,20 @@
    * 等页面会话就绪再拉详情（2026-11-10 实测）：
    * 详情页刚打开就发 flow_more，会拿到 st=602「店铺商品参数错误」或「环境存在风险」；
    * 页面自己的第一条 flow_more 到达后，同样的参数就 st=0。所以首拉前先等：
-   * 页面的 flow_more 已出现，或「视频分析」页签已打开（其请求马上就到），最多等 10 秒。
+   * 页面的 flow_more 已出现，或「视频分析」页签已打开且表格有数据，最多等 10 秒。
+   * 页签刚开时再给页面 4 秒发请求——周期/列集合要跟用户眼前这张表一致，不能抢跑。
    */
   async function waitDetailWarmup(run) {
     const started = performance.now();
     let tabOnAt = 0;
     while (performance.now() - started < 10000) {
       if (run !== detailRun) return false;
-      if (latestRequestEntry(DETAIL_API)) return true;
+      if (latestRequestEntry(DETAIL_API, true)) return true;
       if (detailTabActive()) {
         if (!tabOnAt) tabOnAt = performance.now();
-        if (performance.now() - tabOnAt > 1200) return true;
+        const rows = document.querySelectorAll('tr.aurora-table-row').length;
+        if (rows > 0) return true;
+        if (performance.now() - tabOnAt > 4000) return true;
       }
       await sleep(250);
     }
