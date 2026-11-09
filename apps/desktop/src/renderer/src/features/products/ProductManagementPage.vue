@@ -33,6 +33,7 @@ import PlatformIcon from '../../components/PlatformIcon.vue'
 import { useWorkspaceStore } from '../../stores/workspace'
 import ProductPager from '../products/ProductPager.vue'
 import ProductEditorDrawer from '../products/ProductEditorDrawer.vue'
+import SettingsModal from '../workbench/SettingsModal.vue'
 import { canUnmerge, unmergeConfirmText, unmergeErrorText } from './product-link-actions'
 import { buildUploadTargetOptions } from './product-upload-targets'
 import storeManageIcon from '../../assets/generated/ui-icons/app-store-gen.png'
@@ -375,6 +376,7 @@ async function syncAll(): Promise<void> {
 // ---------------------------------------------------------------- 通用 busy + 打开交互
 
 const busy = ref(false)
+const settingsOpen = ref(false)
 const editingId = ref<string | null>(null)
 
 function openEditor(row: LocalRow): void { editingId.value = row.id }
@@ -1109,6 +1111,7 @@ onMounted(() => { void loadLinks(); void loadLocal() })
         <button v-if="ws.ready && ws.stores.length" type="button" class="unified-button" :disabled="!!syncingStoreId" data-test="product-sync-all" @click="syncAll">
           <img class="button-icon" :src="syncIcon" alt="" />{{ syncingStoreId ? '同步中…' : '同步全部店铺' }}</button>
         <button type="button" class="unified-button" @click="emit('navigate', 'stores')"><img class="button-icon" :src="storeManageIcon" alt="" />管理店铺</button>
+        <button type="button" class="unified-button" data-test="product-settings" @click="settingsOpen = true">设置</button>
       </div>
     </header>
 
@@ -1652,6 +1655,8 @@ onMounted(() => { void loadLinks(); void loadLocal() })
 
     <!-- 编辑抽屉（自加载；保存后刷新列表；归档态由列表行状态驱动只读） -->
     <ProductEditorDrawer v-if="editingId" :product-id="editingId" :status="editingStatus" @close="editingId = null" @saved="onEditorSaved" @unarchive="onEditorUnarchive" />
+
+    <SettingsModal v-if="settingsOpen" title="商品管理 · 功能设置" tab="entry" :only-tabs="['entry']" @close="settingsOpen = false" />
   </section>
 </template>
 
