@@ -332,6 +332,19 @@ async function main() {
     await sleep(400)
     const afterOn = await ui.eval(`return await window.shopilot.settings.get('backup.auto')`)
     check('重新开启自动备份落库', afterOn.ok && afterOn.data?.value === true)
+    for (let i = 0; i < 4; i++) await ui.eval(`return await window.shopilot.backup.create('保留策略验收${i}')`)
+    const beforePrune = await ui.eval(`return await window.shopilot.backup.list()`)
+    await setValue(ui, '[data-test="maintenance-backup-keep"]', '3')
+    await sleep(700)
+    const keepThree = await ui.eval(`return await window.shopilot.settings.get('backup.retentionKeep')`)
+    const afterPrune = await ui.eval(`return await window.shopilot.backup.list()`)
+    check('备份保留份数可改为 3 并立即清理旧备份', keepThree.ok && Number(keepThree.data?.value) === 3
+      && beforePrune.ok && beforePrune.data.length >= 4 && afterPrune.ok && afterPrune.data.length <= 3,
+      JSON.stringify({ before: beforePrune.data?.length, after: afterPrune.data?.length }))
+    await setValue(ui, '[data-test="maintenance-backup-keep"]', '7')
+    await sleep(600)
+    const keepSeven = await ui.eval(`return await window.shopilot.settings.get('backup.retentionKeep')`)
+    check('备份保留份数恢复 7', keepSeven.ok && Number(keepSeven.data?.value) === 7)
   } finally {
     if (ui) ui.close()
     try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* ignore */ }

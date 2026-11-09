@@ -256,6 +256,7 @@ declare global {
         create: (label?: string) => Promise<IPCResult>
         list: () => Promise<IPCResult>
         restore: (backupId: string) => Promise<IPCResult>
+        prune: () => Promise<IPCResult>
       }
       /** 达人邀约 v2：批次 / 逐人记录 / 汇总（启动仍由主进程创建 TaskRun） */
       invite: {

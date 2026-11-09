@@ -422,6 +422,8 @@ export const IPC_CHANNELS = {
   BACKUP_CREATE: 'backup:create',
   BACKUP_LIST: 'backup:list',
   BACKUP_RESTORE: 'backup:restore',
+  /** 按当前保留份数立即清理旧备份（返回清理条数） */
+  BACKUP_PRUNE: 'backup:prune',
   SECURITY_LOCK: 'security:lock',
   SECURITY_UNLOCK: 'security:unlock',
   SECURITY_SET_PASSWORD: 'security:setPassword',

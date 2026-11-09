@@ -181,7 +181,15 @@
             <label class="settings-check"><input v-model="autoBackupEnabled" type="checkbox" class="settings-switch" data-test="maintenance-auto-backup" :disabled="autoBackupSaving || !autoBackupLoaded" @change="applyAutoBackupSwitch" /><span>自动备份（每 24 小时）</span></label>
             <span class="settings-check-state" data-test="maintenance-auto-backup-state">{{ !autoBackupLoaded ? '读取中…' : (autoBackupEnabled ? '已开启' : '已关闭 · 只手动备份') }}</span>
           </div>
-          <p class="settings-hint" data-test="maintenance-last-backup">上次备份：{{ backups[0] ? formatBackupTime(backups[0].createdAt) : '暂无' }} · 保留最近 7 份，恢复成功后建议立即重启应用。</p>
+          <div class="settings-field-row">
+            <label class="settings-check">保留最近
+              <select v-model.number="backupKeep" class="settings-backup-keep" data-test="maintenance-backup-keep" :disabled="backupKeepSaving || !backupKeepLoaded" @change="applyBackupKeep">
+                <option v-for="count in backupKeepOptions" :key="count" :value="count">{{ count }} 份</option>
+              </select>
+            </label>
+            <span class="settings-check-state">{{ backupKeepSaving ? '保存中…' : `超出 ${backupKeep} 份的旧备份会立即清理` }}</span>
+          </div>
+          <p class="settings-hint" data-test="maintenance-last-backup">上次备份：{{ backups[0] ? formatBackupTime(backups[0].createdAt) : '暂无' }} · 保留最近 {{ backupKeep }} 份，恢复成功后建议立即重启应用。</p>
           <div class="settings-actions"><button type="button" class="unified-button" data-test="maintenance-backup-create" :disabled="backupBusy" @click="doBackup"><img class="button-icon" :src="backupCreateIcon" alt="" />{{ backupBusy ? '备份中…' : '立即备份数据库' }}</button></div>
           <div v-if="backups.length" class="maintenance-backup-list">
             <div v-for="item in backups" :key="item.id" class="maintenance-backup-row" data-test="maintenance-backup-row">
@@ -412,6 +420,12 @@ const AUTO_BACKUP_SETTING = 'backup.auto'
 const autoBackupEnabled = ref(true)
 const autoBackupLoaded = ref(false)
 const autoBackupSaving = ref(false)
+const BACKUP_KEEP_SETTING = 'backup.retentionKeep'
+const backupKeep = ref(7)
+const backupKeepLoaded = ref(false)
+const backupKeepSaving = ref(false)
+const backupKeepOptions = [3, 7, 14, 30]
+let savedBackupKeep = 7
 const warmLimitHint = computed(() => `当前 ${warmStoreLimitLabel(warmLimit.value)}。每多保活一家约多占 ${WARM_STORE_LIMITS.estimatedMbPerStore}MB；正在跑任务、采集或邀约的店铺不受此上限影响，不会被回收。`)
 const maintenanceLoading = ref(false)
 const maintenanceLoadError = ref('')
@@ -1087,11 +1101,12 @@ async function loadMaintenance(): Promise<void> {
   maintenanceLoadError.value = ''
   const errors: string[] = []
   try {
-    const [collection, backupList, warm, autoBackup, paths] = await Promise.all([
+    const [collection, backupList, warm, autoBackup, backupKeepSetting, paths] = await Promise.all([
       window.shopilot.settings.get(AUTO_COLLECTION_SETTING),
       window.shopilot.backup.list(),
       window.shopilot.settings.get(WARM_LIMIT_SETTING),
       window.shopilot.settings.get(AUTO_BACKUP_SETTING),
+      window.shopilot.settings.get(BACKUP_KEEP_SETTING),
       window.shopilot.maintenance.paths()
     ])
     if (collection.ok) {
@@ -1111,6 +1126,16 @@ async function loadMaintenance(): Promise<void> {
     } else {
       autoBackupLoaded.value = false
       errors.push('自动备份：' + responseError(autoBackup, '读取失败'))
+    }
+    // 保留份数：主进程 clamp 1–30，这里只认 3/7/14/30 四档；读不到按 7 显示
+    if (backupKeepSetting.ok) {
+      const value = Number(backupKeepSetting.data?.value)
+      backupKeep.value = Number.isFinite(value) ? Math.max(1, Math.min(30, Math.floor(value))) : 7
+      savedBackupKeep = backupKeep.value
+      backupKeepLoaded.value = true
+    } else {
+      backupKeepLoaded.value = false
+      errors.push('备份保留份数：' + responseError(backupKeepSetting, '读取失败'))
     }
     if (backupList.ok) backups.value = (backupList.data || []) as typeof backups.value
     else errors.push('备份列表：' + responseError(backupList, '读取失败'))
@@ -1183,6 +1208,31 @@ async function applyAutoBackupSwitch(): Promise<void> {
     maintenanceSay('保存自动备份开关失败：' + String((error as Error)?.message || error), false)
   } finally {
     autoBackupSaving.value = false
+  }
+}
+
+/**
+ * 备份保留份数（backup.retentionKeep，1–30）。
+ * 写设置后立即 prune 一次，用户马上能看到旧备份被清掉；失败还原下拉框。
+ */
+async function applyBackupKeep(): Promise<void> {
+  const next = Math.max(1, Math.min(30, Math.floor(Number(backupKeep.value) || 7)))
+  if (backupKeepSaving.value || next === savedBackupKeep) return
+  backupKeepSaving.value = true
+  maintenanceMsg.value = ''
+  try {
+    const result = await window.shopilot.settings.set(BACKUP_KEEP_SETTING, next)
+    if (!result.ok) throw new Error(responseError(result, '保存失败'))
+    const pruned = await window.shopilot.backup.prune()
+    const cleaned = pruned.ok ? Number(pruned.data?.cleaned || 0) : 0
+    savedBackupKeep = next
+    await refreshBackups()
+    maintenanceSay(`保留最近 ${next} 份备份${pruned.ok ? `；已清理 ${cleaned} 份旧备份` : '（清理失败，下次备份时重试）'}`, pruned.ok)
+  } catch (error) {
+    backupKeep.value = savedBackupKeep
+    maintenanceSay('保存备份保留份数失败：' + String((error as Error)?.message || error), false)
+  } finally {
+    backupKeepSaving.value = false
   }
 }
 
@@ -1978,4 +2028,5 @@ onBeforeUnmount(() => {
 .about-mark{border-radius:var(--r-md);background:var(--brand);box-shadow:none}
 .about-grid>div{background:var(--ui-surface-subtle)}
 .settings-path{overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px}
+.settings-backup-keep{height:30px;margin-left:6px;padding:0 8px;border:1px solid var(--dash-border);border-radius:7px;background:#fff;color:var(--dash-text-soft);font:inherit}
 </style>

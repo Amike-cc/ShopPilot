@@ -391,7 +391,8 @@ const api = {
   backup: {
     create: (label?: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BACKUP_CREATE, { label }),
     list: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BACKUP_LIST),
-    restore: (backupId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BACKUP_RESTORE, { backupId })
+    restore: (backupId: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BACKUP_RESTORE, { backupId }),
+    prune: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.BACKUP_PRUNE)
   },
 
   // 任务引擎 - §6.4（只能触发白名单动作，任意代码路径不存在）

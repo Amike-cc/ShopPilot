@@ -206,6 +206,16 @@ export function registerProxyAndBackupHandlers(): void {
     }
   })
 
+  // 按当前 backup.retentionKeep 立即清理旧备份（改保留份数后让用户马上看到结果）
+  handle(IPC_CHANNELS.BACKUP_PRUNE, async (): Promise<IPCResult> => {
+    const requestId = rid()
+    try {
+      return ok({ cleaned: BackupManager.pruneBackups() }, requestId)
+    } catch (e: any) {
+      return backupError(e, requestId)
+    }
+  })
+
   handle(IPC_CHANNELS.BACKUP_RESTORE, async (_e: IpcMainInvokeEvent, input: { backupId: string }): Promise<IPCResult> => {
     const requestId = rid()
     try {

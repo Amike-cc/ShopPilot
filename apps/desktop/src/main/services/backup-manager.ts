@@ -259,8 +259,8 @@ async function restoreBackupInner(target: BackupRecord): Promise<{ success: true
   return { success: true, safetyBackupId: safety.id }
 }
 
-/** 保留策略：最近 7 个 + 当前引用（§28 简化版，元数据层） */
-export function pruneBackups(keep = 7): number {
+/** 保留策略：默认最近 7 个；`backup.retentionKeep` 可配 1–30（2026-11-10） */
+export function pruneBackups(keep = backupRetentionKeep()): number {
   const db = getDatabase()
   const stale = db.prepare(
     'SELECT id, file_path FROM backups ORDER BY created_at DESC LIMIT -1 OFFSET ?'
@@ -316,6 +316,17 @@ function autoBackupEnabled(): boolean {
     return row ? JSON.parse(row.value_json) !== false : true
   } catch {
     return true
+  }
+}
+
+/** 保留份数 `backup.retentionKeep`（默认 7，clamp 1–30） */
+function backupRetentionKeep(): number {
+  try {
+    const row = getDatabase().prepare('SELECT value_json FROM app_settings WHERE key = ?').get('backup.retentionKeep') as any
+    const value = row ? Number(JSON.parse(row.value_json)) : 7
+    return Number.isFinite(value) ? Math.max(1, Math.min(30, Math.floor(value))) : 7
+  } catch {
+    return 7
   }
 }
 
