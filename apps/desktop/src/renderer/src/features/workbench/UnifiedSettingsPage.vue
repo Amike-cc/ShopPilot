@@ -112,38 +112,13 @@
       </section>
       <section v-else-if="activeTab === 'extensions'" class="settings-section" data-test="settings-extensions" data-unified-test="unified-settings-extensions">
         <div class="settings-section-head">
-          <div><h2>浏览器扩展</h2><p>上方「插件中心」是随应用内置的插件，可一键安装；下方也可导入本地解包扩展（包含 manifest.json 的文件夹），不支持 Chrome 商店与 .crx。导入/安装都会复制到应用管理目录：自己写插件时用「目录」打开副本编辑，改完点「重载」生效。扩展可以读取和修改店铺页面内容，请只安装你自己编写或可信来源的代码。</p></div>
+          <div><h2>浏览器扩展</h2><p>内置插件已移到「应用中心 → 插件」安装与启停；这里用于导入本地解包扩展（包含 manifest.json 的文件夹），不支持 Chrome 商店与 .crx。导入会复制到应用管理目录：自己写插件时用「目录」打开副本编辑，改完点「重载」生效。扩展可以读取和修改店铺页面内容，请只安装你自己编写或可信来源的代码。</p></div>
           <div class="settings-head-actions-row">
             <button type="button" class="unified-button ghost" data-test="extensions-open-root" :disabled="extensionsBusy" @click="openExtensionDir()">打开扩展目录</button>
             <button type="button" class="unified-button primary" data-test="extensions-import" :disabled="extensionsBusy" @click="importExtension">导入扩展文件夹</button>
           </div>
         </div>
-        <div class="settings-group" data-test="extensions-catalog">
-          <div class="settings-group-head"><h3>插件中心</h3><span>随应用内置、离线可装。点「安装」会复制到本机并立即启用；扩展能读写店铺页面，只装你信任的插件。</span></div>
-          <div v-if="catalogLoading" class="settings-note" role="status">正在读取插件目录…</div>
-          <div v-else-if="catalogError" class="settings-note error" data-test="extensions-catalog-error">{{ catalogError }}</div>
-          <div v-else-if="!catalogEntries.length" class="settings-note" data-test="extensions-catalog-empty">当前版本没有内置插件。</div>
-          <div v-else class="extension-catalog-grid" data-test="extensions-catalog-grid">
-            <article v-for="entry in catalogEntries" :key="entry.key" class="extension-card" :data-test="'extension-card-' + entry.key">
-              <div class="extension-card-head">
-                <strong>{{ entry.name }}</strong>
-                <em>v{{ entry.version }}</em>
-              </div>
-              <p class="extension-card-summary">{{ entry.summary }}</p>
-              <div class="extension-card-meta">
-                <span>{{ entry.permissions.length ? entry.permissions.join(' / ') : '无声明权限' }}</span>
-                <span>{{ formatBytes(entry.sizeBytes) }}</span>
-                <span v-for="tag in entry.tags" :key="tag" class="extension-tag">{{ tag }}</span>
-              </div>
-              <div class="extension-card-actions">
-                <button type="button" class="unified-button primary" :data-test="'extensions-catalog-install-' + entry.key" :disabled="extensionsBusy || !!entry.invalidReason" @click="installCatalogEntry(entry)">{{ entry.installed ? '重新安装' : '安装' }}</button>
-                <span v-if="entry.installed" class="extension-card-state" :data-test="'extensions-catalog-state-' + entry.key">{{ catalogStateLabel(entry) }}</span>
-                <span v-if="entry.invalidReason" class="extension-error">{{ entry.invalidReason }}</span>
-              </div>
-            </article>
-          </div>
-          <p v-if="catalogMasterOff && catalogEntries.some(entry => entry.installed)" class="settings-hint" data-test="extensions-catalog-master-hint">插件已装好并启用，但「启用浏览器扩展」总开关是关的——打开下面的总开关后才会加载进店铺页面。</p>
-        </div>
+        <div class="settings-note" data-test="extensions-catalog-moved">插件中心已移到「应用中心 → 插件」：内置插件的安装、启停与重载都在那里；本地导入与删除仍在本页。</div>
         <div class="settings-group">
           <div class="settings-group-head"><h3>总开关（实验性）</h3><span>关闭会立即卸载所有扩展并重载已打开的店铺页；开启后，新打开的店铺会加载已启用的扩展。</span></div>
           <div class="settings-field-row maintenance-toggle-row">
@@ -302,7 +277,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { WARM_STORE_LIMITS, clampWarmStoreLimit, warmStoreLimitLabel } from '@shared/browser-tools'
-import type { BrowserExtensionCatalogInstallResult, BrowserExtensionCatalogItem, BrowserExtensionCatalogResult, BrowserExtensionItem, BrowserExtensionListResult } from '@shared/contracts/extensions'
+import type { BrowserExtensionItem, BrowserExtensionListResult } from '@shared/contracts/extensions'
 import { platformHomeUrl } from '@shared/constants/platforms'
 import { useWorkspaceStore } from '../../stores/workspace'
 import settingsIcon from '../../assets/icons/nav-settings.svg'
@@ -669,7 +644,6 @@ function selectTab(tab: TabKey) {
   if (tab === 'security' && !securityLoaded.value && !securityLoading.value) void loadSecurity()
   if (tab === 'extensions') {
     if (!extensionsLoaded.value && !extensionsLoading.value) void loadExtensions()
-    if (!catalogLoaded.value && !catalogLoading.value) void loadCatalog()
   }
   if (tab === 'maintenance' && !collectionLoaded.value && !maintenanceLoading.value) void loadMaintenance()
   if (tab === 'about' && !updateLoaded.value && !updateLoading.value) void loadUpdate()
@@ -968,56 +942,6 @@ const extensionsLoading = ref(false)
 const extensionsLoaded = ref(false)
 const extensionsBusy = ref(false)
 const extensionsError = ref('')
-
-// ---------- 插件中心（内置目录，2026-11-08）----------
-const catalogEntries = ref<BrowserExtensionCatalogItem[]>([])
-const catalogLoading = ref(false)
-const catalogLoaded = ref(false)
-const catalogError = ref('')
-/** 总开关关着时，装好的插件还不会生效——界面必须说清楚，而不是让用户以为装了没用 */
-const catalogMasterOff = computed(() => !extensionsMaster.value)
-
-function catalogStateLabel(entry: BrowserExtensionCatalogItem): string {
-  if (!entry.installed) return ''
-  return entry.enabled ? '已安装 · 已启用' : '已安装 · 未启用'
-}
-
-async function loadCatalog(): Promise<void> {
-  catalogLoading.value = true
-  catalogError.value = ''
-  try {
-    const result = await window.shopilot.extensions.catalog()
-    if (!result.ok) throw new Error(responseError(result, '读取插件目录失败'))
-    const data = result.data as BrowserExtensionCatalogResult
-    catalogEntries.value = Array.isArray(data?.entries) ? data.entries : []
-    catalogLoaded.value = true
-    if (data?.sourceError) catalogError.value = data.sourceError
-  } catch (error) {
-    catalogLoaded.value = false
-    catalogError.value = '读取插件目录失败：' + String((error as Error)?.message || error)
-  } finally {
-    catalogLoading.value = false
-  }
-}
-
-async function installCatalogEntry(entry: BrowserExtensionCatalogItem): Promise<void> {
-  extensionsBusy.value = true
-  extensionsError.value = ''
-  try {
-    const result = await window.shopilot.extensions.installFromCatalog(entry.key)
-    if (!result.ok) throw new Error(responseError(result, '安装插件失败'))
-    const data = result.data as BrowserExtensionCatalogInstallResult
-    applyExtensions(data?.list)
-    await loadCatalog()
-    flashSavedMessage(data?.masterOff
-      ? `已安装「${entry.name}」；打开下面的扩展总开关后才会生效`
-      : `已安装并启用「${entry.name}」`)
-  } catch (error) {
-    extensionsError.value = String((error as Error)?.message || error)
-  } finally {
-    extensionsBusy.value = false
-  }
-}
 
 function extensionStatusLabel(item: BrowserExtensionItem): string {
   return ({
@@ -1915,6 +1839,15 @@ onBeforeUnmount(() => {
 .security-status-copy strong{color:#202939;font-size:13px}
 .security-status-copy p{margin:3px 0 0;color:#667085;font-size:10.5px}
 .maintenance-toggle-row{align-items:center}
+/* 2026-11-09：扩展总开关用的 .maintenance-switch 一直没有样式（渲染成不可见按钮），
+   与 .settings-switch 对齐补上；采集总开关同样复用这套。 */
+.maintenance-switch-label{display:inline-flex;align-items:center;gap:10px}
+.settings-field-row .maintenance-switch-label{flex-direction:row;align-items:center;justify-content:space-between;gap:12px;width:100%}
+.maintenance-switch{position:relative;width:36px;height:20px;padding:0;border:0;border-radius:999px;background:#d0d5dd;cursor:pointer;transition:background .18s}
+.maintenance-switch i{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#ffffff;box-shadow:0 1px 3px rgba(16,24,40,.2);transition:transform .18s}
+.maintenance-switch.on{background:#6d4aff}
+.maintenance-switch.on i{transform:translateX(16px)}
+.maintenance-switch:disabled{opacity:.6;cursor:not-allowed}
 .settings-field-row .settings-check{display:flex;flex-direction:row;align-items:center;gap:9px;flex:none;color:#344054;font-size:12px;cursor:pointer}
 .settings-field-row .settings-switch{appearance:none;position:relative;width:36px;height:20px;padding:0;border:0;border-radius:999px;background:#d0d5dd;cursor:pointer;transition:background .18s}
 .settings-field-row .settings-switch::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#ffffff;box-shadow:0 1px 3px rgba(16,24,40,.2);transition:transform .18s}
@@ -1938,16 +1871,6 @@ onBeforeUnmount(() => {
 .about-grid>div{border:1px solid #eef1f6;background:#fafbfd}
 .about-grid select{height:30px}
 .extension-row{align-items:flex-start}
-.extension-catalog-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
-.extension-card{display:flex;flex-direction:column;gap:6px;padding:11px 12px;border:1px solid var(--dash-border);border-radius:9px;background:var(--dash-surface)}
-.extension-card-head{display:flex;align-items:baseline;gap:6px}
-.extension-card-head strong{font-size:12px;color:var(--dash-text)}
-.extension-card-head em{font-style:normal;font-size:10px;color:var(--dash-text-muted)}
-.extension-card-summary{margin:0;font-size:10.5px;line-height:1.55;color:var(--dash-text-soft)}
-.extension-card-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:9.5px;color:var(--dash-text-muted)}
-.extension-tag{padding:1px 6px;border-radius:999px;background:rgba(59,130,246,.1);color:#1d4ed8}
-.extension-card-actions{display:flex;align-items:center;gap:8px;margin-top:2px}
-.extension-card-state{font-size:10px;color:var(--dash-text-muted)}
 .extension-copy{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
 .extension-title{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--dash-text);font-size:12px}
 .extension-title b{color:var(--dash-text-muted);font-size:10px;font-weight:500}

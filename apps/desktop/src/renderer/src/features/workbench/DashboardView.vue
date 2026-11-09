@@ -288,7 +288,7 @@
         <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" @busy-change="imageStudioBusy = $event" />
         <UnifiedGraphicSellPage v-else-if="activePage === 'graphic-sell'" @go-home="navigateTo('overview')" @busy-change="graphicSellBusy = $event" />
         <ProductManagementPage v-else-if="activePage === 'products'" @navigate="navigateTo" @open-store="openStoreFromPage" />
-        <UnifiedAppsPage v-else-if="activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-assistant="openAssistant" @open-invite="openCreatorInvite" />
+        <UnifiedAppsPage v-else-if="activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-assistant="openAssistant" @open-settings="openSettingsTab" />
         <DashboardOverviewPage
           v-else-if="activePage === 'overview'"
           :invoice-todo-state="invoiceTodoState"
@@ -787,20 +787,6 @@ async function openStoreFromPage(storeId: string) {
   void window.shopilot.browser.setViewsObscured(false)
   if (ws.displayedStoreId !== storeId || !ws.openStoreIds.includes(storeId)) await ws.openStore(storeId)
   emit('open-store', storeId)
-}
-/**
- * 达人邀约模块页的「新建邀约」入口：配置与真实发送仍在店铺浏览器的实测面板里，
- * 必须带着具体店铺进去——否则面板只会显示"当前平台未接入"，用户会误判成功能不可用。
- * 取店优先级：页面选中的店 → 正在显示的店 → 已打开的店 → 第一家店；一家都没有就先去店铺管理。
- */
-async function openCreatorInvite(storeIdHint?: string): Promise<void> {
-  if (preventBusyAiStudioExit()) return
-  const storeId = storeIdHint || ws.displayedStoreId || ws.openStoreIds[0] || ws.stores[0]?.id
-  if (!storeId) {
-    navigateTo('stores')
-    return
-  }
-  await openStoreFromPage(storeId)
 }
 
 function setLeftSidebarOpen(open: boolean) {
