@@ -696,6 +696,86 @@ export const useWorkspaceStore = defineStore('workspace', {
       else this.toast('恢复失败: ' + res.error.message, 'error')
     },
 
+    /* ---------------- 批量操作（2026-11-10） ----------------
+     * 逐店调主进程（没有批量 IPC），但只 toast 一次、只 refresh 一次；
+     * 失败按家数如实回报，不把"部分成功"说成全部成功。
+     */
+    async setStoresGroup(storeIds: string[], groupName: string | null): Promise<{ ok: number; failed: number }> {
+      const normalized = normalizeGroupName(groupName)
+      let ok = 0
+      let failed = 0
+      for (const storeId of storeIds) {
+        const res = await window.shopilot.store.setGroup(storeId, normalized)
+        if (res.ok) ok++
+        else failed++
+      }
+      await this.refreshStores()
+      if (ok) this.toast(`已把 ${ok} 家店铺归入「${normalized || '未分组'}」${failed ? `（${failed} 家失败）` : ''}`, failed ? 'info' : 'success')
+      else this.toast('批量分组失败，请重试（详情见提示）', 'error')
+      return { ok, failed }
+    },
+
+    async archiveStores(storeIds: string[]): Promise<{ ok: number; failed: number }> {
+      let ok = 0
+      let failed = 0
+      const open = new Set(this.openStoreIds)
+      for (const storeId of storeIds) {
+        const res = await window.shopilot.store.archive(storeId)
+        if (!res.ok) { failed++; continue }
+        ok++
+        // 归档后关闭该店浏览器：侧栏已经看不到它，原生视图不能还盖着。
+        if (open.has(storeId)) await this.closeStore(storeId)
+      }
+      await this.refreshStores()
+      if (ok) this.toast(`已归档 ${ok} 家店铺${failed ? `（${failed} 家失败）` : ''}`, failed ? 'info' : 'success')
+      else this.toast('批量归档失败，请重试', 'error')
+      return { ok, failed }
+    },
+
+    async restoreStores(storeIds: string[]): Promise<{ ok: number; failed: number }> {
+      let ok = 0
+      let failed = 0
+      for (const storeId of storeIds) {
+        const res = await window.shopilot.store.restore(storeId)
+        if (res.ok) ok++
+        else failed++
+      }
+      await Promise.all([this.refreshStores(), this.refreshTrash()])
+      if (ok) this.toast(`已恢复 ${ok} 家店铺${failed ? `（${failed} 家失败）` : ''}`, failed ? 'info' : 'success')
+      else this.toast('批量恢复失败，请重试', 'error')
+      return { ok, failed }
+    },
+
+    async moveStoresToTrash(storeIds: string[]): Promise<{ ok: number; failed: number }> {
+      const removed = new Set<string>()
+      let failed = 0
+      for (const storeId of storeIds) {
+        const res = await window.shopilot.store.deletePermanent(storeId)
+        if (res.ok) removed.add(storeId)
+        else failed++
+      }
+      if (removed.size) {
+        this.openStoreIds = this.openStoreIds.filter(id => !removed.has(id))
+        for (const storeId of removed) {
+          delete this.tabsByStore[storeId]
+          delete this.activeTabIdByStore[storeId]
+        }
+        if (this.displayedStoreId && removed.has(this.displayedStoreId)) {
+          this.displayedStoreId = null
+          this.selectedStoreId = null
+          this.downloads = []
+          this.downloadsStoreId = null
+          this.bookmarks = []
+          this.bookmarksStoreId = null
+          void window.shopilot.browser.display(null)
+        }
+      }
+      await Promise.all([this.refreshStores(), this.refreshTrash()])
+      if (removed.size) this.toast(`已把 ${removed.size} 家店铺移入回收站${failed ? `（${failed} 家失败）` : ''}`, failed ? 'info' : 'success')
+      else this.toast('批量移入回收站失败，请重试', 'error')
+      return { ok: removed.size, failed }
+    },
+
     async purgeStore(storeId: string) {
       const res = await window.shopilot.store.purge(storeId)
       if (res.ok) { await this.refreshTrash(); this.toast('已彻底删除', 'success') }

@@ -7,7 +7,8 @@
         <p>统一管理店铺、平台、登录态和本地浏览器工作区。</p>
       </div>
       <div class="unified-page-actions">
-        <button type="button" class="unified-button ghost" data-test="store-sort-toggle" :disabled="!bridgeAvailable || view !== 'active' || filteredStores.length < 2" @click="sortMode = !sortMode">{{ sortMode ? '完成排序' : '调整顺序' }}</button>
+        <button type="button" class="unified-button ghost" data-test="store-bulk-toggle" :disabled="!bridgeAvailable || view === 'trash' || bulkBusy" @click="toggleBulkMode">{{ bulkMode ? '退出批量' : '批量操作' }}</button>
+        <button type="button" class="unified-button ghost" data-test="store-sort-toggle" :disabled="!bridgeAvailable || view !== 'active' || filteredStores.length < 2 || bulkMode" @click="sortMode = !sortMode">{{ sortMode ? '完成排序' : '调整顺序' }}</button>
         <button type="button" class="unified-button ghost" data-test="store-batch-login" :disabled="!bridgeAvailable || batchRunning || !ws.stores.length" @click="runBatchLogin">{{ batchRunning ? `检测中 ${batchDone}/${batchTotal}` : '批量检测登录' }}</button>
         <button type="button" class="unified-button ghost" :disabled="!bridgeAvailable" @click="refresh"><img class="button-art" :src="refreshGenIcon" alt="" />刷新</button>
         <button type="button" class="unified-button primary" :disabled="!bridgeAvailable" @click="openCreate"><img class="button-art" :src="addIcon" alt="" />添加店铺</button>
@@ -33,6 +34,16 @@
       </div>
     </div>
 
+    <div v-if="bulkMode" class="bulk-bar" data-test="store-bulk-bar">
+      <strong>已选 {{ selectedIds.length }} 家</strong>
+      <button type="button" class="unified-button ghost" data-test="store-bulk-select-all" @click="selectAllVisible">{{ bulkVisibleStores.length && bulkVisibleStores.every(store => isSelected(store.id)) ? '取消全选' : '全选当前' }}</button>
+      <button v-if="view === 'active'" type="button" class="unified-button ghost" data-test="store-bulk-group" :disabled="!selectedIds.length || bulkBusy" @click="openBulkGroup">批量分组</button>
+      <button v-if="view === 'active'" type="button" class="unified-button ghost" data-test="store-bulk-archive" :disabled="!selectedIds.length || bulkBusy" @click="bulkArchive">批量归档</button>
+      <button v-if="view === 'archived'" type="button" class="unified-button primary" data-test="store-bulk-restore" :disabled="!selectedIds.length || bulkBusy" @click="bulkRestore">批量恢复</button>
+      <button type="button" class="unified-button danger" data-test="store-bulk-trash" :disabled="!selectedIds.length || bulkBusy" @click="bulkTrash">移入回收站</button>
+      <button type="button" class="unified-button ghost" data-test="store-bulk-exit" @click="toggleBulkMode">取消批量</button>
+    </div>
+
     <!-- 批量登录检测结果（2026-11-08）：未检测/未识别与"未登录"分开写，别让用户白跑重登 -->
     <div v-if="batchItems.length" class="unified-alert" :class="{ error: batchHasIssues, info: !batchHasIssues }" data-test="store-batch-login-result">
       <span>{{ batchText }}</span>
@@ -51,7 +62,7 @@
     </div>
     <div v-else-if="view === 'archived'" class="unified-card-grid" data-test="store-archived-view">
       <article v-for="store in archivedStores" :key="store.id" class="unified-store-card">
-        <div class="unified-store-card-head"><PlatformIcon :name="store.platform" :size="34" /><div><strong>{{ store.name }}</strong><small>{{ store.platform }} · 已归档</small></div><span class="unified-status warning"><i></i>已归档</span></div>
+        <div class="unified-store-card-head"><label v-if="bulkMode" class="store-select"><input type="checkbox" :checked="isSelected(store.id)" @change="toggleSelect(store.id)" /></label><PlatformIcon :name="store.platform" :size="34" /><div><strong>{{ store.name }}</strong><small>{{ store.platform }} · 已归档</small></div><span class="unified-status warning"><i></i>已归档</span></div>
         <div class="unified-store-meta"><span>分组：{{ store.groupName || '未分组' }}</span><span>标签：{{ store.tags.length ? store.tags.join('、') : '—' }}</span></div>
         <div class="unified-card-actions"><button type="button" class="unified-button primary" data-test="store-restore" @click="restore(store.id)"><img class="button-art" :src="archiveRestoreIcon" alt="" />恢复使用</button><button type="button" class="unified-button ghost" data-test="store-edit-open" @click="openEdit(store)"><img class="button-art" :src="manualEditIcon" alt="" />编辑</button><button type="button" class="unified-icon-button" title="移入回收站" @click="remove(store)"><img :src="storeTrashIcon" alt="" /></button></div>
       </article>
@@ -60,7 +71,7 @@
     <div v-else-if="!filteredStores.length" class="unified-empty">暂无匹配店铺<button type="button" class="inline-link" @click="openCreate"><img class="button-art" :src="storeAddIcon" alt="" />添加第一家店铺</button></div>
     <div v-else class="unified-card-grid">
       <article v-for="store in filteredStores" :key="store.id" class="unified-store-card" :class="{ online: store.status === 'online' }">
-        <div class="unified-store-card-head"><PlatformIcon :name="store.platform" :size="34" /><div><strong>{{ store.name }}</strong><small>{{ store.platform }} · {{ shortUrl(store.adminUrl) }}</small></div><span class="unified-status" :class="statusClass(store.status)"><i></i>{{ statusLabel(store.status) }}</span></div>
+        <div class="unified-store-card-head"><label v-if="bulkMode" class="store-select"><input type="checkbox" :checked="isSelected(store.id)" @change="toggleSelect(store.id)" /></label><PlatformIcon :name="store.platform" :size="34" /><div><strong>{{ store.name }}</strong><small>{{ store.platform }} · {{ shortUrl(store.adminUrl) }}</small></div><span class="unified-status" :class="statusClass(store.status)"><i></i>{{ statusLabel(store.status) }}</span></div>
         <div class="unified-store-meta"><span>分组：{{ store.groupName || '未分组' }}</span><span>标签：{{ store.tags.length ? store.tags.join('、') : '—' }}</span></div>
         <div class="unified-card-actions"><button type="button" class="unified-button primary" @click="emit('open-store', store.id)"><img class="button-art" :src="workspaceOpenIcon" alt="" />打开工作区</button><button v-if="sortMode" type="button" class="unified-button ghost" data-test="store-move-up" title="上移" @click="moveStore(store, -1)">↑</button><button v-if="sortMode" type="button" class="unified-button ghost" data-test="store-move-down" title="下移" @click="moveStore(store, 1)">↓</button><button type="button" class="unified-button ghost" data-test="store-edit-open" @click="openEdit(store)"><img class="button-art" :src="manualEditIcon" alt="" />编辑</button><button type="button" class="unified-button ghost" data-test="store-group-open" :disabled="!bridgeAvailable" :title="`设置分组（当前：${store.groupName || '未分组'}）`" @click="openGroupEditor(store)"><img class="button-art" :src="groupEditIcon" alt="" />分组</button><button type="button" class="unified-button ghost" @click="toggleArchive(store)"><img class="button-art" :src="archiveRestoreIcon" alt="" />归档</button><button type="button" class="unified-icon-button" title="移入回收站" @click="remove(store)"><img :src="storeTrashIcon" alt="" /></button></div>
       </article>
@@ -111,11 +122,26 @@
         <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" @click="editOpen = false"><img class="button-art" :src="storeCloseIcon" alt="" />取消</button><button type="submit" class="unified-button primary" data-test="store-edit-save" :disabled="editSaving"><img class="button-art" :src="manualEditIcon" alt="" />{{ editSaving ? '保存中…' : '保存修改' }}</button></div>
       </form>
     </div>
+    <div v-if="bulkGroupOpen" class="unified-overlay" @click.self="bulkGroupOpen = false">
+      <form class="unified-dialog" data-test="store-bulk-group-dialog" @submit.prevent="submitBulkGroup">
+        <div class="unified-dialog-head"><div><span class="dashboard-eyebrow">BULK GROUP</span><h2>批量设置分组</h2></div><button type="button" class="unified-icon-button" @click="bulkGroupOpen = false"><img :src="closeIcon" alt="" /></button></div>
+        <p class="unified-muted">将 {{ selectedIds.length }} 家店铺统一归入一个分组；留空保存 = 清除分组。</p>
+        <label>分组名<input v-model="bulkGroupDraft" data-test="store-bulk-group-input" maxlength="120" placeholder="例如：华东区" /></label>
+        <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" @click="bulkGroupOpen = false"><img class="button-art" :src="storeCloseIcon" alt="" />取消</button><button type="submit" class="unified-button primary" data-test="store-bulk-group-save" :disabled="bulkBusy"><img class="button-art" :src="groupEditIcon" alt="" />{{ bulkBusy ? '保存中…' : '应用到所选店铺' }}</button></div>
+      </form>
+    </div>
+    <div v-if="bulkConfirm.open" class="unified-overlay" @click.self="closeBulkConfirm">
+      <section class="unified-dialog" data-test="store-bulk-confirm">
+        <div class="unified-dialog-head"><h2>{{ bulkConfirm.title }}</h2><button type="button" class="unified-icon-button" @click="closeBulkConfirm"><img :src="closeIcon" alt="" /></button></div>
+        <p class="unified-muted">{{ bulkConfirm.detail }}</p>
+        <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" data-test="store-bulk-confirm-cancel" :disabled="bulkBusy" @click="closeBulkConfirm">取消</button><button type="button" class="unified-button danger" data-test="store-bulk-confirm-ok" :disabled="bulkBusy" @click="confirmBulk">{{ bulkBusy ? '处理中…' : '确认' }}</button></div>
+      </section>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import PlatformIcon from '../../components/PlatformIcon.vue'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import { storeStatusLabel } from '@shared/enums/store-status'
@@ -143,6 +169,12 @@ const query = ref('')
 const platformFilter = ref('')
 const groupFilter = ref('')
 const sortMode = ref(false)
+const bulkMode = ref(false)
+const selectedIds = ref<string[]>([])
+const bulkBusy = ref(false)
+const bulkGroupOpen = ref(false)
+const bulkGroupDraft = ref('')
+const bulkConfirm = reactive({ open: false, title: '', detail: '', action: null as null | (() => Promise<void>) })
 const view = ref<'active' | 'archived' | 'trash'>('active')
 const createOpen = ref(false)
 const creating = ref(false)
@@ -247,6 +279,93 @@ async function moveStore(store: StoreRow, delta: -1 | 1): Promise<void> {
   const next = [...ids]
   ;[next[index], next[target]] = [next[target], next[index]]
   await ws.reorderStores(next)
+}
+
+/* ---------------- 批量选择与操作（2026-11-10） ---------------- */
+const bulkVisibleStores = computed(() => view.value === 'archived' ? archivedStores.value : filteredStores.value)
+function toggleBulkMode(): void {
+  bulkMode.value = !bulkMode.value
+  selectedIds.value = []
+  if (bulkMode.value) sortMode.value = false
+}
+function isSelected(storeId: string): boolean { return selectedIds.value.includes(storeId) }
+function toggleSelect(storeId: string): void {
+  selectedIds.value = isSelected(storeId)
+    ? selectedIds.value.filter(id => id !== storeId)
+    : [...selectedIds.value, storeId]
+}
+function selectAllVisible(): void {
+  const visible = bulkVisibleStores.value.map(store => store.id)
+  selectedIds.value = visible.every(id => isSelected(id)) ? [] : visible
+}
+function openBulkGroup(): void {
+  if (!selectedIds.value.length) return
+  bulkGroupDraft.value = ''
+  bulkGroupOpen.value = true
+}
+async function submitBulkGroup(): Promise<void> {
+  if (bulkBusy.value || !selectedIds.value.length) return
+  bulkBusy.value = true
+  try {
+    await ws.setStoresGroup([...selectedIds.value], bulkGroupDraft.value)
+    bulkGroupOpen.value = false
+    selectedIds.value = []
+  } finally {
+    bulkBusy.value = false
+  }
+}
+function askBulk(title: string, detail: string, action: () => Promise<void>): void {
+  bulkConfirm.title = title
+  bulkConfirm.detail = detail
+  bulkConfirm.action = action
+  bulkConfirm.open = true
+}
+function bulkArchive(): void {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+  askBulk(`归档 ${ids.length} 家店铺？`, '归档后从左侧栏与「在用店铺」移除，可在「已归档」恢复。', async () => {
+    bulkBusy.value = true
+    try {
+      await ws.archiveStores(ids)
+      selectedIds.value = []
+      bulkMode.value = false
+    } finally { bulkBusy.value = false }
+  })
+}
+function bulkRestore(): void {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+  askBulk(`恢复 ${ids.length} 家店铺？`, '恢复后回到「在用店铺」与左侧栏。', async () => {
+    bulkBusy.value = true
+    try {
+      await ws.restoreStores(ids)
+      selectedIds.value = []
+    } finally { bulkBusy.value = false }
+  })
+}
+function bulkTrash(): void {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+  askBulk(`把 ${ids.length} 家店铺移入回收站？`, '店铺会从列表移除并关闭已打开的页面；可在回收站恢复或彻底删除。', async () => {
+    bulkBusy.value = true
+    try {
+      await ws.moveStoresToTrash(ids)
+      selectedIds.value = []
+      bulkMode.value = false
+    } finally { bulkBusy.value = false }
+  })
+}
+async function confirmBulk(): Promise<void> {
+  if (bulkBusy.value || !bulkConfirm.action) return
+  const action = bulkConfirm.action
+  bulkConfirm.open = false
+  bulkConfirm.action = null
+  await action()
+}
+function closeBulkConfirm(): void {
+  if (bulkBusy.value) return
+  bulkConfirm.open = false
+  bulkConfirm.action = null
 }
 function refresh() {
   if (!bridgeAvailable) return
@@ -372,6 +491,9 @@ async function submitEdit(): Promise<void> {
 }
 watch(() => editForm.value.platform, onEditPlatformChange)
 watch(() => form.value.platform, onPlatformChange)
+// 切视图/改筛选后，之前选中的店铺可能已不可见；批量操作绝不能作用到看不见的行。
+watch(view, () => { bulkMode.value = false; selectedIds.value = [] })
+watch([query, platformFilter, groupFilter], () => { selectedIds.value = [] })
 onMounted(() => { if (bridgeAvailable) { refresh(); void ws.refreshTrash() } else state.value = 'ready' })
 </script>
 
@@ -383,5 +505,9 @@ onMounted(() => { if (bridgeAvailable) { refresh(); void ws.refreshTrash() } els
 .batch-login-detail { display:block; margin-top:5px; color:var(--dash-text-muted); }
 .unified-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:0 10px; }
 [data-test="store-edit-dialog"] { width:min(660px,100%); }
+.bulk-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px;padding:10px 12px;border:1px solid rgba(124,92,255,.35);border-radius:10px;background:#f6f3ff}
+.bulk-bar strong{margin-right:4px;color:#4c1d95;font-size:12px}
+.store-select{display:flex;align-items:center;justify-content:center;width:22px;height:22px;flex:0 0 22px;border-radius:6px;background:#ffffff;border:1px solid var(--dash-border)}
+.store-select input{width:14px;height:14px;accent-color:#6d4aff;cursor:pointer}
 @media (max-width:600px){.unified-form-grid{grid-template-columns:1fr}}
 </style>

@@ -112,6 +112,16 @@ async function clickButtonInCard(ui, cardText, buttonText) {
   `)
 }
 
+async function clickCardCheckbox(ui, cardText) {
+  return ui.eval(`
+    const card = [...document.querySelectorAll('.unified-store-card')].find(item => item.textContent.includes(${JSON.stringify(cardText)}))
+    const box = card?.querySelector('.store-select input')
+    if (!box) return { ok: false, reason: 'checkbox not found' }
+    box.click()
+    return { ok: true }
+  `)
+}
+
 async function main() {
   const userData = path.join(os.tmpdir(), 'shopilot-store-mgmt-' + Date.now())
   fs.mkdirSync(userData, { recursive: true })
@@ -132,14 +142,16 @@ async function main() {
     await sleep(900)
     const createdA = await ui.eval(`return await window.shopilot.store.create({ name: '验收店A', platform: '抖店', adminUrl: 'https://fxg.jinritemai.com', tags: ['旧标签'] })`)
     const createdB = await ui.eval(`return await window.shopilot.store.create({ name: '验收店B', platform: '快手小店', adminUrl: 'https://s.kwaixiaodian.com' })`)
-    if (!createdA.ok || !createdB.ok) throw new Error('创建店铺失败：' + JSON.stringify({ a: createdA.error, b: createdB.error }))
+    const createdC = await ui.eval(`return await window.shopilot.store.create({ name: '验收店C', platform: '拼多多', adminUrl: 'https://mms.pinduoduo.com' })`)
+    if (!createdA.ok || !createdB.ok || !createdC.ok) throw new Error('创建店铺失败：' + JSON.stringify({ a: createdA.error, b: createdB.error, c: createdC.error }))
     const storeA = createdA.data.id
     const storeB = createdB.data.id
+    const storeC = createdC.data.id
     await ui.eval(`return await window.shopilot.store.setGroup(${JSON.stringify(storeA)}, '华东区')`)
 
     await click(ui, '[data-test="nav-stores"]')
     await sleep(800)
-    check('在用店铺显示 2 家', await ui.eval(`return document.querySelectorAll('.unified-store-card').length === 2`))
+    check('在用店铺显示 3 家', await ui.eval(`return document.querySelectorAll('.unified-store-card').length === 3`))
 
     const editOpened = await clickButtonInCard(ui, '验收店A', '编辑')
     await sleep(300)
@@ -185,7 +197,7 @@ async function main() {
         sidebarHasB: sidebar.some(card => card.getAttribute('data-store-id') === ${JSON.stringify(storeB)})
       }
     `)
-    check('归档后不再出现在在用店铺与侧栏', archivedState.activeCards === 1 && !archivedState.hasB && !archivedState.sidebarHasB,
+    check('归档后不再出现在在用店铺与侧栏', archivedState.activeCards === 2 && !archivedState.hasB && !archivedState.sidebarHasB,
       JSON.stringify(archivedState))
 
     await ui.eval(`
@@ -213,10 +225,77 @@ async function main() {
     await click(ui, '[data-test="store-sort-toggle"]')
     await sleep(300)
     const moved = await clickButtonInCard(ui, '验收店B', '↑')
+    await sleep(600)
+    await clickButtonInCard(ui, '验收店B', '↑')
     await sleep(900)
     const ordered = await ui.eval(`return await window.shopilot.store.list()`)
     const ids = ordered.ok ? ordered.data.filter(item => item.status !== 'archived').map(item => item.id) : []
-    check('上移后排序真实落库（B 在 A 前）', moved.ok && ids.indexOf(storeB) === 0 && ids.indexOf(storeA) === 1, JSON.stringify(ids))
+    check('上移后排序真实落库（B 移到最前）', moved.ok && ids.indexOf(storeB) === 0, JSON.stringify(ids))
+    await click(ui, '[data-test="store-sort-toggle"]')
+    await sleep(300)
+
+    // ---- 批量操作：分组 / 归档 / 恢复 / 移入回收站 ----
+    await click(ui, '[data-test="store-bulk-toggle"]')
+    await sleep(300)
+    await clickCardCheckbox(ui, '验收店B')
+    await clickCardCheckbox(ui, '验收店C')
+    await click(ui, '[data-test="store-bulk-group"]')
+    await sleep(300)
+    await setValue(ui, '[data-test="store-bulk-group-input"]', '批量组')
+    await click(ui, '[data-test="store-bulk-group-save"]')
+    await sleep(900)
+    const afterBulkGroup = await ui.eval(`return await window.shopilot.store.list()`)
+    const bGroup = afterBulkGroup.ok ? afterBulkGroup.data.find(item => item.id === storeB)?.groupName : null
+    const cGroup = afterBulkGroup.ok ? afterBulkGroup.data.find(item => item.id === storeC)?.groupName : null
+    check('批量分组应用到所选店铺', bGroup === '批量组' && cGroup === '批量组', JSON.stringify({ bGroup, cGroup }))
+
+    await clickCardCheckbox(ui, '验收店B')
+    await clickCardCheckbox(ui, '验收店C')
+    await click(ui, '[data-test="store-bulk-archive"]')
+    await sleep(300)
+    await click(ui, '[data-test="store-bulk-confirm-ok"]')
+    await sleep(1000)
+    const afterBulkArchive = await ui.eval(`return await window.shopilot.store.list()`)
+    const bArchived = afterBulkArchive.ok ? afterBulkArchive.data.find(item => item.id === storeB)?.status : null
+    const cArchived = afterBulkArchive.ok ? afterBulkArchive.data.find(item => item.id === storeC)?.status : null
+    check('批量归档两家店铺', bArchived === 'archived' && cArchived === 'archived', JSON.stringify({ bArchived, cArchived }))
+
+    await ui.eval(`
+      const button = [...document.querySelectorAll('.unified-segment button')].find(item => item.textContent.includes('已归档'))
+      if (button) button.click()
+      return !!button
+    `)
+    await sleep(600)
+    await click(ui, '[data-test="store-bulk-toggle"]')
+    await sleep(300)
+    await clickCardCheckbox(ui, '验收店B')
+    await clickCardCheckbox(ui, '验收店C')
+    await click(ui, '[data-test="store-bulk-restore"]')
+    await sleep(300)
+    await click(ui, '[data-test="store-bulk-confirm-ok"]')
+    await sleep(1000)
+    const afterBulkRestore = await ui.eval(`return await window.shopilot.store.list()`)
+    const bRestored = afterBulkRestore.ok ? afterBulkRestore.data.find(item => item.id === storeB)?.status : null
+    const cRestored = afterBulkRestore.ok ? afterBulkRestore.data.find(item => item.id === storeC)?.status : null
+    check('批量恢复两家店铺', bRestored !== 'archived' && cRestored !== 'archived', JSON.stringify({ bRestored, cRestored }))
+
+    await ui.eval(`
+      const button = [...document.querySelectorAll('.unified-segment button')].find(item => item.textContent.includes('在用店铺'))
+      if (button) button.click()
+      return !!button
+    `)
+    await sleep(600)
+    await click(ui, '[data-test="store-bulk-toggle"]')
+    await sleep(300)
+    await clickCardCheckbox(ui, '验收店C')
+    await click(ui, '[data-test="store-bulk-trash"]')
+    await sleep(300)
+    await click(ui, '[data-test="store-bulk-confirm-ok"]')
+    await sleep(1000)
+    const afterBulkTrash = await ui.eval(`return await window.shopilot.store.list()`)
+    const trashList = await ui.eval(`return await window.shopilot.store.trashList()`)
+    check('批量移入回收站', afterBulkTrash.ok && !afterBulkTrash.data.some(item => item.id === storeC)
+      && trashList.ok && trashList.data.some(item => item.id === storeC), JSON.stringify({ inActive: afterBulkTrash.data?.some(item => item.id === storeC), inTrash: trashList.data?.some(item => item.id === storeC) }))
 
     await click(ui, '[data-test="settings-open-btn"]')
     await sleep(800)
