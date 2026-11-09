@@ -85,11 +85,11 @@ export const PLATFORM_CATALOG: readonly PlatformDef[] = [
     name: '抖店',
     color: '#FE2C55',
     adminUrl: 'https://fxg.jinritemai.com',
-    // 用户给定的后台首页（2026-10-25）：浏览器「首页」按钮与登录失效重开都落在这里，
+    // 用户给定的后台首页（2026-11-09 更新）：浏览器「首页」按钮与登录失效重开都落在这里，
     // 不再只到根域名（根域名会再跳一次，慢且看不出当前店铺）。
-    homeUrl: 'https://fxg.jinritemai.com/ffa/mshop/trade/dashboard',
+    homeUrl: 'https://fxg.jinritemai.com/ffa/mshop/homepage/index',
     entryRoutes: [
-      { title: '抖店后台首页', url: 'https://fxg.jinritemai.com/ffa/mshop/trade/dashboard' },
+      { title: '抖店后台首页', url: 'https://fxg.jinritemai.com/ffa/mshop/homepage/index' },
       { title: '订单管理', url: 'https://fxg.jinritemai.com/ffa/mshop/order/list' },
       { title: '商品管理', url: 'https://fxg.jinritemai.com/ffa/g/list' },
       { title: '售后管理', url: 'https://fxg.jinritemai.com/ffa/mshop/aftersale/list' }
