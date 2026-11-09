@@ -569,9 +569,11 @@ const navGroups = computed(() => [
 /** 店铺搜索：只在店铺多到列表要滚的时候出现，少店铺时不占一行 */
 const storeQuery = ref('')
 const visibleStores = computed(() => {
+  // 归档 = 不参与日常切换：侧栏与"在用店铺"都不再列出，店铺管理里可在「已归档」恢复。
+  const active = ws.stores.filter(store => store.status !== 'archived')
   const keyword = storeQuery.value.trim().toLowerCase()
-  if (!keyword) return ws.stores
-  return ws.stores.filter(store => `${store.name} ${store.platform}`.toLowerCase().includes(keyword))
+  if (!keyword) return active
+  return active.filter(store => `${store.name} ${store.platform}`.toLowerCase().includes(keyword))
 })
 const PAGE_TITLES: Record<string, string> = {
   overview: '经营总览', browser: '店铺工作台', products: '商品管理', stores: '店铺管理',

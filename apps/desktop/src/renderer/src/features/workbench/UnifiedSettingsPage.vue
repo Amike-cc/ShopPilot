@@ -177,6 +177,11 @@
         </div>
         <div class="settings-group" data-test="maintenance-backup">
           <div class="settings-group-head"><h3>备份与恢复</h3><span>备份含校验和；恢复失败绝不覆盖现有数据</span></div>
+          <div class="settings-field-row maintenance-toggle-row">
+            <label class="settings-check"><input v-model="autoBackupEnabled" type="checkbox" class="settings-switch" data-test="maintenance-auto-backup" :disabled="autoBackupSaving || !autoBackupLoaded" @change="applyAutoBackupSwitch" /><span>自动备份（每 24 小时）</span></label>
+            <span class="settings-check-state" data-test="maintenance-auto-backup-state">{{ !autoBackupLoaded ? '读取中…' : (autoBackupEnabled ? '已开启' : '已关闭 · 只手动备份') }}</span>
+          </div>
+          <p class="settings-hint" data-test="maintenance-last-backup">上次备份：{{ backups[0] ? formatBackupTime(backups[0].createdAt) : '暂无' }} · 保留最近 7 份，恢复成功后建议立即重启应用。</p>
           <div class="settings-actions"><button type="button" class="unified-button" data-test="maintenance-backup-create" :disabled="backupBusy" @click="doBackup"><img class="button-icon" :src="backupCreateIcon" alt="" />{{ backupBusy ? '备份中…' : '立即备份数据库' }}</button></div>
           <div v-if="backups.length" class="maintenance-backup-list">
             <div v-for="item in backups" :key="item.id" class="maintenance-backup-row" data-test="maintenance-backup-row">
@@ -392,6 +397,11 @@ const WARM_LIMIT_SETTING = 'browser.warmStoreLimit'
 const warmLimit = ref<number>(WARM_STORE_LIMITS.defaultValue)
 const warmLimitSaving = ref(false)
 const warmLimitOptions = [1, 2, 3, 4]
+// 自动备份：主进程默认开（距上次备份满 24h 拍一次）；这里只负责显示/改写开关。
+const AUTO_BACKUP_SETTING = 'backup.auto'
+const autoBackupEnabled = ref(true)
+const autoBackupLoaded = ref(false)
+const autoBackupSaving = ref(false)
 const warmLimitHint = computed(() => `当前 ${warmStoreLimitLabel(warmLimit.value)}。每多保活一家约多占 ${WARM_STORE_LIMITS.estimatedMbPerStore}MB；正在跑任务、采集或邀约的店铺不受此上限影响，不会被回收。`)
 const maintenanceLoading = ref(false)
 const maintenanceLoadError = ref('')
@@ -1065,10 +1075,11 @@ async function loadMaintenance(): Promise<void> {
   maintenanceLoadError.value = ''
   const errors: string[] = []
   try {
-    const [collection, backupList, warm] = await Promise.all([
+    const [collection, backupList, warm, autoBackup] = await Promise.all([
       window.shopilot.settings.get(AUTO_COLLECTION_SETTING),
       window.shopilot.backup.list(),
-      window.shopilot.settings.get(WARM_LIMIT_SETTING)
+      window.shopilot.settings.get(WARM_LIMIT_SETTING),
+      window.shopilot.settings.get(AUTO_BACKUP_SETTING)
     ])
     if (collection.ok) {
       collectionEnabled.value = parseAutoCollectionEnabled(collection.data?.value)
@@ -1080,7 +1091,15 @@ async function loadMaintenance(): Promise<void> {
     // 没存过或值非法都回落默认 1 家（与主进程启动读取同一口径：clamp 到 1–4）
     if (warm.ok) warmLimit.value = clampWarmStoreLimit(warm.data?.value)
     else errors.push('多店保活：' + responseError(warm, '读取失败'))
-    if (backupList.ok) backups.value = ((backupList.data || []) as typeof backups.value).slice(0, 5)
+    // 主进程默认 true；只有显式 false 才关。读不到按默认开显示，但标成"读取失败"。
+    if (autoBackup.ok) {
+      autoBackupEnabled.value = autoBackup.data?.value !== false
+      autoBackupLoaded.value = true
+    } else {
+      autoBackupLoaded.value = false
+      errors.push('自动备份：' + responseError(autoBackup, '读取失败'))
+    }
+    if (backupList.ok) backups.value = (backupList.data || []) as typeof backups.value
     else errors.push('备份列表：' + responseError(backupList, '读取失败'))
   } catch (error) {
     errors.push(String((error as Error)?.message || error))
@@ -1112,6 +1131,27 @@ async function applyCollectionSwitch(): Promise<void> {
     maintenanceSay('保存自动采集总开关失败：' + String((error as Error)?.message || error), false)
   } finally {
     collectionSaving.value = false
+  }
+}
+
+/**
+ * 自动备份开关（backup.auto，主进程默认开）。
+ * 只是控制"每 24 小时自动拍一次"；手动「立即备份」不受影响。
+ * 保存失败还原勾选框，避免勾着但实际没关/没开。
+ */
+async function applyAutoBackupSwitch(): Promise<void> {
+  const next = autoBackupEnabled.value === true
+  autoBackupSaving.value = true
+  maintenanceMsg.value = ''
+  try {
+    const result = await window.shopilot.settings.set(AUTO_BACKUP_SETTING, next)
+    if (!result.ok) throw new Error(responseError(result, '保存失败'))
+    maintenanceSay(next ? '自动备份已开启：距上次备份满 24 小时自动拍一次' : '自动备份已关闭；仍可随时手动备份', true)
+  } catch (error) {
+    autoBackupEnabled.value = !next
+    maintenanceSay('保存自动备份开关失败：' + String((error as Error)?.message || error), false)
+  } finally {
+    autoBackupSaving.value = false
   }
 }
 

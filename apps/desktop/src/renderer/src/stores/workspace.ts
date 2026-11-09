@@ -56,6 +56,9 @@ export interface StoreRow {
   tags: string[]
   owner?: string | null
   region?: string | null
+  /** 外部编码/备注：店铺完整编辑要用，侧栏不展示 */
+  externalCode?: string | null
+  notes?: string | null
   /** 营业执照主体名称与统一社会信用代码（发票按主体分账用；两字段都可为空 = 未填写） */
   licenseName?: string | null
   licenseNo?: string | null
@@ -91,6 +94,7 @@ function toRow(row: any): StoreRow {
     sortOrder: Number(row.sortOrder) || 0,
     groupName: row.groupName ?? null, tags: parseTags(row),
     owner: row.owner ?? null, region: row.region ?? null,
+    externalCode: row.externalCode ?? null, notes: row.notes ?? null,
     licenseName: row.licenseName ?? null, licenseNo: row.licenseNo ?? null,
     lastActiveAt: row.lastActiveAt ?? null
   }
@@ -619,6 +623,21 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     /**
+     * 完整编辑店铺资料（2026-11-09）。之前只有改名与营业执照两个入口，
+     * 平台/后台地址/标签/负责人/地区/备注只能建店时一次填对。
+     * 失败把主进程的字段级原因带回浮层，不静默改本地列表。
+     */
+    async updateStore(storeId: string, patch: Record<string, unknown>): Promise<{ ok: boolean; message?: string }> {
+      const res = await window.shopilot.store.update({ storeId, patch })
+      if (!res.ok) {
+        const detail = Array.isArray(res.error?.details) ? res.error.details[0]?.message : ''
+        return { ok: false, message: detail || res.error?.message || '保存失败' }
+      }
+      await this.refreshStores()
+      return { ok: true }
+    },
+
+    /**
      * 设置 / 清除店铺分组（null / 空串 = 取消分组）。
      * 主进程 `store:setGroup` 全链路已齐全，这里只补渲染层入口：先按纯模块的规则规范化再过 IPC，
      * 成功后**就地**改这一行（沿用 STORE_STATUS_CHANGED 的写法），不整表重载——
@@ -638,8 +657,13 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async archiveStore(storeId: string) {
       const res = await window.shopilot.store.archive(storeId)
-      if (res.ok) { await this.refreshStores(); this.toast('已归档', 'success') }
-      else this.toast('归档失败: ' + res.error.message, 'error')
+      if (res.ok) {
+        // 归档 = 退出日常使用：已打开的店铺浏览器要一起关掉，
+        // 否则侧栏已经看不到它、原生视图却还盖在窗口上。
+        if (this.openStoreIds.includes(storeId)) await this.closeStore(storeId)
+        else await this.refreshStores()
+        this.toast('已归档', 'success')
+      } else this.toast('归档失败: ' + res.error.message, 'error')
     },
 
     async moveToTrash(storeId: string) {

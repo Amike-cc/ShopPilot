@@ -7,6 +7,7 @@
         <p>统一管理店铺、平台、登录态和本地浏览器工作区。</p>
       </div>
       <div class="unified-page-actions">
+        <button type="button" class="unified-button ghost" data-test="store-sort-toggle" :disabled="!bridgeAvailable || view !== 'active' || filteredStores.length < 2" @click="sortMode = !sortMode">{{ sortMode ? '完成排序' : '调整顺序' }}</button>
         <button type="button" class="unified-button ghost" data-test="store-batch-login" :disabled="!bridgeAvailable || batchRunning || !ws.stores.length" @click="runBatchLogin">{{ batchRunning ? `检测中 ${batchDone}/${batchTotal}` : '批量检测登录' }}</button>
         <button type="button" class="unified-button ghost" :disabled="!bridgeAvailable" @click="refresh"><img class="button-art" :src="refreshGenIcon" alt="" />刷新</button>
         <button type="button" class="unified-button primary" :disabled="!bridgeAvailable" @click="openCreate"><img class="button-art" :src="addIcon" alt="" />添加店铺</button>
@@ -20,8 +21,14 @@
         <option value="">全部平台</option>
         <option v-for="platform in platforms" :key="platform" :value="platform">{{ platform }}</option>
       </select>
+      <select v-model="groupFilter" aria-label="分组筛选" data-test="store-group-filter">
+        <option value="">全部分组</option>
+        <option value="__ungrouped__">未分组</option>
+        <option v-for="group in groupOptions" :key="group" :value="group">{{ group }}</option>
+      </select>
       <div class="unified-segment" role="tablist" aria-label="店铺视图">
         <button type="button" :class="{ active: view === 'active' }" @click="view = 'active'">在用店铺</button>
+        <button type="button" :class="{ active: view === 'archived' }" @click="showArchived">已归档 <span>{{ archivedStores.length }}</span></button>
         <button type="button" :disabled="!bridgeAvailable" :class="{ active: view === 'trash' }" @click="showTrash">回收站 <span>{{ ws.trashStores.length }}</span></button>
       </div>
     </div>
@@ -36,18 +43,26 @@
     <div v-else-if="state === 'loading'" class="unified-state"><span class="loader"></span>正在读取店铺…</div>
     <div v-else-if="view === 'trash'" class="unified-card-grid">
       <article v-for="store in ws.trashStores" :key="store.id" class="unified-store-card">
-        <div class="unified-store-card-head"><PlatformIcon :name="store.platform" :size="34" /><div><strong>{{ store.name }}</strong><small>{{ store.platform }} · 已归档</small></div></div>
+        <div class="unified-store-card-head"><PlatformIcon :name="store.platform" :size="34" /><div><strong>{{ store.name }}</strong><small>{{ store.platform }} · 已删除</small></div></div>
         <p class="unified-muted">{{ store.adminUrl || '没有后台地址' }}</p>
         <div class="unified-card-actions"><button type="button" class="unified-button ghost" @click="restore(store.id)"><img class="button-art" :src="archiveRestoreIcon" alt="" />恢复</button><button type="button" class="unified-button danger" @click="purge(store)"><img class="button-art" :src="storeTrashIcon" alt="" />彻底删除</button></div>
       </article>
       <div v-if="!ws.trashStores.length" class="unified-empty">回收站为空</div>
+    </div>
+    <div v-else-if="view === 'archived'" class="unified-card-grid" data-test="store-archived-view">
+      <article v-for="store in archivedStores" :key="store.id" class="unified-store-card">
+        <div class="unified-store-card-head"><PlatformIcon :name="store.platform" :size="34" /><div><strong>{{ store.name }}</strong><small>{{ store.platform }} · 已归档</small></div><span class="unified-status warning"><i></i>已归档</span></div>
+        <div class="unified-store-meta"><span>分组：{{ store.groupName || '未分组' }}</span><span>标签：{{ store.tags.length ? store.tags.join('、') : '—' }}</span></div>
+        <div class="unified-card-actions"><button type="button" class="unified-button primary" data-test="store-restore" @click="restore(store.id)"><img class="button-art" :src="archiveRestoreIcon" alt="" />恢复使用</button><button type="button" class="unified-button ghost" data-test="store-edit-open" @click="openEdit(store)"><img class="button-art" :src="manualEditIcon" alt="" />编辑</button><button type="button" class="unified-icon-button" title="移入回收站" @click="remove(store)"><img :src="storeTrashIcon" alt="" /></button></div>
+      </article>
+      <div v-if="!archivedStores.length" class="unified-empty">暂无已归档店铺</div>
     </div>
     <div v-else-if="!filteredStores.length" class="unified-empty">暂无匹配店铺<button type="button" class="inline-link" @click="openCreate"><img class="button-art" :src="storeAddIcon" alt="" />添加第一家店铺</button></div>
     <div v-else class="unified-card-grid">
       <article v-for="store in filteredStores" :key="store.id" class="unified-store-card" :class="{ online: store.status === 'online' }">
         <div class="unified-store-card-head"><PlatformIcon :name="store.platform" :size="34" /><div><strong>{{ store.name }}</strong><small>{{ store.platform }} · {{ shortUrl(store.adminUrl) }}</small></div><span class="unified-status" :class="statusClass(store.status)"><i></i>{{ statusLabel(store.status) }}</span></div>
         <div class="unified-store-meta"><span>分组：{{ store.groupName || '未分组' }}</span><span>标签：{{ store.tags.length ? store.tags.join('、') : '—' }}</span></div>
-        <div class="unified-card-actions"><button type="button" class="unified-button primary" @click="emit('open-store', store.id)"><img class="button-art" :src="workspaceOpenIcon" alt="" />打开工作区</button><button type="button" class="unified-button ghost" data-test="store-group-open" :disabled="!bridgeAvailable" :title="`设置分组（当前：${store.groupName || '未分组'}）`" @click="openGroupEditor(store)"><img class="button-art" :src="groupEditIcon" alt="" />分组</button><button type="button" class="unified-button ghost" @click="toggleArchive(store)"><img class="button-art" :src="archiveRestoreIcon" alt="" />{{ store.status === 'archived' ? '恢复使用' : '归档' }}</button><button type="button" class="unified-icon-button" title="移入回收站" @click="remove(store)"><img :src="storeTrashIcon" alt="" /></button></div>
+        <div class="unified-card-actions"><button type="button" class="unified-button primary" @click="emit('open-store', store.id)"><img class="button-art" :src="workspaceOpenIcon" alt="" />打开工作区</button><button v-if="sortMode" type="button" class="unified-button ghost" data-test="store-move-up" title="上移" @click="moveStore(store, -1)">↑</button><button v-if="sortMode" type="button" class="unified-button ghost" data-test="store-move-down" title="下移" @click="moveStore(store, 1)">↓</button><button type="button" class="unified-button ghost" data-test="store-edit-open" @click="openEdit(store)"><img class="button-art" :src="manualEditIcon" alt="" />编辑</button><button type="button" class="unified-button ghost" data-test="store-group-open" :disabled="!bridgeAvailable" :title="`设置分组（当前：${store.groupName || '未分组'}）`" @click="openGroupEditor(store)"><img class="button-art" :src="groupEditIcon" alt="" />分组</button><button type="button" class="unified-button ghost" @click="toggleArchive(store)"><img class="button-art" :src="archiveRestoreIcon" alt="" />归档</button><button type="button" class="unified-icon-button" title="移入回收站" @click="remove(store)"><img :src="storeTrashIcon" alt="" /></button></div>
       </article>
     </div>
 
@@ -76,6 +91,26 @@
         <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" data-test="store-group-clear" :disabled="groupSaving" @click="clearGroup">清除分组</button><button type="button" class="unified-button ghost" data-test="store-group-cancel" @click="closeGroupEditor"><img class="button-art" :src="storeCloseIcon" alt="" />取消</button><button type="submit" class="unified-button primary" data-test="store-group-save" :disabled="groupSaving || !bridgeAvailable"><img class="button-art" :src="groupEditIcon" alt="" />{{ groupSaving ? '保存中…' : '保存' }}</button></div>
       </form>
     </div>
+    <div v-if="editOpen" class="unified-overlay" @click.self="editOpen = false">
+      <form class="unified-dialog" data-test="store-edit-dialog" @submit.prevent="submitEdit">
+        <div class="unified-dialog-head"><div><span class="dashboard-eyebrow">STORE PROFILE</span><h2>编辑店铺</h2></div><button type="button" class="unified-icon-button" @click="editOpen = false"><img :src="closeIcon" alt="" /></button></div>
+        <label>店铺名称<input v-model="editForm.name" data-test="store-edit-name" required maxlength="120" /></label>
+        <label>平台<select v-model="editForm.platform" data-test="store-edit-platform"><option v-for="platform in platformDefs" :key="platform.name" :value="platform.name">{{ platform.name }}</option><option value="其他">其他（自定义平台）</option></select></label>
+        <label>后台地址<input v-model="editForm.adminUrl" data-test="store-edit-admin-url" placeholder="https://…" /></label>
+        <label>标签（逗号分隔）<input v-model="editForm.tags" data-test="store-edit-tags" placeholder="主账号, 售后组" /></label>
+        <div class="unified-form-grid">
+          <label>分组<input v-model="editForm.groupName" data-test="store-edit-group" maxlength="120" placeholder="留空 = 未分组" /></label>
+          <label>负责人<input v-model="editForm.owner" data-test="store-edit-owner" maxlength="120" /></label>
+          <label>地区<input v-model="editForm.region" data-test="store-edit-region" maxlength="120" /></label>
+          <label>外部编码<input v-model="editForm.externalCode" data-test="store-edit-external" maxlength="256" /></label>
+        </div>
+        <label>营业执照主体名称（选填）<input v-model="editForm.licenseName" maxlength="120" /></label>
+        <label>统一社会信用代码（选填）<input v-model="editForm.licenseNo" maxlength="64" /></label>
+        <label>备注<textarea v-model="editForm.notes" data-test="store-edit-notes" rows="2" maxlength="5000"></textarea></label>
+        <div v-if="editError" class="unified-alert error" role="alert">{{ editError }}</div>
+        <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" @click="editOpen = false"><img class="button-art" :src="storeCloseIcon" alt="" />取消</button><button type="submit" class="unified-button primary" data-test="store-edit-save" :disabled="editSaving"><img class="button-art" :src="manualEditIcon" alt="" />{{ editSaving ? '保存中…' : '保存修改' }}</button></div>
+      </form>
+    </div>
   </section>
 </template>
 
@@ -96,6 +131,7 @@ import workspaceOpenIcon from '../../assets/generated/ui-icons/workspace-open-ge
 import storeRetryIcon from '../../assets/generated/ui-icons/stores-retry-gen.png'
 import storeCloseIcon from '../../assets/generated/ui-icons/stores-close-gen.png'
 import groupEditIcon from '../../assets/generated/ui-icons/manual-edit-gen.png'
+import manualEditIcon from '../../assets/generated/ui-icons/manual-edit-gen.png'
 // 分组输入口径（规范化 / 白名单校验 / 已有分组建议）统一走纯模块，见 features/stores/store-group.ts
 import { STORE_GROUP_MAX_LENGTH, listStoreGroups, validateGroupName } from '../stores/store-group'
 
@@ -105,7 +141,9 @@ const state = ref<'loading' | 'ready' | 'error'>('loading')
 const errorMessage = ref('')
 const query = ref('')
 const platformFilter = ref('')
-const view = ref<'active' | 'trash'>('active')
+const groupFilter = ref('')
+const sortMode = ref(false)
+const view = ref<'active' | 'archived' | 'trash'>('active')
 const createOpen = ref(false)
 const creating = ref(false)
 const createError = ref('')
@@ -115,10 +153,14 @@ const bridgeAvailable = typeof window !== 'undefined' && !!window.shopilot
 const platformDefs = (window.shopilot?.platforms || []) as Array<{ name: string; adminUrl: string }>
 const form = ref({ name: '', platform: platformDefs[0]?.name || '拼多多', adminUrl: platformDefs[0]?.adminUrl || '', tags: '', notes: '', licenseName: '', licenseNo: '' })
 const platforms = computed(() => [...new Set(ws.stores.map(store => store.platform))].sort((a, b) => a.localeCompare(b, 'zh-CN')))
-const filteredStores = computed(() => ws.stores.filter(store => {
+const archivedStores = computed(() => ws.stores.filter(store => store.status === 'archived'))
+const activeStores = computed(() => ws.stores.filter(store => store.status !== 'archived'))
+const filteredStores = computed(() => activeStores.value.filter(store => {
   const q = query.value.trim().toLowerCase()
   const matchesQuery = !q || [store.name, store.platform, store.groupName || '', ...store.tags].join(' ').toLowerCase().includes(q)
-  return matchesQuery && (!platformFilter.value || store.platform === platformFilter.value)
+  const matchesGroup = !groupFilter.value
+    || (groupFilter.value === '__ungrouped__' ? !store.groupName : store.groupName === groupFilter.value)
+  return matchesQuery && matchesGroup && (!platformFilter.value || store.platform === platformFilter.value)
 }))
 
 /* ---------------- 批量登录检测（2026-11-08） ----------------
@@ -188,6 +230,24 @@ function shortUrl(value: string) { try { return new URL(value).host } catch { re
 function statusClass(value: string) { return value === 'online' ? 'online' : ['needs_login', 'proxy_error'].includes(value) ? 'warning' : 'offline' }
 function openCreate() { createError.value = ''; createOpen.value = true }
 function showTrash() { view.value = 'trash'; if (bridgeAvailable) void ws.refreshTrash() }
+function showArchived() { view.value = 'archived'; sortMode.value = false }
+/**
+ * 排序：在当前筛选结果里找相邻店，再交换两者在全量序列中的位置。
+ * 只按全量相邻交换的话，中间夹着被筛选掉的店铺时，屏上看起来"没动"。
+ */
+async function moveStore(store: StoreRow, delta: -1 | 1): Promise<void> {
+  const visibleIds = filteredStores.value.map(item => item.id)
+  const visibleIndex = visibleIds.indexOf(store.id)
+  const targetId = visibleIds[visibleIndex + delta]
+  if (!targetId) return
+  const ids = ws.stores.map(item => item.id)
+  const index = ids.indexOf(store.id)
+  const target = ids.indexOf(targetId)
+  if (index < 0 || target < 0) return
+  const next = [...ids]
+  ;[next[index], next[target]] = [next[target], next[index]]
+  await ws.reorderStores(next)
+}
 function refresh() {
   if (!bridgeAvailable) return
   state.value = 'loading'
@@ -252,6 +312,65 @@ async function submitGroup() {
 }
 /** 清除 = 用空值走同一条保存路径（validate 把空值归一成 null） */
 async function clearGroup() { groupDraft.value = ''; await submitGroup() }
+
+/* ---------------- 完整编辑店铺（2026-11-09） ---------------- */
+const editOpen = ref(false)
+const editSaving = ref(false)
+const editError = ref('')
+const editStoreId = ref('')
+const editForm = ref({
+  name: '', platform: '', adminUrl: '', tags: '', groupName: '',
+  owner: '', region: '', externalCode: '', licenseName: '', licenseNo: '', notes: ''
+})
+function openEdit(store: StoreRow): void {
+  editStoreId.value = store.id
+  editForm.value = {
+    name: store.name,
+    platform: store.platform,
+    adminUrl: store.adminUrl,
+    tags: store.tags.join(', '),
+    groupName: store.groupName || '',
+    owner: store.owner || '',
+    region: store.region || '',
+    externalCode: store.externalCode || '',
+    licenseName: store.licenseName || '',
+    licenseNo: store.licenseNo || '',
+    notes: store.notes || ''
+  }
+  editError.value = ''
+  editOpen.value = true
+}
+function onEditPlatformChange(next: string, previous: string): void {
+  const platform = platformDefs.find(item => item.name === next)
+  const previousUrl = platformDefs.find(item => item.name === previous)?.adminUrl
+  if (platform && (!editForm.value.adminUrl || (previousUrl && editForm.value.adminUrl === previousUrl))) {
+    editForm.value.adminUrl = platform.adminUrl
+  }
+}
+async function submitEdit(): Promise<void> {
+  if (!bridgeAvailable || !editStoreId.value || editSaving.value) return
+  editSaving.value = true
+  editError.value = ''
+  const current = editForm.value
+  const result = await ws.updateStore(editStoreId.value, {
+    name: current.name.trim(),
+    platform: current.platform,
+    adminUrl: current.adminUrl.trim(),
+    tags: current.tags.split(',').map(item => item.trim()).filter(Boolean),
+    groupName: current.groupName.trim() || null,
+    owner: current.owner.trim(),
+    region: current.region.trim(),
+    externalCode: current.externalCode.trim(),
+    licenseName: current.licenseName.trim(),
+    licenseNo: current.licenseNo.trim(),
+    notes: current.notes.trim()
+  })
+  editSaving.value = false
+  if (!result.ok) { editError.value = result.message || '保存失败'; return }
+  ws.toast(`已更新「${current.name.trim()}」`, 'success')
+  editOpen.value = false
+}
+watch(() => editForm.value.platform, onEditPlatformChange)
 watch(() => form.value.platform, onPlatformChange)
 onMounted(() => { if (bridgeAvailable) { refresh(); void ws.refreshTrash() } else state.value = 'ready' })
 </script>
@@ -262,4 +381,7 @@ onMounted(() => { if (bridgeAvailable) { refresh(); void ws.refreshTrash() } els
 @media (max-width:900px){.unified-page{padding:16px}.unified-toolbar-card{flex-wrap:wrap}.unified-search{min-width:100%}.unified-segment{margin-left:auto}}
 .unified-alert.info { border:1px solid rgba(76,157,255,.23); background:rgba(33,91,158,.08); color:var(--dash-text-soft); }
 .batch-login-detail { display:block; margin-top:5px; color:var(--dash-text-muted); }
+.unified-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:0 10px; }
+[data-test="store-edit-dialog"] { width:min(660px,100%); }
+@media (max-width:600px){.unified-form-grid{grid-template-columns:1fr}}
 </style>

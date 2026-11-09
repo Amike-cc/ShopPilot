@@ -93,7 +93,7 @@ const SETTING_VALUE_MAX_BYTES = 64 * 1024
  * - collection.*       采集口径（如 collection.autoEnabled 自动采集总开关，默认关）
  * - browser.*          浏览器内存策略（如 browser.warmStoreLimit 后台保活店铺数 1–4）
  */
-const SETTING_ALLOW_PREFIXES = ['ui.', 'update.', 'platform.homeUrls', 'invite.', 'security.idleMinutes', 'collection.', 'browser.']
+const SETTING_ALLOW_PREFIXES = ['ui.', 'update.', 'platform.homeUrls', 'invite.', 'security.idleMinutes', 'collection.', 'browser.', 'backup.auto']
 
 /** 前三段属于"非敏感但需要说明"的越权尝试；其余不在白名单里的一律按参数错误返回 */
 const SETTING_SENSITIVE_PREFIXES = ['securi', 'ai_cred', 'ai.', 'proxy_cred', 'agent.']
