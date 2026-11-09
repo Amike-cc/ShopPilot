@@ -45,7 +45,7 @@ const emit = defineEmits<{
 const title = computed(() => props.mode === 'ai' ? 'AI 创作工具' : '应用商城')
 const subtitle = computed(() => props.mode === 'ai'
   ? '访问当前已接入的 AI 助手与模型配置。'
-  : '安装插件与扩展，进入 AI 工具与系统页面；插件随应用内置，离线可装。')
+  : '安装插件与扩展，进入 AI 工具、业务应用与系统页面；插件随应用内置，离线可装。')
 
 /** 图标底色：资源本身是浅色描边（为深色底准备），这里用 mask 着色，不改动图标文件 */
 const appTones: Record<AppTone, { bg: string; fg: string }> = {
@@ -61,15 +61,22 @@ const appTones: Record<AppTone, { bg: string; fg: string }> = {
 }
 
 /**
- * 系统页面：这些入口在左侧导航都有，折叠起来只作为「不想找侧栏」时的备用路径，
- * 不再占据应用商城的首屏（首屏留给插件与 AI 工具）。
+ * 业务应用：内置业务模块，但不是产品底座（2026-11-09 产品口径：商品/发票/涉税不算核心）。
+ * 在商城按「内置可选」展示，提供入口但不提供安装/卸载；侧栏仍可直达。
+ */
+const businessApps: AppLink[] = [
+  { key: 'products', label: '商品管理', description: '查询、编辑与批量发布预检，支持草稿、回收站与 CSV。', note: '批量发布 · 回收站', tone: 'green', icon: productsAppIcon, page: 'products' },
+  { key: 'invoices', label: '发票中心', description: '汇总待开票记录并导出 CSV，按主体与店铺核对。', note: '待开票 · CSV 导出', tone: 'orange', icon: invoicesAppIcon, page: 'invoices' },
+  { key: 'tax', label: '涉税信息', description: '查看平台按季度报送的涉税经营数据与主体汇总。', note: '季度报送 · 只读核对', tone: 'green', icon: taxAppIcon, page: 'tax' }
+]
+
+/**
+ * 系统页面：产品底座（店铺/数据/设置），不可卸载。
+ * 这些入口在左侧导航都有，折叠起来只作为「不想找侧栏」时的备用路径。
  */
 const systemApps: AppLink[] = [
   { key: 'stores', label: '店铺管理', description: '管理店铺、平台与登录状态，托管本机浏览器工作区。', note: '平台登录 · 浏览器工作区', tone: 'blue', icon: storesAppIcon, page: 'stores' },
-  { key: 'products', label: '商品管理', description: '查询、编辑与批量发布预检，支持草稿、回收站与 CSV。', note: '批量发布 · 回收站', tone: 'green', icon: productsAppIcon, page: 'products' },
   { key: 'analytics', label: '数据分析', description: '查看真实快照、经营指标与数据采集入口。', note: '真实快照 · 采集口径', tone: 'violet', icon: analyticsAppIcon, page: 'analytics' },
-  { key: 'invoices', label: '发票中心', description: '汇总待开票记录并导出 CSV，按主体与店铺核对。', note: '待开票 · CSV 导出', tone: 'orange', icon: invoicesAppIcon, page: 'invoices' },
-  { key: 'tax', label: '涉税信息', description: '查看平台按季度报送的涉税经营数据与主体汇总。', note: '季度报送 · 只读核对', tone: 'green', icon: taxAppIcon, page: 'tax' },
   { key: 'settings', label: '设置中心', description: '平台地址、AI 配置、应用锁与数据维护。', note: '地址 · AI · 应用锁', tone: 'slate', icon: settingsAppIcon, page: 'settings' }
 ]
 
@@ -82,7 +89,7 @@ interface AiConfigShape {
   hasImageTextKey?: boolean
 }
 
-const showBuiltin = ref(false)
+const showSystem = ref(false)
 const aiStatus = ref<{ text: AiConfigShape | null; image: AiConfigShape | null; imageText: AiConfigShape | null } | null>(null)
 const aiStatusLoading = ref(false)
 const aiStatusError = ref('')
@@ -171,6 +178,7 @@ function iconMask(url: string): Record<string, string> {
         <!-- AI 工具 -->
         <div class="ac-section ac-section-row">
           <h2>AI 工具</h2>
+          <span class="ac-kind">增值</span>
           <span class="ac-count">3</span>
           <button type="button" class="ac-link" data-test="apps-ai-settings" @click="emit('open-settings', 'ai')">模型配置</button>
         </div>
@@ -222,14 +230,51 @@ function iconMask(url: string): Record<string, string> {
           </article>
         </div>
 
-        <!-- 系统页面：默认折叠，避免与左侧导航重复抢首屏 -->
+        <!-- 业务应用：内置可选，不算产品核心 -->
+        <div class="ac-section ac-section-row" data-test="apps-business">
+          <h2>业务应用</h2>
+          <span class="ac-kind">内置可选</span>
+          <span class="ac-count">{{ businessApps.length }}</span>
+        </div>
+        <p class="ac-hint">可选业务模块，不随商城安装或卸载；左侧导航仍可直达。</p>
+        <div class="ac-grid" data-test="apps-business-grid">
+          <article
+            v-for="item in businessApps"
+            :key="item.key"
+            class="ac-card"
+            role="button"
+            tabindex="0"
+            :data-test="`apps-card-${item.key}`"
+            @click="openApp(item)"
+            @keydown.enter="openApp(item)"
+            @keydown.space.prevent="openApp(item)"
+          >
+            <div class="ac-top">
+              <span class="ac-icon" :style="{ background: appTones[item.tone].bg, color: appTones[item.tone].fg }">
+                <i :style="iconMask(item.icon)"></i>
+              </span>
+              <span class="ac-cat">内置可选</span>
+            </div>
+            <h3>{{ item.label }}</h3>
+            <p class="ac-desc">{{ item.description }}</p>
+            <div class="ac-foot">
+              <span class="ac-note">{{ item.note }}</span>
+              <span class="ac-open">打开
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+              </span>
+            </div>
+          </article>
+        </div>
+
+        <!-- 系统页面：核心底座，默认折叠，避免与左侧导航重复抢首屏 -->
         <div class="ac-section ac-section-row">
           <h2>系统页面</h2>
+          <span class="ac-kind">核心</span>
           <span class="ac-count">{{ systemApps.length }}</span>
-          <button type="button" class="ac-link" data-test="apps-system-toggle" :aria-expanded="showBuiltin" @click="showBuiltin = !showBuiltin">{{ showBuiltin ? '收起' : '展开' }}</button>
+          <button type="button" class="ac-link" data-test="apps-system-toggle" :aria-expanded="showSystem" @click="showSystem = !showSystem">{{ showSystem ? '收起' : '展开' }}</button>
         </div>
-        <p v-if="!showBuiltin" class="ac-hint">店铺、商品、数据、发票、涉税与设置入口；日常使用左侧导航更快。</p>
-        <div v-if="showBuiltin" class="ac-grid" data-test="apps-system-grid">
+        <p v-if="!showSystem" class="ac-hint">店铺、数据与设置入口；核心页面不可卸载，日常使用左侧导航更快。</p>
+        <div v-if="showSystem" class="ac-grid" data-test="apps-system-grid">
           <article
             v-for="item in systemApps"
             :key="item.key"
@@ -245,7 +290,7 @@ function iconMask(url: string): Record<string, string> {
               <span class="ac-icon" :style="{ background: appTones[item.tone].bg, color: appTones[item.tone].fg }">
                 <i :style="iconMask(item.icon)"></i>
               </span>
-              <span class="ac-cat">系统</span>
+              <span class="ac-cat">核心</span>
             </div>
             <h3>{{ item.label }}</h3>
             <p class="ac-desc">{{ item.description }}</p>
@@ -269,6 +314,7 @@ function iconMask(url: string): Record<string, string> {
 .ac-section{display:flex;align-items:center;gap:8px;margin:0}
 .ac-section h2{margin:0;font-size:var(--text-14);font-weight:var(--weight-semibold)}
 .ac-count{display:grid;place-items:center;min-width:20px;height:18px;padding:0 6px;border-radius:var(--r-xs);background:var(--ui-surface-sunken);color:var(--ui-text-muted);font-size:var(--text-11);font-weight:var(--weight-medium);font-variant-numeric:tabular-nums}
+.ac-kind{padding:1px 7px;border-radius:999px;background:var(--ui-surface-sunken);color:var(--ui-text-muted);font-size:var(--text-11);font-weight:var(--weight-medium);line-height:17px}
 .ac-link{margin-left:auto;padding:0;border:0;background:transparent;color:var(--brand-text);font-size:var(--text-12);font-weight:var(--weight-medium);cursor:pointer}
 .ac-link:hover{text-decoration:underline}
 .ac-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--sp-3);align-items:start}
