@@ -152,6 +152,7 @@ async function main() {
     await click(ui, '[data-test="nav-stores"]')
     await sleep(800)
     check('在用店铺显示 3 家', await ui.eval(`return document.querySelectorAll('.unified-store-card').length === 3`))
+    check('导出清单入口存在', await ui.eval(`return !!document.querySelector('[data-test="store-export-csv"]')`))
 
     const editOpened = await clickButtonInCard(ui, '验收店A', '编辑')
     await sleep(300)

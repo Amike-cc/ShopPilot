@@ -4,7 +4,9 @@
  */
 
 import { familyHandle } from './family-handle'
-import { IpcMainInvokeEvent } from 'electron'
+import { IpcMainInvokeEvent, BrowserWindow, dialog, app } from 'electron'
+import { writeFileSync } from 'fs'
+import { join } from 'path'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
 import {
@@ -18,6 +20,9 @@ import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as StoreManager from '../stores/store-manager'
 import * as TaskStore from '../tasks/task-store'
 import * as Runner from '../tasks/task-runner'
+import { buildStoreCsv } from '@shared/store-csv'
+import { ensureCsvExtension } from '@shared/invoice-csv'
+import { writeAudit } from '../services/audit-logger'
 import { randomUUID } from 'crypto'
 import { ipcOk as success, ipcFail as error, ipcErrFromUnknown } from './envelope'
 
@@ -68,6 +73,30 @@ export function registerStoreHandlers(): void {
     }
   })
   
+  // store:exportCsv - 导出店铺清单（元数据，不含会话/凭据）
+  handle(IPC_CHANNELS.STORE_EXPORT_CSV, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const stores = StoreManager.listStores()
+      if (!stores.length) return error(ERROR_CODES.INVALID_ARGUMENT.code, '当前没有可导出的店铺', requestId)
+      const { csv, rows } = buildStoreCsv(stores)
+      const stamp = new Date().toISOString().slice(0, 10)
+      const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+      const res = await dialog.showSaveDialog(win, {
+        title: '导出店铺清单',
+        defaultPath: join(app.getPath('documents'), `店铺清单-${stamp}.csv`),
+        filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
+      })
+      if (res.canceled || !res.filePath) return success({ canceled: true }, requestId)
+      const filePath = ensureCsvExtension(res.filePath)
+      writeFileSync(filePath, '\uFEFF' + csv, 'utf8')
+      writeAudit('store.export', 'success', { requestId: JSON.stringify({ rows }) })
+      return success({ path: filePath, rows }, requestId)
+    } catch (err: unknown) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, String((err as Error)?.message || err), requestId)
+    }
+  })
+
   // store:get
   handle(IPC_CHANNELS.STORE_GET, async (_event: IpcMainInvokeEvent, input: unknown): Promise<IPCResult> => {
     const requestId = generateRequestId()

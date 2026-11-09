@@ -109,6 +109,8 @@ export type IPCResult<T = any> = IPCSuccess<T> | IPCError
 export const IPC_CHANNELS = {
   // 店铺管理 - §6.1
   STORE_LIST: 'store:list',
+  /** 导出店铺清单 CSV（只含元数据，不含会话/凭据） */
+  STORE_EXPORT_CSV: 'store:exportCsv',
   STORE_GET: 'store:get',
   STORE_CREATE: 'store:create',
   STORE_UPDATE: 'store:update',
@@ -664,6 +666,7 @@ export interface IpcSnapshotRow {
 export interface IpcContract {
   // ------------------------------ 店铺管理 §6.1 ------------------------------
   'store:list': { req: void; res: Store[] }
+  'store:exportCsv': { req: void; res: { canceled?: boolean; path?: string; rows?: number } }
   'store:get': { req: z.input<typeof storeIdInputSchema>; res: Store }
   'store:create': { req: z.input<typeof storeCreateSchema>; res: Store }
   'store:update': { req: z.input<typeof storeUpdateSchema>; res: Store }

@@ -38,6 +38,7 @@ const api = {
     deletePermanent: (storeId: string) => invoke(IPC_CHANNELS.STORE_DELETE_PERMANENT, { storeId }),
     reorder: (orderedStoreIds: string[]) => invoke(IPC_CHANNELS.STORE_REORDER, { orderedStoreIds }),
     setGroup: (storeId: string, groupName: string | null) => invoke(IPC_CHANNELS.STORE_SET_GROUP, { storeId, groupName }),
+    exportCsv: () => invoke(IPC_CHANNELS.STORE_EXPORT_CSV),
     trashList: () => invoke(IPC_CHANNELS.STORE_TRASH_LIST),
     purge: (storeId: string) => invoke(IPC_CHANNELS.STORE_PURGE, { storeId })
   },

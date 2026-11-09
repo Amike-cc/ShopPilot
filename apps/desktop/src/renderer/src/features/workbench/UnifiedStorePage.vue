@@ -7,6 +7,7 @@
         <p>统一管理店铺、平台、登录态和本地浏览器工作区。</p>
       </div>
       <div class="unified-page-actions">
+        <button type="button" class="unified-button ghost" data-test="store-export-csv" :disabled="!bridgeAvailable || exportingStores || !ws.stores.length" @click="exportStoreList">{{ exportingStores ? '导出中…' : '导出清单' }}</button>
         <button type="button" class="unified-button ghost" data-test="store-bulk-toggle" :disabled="!bridgeAvailable || view === 'trash' || bulkBusy" @click="toggleBulkMode">{{ bulkMode ? '退出批量' : '批量操作' }}</button>
         <button type="button" class="unified-button ghost" data-test="store-sort-toggle" :disabled="!bridgeAvailable || view !== 'active' || filteredStores.length < 2 || bulkMode" @click="sortMode = !sortMode">{{ sortMode ? '完成排序' : '调整顺序' }}</button>
         <button type="button" class="unified-button ghost" data-test="store-batch-login" :title="`最多检测 ${BATCH_LOGIN_LIMIT} 家（按当前筛选顺序），超出部分本轮不检测`" :disabled="!bridgeAvailable || batchRunning || !ws.stores.length" @click="runBatchLogin">{{ batchRunning ? `检测中 ${batchDone}/${batchTotal}` : '批量检测登录' }}</button>
@@ -193,6 +194,7 @@ const bulkConfirm = reactive({ open: false, title: '', detail: '', action: null 
 const bulkProxyOpen = ref(false)
 const bulkProxyId = ref('')
 const bulkProxyList = ref<Array<{ id: string; label: string | null; host: string; port: number; type: string }>>([])
+const exportingStores = ref(false)
 const view = ref<'active' | 'archived' | 'trash'>('active')
 const createOpen = ref(false)
 const creating = ref(false)
@@ -408,6 +410,20 @@ function refresh() {
   if (!bridgeAvailable) return
   state.value = 'loading'
   void ws.refreshStores().then(() => { state.value = 'ready' }).catch(error => { state.value = 'error'; errorMessage.value = error instanceof Error ? error.message : String(error) })
+}
+async function exportStoreList(): Promise<void> {
+  if (!bridgeAvailable || exportingStores.value) return
+  exportingStores.value = true
+  try {
+    const result = await window.shopilot.store.exportCsv()
+    if (!result.ok) { ws.toast('导出店铺清单失败：' + result.error.message, 'error'); return }
+    if (result.data?.canceled) return
+    ws.toast(`已导出 ${Number(result.data?.rows || 0)} 家店铺清单`, 'success')
+  } catch (error) {
+    ws.toast('导出店铺清单失败：' + String((error as Error)?.message || error), 'error')
+  } finally {
+    exportingStores.value = false
+  }
 }
 function onPlatformChange(next: string, previous: string) {
   const platform = platformDefs.find(item => item.name === next)

@@ -40,6 +40,7 @@ declare global {
         deletePermanent: (storeId: string) => Promise<IPCResult>
         reorder: (orderedStoreIds: string[]) => Promise<IPCResult>
         setGroup: (storeId: string, groupName: string | null) => Promise<IPCResult>
+        exportCsv: () => Promise<IPCResult>
         trashList: () => Promise<IPCResult>
         purge: (storeId: string) => Promise<IPCResult>
       }

@@ -1,3 +1,17 @@
+# ShopPilot 0.9.17 变更说明（店铺清单 CSV 导出）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
+
+## 本次更新
+
+- 店铺管理新增「导出清单」：把当前全部店铺导出为 CSV。
+- 包含名称、平台、后台地址、分组、标签、负责人、地区、外部编码、营业执照主体/信用代码、备注。
+- **不含** Cookie、密码、代理凭据或许可证图片；标签还原为逗号分隔，字段按 CSV 规则转义，带 UTF-8 BOM。
+- 导出走系统保存框，默认文件名 `店铺清单-YYYY-MM-DD.csv`；审计记录 `store.export`（只记行数）。
+- 新增 `store-csv` 单测；`store-management-cdp-verify.js` 扩到 25 项（导出入口存在）。
+
+---
+
 # ShopPilot 0.9.16 变更说明（店铺批量绑定代理）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。

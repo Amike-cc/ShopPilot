@@ -8,7 +8,7 @@ import { randomBytes } from 'crypto'
 import { logMain } from './logger'
 
 export type AuditAction =
-  | 'store.create' | 'store.update' | 'store.reorder' | 'store.setGroup' | 'store.archive' | 'store.restore' | 'store.deletePermanent' | 'store.purge'
+  | 'store.create' | 'store.update' | 'store.reorder' | 'store.setGroup' | 'store.archive' | 'store.restore' | 'store.deletePermanent' | 'store.purge' | 'store.export'
   | 'browser.clearData' | 'browser.partition.clean' | 'session.export' | 'session.import'
   | 'proxy.create' | 'proxy.update' | 'proxy.delete' | 'proxy.bind' | 'proxy.test'
   | 'extension.import' | 'extension.install' | 'extension.enable' | 'extension.disable' | 'extension.master' | 'extension.remove' | 'extension.reload' | 'extension.openDir'
