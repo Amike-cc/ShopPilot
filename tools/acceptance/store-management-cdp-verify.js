@@ -182,6 +182,18 @@ async function main() {
     await setValue(ui, '[data-test="store-group-filter"]', '')
     await sleep(300)
 
+    const singleArchive = await clickButtonInCard(ui, '验收店A-改', '归档')
+    await sleep(300)
+    const confirmShown = await ui.eval(`
+      const dialog = document.querySelector('[data-test="store-bulk-confirm"]')
+      return !!dialog && dialog.textContent.includes('归档')
+    `)
+    await click(ui, '[data-test="store-bulk-confirm-cancel"]')
+    await sleep(400)
+    const listAfterCancel = await ui.eval(`return await window.shopilot.store.list()`)
+    const stillActive = listAfterCancel.ok ? listAfterCancel.data.find(item => item.id === storeA)?.status : null
+    check('单店归档使用页内确认，取消后不执行', singleArchive.ok && confirmShown && stillActive !== 'archived', JSON.stringify({ confirmShown, stillActive }))
+
     const archived = await ui.eval(`return await window.shopilot.store.archive(${JSON.stringify(storeB)})`)
     check('归档接口成功', archived.ok === true)
     await ui.eval('location.reload(); return true')

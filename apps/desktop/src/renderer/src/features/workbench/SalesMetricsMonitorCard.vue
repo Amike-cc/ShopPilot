@@ -222,7 +222,7 @@ async function runNow(plan: SalesMetricsPlanView): Promise<void> {
   try {
     const result = await window.shopilot.salesMetrics.planRunNow(plan.storeId)
     if (!result.ok) notify(`立即采集失败：${result.error.message}`, 'error')
-    else notify(`${plan.storeName} 已加入采集队列（并发上限 2，按序执行）`, 'success')
+    else notify(`${plan.storeName} 已加入采集队列（手动并发上限 4，按序执行）`, 'success')
   } finally {
     busy.value = ''
     await load()

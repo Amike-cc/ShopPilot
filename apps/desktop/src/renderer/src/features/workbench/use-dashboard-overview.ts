@@ -12,7 +12,7 @@ import { useWorkspaceStore } from '../../stores/workspace'
  */
 
 export type LoadState = 'loading' | 'ready' | 'empty' | 'error'
-export type PeriodKey = 'today' | 'yesterday' | '7d' | '30d' | 'custom'
+export type PeriodKey = 'today' | 'yesterday' | '7d' | '30d'
 
 export interface SnapshotRow {
   id: string
@@ -73,14 +73,12 @@ export function useDashboardOverview(options: DashboardOverviewOptions) {
   let loadingSnapshots = false
   let stopStoreWatch: (() => void) | null = null
 
-  // 周期页签顺序：今日(默认) / 昨日 / 近 7 天 / 近 30 天 / 自定义日期
-  // （设计稿里默认是"近 7 天"，2026-10-02 用户要求改成"今日"）
+  // 周期页签：只保留采集真实提供的四种口径。没有日期选择器就不要放「自定义日期」
+  // （2026-11-10 审查：旧实现把「自定义日期」悄悄映射成近 30 天，属于假控件）。
   const periodOptions: Array<{ key: PeriodKey; label: string }> = [
     { key: 'today', label: '今日' }, { key: 'yesterday', label: '昨日' }, { key: '7d', label: '近 7 天' },
-    { key: '30d', label: '近 30 天' }, { key: 'custom', label: '自定义日期' }
+    { key: '30d', label: '近 30 天' }
   ]
-
-  const platformOptions = computed(() => [...new Set(snapshots.value.map(item => item.platform))].sort((a, b) => a.localeCompare(b, 'zh-CN')))
 
   /** 任务快照（store_snapshots）里的指标合计：自动采集缺该字段时的兜底来源 */
   function metricAggregate(metric: string, platform = 'all') {
@@ -96,12 +94,17 @@ export function useDashboardOverview(options: DashboardOverviewOptions) {
   //   · 只在**同一口径**（periodType）内相加：今日累计 / 近 7 天滚动 / 近 30 天滚动不能混加；
   //   · 采集数据缺失时才回落到任务快照，并在卡片上标明来源（数字必须能说清"从哪来、什么时候"）；
   //   · 订单数取 paidOrderCount（平台页面上的"成交订单"），无值时如实显示"该口径未提供"。
-  const PERIOD_TO_TYPE: Record<PeriodKey, CollectedPeriodType> = { today: 'TODAY', yesterday: 'YESTERDAY', '7d': 'LAST_7_DAYS', '30d': 'LAST_30_DAYS', custom: 'LAST_30_DAYS' }
-  const PERIOD_CAPTION: Record<PeriodKey, string> = { today: '今日累计', yesterday: '昨日', '7d': '近 7 天滚动', '30d': '近 30 天滚动', custom: '近 30 天滚动' }
+  const PERIOD_TO_TYPE: Record<PeriodKey, CollectedPeriodType> = { today: 'TODAY', yesterday: 'YESTERDAY', '7d': 'LAST_7_DAYS', '30d': 'LAST_30_DAYS' }
+  const PERIOD_CAPTION: Record<PeriodKey, string> = { today: '今日累计', yesterday: '昨日', '7d': '近 7 天滚动', '30d': '近 30 天滚动' }
 
   const collectedStores = ref<CollectedStore[]>([])
   const collectedState = ref<LoadState>('loading')
   const collectedFetchedAt = ref<number | null>(null)
+  /** 平台筛选：任务快照与自动采集任一有该平台就列出，避免只有自动采集时下拉框为空。 */
+  const platformOptions = computed(() => [...new Set([
+    ...snapshots.value.map(item => item.platform),
+    ...collectedStores.value.map(row => row.platform)
+  ])].sort((a, b) => a.localeCompare(b, 'zh-CN')))
 
   /** 相对时间：让"数据有多新"一眼可见（采集是最多 10 分钟一轮） */
   function relativeTime(ts: number | null | undefined): string {
@@ -283,7 +286,7 @@ export function useDashboardOverview(options: DashboardOverviewOptions) {
    * 其余口径维持原窗口（昨日 1 天 / 近 7 天 7 天 / 近 30 天与自定义 30 天）。
    */
   const trendWindowStart = computed(() => {
-    const days = period.value === 'yesterday' ? 1 : period.value === '30d' || period.value === 'custom' ? 30 : 7
+    const days = period.value === 'yesterday' ? 1 : period.value === '30d' ? 30 : 7
     return Date.now() - days * 86400000
   })
   /**

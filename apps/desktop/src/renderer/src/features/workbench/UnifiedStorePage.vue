@@ -9,7 +9,7 @@
       <div class="unified-page-actions">
         <button type="button" class="unified-button ghost" data-test="store-bulk-toggle" :disabled="!bridgeAvailable || view === 'trash' || bulkBusy" @click="toggleBulkMode">{{ bulkMode ? '退出批量' : '批量操作' }}</button>
         <button type="button" class="unified-button ghost" data-test="store-sort-toggle" :disabled="!bridgeAvailable || view !== 'active' || filteredStores.length < 2 || bulkMode" @click="sortMode = !sortMode">{{ sortMode ? '完成排序' : '调整顺序' }}</button>
-        <button type="button" class="unified-button ghost" data-test="store-batch-login" :disabled="!bridgeAvailable || batchRunning || !ws.stores.length" @click="runBatchLogin">{{ batchRunning ? `检测中 ${batchDone}/${batchTotal}` : '批量检测登录' }}</button>
+        <button type="button" class="unified-button ghost" data-test="store-batch-login" :title="`最多检测 ${BATCH_LOGIN_LIMIT} 家（按当前筛选顺序），超出部分本轮不检测`" :disabled="!bridgeAvailable || batchRunning || !ws.stores.length" @click="runBatchLogin">{{ batchRunning ? `检测中 ${batchDone}/${batchTotal}` : '批量检测登录' }}</button>
         <button type="button" class="unified-button ghost" :disabled="!bridgeAvailable" @click="refresh"><img class="button-art" :src="refreshGenIcon" alt="" />刷新</button>
         <button type="button" class="unified-button primary" :disabled="!bridgeAvailable" @click="openCreate"><img class="button-art" :src="addIcon" alt="" />添加店铺</button>
       </div>
@@ -390,10 +390,23 @@ async function submitCreate() {
   createOpen.value = false
   form.value = { name: '', platform: platformDefs[0]?.name || '拼多多', adminUrl: platformDefs[0]?.adminUrl || '', tags: '', notes: '', licenseName: '', licenseNo: '' }
 }
-async function toggleArchive(store: StoreRow) { if (store.status === 'archived') await ws.restoreStore(store.id); else if (window.confirm(`确认归档「${store.name}」？`)) await ws.archiveStore(store.id) }
-async function remove(store: StoreRow) { if (window.confirm(`确认将「${store.name}」移入回收站？`)) await ws.moveToTrash(store.id) }
+async function toggleArchive(store: StoreRow) {
+  if (store.status === 'archived') { await ws.restoreStore(store.id); return }
+  askBulk(`归档「${store.name}」？`, '归档后从左侧栏与「在用店铺」移除，可在「已归档」恢复。', async () => {
+    await ws.archiveStore(store.id)
+  })
+}
+async function remove(store: StoreRow) {
+  askBulk(`将「${store.name}」移入回收站？`, '店铺会从列表移除并关闭已打开的页面；可在回收站恢复或彻底删除。', async () => {
+    await ws.moveToTrash(store.id)
+  })
+}
 async function restore(id: string) { await ws.restoreStore(id) }
-async function purge(store: StoreRow) { if (window.confirm(`彻底删除「${store.name}」后不可恢复，确认继续？`)) await ws.purgeStore(store.id) }
+async function purge(store: StoreRow) {
+  askBulk(`彻底删除「${store.name}」？`, '彻底删除后不可恢复，店铺数据与本地浏览器分区都会被清理。', async () => {
+    await ws.purgeStore(store.id)
+  })
+}
 
 /**
  * 分组编辑浮层：页内轻量输入，不用 window.confirm/prompt（那会阻塞渲染进程并卡 CDP）。

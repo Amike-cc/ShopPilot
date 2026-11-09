@@ -184,6 +184,10 @@ async function main() {
       return !!tab
     `)
     await sleep(400)
+    check('环境页显示主进程会话状态', await ui.eval(`
+      const node = document.querySelector('[data-test="session-state"]')
+      return !!node && node.textContent.includes('会话状态')
+    `))
     const editorOpened = await click(ui, '[data-test="profile-edit"]')
     await sleep(500)
     check('指纹编辑 UI：工作区环境页可打开编辑器并带出当前 UA', openedWorkspace && envTab && editorOpened.ok
@@ -218,6 +222,7 @@ async function main() {
     const invoiceCard = await ui.eval(`return !!document.querySelector('#invoice-todo')`)
     check('AI 卸载后总览不再显示 AI 入口/卡片', !String(bodyAfter).includes('AI 电商助手') && !String(bodyAfter).includes('问问 AI') && navAi === false)
     check('AI 卸载后发票待办仍在（未卸载）', invoiceCard === true && String(bodyAfter).includes('待开发票'))
+    check('经营总览不再显示假的自定义日期', !String(bodyAfter).includes('自定义日期'))
 
     await ui.eval(`return await window.shopilot.settings.set('ui.apps.installedModules', ['products','invoices','tax','ai'])`)
   } finally {

@@ -238,6 +238,8 @@
 
           <div class="env-sec" data-test="session-sec">
             <div class="env-h">会话与 Cookie <button type="button" class="mini-btn env-action" data-test="session-check-login" :disabled="loginCheckBusy || !loginCheckReady" :title="loginCheckTitle" @click="checkLoginStatus">{{ loginCheckButtonText(loginCheckBusy) }}</button></div>
+            <!-- 主进程返回的会话状态：以前只写进 ref 没有上屏，用户看不到"需检查" -->
+            <div :class="['env-note', `session-state-${sessionState.kind}`]" data-test="session-state"><strong>会话状态：{{ sessionState.label }}</strong> · {{ sessionState.detail }}</div>
             <!-- 主动检测结果：tone 决定颜色，label + detail 直接上屏；结构不认识时如实显示「未识别」 -->
             <div v-if="loginCheckView" :class="['env-note', `login-check-${loginCheckView.tone}`]" data-test="session-check-login-result"><strong>{{ loginCheckView.label }}</strong> · {{ loginCheckView.detail }}</div>
             <!-- 行内提示：检测失败的原因，或按钮为什么点不动（不用 alert / window.confirm） -->
@@ -1602,6 +1604,9 @@ onBeforeUnmount(() => {
 .env-note.login-check-warning { color: #b54708; }
 .env-note.login-check-error { color: #b42318; }
 .env-note.login-check-info { color: var(--dash-text-muted); }
+.env-note.session-state-ready { color: #067647; }
+.env-note.session-state-partial { color: #b54708; }
+.env-note.session-state-error { color: #b42318; }
 .env-lock-state { padding: 1px 6px; border-radius: 4px; background: #eef1f7; color: var(--dash-text-muted); font-size: 9px; font-weight: 500; }
 .env-lock-state.locked { background: #fff4e5; color: #b54708; }
 .profile-editor { margin: 8px 0 2px; padding: 10px; border: 1px dashed var(--dash-border); border-radius: 9px; background: #f7f9fd; }
