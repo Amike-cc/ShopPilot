@@ -35,7 +35,7 @@
 
   // detail
   let detailVideos = [];
-  let detailMeta = { begin: '', end: '', done: false, error: '' };
+  let detailMeta = { begin: '', end: '', done: false, error: '', note: '' };
   let detailLoading = false;
   /** 详情加载代次：切竞品时旧请求还在飞，回来必须认得出来 */
   let detailRun = 0;
@@ -157,6 +157,46 @@
   function noteError(message) {
     diag.lastError = String(message || '');
     persistDiag();
+  }
+
+  /**
+   * 可重试的错误：风控/限流/网关抖动。
+   * 2026-11-09 实测：详情页打开瞬间的第一条 flow_more 常被「当前环境存在风险，请稍后重试」
+   * 拒绝，同一 URL 隔几秒重放就 st=0（页面自己的请求也是第二次才成功）——这类错误
+   * 只是冷却期，不能当最终失败一棒打死。参数类错误（如「店铺商品参数错误」）不重试。
+   */
+  const TRANSIENT_RE = /环境存在风险|请求过于频繁|操作频繁|访问频繁|稍后(再|重)试|请稍候|HTTP 5\d\d|请求超时|Failed to fetch|网络/;
+  /** 重试节奏：首次立即，之后 3s / 8s / 20s（合计 ~31s，覆盖实测的风控冷却窗口） */
+  const RETRY_DELAYS = [0, 3000, 8000, 20000];
+
+  function isTransientError(err) {
+    return TRANSIENT_RE.test(String((err && err.message) || err || ''));
+  }
+
+  /**
+   * 带风控冷却的接口请求：pageFetch + st 校验 + 瞬态错误自动重试。
+   * onWait(秒, 第几次重试) 用于把「冷却中」写进详情工具条，避免用户以为卡死。
+   */
+  async function pageFetchRetry(url, opts, onWait) {
+    let lastErr = null;
+    for (let i = 0; i < RETRY_DELAYS.length; i++) {
+      const wait = RETRY_DELAYS[i];
+      if (wait > 0) {
+        if (onWait) onWait(Math.round(wait / 1000), i);
+        await sleep(wait);
+      }
+      let json = null;
+      try {
+        json = await pageFetch(url, opts);
+      } catch (err) {
+        lastErr = err;
+      }
+      if (json && json.st === 0) return json;
+      if (json) lastErr = new Error(json.msg || ('st=' + json.st));
+      noteError(String((lastErr && lastErr.message) || lastErr || ''));
+      if (!isTransientError(lastErr)) throw lastErr || new Error('请求失败');
+    }
+    throw lastErr || new Error('请求失败');
   }
 
   /**
@@ -526,8 +566,12 @@
   const DETAIL_API = '/compass_api/shop/product/compete_product_detail/flow_source/flow_more';
   const RANK_PAGE_SIZE = 10;     // 榜单接口把 page_size 卡在 10
   const RANK_MAX_PAGE = 20;      // 10 × 20 = 200 条
-  const DETAIL_PAGE_SIZE = 10;   // 改版后实测 10 可用（100 未验证，不用赌）
-  const DETAIL_MAX_PAGE = 50;    // 上限 500 条
+  // 2026-11-09 实测：flow_more 的 page_size 20/50/100/200 都可用（返回对应行数）。
+  // 从 10 提到 100：360 条只要 4 个请求，不再 36 连发——风控/限流概率随之大降。
+  const DETAIL_PAGE_SIZE = 100;
+  const DETAIL_MAX_PAGE = 20;    // 上限 2000 条
+  /** 页间停顿（再加 0~250ms 抖动）：保持"人在翻页"的节奏，别把接口打成爬虫 */
+  const PAGE_GAP_MS = 450;
   const DETAIL_COPY_BATCH = 20;  // 单次批量复制上限：换链接口有配额/频率限制，一次几百条只会全失败
   /** 兜底参数：只在页面自己的请求还没出现时用（类目跟着店铺走，不能长期写死） */
   const DEFAULT_CFG = {
@@ -661,7 +705,7 @@
       rank_data_type: '1',
       activity_id: ''
     })).toString();
-    const json = await pageFetch(`${location.origin}${RANK_API}?${qs}`);
+    const json = await pageFetchRetry(`${location.origin}${RANK_API}?${qs}`);
     if (!json || json.st !== 0) throw new Error((json && json.msg) || ('st=' + (json && json.st)));
     const products = (json.data && json.data.data_result) || [];
     return { rows: parseRank(json), products: products.length };
@@ -681,21 +725,19 @@
       let emptyStreak = 0;
       for (let p = 1; p <= RANK_MAX_PAGE; p++) {
         let page = null;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try { page = await fetchRankPage(p, params); break; }
-          catch (err) {
-            lastError = String((err && err.message) || err);
-            noteError(lastError);
-            if (!attempt) await sleep(1200);
-          }
+        try {
+          page = await fetchRankPage(p, params);   // 瞬态错误（风控/限流/5xx）在内部冷却重试
+        } catch (err) {
+          lastError = String((err && err.message) || err);
+          noteError(lastError);
+          break;
         }
-        if (page === null) break;
         applyRankRows(page.rows);
         // page_size 卡的是「商品数」，不是视频条数——必须用商品数判断是否到底
         emptyStreak = page.products ? 0 : emptyStreak + 1;
         if (emptyStreak >= 2) break;
         if (page.products < RANK_PAGE_SIZE) break;
-        await sleep(300);
+        await sleep(PAGE_GAP_MS + Math.random() * 250);
       }
     } finally {
       rankLoadAt = performance.now();
@@ -708,7 +750,7 @@
     }
   }
 
-  async function fetchDetailPage(pid, dr, pageNo) {
+  async function fetchDetailPage(pid, dr, pageNo, pageSize) {
     // 页面最近一次 flow_more 请求的参数优先（列集合/排序/周期都以页面为准）
     const req = latestRequestParams(DETAIL_API) || {};
     const q = new URLSearchParams({
@@ -721,12 +763,16 @@
       activity_id: urlParam('activity_id') || req.activity_id || '',
       index_selected: urlParam('index_selected') || req.index_selected ||
         'pay_amt,pay_ucnt,dh_product_click_ratio_uv,pay_cnt,pay_combo_cnt',
-      page_size: String(DETAIL_PAGE_SIZE),
+      page_size: String(pageSize || DETAIL_PAGE_SIZE),
       page_no: String(pageNo),
       sort_field: urlParam('sort_field') || req.sort_field || 'pay_amt',
       is_asc: urlParam('is_asc') || req.is_asc || 'false'
     });
-    const json = await pageFetch(`${location.origin}${DETAIL_API}?${q.toString()}`);
+    const json = await pageFetchRetry(`${location.origin}${DETAIL_API}?${q.toString()}`, null, function (sec, attempt) {
+      // 冷却中把状态写进详情工具条：用户能看到还在重试，而不是以为卡死
+      detailMeta.note = `服务端限流，${sec} 秒后自动重试（第 ${attempt} 次）`;
+      renderDetailBar();
+    });
     if (!json || json.st !== 0) throw new Error((json && json.msg) || ('st=' + (json && json.st)));
     return json;
   }
@@ -999,7 +1045,7 @@
   function loadDetail() {
     const run = ++detailRun;
     detailLoading = true;
-    detailMeta = { begin: '', end: '', done: false, error: '' };
+    detailMeta = { begin: '', end: '', done: false, error: '', note: '' };
     detailVideos = [];
     clearDetailRowButtons();
     renderDetailBar();
@@ -1017,16 +1063,20 @@
         persistDiag();
         if (!ready.ok) throw new Error('页面桥初始化失败（' + ready.reason + '）');
 
+        // 服务端可能钳制 page_size：第 1 页实际返回多少，后续就按多少判断「到底」
+        let pageSize = DETAIL_PAGE_SIZE;
         for (let p = 1; p <= DETAIL_MAX_PAGE; p++) {
-          const json = await fetchDetailPage(pid, dr, p);
+          const json = await fetchDetailPage(pid, dr, p, pageSize);
           if (run !== detailRun) return;          // 已经切到别的竞品，旧请求直接丢弃
+          detailMeta.note = '';
           const rawCount = detailRowsOf(json).length;
+          if (p === 1 && rawCount > 0 && rawCount < pageSize) pageSize = rawCount;
           applyDetailRows(json);
           renderDetailBar();
           // 用接口原始行数判断到底：页面推送可能先塞过第 1 页，去重后的 added 会假性为 0
           if (!rawCount) break;
-          if (rawCount < DETAIL_PAGE_SIZE) break;
-          await sleep(300);
+          if (rawCount < pageSize) break;
+          await sleep(PAGE_GAP_MS + Math.random() * 250);
         }
         if (run !== detailRun) return;
         detailMeta.error = '';
@@ -1038,10 +1088,14 @@
         if (run !== detailRun) return;            // 旧代次不许改写新一次加载的 UI 状态
         detailLoading = false;
         detailMeta.done = true;
+        detailMeta.note = '';
         renderDetailBar();
         injectDetailRowButtons();
         if (!detailVideos.length) {
-          renderErrorChip('罗盘下载：竞品视频抓取失败' + (detailMeta.error ? '：' + detailMeta.error : '') + '（打开「视频分析」标签页翻一页可重试）');
+          renderErrorChip('罗盘下载：竞品视频抓取失败' + (detailMeta.error ? '：' + detailMeta.error : '') + '（稍后点插件弹窗「重新抓取」重试）');
+        } else if (detailMeta.error) {
+          // 拿到一部分但被限流打断：如实告知，别让用户以为已经拿全
+          renderErrorChip('罗盘下载：已获取 ' + detailVideos.length + ' 条视频，服务端限流中断；稍后点插件弹窗「重新抓取」继续');
         } else {
           renderErrorChip(null);
         }
@@ -1181,7 +1235,9 @@
     const range = fmtRange(detailMeta.begin, detailMeta.end);
     let text;
     if (detailLoading) {
-      text = `抓取中 · 已收 ${detailVideos.length} 条`;
+      text = detailMeta.note
+        ? `${detailMeta.note} · 已收 ${detailVideos.length} 条`
+        : `抓取中 · 已收 ${detailVideos.length} 条`;
     } else if (detailMeta.error) {
       text = `抓取失败：${detailMeta.error}`;
     } else if (!detailVideos.length) {
