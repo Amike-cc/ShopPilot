@@ -1,3 +1,18 @@
+# ShopPilot 0.9.18 变更说明（店铺清单 CSV 导入：预览后确认）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
+
+## 本次更新
+
+- 店铺管理新增「导入清单」：选择 CSV 后先显示预览，区分「可新增 / 重复 / 不合法」，并列出每行原因。
+- 只导入勾选的可新增行；重复（同名 + 同平台 + 同后台地址）与不合法行不会写入。
+- 导入只创建店铺元数据（名称/平台/地址/分组/标签/负责人/地区/编码/执照/备注），**不包含**登录态、Cookie 或代理凭据。
+- 主进程对每一行重新用店铺 schema 校验；失败按行号+店铺名如实回报。
+- 修复 Vue reactive proxy 直接过 IPC 无法 structured clone 的问题：提交前转普通 JSON。
+- 新增 `store-csv` 导入解析单测；`store-import-cdp-verify.js` 4 项真机验收（1 新增 / 1 重复 / 1 不合法）。
+
+---
+
 # ShopPilot 0.9.17 变更说明（店铺清单 CSV 导出）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。

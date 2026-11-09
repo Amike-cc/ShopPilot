@@ -111,6 +111,10 @@ export const IPC_CHANNELS = {
   STORE_LIST: 'store:list',
   /** 导出店铺清单 CSV（只含元数据，不含会话/凭据） */
   STORE_EXPORT_CSV: 'store:exportCsv',
+  /** 导入店铺清单：解析 CSV 并返回 new/duplicate/invalid 预览（不落库） */
+  STORE_IMPORT_PREVIEW: 'store:importPreview',
+  /** 导入店铺清单：把预览中选中的行真正创建为店铺 */
+  STORE_IMPORT_APPLY: 'store:importApply',
   STORE_GET: 'store:get',
   STORE_CREATE: 'store:create',
   STORE_UPDATE: 'store:update',
@@ -667,6 +671,8 @@ export interface IpcContract {
   // ------------------------------ 店铺管理 §6.1 ------------------------------
   'store:list': { req: void; res: Store[] }
   'store:exportCsv': { req: void; res: { canceled?: boolean; path?: string; rows?: number } }
+  'store:importPreview': { req: void; res: { canceled?: boolean; rows?: Array<Record<string, unknown>>; counts?: { new: number; duplicate: number; invalid: number } } }
+  'store:importApply': { req: { rows: Array<Record<string, unknown>> }; res: { created: number; failed: Array<{ line: number; name: string; message: string }> } }
   'store:get': { req: z.input<typeof storeIdInputSchema>; res: Store }
   'store:create': { req: z.input<typeof storeCreateSchema>; res: Store }
   'store:update': { req: z.input<typeof storeUpdateSchema>; res: Store }

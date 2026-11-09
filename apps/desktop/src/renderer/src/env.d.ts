@@ -41,6 +41,8 @@ declare global {
         reorder: (orderedStoreIds: string[]) => Promise<IPCResult>
         setGroup: (storeId: string, groupName: string | null) => Promise<IPCResult>
         exportCsv: () => Promise<IPCResult>
+        importPreview: () => Promise<IPCResult>
+        importApply: (rows: Array<Record<string, unknown>>) => Promise<IPCResult>
         trashList: () => Promise<IPCResult>
         purge: (storeId: string) => Promise<IPCResult>
       }

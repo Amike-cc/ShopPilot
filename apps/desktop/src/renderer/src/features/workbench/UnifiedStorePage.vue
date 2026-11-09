@@ -8,6 +8,7 @@
       </div>
       <div class="unified-page-actions">
         <button type="button" class="unified-button ghost" data-test="store-export-csv" :disabled="!bridgeAvailable || exportingStores || !ws.stores.length" @click="exportStoreList">{{ exportingStores ? '导出中…' : '导出清单' }}</button>
+        <button type="button" class="unified-button ghost" data-test="store-import-csv" :disabled="!bridgeAvailable || importBusy" @click="openImport">{{ importBusy ? '读取中…' : '导入清单' }}</button>
         <button type="button" class="unified-button ghost" data-test="store-bulk-toggle" :disabled="!bridgeAvailable || view === 'trash' || bulkBusy" @click="toggleBulkMode">{{ bulkMode ? '退出批量' : '批量操作' }}</button>
         <button type="button" class="unified-button ghost" data-test="store-sort-toggle" :disabled="!bridgeAvailable || view !== 'active' || filteredStores.length < 2 || bulkMode" @click="sortMode = !sortMode">{{ sortMode ? '完成排序' : '调整顺序' }}</button>
         <button type="button" class="unified-button ghost" data-test="store-batch-login" :title="`最多检测 ${BATCH_LOGIN_LIMIT} 家（按当前筛选顺序），超出部分本轮不检测`" :disabled="!bridgeAvailable || batchRunning || !ws.stores.length" @click="runBatchLogin">{{ batchRunning ? `检测中 ${batchDone}/${batchTotal}` : '批量检测登录' }}</button>
@@ -124,6 +125,30 @@
         <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" @click="editOpen = false"><img class="button-art" :src="storeCloseIcon" alt="" />取消</button><button type="submit" class="unified-button primary" data-test="store-edit-save" :disabled="editSaving"><img class="button-art" :src="manualEditIcon" alt="" />{{ editSaving ? '保存中…' : '保存修改' }}</button></div>
       </form>
     </div>
+    <div v-if="importOpen" class="unified-overlay" @click.self="importOpen = false">
+      <section class="unified-dialog store-import-dialog" data-test="store-import-dialog">
+        <div class="unified-dialog-head"><div><span class="dashboard-eyebrow">IMPORT STORES</span><h2>导入店铺清单</h2></div><button type="button" class="unified-icon-button" @click="importOpen = false"><img :src="closeIcon" alt="" /></button></div>
+        <p class="unified-muted">预览来自 CSV，只导入选中的「可新增」行；重复与不合法行不会写入。导入只创建店铺元数据，不含登录态与代理凭据。</p>
+        <div v-if="importCounts" class="import-summary" data-test="store-import-summary">可新增 {{ importCounts.new }} · 重复 {{ importCounts.duplicate }} · 不合法 {{ importCounts.invalid }}</div>
+        <div v-if="importError" class="unified-alert error" role="alert">{{ importError }}</div>
+        <div class="import-table-wrap">
+          <table class="import-table" data-test="store-import-table">
+            <thead><tr><th><input type="checkbox" aria-label="全选可新增" :checked="importRows.filter(row => row.status === 'new').length > 0 && importRows.filter(row => row.status === 'new').every(row => isImportSelected(Number(row.line)))" @change="toggleImportAll" /></th><th>行</th><th>店铺</th><th>平台</th><th>状态</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr v-for="row in importRows" :key="row.line" :class="`import-${row.status}`">
+                <td><input type="checkbox" :data-test="'store-import-row-' + row.line" :disabled="row.status !== 'new'" :checked="isImportSelected(Number(row.line))" @change="toggleImportLine(Number(row.line))" /></td>
+                <td>{{ row.line }}</td>
+                <td>{{ row.name || '—' }}</td>
+                <td>{{ row.platform || '—' }}</td>
+                <td><span :class="['import-status', row.status]">{{ row.status === 'new' ? '可新增' : row.status === 'duplicate' ? '重复' : '不合法' }}</span></td>
+                <td class="import-reasons">{{ (row.reasons || []).join('；') || '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" @click="importOpen = false">取消</button><button type="button" class="unified-button primary" data-test="store-import-apply" :disabled="importBusy || !importSelected.length" @click="submitImport">{{ importBusy ? '导入中…' : `导入 ${importSelected.length} 家` }}</button></div>
+      </section>
+    </div>
     <div v-if="bulkProxyOpen" class="unified-overlay" @click.self="bulkProxyOpen = false">
       <form class="unified-dialog" data-test="store-bulk-proxy-dialog" @submit.prevent="submitBulkProxy">
         <div class="unified-dialog-head"><div><span class="dashboard-eyebrow">BULK PROXY</span><h2>批量绑定代理</h2></div><button type="button" class="unified-icon-button" @click="bulkProxyOpen = false"><img :src="closeIcon" alt="" /></button></div>
@@ -195,6 +220,20 @@ const bulkProxyOpen = ref(false)
 const bulkProxyId = ref('')
 const bulkProxyList = ref<Array<{ id: string; label: string | null; host: string; port: number; type: string }>>([])
 const exportingStores = ref(false)
+const importOpen = ref(false)
+const importBusy = ref(false)
+const importError = ref('')
+interface ImportPreviewRow {
+  line: number
+  name: string
+  platform: string
+  status: 'new' | 'duplicate' | 'invalid'
+  reasons: string[]
+  [key: string]: unknown
+}
+const importRows = ref<ImportPreviewRow[]>([])
+const importCounts = ref<{ new: number; duplicate: number; invalid: number } | null>(null)
+const importSelected = ref<number[]>([])
 const view = ref<'active' | 'archived' | 'trash'>('active')
 const createOpen = ref(false)
 const creating = ref(false)
@@ -425,6 +464,56 @@ async function exportStoreList(): Promise<void> {
     exportingStores.value = false
   }
 }
+async function openImport(): Promise<void> {
+  if (!bridgeAvailable || importBusy.value) return
+  importBusy.value = true
+  importError.value = ''
+  try {
+    const result = await window.shopilot.store.importPreview()
+    if (!result.ok) { ws.toast('读取店铺清单失败：' + result.error.message, 'error'); return }
+    if (result.data?.canceled) return
+    importRows.value = Array.isArray(result.data?.rows) ? result.data.rows : []
+    importCounts.value = result.data?.counts || null
+    importSelected.value = importRows.value.filter(row => row.status === 'new').map(row => Number(row.line))
+    importOpen.value = true
+  } catch (error) {
+    ws.toast('读取店铺清单失败：' + String((error as Error)?.message || error), 'error')
+  } finally {
+    importBusy.value = false
+  }
+}
+function isImportSelected(line: number): boolean { return importSelected.value.includes(line) }
+function toggleImportLine(line: number): void {
+  importSelected.value = isImportSelected(line)
+    ? importSelected.value.filter(item => item !== line)
+    : [...importSelected.value, line]
+}
+function toggleImportAll(): void {
+  const newLines = importRows.value.filter(row => row.status === 'new').map(row => Number(row.line))
+  importSelected.value = newLines.every(line => isImportSelected(line)) ? [] : newLines
+}
+async function submitImport(): Promise<void> {
+  if (importBusy.value) return
+  const chosen = importRows.value.filter(row => row.status === 'new' && isImportSelected(Number(row.line)))
+  if (!chosen.length) return
+  importBusy.value = true
+  importError.value = ''
+  try {
+    // Vue reactive proxy 不能直接 structured clone 过 IPC；先转成普通 JSON。
+    const result = await window.shopilot.store.importApply(JSON.parse(JSON.stringify(chosen)))
+    if (!result.ok) throw new Error(result.error.message)
+    const created = Number(result.data?.created || 0)
+    const failedCount = Array.isArray(result.data?.failed) ? result.data.failed.length : 0
+    await ws.refreshStores()
+    importOpen.value = false
+    importRows.value = []
+    ws.toast(`已导入 ${created} 家店铺${failedCount ? `，${failedCount} 家失败` : ''}`, failedCount ? 'info' : 'success')
+  } catch (error) {
+    importError.value = String((error as Error)?.message || error)
+  } finally {
+    importBusy.value = false
+  }
+}
 function onPlatformChange(next: string, previous: string) {
   const platform = platformDefs.find(item => item.name === next)
   // 和"上一个平台"的默认地址比，而不是和目录第一家比：连续切换三次平台时，
@@ -575,5 +664,18 @@ onMounted(() => { if (bridgeAvailable) { refresh(); void ws.refreshTrash() } els
 .bulk-bar strong{margin-right:4px;color:#4c1d95;font-size:12px}
 .store-select{display:flex;align-items:center;justify-content:center;width:22px;height:22px;flex:0 0 22px;border-radius:6px;background:#ffffff;border:1px solid var(--dash-border)}
 .store-select input{width:14px;height:14px;accent-color:#6d4aff;cursor:pointer}
+.store-import-dialog{width:min(920px,100%)}
+.import-summary{margin:6px 0 10px;color:var(--dash-text-soft);font-size:11px}
+.import-table-wrap{max-height:420px;overflow:auto;border:1px solid var(--dash-border);border-radius:10px}
+.import-table{width:100%;border-collapse:collapse;font-size:11px}
+.import-table th,.import-table td{padding:7px 8px;border-bottom:1px solid rgba(111,137,177,.12);text-align:left;vertical-align:top}
+.import-table th{position:sticky;top:0;background:#f7f9fd;color:var(--dash-text-muted);font-weight:500;white-space:nowrap}
+.import-status{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;white-space:nowrap}
+.import-status.new{background:#e8f5ee;color:#027a48}
+.import-status.duplicate{background:#fff4e5;color:#b54708}
+.import-status.invalid{background:#fef3f2;color:#b42318}
+.import-reasons{max-width:340px;color:var(--dash-text-muted);word-break:break-word}
+.import-duplicate .import-reasons{color:#b54708}
+.import-invalid .import-reasons{color:#b42318}
 @media (max-width:600px){.unified-form-grid{grid-template-columns:1fr}}
 </style>

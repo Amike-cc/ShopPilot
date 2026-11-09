@@ -5,7 +5,7 @@
 
 import { familyHandle } from './family-handle'
 import { IpcMainInvokeEvent, BrowserWindow, dialog, app } from 'electron'
-import { writeFileSync } from 'fs'
+import { writeFileSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { IPC_CHANNELS } from '@shared/contracts/ipc'
 import type { IPCResult } from '@shared/contracts/ipc'
@@ -20,8 +20,9 @@ import { ERROR_CODES } from '@shared/errors/error-codes'
 import * as StoreManager from '../stores/store-manager'
 import * as TaskStore from '../tasks/task-store'
 import * as Runner from '../tasks/task-runner'
-import { buildStoreCsv } from '@shared/store-csv'
+import { buildStoreCsv, parseStoreCsv } from '@shared/store-csv'
 import { ensureCsvExtension } from '@shared/invoice-csv'
+import { platformAdminUrl } from '@shared/constants/platforms'
 import { writeAudit } from '../services/audit-logger'
 import { randomUUID } from 'crypto'
 import { ipcOk as success, ipcFail as error, ipcErrFromUnknown } from './envelope'
@@ -33,8 +34,11 @@ function generateRequestId(): string {
   return randomUUID()
 }
 
-function invalidInput(requestId: string, issues: Array<{ path: PropertyKey[]; message: string }>): IPCResult {
-  return error(
+function storeIdentityKey(name: string, platform: string, adminUrl: string): string {
+  return `${name.trim().toLowerCase()}\u0000${platform.trim().toLowerCase()}\u0000${adminUrl.trim().toLowerCase()}`
+}
+
+function invalidInput(requestId: string, issues: Array<{ path: PropertyKey[]; message: string }>): IPCResult {  return error(
     ERROR_CODES.INVALID_ARGUMENT.code,
     ERROR_CODES.INVALID_ARGUMENT.message,
     requestId,
@@ -95,6 +99,95 @@ export function registerStoreHandlers(): void {
     } catch (err: unknown) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, String((err as Error)?.message || err), requestId)
     }
+  })
+
+  // store:importPreview - 选择 CSV 并解析预览（不落库）
+  handle(IPC_CHANNELS.STORE_IMPORT_PREVIEW, async (): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    try {
+      const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+      const testFile = process.env.SHOPILOT_ACCEPTANCE === '1' ? String(process.env.SHOPILOT_TEST_STORE_IMPORT_CSV || '') : ''
+      let filePath = testFile
+      if (!filePath) {
+        const picked = await dialog.showOpenDialog(win, {
+          title: '选择店铺清单 CSV',
+          properties: ['openFile'],
+          filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
+        })
+        if (picked.canceled || !picked.filePaths?.length) return success({ canceled: true }, requestId)
+        filePath = picked.filePaths[0]
+      }
+      const text = readFileSync(filePath, 'utf8')
+      const parsed = parseStoreCsv(text, 500)
+      if (parsed.headerError) return error(ERROR_CODES.INVALID_ARGUMENT.code, parsed.headerError, requestId)
+      const existing = new Set(StoreManager.listStores().map(store => storeIdentityKey(store.name, store.platform, store.adminUrl)))
+      const counts = { new: 0, duplicate: 0, invalid: 0 }
+      const rows = parsed.rows.map(row => {
+        const reasons = [...row.errors]
+        let status: 'new' | 'duplicate' | 'invalid' = 'new'
+        if (reasons.length) status = 'invalid'
+        else if (existing.has(storeIdentityKey(row.name, row.platform, row.adminUrl))) { status = 'duplicate'; reasons.push('同名/同平台/同地址的店铺已存在') }
+        if (status === 'new') counts.new++
+        else if (status === 'duplicate') counts.duplicate++
+        else counts.invalid++
+        return { ...row, status, reasons }
+      })
+      return success({ rows, counts }, requestId)
+    } catch (err: unknown) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, String((err as Error)?.message || err), requestId)
+    }
+  })
+
+  // store:importApply - 把预览中选中的行真正创建为店铺（逐行校验，失败如实回报）
+  handle(IPC_CHANNELS.STORE_IMPORT_APPLY, async (_event: IpcMainInvokeEvent, input: { rows?: unknown }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    const rows = Array.isArray(input?.rows) ? input.rows.slice(0, 500) as Array<Record<string, unknown>> : []
+    if (!rows.length) return error(ERROR_CODES.INVALID_ARGUMENT.code, '没有可导入的店铺', requestId)
+    let created = 0
+    const failed: Array<{ line: number; name: string; message: string }> = []
+    const existing = new Set(StoreManager.listStores().map(store => storeIdentityKey(store.name, store.platform, store.adminUrl)))
+    for (const raw of rows) {
+      const line = Number(raw.line) || 0
+      const name = String(raw.name || '').trim()
+      const platform = String(raw.platform || '').trim()
+      try {
+        const candidate = {
+          name,
+          platform,
+          adminUrl: String(raw.adminUrl || '').trim() || platformAdminUrl(platform),
+          tags: Array.isArray(raw.tags) ? raw.tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 50) : [],
+          notes: String(raw.notes || '').trim(),
+          owner: String(raw.owner || '').trim(),
+          region: String(raw.region || '').trim(),
+          externalCode: String(raw.externalCode || '').trim(),
+          licenseName: String(raw.licenseName || '').trim(),
+          licenseNo: String(raw.licenseNo || '').trim()
+        }
+        const parsed = storeCreateSchema.safeParse(candidate)
+        if (!parsed.success) {
+          failed.push({ line, name, message: parsed.error.issues[0]?.message || '字段不合法' })
+          continue
+        }
+        const key = storeIdentityKey(parsed.data.name, parsed.data.platform, parsed.data.adminUrl || '')
+        if (existing.has(key)) {
+          failed.push({ line, name, message: '同名/同平台/同地址的店铺已存在' })
+          continue
+        }
+        const store = StoreManager.createStore(parsed.data)
+        const groupName = String(raw.groupName || '').trim().slice(0, 120)
+        if (groupName) {
+          try { StoreManager.setStoreGroup(store.id, groupName) } catch { /* 分组失败不影响店铺本身 */ }
+        }
+        existing.add(key)
+        created++
+      } catch (err: unknown) {
+        failed.push({ line, name, message: String((err as Error)?.message || err) })
+      }
+    }
+    writeAudit('store.import', created ? 'success' : 'failure', {
+      requestId: JSON.stringify({ created, failed: failed.length })
+    })
+    return success({ created, failed }, requestId)
   })
 
   // store:get
