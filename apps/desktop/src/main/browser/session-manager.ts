@@ -85,17 +85,16 @@ function highEntropyHeaders(ch: NonNullable<ReturnType<typeof parseUaClientHints
 const VIDEO_DOWNLOAD_EXT_RE = /\.(mp4|webm|mov|m4v|avi|mkv|flv|wmv|mpg|mpeg|3gp|ts)$/i
 
 /**
- * 视频「一批只问一次」状态（2026-11-02）：
+ * 视频「一批只问一次」的会话窗口（2026-11-02）。
+ *
+ * 状态**按店铺 session 各自持有**（定义在 will-download 的注册作用域里），
+ * 不能放模块级单例：店铺 A 选定文件夹后 60 秒内，店铺 B 的视频会免问直接落进 A 的目录。
  *   · videoFolder / expiresAt —— 用户选定的文件夹会话，最后一个视频后 60s 过期；
  *   · videoFolderAsking —— 文件夹选择框打开期间到达的后续视频挂起等待；
  *   · videoPendingNames —— 挂起中的 url→原始文件名（确认后随批重发）；
  *   · videoReissueNames —— 重发时恢复原始文件名（downloadURL 会丢 download 属性）。
  */
 const VIDEO_FOLDER_SESSION_MS = 60 * 1000
-const videoFolder: { dir: string; expiresAt: number } = { dir: '', expiresAt: 0 }
-let videoFolderAsking = false
-const videoPendingNames = new Map<string, string>()
-const videoReissueNames = new Map<string, string>()
 
 /** 唯一放行的权限：剪贴板**写入**（页面的"复制"按钮要用）。读取一律拒绝——
  *  剪贴板里可能是用户刚复制的密码/验证码/订单信息，页面没有理由能读到它。
@@ -446,6 +445,11 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
   // 一次下载写 N 条 downloads 记录 + N 次 mkdirSync（2026-09-28 审查确认）。
   if (!(sess as any).__downloadHooked) {
     (sess as any).__downloadHooked = true
+    // 这批状态只属于当前店铺 session：不同店铺绝不会串文件夹/串挂起队列。
+    const videoFolder: { dir: string; expiresAt: number } = { dir: '', expiresAt: 0 }
+    let videoFolderAsking = false
+    const videoPendingNames = new Map<string, string>()
+    const videoReissueNames = new Map<string, string>()
     sess.on('will-download', (event, item, webContents) => {
     try {
       const pageUrl = (() => { try { return webContents.getURL() } catch { return undefined } })()

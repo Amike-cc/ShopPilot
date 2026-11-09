@@ -659,8 +659,7 @@ function addRowToAggregate(target: AnalyticsAggregate, row: AnalyticsMetricRow):
  * 指定周期：只取该周期的自动采集行；任务快照没有周期字段，不参与该筛选（避免把"某天的快照"
  * 冒充成"近 7 天"）。
  */
-export function overviewAnalyticsSummary(periodType: AnalyticsPeriodFilter = 'ALL'): AnalyticsSummary {
-  const db = getDatabase()
+export function overviewAnalyticsSummary(periodType: AnalyticsPeriodFilter = 'ALL'): AnalyticsSummary {  const db = getDatabase()
   const periodFilter = periodType === 'ALL' ? null : periodType
   const stores = db.prepare(
     'SELECT id, name, platform FROM stores WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at DESC'
@@ -768,3 +767,50 @@ export function overviewAnalyticsSummary(periodType: AnalyticsPeriodFilter = 'AL
     totals
   }
 }
+
+/**
+ * 发票/涉税后台采集的运行历史（2026-11-10）。
+ *
+ * 任务中心 UI 已按产品决定移除，但后台采集失败不能只剩"本次没读到"——
+ * 各自数据页需要一个只读入口看到最近几次运行的错误码/错误消息/状态原因。
+ * 只按任务名前缀认领（与 isBackgroundCollectTask 同一口径），不改任务定义。
+ */
+export interface CollectionHistoryRow {
+  runId: string
+  taskName: string
+  storeName: string
+  status: string
+  startedAt: number | null
+  finishedAt: number | null
+  errorCode: string | null
+  errorMessage: string | null
+  statusReason: string | null
+}
+
+export function collectionHistory(domain: 'invoice' | 'tax', limit = 20): CollectionHistoryRow[] {
+  const db = getDatabase()
+  const prefix = domain === 'invoice' ? INVOICE_TASK_PREFIX : TAX_TASK_PREFIX
+  const rows = db.prepare(`
+    SELECT r.id AS runId, t.name AS taskName, COALESCE(s.name, r.store_id) AS storeName,
+           r.status, r.started_at AS startedAt, r.finished_at AS finishedAt,
+           r.error_code AS errorCode, r.error_message AS errorMessage, r.status_reason AS statusReason
+    FROM task_runs r
+    JOIN tasks t ON t.id = r.task_id
+    LEFT JOIN stores s ON s.id = r.store_id
+    WHERE t.name LIKE ?
+    ORDER BY r.rowid DESC
+    LIMIT ?
+  `).all(`${prefix}%`, Math.max(1, Math.min(100, limit))) as any[]
+  return rows.map(row => ({
+    runId: String(row.runId),
+    taskName: String(row.taskName || ''),
+    storeName: String(row.storeName || ''),
+    status: String(row.status || ''),
+    startedAt: row.startedAt == null ? null : Number(row.startedAt),
+    finishedAt: row.finishedAt == null ? null : Number(row.finishedAt),
+    errorCode: row.errorCode == null ? null : String(row.errorCode),
+    errorMessage: row.errorMessage == null ? null : String(row.errorMessage),
+    statusReason: row.statusReason == null ? null : String(row.statusReason)
+  }))
+}
+

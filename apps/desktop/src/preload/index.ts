@@ -136,6 +136,8 @@ const api = {
     analytics: (input?: { periodType?: string }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_ANALYTICS, input ?? {}),
     /** 数据分析：把当前周期/平台的经营指标导出为 CSV（弹保存框） */
     analyticsExport: (input?: { periodType?: string; platform?: string }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_ANALYTICS_EXPORT, input ?? {}),
+    /** 发票/涉税后台采集最近运行记录（只读） */
+    collectionHistory: (domain: 'invoice' | 'tax', limit?: number): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_COLLECTION_HISTORY, { domain, limit }),
     /** 发票中心：各店铺的待开票信息（来自发票页 readTable 快照） */
     invoiceCenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_INVOICE_CENTER),
     /** 发票中心：把待开票清单导出为 CSV（弹保存框）。传 licenseKey = 只导出该开票主体的行（跟随屏上筛选） */

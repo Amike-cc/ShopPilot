@@ -322,6 +322,8 @@ export const IPC_CHANNELS = {
   OVERVIEW_ANALYTICS: 'overview:analytics',
   // 数据分析：把当前周期/平台的经营指标导出为 CSV（弹保存框）
   OVERVIEW_ANALYTICS_EXPORT: 'overview:analyticsExport',
+  // 发票/涉税后台采集的运行历史（只读；任务中心已移除，记录在各自页面内查看）
+  OVERVIEW_COLLECTION_HISTORY: 'overview:collectionHistory',
   // 发票中心：汇总各店铺的**待开票信息**（来自发票页 readTable 快照）
   OVERVIEW_INVOICE_CENTER: 'overview:invoiceCenter',
   // 发票中心：把当前待开票清单导出为 CSV（弹保存框；只写文件，不上传）

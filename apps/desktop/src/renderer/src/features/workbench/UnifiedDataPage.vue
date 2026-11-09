@@ -2,7 +2,7 @@
   <section :class="['unified-page unified-data-page', { 'invoice-center-page': mode === 'invoices', 'tax-report-page': mode === 'tax' }]" :data-test="`unified-${mode}-page`">
     <header class="unified-page-head">
       <div><span class="dashboard-eyebrow">WORKSPACE / DATA</span><h1>{{ title }}</h1><p>{{ subtitle }}</p></div>
-      <div class="unified-page-actions"><button v-if="mode !== 'analytics'" type="button" class="unified-button ghost" data-test="data-module-settings" @click="settingsOpen = true">设置</button><button v-if="mode === 'analytics'" type="button" class="unified-button ghost" data-test="analytics-export" :disabled="analyticsExporting || !analyticsHasData" @click="exportAnalytics"><img class="button-icon" :src="dataExportSheetIcon" alt="" />{{ analyticsExporting ? '导出中…' : '导出经营指标' }}</button><button v-if="mode !== 'invoices'" type="button" class="unified-button ghost" :disabled="loading" @click="load"><img class="button-icon" :src="dataSyncSheetIcon" alt="" />{{ loading ? '读取中…' : '刷新数据' }}</button><template v-if="mode === 'invoices'">
+      <div class="unified-page-actions"><button v-if="mode === 'invoices' || mode === 'tax'" type="button" class="unified-button ghost" data-test="collection-history-open" @click="historyOpen = true">采集记录</button><button v-if="mode !== 'analytics'" type="button" class="unified-button ghost" data-test="data-module-settings" @click="settingsOpen = true">设置</button><button v-if="mode === 'analytics'" type="button" class="unified-button ghost" data-test="analytics-export" :disabled="analyticsExporting || !analyticsHasData" @click="exportAnalytics"><img class="button-icon" :src="dataExportSheetIcon" alt="" />{{ analyticsExporting ? '导出中…' : '导出经营指标' }}</button><button v-if="mode !== 'invoices'" type="button" class="unified-button ghost" :disabled="loading" @click="load"><img class="button-icon" :src="dataSyncSheetIcon" alt="" />{{ loading ? '读取中…' : '刷新数据' }}</button><template v-if="mode === 'invoices'">
           <!-- ⚠ 验收脚本按 data-test="invoice-export" 定位导出按钮（invoice-license-local-verify.js 第 13 步），
                改这段工具栏必须保留它。
                顺带改正一处 bug：原来的 v-if 写反了（mode !== 'invoices'），于是「数据分析」页上挂着一个
@@ -711,6 +711,7 @@
       <section v-if="mode === 'analytics'" class="unified-card manual-card"><div class="unified-card-head"><div><h2>手动录入指标</h2><span>仅用于平台反抓取导致无法自动读取的数字，来源会标注为手动</span></div></div><div class="manual-form"><select v-model="manual.storeId" aria-label="店铺"><option value="">选择店铺</option><option v-for="store in ws.stores" :key="store.id" :value="store.id">{{ store.name }}</option></select><select v-model="manual.metric" aria-label="指标"><option v-for="metric in bizMetrics" :key="metric.key" :value="metric.key">{{ metric.label }}</option></select><input v-model.number="manual.value" type="number" min="0" placeholder="数值" /><button type="button" class="unified-button ghost" :disabled="!manualReady" @click="saveManual"> <img class="button-icon" :src="dataManualEntrySheetIcon" alt="" />录入</button></div></section>
     </template>
     <SettingsModal v-if="settingsOpen" :title="title + ' · 功能设置'" tab="entry" :only-tabs="['entry', 'maintenance']" @close="settingsOpen = false" />
+    <CollectionHistoryModal v-if="historyOpen" :domain="mode === 'invoices' ? 'invoice' : 'tax'" @close="historyOpen = false" />
   </section>
 </template>
 
@@ -723,6 +724,7 @@ import { UNKNOWN_TAX_SUBJECT_LABEL } from '@shared/tax-subject'
 import { NO_LICENSE_KEY } from '@shared/store-license'
 import SalesMetricsMonitorCard from './SalesMetricsMonitorCard.vue'
 import SettingsModal from './SettingsModal.vue'
+import CollectionHistoryModal from './CollectionHistoryModal.vue'
 import invoiceIcon from '../../assets/generated/ui-icons/invoice-gen.png'
 import dataRetryIcon from '../../assets/generated/ui-icons/data-retry-gen.png'
 import dataAnalyticsSheetIcon from '../../assets/generated/ui-icons/data-analytics-sheet-gen.png'
@@ -738,6 +740,7 @@ import { useInvoiceDetail } from './use-invoice-detail'
 import { useTaxLicense } from './use-tax-license'
 
 const settingsOpen = ref(false)
+const historyOpen = ref(false)
 import { useDataCollection } from './use-data-collection'
 
 type DataMode = 'analytics' | 'invoices' | 'tax'

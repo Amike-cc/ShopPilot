@@ -25,6 +25,7 @@ import {
   applyEntityToStores,
   overviewDatacenterSummary,
   overviewAnalyticsSummary,
+  collectionHistory,
   // 发票导出与发票中心共用同一份待开票取数（2026-09-26 审计 P2：helper 已搬进 services，
   // 方向变成单向的 ipc → services，不再有 overview-service ⇄ ipc 的循环 import）
   collectInvoiceRows
@@ -399,6 +400,19 @@ export function registerProfileAndMiscHandlers(): void {
         requestId: JSON.stringify({ periodType, platform: platform || null, rows })
       })
       return success({ path: filePath, rows, periodType, platform: platform || null }, requestId)
+    } catch (err: unknown) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, String((err as Error)?.message || err), requestId)
+    }
+  })
+
+  // overview:collectionHistory - 发票/涉税后台采集最近运行记录（只读）。
+  handle(IPC_CHANNELS.OVERVIEW_COLLECTION_HISTORY, async (_e: IpcMainInvokeEvent, input: { domain?: string; limit?: number }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    if (input?.domain !== 'invoice' && input?.domain !== 'tax') {
+      return error(ERROR_CODES.INVALID_ARGUMENT.code, '采集域不合法', requestId)
+    }
+    try {
+      return success(collectionHistory(input.domain, Number(input.limit) || 20), requestId)
     } catch (err: unknown) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, String((err as Error)?.message || err), requestId)
     }
