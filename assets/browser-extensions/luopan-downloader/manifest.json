@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "三鱼带货视频下载",
-  "version": "2.8.0",
+  "version": "2.8.1",
   "description": "抖店罗盘：商品榜单短视频榜、竞品详情视频分析，一键复制链接与批量下载 mp4",
   "icons": {
     "16": "icons/icon16.png",

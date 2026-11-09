@@ -23,6 +23,8 @@
   let rankBooted = false;
   let detailBooted = false;
   let detailPid = '';
+  /** 「视频分析」页签是否已经打开过（打开后补拉一次详情） */
+  let detailTabSeen = false;
 
   // rank
   const items = new Map();       // videoId -> item（主动拉取/页面推送累积，只增不删）
@@ -165,7 +167,7 @@
    * 拒绝，同一 URL 隔几秒重放就 st=0（页面自己的请求也是第二次才成功）——这类错误
    * 只是冷却期，不能当最终失败一棒打死。参数类错误（如「店铺商品参数错误」）不重试。
    */
-  const TRANSIENT_RE = /环境存在风险|请求过于频繁|操作频繁|访问频繁|稍后(再|重)试|请稍候|HTTP 5\d\d|请求超时|Failed to fetch|网络/;
+  const TRANSIENT_RE = /环境存在风险|请求过于频繁|操作频繁|访问频繁|稍后(再|重)试|请稍候|店铺商品参数错误|^st=602$|HTTP 5\d\d|请求超时|Failed to fetch|网络/;
   /** 重试节奏：首次立即，之后 3s / 8s / 20s（合计 ~31s，覆盖实测的风控冷却窗口） */
   const RETRY_DELAYS = [0, 3000, 8000, 20000];
 
@@ -770,7 +772,7 @@
     });
     const json = await pageFetchRetry(`${location.origin}${DETAIL_API}?${q.toString()}`, null, function (sec, attempt) {
       // 冷却中把状态写进详情工具条：用户能看到还在重试，而不是以为卡死
-      detailMeta.note = `服务端限流，${sec} 秒后自动重试（第 ${attempt} 次）`;
+      detailMeta.note = `服务端暂未就绪，${sec} 秒后自动重试（第 ${attempt} 次）`;
       renderDetailBar();
     });
     if (!json || json.st !== 0) throw new Error((json && json.msg) || ('st=' + (json && json.st)));
@@ -1038,6 +1040,42 @@
     return added;
   }
 
+  /** 「视频分析」页签是否已被用户打开（aria-selected / active 类 / 面板可见） */
+  function detailTabActive() {
+    const tabs = document.querySelectorAll('[role=tab], .aurora-tabs-tab-btn');
+    for (let i = 0; i < tabs.length; i++) {
+      const txt = (tabs[i].textContent || '').trim();
+      if (txt !== '视频分析') continue;
+      if (tabs[i].getAttribute('aria-selected') === 'true') return true;
+      if (/(^|\s)(active|aurora-tabs-tab-btn-active)(\s|$)/i.test(String(tabs[i].className || ''))) return true;
+      const id = tabs[i].getAttribute('aria-controls');
+      const panel = id ? document.getElementById(id) : null;
+      if (panel && panel.offsetParent !== null) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 等页面会话就绪再拉详情（2026-11-10 实测）：
+   * 详情页刚打开就发 flow_more，会拿到 st=602「店铺商品参数错误」或「环境存在风险」；
+   * 页面自己的第一条 flow_more 到达后，同样的参数就 st=0。所以首拉前先等：
+   * 页面的 flow_more 已出现，或「视频分析」页签已打开（其请求马上就到），最多等 10 秒。
+   */
+  async function waitDetailWarmup(run) {
+    const started = performance.now();
+    let tabOnAt = 0;
+    while (performance.now() - started < 10000) {
+      if (run !== detailRun) return false;
+      if (latestRequestEntry(DETAIL_API)) return true;
+      if (detailTabActive()) {
+        if (!tabOnAt) tabOnAt = performance.now();
+        if (performance.now() - tabOnAt > 1200) return true;
+      }
+      await sleep(250);
+    }
+    return true;
+  }
+
   /**
    * 进入竞品详情页（v2.7.0）：重置 UI 后**主动**经页面桥分页拉取 flow_more
    * （签名由页面世界的罗盘包装器自动附加，实测 st=0 + 10 行）。页面推送仍作为补充来源。
@@ -1054,14 +1092,19 @@
       const pid = urlParam('product_id') || '';
       try {
         if (!pid) throw new Error('URL 缺少 product_id');
-        const dr = detailDateRange();
-        detailMeta.begin = dr.begin_date;
-        detailMeta.end = dr.end_date;
         const ready = await injectFetcher();
         if (run !== detailRun) return;
         diag.bridge = ready.ok ? 'ok' : 'fail';
         persistDiag();
         if (!ready.ok) throw new Error('页面桥初始化失败（' + ready.reason + '）');
+
+        // 会话就绪再拉：页面的第一条 flow_more 到达后再发，周期参数也随页面走
+        await waitDetailWarmup(run);
+        if (run !== detailRun) return;
+        const dr = detailDateRange();
+        detailMeta.begin = dr.begin_date;
+        detailMeta.end = dr.end_date;
+        renderDetailBar();
 
         // 服务端可能钳制 page_size：第 1 页实际返回多少，后续就按多少判断「到底」
         let pageSize = DETAIL_PAGE_SIZE;
@@ -1547,9 +1590,9 @@
     startRankHintTimer();
   }
 
-  function startDetail() {
+  function startDetail(force) {
     const pid = urlParam('product_id') || '';
-    if (detailBooted && pid === detailPid) return;
+    if (!force && detailBooted && pid === detailPid) return;
     detailBooted = true;
     detailPid = pid;
     loadDetail();
@@ -1570,6 +1613,19 @@
       // 站内切换到别的竞品时，URL 变了但路由没刷新，这里补一次重置（重新主动拉取）
       const pid = urlParam('product_id') || '';
       if (pid && pid !== detailPid) { startDetail(); }
+      // 用户打开「视频分析」页签：页面自己的 flow_more 刚发出——等它落地后重拉一次。
+      // 首拉发生在页面刚打开时（会话未就绪），只有这一下能把 st=602/风控 的那次补回来。
+      const tabOn = detailTabActive();
+      if (tabOn && !detailTabSeen) {
+        detailTabSeen = true;
+        if (!detailLoading && (!detailVideos.length || detailMeta.error)) {
+          setTimeout(function () {
+            if (mode === 'detail' && !detailLoading && (!detailVideos.length || detailMeta.error)) startDetail(true);
+          }, 1500);
+        }
+      } else if (!tabOn) {
+        detailTabSeen = false;
+      }
       try { injectDetailBar(); } catch (e) {}
       try { injectDetailRowButtons(); } catch (e) {}
     }
