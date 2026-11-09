@@ -96,6 +96,57 @@ const moduleError = ref('')
 const moduleBusy = ref('')
 const aiInstalled = computed(() => isModuleInstalled('ai'))
 
+interface ModuleSettingLink {
+  tab: string
+  label: string
+  description: string
+}
+
+/** 每个可装卸模块对应的功能设置入口；指向设置中心已有页签，不另造一套配置 */
+const moduleSettings: Record<OptionalModuleKey, ModuleSettingLink[]> = {
+  products: [
+    { tab: 'entry', label: '平台入口', description: '商品发布跳转的平台后台地址' }
+  ],
+  invoices: [
+    { tab: 'entry', label: '平台入口', description: '发票采集入口与平台地址' },
+    { tab: 'maintenance', label: '数据与维护', description: '自动采集总开关、备份与缓存' }
+  ],
+  tax: [
+    { tab: 'entry', label: '平台入口', description: '涉税报送入口与平台地址' },
+    { tab: 'maintenance', label: '数据与维护', description: '自动采集总开关、备份与缓存' }
+  ],
+  ai: [
+    { tab: 'ai', label: 'AI 配置', description: '文本/生图/图文模型、接口与密钥' }
+  ]
+}
+
+const aiModuleLink: AppLink = {
+  key: 'ai',
+  label: 'AI 创作',
+  description: 'AI 助手、商品图与图文带货',
+  note: '',
+  tone: 'violet',
+  icon: aiAppIcon,
+  page: 'image-studio'
+}
+
+const settingsFor = ref<AppLink | null>(null)
+
+function settingsLinks(item: AppLink | null): ModuleSettingLink[] {
+  if (!item) return []
+  return moduleSettings[item.key as OptionalModuleKey] || []
+}
+
+function openModuleSettings(item: AppLink): void {
+  settingsFor.value = item
+}
+
+function gotoModuleSetting(tab: string): void {
+  settingsFor.value = null
+  emit('open-settings', tab)
+}
+
+
 function moduleKeyOf(item: AppLink): OptionalModuleKey {
   return item.key as OptionalModuleKey
 }
@@ -115,7 +166,11 @@ async function setBusinessInstalled(item: AppLink, next: boolean): Promise<void>
   moduleError.value = ''
   const result = await setModuleInstalled(moduleKeyOf(item), next)
   if (!result.ok) moduleError.value = result.error || (next ? '下载安装失败' : '卸载失败')
-  else sayModule(next ? `已下载安装「${item.label}」` : `已卸载「${item.label}」，业务数据保留`)
+  else {
+    sayModule(next ? `已下载安装「${item.label}」` : `已卸载「${item.label}」，业务数据保留`)
+    // 安装完直接把功能设置摆出来；卸载不弹设置
+    if (next) settingsFor.value = item
+  }
   moduleBusy.value = ''
 }
 
@@ -134,7 +189,10 @@ async function toggleAiModule(next: boolean): Promise<void> {
   moduleError.value = ''
   const result = await setModuleInstalled('ai', next)
   if (!result.ok) moduleError.value = result.error || (next ? '下载安装失败' : '卸载失败')
-  else sayModule(next ? '已下载安装「AI 创作」' : '已卸载「AI 创作」，模型配置与历史保留')
+  else {
+    sayModule(next ? '已下载安装「AI 创作」' : '已卸载「AI 创作」，模型配置与历史保留')
+    if (next) settingsFor.value = aiModuleLink
+  }
   moduleBusy.value = ''
 }
 const aiStatus = ref<{ text: AiConfigShape | null; image: AiConfigShape | null; imageText: AiConfigShape | null } | null>(null)
@@ -240,7 +298,7 @@ function iconMask(url: string): Record<string, string> {
               :disabled="moduleBusy === 'ai'"
               @click="toggleAiModule(!aiInstalled)"
             >{{ moduleBusy === 'ai' ? '处理中…' : aiInstalled ? '卸载 AI 创作' : '下载安装 AI 创作' }}</button>
-            <button type="button" class="ac-link" data-test="apps-ai-settings" @click="emit('open-settings', 'ai')">模型配置</button>
+            <button v-if="aiInstalled" type="button" class="ac-link" data-test="apps-ai-settings" @click="openModuleSettings(aiModuleLink)">功能设置</button>
           </div>
         </div>
         <p v-if="aiStatusError" class="ac-hint error">读取模型状态失败：{{ aiStatusError }}</p>
@@ -324,6 +382,7 @@ function iconMask(url: string): Record<string, string> {
               <span class="ac-actions">
                 <template v-if="isModuleInstalled(item.key)">
                   <button type="button" class="ac-action" @click.stop="openApp(item)">打开</button>
+                  <button type="button" class="ac-action" :data-test="'apps-module-settings-' + item.key" @click.stop="openModuleSettings(item)">功能设置</button>
                   <button type="button" class="ac-action danger" :data-test="'apps-module-uninstall-' + item.key" :disabled="moduleBusy === item.key" @click.stop="uninstallBusiness(item)">卸载</button>
                 </template>
                 <button v-else type="button" class="ac-action primary" :data-test="'apps-module-install-' + item.key" :disabled="moduleBusy === item.key" @click.stop="installBusiness(item)">{{ moduleBusy === item.key ? '安装中…' : '下载安装' }}</button>
@@ -368,6 +427,35 @@ function iconMask(url: string): Record<string, string> {
             </div>
           </article>
         </div>
+
+        <!-- 功能设置：安装后从卡片/区块进入，只跳设置中心已有页签 -->
+        <div v-if="settingsFor" class="ac-modal" role="dialog" aria-modal="true" :aria-label="settingsFor.label + ' 功能设置'" @click.self="settingsFor = null">
+          <section class="ac-modal-card">
+            <header class="ac-modal-head">
+              <div>
+                <h3>{{ settingsFor.label }} · 功能设置</h3>
+                <p>模块已安装；以下设置会影响该功能。</p>
+              </div>
+              <button type="button" class="ac-modal-close" aria-label="关闭" @click="settingsFor = null">×</button>
+            </header>
+            <div class="ac-modal-body">
+              <button
+                v-for="link in settingsLinks(settingsFor)"
+                :key="link.tab"
+                type="button"
+                class="ac-setting-link"
+                @click="gotoModuleSetting(link.tab)"
+              >
+                <strong>{{ link.label }}</strong>
+                <span>{{ link.description }}</span>
+              </button>
+              <p v-if="!settingsLinks(settingsFor).length" class="ac-hint">该模块没有独立设置。</p>
+            </div>
+            <footer class="ac-modal-foot">
+              <button type="button" class="ac-action" @click="settingsFor = null">稍后再说</button>
+            </footer>
+          </section>
+        </div>
       </div>
     </template>
   </section>
@@ -409,6 +497,18 @@ function iconMask(url: string): Record<string, string> {
 .ac-notice{margin:0;padding:8px 10px;border-radius:var(--r-sm);background:var(--success-soft);color:var(--success-text);font-size:var(--text-11)}
 .ac-notice.error{background:rgba(217,45,32,.08);color:var(--danger-text)}
 .ac-cat.off{color:var(--danger-text);border-color:rgba(217,45,32,.25);background:rgba(217,45,32,.06)}
+.ac-modal{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:24px;background:rgba(16,24,40,.38)}
+.ac-modal-card{width:min(440px,100%);max-height:min(520px,calc(100vh - 48px));overflow:auto;border:1px solid var(--ui-border);border-radius:var(--r-lg);background:var(--ui-surface);box-shadow:0 24px 48px -24px rgba(16,24,40,.45)}
+.ac-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:16px 18px 10px}
+.ac-modal-head h3{margin:0 0 4px;font-size:var(--text-16);font-weight:var(--weight-semibold);color:var(--ui-text)}
+.ac-modal-head p{margin:0;color:var(--ui-text-muted);font-size:var(--text-11)}
+.ac-modal-close{display:grid;place-items:center;width:26px;height:26px;flex:0 0 auto;padding:0;border:1px solid var(--ui-border);border-radius:var(--r-sm);background:var(--ui-surface);color:var(--ui-text-muted);font-size:16px;line-height:1;cursor:pointer}
+.ac-modal-body{display:flex;flex-direction:column;gap:8px;padding:4px 18px 8px}
+.ac-setting-link{display:flex;flex-direction:column;gap:3px;width:100%;padding:10px 12px;border:1px solid var(--ui-border);border-radius:var(--r-sm);background:var(--ui-surface-sunken);text-align:left;cursor:pointer}
+.ac-setting-link:hover{border-color:var(--brand-border);background:var(--ui-surface)}
+.ac-setting-link strong{font-size:var(--text-12);font-weight:var(--weight-semibold);color:var(--ui-text)}
+.ac-setting-link span{font-size:var(--text-11);color:var(--ui-text-muted)}
+.ac-modal-foot{display:flex;justify-content:flex-end;padding:8px 18px 16px}
 .ac-hint{margin:0;color:var(--ui-text-muted);font-size:var(--text-11)}
 .ac-hint.error{color:var(--danger-text)}
 @media(max-width:1180px){.ac-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
