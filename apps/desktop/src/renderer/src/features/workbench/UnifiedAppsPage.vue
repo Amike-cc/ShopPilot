@@ -20,6 +20,7 @@ import forwardIcon from '../../assets/generated/ui-icons/forward-gen.png'
 import assistantArt from '../../assets/generated/ai-assistant-generated.png'
 import assistantOpenIcon from '../../assets/generated/ui-icons/assistant-open-gen.png'
 import AppCenterExtensions from './AppCenterExtensions.vue'
+import { ensureAppModulesLoaded, isModuleInstalled, setModuleInstalled, type OptionalModuleKey } from './use-app-modules'
 
 type Mode = 'ai' | 'apps'
 type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'image-studio' | 'graphic-sell' | 'products'
@@ -90,6 +91,52 @@ interface AiConfigShape {
 }
 
 const showSystem = ref(false)
+const moduleNotice = ref('')
+const moduleError = ref('')
+const moduleBusy = ref('')
+const aiInstalled = computed(() => isModuleInstalled('ai'))
+
+function moduleKeyOf(item: AppLink): OptionalModuleKey {
+  return item.key as OptionalModuleKey
+}
+
+function sayModule(text: string): void {
+  moduleNotice.value = text
+  window.setTimeout(() => { if (moduleNotice.value === text) moduleNotice.value = '' }, 3000)
+}
+
+function activateBusinessApp(item: AppLink): void {
+  if (isModuleInstalled(item.key)) openApp(item)
+  else void installBusiness(item)
+}
+
+async function setBusinessInstalled(item: AppLink, next: boolean): Promise<void> {
+  moduleBusy.value = item.key
+  moduleError.value = ''
+  const result = await setModuleInstalled(moduleKeyOf(item), next)
+  if (!result.ok) moduleError.value = result.error || (next ? '下载安装失败' : '卸载失败')
+  else sayModule(next ? `已下载安装「${item.label}」` : `已卸载「${item.label}」，业务数据保留`)
+  moduleBusy.value = ''
+}
+
+function installBusiness(item: AppLink): Promise<void> {
+  return setBusinessInstalled(item, true)
+}
+
+async function uninstallBusiness(item: AppLink): Promise<void> {
+  if (!window.confirm(`卸载「${item.label}」？\n入口会从左侧导航和商城隐藏，业务数据保留；可随时在应用商城重新下载安装。`)) return
+  await setBusinessInstalled(item, false)
+}
+
+async function toggleAiModule(next: boolean): Promise<void> {
+  if (!next && !window.confirm('卸载「AI 创作」？\n助手、生图与图文带货入口会隐藏，模型配置与历史保留；可随时在应用商城重新下载安装。')) return
+  moduleBusy.value = 'ai'
+  moduleError.value = ''
+  const result = await setModuleInstalled('ai', next)
+  if (!result.ok) moduleError.value = result.error || (next ? '下载安装失败' : '卸载失败')
+  else sayModule(next ? '已下载安装「AI 创作」' : '已卸载「AI 创作」，模型配置与历史保留')
+  moduleBusy.value = ''
+}
 const aiStatus = ref<{ text: AiConfigShape | null; image: AiConfigShape | null; imageText: AiConfigShape | null } | null>(null)
 const aiStatusLoading = ref(false)
 const aiStatusError = ref('')
@@ -133,7 +180,10 @@ function openApp(item: AppLink): void {
 }
 
 onMounted(() => {
-  if (props.mode === 'apps') void loadAiStatus()
+  if (props.mode === 'apps') {
+    void ensureAppModulesLoaded()
+    void loadAiStatus()
+  }
 })
 
 /**
@@ -173,17 +223,29 @@ function iconMask(url: string): Record<string, string> {
 
     <template v-else>
       <div class="apps-center">
+        <p v-if="moduleNotice" class="ac-notice" role="status">{{ moduleNotice }}</p>
+        <p v-if="moduleError" class="ac-notice error" role="alert">{{ moduleError }}</p>
         <AppCenterExtensions />
 
-        <!-- AI 工具 -->
+        <!-- AI 工具（可整体下载安装/卸载） -->
         <div class="ac-section ac-section-row">
           <h2>AI 工具</h2>
           <span class="ac-kind">增值</span>
           <span class="ac-count">3</span>
-          <button type="button" class="ac-link" data-test="apps-ai-settings" @click="emit('open-settings', 'ai')">模型配置</button>
+          <div class="ac-section-actions">
+            <button
+              type="button"
+              class="ac-link"
+              data-test="apps-ai-module-toggle"
+              :disabled="moduleBusy === 'ai'"
+              @click="toggleAiModule(!aiInstalled)"
+            >{{ moduleBusy === 'ai' ? '处理中…' : aiInstalled ? '卸载 AI 创作' : '下载安装 AI 创作' }}</button>
+            <button type="button" class="ac-link" data-test="apps-ai-settings" @click="emit('open-settings', 'ai')">模型配置</button>
+          </div>
         </div>
         <p v-if="aiStatusError" class="ac-hint error">读取模型状态失败：{{ aiStatusError }}</p>
-        <div class="ac-grid" data-test="apps-ai-grid">
+        <p v-if="!aiInstalled" class="ac-hint">AI 创作未安装：点右上「下载安装 AI 创作」恢复助手、生图与图文带货。</p>
+        <div v-else class="ac-grid" data-test="apps-ai-grid">
           <article class="ac-card" role="button" tabindex="0" data-test="apps-ai-assistant" @click="emit('open-assistant')" @keydown.enter="emit('open-assistant')" @keydown.space.prevent="emit('open-assistant')">
             <div class="ac-top">
               <span class="ac-icon" :style="{ background: appTones.violet.bg, color: appTones.violet.fg }"><i :style="iconMask(aiAppIcon)"></i></span>
@@ -230,13 +292,13 @@ function iconMask(url: string): Record<string, string> {
           </article>
         </div>
 
-        <!-- 业务应用：内置可选，不算产品核心 -->
+        <!-- 业务应用：内置模块，可下载安装/卸载，业务数据保留 -->
         <div class="ac-section ac-section-row" data-test="apps-business">
           <h2>业务应用</h2>
-          <span class="ac-kind">内置可选</span>
+          <span class="ac-kind">可下载/卸载</span>
           <span class="ac-count">{{ businessApps.length }}</span>
         </div>
-        <p class="ac-hint">可选业务模块，不随商城安装或卸载；左侧导航仍可直达。</p>
+        <p class="ac-hint">内置模块，支持下载安装与卸载；卸载后入口从导航隐藏，业务数据保留。</p>
         <div class="ac-grid" data-test="apps-business-grid">
           <article
             v-for="item in businessApps"
@@ -245,22 +307,26 @@ function iconMask(url: string): Record<string, string> {
             role="button"
             tabindex="0"
             :data-test="`apps-card-${item.key}`"
-            @click="openApp(item)"
-            @keydown.enter="openApp(item)"
-            @keydown.space.prevent="openApp(item)"
+            @click="activateBusinessApp(item)"
+            @keydown.enter="activateBusinessApp(item)"
+            @keydown.space.prevent="activateBusinessApp(item)"
           >
             <div class="ac-top">
               <span class="ac-icon" :style="{ background: appTones[item.tone].bg, color: appTones[item.tone].fg }">
                 <i :style="iconMask(item.icon)"></i>
               </span>
-              <span class="ac-cat">内置可选</span>
+              <span class="ac-cat" :class="{ off: !isModuleInstalled(item.key) }">{{ isModuleInstalled(item.key) ? '已安装' : '未安装' }}</span>
             </div>
             <h3>{{ item.label }}</h3>
             <p class="ac-desc">{{ item.description }}</p>
             <div class="ac-foot">
               <span class="ac-note">{{ item.note }}</span>
-              <span class="ac-open">打开
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+              <span class="ac-actions">
+                <template v-if="isModuleInstalled(item.key)">
+                  <button type="button" class="ac-action" @click.stop="openApp(item)">打开</button>
+                  <button type="button" class="ac-action danger" :data-test="'apps-module-uninstall-' + item.key" :disabled="moduleBusy === item.key" @click.stop="uninstallBusiness(item)">卸载</button>
+                </template>
+                <button v-else type="button" class="ac-action primary" :data-test="'apps-module-install-' + item.key" :disabled="moduleBusy === item.key" @click.stop="installBusiness(item)">{{ moduleBusy === item.key ? '安装中…' : '下载安装' }}</button>
               </span>
             </div>
           </article>
@@ -332,6 +398,17 @@ function iconMask(url: string): Record<string, string> {
 .ac-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ac-open{display:inline-flex;align-items:center;gap:3px;flex:0 0 auto;margin-left:auto;color:var(--brand-text);font-weight:var(--weight-medium)}
 .ac-open svg{width:11px;height:11px}
+.ac-section-actions{display:flex;align-items:center;gap:12px;margin-left:auto}
+.ac-section-actions .ac-link{margin-left:0}
+.ac-actions{display:inline-flex;align-items:center;gap:8px;margin-left:auto}
+.ac-action{padding:0;border:0;background:transparent;color:var(--brand-text);font-size:var(--text-11);font-weight:var(--weight-medium);cursor:pointer}
+.ac-action:hover:not(:disabled){text-decoration:underline}
+.ac-action.danger{color:var(--danger-text)}
+.ac-action.primary{padding:2px 8px;border:1px solid var(--brand);border-radius:var(--r-xs);background:var(--brand);color:#fff}
+.ac-action:disabled{opacity:.55;cursor:not-allowed}
+.ac-notice{margin:0;padding:8px 10px;border-radius:var(--r-sm);background:var(--success-soft);color:var(--success-text);font-size:var(--text-11)}
+.ac-notice.error{background:rgba(217,45,32,.08);color:var(--danger-text)}
+.ac-cat.off{color:var(--danger-text);border-color:rgba(217,45,32,.25);background:rgba(217,45,32,.06)}
 .ac-hint{margin:0;color:var(--ui-text-muted);font-size:var(--text-11)}
 .ac-hint.error{color:var(--danger-text)}
 @media(max-width:1180px){.ac-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

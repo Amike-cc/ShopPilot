@@ -14,7 +14,7 @@
         </button>
         <div class="sb-rail-sep" aria-hidden="true"></div>
         <button
-          v-for="item in navItems"
+          v-for="item in visibleNavItems"
           :key="item.key"
           type="button"
           class="ui-icon-btn sb-rail-btn"
@@ -491,7 +491,7 @@
     </div>
 
     <AgentDock
-      v-if="hasNativeBridge"
+      v-if="hasNativeBridge && isModuleInstalled('ai')"
       :locked="ws.appLocked"
     />
   </section>
@@ -514,6 +514,7 @@ const ProductManagementPage = defineAsyncComponent(() => import('../products/Pro
 const UnifiedAppsPage = defineAsyncComponent(() => import('./UnifiedAppsPage.vue'))
 import DashboardOverviewPage from './components/DashboardOverviewPage.vue'
 import { waitForWorkspaceReady } from './use-dashboard-overview'
+import { ensureAppModulesLoaded, isModuleInstalled, type OptionalModuleKey } from './use-app-modules'
 import { buildWorkbenchNotifications, type WorkbenchNotificationItem } from './notification-center'
 import { useAgentStore } from '../../stores/agent'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
@@ -547,11 +548,23 @@ const navItems: NavItem[] = [
   { key: 'apps', label: '应用商城', icon: 'grid' }
 ]
 const activeNav = ref('经营总览')
+/**
+ * 可选模块（商品/发票/涉税/AI 创作）支持在应用商城下载安装/卸载；
+ * 卸载后只隐藏入口与路由，数据保留。核心功能（总览/店铺/数据/商城/设置）不在过滤范围。
+ */
+const visibleNavItems = computed(() => navItems.filter((item) => {
+  if (item.key === 'products') return isModuleInstalled('products')
+  if (item.key === 'invoices') return isModuleInstalled('invoices')
+  if (item.key === 'tax') return isModuleInstalled('tax')
+  if (item.key === 'ai') return isModuleInstalled('ai')
+  return true
+}))
+void ensureAppModulesLoaded()
 /** 侧栏导航分组（主控台三项 / 运营三项 / 工具两项；设置单独落在左下角） */
 const navGroups = computed(() => [
-  { key: 'main', title: '', items: navItems.filter(item => ['经营总览', '商品管理', '店铺管理'].includes(item.label)) },
-  { key: 'ops', title: '运营', items: navItems.filter(item => ['数据分析', '发票中心', '涉税信息'].includes(item.label)) },
-  { key: 'tools', title: '工具', items: navItems.filter(item => ['AI 创作', '应用商城'].includes(item.label)) }
+  { key: 'main', title: '', items: visibleNavItems.value.filter(item => ['经营总览', '商品管理', '店铺管理'].includes(item.label)) },
+  { key: 'ops', title: '运营', items: visibleNavItems.value.filter(item => ['数据分析', '发票中心', '涉税信息'].includes(item.label)) },
+  { key: 'tools', title: '工具', items: visibleNavItems.value.filter(item => ['AI 创作', '应用商城'].includes(item.label)) }
 ])
 /** 店铺搜索：只在店铺多到列表要滚的时候出现，少店铺时不占一行 */
 const storeQuery = ref('')
@@ -566,6 +579,15 @@ const PAGE_TITLES: Record<string, string> = {
   'image-studio': '图片工作台', 'graphic-sell': '图文带货'
 }
 const pageTitle = computed(() => PAGE_TITLES[activePage.value] || '经营总览')
+/** 可选模块页面 → 模块键：未安装时直接回商城，不能让路由把人带进已卸载的模块 */
+const OPTIONAL_PAGE_MODULE: Record<string, OptionalModuleKey> = {
+  products: 'products',
+  invoices: 'invoices',
+  tax: 'tax',
+  ai: 'ai',
+  'image-studio': 'ai',
+  'graphic-sell': 'ai'
+}
 /**
  * 客服未读总数（2026-10-16「实时检测店铺消息」）：侧栏客服入口红点用。
  * 只累加真读到的正数——读不到的店按 0 算，绝不虚报（口径与 @shared/customer-message-alert 一致）。
@@ -714,6 +736,11 @@ function preventBusyAiStudioExit() {
   return false
 }
 function navigateTo(page: DashboardPage) {
+  const moduleKey = OPTIONAL_PAGE_MODULE[page]
+  if (moduleKey && !isModuleInstalled(moduleKey)) {
+    showNotice(`「${PAGE_TITLES[page] || '该功能'}」未安装，可在应用商城下载安装`)
+    page = 'apps'
+  }
   if (page !== activePage.value && preventBusyAiStudioExit()) return
   mobileNavOpen.value = false
   // B4：回到经营总览时补一次发票待办——「待开发票」那几行只在挂载与"停在总览页时的任务终态事件"
@@ -923,6 +950,11 @@ async function syncStoreContextOcclusion() {
   await bridge.browser.setViewsObscured(overlap)
 }
 async function openAssistant() {
+  if (!isModuleInstalled('ai')) {
+    showNotice('「AI 创作」未安装，可在应用商城下载安装')
+    navigateTo('apps')
+    return
+  }
   try { await agent.initialize(); agent.setDrawerOpen(true) } catch { showNotice('AI 助手暂时不可用，请检查模型配置') }
 }
 function openCommandPalette() { commandOpen.value = true; nextTick(() => commandInput.value?.focus()) }
