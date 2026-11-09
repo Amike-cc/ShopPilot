@@ -11,6 +11,7 @@ import { buildTaxCollectSteps } from '@shared/tax-steps'
 import { buildInvoiceCollectSteps } from '@shared/invoice-steps'
 import { entityProfileFor } from '@shared/constants/entity'
 import { buildEntityCollectSteps } from '@shared/entity-steps'
+import type { AnalyticsSummary } from '@shared/contracts/analytics'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useWorkspaceStore } from '../../stores/workspace'
 import type { DataMode, InvoiceDetailApi } from './use-invoice-detail'
@@ -46,6 +47,55 @@ let entityCollectGeneration = 0
   const openExportConfirm = page.openExportConfirm
   const reloadInvoiceData = tax.reloadInvoiceData
   const reloadTaxData = tax.reloadTaxData
+  const analyticsData = page.analyticsData
+  const analyticsState = page.analyticsState
+  const analyticsError = page.analyticsError
+  const analyticsPeriod = page.analyticsPeriod
+  const analyticsPlatform = page.analyticsPlatform
+  const analyticsExporting = ref(false)
+
+/**
+ * 经营指标聚合（数据分析页）。
+ *
+ * 主进程一次返回「自动采集优先、任务快照兜底」的行；这里不做第二套合并逻辑，
+ * 只负责按周期重新取数与错误上屏。周期切换必须重新取——不能拿旧周期的行继续显示。
+ */
+async function loadAnalytics(): Promise<void> {
+  if (!window.shopilot) return
+  analyticsState.value = 'loading'
+  analyticsError.value = ''
+  try {
+    const result = await window.shopilot.overview.analytics({ periodType: analyticsPeriod.value })
+    if (!result.ok) throw new Error(result.error.message)
+    analyticsData.value = result.data as AnalyticsSummary
+    analyticsState.value = 'ready'
+  } catch (error) {
+    analyticsData.value = null
+    analyticsState.value = 'error'
+    analyticsError.value = String((error as Error)?.message || error)
+  }
+}
+
+async function exportAnalytics(): Promise<void> {
+  if (analyticsExporting.value) return
+  analyticsExporting.value = true
+  try {
+    const result = await window.shopilot.overview.analyticsExport({
+      periodType: analyticsPeriod.value,
+      platform: analyticsPlatform.value === 'all' ? undefined : analyticsPlatform.value
+    })
+    if (!result.ok) {
+      ws.toast('导出失败：' + result.error.message, 'error')
+      return
+    }
+    if (result.data?.canceled) return
+    ws.toast(`已导出 ${Number(result.data?.rows || 0)} 行经营指标`, 'success')
+  } catch (error) {
+    ws.toast('导出失败：' + String((error as Error)?.message || error), 'error')
+  } finally {
+    analyticsExporting.value = false
+  }
+}
 
 async function load() {
   // P1-7（2026-10-15 审查）：无 preload（纯渲染调试模式）时给出降级提示，而不是 TypeError 白屏
@@ -83,6 +133,8 @@ async function load() {
     // 这里历史写成 responses[4]，取到 undefined 走 false 分支 → 界面永远显示"总开关关着"（假状态）。
     autoCollectionOn.value = responses[3]?.ok ? parseAutoCollectionEnabled(responses[3].data?.value) : false
     if (failed.length) errorMessage.value = failed.join('；')
+    // 经营指标单独取：它有自己的周期筛选与来源标记，不能混进 dataCenter 的"最新快照"。
+    if (props.mode === 'analytics') await loadAnalytics()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error)
   } finally { loading.value = false }
@@ -447,6 +499,7 @@ async function exportInvoices(): Promise<boolean> {
 }
 function onTaskProgress(event: any) { if (event?.phase === 'finished' || event?.phase === 'failed') void load() }
 watch(() => props.mode, () => { void load() })
+watch(analyticsPeriod, () => { if (props.mode === 'analytics') void loadAnalytics() })
 onMounted(() => {
   if (!window.shopilot) return
   window.shopilot.on(EVENT_CHANNELS.TASK_PROGRESS, onTaskProgress)
@@ -462,6 +515,12 @@ onBeforeUnmount(() => {
     entityCollectGeneration,
 
     load,
+
+    loadAnalytics,
+
+    exportAnalytics,
+
+    analyticsExporting,
 
     INVOICE_SCHEDULE_MS,
 

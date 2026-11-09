@@ -12,6 +12,7 @@ import { getDatabase } from '../db/database'
 import { saveProxyCredentials, deleteProxyCredentials, credentialRefs, getProxyCredentials } from '../services/credential-store'
 import { reconfigureProxy } from '../browser/session-manager'
 import { writeAudit } from '../services/audit-logger'
+import { sameProxyEndpoint } from '@shared/proxy-scope'
 
 export type ProxyType = 'http' | 'https' | 'socks5'
 
@@ -166,16 +167,30 @@ export async function updateProxy(
   const sets: string[] = ['type = ?', 'host = ?', 'port = ?', 'label = ?', 'tags_json = ?', 'expires_at = ?', 'updated_at = ?']
   const vals: any[] = [merged.type, merged.host, merged.port, merged.label ?? null, JSON.stringify(merged.tags || []), merged.expiresAt ?? null, Date.now()]
 
-  if (patch.username !== undefined || patch.password !== undefined) {
-    // 部分更新不能把未传入的另一半凭据清空。
+  /**
+   * 改地址必须同时换凭据（2026-11-09 审查）。
+   *
+   * 旧行为允许只改 host/port 而保留原账号密码：一次 `proxy:update` 就能把旧凭据
+   * "搬"到新主机，后续 407 自动注入时发给新主机。这里在地址变化时强制清空旧凭据，
+   * 只保留本次 patch 里显式提供的那一半（另一半为空，不会把旧密码带过去）。
+   */
+  const endpointChanged = merged.type !== existing.type || merged.host !== existing.host || merged.port !== existing.port
+  const clearStoredCredentials = endpointChanged && existing.hasCredential
+  if (patch.username !== undefined || patch.password !== undefined || clearStoredCredentials) {
+    // 部分更新不能把未传入的另一半凭据清空（地址未变时）；地址变了则旧的那一半必须置空，
+    // 否则 ref 仍指向已删除的凭据键，列表还会显示「含凭据」。
     const refs = credentialRefs(proxyId)
     sets.push('username_ref = ?', 'password_ref = ?')
-    vals.push(refs.usernameRef, refs.passwordRef)
+    vals.push(
+      patch.username !== undefined ? refs.usernameRef : (clearStoredCredentials ? null : refs.usernameRef),
+      patch.password !== undefined ? refs.passwordRef : (clearStoredCredentials ? null : refs.passwordRef)
+    )
   }
 
   vals.push(proxyId)
   db.transaction(() => {
     db.prepare(`UPDATE proxies SET ${sets.join(', ')} WHERE id = ?`).run(...vals)
+    if (clearStoredCredentials) deleteProxyCredentials(proxyId)
     if (patch.username !== undefined) saveProxyCredentials(proxyId, patch.username)
     if (patch.password !== undefined) saveProxyCredentials(proxyId, undefined, patch.password)
   })()
@@ -416,7 +431,17 @@ export async function testProxyAsync(
   assertValidDraft(draft)
   const timeoutMs = opts.timeoutMs ?? 4000
   const start = Date.now()
-  const credentials = opts.proxyId ? getProxyCredentials(opts.proxyId) : undefined
+  /**
+   * 凭据只在「测试的就是已保存的那个代理」时才取出。
+   *
+   * 2026-11-09 审查：旧实现只要传了 proxyId 就解密凭据，然后发往 **draft 里的任意 host**；
+   * 渲染层一旦被注入，就能拿一个合法 proxyId 把账号密码送到攻击者主机。
+   * 这里要求 type/host/port 与库中记录完全一致；改地址后要测试，必须重新输入凭据。
+   */
+  const stored = opts.proxyId ? getProxy(opts.proxyId) : null
+  const credentials = opts.proxyId && sameProxyEndpoint(stored, draft)
+    ? getProxyCredentials(opts.proxyId)
+    : undefined
   const echoUrl = new URL(process.env.SHOPILOT_PROXY_ECHO_URL || DEFAULT_PROXY_ECHO_URL)
   let result: ProxyCheckResult
   try {

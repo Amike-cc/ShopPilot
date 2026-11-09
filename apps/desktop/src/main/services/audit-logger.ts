@@ -38,7 +38,7 @@ export type AuditAction =
   | 'agent.skill.create' | 'agent.skill.update' | 'agent.skill.delete' | 'agent.skill.run'
   | 'agent.plugin.create' | 'agent.plugin.update' | 'agent.plugin.delete'
   | 'agent.pack.import' | 'agent.pack.export'
-  | 'diagnostics.export' | 'audit.export' | 'invoice.export'
+  | 'diagnostics.export' | 'audit.export' | 'invoice.export' | 'analytics.export'
   // 维护动作：清缓存会动磁盘上别人看不到的东西，留痕才能回答"我的登录态怎么没了"
   | 'maintenance.cache.clear'
   // 把平台读到的主体写回店铺营业执照（会改 stores 两列 → 留痕）

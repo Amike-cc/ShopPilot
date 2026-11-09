@@ -60,6 +60,7 @@ function backupError(errObj: any, requestId: string): IPCResult {
   if (msg.includes('BACKUP_CHECKSUM_FAILED')) return err(ERROR_CODES.BACKUP_CHECKSUM_FAILED.code, ERROR_CODES.BACKUP_CHECKSUM_FAILED.message, requestId)
   if (msg.includes('BACKUP_NOT_FOUND')) return err(ERROR_CODES.BACKUP_CHECKSUM_FAILED.code, '备份不存在或文件缺失', requestId)
   if (msg.includes('BACKUP_VERSION_TOO_NEW')) return err(ERROR_CODES.BACKUP_CHECKSUM_FAILED.code, '备份来自更高版本，请先升级应用', requestId)
+  if (msg.includes('BACKUP_RESTORE_ROLLBACK_FAILED')) return err(ERROR_CODES.INTERNAL_ERROR.code, '恢复失败，且自动回滚未完成。请立即用备份文件手动恢复，不要再继续写入数据', requestId)
   // 备份读写异常常带绝对路径（文件不存在/校验失败），文案统一脱敏
   return ipcErrFromUnknown(errObj, requestId, { fallback: '备份操作失败' })
 }

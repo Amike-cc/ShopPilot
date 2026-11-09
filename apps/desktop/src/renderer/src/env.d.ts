@@ -111,6 +111,8 @@ declare global {
       overview: {
         stats: () => Promise<IPCResult>
         datacenter: () => Promise<IPCResult>
+        analytics: (input?: { periodType?: string }) => Promise<IPCResult>
+        analyticsExport: (input?: { periodType?: string; platform?: string }) => Promise<IPCResult>
         invoiceCenter: () => Promise<IPCResult>
         invoiceExport: (input?: { licenseKey?: string }) => Promise<IPCResult>
         /** 涉税信息报送：各店铺的平台侧报送数据；返回体带 disclaimer（不得作为税务申报依据） */

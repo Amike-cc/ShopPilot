@@ -14,6 +14,7 @@ import * as Security from '../services/security-manager'
 import * as Diagnostics from '../services/diagnostics'
 import * as StoreManager from '../stores/store-manager'
 import * as ShopSessionManager from '../browser/shop-session-manager'
+import { refreshProfileRuntime } from '../browser/session-manager'
 import { emitToRenderer, setBrowserViewsVisible } from '../browser/window-manager'
 import { writeAudit, auditRequestId } from '../services/audit-logger'
 import { customerMessageMonitor } from '../services/customer-message-monitor'
@@ -76,7 +77,12 @@ export function registerSessionAndSecurityHandlers(): void {
     try {
       const storeId = requireStoreId(input?.storeId)
       if (!storeId) return err(ERROR_CODES.STORE_NOT_FOUND.code, ERROR_CODES.STORE_NOT_FOUND.message, requestId)
-      return ok(await SessionExporter.importSessionPackage(storeId, input.filePath || '', { pickFile: input.pickFile }), requestId)
+      const imported = await SessionExporter.importSessionPackage(storeId, input.filePath || '', { pickFile: input.pickFile })
+      // 导入的 Cookie 才是当前登录态：旧快照必须作废，否则重启时 restoreStoreSession
+      // 会把导入前的 Cookie 重新灌回来（2026-11-09 审查）。
+      SessionPersistence.clearStoreSessionSnapshot(storeId)
+      if (imported.profileRestored) await refreshProfileRuntime(storeId)
+      return ok(imported, requestId)
     } catch (e: any) { return sessionError(e, requestId) }
   })
 

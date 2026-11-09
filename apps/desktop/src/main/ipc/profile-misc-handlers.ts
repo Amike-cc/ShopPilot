@@ -24,12 +24,15 @@ import {
   overviewTaxReport,
   applyEntityToStores,
   overviewDatacenterSummary,
+  overviewAnalyticsSummary,
   // 发票导出与发票中心共用同一份待开票取数（2026-09-26 审计 P2：helper 已搬进 services，
   // 方向变成单向的 ipc → services，不再有 overview-service ⇄ ipc 的循环 import）
   collectInvoiceRows
 } from '../services/overview-service'
 import { INVOICE_COLUMNS } from '@shared/constants/invoice'
 import { buildInvoiceCsv, ensureCsvExtension, invoiceCsvRows } from '@shared/invoice-csv'
+import { buildAnalyticsCsv } from '@shared/analytics-csv'
+import { ANALYTICS_PERIOD_FILTERS, ANALYTICS_PERIOD_LABELS, type AnalyticsPeriodFilter } from '@shared/contracts/analytics'
 import { filterRowsByLicenseKey, licenseScopeLabel } from '@shared/store-license'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
@@ -54,6 +57,13 @@ const profileLockInputSchema = z.object({ storeId: profileStoreIdSchema, locked:
 const profileCopyInputSchema = z.object({
   sourceStoreId: profileStoreIdSchema,
   targetStoreIds: z.array(profileStoreIdSchema).max(200)
+}).strict()
+const analyticsInputSchema = z.object({
+  periodType: z.enum(ANALYTICS_PERIOD_FILTERS).optional()
+}).strict()
+const analyticsExportInputSchema = z.object({
+  periodType: z.enum(ANALYTICS_PERIOD_FILTERS).optional(),
+  platform: z.string().trim().max(100).optional()
 }).strict()
 
 
@@ -330,6 +340,67 @@ export function registerProfileAndMiscHandlers(): void {
       return success(overviewDatacenterSummary(), requestId)
     } catch (err: any) {
       return error(ERROR_CODES.INTERNAL_ERROR.code, err.message, requestId)
+    }
+  })
+
+  /**
+   * overview:analytics - 数据分析页的经营指标。
+   * 聚合在 overview-service 里完成；这里只做入参校验，不把 SQL/口径散到 IPC 层。
+   */
+  handle(IPC_CHANNELS.OVERVIEW_ANALYTICS, async (_e: IpcMainInvokeEvent, input: { periodType?: string }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    const parsed = analyticsInputSchema.safeParse(input ?? {})
+    if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, '经营指标周期不合法', requestId)
+    try {
+      return success(overviewAnalyticsSummary((parsed.data.periodType || 'ALL') as AnalyticsPeriodFilter), requestId)
+    } catch (err: unknown) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, String((err as Error)?.message || err), requestId)
+    }
+  })
+
+  /**
+   * overview:analyticsExport - 经营指标 CSV。
+   *
+   * 与发票导出同一套保存框/补扩展名逻辑；数据直接取聚合结果，**不在导出时重新查一次库**，
+   * 否则用户可能拿到与屏上不同的一组数字（尤其是自动采集刚写下一轮时）。
+   */
+  handle(IPC_CHANNELS.OVERVIEW_ANALYTICS_EXPORT, async (_e: IpcMainInvokeEvent, input: { periodType?: string; platform?: string }): Promise<IPCResult> => {
+    const requestId = generateRequestId()
+    const parsed = analyticsExportInputSchema.safeParse(input ?? {})
+    if (!parsed.success) return error(ERROR_CODES.INVALID_ARGUMENT.code, '导出范围不合法', requestId)
+    try {
+      const periodType = (parsed.data.periodType || 'ALL') as AnalyticsPeriodFilter
+      const platform = parsed.data.platform || ''
+      const summary = overviewAnalyticsSummary(periodType)
+      const { csv, rows } = buildAnalyticsCsv(summary, platform || undefined)
+      if (!rows || !summary.rows.some(row => row.source !== 'NONE' && (!platform || row.platform === platform))) {
+        return error(ERROR_CODES.INVALID_ARGUMENT.code, '当前范围没有可导出的经营指标（先到店铺浏览器采集，或切换周期）', requestId)
+      }
+      const periodLabel = ANALYTICS_PERIOD_LABELS[periodType] || periodType
+      const fileTag = String(platform || periodLabel).replace(/[\\/:*?"<>|\s]+/g, '').slice(0, 40)
+      const stamp = new Date().toISOString().slice(0, 10)
+      const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+      const res = await dialog.showSaveDialog(win, {
+        title: '导出经营指标',
+        defaultPath: join(app.getPath('documents'), `经营指标-${fileTag}-${stamp}.csv`),
+        filters: [{ name: 'CSV 表格', extensions: ['csv'] }]
+      })
+      if (res.canceled || !res.filePath) return success({ canceled: true }, requestId)
+      const filePath = ensureCsvExtension(res.filePath)
+      try {
+        writeFileSync(filePath, '\uFEFF' + csv, 'utf8')
+      } catch (writeErr: unknown) {
+        writeAudit('analytics.export', 'failure', {
+          requestId: JSON.stringify({ periodType, platform: platform || null, stage: 'write', errorCode: String((writeErr as NodeJS.ErrnoException)?.code || 'WRITE_FAILED').slice(0, 40) })
+        })
+        return error(ERROR_CODES.INTERNAL_ERROR.code, '写入文件失败，请检查保存位置和文件权限后重试', requestId)
+      }
+      writeAudit('analytics.export', 'success', {
+        requestId: JSON.stringify({ periodType, platform: platform || null, rows })
+      })
+      return success({ path: filePath, rows, periodType, platform: platform || null }, requestId)
+    } catch (err: unknown) {
+      return error(ERROR_CODES.INTERNAL_ERROR.code, String((err as Error)?.message || err), requestId)
     }
   })
 

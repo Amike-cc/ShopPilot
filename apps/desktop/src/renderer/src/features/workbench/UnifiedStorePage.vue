@@ -193,7 +193,15 @@ function refresh() {
   state.value = 'loading'
   void ws.refreshStores().then(() => { state.value = 'ready' }).catch(error => { state.value = 'error'; errorMessage.value = error instanceof Error ? error.message : String(error) })
 }
-function onPlatformChange() { const platform = platformDefs.find(item => item.name === form.value.platform); if (platform && (!form.value.adminUrl || form.value.adminUrl === platformDefs[0]?.adminUrl)) form.value.adminUrl = platform.adminUrl }
+function onPlatformChange(next: string, previous: string) {
+  const platform = platformDefs.find(item => item.name === next)
+  // 和"上一个平台"的默认地址比，而不是和目录第一家比：连续切换三次平台时，
+  // 旧实现从第二次起就认不出地址仍是默认值，会保留上一平台的地址。
+  const previousUrl = platformDefs.find(item => item.name === previous)?.adminUrl
+  if (platform && (!form.value.adminUrl || (previousUrl && form.value.adminUrl === previousUrl))) {
+    form.value.adminUrl = platform.adminUrl
+  }
+}
 async function submitCreate() {
   if (!bridgeAvailable) return
   creating.value = true; createError.value = ''

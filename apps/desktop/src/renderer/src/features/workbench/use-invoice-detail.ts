@@ -3,6 +3,13 @@ import { isPendingSection } from '@shared/constants/invoice'
 import { findPlatform } from '@shared/constants/platforms'
 import { NO_LICENSE_KEY, groupStoresByLicense } from '@shared/store-license'
 import { invoiceAmountText, parseInvoiceAmount } from '@shared/invoice-amount'
+import {
+  ANALYTICS_PERIOD_FILTERS,
+  ANALYTICS_PERIOD_LABELS,
+  ANALYTICS_SOURCE_LABELS,
+  type AnalyticsPeriodFilter,
+  type AnalyticsSummary
+} from '@shared/contracts/analytics'
 import { computed, reactive, ref } from 'vue'
 import { useWorkspaceStore } from '../../stores/workspace'
 
@@ -47,10 +54,28 @@ const subtitle = computed(() => props.mode === 'invoices'
   ? '开票与申报资料统一管理。'
   : props.mode === 'tax'
     ? '查看平台按季度报送的涉税经营数据；本应用只读展示，不代替税务申报。'
-    : '销售额、订单和经营指标均来自本机快照。')
+    : '经营指标优先取 10 分钟自动采集；没有自动数据时才回落到任务快照，并标出来源与口径。')
 const bizMetrics = BIZ_METRICS
 const totalCards = computed(() => { const t = dataCenter.value?.totals || {}; return [{ label: '店铺', value: t.stores ?? '—', note: `${t.online ?? 0} 家在线` }, { label: '平台', value: t.platforms ?? '—', note: '已配置的平台' }, { label: '指标快照', value: t.snapshots ?? '—', note: '本机采集记录' }, { label: '任务', value: t.tasks ?? '—', note: '任务定义总数' }] })
 const snapshotRows = computed<any[]>(() => dataCenter.value?.snapshots || [])
+/**
+ * 数据分析 · 经营指标聚合（2026-11-09）。
+ *
+ * 数据由主进程一次聚合返回：自动采集（sales_metrics）优先，任务快照（store_snapshots）兜底。
+ * 页面不再自己拼两种来源——以前表格只读快照，监控卡读自动采集，同一页会出现两套数字。
+ */
+const analyticsData = ref<AnalyticsSummary | null>(null)
+const analyticsState = ref<'loading' | 'ready' | 'error'>('loading')
+const analyticsError = ref('')
+const analyticsPeriod = ref<AnalyticsPeriodFilter>('ALL')
+const analyticsPlatform = ref('all')
+const analyticsPeriodOptions = ANALYTICS_PERIOD_FILTERS.map(value => ({ value, label: ANALYTICS_PERIOD_LABELS[value] }))
+const analyticsPlatformOptions = computed(() => {
+  const platforms = (analyticsData.value?.rows || []).map(row => row.platform)
+  return [...new Set(platforms)].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+})
+const analyticsByPlatform = computed(() => analyticsData.value?.byPlatform || [])
+const analyticsHasData = computed(() => (analyticsData.value?.rows || []).some(row => row.source !== 'NONE'))
 const invoiceRows = computed<any[]>(() => invoiceData.value?.rows || [])
 /**
  * 每行补上「无需操作」条数。
@@ -500,12 +525,15 @@ function invoiceRowAmount(row: any): { total: number; parsed: number; text: stri
 function invoiceRowAmountText(row: any): string {
   return invoiceRowAmount(row).text
 }
-const metricRows = computed(() => {
-  const rows = new Map<string, any>()
-  for (const store of ws.stores) rows.set(store.id, { storeId: store.id, storeName: store.name, platform: store.platform, values: {}, manual: {}, lastAt: 0 })
-  for (const snapshot of snapshotRows.value) { const row = rows.get(snapshot.storeId); if (!row || !String(snapshot.metric).startsWith('biz.')) continue; row.values[snapshot.metric] = snapshot.value; row.manual[snapshot.metric] = !!snapshot.manual; row.lastAt = Math.max(row.lastAt, Number(snapshot.capturedAt) || 0) }
-  return [...rows.values()]
-})
+const metricRows = computed(() => (analyticsData.value?.rows || [])
+  .filter(row => analyticsPlatform.value === 'all' || row.platform === analyticsPlatform.value)
+  .map(row => ({
+    ...row,
+    // 模板旧字段兼容：手动标与采集时间；来源/口径用新字段显式展示。
+    manual: Object.fromEntries(row.manualMetrics.map(key => [key, true])) as Record<string, boolean>,
+    lastAt: row.collectedAt,
+    sourceLabel: ANALYTICS_SOURCE_LABELS[row.source]
+  })))
 const manualReady = computed(() => !!manual.storeId && manual.value != null && Number.isFinite(Number(manual.value)) && Number(manual.value) >= 0)
 function displayValue(value: unknown) { return value == null || value === '' ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value) }
 function formatTime(value: number) { return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
@@ -568,6 +596,16 @@ function openExportConfirm() {
     totalCards,
 
     snapshotRows,
+
+    analyticsData,
+    analyticsState,
+    analyticsError,
+    analyticsPeriod,
+    analyticsPlatform,
+    analyticsPeriodOptions,
+    analyticsPlatformOptions,
+    analyticsByPlatform,
+    analyticsHasData,
 
     invoiceRows,
 

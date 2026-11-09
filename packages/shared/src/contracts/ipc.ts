@@ -318,6 +318,10 @@ export const IPC_CHANNELS = {
   OVERVIEW_STATS: 'overview:stats',
   // 数据中心：汇总所有店铺的数据（店铺分布 / 指标快照 / 邀约与任务运行）
   OVERVIEW_DATACENTER: 'overview:datacenter',
+  // 数据分析：经营指标聚合（自动采集优先、任务快照兜底，带周期与来源）
+  OVERVIEW_ANALYTICS: 'overview:analytics',
+  // 数据分析：把当前周期/平台的经营指标导出为 CSV（弹保存框）
+  OVERVIEW_ANALYTICS_EXPORT: 'overview:analyticsExport',
   // 发票中心：汇总各店铺的**待开票信息**（来自发票页 readTable 快照）
   OVERVIEW_INVOICE_CENTER: 'overview:invoiceCenter',
   // 发票中心：把当前待开票清单导出为 CSV（弹保存框；只写文件，不上传）

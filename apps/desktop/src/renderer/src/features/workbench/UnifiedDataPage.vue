@@ -2,7 +2,7 @@
   <section :class="['unified-page unified-data-page', { 'invoice-center-page': mode === 'invoices', 'tax-report-page': mode === 'tax' }]" :data-test="`unified-${mode}-page`">
     <header class="unified-page-head">
       <div><span class="dashboard-eyebrow">WORKSPACE / DATA</span><h1>{{ title }}</h1><p>{{ subtitle }}</p></div>
-      <div class="unified-page-actions"><button v-if="mode !== 'analytics'" type="button" class="unified-button ghost" data-test="data-module-settings" @click="settingsOpen = true">设置</button><button v-if="mode !== 'invoices'" type="button" class="unified-button ghost" :disabled="loading" @click="load"><img class="button-icon" :src="dataSyncSheetIcon" alt="" />{{ loading ? '读取中…' : '刷新数据' }}</button><template v-if="mode === 'invoices'">
+      <div class="unified-page-actions"><button v-if="mode !== 'analytics'" type="button" class="unified-button ghost" data-test="data-module-settings" @click="settingsOpen = true">设置</button><button v-if="mode === 'analytics'" type="button" class="unified-button ghost" data-test="analytics-export" :disabled="analyticsExporting || !analyticsHasData" @click="exportAnalytics"><img class="button-icon" :src="dataExportSheetIcon" alt="" />{{ analyticsExporting ? '导出中…' : '导出经营指标' }}</button><button v-if="mode !== 'invoices'" type="button" class="unified-button ghost" :disabled="loading" @click="load"><img class="button-icon" :src="dataSyncSheetIcon" alt="" />{{ loading ? '读取中…' : '刷新数据' }}</button><template v-if="mode === 'invoices'">
           <!-- ⚠ 验收脚本按 data-test="invoice-export" 定位导出按钮（invoice-license-local-verify.js 第 13 步），
                改这段工具栏必须保留它。
                顺带改正一处 bug：原来的 v-if 写反了（mode !== 'invoices'），于是「数据分析」页上挂着一个
@@ -18,10 +18,41 @@
         <article v-for="card in totalCards" :key="card.label" class="unified-stat-card"><span>{{ card.label }}</span><strong>{{ card.value }}</strong><small>{{ card.note }}</small></article>
       </div>
 
+      <div v-if="mode === 'analytics'" class="an-toolbar" data-test="analytics-toolbar">
+        <div class="ui-seg" role="tablist" aria-label="统计周期">
+          <button v-for="option in analyticsPeriodOptions" :key="option.value" type="button" :class="{ on: analyticsPeriod === option.value }" :aria-selected="analyticsPeriod === option.value" role="tab" @click="analyticsPeriod = option.value">{{ option.label }}</button>
+        </div>
+        <select v-model="analyticsPlatform" class="an-platform" aria-label="平台筛选" data-test="analytics-platform">
+          <option value="all">全部平台</option>
+          <option v-for="platform in analyticsPlatformOptions" :key="platform" :value="platform">{{ platform }}</option>
+        </select>
+        <span class="an-toolbar-note">自动采集优先；没有自动数据时才回落任务快照</span>
+      </div>
+
       <div v-if="mode === 'analytics'" class="unified-data-grid">
-        <section class="unified-card data-wide"><div class="unified-card-head"><div><h2>经营指标</h2><span>每店每指标取本机最新快照</span></div><button type="button" class="unified-button ghost" :disabled="collecting" @click="collectBusiness"><img class="button-icon" :src="dataAnalyticsSheetIcon" alt="" />{{ collecting ? '创建任务中…' : '采集经营数据' }}</button></div><div v-if="metricRows.length" class="unified-table-wrap"><table class="unified-table"><thead><tr><th>店铺</th><th>平台</th><th v-for="metric in bizMetrics" :key="metric.key">{{ metric.label }}</th><th>采集时间</th></tr></thead><tbody><tr v-for="row in metricRows" :key="row.storeId"><td>{{ row.storeName }}</td><td>{{ row.platform }}</td><td v-for="metric in bizMetrics" :key="metric.key">{{ formatValue(row.values[metric.key], metric.key) }}<em v-if="row.manual[metric.key]">手动</em></td><td>{{ row.lastAt ? formatTime(row.lastAt) : '—' }}</td></tr></tbody></table></div><div v-else class="unified-empty compact">暂无经营快照。请在店铺浏览器中采集或运行读取任务。</div></section>
+        <section class="unified-card data-wide"><div class="unified-card-head"><div><h2>经营指标</h2><span>每店一条；来源与周期逐行标注</span></div><button type="button" class="unified-button ghost" :disabled="collecting" @click="collectBusiness"><img class="button-icon" :src="dataAnalyticsSheetIcon" alt="" />{{ collecting ? '创建任务中…' : '采集经营数据' }}</button></div>
+          <div v-if="analyticsError" class="unified-alert error" role="alert">经营指标读取失败：{{ analyticsError }} <button type="button" @click="loadAnalytics">重试</button></div>
+          <div v-else-if="analyticsState === 'loading'" class="unified-state compact"><span class="loader"></span>正在汇总经营指标…</div>
+          <div v-else-if="!metricRows.some(row => row.source !== 'NONE')" class="unified-empty compact">当前范围没有经营指标。请先运行自动采集，或点「采集经营数据」。</div>
+          <div v-else class="unified-table-wrap"><table class="unified-table"><thead><tr><th>店铺</th><th>平台</th><th>来源</th><th>口径</th><th v-for="metric in bizMetrics" :key="metric.key">{{ metric.label }}</th><th>采集时间</th></tr></thead><tbody><tr v-for="row in metricRows" :key="row.storeId"><td>{{ row.storeName }}</td><td>{{ row.platform }}</td><td><span :class="['an-source', row.source.toLowerCase()]">{{ row.sourceLabel }}</span></td><td><span class="an-period">{{ row.periodLabel }}</span></td><td v-for="metric in bizMetrics" :key="metric.key">{{ formatValue(row.values[metric.key], metric.key) }}<em v-if="row.manual[metric.key]">手动</em></td><td>{{ row.lastAt ? formatTime(row.lastAt) : '—' }}</td></tr></tbody></table></div>
+        </section>
         <section class="unified-card"><div class="unified-card-head"><div><h2>指标快照</h2><span>{{ snapshotRows.length }} 条本机记录</span></div></div><div v-if="snapshotRows.length" class="snapshot-list"><div v-for="snapshot in snapshotRows.slice(0, 12)" :key="snapshot.storeId + snapshot.metric + snapshot.capturedAt" class="snapshot-row"><div><strong>{{ snapshot.metric }}</strong><small>{{ snapshot.storeName || snapshot.storeId }}</small></div><span>{{ displayValue(snapshot.value) }}</span></div></div><div v-else class="unified-empty compact">暂无快照</div></section>
       </div>
+
+      <section v-if="mode === 'analytics' && analyticsByPlatform.length" class="unified-card analytics-platform-card" data-test="analytics-platform-compare">
+        <div class="unified-card-head"><div><h2>平台对比</h2><span>同一周期内按平台汇总；来源家数一并列出，不把快照和自动采集混着算</span></div></div>
+        <div class="an-platform-grid">
+          <article v-for="platform in analyticsByPlatform" :key="platform.platform" class="an-platform-card">
+            <div class="an-platform-head"><strong>{{ platform.platform }}</strong><span>{{ platform.storeCount }} 家</span></div>
+            <small>自动 {{ platform.autoCount }} · 快照 {{ platform.snapshotCount }}</small>
+            <dl>
+              <div><dt>销售额</dt><dd>{{ formatValue(platform.values['biz.gmv'], 'biz.gmv') }}</dd></div>
+              <div><dt>订单</dt><dd>{{ formatValue(platform.values['biz.orders'], 'biz.orders') }}</dd></div>
+              <div><dt>投放花费</dt><dd>{{ formatValue(platform.values['biz.adSpend'], 'biz.adSpend') }}</dd></div>
+            </dl>
+          </article>
+        </div>
+      </section>
 
       <SalesMetricsMonitorCard v-if="mode === 'analytics'" @open-store="emit('open-store', $event)" />
 
@@ -731,6 +762,14 @@ const {
   bizMetrics,
   totalCards,
   snapshotRows,
+  analyticsState,
+  analyticsError,
+  analyticsPeriod,
+  analyticsPlatform,
+  analyticsPeriodOptions,
+  analyticsPlatformOptions,
+  analyticsByPlatform,
+  analyticsHasData,
   invoiceRows,
   invoiceLicense,
   invoiceStatusFilter,
@@ -824,6 +863,9 @@ const {
 const collection = useDataCollection(page, tax, { props })
 const {
   load,
+  loadAnalytics,
+  exportAnalytics,
+  analyticsExporting,
   collectStoreEntities,
   collectBusiness,
   collectInvoices,
@@ -1091,4 +1133,26 @@ button.inv-chip:hover{border-color:rgba(151,120,255,.7);color:var(--dash-text)}
   .inv-mobile-actions{display:flex;gap:8px;position:sticky;bottom:0;z-index:6;margin-top:10px;padding:8px 0 10px;border-top:1px solid var(--dash-border);background:#ffffff}
   .inv-mobile-actions .unified-button{flex:1;justify-content:center;min-height:40px}
 }
+/* 数据分析 · 经营指标（2026-11-09）：周期/平台/来源与平台对比 */
+.an-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}
+.an-toolbar .ui-seg{display:flex;gap:3px;padding:3px;border-radius:9px;background:#ebeced}
+.an-toolbar .ui-seg button{height:28px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--dash-text-muted);cursor:pointer}
+.an-toolbar .ui-seg button.on{background:rgba(120,85,238,.35);color:#4c1d95}
+.an-platform{height:34px;min-width:150px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#ffffff;color:var(--dash-text-soft)}
+.an-toolbar-note{margin-left:auto;color:var(--dash-text-muted);font-size:11px}
+.an-source{display:inline-flex;align-items:center;padding:2px 6px;border-radius:5px;font-size:10px;white-space:nowrap}
+.an-source.auto{background:#e8f5ee;color:#027a48}
+.an-source.snapshot{background:#fff4e5;color:#b54708}
+.an-source.none{background:#eef1f7;color:var(--dash-text-muted)}
+.an-period{color:var(--dash-text-muted);font-size:10.5px;white-space:nowrap}
+.analytics-platform-card{margin-top:12px}
+.an-platform-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.an-platform-card{padding:12px;border:1px solid var(--dash-border);border-radius:10px;background:#f7f9fd}
+.an-platform-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.an-platform-head strong{color:var(--dash-text);font-size:13px}
+.an-platform-head span,.an-platform-card>small{color:var(--dash-text-muted);font-size:10.5px}
+.an-platform-card dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0 0}
+.an-platform-card dt{color:var(--dash-text-muted);font-size:10px}
+.an-platform-card dd{margin:2px 0 0;color:var(--dash-text);font-size:12px;font-weight:600;white-space:nowrap}
+@media(max-width:768px){.an-toolbar-note{flex:1 1 100%;margin-left:0}.an-platform-card dl{grid-template-columns:1fr}}
 </style>

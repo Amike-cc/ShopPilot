@@ -25,6 +25,15 @@ import { ENTITY_METRIC_NAME, ENTITY_METRIC_NO, entityProfileFor, entityUnsupport
 import { decideLicenseWrite, normalizeLicenseName, normalizeLicenseNo } from '@shared/store-license'
 import { TAX_COLUMNS, TAX_DATA_DISCLAIMER, TAX_REPORT_BASIS, TAX_TASK_PREFIX, TAX_UNSUPPORTED_NOTE, taxProfileFor } from '@shared/constants/tax'
 import type { TaxColumnKey } from '@shared/constants/tax'
+import { BIZ_METRICS } from '@shared/constants/business'
+import {
+  SALES_METRICS_PERIOD_LABELS,
+  type AnalyticsAggregate,
+  type AnalyticsMetricRow,
+  type AnalyticsPeriodFilter,
+  type AnalyticsPlatformSummary,
+  type AnalyticsSummary
+} from '@shared/contracts/analytics'
 
 /**
  * overview:stats - 工作台概览
@@ -578,5 +587,184 @@ export function overviewDatacenterSummary() {
     snapshots,
     invite: { byStatus: inviteByStatus, recent: inviteRecent },
     runs: { byStatus: runsByStatus, recentIssues }
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * 数据分析 · 经营指标聚合（2026-11-09）
+ *
+ * 统一读取顺序：**自动采集（sales_metrics）优先，任务快照（store_snapshots）兜底**。
+ * 两条来源各有自己的时间字段：自动采集是 collected_at，快照是 captured_at；
+ * 界面不能再拿一个"采集时间"糊住两种口径。
+ * ------------------------------------------------------------------------- */
+
+function analyticsNumber(value: unknown): number | null {
+  if (value == null || value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function analyticsYuan(minor: unknown): number | null {
+  const value = analyticsNumber(minor)
+  return value == null ? null : Math.round(value) / 100
+}
+
+function emptyAnalyticsValues(): Record<string, number | null> {
+  return Object.fromEntries(BIZ_METRICS.map(metric => [metric.key, null]))
+}
+
+/** 自动采集行 → 界面六个指标（金额从「分」换成「元」）。 */
+function autoValues(metric: Record<string, unknown>): Record<string, number | null> {
+  return {
+    'biz.units': analyticsNumber(metric.sales_quantity),
+    // 「订单」用支付订单数；旧数据没有该列时退回下单订单数，口径差异由 dataStatus/来源列交代。
+    'biz.orders': analyticsNumber(metric.paid_order_count) ?? analyticsNumber(metric.order_count),
+    'biz.gmv': analyticsYuan(metric.gross_sales_amount_minor ?? metric.paid_sales_amount_minor),
+    'biz.refundAmount': analyticsYuan(metric.refund_amount_minor),
+    'biz.refundOrders': analyticsNumber(metric.refund_order_count),
+    'biz.adSpend': analyticsYuan(metric.ad_spend_minor)
+  }
+}
+
+function addAnalyticsValues(target: Record<string, number | null>, source: Record<string, number | null>): void {
+  for (const metric of BIZ_METRICS) {
+    const value = source[metric.key]
+    if (value == null) continue
+    target[metric.key] = (target[metric.key] ?? 0) + value
+  }
+}
+
+function roundAnalyticsAggregate(values: Record<string, number | null>): void {
+  for (const key of ['biz.gmv', 'biz.refundAmount', 'biz.adSpend']) {
+    const value = values[key]
+    if (value != null) values[key] = Math.round(value * 100) / 100
+  }
+}
+
+function emptyAggregate(): AnalyticsAggregate {
+  return { storeCount: 0, autoCount: 0, snapshotCount: 0, values: emptyAnalyticsValues() }
+}
+
+function addRowToAggregate(target: AnalyticsAggregate, row: AnalyticsMetricRow): void {
+  target.storeCount++
+  if (row.source === 'AUTO') target.autoCount++
+  if (row.source === 'SNAPSHOT') target.snapshotCount++
+  if (row.source !== 'NONE') addAnalyticsValues(target.values, row.values)
+}
+
+/**
+ * overview:analytics - 数据分析页的经营指标（只读）。
+ *
+ * `periodType = ALL`：每店取最新一条自动采集（保留平台自己的周期），没有则回落到任务快照；
+ * 指定周期：只取该周期的自动采集行；任务快照没有周期字段，不参与该筛选（避免把"某天的快照"
+ * 冒充成"近 7 天"）。
+ */
+export function overviewAnalyticsSummary(periodType: AnalyticsPeriodFilter = 'ALL'): AnalyticsSummary {
+  const db = getDatabase()
+  const periodFilter = periodType === 'ALL' ? null : periodType
+  const stores = db.prepare(
+    'SELECT id, name, platform FROM stores WHERE deleted_at IS NULL ORDER BY sort_order ASC, created_at DESC'
+  ).all() as Array<{ id: string; name: string; platform: string }>
+
+  const autoRows = db.prepare(`
+    SELECT * FROM (
+      SELECT sm.*, ROW_NUMBER() OVER (
+        PARTITION BY sm.store_id ORDER BY sm.collected_at DESC, sm.period_end DESC
+      ) AS rn
+      FROM sales_metrics sm
+      WHERE (? IS NULL OR sm.period_type = ?)
+    ) WHERE rn = 1
+  `).all(periodFilter, periodFilter) as Array<Record<string, unknown>>
+  const autoByStore = new Map(autoRows.map(row => [String(row.store_id), row]))
+
+  // 任务快照只在「各平台最新」下兜底：它没有 period_type，不能参与周期筛选。
+  const snapshotByStore = new Map<string, { values: Record<string, number | null>; manual: string[]; capturedAt: number }>()
+  if (periodType === 'ALL') {
+    const datacenterSnapshots = overviewDatacenterSummary().snapshots as Array<{
+      storeId: string
+      metric: string
+      value: unknown
+      manual: boolean
+      capturedAt: number
+    }>
+    for (const snapshot of datacenterSnapshots) {
+      if (!String(snapshot.metric).startsWith('biz.')) continue
+      const value = analyticsNumber(snapshot.value)
+      if (value == null) continue
+      const entry = snapshotByStore.get(snapshot.storeId) || {
+        values: emptyAnalyticsValues(),
+        manual: [],
+        capturedAt: 0
+      }
+      entry.values[snapshot.metric] = value
+      if (snapshot.manual) entry.manual.push(snapshot.metric)
+      entry.capturedAt = Math.max(entry.capturedAt, Number(snapshot.capturedAt) || 0)
+      snapshotByStore.set(snapshot.storeId, entry)
+    }
+  }
+
+  const rows: AnalyticsMetricRow[] = stores.map(store => {
+    const auto = autoByStore.get(store.id)
+    if (auto) {
+      const type = String(auto.period_type) as keyof typeof SALES_METRICS_PERIOD_LABELS
+      return {
+        storeId: store.id,
+        storeName: store.name,
+        platform: store.platform,
+        source: 'AUTO',
+        periodType: type,
+        periodLabel: SALES_METRICS_PERIOD_LABELS[type] || String(auto.period_type),
+        collectedAt: analyticsNumber(auto.collected_at),
+        dataStatus: auto.data_status == null ? null : String(auto.data_status),
+        manualMetrics: [],
+        values: autoValues(auto)
+      }
+    }
+    const snapshot = snapshotByStore.get(store.id)
+    if (snapshot) {
+      return {
+        storeId: store.id,
+        storeName: store.name,
+        platform: store.platform,
+        source: 'SNAPSHOT',
+        periodType: null,
+        periodLabel: '任务快照',
+        collectedAt: snapshot.capturedAt || null,
+        dataStatus: null,
+        manualMetrics: snapshot.manual,
+        values: snapshot.values
+      }
+    }
+    return {
+      storeId: store.id,
+      storeName: store.name,
+      platform: store.platform,
+      source: 'NONE',
+      periodType: null,
+      periodLabel: '—',
+      collectedAt: null,
+      dataStatus: null,
+      manualMetrics: [],
+      values: emptyAnalyticsValues()
+    }
+  })
+
+  const totals = emptyAggregate()
+  const platforms = new Map<string, AnalyticsPlatformSummary>()
+  for (const row of rows) {
+    addRowToAggregate(totals, row)
+    const platform = platforms.get(row.platform) || { platform: row.platform, ...emptyAggregate() }
+    addRowToAggregate(platform, row)
+    platforms.set(row.platform, platform)
+  }
+  roundAnalyticsAggregate(totals.values)
+  for (const platform of platforms.values()) roundAnalyticsAggregate(platform.values)
+
+  return {
+    generatedAt: Date.now(),
+    periodType,
+    rows,
+    byPlatform: [...platforms.values()],
+    totals
   }
 }

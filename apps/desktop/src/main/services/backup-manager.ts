@@ -221,10 +221,19 @@ async function restoreBackupInner(target: BackupRecord): Promise<{ success: true
   } catch (err) {
     // 恢复失败 → 用刚才的安全快照回滚，保证现有数据不被破坏（同样是原子替换）
     closeDatabase()
+    let rollbackError: unknown = null
     try {
       atomicReplaceDb(safety.filePath, dbPath)
       initDatabase()
-    } catch { /* 回滚也失败：保留现场，异常向上抛，日志里有 audit */ }
+    } catch (rollbackErr) {
+      // 回滚也失败：**不能**再向界面宣称"现有数据未受影响"。
+      // 抛独立错误码，UI 明确提示"自动回滚未完成，请用备份文件手动恢复"。
+      rollbackError = rollbackErr
+      writeAudit('backup.restore', 'failure', {
+        requestId: JSON.stringify({ stage: 'rollback', errorCode: 'ROLLBACK_FAILED' })
+      })
+    }
+    if (rollbackError) throw new Error('BACKUP_RESTORE_ROLLBACK_FAILED')
     throw err
   }
 

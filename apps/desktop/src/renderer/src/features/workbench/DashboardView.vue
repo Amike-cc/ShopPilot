@@ -695,6 +695,7 @@ function statusClass(status: string) { return status === 'online' ? 'online' : [
 function statusLabel(status: string) { return storeStatusLabel(status) }
 
 async function loadInvoiceTodo() {
+  if (!isModuleInstalled('invoices')) { invoiceTodoRows.value = []; invoiceTodoState.value = 'empty'; return }
   invoiceTodoState.value = 'loading'
   try {
     const response = await window.shopilot.overview.invoiceCenter()

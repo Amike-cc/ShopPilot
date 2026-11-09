@@ -132,6 +132,10 @@ const api = {
     stats: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_STATS),
     /** 数据中心：所有店铺的汇总数据（只读） */
     datacenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_DATACENTER),
+    /** 数据分析：经营指标（自动采集优先、任务快照兜底；带周期与来源） */
+    analytics: (input?: { periodType?: string }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_ANALYTICS, input ?? {}),
+    /** 数据分析：把当前周期/平台的经营指标导出为 CSV（弹保存框） */
+    analyticsExport: (input?: { periodType?: string; platform?: string }): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_ANALYTICS_EXPORT, input ?? {}),
     /** 发票中心：各店铺的待开票信息（来自发票页 readTable 快照） */
     invoiceCenter: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.OVERVIEW_INVOICE_CENTER),
     /** 发票中心：把待开票清单导出为 CSV（弹保存框）。传 licenseKey = 只导出该开票主体的行（跟随屏上筛选） */

@@ -18,7 +18,7 @@
             <AppIcon name="refresh" :size="14" />
             {{ refreshLabel }}
           </button>
-          <button type="button" class="ui-btn ui-btn--primary" @click="emit('open-assistant')">
+          <button v-if="aiInstalled" type="button" class="ui-btn ui-btn--primary" @click="emit('open-assistant')">
             <AppIcon name="sparkles" :size="14" />
             问问 AI
           </button>
@@ -133,7 +133,7 @@
             </div>
             <div class="ui-card__body ov-tiles">
               <article
-                v-for="tile in quickActions"
+                v-for="tile in visibleQuickActions"
                 :key="tile.key"
                 :class="['ov-tile', `tone-${tile.tone}`, { disabled: !tile.available }]"
                 :data-test="'quick-action-' + tile.key"
@@ -189,7 +189,7 @@
             </div>
           </section>
 
-          <section id="ai-assistant" class="ui-card ov-ai">
+          <section v-if="aiInstalled" id="ai-assistant" class="ui-card ov-ai">
             <div class="ov-ai-icon" aria-hidden="true"><AppIcon name="sparkles" :size="18" /></div>
             <h2>AI 电商助手</h2>
             <p>创作、优化、分析，一站完成。只给建议，不替你动店铺数据。</p>
@@ -198,7 +198,7 @@
             </button>
           </section>
 
-          <section id="invoice-todo" class="ui-card">
+          <section v-if="invoicesInstalled" id="invoice-todo" class="ui-card">
             <div class="ui-card__head">
               <div class="ui-card__title"><h2>待开发票</h2></div>
               <span class="ui-chip ui-chip--soft">{{ pendingInvoices.length }} 家店铺</span>
@@ -233,7 +233,9 @@
 <script setup lang="ts">
 import PlatformIcon from '../../../components/PlatformIcon.vue'
 import AppIcon from '../../../components/ui/AppIcon.vue'
+import { computed } from 'vue'
 import { useDashboardOverview, type LoadState } from '../use-dashboard-overview'
+import { isModuleInstalled } from '../use-app-modules'
 
 /**
  * 「经营总览」页（2026-11 界面重构）。
@@ -277,6 +279,19 @@ const quickActions = [
   { key: 'image', label: 'AI 生成商品图', description: '白底图、场景图，选模型直接出图', icon: 'image', tone: 'purple', available: true, actionLabel: '立即创作' },
   { key: 'publish', label: '批量发布商品', description: '多平台批量发布，先预检再执行', icon: 'box', tone: 'blue', available: true, actionLabel: '去发布' }
 ]
+/**
+ * 模块卸载后总览不能再露出对应入口（2026-11-09 审查）。
+ * 侧栏与路由已有守卫，但总览的 AI 按钮/卡片、商品快捷入口和待开发票卡是独立渲染的，
+ * 守卫只在点击后跳商城——用户仍会看到一个"装了但点不开"的入口，语义不一致。
+ */
+const aiInstalled = computed(() => isModuleInstalled('ai'))
+const productsInstalled = computed(() => isModuleInstalled('products'))
+const invoicesInstalled = computed(() => isModuleInstalled('invoices'))
+const visibleQuickActions = computed(() => quickActions.filter(action => {
+  if (action.key === 'image') return aiInstalled.value
+  if (action.key === 'publish') return productsInstalled.value
+  return true
+}))
 function handleQuickAction(action: (typeof quickActions)[number]) {
   if (action.key === 'image') { emit('navigate', 'image-studio'); return }
   // 批量发布已落地（商品管理内的预检/批量编排/人工确认），快捷入口不能再显示「待接入」。

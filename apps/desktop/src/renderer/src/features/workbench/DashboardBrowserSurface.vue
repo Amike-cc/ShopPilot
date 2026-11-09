@@ -212,7 +212,26 @@
           </div>
 
           <div class="env-sec">
-            <div class="env-h">环境指纹 <button type="button" class="mini-btn env-action" :disabled="verifying" @click="verifyEnv">{{ verifying ? '验证中…' : '打开店铺页面后验证' }}</button></div>
+            <div class="env-h">环境指纹 <span class="env-lock-state" :class="{ locked: profileLocked }">{{ profileLocked ? '已锁定' : '可修改' }}</span><button type="button" class="mini-btn env-action" data-test="profile-edit" :disabled="profileBusy" @click="openProfileEditor">{{ profileOpen ? '收起编辑' : '编辑指纹' }}</button><button type="button" class="mini-btn env-action" :disabled="verifying" @click="verifyEnv">{{ verifying ? '验证中…' : '打开店铺页面后验证' }}</button></div>
+            <div v-if="profileOpen" class="profile-editor" data-test="profile-editor">
+              <div v-if="profileError" class="env-note error" role="alert">{{ profileError }}</div>
+              <label class="profile-field profile-field-wide"><span>User-Agent</span><input v-model="profileDraft.userAgent" data-test="profile-user-agent" :disabled="profileLocked" spellcheck="false" /></label>
+              <div class="profile-grid">
+                <label class="profile-field"><span>语言</span><input v-model="profileDraft.language" data-test="profile-language" :disabled="profileLocked" placeholder="zh-CN" /></label>
+                <label class="profile-field"><span>时区</span><input v-model="profileDraft.timezone" data-test="profile-timezone" :disabled="profileLocked" placeholder="Asia/Shanghai" /></label>
+                <label class="profile-field"><span>屏幕宽</span><input v-model.number="profileDraft.screenWidth" type="number" min="1" max="16384" :disabled="profileLocked" /></label>
+                <label class="profile-field"><span>屏幕高</span><input v-model.number="profileDraft.screenHeight" type="number" min="1" max="16384" :disabled="profileLocked" /></label>
+                <label class="profile-field"><span>色深</span><input v-model.number="profileDraft.colorDepth" type="number" min="1" max="64" :disabled="profileLocked" /></label>
+                <label class="profile-field"><span>CPU 核心</span><input v-model.number="profileDraft.hardwareConcurrency" type="number" min="1" max="256" :disabled="profileLocked" /></label>
+                <label class="profile-field"><span>WebGL 厂商</span><input v-model="profileDraft.webglVendor" :disabled="profileLocked" /></label>
+                <label class="profile-field"><span>WebGL 渲染器</span><input v-model="profileDraft.webglRenderer" :disabled="profileLocked" /></label>
+              </div>
+              <div class="profile-actions">
+                <button type="button" class="mini-btn primary" data-test="profile-save" :disabled="profileBusy || profileLocked" @click="saveProfile">{{ profileBusy ? '保存中…' : '保存指纹' }}</button>
+                <button type="button" class="mini-btn" data-test="profile-lock" :disabled="profileBusy" @click="toggleProfileLock">{{ profileLocked ? '解锁环境' : '锁定环境' }}</button>
+              </div>
+              <div class="env-note">锁定后不可修改，会话包导入也不会覆盖本店指纹。保存会刷新已打开页面。</div>
+            </div>
             <div v-if="!verifyItems.length" class="env-note env-empty-note"><img class="browser-inline-art" :src="networkArt" alt="环境尚未验证" /><span>未验证。字段实际值需在店铺浏览器打开后采集，无法验证的字段如实标记“未验证”。</span></div>
             <div v-for="item in verifyItems" :key="item.field" class="verify-item"><img class="verify-status-icon" :src="item.state === 'verified' ? verifiedIcon : unknownIcon" :alt="item.state === 'verified' ? '已验证' : '未验证'" /><div class="v-info"><div class="row-main">{{ item.field }}</div><div class="row-sub" :title="`期望 ${item.expected} / 实际 ${item.actual ?? '—'}`">期望 {{ clip(item.expected) }} → 实际 {{ clip(item.actual) }}</div></div></div>
           </div>
@@ -451,6 +470,26 @@ const proxyAuthObserved = ref(false)
 const testingIds = ref<string[]>([])
 const verifyItems = ref<Array<{ field: string; expected: unknown; actual: unknown; state: string }>>([])
 const verifying = ref(false)
+/**
+ * 环境指纹编辑（2026-11-09）：后端一直有 profile:update / profile:lock，
+ * 但界面只有"验证"，用户无法改 UA/时区/分辨率，也无法锁定防误改。
+ * 这里只编辑已实测可注入的字段；保存由主进程 refreshProfileRuntime 同步到已打开页面。
+ */
+const profileOpen = ref(false)
+const profileBusy = ref(false)
+const profileError = ref('')
+const profileLocked = ref(false)
+const profileDraft = reactive({
+  userAgent: '',
+  language: '',
+  timezone: '',
+  screenWidth: 0,
+  screenHeight: 0,
+  colorDepth: 0,
+  hardwareConcurrency: 0,
+  webglVendor: '',
+  webglRenderer: ''
+})
 const np = reactive({ label: '', type: 'http', host: '', port: null as number | null, user: '', pass: '' })
 const cookies = ref<any[]>([])
 const cookiesTotal = ref(0)
@@ -1101,6 +1140,101 @@ async function verifyEnv() {
   )
 }
 
+type ProfileDraftSource = {
+  locked?: unknown
+  userAgent?: unknown
+  language?: unknown
+  timezone?: unknown
+  screenWidth?: unknown
+  screenHeight?: unknown
+  colorDepth?: unknown
+  hardwareConcurrency?: unknown
+  webglVendor?: unknown
+  webglRenderer?: unknown
+}
+
+function fillProfileDraft(profile: ProfileDraftSource | null | undefined): void {
+  profileLocked.value = profile?.locked === true
+  profileDraft.userAgent = String(profile?.userAgent || '')
+  profileDraft.language = String(profile?.language || '')
+  profileDraft.timezone = String(profile?.timezone || '')
+  profileDraft.screenWidth = Number(profile?.screenWidth) || 0
+  profileDraft.screenHeight = Number(profile?.screenHeight) || 0
+  profileDraft.colorDepth = Number(profile?.colorDepth) || 0
+  profileDraft.hardwareConcurrency = Number(profile?.hardwareConcurrency) || 0
+  profileDraft.webglVendor = String(profile?.webglVendor || '')
+  profileDraft.webglRenderer = String(profile?.webglRenderer || '')
+}
+
+async function openProfileEditor(): Promise<void> {
+  if (profileOpen.value) { profileOpen.value = false; return }
+  const storeId = ws.displayedStoreId
+  if (!storeId) return
+  profileBusy.value = true
+  profileError.value = ''
+  try {
+    const result = await window.shopilot.profile.get(storeId)
+    if (!result.ok) throw new Error(result.error.message)
+    fillProfileDraft(result.data)
+    profileOpen.value = true
+  } catch (error) {
+    profileError.value = String((error as Error)?.message || error)
+    ws.toast(`读取环境配置失败：${profileError.value}`, 'error')
+  } finally {
+    profileBusy.value = false
+  }
+}
+
+async function saveProfile(): Promise<void> {
+  const storeId = ws.displayedStoreId
+  if (!storeId || profileBusy.value || profileLocked.value) return
+  profileBusy.value = true
+  profileError.value = ''
+  try {
+    const patch: Record<string, unknown> = {
+      userAgent: profileDraft.userAgent.trim(),
+      language: profileDraft.language.trim(),
+      timezone: profileDraft.timezone.trim(),
+      screenWidth: Number(profileDraft.screenWidth),
+      screenHeight: Number(profileDraft.screenHeight)
+    }
+    if (profileDraft.colorDepth > 0) patch.colorDepth = Number(profileDraft.colorDepth)
+    if (profileDraft.hardwareConcurrency > 0) patch.hardwareConcurrency = Number(profileDraft.hardwareConcurrency)
+    if (profileDraft.webglVendor.trim()) patch.webglVendor = profileDraft.webglVendor.trim()
+    if (profileDraft.webglRenderer.trim()) patch.webglRenderer = profileDraft.webglRenderer.trim()
+    const result = await window.shopilot.profile.update(storeId, patch)
+    if (!result.ok) throw new Error(result.error.message)
+    fillProfileDraft(result.data)
+    ws.toast('环境指纹已保存；已打开的店铺页会自动刷新', 'success')
+    verifyItems.value = []
+  } catch (error) {
+    profileError.value = String((error as Error)?.message || error)
+    ws.toast(`保存环境指纹失败：${profileError.value}`, 'error')
+  } finally {
+    profileBusy.value = false
+  }
+}
+
+async function toggleProfileLock(): Promise<void> {
+  const storeId = ws.displayedStoreId
+  if (!storeId || profileBusy.value) return
+  profileBusy.value = true
+  profileError.value = ''
+  try {
+    const result = await window.shopilot.profile.lock(storeId, !profileLocked.value)
+    if (!result.ok) throw new Error(result.error.message)
+    fillProfileDraft(result.data)
+    ws.toast(profileLocked.value
+      ? '环境已锁定：指纹不可修改，会话包导入也不会覆盖'
+      : '环境已解锁：现在可以修改指纹', 'success')
+  } catch (error) {
+    profileError.value = String((error as Error)?.message || error)
+    ws.toast(`切换环境锁定失败：${profileError.value}`, 'error')
+  } finally {
+    profileBusy.value = false
+  }
+}
+
 function clip(value: unknown) {
   const text = value == null ? '—' : String(value)
   return text.length > 46 ? `${text.slice(0, 43)}…` : text
@@ -1155,8 +1289,9 @@ async function importSession() {
   secBusy.value = false
   if (result.ok) {
     const storage = describeStorage(result.data, '导入')
+    const profileNote = result.data?.profileRestored ? ' · 已恢复包内指纹配置' : ''
     ws.toast(
-      `会话已导入：${result.data.imported} 条 Cookie 生效${result.data.failed ? `（${result.data.failed} 条失败）` : ''}${storage.text ? ' · ' + storage.text : ''}`,
+      `会话已导入：${result.data.imported} 条 Cookie 生效${result.data.failed ? `（${result.data.failed} 条失败）` : ''}${storage.text ? ' · ' + storage.text : ''}${profileNote}`,
       storage.partial ? 'info' : 'success'
     )
   } else if (result.error.code !== 'SESSION_CANCELLED') ws.toast(`导入失败：${result.error.message}`, 'error')
@@ -1467,6 +1602,16 @@ onBeforeUnmount(() => {
 .env-note.login-check-warning { color: #b54708; }
 .env-note.login-check-error { color: #b42318; }
 .env-note.login-check-info { color: var(--dash-text-muted); }
+.env-lock-state { padding: 1px 6px; border-radius: 4px; background: #eef1f7; color: var(--dash-text-muted); font-size: 9px; font-weight: 500; }
+.env-lock-state.locked { background: #fff4e5; color: #b54708; }
+.profile-editor { margin: 8px 0 2px; padding: 10px; border: 1px dashed var(--dash-border); border-radius: 9px; background: #f7f9fd; }
+.profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.profile-field { display: flex; min-width: 0; flex-direction: column; gap: 4px; margin-bottom: 7px; color: var(--dash-text-muted); font-size: 9px; }
+.profile-field-wide { grid-column: 1 / -1; }
+.profile-field input { box-sizing: border-box; width: 100%; min-height: 27px; padding: 0 7px; border: 1px solid var(--dash-border); border-radius: 6px; background: #ffffff; color: var(--dash-text-soft); font: inherit; font-size: 10px; }
+.profile-field input:disabled { background: #eef1f7; color: var(--dash-text-muted); }
+.profile-actions { display: flex; gap: 7px; margin-top: 2px; }
+.env-note.error { color: #b42318; }
 .proxy-item { display: flex; min-width: 0; align-items: center; gap: 7px; padding: 7px 0; border-top: 1px solid rgba(111,137,177,.08); }
 .p-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #78849b; }.p-dot.proxy-ok { background: #20d19a; }.p-dot.proxy-error { background: #ef6a7b; }
 .p-info, .v-info { min-width: 0; flex: 1; }

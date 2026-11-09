@@ -1092,7 +1092,7 @@ async function loadMaintenance(): Promise<void> {
 
 async function refreshBackups(): Promise<void> {
   const result = await window.shopilot.backup.list()
-  if (result.ok) backups.value = ((result.data || []) as typeof backups.value).slice(0, 5)
+  if (result.ok) backups.value = (result.data || []) as typeof backups.value
 }
 
 /**
@@ -1179,12 +1179,12 @@ async function doRestore(backupId: string): Promise<void> {
   try {
     const result = await window.shopilot.backup.restore(backupId)
     if (!result.ok) throw new Error(responseError(result, '恢复失败'))
-    ws.toast('已恢复备份，安全快照已保留', 'success')
-    maintenanceSay('已恢复备份，安全快照已保留', true)
+    ws.toast('已恢复备份，安全快照已保留；建议立即重启应用', 'success')
+    maintenanceSay('已恢复备份，安全快照已保留。请立即重启应用（至少关闭所有店铺页后重新打开），避免旧会话继续使用恢复前的登录态。', true)
     await ws.refreshStores()
     await refreshBackups()
   } catch (error) {
-    const message = '恢复失败（现有数据未受影响）：' + String((error as Error)?.message || error)
+    const message = '恢复失败：' + String((error as Error)?.message || error)
     ws.toast(message, 'error')
     maintenanceSay(message, false)
   } finally {
