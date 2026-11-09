@@ -40,6 +40,9 @@ test-results
 /release/
 /release-share/
 /release-icon/
+# electron-builder --dir 的临时验证产物（本地残留，不属于源码；删不掉时也别进版本库）
+/release-verify*/
+/release-0.4.63/
 
 # 仓库级日志：logs/README.md 写明「日志文件默认被 Git 忽略，不进入源码提交」，
 # 但此前只忽略了 *.log，于是 60 多个 build-*.txt / m1-*.txt 一直以未跟踪状态堆在工作区，

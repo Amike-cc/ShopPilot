@@ -1,18 +1,20 @@
 /**
  * 页面上下文执行器（通过 <script> 注入，运行在页面 world）
  *
- * 两个职责（2026-11-08 v2.3.0 架构调整）：
- *  1. 保留原有 req/res 通道：content script 主动请求罗盘接口（仅 detail 兜底用）；
- *  2. **响应拦截（新主通道）**：罗盘接口现在强校验 a_bogus/msToken 签名（由页面自己的
- *     请求库在发请求时附加），插件裸 fetch 拿到的只有"成功但空数据"或风控拒绝。
- *     所以这里 hook 页面的 fetch + XHR，把页面自己发出的
+ * 两个职责：
+ *  1. req/res 通道（主通道）：content script 经此重放罗盘接口。页面世界的 window.fetch
+ *     就是罗盘自己的签名包装器（自动附加 a_bogus/msToken），重放请求天然带签名；
+ *     同一通道也承载剪贴板写入（绕开罗盘对 clipboard.writeText 的反复制替换）。
+ *  2. 响应拦截（补充通道）：hook 页面的 fetch + XHR，把页面自己发出的
  *       · product_rank/video_bring_good   （榜单）
  *       · compete_product_detail/flow_more（竞品详情）
- *     响应体原样 postMessage 给内容脚本——签名、分页、筛选全部天然正确。
+ *     响应体 postMessage 给内容脚本。页面 bundle 可能保存原生引用绕过 hook，
+ *     所以这条通道只作补充，不承担主流程。
  */
 (function () {
   'use strict';
-  if (window.__lpFetcher) return;
+  // 只有「桥已装好」才跳过；内联注入半途失败时本文件仍要接手，不能只看 __lpFetcher
+  if (window.__lpFetcher && document.documentElement.dataset.lpHook === '1') return;
   window.__lpFetcher = 'v2';
   // 抢先绑定原生剪贴板写入（罗盘稍后会把 clipboard.writeText 换成自己的签名函数）
   try {
@@ -129,7 +131,6 @@
       return origSend.apply(this, arguments);
     };
   }
+  // 与 content.js 内联注入同一份逻辑的文件版（src 兜底路径）：装完 hook 打标记
+  document.documentElement.dataset.lpHook = '1';
 })();
-
-// 与 content.js 内联注入同一份逻辑的文件版（src 兜底路径）：装完 hook 打标记
-document.documentElement.dataset.lpHook = '1';

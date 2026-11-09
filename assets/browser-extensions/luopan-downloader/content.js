@@ -4,9 +4,10 @@
  *   rank   —— /shop/chance/product-rank         商品榜单 → 每行视频下方注入按钮
  *   detail —— /shop/chance/rank-product/detail  竞品详情 → 视频分析表格上方注入批量按钮
  *
- * 数据来源（v2.3.0，2026-11-08）：fetch.js 在页面世界 hook fetch/XHR，把罗盘页面
- * 自己发出的接口响应推过来（__lp:'data'）。不再自己拼参数调接口——罗盘现在强校验
- * a_bogus/msToken 签名（页面请求库自动附加），裸 fetch 只能拿到「成功但空」。
+ * 数据来源（v2.7.x）：进入页面后经页面世界桥**主动拉取**接口——页面世界的 window.fetch
+ * 就是罗盘自己的签名包装器（自动附加 a_bogus/msToken），桥转发即可拿到完整数据。
+ * 页面响应推送（fetch.js 的 hook）保留作补充，但不再依赖它（页面 bundle 可能保存原生
+ * 引用绕过 hook，hook 成败取决于注入时序）。
  */
 (function () {
   'use strict';
@@ -24,14 +25,20 @@
   let detailPid = '';
 
   // rank
-  const items = new Map();       // videoId -> item（页面推送逐页累积，只增不删）
+  const items = new Map();       // videoId -> item（主动拉取/页面推送累积，只增不删）
   let loading = false;
   let lastError = '';
+  /** 当前榜单数据对应的参数签名：页面换筛选后与之不符即重拉 */
+  let rankSig = '';
+  /** 上一次榜单拉取完成的时间（performance.now），用来忽略「旧请求」 */
+  let rankLoadAt = 0;
 
   // detail
   let detailVideos = [];
   let detailMeta = { begin: '', end: '', done: false, error: '' };
   let detailLoading = false;
+  /** 详情加载代次：切竞品时旧请求还在飞，回来必须认得出来 */
+  let detailRun = 0;
 
   /* ---------------- 通用工具 ---------------- */
 
@@ -72,11 +79,20 @@
   }
 
   function copyText(text, cb) {
+    let finished = false;
+    let firstErr = false;
     function recordCopyErr(msg) {
-      // 保留首因：fallback 会覆盖 page-clipboard 的错误，排查时要看第一条
-      if (copyText.__recorded) return;
-      copyText.__recorded = true;
-      try { chrome.storage.local.set({ lpCopyErr: String(msg).slice(0, 140) }); } catch (e) {}
+      // 每次复制只记第一条错误：fallback 会覆盖页面剪贴板的错误，排查时要看首因
+      if (firstErr) return;
+      firstErr = true;
+      try { chrome.storage.local.set({ lpCopyErr: String(msg).slice(0, 140), lpCopyErrAt: Date.now() }); } catch (e) {}
+    }
+    function finish(ok) {
+      if (finished) return;
+      finished = true;
+      // 只有真正写进剪贴板才留痕：这个键是验收/排查的「成功」依据，不能在尝试前就写
+      if (ok) { try { chrome.storage.local.set({ lpLastCopy: String(text), lpCopyAt: Date.now() }); } catch (e) {} }
+      cb && cb(ok);
     }
     function fallback() {
       const ta = document.createElement('textarea');
@@ -93,7 +109,7 @@
       try { ok = document.execCommand('copy'); } catch (e) { recordCopyErr('exec-throw: ' + String((e && e.message) || e)); }
       if (!ok) recordCopyErr('exec-false focus=' + document.hasFocus());
       ta.remove();
-      cb && cb(ok);
+      finish(ok);
     }
     // 优先页面世界剪贴板（罗盘 origin 已被应用授权 clipboard-sanitized-write）
     const bridgeId = 'c' + Date.now() + Math.random().toString(36).slice(2, 6);
@@ -104,7 +120,7 @@
       if (!d || d.__lp !== 'res' || d.id !== bridgeId) return;
       bridged = true;
       window.removeEventListener('message', onBridge);
-      if (d.ok) { cb && cb(true); return; }
+      if (d.ok) { finish(true); return; }
       recordCopyErr('page-clipboard: ' + String(d.error || '').slice(0, 80));
       fallback();
     }
@@ -124,7 +140,7 @@
    * 桥转发的请求天然带签名——榜单/详情/换链三个接口重放全部拿到完整数据。
    * 旧「hook 推送」架构依赖 document_start 时序竞态（页面 bundle 抢先捕获原生引用就全盲），
    * 时灵时不灵；推送通道保留作补充（页面翻页/筛选时的新数据自动跟随）。 */
-  const diag = { lastError: '', at: 0, note: '' };
+  const diag = { lastError: '', at: 0, note: '', bridge: '' };
 
   /** 分页请求间的小停顿，减轻服务端压力 */
   function sleep(ms) {
@@ -134,7 +150,7 @@
   function persistDiag() {
     try {
       diag.at = Date.now();
-      chrome.storage.local.set({ lpDiagCs: { lastError: diag.lastError, note: String(diag.note || ''), at: diag.at } });
+      chrome.storage.local.set({ lpDiagCs: { lastError: diag.lastError, note: String(diag.note || ''), bridge: diag.bridge || '', at: diag.at } });
     } catch (e) {}
   }
 
@@ -362,12 +378,22 @@
     let idx = 0;
     let done = 0;
     let failed = 0;
+    let quotaOut = false;
     async function worker() {
       while (idx < valid.length) {
         const i = idx++;
+        if (quotaOut) {
+          results[i] = { error: '换链配额已用尽' };
+          failed++;
+          done++;
+          if (onProgress) onProgress(done, valid.length, failed);
+          continue;
+        }
         try {
           results[i] = await resolveVideoEntity(valid[i].ref);
           if (results[i].videoId) refCache.set(valid[i].ref, results[i].videoId);
+          // remaining_cnt 是接口自己给的配额；打到 0 还继续请求只会白拿失败
+          if (typeof results[i].remainingCnt === 'number' && results[i].remainingCnt <= 0) quotaOut = true;
         } catch (e) {
           results[i] = { error: String((e && e.message) || e) };
           failed++;
@@ -379,10 +405,35 @@
     const workers = [];
     for (let w = 0; w < Math.min(RESOLVE_CONCURRENCY, valid.length); w++) workers.push(worker());
     await Promise.all(workers);
-    return { results: results, valid: valid, failed: failed };
+    return { results: results, valid: valid, failed: failed, quotaOut: quotaOut };
   }
 
-  function buildName(it) {
+  /**
+   * 异步解析后再写剪贴板，用户激活（transient activation）可能已经过期：
+   * 第一次写失败时把解析结果留在按钮上，用户再点一次——第二次写入发生在手势内。
+   */
+  function retryCopyIfPending(btn) {
+    if (!btn || !btn.__lpPending) return false;
+    const text = btn.__lpPending;
+    copyText(text, function (ok) {
+      if (ok) {
+        btn.__lpPending = '';
+        if (typeof btn.__lpPendingAdvance === 'number') { btn.__lpCursor = btn.__lpPendingAdvance; btn.__lpPendingAdvance = null; }
+        flash(btn, '已复制');
+      } else {
+        flash(btn, '复制失败，再点一次');
+      }
+    });
+    return true;
+  }
+
+  /** 同一视频在页面里可能以不同 ref 出现（ref 是请求级引用键），按内容做去重 */
+  function videoDedupeKey(v) {
+    if (/^\d+$/.test(v.videoId)) return 'id:' + v.videoId;
+    return 'meta:' + [v.title || '', v.author || '', v.publishTs || 0].join('|');
+  }
+
+  function buildName(it, realId) {
     const seq = it.rank
       ? String(it.rank).padStart(3, '0')
       : (it.seq ? String(it.seq).padStart(3, '0') : '');
@@ -390,25 +441,44 @@
       seq,
       sanitize(it.author).slice(0, 16),
       sanitize(it.title).slice(0, 30),
-      it.videoId
+      realId || it.videoId
     ].filter(Boolean);
     return `${it.folder || '罗盘带货视频'}/${parts.join('_')}.mp4`;
   }
 
   async function downloadVideos(list, btn) {
-    const valid = (list || []).filter(function (it) { return it && it.videoId && (it.playUrl || it.ref); });
-    if (!valid.length) { flash(btn, '无可下载'); return; }
-    flash(btn, '解析链接…');
-    const resolved = await resolveVideoLinks(valid, function (done, total) {
-      flash(btn, `解析链接 ${done}/${total}…`);
-    });
-    const jobs = [];
-    for (let i = 0; i < resolved.valid.length; i++) {
-      const it = resolved.valid[i];
-      const r = resolved.results[i];
-      if (r && r.playUrl) jobs.push({ url: r.playUrl, filename: buildName(it) });
+    // 同一视频可能以不同 ref 在多页出现：先按内容去重，别为同一条视频换两次链
+    const valid = [];
+    const seen = new Set();
+    for (const it of list || []) {
+      if (!it || !it.videoId || !(it.playUrl || it.ref)) continue;
+      const key = videoDedupeKey(it);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      valid.push(it);
     }
-    if (!jobs.length) { flash(btn, `解析失败（${resolved.failed}）`); return; }
+    if (!valid.length) { flash(btn, '无可下载'); return; }
+    // 已有直链的直接用；只为缺地址的条目换链（entity_by_ref 有配额）
+    const needResolve = valid.filter(function (it) { return !it.playUrl && it.ref; });
+    let resolved = { results: [], valid: [], failed: 0 };
+    if (needResolve.length) {
+      flash(btn, '解析链接…');
+      resolved = await resolveVideoLinks(needResolve, function (done, total) {
+        flash(btn, `解析链接 ${done}/${total}…`);
+      });
+    }
+    const byRef = new Map();
+    for (let i = 0; i < resolved.valid.length; i++) byRef.set(resolved.valid[i].ref, resolved.results[i]);
+    const jobs = [];
+    for (let i = 0; i < valid.length; i++) {
+      const it = valid[i];
+      const r = it.playUrl ? { videoId: it.videoId, playUrl: it.playUrl } : byRef.get(it.ref);
+      if (r && r.playUrl) jobs.push({ url: r.playUrl, filename: buildName(it, r.videoId) });
+    }
+    if (!jobs.length) {
+      flash(btn, needResolve.length ? `解析失败（${resolved.failed}）` : '无可下载');
+      return;
+    }
     flash(btn, `提交 ${jobs.length} 个…`);
     chrome.runtime.sendMessage({ type: 'LP_DOWNLOAD', jobs: jobs }, function (resp) {
       void chrome.runtime.lastError;
@@ -418,11 +488,8 @@
 
   /* ================= 模式一：商品榜单 ================= */
   /**
-   * 数据来源（2026-11-08 v2.3.0）：不再自己拼参数调接口。
-   * 罗盘现在强校验 a_bogus/msToken 签名（由页面请求库在发请求时自动附加），
-   * 插件裸 fetch 只会拿到「st=0 但空数据」或风控拒绝——这就是「获取不到链接」的根因。
-   * 现在改为拦截页面自己的请求响应（fetch.js 推送 __lp:'data'）：
-   * 页面翻页、筛选、搜索都自动跟随，签名天然正确。
+   * 榜单解析：video_id / video_play_url 在 2026-11 改版后置空，只发 video_ref 引用键。
+   * 条目以 ref 兜底保住按钮渲染，真实链接在复制/下载时用 entity_by_ref 解析。
    */
   function parseRank(json) {
     const out = [];
@@ -461,6 +528,8 @@
   const RANK_MAX_PAGE = 20;      // 10 × 20 = 200 条
   const DETAIL_PAGE_SIZE = 10;   // 改版后实测 10 可用（100 未验证，不用赌）
   const DETAIL_MAX_PAGE = 50;    // 上限 500 条
+  const DETAIL_COPY_BATCH = 20;  // 单次批量复制上限：换链接口有配额/频率限制，一次几百条只会全失败
+  /** 兜底参数：只在页面自己的请求还没出现时用（类目跟着店铺走，不能长期写死） */
   const DEFAULT_CFG = {
     industry_id: '4',
     category_id: '1000003282,1000009114',
@@ -468,6 +537,83 @@
     price_bin: '不限',
     date_type: '21'
   };
+
+  /** 请求 URL 里不参与比对的易变参数（分页与签名每次不同） */
+  const REQ_SKIP = ['page_no', 'page_size', 'rank_data_type', 'activity_id',
+    'msToken', 'a_bogus', 'verifyFp', 'fp', '_lid', 't'];
+
+  /** 从 performance 资源条目里取最近一次接口请求（同源，含类目/筛选/周期） */
+  function latestRequestEntry(apiPath) {
+    try {
+      const entries = performance.getEntriesByType('resource');
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const e = entries[i];
+        if (e && e.name && e.name.indexOf(apiPath) >= 0) return e;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function latestRequestParams(apiPath) {
+    const entry = latestRequestEntry(apiPath);
+    if (!entry) return null;
+    try {
+      const u = new URL(entry.name);
+      const out = {};
+      u.searchParams.forEach(function (v, k) { out[k] = v; });
+      return out;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** 页面最近一次榜单请求里的业务参数（剔除分页与签名） */
+  function pageRankParams() {
+    const p = latestRequestParams(RANK_API);
+    const out = {};
+    if (!p) return out;
+    Object.keys(p).forEach(function (k) {
+      if (REQ_SKIP.indexOf(k) < 0 && p[k] !== '') out[k] = p[k];
+    });
+    return out;
+  }
+
+  /** 业务参数的稳定签名：只保留会改变数据集的键（分页/签名已剔除） */
+  function paramsSignature(p) {
+    return Object.keys(p || {})
+      .filter(function (k) { return REQ_SKIP.indexOf(k) < 0 && p[k] !== ''; })
+      .sort()
+      .map(function (k) { return k + '=' + p[k]; })
+      .join('&');
+  }
+
+  /**
+   * 榜单请求参数：页面实际请求 > URL > 兜底。
+   * 类目/价格带/品牌/搜索词必须跟用户当前看到的页面一致，否则拉回来的榜单
+   * 是另一批商品，按钮按商品名匹配会大面积落空。
+   */
+  function rankBaseParams() {
+    const fromUrl = {};
+    ['industry_id', 'category_id', 'brand_type', 'price_bin', 'date_type', 'search_info'].forEach(function (k) {
+      const v = urlParam(k);
+      if (v) fromUrl[k] = v;
+    });
+    const out = Object.assign({}, DEFAULT_CFG, pageRankParams(), fromUrl);
+    if (!out.begin_date || !out.end_date) {
+      const dr = readPageDateRange() || dateRange();
+      if (!out.begin_date) out.begin_date = dr.begin_date;
+      if (!out.end_date) out.end_date = dr.end_date;
+    }
+    if (!out.search_info) out.search_info = readPageKeyword() || '';
+    return out;
+  }
+
+  /** 详情周期：页面最近一次 flow_more 请求自带的区间最准，其次 URL，最后才猜 */
+  function detailDateRange() {
+    const p = latestRequestParams(DETAIL_API);
+    if (p && p.begin_date && p.end_date) return { begin_date: p.begin_date, end_date: p.end_date };
+    return urlDateRange() || readPageDateRange() || dateRange();
+  }
 
   /** 近 7 天（截止昨天）——罗盘默认区间 */
   function dateRange() {
@@ -517,7 +663,8 @@
     })).toString();
     const json = await pageFetch(`${location.origin}${RANK_API}?${qs}`);
     if (!json || json.st !== 0) throw new Error((json && json.msg) || ('st=' + (json && json.st)));
-    return parseRank(json);
+    const products = (json.data && json.data.data_result) || [];
+    return { rows: parseRank(json), products: products.length };
   }
 
   async function loadRankAll() {
@@ -526,25 +673,32 @@
     lastError = '';
     try {
       const ready = await injectFetcher();
+      diag.bridge = ready.ok ? 'ok' : 'fail';
+      persistDiag();
       if (!ready.ok) throw new Error('页面桥初始化失败（' + ready.reason + '）');
-      const dr = readPageDateRange() || dateRange();
-      const kw = readPageKeyword();
-      const params = Object.assign({}, DEFAULT_CFG, dr, { search_info: kw || '' });
+      const params = rankBaseParams();
+      rankSig = paramsSignature(params);       // 记录「当前数据对应哪套参数」
       let emptyStreak = 0;
       for (let p = 1; p <= RANK_MAX_PAGE; p++) {
-        let rows = null;
+        let page = null;
         for (let attempt = 0; attempt < 2; attempt++) {
-          try { rows = await fetchRankPage(p, params); break; }
-          catch (err) { lastError = String((err && err.message) || err); if (!attempt) await sleep(1200); }
+          try { page = await fetchRankPage(p, params); break; }
+          catch (err) {
+            lastError = String((err && err.message) || err);
+            noteError(lastError);
+            if (!attempt) await sleep(1200);
+          }
         }
-        if (rows === null) break;
-        applyRankRows(rows);
-        emptyStreak = rows.length ? 0 : emptyStreak + 1;
-        if (emptyStreak >= 2) break;          // 连续两页没有有效视频行，后面基本也不会有
-        if (rows.length < RANK_PAGE_SIZE) break;
+        if (page === null) break;
+        applyRankRows(page.rows);
+        // page_size 卡的是「商品数」，不是视频条数——必须用商品数判断是否到底
+        emptyStreak = page.products ? 0 : emptyStreak + 1;
+        if (emptyStreak >= 2) break;
+        if (page.products < RANK_PAGE_SIZE) break;
         await sleep(300);
       }
     } finally {
+      rankLoadAt = performance.now();
       loading = false;
     }
     if (!items.size) {
@@ -555,31 +709,38 @@
   }
 
   async function fetchDetailPage(pid, dr, pageNo) {
+    // 页面最近一次 flow_more 请求的参数优先（列集合/排序/周期都以页面为准）
+    const req = latestRequestParams(DETAIL_API) || {};
     const q = new URLSearchParams({
       product_id: pid,
-      saleType: '0',
+      saleType: urlParam('saleType') || req.saleType || '0',
       source_entrance: 'video',
-      date_type: urlParam('date_type') || '21',
+      date_type: urlParam('date_type') || req.date_type || '21',
       begin_date: dr.begin_date,
       end_date: dr.end_date,
-      activity_id: urlParam('activity_id') || '',
-      index_selected: 'pay_amt,pay_ucnt,dh_product_click_ratio_uv,pay_cnt,pay_combo_cnt',
+      activity_id: urlParam('activity_id') || req.activity_id || '',
+      index_selected: urlParam('index_selected') || req.index_selected ||
+        'pay_amt,pay_ucnt,dh_product_click_ratio_uv,pay_cnt,pay_combo_cnt',
       page_size: String(DETAIL_PAGE_SIZE),
       page_no: String(pageNo),
-      sort_field: urlParam('sort_field') || 'pay_amt',
-      is_asc: urlParam('is_asc') || 'false'
+      sort_field: urlParam('sort_field') || req.sort_field || 'pay_amt',
+      is_asc: urlParam('is_asc') || req.is_asc || 'false'
     });
     const json = await pageFetch(`${location.origin}${DETAIL_API}?${q.toString()}`);
     if (!json || json.st !== 0) throw new Error((json && json.msg) || ('st=' + (json && json.st)));
     return json;
   }
 
-  /** 数据入库（主动拉取与页面推送共用）→ 只增不删，保证按钮不中途消失 */
+  /** 数据入库（主动拉取与页面推送共用）→ 只增不删，保证按钮不中途消失。
+   *  以 ref 为主键：同一条视频可能先以 ref、后以真实 video_id 到达，不能算两条。 */
   function applyRankRows(rows) {
     let added = 0;
     for (const it of rows || []) {
-      if (!items.has(it.videoId)) added++;
-      items.set(it.videoId, it);
+      const key = it.ref || it.videoId;
+      const prev = items.get(key);
+      if (!prev) { added++; items.set(key, it); continue; }
+      // 后到的真实 ID 更利于复制/命名，覆盖 ref 版
+      if (/^\d+$/.test(it.videoId) && !/^\d+$/.test(prev.videoId)) items.set(key, it);
     }
     if (added) {
       lastError = '';
@@ -666,47 +827,62 @@
   }
 
   async function copyProductLinks(g, btn) {
+    if (retryCopyIfPending(btn)) return;
     const videos = g.videos.filter(function (v) { return v && v.videoId && (v.ref || v.playUrl); });
     if (!videos.length) { flash(btn, '无可复制'); return; }
 
-    // 优先走预解析缓存：同步取值，复制发生在用户手势窗口内（最稳）
+    // 命中缓存就同步取值，复制仍在用户点击窗口内；未命中的才现解析
     const cachedLines = [];
+    const seenLine = new Set();
+    function pushLine(id) {
+      const url = 'https://www.douyin.com/video/' + id;
+      if (seenLine.has(url)) return;        // 同一条视频的 ref 版与真实 ID 版只复制一次
+      seenLine.add(url);
+      cachedLines.push(url);
+    }
     const missRefs = [];
+    const seen = new Set();
     for (const v of videos) {
-      if (!v.ref) { cachedLines.push('https://www.douyin.com/video/' + v.videoId); continue; }
-      const id = refCache.get(v.ref);
-      if (id) cachedLines.push('https://www.douyin.com/video/' + id);
-      else missRefs.push(v);
+      const key = videoDedupeKey(v);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (/^\d+$/.test(v.videoId)) { pushLine(v.videoId); continue; }
+      const id = v.ref ? refCache.get(v.ref) : '';
+      if (id) pushLine(id);
+      else if (v.ref) missRefs.push(v);
     }
     if (!missRefs.length) {
-      try { chrome.storage.local.set({ lpLastCopy: cachedLines.join('\n') }); } catch (e) {}
-      copyText(cachedLines.join('\n'), function (ok) {
-        flash(btn, ok ? `已复制 ${cachedLines.length} 条` : '复制失败（页面需保持前台焦点）');
+      const text = cachedLines.join('\n');
+      btn.__lpPending = text;
+      copyText(text, function (ok) {
+        if (ok) { btn.__lpPending = ''; flash(btn, `已复制 ${cachedLines.length} 条`); }
+        else flash(btn, `复制失败，再点一次（${cachedLines.length} 条已就绪）`);
       });
       return;
     }
 
     // 缓存未就绪（点得太快）：现解析，失败如实报
     flash(btn, '解析链接…');
-    const resolved = await resolveVideoLinks(missRefs.concat([]), function (done, total) {
+    const resolved = await resolveVideoLinks(missRefs, function (done, total) {
       flash(btn, `解析链接 ${done}/${total}…`);
     });
-    const lines = cachedLines.slice();
     for (let i = 0; i < resolved.valid.length; i++) {
-      const v = resolved.valid[i];
       const r = resolved.results[i];
-      if (r && r.videoId) lines.push('https://www.douyin.com/video/' + r.videoId);
+      if (r && r.videoId) pushLine(r.videoId);
     }
+    const lines = cachedLines;
     if (!lines.length) { flash(btn, `解析失败（${resolved.failed}）`); return; }
-    try { chrome.storage.local.set({ lpLastCopy: lines.join('\n') }); } catch (e) {}
-    copyText(lines.join('\n'), function (ok) {
-      flash(btn, ok ? `已复制 ${lines.length} 条` + (resolved.failed ? `（${resolved.failed} 条失败）` : '') : '复制失败（页面需保持前台焦点）');
+    const text = lines.join('\n');
+    btn.__lpPending = text;
+    copyText(text, function (ok) {
+      if (ok) { btn.__lpPending = ''; flash(btn, `已复制 ${lines.length} 条` + (resolved.failed ? `（${resolved.failed} 条失败）` : '')); }
+      else flash(btn, `复制失败，再点一次（${lines.length} 条已就绪）`);
     });
   }
 
   /* ---------------- 搜索框诊断（仅榜单） ----------------
-   * 搜索/筛选由罗盘页面自己重新请求，fetch.js 拦到新响应后数据自动跟随；
-   * 这里只剩诊断属性（data-lp-kw），不再触发主动抓取。 */
+   * 搜索/筛选由罗盘页面自己重新请求；这里除了诊断属性，还负责发现「页面换了筛选」——
+   * 主动拉取只在进入页面时跑一次，筛选变了必须清掉旧数据重拉，否则按钮对不上表格。 */
   function readPageKeyword() {
     try {
       const inputs = document.querySelectorAll('input[placeholder]');
@@ -717,6 +893,24 @@
       }
     } catch (e) {}
     return null;
+  }
+
+  function syncRankSource() {
+    if (mode !== 'rank' || loading) return;
+    const entry = latestRequestEntry(RANK_API);
+    // 只认「晚于上一次拉取」的页面请求：自己拉取的请求不能让这里反复触发
+    if (!entry || entry.startTime <= rankLoadAt) return;
+    const p = latestRequestParams(RANK_API);
+    if (!p) return;
+    const sig = paramsSignature(p);
+    if (sig === rankSig) return;
+    rankSig = sig;
+    // 页面换了类目/价格带/搜索词：旧数据不再对应当前表格，清掉重拉
+    items.clear();
+    const old = document.querySelectorAll('.lp-rowbtns');
+    for (let i = 0; i < old.length; i++) old[i].remove();
+    renderErrorChip(null);
+    loadRankAll();
   }
 
   function watchPageKeyword() {
@@ -760,20 +954,32 @@
   }
 
   /**
-   * 竞品详情的数据来源（v2.3.0）：与榜单一样走页面响应推送（fetch.js 拦截 flow_more）。
-   * 用户切筛选/翻页时罗盘自己会重发请求（带完整签名），推送自动到达，这里不再主动拉取。
+   * 数据入库（主动拉取与页面推送共用）→ 只增不删，保证按钮不中途消失。
+   * 页面换筛选时由 syncRankSource 清空后重拉。
    */
-  function applyDetailRows(json) {
-    const arr = Array.isArray(json)
+  function detailRowsOf(json) {
+    return Array.isArray(json)
       ? json
       : ((json && json.data && json.data.data_result) || (Array.isArray(json && json.data) ? json.data : []));
+  }
+
+  function applyDetailRows(json) {
+    const arr = detailRowsOf(json);
     const base = detailVideos.length;
     let added = 0;
     for (let i = 0; i < arr.length; i++) {
       const v = parseDetailItem(arr[i], base + i + 1);
-      if (v && !detailVideos.some(function (x) { return x.videoId === v.videoId; })) {
+      if (!v) continue;
+      const key = v.ref || v.videoId;
+      let hit = -1;
+      for (let k = 0; k < detailVideos.length; k++) {
+        if ((detailVideos[k].ref || detailVideos[k].videoId) === key) { hit = k; break; }
+      }
+      if (hit < 0) {
         detailVideos.push(v);
         added++;
+      } else if (/^\d+$/.test(v.videoId) && !/^\d+$/.test(detailVideos[hit].videoId)) {
+        detailVideos[hit] = v;
       }
     }
     if (added) {
@@ -791,6 +997,7 @@
    * （签名由页面世界的罗盘包装器自动附加，实测 st=0 + 10 行）。页面推送仍作为补充来源。
    */
   function loadDetail() {
+    const run = ++detailRun;
     detailLoading = true;
     detailMeta = { begin: '', end: '', done: false, error: '' };
     detailVideos = [];
@@ -801,24 +1008,34 @@
       const pid = urlParam('product_id') || '';
       try {
         if (!pid) throw new Error('URL 缺少 product_id');
-        const dr = urlDateRange() || readPageDateRange() || dateRange();
+        const dr = detailDateRange();
         detailMeta.begin = dr.begin_date;
         detailMeta.end = dr.end_date;
         const ready = await injectFetcher();
+        if (run !== detailRun) return;
+        diag.bridge = ready.ok ? 'ok' : 'fail';
+        persistDiag();
         if (!ready.ok) throw new Error('页面桥初始化失败（' + ready.reason + '）');
 
         for (let p = 1; p <= DETAIL_MAX_PAGE; p++) {
           const json = await fetchDetailPage(pid, dr, p);
-          const added = applyDetailRows(json);
+          if (run !== detailRun) return;          // 已经切到别的竞品，旧请求直接丢弃
+          const rawCount = detailRowsOf(json).length;
+          applyDetailRows(json);
           renderDetailBar();
-          if (!added) break;                 // 空页=到底
-          if (added < DETAIL_PAGE_SIZE) break;
+          // 用接口原始行数判断到底：页面推送可能先塞过第 1 页，去重后的 added 会假性为 0
+          if (!rawCount) break;
+          if (rawCount < DETAIL_PAGE_SIZE) break;
           await sleep(300);
         }
+        if (run !== detailRun) return;
         detailMeta.error = '';
       } catch (err) {
+        if (run !== detailRun) return;
         detailMeta.error = String((err && err.message) || err);
+        noteError(detailMeta.error);
       } finally {
+        if (run !== detailRun) return;            // 旧代次不许改写新一次加载的 UI 状态
         detailLoading = false;
         detailMeta.done = true;
         renderDetailBar();
@@ -1046,27 +1263,86 @@
     renderDetailBar();
   }
 
-  async function detailCopy(btn) {
-    if (!detailVideos.length) { flash(btn, '暂无数据'); return; }
-    const hasRef = detailVideos.some(function (v) { return v.ref; });
-    if (!hasRef) {
-      // detail 响应结构未适配 ref 时，如实告知无法解析
-      flash(btn, '暂无可用链接');
-      return;
+  /** 单行「复制链接」：ref 必须先换链成真实抖音 ID（v2.7.3 修） */
+  async function copyDetailVideoLink(v, btn) {
+    if (retryCopyIfPending(btn)) return;
+    let id = /^\d+$/.test(v.videoId) ? v.videoId : (v.ref ? refCache.get(v.ref) : '');
+    if (!id && v.ref) {
+      flash(btn, '解析链接…');
+      try {
+        const r = await resolveVideoEntity(v.ref);
+        if (r.videoId) { refCache.set(v.ref, r.videoId); id = r.videoId; }
+      } catch (e) {
+        noteError('换链失败：' + String((e && e.message) || e));
+        flash(btn, '解析失败');
+        return;
+      }
     }
-    flash(btn, '解析链接…');
-    const resolved = await resolveVideoLinks(detailVideos, function (done, total) {
-      flash(btn, `解析链接 ${done}/${total}…`);
+    if (!id) { flash(btn, '暂无可用链接'); return; }
+    const url = 'https://www.douyin.com/video/' + id;
+    btn.__lpPending = url;
+    copyText(url, function (ok) {
+      if (ok) { btn.__lpPending = ''; flash(btn, '已复制'); }
+      else flash(btn, '复制失败，再点一次');
     });
-    const lines = [];
-    for (let i = 0; i < resolved.valid.length; i++) {
-      const r = resolved.results[i];
-      if (r && r.videoId) lines.push('https://www.douyin.com/video/' + r.videoId);
+  }
+
+  async function detailCopy(btn) {
+    if (retryCopyIfPending(btn)) return;
+    if (!detailVideos.length) { flash(btn, '暂无数据'); return; }
+    // 单次最多 20 条：换链接口有配额/频率限制，一次几百条只会全失败。
+    // 分批用按钮上的游标推进，再点一次继续下一批（转完一轮回到开头）。
+    const start = (typeof btn.__lpCursor === 'number' && btn.__lpCursor < detailVideos.length) ? btn.__lpCursor : 0;
+    const batch = [];
+    const seen = new Set();
+    for (let i = start; i < detailVideos.length && batch.length < DETAIL_COPY_BATCH; i++) {
+      const v = detailVideos[i];
+      const key = videoDedupeKey(v);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      batch.push({ v: v, src: i });
     }
-    if (!lines.length) { flash(btn, `解析失败（${resolved.failed}）`); return; }
-    try { chrome.storage.local.set({ lpLastCopy: lines.join('\n') }); } catch (e) {}
-    copyText(lines.join('\n'), function (ok) {
-      flash(btn, ok ? `已复制 ${lines.length} 条` + (resolved.failed ? `（${resolved.failed} 条失败）` : '') : '复制失败');
+    if (!batch.length) { flash(btn, '暂无可用链接'); return; }
+
+    // 先按表格顺序占位：命中缓存/已是真实 ID 的同步填，缺的才换链
+    const slots = new Array(batch.length).fill('');
+    const pending = [];
+    batch.forEach(function (x, pos) {
+      const v = x.v;
+      if (/^\d+$/.test(v.videoId)) { slots[pos] = 'https://www.douyin.com/video/' + v.videoId; return; }
+      const cached = v.ref ? refCache.get(v.ref) : '';
+      if (cached) slots[pos] = 'https://www.douyin.com/video/' + cached;
+      else if (v.ref) pending.push({ v: v, pos: pos });
+    });
+    let failed = 0;
+    if (pending.length) {
+      flash(btn, `解析链接 0/${pending.length}…`);
+      const resolved = await resolveVideoLinks(pending.map(function (x) { return x.v; }), function (done, total) {
+        flash(btn, `解析链接 ${done}/${total}…`);
+      });
+      failed = resolved.failed;
+      for (let k = 0; k < resolved.valid.length; k++) {
+        const r = resolved.results[k];
+        if (r && r.videoId) slots[pending[k].pos] = 'https://www.douyin.com/video/' + r.videoId;
+      }
+    }
+    const lines = Array.from(new Set(slots.filter(Boolean)));
+    if (!lines.length) { flash(btn, pending.length ? `解析失败（${failed}）` : '暂无可用链接'); return; }
+    const lastSrc = batch[batch.length - 1].src;
+    const nextCursor = lastSrc + 1 >= detailVideos.length ? 0 : lastSrc + 1;
+    const more = nextCursor !== 0;
+    const text = lines.join('\n');
+    btn.__lpPending = text;
+    btn.__lpPendingAdvance = nextCursor;
+    copyText(text, function (ok) {
+      if (ok) {
+        btn.__lpPending = '';
+        btn.__lpCursor = nextCursor;
+        btn.__lpPendingAdvance = null;
+        flash(btn, `已复制 ${lines.length} 条` + (more ? ' · 再点下一批' : '') + (failed ? `（${failed} 条失败）` : ''));
+      } else {
+        flash(btn, `复制失败，再点一次（${lines.length} 条已就绪）`);
+      }
     });
   }
 
@@ -1088,12 +1364,11 @@
     if (rbtn) {
       ev.preventDefault();
       ev.stopPropagation();
-      const v = detailVideos.find(function (x) { return x.videoId === rbtn.dataset.vid; });
+      const v = detailVideos.find(function (x) { return x.videoId === rbtn.dataset.vid; }) ||
+        detailVideos.find(function (x) { return (x.ref || x.videoId) === rbtn.dataset.vid; });
       if (!v) return;
       if (rbtn.dataset.drowact === 'copy') {
-        copyText('https://www.douyin.com/video/' + v.videoId, function (ok) {
-          flash(rbtn, ok ? '已复制' : '复制失败');
-        });
+        copyDetailVideoLink(v, rbtn);
       } else {
         downloadVideos([v], rbtn);
       }
@@ -1233,6 +1508,7 @@
     }
 
     if (mode === 'rank') {
+      try { syncRankSource(); } catch (e) {}
       try { injectRowButtons(); } catch (e) {}
     } else if (mode === 'detail') {
       // 站内切换到别的竞品时，URL 变了但路由没刷新，这里补一次重置（重新主动拉取）

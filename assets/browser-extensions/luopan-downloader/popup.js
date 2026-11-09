@@ -48,10 +48,7 @@ function refreshDiag() {
     const cs = cfg.lpDiagCs;
     const parts = [];
     parts.push('后台：' + (sw && sw.sw ? '正常' : '未启动'));
-    parts.push('webRequest：' + (sw ? (sw.webRequest ? '可用' : '不可用') : '-'));
-    if (cs && cs.bridge) {
-      parts.push('取数：' + (cs.bridge === 'direct' ? '直连' : cs.bridge === 'ok' ? '页面桥' : cs.bridge));
-    }
+    if (cs && cs.bridge) parts.push('取数：' + (cs.bridge === 'ok' ? '页面桥' : cs.bridge));
     if (cs && cs.lastError) parts.push('最近错误：' + String(cs.lastError).slice(0, 60));
     el.textContent = parts.join(' · ');
   });

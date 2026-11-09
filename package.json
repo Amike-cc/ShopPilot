@@ -1,6 +1,6 @@
 {
   "name": "shopilot",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "ShopPilot - 电商店铺浏览器工作台",
   "private": true,
   "packageManager": "pnpm@10.34.7",
@@ -44,7 +44,8 @@
     "test:invite-v2-smoke": "node tools/acceptance/creator-invite-smoke.js",
     "test:custom-realclick": "node tools/acceptance/custom-task-real-click-verify.js",
     "test:browser-tools": "node tools/acceptance/browser-tools-cdp-verify.js",
-    "test:webview-attach": "node tools/acceptance/webview-attach-local-verify.js"
+    "test:webview-attach": "node tools/acceptance/webview-attach-local-verify.js",
+    "test:luopan-copy": "node tools/acceptance/luopan-copy-cdp-verify.js"
   },
   "dependencies": {
     "better-sqlite3": "13.0.3",
