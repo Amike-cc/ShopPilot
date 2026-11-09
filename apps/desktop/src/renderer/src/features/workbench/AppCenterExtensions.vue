@@ -150,6 +150,23 @@ function reloadExtension(item: BrowserExtensionItem): Promise<void> {
   return runAction('reload:' + item.id, () => window.shopilot.extensions.reload(item.id), `已重载「${item.name}」`)
 }
 
+/** 卸载：删除本机副本并停用；已打开页面里已注入的脚本要刷新后完全消失 */
+async function uninstallExtension(item: BrowserExtensionItem): Promise<void> {
+  if (!window.confirm(`卸载「${item.name}」？\n本机副本会被删除，已打开的店铺页刷新后完全移除；此操作不可撤销。`)) return
+  busyKey.value = 'remove:' + item.id
+  error.value = ''
+  try {
+    const result = await window.shopilot.extensions.remove(item.id)
+    if (!result.ok) throw new Error(responseError(result, '卸载失败'))
+    await refresh()
+    setNotice(`已卸载「${item.name}」`)
+  } catch (e) {
+    error.value = String((e as Error)?.message || e)
+  } finally {
+    busyKey.value = ''
+  }
+}
+
 async function openDir(item?: BrowserExtensionItem): Promise<void> {
   busyKey.value = 'dir:' + (item?.id || 'root')
   error.value = ''
@@ -174,7 +191,7 @@ onMounted(() => { void refresh() })
     <div class="ace-head">
       <div class="ace-head-copy">
         <h2>插件</h2>
-        <p>随应用内置、离线可装。插件能读写店铺页面，只安装你信任的来源；本地导入与删除在设置中心。</p>
+        <p>随应用内置、离线可装；支持下载安装与卸载（复制/删除本机副本）。插件能读写店铺页面，只安装你信任的来源；本地导入请到设置中心。</p>
       </div>
       <div class="ace-head-actions">
         <label class="ace-master">
@@ -220,9 +237,10 @@ onMounted(() => { void refresh() })
               type="button"
               class="ace-btn primary"
               :data-test="'apps-plugin-install-' + entry.key"
+              :title="entry.installed ? '从应用内置目录重新复制安装' : '从应用内置目录复制安装，无需联网'"
               :disabled="!!busyKey || !!entry.invalidReason"
               @click="install(entry)"
-            >{{ busyKey === 'install:' + entry.key ? '安装中…' : entry.installed ? '重新安装' : '安装' }}</button>
+            >{{ busyKey === 'install:' + entry.key ? '安装中…' : entry.installed ? '重新安装' : '下载安装' }}</button>
             <span v-if="entry.invalidReason" class="ace-error">{{ entry.invalidReason }}</span>
           </div>
         </div>
@@ -236,7 +254,7 @@ onMounted(() => { void refresh() })
         <span>{{ installedCount }} 个 · {{ enabledCount }} 个启用</span>
       </div>
       <div v-if="!extensions.length" class="ace-note" data-test="apps-plugin-empty">
-        还没有已安装的扩展。上方安装内置插件；导入本地文件夹请到 设置 → 浏览器扩展。
+        还没有已安装的扩展。上方「下载安装」内置插件；导入本地文件夹请到 设置 → 浏览器扩展。
       </div>
       <div v-for="item in extensions" :key="item.id" class="ace-row" :data-test="'apps-plugin-row-' + item.id">
         <div class="ace-row-copy">
@@ -247,6 +265,7 @@ onMounted(() => { void refresh() })
         <button type="button" class="ace-btn ghost" :disabled="!!busyKey" @click="toggleExtension(item)">{{ item.enabled ? '停用' : '启用' }}</button>
         <button type="button" class="ace-btn ghost" :disabled="!!busyKey" @click="openDir(item)">目录</button>
         <button type="button" class="ace-btn ghost" :disabled="!!busyKey || !item.enabled" @click="reloadExtension(item)">重载</button>
+        <button type="button" class="ace-btn danger" :data-test="'apps-plugin-remove-' + item.id" :disabled="!!busyKey" @click="uninstallExtension(item)">{{ busyKey === 'remove:' + item.id ? '卸载中…' : '卸载' }}</button>
       </div>
       <p v-if="masterOff && extensions.length" class="ace-hint">总开关关着：插件还不会加载进店铺页面。</p>
     </div>
@@ -271,6 +290,8 @@ onMounted(() => { void refresh() })
 .ace-btn:disabled{opacity:.55;cursor:not-allowed}
 .ace-btn.primary{border-color:var(--brand);background:var(--brand);color:#fff}
 .ace-btn.primary:hover:not(:disabled){border-color:var(--brand);color:#fff;filter:brightness(.97)}
+.ace-btn.danger{border-color:rgba(217,45,32,.35);color:var(--danger-text)}
+.ace-btn.danger:hover:not(:disabled){border-color:var(--danger-text);color:var(--danger-text);background:rgba(217,45,32,.06)}
 .ace-catalog{display:flex;flex-direction:column;gap:var(--sp-2)}
 .ace-card{border:1px solid var(--ui-border);border-radius:var(--r-md);background:var(--ui-surface-sunken);padding:var(--sp-3)}
 .ace-card-main{display:flex;align-items:flex-start;gap:12px}
