@@ -38,6 +38,7 @@
       <strong>已选 {{ selectedIds.length }} 家</strong>
       <button type="button" class="unified-button ghost" data-test="store-bulk-select-all" @click="selectAllVisible">{{ bulkVisibleStores.length && bulkVisibleStores.every(store => isSelected(store.id)) ? '取消全选' : '全选当前' }}</button>
       <button v-if="view === 'active'" type="button" class="unified-button ghost" data-test="store-bulk-group" :disabled="!selectedIds.length || bulkBusy" @click="openBulkGroup">批量分组</button>
+      <button v-if="view === 'active'" type="button" class="unified-button ghost" data-test="store-bulk-proxy" :disabled="!selectedIds.length || bulkBusy" @click="openBulkProxy">绑定代理</button>
       <button v-if="view === 'active'" type="button" class="unified-button ghost" data-test="store-bulk-archive" :disabled="!selectedIds.length || bulkBusy" @click="bulkArchive">批量归档</button>
       <button v-if="view === 'archived'" type="button" class="unified-button primary" data-test="store-bulk-restore" :disabled="!selectedIds.length || bulkBusy" @click="bulkRestore">批量恢复</button>
       <button type="button" class="unified-button danger" data-test="store-bulk-trash" :disabled="!selectedIds.length || bulkBusy" @click="bulkTrash">移入回收站</button>
@@ -122,6 +123,20 @@
         <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" @click="editOpen = false"><img class="button-art" :src="storeCloseIcon" alt="" />取消</button><button type="submit" class="unified-button primary" data-test="store-edit-save" :disabled="editSaving"><img class="button-art" :src="manualEditIcon" alt="" />{{ editSaving ? '保存中…' : '保存修改' }}</button></div>
       </form>
     </div>
+    <div v-if="bulkProxyOpen" class="unified-overlay" @click.self="bulkProxyOpen = false">
+      <form class="unified-dialog" data-test="store-bulk-proxy-dialog" @submit.prevent="submitBulkProxy">
+        <div class="unified-dialog-head"><div><span class="dashboard-eyebrow">BULK PROXY</span><h2>批量绑定代理</h2></div><button type="button" class="unified-icon-button" @click="bulkProxyOpen = false"><img :src="closeIcon" alt="" /></button></div>
+        <p class="unified-muted">为所选 {{ selectedIds.length }} 家店铺统一设置网络出口；选「直连」= 解除现有代理绑定。</p>
+        <label>网络出口
+          <select v-model="bulkProxyId" data-test="store-bulk-proxy-select">
+            <option value="">直连（不使用代理 / 解绑）</option>
+            <option v-for="proxy in bulkProxyList" :key="proxy.id" :value="proxy.id">{{ proxy.label || `${proxy.host}:${proxy.port}` }} · {{ proxy.type }}</option>
+          </select>
+        </label>
+        <div v-if="!bulkProxyList.length" class="unified-muted">暂无已保存代理；先到店铺工作台「环境与安全」添加。</div>
+        <div class="unified-dialog-actions"><button type="button" class="unified-button ghost" @click="bulkProxyOpen = false"><img class="button-art" :src="storeCloseIcon" alt="" />取消</button><button type="submit" class="unified-button primary" data-test="store-bulk-proxy-save" :disabled="bulkBusy"><img class="button-art" :src="groupEditIcon" alt="" />{{ bulkBusy ? '应用中…' : '应用到所选店铺' }}</button></div>
+      </form>
+    </div>
     <div v-if="bulkGroupOpen" class="unified-overlay" @click.self="bulkGroupOpen = false">
       <form class="unified-dialog" data-test="store-bulk-group-dialog" @submit.prevent="submitBulkGroup">
         <div class="unified-dialog-head"><div><span class="dashboard-eyebrow">BULK GROUP</span><h2>批量设置分组</h2></div><button type="button" class="unified-icon-button" @click="bulkGroupOpen = false"><img :src="closeIcon" alt="" /></button></div>
@@ -175,6 +190,9 @@ const bulkBusy = ref(false)
 const bulkGroupOpen = ref(false)
 const bulkGroupDraft = ref('')
 const bulkConfirm = reactive({ open: false, title: '', detail: '', action: null as null | (() => Promise<void>) })
+const bulkProxyOpen = ref(false)
+const bulkProxyId = ref('')
+const bulkProxyList = ref<Array<{ id: string; label: string | null; host: string; port: number; type: string }>>([])
 const view = ref<'active' | 'archived' | 'trash'>('active')
 const createOpen = ref(false)
 const creating = ref(false)
@@ -309,6 +327,25 @@ async function submitBulkGroup(): Promise<void> {
   try {
     await ws.setStoresGroup([...selectedIds.value], bulkGroupDraft.value)
     bulkGroupOpen.value = false
+    selectedIds.value = []
+  } finally {
+    bulkBusy.value = false
+  }
+}
+async function openBulkProxy(): Promise<void> {
+  if (!selectedIds.value.length) return
+  const result = await window.shopilot.proxy.list()
+  if (!result.ok) { ws.toast('读取代理列表失败：' + result.error.message, 'error'); return }
+  bulkProxyList.value = (result.data || []) as typeof bulkProxyList.value
+  bulkProxyId.value = ''
+  bulkProxyOpen.value = true
+}
+async function submitBulkProxy(): Promise<void> {
+  if (bulkBusy.value || !selectedIds.value.length) return
+  bulkBusy.value = true
+  try {
+    await ws.bindStoresProxy([...selectedIds.value], bulkProxyId.value || null)
+    bulkProxyOpen.value = false
     selectedIds.value = []
   } finally {
     bulkBusy.value = false

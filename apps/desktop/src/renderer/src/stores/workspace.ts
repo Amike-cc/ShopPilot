@@ -715,8 +715,25 @@ export const useWorkspaceStore = defineStore('workspace', {
       return { ok, failed }
     },
 
-    async archiveStores(storeIds: string[]): Promise<{ ok: number; failed: number }> {
+    /** 批量绑定/解绑代理：逐店调现有 proxy.bind，只刷新一次；失败按家数回报。 */
+    async bindStoresProxy(storeIds: string[], proxyId: string | null): Promise<{ ok: number; failed: number }> {
       let ok = 0
+      let failed = 0
+      for (const storeId of storeIds) {
+        const res = await window.shopilot.proxy.bind(storeId, proxyId)
+        if (res.ok) ok++
+        else failed++
+      }
+      await this.refreshStores()
+      if (ok) this.toast(proxyId
+        ? `已为 ${ok} 家店铺绑定代理${failed ? `（${failed} 家失败）` : ''}`
+        : `已解除 ${ok} 家店铺的代理绑定${failed ? `（${failed} 家失败）` : ''}`,
+      failed ? 'info' : 'success')
+      else this.toast('批量绑定代理失败，请重试', 'error')
+      return { ok, failed }
+    },
+
+    async archiveStores(storeIds: string[]): Promise<{ ok: number; failed: number }> {      let ok = 0
       let failed = 0
       const open = new Set(this.openStoreIds)
       for (const storeId of storeIds) {

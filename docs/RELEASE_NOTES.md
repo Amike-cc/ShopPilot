@@ -1,3 +1,16 @@
+# ShopPilot 0.9.16 变更说明（店铺批量绑定代理）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
+
+## 本次更新
+
+- 店铺管理批量操作新增「绑定代理」：为所选店铺统一设置同一网络出口；选「直连」= 批量解除现有代理绑定。
+- 代理列表来自本机已保存代理（名称/主机:端口/类型）；没有代理时给出添加入口提示。
+- 逐店调用现有 `proxy.bind`，只 toast 一次、只刷新一次；失败按家数如实回报。
+- 验收：`store-management-cdp-verify.js` 扩到 24 项（批量绑定 → 两家 session 的 binding 都是该 proxyId → 批量直连 → mode=direct）。
+
+---
+
 # ShopPilot 0.9.15 变更说明（浏览器安全加固与配置审计）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。

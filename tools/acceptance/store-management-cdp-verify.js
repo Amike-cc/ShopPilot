@@ -299,6 +299,35 @@ async function main() {
     await sleep(600)
     await click(ui, '[data-test="store-bulk-toggle"]')
     await sleep(300)
+    const bulkProxy = await ui.eval(`return await window.shopilot.proxy.create({ type: 'socks5', host: '127.0.0.1', port: 9, label: '批量绑定验收' })`)
+    if (bulkProxy.ok) {
+      await clickCardCheckbox(ui, '验收店B')
+      await clickCardCheckbox(ui, '验收店C')
+      await click(ui, '[data-test="store-bulk-proxy"]')
+      await sleep(400)
+      await setValue(ui, '[data-test="store-bulk-proxy-select"]', bulkProxy.data.id)
+      await click(ui, '[data-test="store-bulk-proxy-save"]')
+      await sleep(900)
+      const statusB = await ui.eval(`return await window.shopilot.session.status(${JSON.stringify(storeB)})`)
+      const statusC = await ui.eval(`return await window.shopilot.session.status(${JSON.stringify(storeC)})`)
+      check('批量绑定代理应用到所选店铺',
+        statusB.ok && statusB.data?.binding?.mode === 'bound' && statusB.data?.binding?.proxyId === bulkProxy.data.id
+        && statusC.ok && statusC.data?.binding?.mode === 'bound' && statusC.data?.binding?.proxyId === bulkProxy.data.id,
+        JSON.stringify({ b: statusB.data?.binding, c: statusC.data?.binding }))
+
+      await clickCardCheckbox(ui, '验收店B')
+      await clickCardCheckbox(ui, '验收店C')
+      await click(ui, '[data-test="store-bulk-proxy"]')
+      await sleep(400)
+      await setValue(ui, '[data-test="store-bulk-proxy-select"]', '')
+      await click(ui, '[data-test="store-bulk-proxy-save"]')
+      await sleep(900)
+      const directB = await ui.eval(`return await window.shopilot.session.status(${JSON.stringify(storeB)})`)
+      check('批量选择直连可解除代理绑定', directB.ok && directB.data?.binding?.mode !== 'bound', JSON.stringify(directB.data?.binding))
+      await ui.eval(`return await window.shopilot.proxy.delete(${JSON.stringify(bulkProxy.data.id)})`)
+    } else {
+      check('批量绑定代理应用到所选店铺', false, '创建代理失败')
+    }
     await clickCardCheckbox(ui, '验收店C')
     await click(ui, '[data-test="store-bulk-trash"]')
     await sleep(300)
