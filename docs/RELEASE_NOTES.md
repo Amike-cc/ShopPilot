@@ -1,3 +1,16 @@
+# ShopPilot 0.9.15 变更说明（浏览器安全加固与配置审计）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
+
+## 本次更新
+
+- 工作台标签页与独立窗口除了 `will-navigate`，同时拦截 `will-redirect`：服务端 30x 不能再绕过页面导航白名单。
+- `will-attach-webview` 显式重置 Renderer 可传入的 `webSecurity` / `allowRunningInsecureContent` / `nodeIntegrationInWorker` / `nodeIntegrationInSubFrames` / `safeDialogs` / Blink features，安全开关不再交给页面参数决定。
+- 审计补齐：`store.update` / `store.reorder` / `store.setGroup` / `proxy.update` / `proxy.test` 现在都会留痕（只记字段名与结果码，不记凭据/备注原文）。
+- 新增 `browser-security-hardening` 源码级回归测试，防止重定向拦截与 webPreferences 重置被后续改动删掉。
+
+---
+
 # ShopPilot 0.9.14 变更说明（店铺状态机补齐：启动中 / 代理异常）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。

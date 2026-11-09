@@ -829,6 +829,12 @@ function attachGuestWebContents(tab: Tab, wc: Electron.WebContents): void {
     event.preventDefault()
     logMain('warn', `[nav] 页面主动跳转被拦截 store=${tab.storeId} tab=${tab.id} target=${String(targetUrl).slice(0, 200)}`)
   })
+  // 服务端 30x 走 will-redirect，不经过 will-navigate；同样必须拦，否则白名单可被重定向绕过。
+  wc.on('will-redirect', (event, targetUrl) => {
+    if (isAllowedPageNavigation(targetUrl)) return
+    event.preventDefault()
+    logMain('warn', `[nav] 页面重定向被拦截 store=${tab.storeId} tab=${tab.id} target=${String(targetUrl).slice(0, 200)}`)
+  })
   wc.on('page-title-updated', (_e, title) => {
     tab.title = title
     saveTabToDatabase(tab)
@@ -1522,6 +1528,12 @@ export function openStandaloneWindow(storeId: string, tabId?: string): void {
     if (isAllowedPageNavigation(targetUrl)) return
     event.preventDefault()
     logMain('warn', `[nav] 独立窗口页面主动跳转被拦截 store=${storeId} target=${String(targetUrl).slice(0, 200)}`)
+  })
+  // 独立窗口同样要拦服务端重定向（will-navigate 不覆盖 30x）。
+  win.webContents.on('will-redirect', (event, targetUrl) => {
+    if (isAllowedPageNavigation(targetUrl)) return
+    event.preventDefault()
+    logMain('warn', `[nav] 独立窗口页面重定向被拦截 store=${storeId} target=${String(targetUrl).slice(0, 200)}`)
   })
 
   // 独立窗口同样给右键菜单与重载快捷键：导航/重新加载/强制重新加载/编辑/链接/元素定位信息。

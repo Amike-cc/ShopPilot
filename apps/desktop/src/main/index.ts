@@ -262,6 +262,14 @@ function createWindow(): void {
     webPreferences.contextIsolation = true
     webPreferences.sandbox = true
     webPreferences.webviewTag = false
+    // Renderer 还能在 attach 参数里塞这些开关；不显式重置就等于交给页面决定。
+    webPreferences.webSecurity = true
+    webPreferences.allowRunningInsecureContent = false
+    webPreferences.nodeIntegrationInWorker = false
+    webPreferences.nodeIntegrationInSubFrames = false
+    webPreferences.safeDialogs = true
+    webPreferences.enableBlinkFeatures = ''
+    webPreferences.disableBlinkFeatures = ''
     const storeId = getWebviewStoreId(params.partition)
     const customerServiceStoreId = params.src === CUSTOMER_SERVICE_WEBVIEW_PLACEHOLDER_SOURCE ? storeId : null
     // 经营页面默认允许 Chromium 对隐藏页面节流；客服页面需要保持实时接待状态，

@@ -254,7 +254,10 @@ export function updateStore(input: StoreUpdateInput): Store | null {
   `)
   
   stmt.run(...values)
-  
+  writeAudit('store.update', 'success', {
+    storeId: input.storeId,
+    requestId: JSON.stringify({ fields: Object.keys(input.patch).slice(0, 20) })
+  })
   return getStore(input.storeId)
 }
 
@@ -408,7 +411,9 @@ export function reorderStores(orderedStoreIds: string[]): boolean {
       stmt.run(index, Date.now(), storeId)
     })
   })()
-  
+  writeAudit('store.reorder', 'success', {
+    requestId: JSON.stringify({ count: orderedStoreIds.length })
+  })
   return true
 }
 
@@ -424,6 +429,12 @@ export function setStoreGroup(storeId: string, groupName: string | null): boolea
   `)
   
   const info = stmt.run(groupName, Date.now(), storeId)
+  if (info.changes > 0) {
+    writeAudit('store.setGroup', 'success', {
+      storeId,
+      requestId: JSON.stringify({ grouped: !!groupName })
+    })
+  }
   return info.changes > 0
 }
 

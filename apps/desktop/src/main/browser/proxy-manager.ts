@@ -208,6 +208,9 @@ export async function updateProxy(
     await Promise.all(boundStoreIds.map(storeId => reconfigureProxy(storeId).catch(() => undefined)))
     throw error
   }
+  writeAudit('proxy.update', 'success', {
+    requestId: JSON.stringify({ proxyId, fields: Object.keys(patch).slice(0, 10), credentialsCleared: clearStoredCredentials })
+  })
   return getProxy(proxyId)!
 }
 
@@ -459,6 +462,9 @@ export async function testProxyAsync(
   if (opts.proxyId) {
     recordCheck(opts.proxyId, result)
   }
+  writeAudit('proxy.test', result.ok ? 'success' : 'failure', {
+    requestId: JSON.stringify({ proxyId: opts.proxyId || null, errorCode: result.errorCode })
+  })
   return result
 }
 
