@@ -1470,8 +1470,20 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
   border-radius: var(--r-sm);
 }
 .sb-rail-btn.on {
-  background: var(--brand-soft);
-  color: var(--brand);
+  background: var(--brand);
+  color: #fff;
+  box-shadow: 0 6px 16px -8px rgba(124, 92, 245, 0.9);
+}
+.dashboard-sidebar .sb-rail-btn {
+  color: var(--ui-text-secondary);
+}
+.dashboard-sidebar .sb-rail-btn:hover {
+  background: var(--ui-surface-sunken);
+  color: var(--ui-text);
+}
+.dashboard-sidebar .sb-rail-btn.on {
+  background: var(--brand);
+  color: #fff;
 }
 .rail-badge {
   position: absolute;

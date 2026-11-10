@@ -22,9 +22,9 @@
         <span v-if="tab.isPinned" class="browser-tab-pin" aria-hidden="true">●</span>
         <span v-if="tab.loading" class="browser-tab-spinner" aria-hidden="true"></span>
         <span class="browser-tab-title" :title="tab.title || tab.url">{{ tab.title || '新标签页' }}</span>
-        <span class="browser-tab-close" title="关闭标签页" @click.stop="ws.closeTab(tab.id)"><img :src="closeIcon" alt="" /></span>
+        <span class="browser-tab-close" title="关闭标签页" @click.stop="ws.closeTab(tab.id)"><AppIcon name="close" :size="12" /></span>
       </button>
-      <button type="button" class="dashboard-browser-tab-add" title="新标签页" @click="ws.newTab()"><img :src="addIcon" alt="" /></button>
+      <button type="button" class="dashboard-browser-tab-add" title="新标签页" @click="ws.newTab()"><AppIcon name="plus" :size="15" /></button>
       <!-- 多选模式：只有真的选中了才出现，避免常驻占用标签栏宽度 -->
       <div v-if="selectedTabIds.length" class="dashboard-tabs-batch" data-test="tabs-batch-bar">
         <span class="tabs-batch-count" data-test="tabs-batch-count">已选 {{ selectedTabIds.length }} 个</span>
@@ -41,16 +41,16 @@
         :title="panelOpen ? '收起侧栏（Ctrl+Shift+B）' : '展开侧栏（Ctrl+Shift+B）'"
         :aria-expanded="panelOpen"
         @click="togglePanel"
-      ><img :src="panelToggleIcon" alt="" /></button>
+      ><AppIcon name="chevron-right" :size="15" /></button>
     </div>
 
     <div class="dashboard-browser-address address-bar">
-      <button type="button" class="browser-nav-button" title="后退" @click="ws.tabControl('back')"><img :src="backIcon" alt="" /></button>
-      <button type="button" class="browser-nav-button" title="前进" @click="ws.tabControl('forward')"><img :src="forwardIcon" alt="" /></button>
-      <button type="button" class="browser-nav-button" title="刷新" @click="ws.tabControl('reload')"><img :src="reloadIcon" alt="" /></button>
-      <button type="button" class="browser-nav-button home-btn nav-btn" data-test="nav-home" :disabled="!homeUrl" :title="homeUrl ? `店铺首页：${homeUrl}` : '店铺首页'" @click="goHome"><img :src="homeIcon" alt="" /></button>
+      <button type="button" class="browser-nav-button" title="后退" @click="ws.tabControl('back')"><AppIcon name="arrow-left" :size="16" /></button>
+      <button type="button" class="browser-nav-button" title="前进" @click="ws.tabControl('forward')"><AppIcon name="arrow-right" :size="16" /></button>
+      <button type="button" class="browser-nav-button" title="刷新" @click="ws.tabControl('reload')"><AppIcon name="refresh" :size="15" /></button>
+      <button type="button" class="browser-nav-button home-btn nav-btn" data-test="nav-home" :disabled="!homeUrl" :title="homeUrl ? `店铺首页：${homeUrl}` : '店铺首页'" @click="goHome"><AppIcon name="home" :size="15" /></button>
       <label class="dashboard-browser-url" aria-label="当前页面地址">
-        <img :src="searchIcon" alt="" />
+        <AppIcon name="search" :size="14" />
         <input v-model="urlDraft" spellcheck="false" @keydown.enter="submitUrl" />
       </label>
       <div v-if="activeWebviewKey" class="browser-zoom" data-test="browser-zoom">
@@ -159,7 +159,7 @@
           <div class="browser-panel-heading"><strong>收藏</strong><button type="button" @click="ws.refreshBookmarks()"><img class="button-icon" :src="workspaceRefreshIcon" alt="" />刷新</button></div>
           <div v-if="entryRoutes.length" class="env-sec" data-test="entry-routes">
             <div class="env-h"><PlatformIcon :name="displayedPlatformName" :size="14" /><span class="entry-routes-title">{{ displayedPlatformName }} · 平台入口</span></div>
-            <button v-for="route in entryRoutes" :key="route.id" type="button" class="browser-panel-row entry-route" data-test="entry-route" @click="ws.navigate(route.url)"><span class="browser-panel-row-copy"><strong class="row-main">{{ route.title }}</strong><small>{{ shortUrl(route.url) }}</small></span><span class="browser-panel-row-action"><img :src="forwardIcon" alt="" /></span></button>
+            <button v-for="route in entryRoutes" :key="route.id" type="button" class="browser-panel-row entry-route" data-test="entry-route" @click="ws.navigate(route.url)"><span class="browser-panel-row-copy"><strong class="row-main">{{ route.title }}</strong><small>{{ shortUrl(route.url) }}</small></span><span class="browser-panel-row-action"><AppIcon name="chevron-right" :size="14" /></span></button>
             <div class="env-note">平台入口由内置适配器提供，页面改版可能调整地址；失效可直接在下方自建收藏。</div>
           </div>
           <div v-if="!ws.bookmarks.length" class="browser-panel-empty"><img class="browser-state-art" :src="bookmarksArt" alt="暂无收藏" /><span>暂无收藏</span></div>
@@ -340,22 +340,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import PlatformIcon from '../../components/PlatformIcon.vue'
+import AppIcon from '../../components/ui/AppIcon.vue'
 import bookmarksArt from '../../assets/ui/browser/bookmarks.png'
 import downloadsArt from '../../assets/ui/browser/downloads.png'
 import networkArt from '../../assets/ui/browser/network.png'
-import homeIcon from '../../assets/icons/utility-home.svg'
 import bookmarksIcon from '../../assets/icons/browser-bookmarks.svg'
 import downloadsIcon from '../../assets/icons/browser-downloads.svg'
 import envIcon from '../../assets/icons/browser-env.svg'
 import inviteIcon from '../../assets/icons/invite-creator.svg'
-import addIcon from '../../assets/generated/ui-icons/add.png'
-import closeIcon from '../../assets/generated/ui-icons/close.png'
 import deleteIcon from '../../assets/generated/ui-icons/delete-gen.png'
-import searchIcon from '../../assets/generated/ui-icons/search.png'
 import securityLockIcon from '../../assets/generated/ui-icons/security-lock-gen.png'
-import backIcon from '../../assets/generated/ui-icons/back-gen.png'
-import forwardIcon from '../../assets/generated/ui-icons/forward-gen.png'
-import reloadIcon from '../../assets/generated/ui-icons/reload-gen.png'
 import openIcon from '../../assets/generated/ui-icons/open-gen.png'
 import browserRetryIcon from '../../assets/generated/ui-icons/browser-retry-gen.png'
 import sessionExportIcon from '../../assets/generated/ui-icons/session-export-gen.png'
@@ -363,7 +357,6 @@ import sessionImportIcon from '../../assets/generated/ui-icons/session-import-ge
 import workspaceRefreshIcon from '../../assets/generated/ui-icons/workspace-refresh-gen.png'
 import settingsSaveIcon from '../../assets/generated/ui-icons/settings-save-gen.png'
 import panelExpandIcon from '../../assets/generated/ui-icons/panel-expand-gen.png'
-import panelToggleIcon from '../../assets/generated/ui-icons/chevron-right-gen.png'
 import verifiedIcon from '../../assets/generated/ui-icons/browser-verified-gen.png'
 import unknownIcon from '../../assets/generated/ui-icons/browser-unknown-gen.png'
 import browserRefreshIcon from '../../assets/generated/ui-icons/browser-refresh-gen.png'
@@ -1443,7 +1436,7 @@ onBeforeUnmount(() => {
 .dashboard-browser-tab.active { border-color: var(--dash-border); border-bottom-color: rgba(139, 92, 246, .75); background: #ffffff; color: var(--dash-text); }
 .dashboard-browser-tab:hover { color: var(--dash-text); }
 .browser-tab-title { overflow: hidden; flex: 1; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: 11px; }
-.browser-tab-close { display:grid;place-items:center;flex: 0 0 auto; color: var(--dash-text-muted); line-height: 1; }.browser-tab-close img { width:13px;height:13px;object-fit:contain; }
+.browser-tab-close { display:grid;place-items:center;flex: 0 0 auto; color: var(--dash-text-muted); line-height: 1; }.browser-tab-close .ui-icon { opacity:.72; }.browser-tab-close:hover .ui-icon { opacity:1; }
 .browser-tab-close:hover { color: #d92d20; }
 .browser-tab-spinner { width: 9px; height: 9px; flex: 0 0 auto; border: 1px solid rgba(150, 137, 255, .28); border-top-color: #b99aff; border-radius: 50%; animation: dashboard-browser-spin .8s linear infinite; }
 /* 固定标签：一键"关闭其他/全部"会跳过它，必须让用户在标签上就看得出来 */
@@ -1478,15 +1471,15 @@ onBeforeUnmount(() => {
 .tabs-confirm-cancel:hover { background: #f4f6fb; }
 .tabs-confirm-ok { border: 1px solid #b42318; background: #d92d20; color: #ffffff; }
 .tabs-confirm-ok:hover { background: #b42318; }
-.dashboard-browser-tab-add { display:grid;place-items:center;width: 34px; min-width: 34px; height: 30px; align-self: center; }.dashboard-browser-tab-add img { width:16px;height:16px;object-fit:contain; }
+.dashboard-browser-tab-add { display:grid;place-items:center;width: 34px; min-width: 34px; height: 30px; align-self: center; }.dashboard-browser-tab-add .ui-icon { color:var(--dash-text-muted); }
 /* 侧栏开关：原先在头部栏，头部整条移除后挪到标签栏右端（margin-left:auto 保证永远贴在右端）。
    收起时把箭头翻转成"指向左"，语义与面板从右侧收/放一致 */
-.dashboard-browser-panel-toggle { display:grid;place-items:center; width: 30px; min-width: 30px; height: 30px; margin-left: auto; align-self: center; }.dashboard-browser-panel-toggle img { width:16px;height:16px;object-fit:contain; }
+.dashboard-browser-panel-toggle { display:grid;place-items:center; width: 30px; min-width: 30px; height: 30px; margin-left: auto; align-self: center; }.dashboard-browser-panel-toggle .ui-icon { color:var(--dash-text-muted); }
 .dashboard-browser-panel-toggle.collapsed img { transform: scaleX(-1); }
 .dashboard-browser-address { gap: 6px; min-height: 38px; padding: 0 8px; border: 1px solid var(--dash-border); border-radius: 10px; background: #f7f9fd; }
-.browser-nav-button { display:grid;place-items:center; width: 28px; height: 28px; padding: 0; line-height: 1; }.browser-nav-button img { width:16px;height:16px;object-fit:contain; }
+.browser-nav-button { display:grid;place-items:center; width: 28px; height: 28px; padding: 0; line-height: 1; }.browser-nav-button .ui-icon { color:var(--dash-text-soft); }
 .browser-nav-button:disabled { cursor: default; opacity: .4; }
-.dashboard-browser-url img { width:15px;height:15px;object-fit:contain;flex:0 0 auto; }.dashboard-browser-url { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px; border: 1px solid rgba(111, 137, 177, .16); border-radius: 7px; background: #ffffff; color: var(--dash-text-muted); }
+.dashboard-browser-url .ui-icon { flex:0 0 auto; color:var(--dash-text-muted); }.dashboard-browser-url { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px; border: 1px solid rgba(111, 137, 177, .16); border-radius: 7px; background: #ffffff; color: var(--dash-text-muted); }
 .dashboard-browser-url:focus-within { border-color: rgba(135, 102, 246, .7); box-shadow: 0 0 0 2px rgba(135, 102, 246, .12); }
 .dashboard-browser-url input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--dash-text-soft); font-size: 11px; }
 .dashboard-browser-hint { flex: 0 0 auto; color: var(--dash-text-muted); font-size: 10px; }
@@ -1552,7 +1545,7 @@ onBeforeUnmount(() => {
 .browser-panel-row-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
 .browser-panel-row-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
 .browser-panel-row-copy small { overflow: hidden; color: var(--dash-text-muted); text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
-.browser-panel-row-action { display:grid;place-items:center; flex: 0 0 auto; border: 0; background: transparent; color: var(--dash-text-muted); cursor: pointer; }.browser-panel-row-action img { width:15px;height:15px;object-fit:contain; }
+.browser-panel-row-action { display:grid;place-items:center; flex: 0 0 auto; border: 0; background: transparent; color: var(--dash-text-muted); cursor: pointer; }.browser-panel-row-action .ui-icon { color:var(--dash-text-muted); }
 .browser-panel-row-action:hover { color: var(--dash-text); }
 
 /* ---- 下载行的控制按钮（2026-11-08）----

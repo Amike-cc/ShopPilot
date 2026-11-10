@@ -446,13 +446,13 @@ function handleQuickAction(action: (typeof quickActions)[number]) {
   color: var(--delta-down);
 }
 .ov-kpi-note {
-  display: block;
+  display: -webkit-box;
   overflow: hidden;
   color: var(--ui-text-muted);
   font-size: var(--text-11);
   line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 /* ---- 趋势图 ---- */

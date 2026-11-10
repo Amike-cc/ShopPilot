@@ -2,9 +2,9 @@
   <section class="graphic-sell-page" data-test="graphic-sell-page">
     <header class="gs-head">
       <div class="gs-brand">
-        <button type="button" class="gs-brand-mark" aria-label="返回首页" @click="emit('go-home')">ϟ</button>
-        <strong>店管家</strong>
-        <span class="gs-crumb">AI 创作 / 图文带货</span>
+        <button type="button" class="gs-brand-mark" aria-label="返回首页" @click="emit('go-home')"><img :src="brandMark" alt="" /></button>
+        <strong>ShopPilot</strong>
+        <span class="gs-crumb">图片工作台 / 图文带货</span>
       </div>
       <div class="gs-status-bar" data-test="graphic-sell-config">
         <span class="gs-status" :class="readiness.copyReady ? 'ready' : 'warn'" :title="copyStatusHint"><i></i>文案：{{ readiness.copyLabel }}</span>
@@ -230,6 +230,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import brandMark from '../../assets/generated/shopilot-logo-generated.png'
 import { SELL_COPY_LIMITS } from '@shared/contracts/ai-sell-copy'
 import {
   GRAPHIC_SELL_EFFECT_OPTIONS,
@@ -335,7 +336,8 @@ function formatDate(value: number): string {
 .graphic-sell-page{position:relative;display:flex;flex-direction:column;height:100%;min-height:0;min-width:0;overflow:hidden;background:#f5f7fb;color:#16275e}
 .gs-head{display:flex;align-items:center;justify-content:space-between;gap:16px;height:58px;min-height:58px;flex:0 0 58px;padding:0 24px;border-bottom:1px solid #edf0f5;background:rgba(255,255,255,.96);backdrop-filter:blur(10px);z-index:5}
 .gs-brand{display:flex;align-items:center;gap:8px;min-width:0;color:#1e2a41;font-size:15px}
-.gs-brand-mark{display:grid;place-items:center;width:31px;height:31px;border:0;border-radius:8px;background:#4c6fff;color:#fff;font-size:20px;cursor:pointer;box-shadow:0 4px 10px rgba(76,111,255,.22)}
+.gs-brand-mark{display:grid;place-items:center;width:31px;height:31px;padding:0;border:1px solid var(--ui-border);border-radius:8px;background:#fff;cursor:pointer;box-shadow:var(--e1)}
+.gs-brand-mark img{width:23px;height:23px;object-fit:contain}
 .gs-crumb{overflow:hidden;color:#8b95a7;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
 .gs-status-bar{display:flex;align-items:center;gap:8px;min-width:0;overflow-x:auto;scrollbar-width:none}
 .gs-status-bar::-webkit-scrollbar{display:none}

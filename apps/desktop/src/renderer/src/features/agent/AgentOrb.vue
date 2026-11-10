@@ -119,11 +119,11 @@ onBeforeUnmount(() => { resizeObserver?.disconnect(); window.removeEventListener
 
 <style scoped>
 .agent-orb-host { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: visible; }
-.agent-orb { position: absolute; width: 64px; height: 64px; padding: 0; border: 0; border-radius: 50%; background: transparent; display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;pointer-events:auto;-webkit-app-region:no-drag;transition:filter .18s,transform .18s; }
+.agent-orb { position: absolute; width: 56px; height: 56px; padding: 0; border: 0; border-radius: 50%; background: transparent; display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;pointer-events:auto;-webkit-app-region:no-drag;transition:filter .18s,transform .18s; }
 .agent-orb:hover { transform: translateY(-1px); filter: drop-shadow(0 7px 12px rgba(54, 83, 219, .42)); }
 .agent-orb:focus-visible { outline: 2px solid #b6e0ff; outline-offset: 3px; }
 .agent-orb.dragging { cursor:grabbing;transition:none; }
-.orb-image { display: block; width: 64px; height: 64px; object-fit: contain; user-select: none; pointer-events: none; }
+.orb-image { display: block; width: 56px; height: 56px; object-fit: contain; user-select: none; pointer-events: none; }
 .orb-alert img { width:14px;height:14px;object-fit:contain; }.orb-alert { position:absolute;right:-3px;top:-4px;width:17px;height:17px;border:2px solid #24253c;border-radius:50%;background:#f5b942;color:#30230a;font-size:11px;font-weight:900;line-height:13px;box-shadow:0 0 10px rgba(245,185,66,.75);animation:agent-pulse 1.4s ease-in-out infinite; }
 .needs-confirm { filter: drop-shadow(0 0 9px rgba(245,185,66,.78)); }
 @keyframes agent-pulse { 50% { transform:scale(1.14);box-shadow:0 0 15px rgba(245,185,66,.9); } }

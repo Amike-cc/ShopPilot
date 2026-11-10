@@ -30,23 +30,21 @@ import { storeStatusLabel } from '@shared/enums/store-status'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import type { PlatformProductStatus } from '@shared/contracts/platform-product'
 import PlatformIcon from '../../components/PlatformIcon.vue'
+import AppIcon from '../../components/ui/AppIcon.vue'
 import { useWorkspaceStore } from '../../stores/workspace'
 import ProductPager from '../products/ProductPager.vue'
 import ProductEditorDrawer from '../products/ProductEditorDrawer.vue'
 import SettingsModal from '../workbench/SettingsModal.vue'
 import { canUnmerge, unmergeConfirmText, unmergeErrorText } from './product-link-actions'
 import { buildUploadTargetOptions } from './product-upload-targets'
-import storeManageIcon from '../../assets/generated/ui-icons/app-store-gen.png'
 import syncIcon from '../../assets/generated/ui-icons/sync-gen.png'
 import productSyncIcon from '../../assets/generated/ui-icons/product-sync-sheet-gen.png'
 import publishIcon from '../../assets/generated/ui-icons/publish-gen.png'
-import preflightIcon from '../../assets/generated/ui-icons/preflight-gen.png'
 import externalIcon from '../../assets/generated/ui-icons/external-gen.png'
 import downloadImageIcon from '../../assets/generated/ui-icons/download-image-gen.png'
 import cleanupIcon from '../../assets/generated/ui-icons/cleanup-gen.png'
 import acceptIcon from '../../assets/generated/ui-icons/accept-gen.png'
 import scanQueueIcon from '../../assets/generated/ui-icons/scan-queue-gen.png'
-import manualEditIcon from '../../assets/generated/ui-icons/manual-edit-gen.png'
 import publishGateIcon from '../../assets/generated/ui-icons/publish-gate-sheet-gen.png'
 import publishConfirmIcon from '../../assets/generated/ui-icons/publish-confirm-sheet-gen.png'
 import publishAbandonIcon from '../../assets/generated/ui-icons/publish-abandon-sheet-gen.png'
@@ -1107,11 +1105,11 @@ onMounted(() => { void loadLinks(); void loadLocal() })
       </div>
       <div class="product-head-actions">
         <button type="button" class="unified-button primary" data-test="local-create" :disabled="busy" @click="createBlankProduct">
-          <img class="button-icon" :src="manualEditIcon" alt="" />新建商品</button>
+          <AppIcon name="plus" :size="15" />新建商品</button>
         <button v-if="ws.ready && ws.stores.length" type="button" class="unified-button" :disabled="!!syncingStoreId" data-test="product-sync-all" @click="syncAll">
-          <img class="button-icon" :src="syncIcon" alt="" />{{ syncingStoreId ? '同步中…' : '同步全部店铺' }}</button>
-        <button type="button" class="unified-button" @click="emit('navigate', 'stores')"><img class="button-icon" :src="storeManageIcon" alt="" />管理店铺</button>
-        <button type="button" class="unified-button" data-test="product-settings" @click="settingsOpen = true">设置</button>
+          <AppIcon name="refresh" :size="15" />{{ syncingStoreId ? '同步中…' : '同步全部店铺' }}</button>
+        <button type="button" class="unified-button" @click="emit('navigate', 'stores')"><AppIcon name="store" :size="15" />管理店铺</button>
+        <button type="button" class="unified-button" data-test="product-settings" @click="settingsOpen = true"><AppIcon name="settings" :size="15" />设置</button>
       </div>
     </header>
 
@@ -1198,7 +1196,7 @@ onMounted(() => { void loadLinks(); void loadLocal() })
                 <td class="th-thumb">
                   <div class="product-thumb">
                     <img v-if="row.coverLocalPath && !thumbErrors.has(row.id)" :src="mediaUrl(row.coverLocalPath)" alt="" loading="lazy" @error="onThumbError(row.id)" />
-                    <span v-else class="thumb-state" :title="mediaStateLabel(row.coverState)">{{ row.coverLocalPath && thumbErrors.has(row.id) ? '文件缺失' : mediaStateLabel(row.coverState) }}</span>
+                    <span v-else class="thumb-state" :title="row.coverLocalPath && thumbErrors.has(row.id) ? '本地文件缺失' : mediaStateLabel(row.coverState)"><AppIcon name="image" :size="16" /></span>
                   </div>
                 </td>
                 <td>
@@ -1216,19 +1214,19 @@ onMounted(() => { void loadLinks(); void loadLocal() })
                 <td>{{ formatTime(row.updatedAt) }}</td>
                 <td class="product-actions">
                   <button type="button" class="unified-button ghost" :data-test="'local-edit-' + row.id" :disabled="busy" @click="openEditor(row)">
-                  <img class="button-icon" :src="manualEditIcon" alt="" />编辑</button>
+                  <AppIcon name="edit" :size="14" />编辑</button>
                   <button type="button" class="unified-button ghost" :data-test="'local-copy-' + row.id" :disabled="busy" @click="duplicateProduct(row)">
-                  <img class="button-icon" :src="batchHandleStoreIcon" alt="" />复制</button>
+                  <AppIcon name="copy" :size="14" />复制</button>
                   <button type="button" class="unified-button ghost" :data-test="'local-localize-' + row.id" :disabled="busy" @click="localizeMedia(row)">
-                  <img class="button-icon" :src="downloadImageIcon" alt="" />下载图片</button>
+                  <AppIcon name="download" :size="14" />下载图片</button>
                   <button type="button" class="unified-button ghost" :data-test="'local-preflight-' + row.id" :disabled="busy" @click="runPreflight(row)">
-                  <img class="button-icon" :src="preflightIcon" alt="" />发布预检</button>
+                  <AppIcon name="check-circle" :size="14" />发布预检</button>
                   <button v-if="row.status === 'archived'" type="button" class="unified-button ghost" :data-test="'local-unarchive-' + row.id" :disabled="busy" @click="setArchived(row, false)">
-                  <img class="button-icon" :src="acceptIcon" alt="" />取消归档</button>
+                  <AppIcon name="refresh" :size="14" />取消归档</button>
                   <button v-else type="button" class="unified-button ghost" :data-test="'local-archive-' + row.id" :disabled="busy" @click="setArchived(row, true)">
-                  <img class="button-icon" :src="publishAbandonIcon" alt="" />归档</button>
+                  <AppIcon name="archive" :size="14" />归档</button>
                   <button type="button" class="unified-button ghost" :disabled="busy" @click="removeLocal(row)">
-                  <img class="button-icon" :src="cleanupIcon" alt="" />删除</button>
+                  <AppIcon name="trash" :size="14" />删除</button>
                 </td>
               </tr>
             </tbody>
@@ -1704,7 +1702,7 @@ onMounted(() => { void loadLinks(); void loadLocal() })
 .th-thumb{width:52px}
 .product-thumb{width:40px;height:40px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f8fa;display:flex;align-items:center;justify-content:center;overflow:hidden}
 .product-thumb img{width:100%;height:100%;object-fit:cover}
-.thumb-state{color:var(--dash-text-muted);font-size:9px;line-height:1.2;text-align:center;padding:0 2px}
+.thumb-state{display:grid;place-items:center;width:100%;height:100%;color:var(--dash-text-disabled)}
 .status-chip{display:inline-flex;align-items:center;min-height:20px;padding:0 8px;border-radius:999px;font-size:11px;border:1px solid var(--dash-border);background:#f9fafb;color:var(--dash-text-soft)}
 .status-chip.chip-draft{background:#fef3f2;border-color:#fecdca;color:#b42318}
 .status-chip.chip-ready{background:#ecfdf3;border-color:#abefc6;color:#027a48}
@@ -1769,7 +1767,9 @@ onMounted(() => { void loadLinks(); void loadLocal() })
 .status-chip,
 .product-orphan,
 .product-platform{white-space:nowrap}
-.product-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 6px;max-width:212px}
-.product-actions>button{justify-content:flex-start;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.product-table td{padding:9px 10px}
+.product-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 5px;max-width:250px}
+.product-actions>button{justify-content:flex-start;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:28px;height:28px;padding:0 6px;font-size:11px}
+.product-actions>button .ui-icon{color:var(--dash-text-muted)}
+.product-actions>button:hover .ui-icon{color:currentColor}
+.product-table td{padding:8px 10px;vertical-align:middle}
 </style>

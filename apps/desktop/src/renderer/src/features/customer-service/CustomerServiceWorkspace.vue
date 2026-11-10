@@ -74,7 +74,7 @@
         <section v-else class="customer-service-browser" data-test="customer-service-browser">
           <div class="browser-heading"><div><span class="section-eyebrow">MANUAL REPLY / EMBEDDED BROWSER</span><h1>{{ activeStore.name }} · {{ activeStore.platform }}客服</h1></div><div class="browser-heading-meta"><span class="page-live-pill"><i aria-hidden="true"></i>当前店铺客服页</span><span class="message-status" :class="statusTone(selectedStatus)" :title="statusMessage(selectedStatus)"><i aria-hidden="true"></i>{{ statusLabel(selectedStatus) }}</span></div></div>
           <div class="customer-browser-shell">
-            <div class="customer-browser-addressbar"><div class="browser-nav-actions" aria-label="客服网页导航"><button type="button" class="browser-nav-button" title="后退" :disabled="!activeState?.canGoBack" data-test="customer-service-browser-back" @click="goBack"><span aria-hidden="true">‹</span></button><button type="button" class="browser-nav-button" title="前进" :disabled="!activeState?.canGoForward" data-test="customer-service-browser-forward" @click="goForward"><span aria-hidden="true">›</span></button><button type="button" class="browser-nav-button" title="刷新客服页面" data-test="customer-service-browser-reload" @click="reloadActive"><span aria-hidden="true">↻</span></button></div><div class="customer-browser-url" aria-label="当前客服页面地址"><span class="url-lock" aria-hidden="true">⌁</span><span class="url-value" :title="activeState?.url || serviceEntry(activeStore) || ''">{{ activeState?.url || serviceEntry(activeStore) || '平台客服地址未配置' }}</span></div><span class="customer-browser-load-state" :class="{ loading: activeState?.loading, failed: !!activeState?.failed }"><i aria-hidden="true"></i>{{ activeState?.loading ? '加载中' : activeState?.failed ? '加载失败' : '可接待' }}</span></div>
+            <div class="customer-browser-addressbar"><div class="browser-nav-actions" aria-label="客服网页导航"><button type="button" class="browser-nav-button" title="后退" :disabled="!activeState?.canGoBack" data-test="customer-service-browser-back" @click="goBack"><span aria-hidden="true">‹</span></button><button type="button" class="browser-nav-button" title="前进" :disabled="!activeState?.canGoForward" data-test="customer-service-browser-forward" @click="goForward"><span aria-hidden="true">›</span></button><button type="button" class="browser-nav-button" title="刷新客服页面" data-test="customer-service-browser-reload" @click="reloadActive"><span aria-hidden="true">↻</span></button></div><div class="customer-browser-url" aria-label="当前客服页面地址"><span class="url-lock" aria-hidden="true">⌁</span><span class="url-value" :title="activeState?.url || serviceEntry(activeStore) || ''">{{ activeState?.url || serviceEntry(activeStore) || '平台客服地址未配置' }}</span></div><span class="customer-browser-load-state" :class="{ loading: activeState?.loading, failed: !!activeState?.failed }"><i aria-hidden="true"></i>{{ activeState?.loading ? '加载中' : activeState?.failed ? '加载失败' : '页面已加载' }}</span></div>
             <div class="customer-browser-viewport" data-test="customer-service-browser-viewport">
               <webview v-if="serviceEntry(activeStore)" :key="activeStore.id" :ref="customerWebviewRefCallback(activeStore.id)" class="customer-service-webview" :partition="customerServiceSessionPartition(activeStore.id)" :src="CUSTOMER_SERVICE_WEBVIEW_PLACEHOLDER_SOURCE" :data-store-id="activeStore.id" :aria-label="`${activeStore.name} · ${activeStore.platform}客服页面`" allowpopups @did-attach="handleWebviewAttach(activeStore.id)" @did-start-loading="handleWebviewStart(activeStore.id)" @did-stop-loading="handleWebviewStop(activeStore.id)" @did-finish-load="handleWebviewFinish(activeStore.id)" @did-navigate="handleWebviewNavigate(activeStore.id, $event)" @did-navigate-in-page="handleWebviewNavigate(activeStore.id, $event)" @page-title-updated="handleWebviewTitle(activeStore.id, $event)" @did-fail-load="handleWebviewFailure(activeStore.id, $event)" @destroyed="handleWebviewDestroyed(activeStore.id)"></webview>
               <div v-if="!serviceEntry(activeStore)" class="customer-browser-empty" data-test="customer-service-url-unavailable"><span class="customer-browser-empty-icon" aria-hidden="true">◎</span><strong>暂未配置 {{ activeStore.platform }}客服地址</strong><span>请为该店铺选择四个平台之一。</span></div>
@@ -413,7 +413,7 @@ onBeforeUnmount(() => {
 .customer-service-store-rail { display: flex; width: 276px; min-width: 236px; min-height: 0; flex-direction: column; padding: 22px 14px 16px; border-right: 1px solid #e2e7f0; background: #fff; }
 .store-rail-heading { display: flex; align-items: flex-start; justify-content: space-between; padding: 0 8px 15px; border-bottom: 1px solid #edf0f5; }
 .store-rail-heading > div { display: grid; gap: 3px; }
-.section-eyebrow { color: #98a2b3; font-size: 9px; font-weight: 800; letter-spacing: .1em; line-height: 1.2; }
+.section-eyebrow { color: #98a2b3; font-size: 10px; font-weight: 800; letter-spacing: .1em; line-height: 1.2; }
 .store-rail-heading strong { color: #172033; font-size: 15px; }
 .store-count { display: inline-flex; min-width: 23px; height: 22px; align-items: center; justify-content: center; padding: 0 6px; border-radius: 7px; background: #f1efff; color: #694cf1; font-size: 11px; font-weight: 800; }
 .customer-service-store-list { min-height: 0; flex: 1; overflow-y: auto; padding: 10px 0; scrollbar-width: thin; }
@@ -424,9 +424,9 @@ onBeforeUnmount(() => {
 .store-copy { display: grid; min-width: 0; flex: 1; gap: 3px; }
 .store-copy strong, .store-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .store-copy strong { color: #273142; font-size: 12px; }
-.store-copy small { color: #8a94a6; font-size: 10px; }
-.store-state { display: grid; min-width: 39px; justify-items: end; gap: 3px; }
-.store-state small { color: #9aa3b2; font-size: 8px; white-space: nowrap; }
+.store-copy small { color: #8a94a6; font-size: 11px; }
+.store-state { display: grid; min-width: 41px; justify-items: end; gap: 3px; }
+.store-state small { color: #9aa3b2; font-size: 10px; white-space: nowrap; }
 .store-state-dot { width: 6px; height: 6px; border-radius: 50%; background: #e5a33a; }
 .store-state-dot.available { background: #22b77a; }
 .store-state-dot.error { background: #ef6b61; }
@@ -436,14 +436,14 @@ onBeforeUnmount(() => {
 .customer-service-rail-state strong { color: #4a5568; font-size: 12px; }
 .state-spinner { width: 20px; height: 20px; border: 2px solid #e1defb; border-top-color: #8065f5; border-radius: 50%; animation: customer-service-spin .8s linear infinite; }
 .rail-empty-icon { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 10px; background: #f1efff; color: #8065f5; font-size: 19px; }
-.store-rail-footnote { display: flex; align-items: flex-start; gap: 7px; margin: auto 5px 0; padding: 10px 8px 0; border-top: 1px solid #edf0f5; color: #8993a5; font-size: 10px; line-height: 1.55; }
+.store-rail-footnote { display: flex; align-items: flex-start; gap: 7px; margin: auto 5px 0; padding: 10px 8px 0; border-top: 1px solid #edf0f5; color: #8993a5; font-size: 10.5px; line-height: 1.6; }
 .footnote-icon { display: grid; width: 15px; height: 15px; flex: 0 0 15px; place-items: center; border-radius: 50%; background: #f0edff; color: #7054eb; font-size: 10px; font-weight: 800; }
 .customer-service-main { min-width: 0; min-height: 0; flex: 1; overflow: hidden; padding: 24px 30px 30px; background: radial-gradient(circle at 82% -10%, rgba(128, 101, 245, .1), transparent 33%), #f4f6fb; }
 .customer-service-browser { display: flex; width: 100%; max-width: 1500px; min-width: 0; min-height: 0; height: 100%; flex-direction: column; margin: 0 auto; }
 .browser-heading { display: flex; min-height: 54px; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
-.browser-heading h1 { margin-top: 5px; color: #172033; font-size: 22px; letter-spacing: -.04em; }
+.browser-heading h1 { margin-top: 5px; color: #172033; font-size: 24px; letter-spacing: -.03em; }
 .browser-heading-meta { display: flex; align-items: center; gap: 9px; padding-top: 8px; }
-.page-live-pill, .message-status { display: inline-flex; align-items: center; gap: 7px; min-height: 27px; padding: 0 9px; border-radius: 999px; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.page-live-pill, .message-status { display: inline-flex; align-items: center; gap: 7px; min-height: 27px; padding: 0 10px; border-radius: 999px; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .page-live-pill { background: #eaf8f2; color: #18845a; }
 .page-live-pill i { width: 6px; height: 6px; border-radius: 50%; background: #22b77a; }
 .message-status { background: #fff5df; color: #9a671d; }
@@ -461,8 +461,9 @@ onBeforeUnmount(() => {
 .browser-nav-button:disabled { background: transparent; color: #c4cbd6; cursor: not-allowed; }
 .customer-browser-url { display: flex; min-width: 0; min-height: 31px; flex: 1; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid #e2e6ee; border-radius: 9px; background: #f8f9fc; color: #667286; }
 .url-lock { color: #8e98a9; font-size: 13px; }
-.url-value { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.customer-browser-load-state { display: inline-flex; min-width: 52px; align-items: center; gap: 6px; color: #18845a; font-size: 9px; white-space: nowrap; }
+.url-value { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.customer-browser-load-state { display: inline-flex; min-width: 60px; align-items: center; gap: 6px; color: var(--dash-text-muted); font-size: 10.5px; white-space: nowrap; }
+.customer-browser-load-state i { background: #98a2b3; }
 .customer-browser-load-state.loading { color: #6951dc; }
 .customer-browser-load-state.loading i { background: #8065f5; }
 .customer-browser-load-state.failed { color: #b43c35; }
@@ -476,12 +477,12 @@ onBeforeUnmount(() => {
 .customer-browser-empty-icon, .customer-browser-error-icon { display: grid; width: 45px; height: 45px; place-items: center; border-radius: 14px; background: #f0edff; color: #6a4cf3; font-size: 22px; font-weight: 800; }
 .customer-browser-error-icon { background: #fff0ee; color: #c24d43; }
 .customer-browser-error .customer-service-primary { margin-top: 5px; }
-.customer-browser-footer { display: flex; min-height: 38px; align-items: center; gap: 8px; padding: 0 12px; border-top: 1px solid #e8ebf2; color: #8993a5; font-size: 9px; }
+.customer-browser-footer { display: flex; min-height: 40px; align-items: center; gap: 8px; padding: 0 12px; border-top: 1px solid #e8ebf2; color: #8993a5; font-size: 10.5px; }
 .footer-primary { display: inline-flex; align-items: center; gap: 6px; color: #18845a; font-weight: 700; white-space: nowrap; }
 .footer-primary i { width: 6px; height: 6px; border-radius: 50%; background: #22b77a; }
 .footer-spacer { flex: 1; }
 .footer-error { overflow: hidden; max-width: 260px; color: #b43c35; text-overflow: ellipsis; white-space: nowrap; }
-.footer-refresh { min-height: 25px; padding: 0 8px; border: 1px solid #dfe4ed; border-radius: 7px; background: #fff; color: #6a7587; cursor: pointer; font-size: 9px; }
+.footer-refresh { min-height: 26px; padding: 0 9px; border: 1px solid #dfe4ed; border-radius: 7px; background: #fff; color: #6a7587; cursor: pointer; font-size: 10.5px; }
 .footer-refresh:hover, .footer-refresh:focus-visible { border-color: #bdb2ff; background: #faf9ff; color: #5b3df5; outline: none; }
 .customer-service-state { display: grid; min-width: 0; min-height: 0; height: 100%; place-items: center; padding: 24px; }
 .customer-service-state-card { display: grid; max-width: 460px; justify-items: center; gap: 9px; padding: 38px 44px; border: 1px solid #e5e9f2; border-radius: 20px; background: #fff; box-shadow: 0 16px 42px rgba(31, 41, 55, .07); text-align: center; }

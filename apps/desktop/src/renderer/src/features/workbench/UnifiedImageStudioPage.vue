@@ -1,7 +1,7 @@
 <template>
   <section class="image-studio-page" :class="{ 'detail-mode': mode === 'detail' }" data-test="unified-image-studio-page">
     <header class="studio-page-head">
-      <div class="studio-brand"><button type="button" class="studio-brand-mark" aria-label="返回首页" @click="emit('go-home')">ϟ</button><strong>店管家</strong></div>
+      <div class="studio-brand"><button type="button" class="studio-brand-mark" aria-label="返回首页" @click="emit('go-home')"><img :src="brandMark" alt="" /></button><strong>ShopPilot</strong><span class="studio-brand-sub">图片工作台</span></div>
       <nav class="studio-top-nav" data-test="studio-top-nav" aria-label="AI 商品创作导航">
         <button v-for="item in creativeModes" :key="item.key" type="button" :class="{ active: mode === item.key }" :data-test="`studio-top-nav-${item.key}`" :disabled="generating || sceneGenerating || confirmOpen || sceneConfirmOpen" @click="mode = item.key">{{ item.label }}</button>
       </nav>
@@ -400,6 +400,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import brandMark from '../../assets/generated/shopilot-logo-generated.png'
 import sendIcon from '../../assets/generated/ui-icons/send-studio-gen.png'
 import recommendIcon from '../../assets/generated/ui-icons/recommend.png'
 import deleteIcon from '../../assets/generated/ui-icons/delete.png'
@@ -704,7 +705,7 @@ async function submitGeneration() {
 /* AI 生图工作区是浅色工作台（外层导航仍是深色壳）。左配置面板 + 右输出区。 */
 .image-studio-page{display:flex;flex-direction:column;height:100%;min-height:0;min-width:0;overflow:hidden;padding:0 28px 12px;color:#16275e;background:#f5f7fb}
 .studio-page-head{position:relative;top:auto;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:16px;height:58px;min-height:58px;flex:0 0 58px;margin:0 -28px 14px;padding:0 28px;border-bottom:1px solid #edf0f5;background:rgba(255,255,255,.96);backdrop-filter:blur(10px)}
-.studio-brand{display:flex;align-items:center;gap:7px;flex:0 0 auto;color:#1e2a41;font-size:16px}.studio-brand-mark{display:grid;place-items:center;width:31px;height:31px;border:0;border-radius:8px;background:#4c6fff;color:#fff;font-size:20px;cursor:pointer;box-shadow:0 4px 10px rgba(76,111,255,.22)}
+.studio-brand{display:flex;align-items:center;gap:7px;flex:0 0 auto;color:#1e2a41;font-size:16px}.studio-brand-mark{display:grid;place-items:center;width:31px;height:31px;padding:0;border:1px solid var(--ui-border);border-radius:8px;background:#fff;cursor:pointer;box-shadow:var(--e1)}.studio-brand-mark img{width:23px;height:23px;object-fit:contain}.studio-brand-sub{padding-left:8px;border-left:1px solid var(--ui-border);color:var(--ui-text-muted);font-size:11px;font-weight:500}
 .studio-top-nav{display:flex;align-items:center;gap:4px;flex:1;justify-content:flex-start;height:100%;margin-left:28px;overflow-x:auto;scrollbar-width:none}.studio-top-nav::-webkit-scrollbar{display:none}.studio-top-nav button{height:34px;padding:0 12px;border:0;border-radius:9px;background:transparent;color:#525d72;font-size:12px;cursor:pointer;white-space:nowrap}.studio-top-nav button:hover{background:#f1f4ff;color:#394bd0}.studio-top-nav button.active{background:#edf0ff;color:#4d5be0;font-weight:600}
 .button-icon{width:16px;height:16px;object-fit:contain;vertical-align:-3px;margin-right:4px}
 .studio-button{display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(103,143,207,.2);background:rgba(255,255,255,.68);color:#38528d;cursor:pointer;border-radius:9px}

@@ -27,6 +27,8 @@ const PAGES = [
   { key: 'invoices', label: '发票中心' },
   { key: 'tax', label: '涉税信息' },
   { key: 'apps', label: 'AI 创作' },
+  { key: 'image-studio', label: 'AI 生成商品图', via: 'ai-card' },
+  { key: 'graphic-sell', label: '图文带货', via: 'ai-card' },
   { key: 'app-center', label: '应用商城' },
   { key: 'settings', label: '设置中心', via: 'data-test' }
 ]
@@ -82,6 +84,15 @@ async function main() {
     }
     await sleep(1200)
 
+    // 截图用的临时库副本：把可选模块全部启用，保证发票/涉税页面也能进入评审（不触碰真实库）。
+    try {
+      await client.eval(`await window.shopilot.settings.set('ui.apps.installedModules', ['products','invoices','tax','ai']); return true`)
+      await client.send('Page.reload', { ignoreCache: true })
+      await sleep(2200)
+    } catch (err) {
+      console.log('[shot] 启用可选模块失败（继续按当前安装状态截图）：', err && err.message)
+    }
+
     for (const page of PAGES) {
       const clicked = await client.eval(`
         const label = ${JSON.stringify(page.label)}
@@ -89,6 +100,17 @@ async function main() {
           const btn = document.querySelector('[data-test="settings-open-btn"]')
           if (!btn) return false
           btn.click(); return true
+        }
+        if (${JSON.stringify(page.via || '')} === 'ai-card') {
+          const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+            .find(el => (el.textContent || '').trim().includes('AI 创作'))
+          if (!nav) return false
+          nav.click()
+          await new Promise(r => setTimeout(r, 700))
+          const card = [...document.querySelectorAll('.app-card')]
+            .find(el => (el.textContent || '').includes(label))
+          if (!card) return false
+          card.click(); return true
         }
         const item = [...document.querySelectorAll('.dashboard-nav-item')]
           .find(el => (el.textContent || '').trim().includes(label))
@@ -101,6 +123,23 @@ async function main() {
       fs.writeFileSync(file, Buffer.from(shot.data, 'base64'))
       console.log(`[shot] ${page.key.padEnd(11)} clicked=${clicked} → ${path.basename(file)}`)
     }
+
+    // 电商客服工作区（同窗切换，不是新窗口）
+    const cs = await client.eval(`
+      const btn = document.querySelector('[data-test="workspace-tab-customer-service"]')
+      if (!btn) return false
+      btn.click(); return true
+    `)
+    await sleep(2600)
+    const csShot = await client.send('Page.captureScreenshot', { format: 'png' })
+    fs.writeFileSync(path.join(OUT, 'customer-service.png'), Buffer.from(csShot.data, 'base64'))
+    console.log('[shot] customer-service clicked=' + cs + ' → customer-service.png')
+    await client.eval(`
+      const back = document.querySelector('[data-test="customer-service-back-commerce"]')
+        || [...document.querySelectorAll('[data-test="workspace-tab-workbench"]')].find(el => el.offsetParent !== null)
+      back?.click(); return true
+    `)
+    await sleep(900)
 
     // 店铺浏览器（guest 宿主 + 标签栏 + 地址栏 + 右侧面板），最容易因外壳改动回归的一面
     const opened = await client.eval(`
