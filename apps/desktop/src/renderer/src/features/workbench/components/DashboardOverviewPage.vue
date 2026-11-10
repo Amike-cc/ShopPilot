@@ -162,7 +162,7 @@
           <section id="platform-sync" class="ui-card">
             <div class="ui-card__head">
               <div class="ui-card__title"><h2>平台同步状态</h2></div>
-              <span class="ui-chip ui-chip--success">{{ platformOnlineSummary }}</span>
+              <span :class="['ui-chip', platformOnlineTone]">{{ platformOnlineSummary }}</span>
             </div>
             <div class="ui-card__body ov-sync">
               <div v-if="!platformSyncRows.length" class="ui-empty ui-empty--compact">
@@ -176,8 +176,8 @@
                   <span>{{ row.count }} 家店铺</span>
                 </div>
                 <div class="ov-sync-meta">
-                  <span :class="['ui-dot', row.state]"></span>
-                  <strong>{{ row.stateLabel }}</strong>
+                  <span :class="['ui-dot', row.state === 'login' ? 'warning' : row.state]"></span>
+                  <strong :class="{ 'sync-bad': row.state === 'login', 'sync-warn': row.state === 'offline' }">{{ row.stateLabel }}</strong>
                   <small>{{ row.lastSync }}</small>
                 </div>
               </div>
@@ -187,15 +187,6 @@
                 管理店铺<AppIcon name="arrow-right" :size="13" />
               </button>
             </div>
-          </section>
-
-          <section v-if="aiInstalled" id="ai-assistant" class="ui-card ov-ai">
-            <div class="ov-ai-icon" aria-hidden="true"><AppIcon name="sparkles" :size="18" /></div>
-            <h2>AI 电商助手</h2>
-            <p>创作、优化、分析，一站完成。只给建议，不替你动店铺数据。</p>
-            <button type="button" class="ui-btn ui-btn--primary ui-btn--block" @click="emit('open-assistant')">
-              开始对话<AppIcon name="arrow-right" :size="14" />
-            </button>
           </section>
 
           <section v-if="invoicesInstalled" id="invoice-todo" class="ui-card">
@@ -223,6 +214,15 @@
                 打开发票中心<AppIcon name="arrow-right" :size="13" />
               </button>
             </div>
+          </section>
+
+          <section v-if="aiInstalled" id="ai-assistant" class="ui-card ov-ai">
+            <div class="ov-ai-icon" aria-hidden="true"><AppIcon name="sparkles" :size="18" /></div>
+            <h2>AI 电商助手</h2>
+            <p>创作、优化、分析，一站完成。只给建议，不替你动店铺数据。</p>
+            <button type="button" class="ui-btn ui-btn--primary ui-btn--block" @click="emit('open-assistant')">
+              开始对话<AppIcon name="arrow-right" :size="14" />
+            </button>
           </section>
         </aside>
       </div>
@@ -267,7 +267,7 @@ const {
   kpiRow, deltaClass, formatNumber,
   trendPlot, chartYAxis, gmvAreaPath, orderPath, gmvPath, tooltipStyle,
   trendCaption, trendEmptyHint,
-  platformSyncRows, platformOnlineSummary,
+  platformSyncRows, platformOnlineSummary, platformOnlineTone,
   collectState, refreshLabel, refreshData, loadDashboardData, loadSnapshots, loadCollectedMetrics
 } = useDashboardOverview({
   onNotice: message => emit('notice', message),
@@ -704,6 +704,8 @@ function handleQuickAction(action: (typeof quickActions)[number]) {
   font-size: var(--text-11);
   font-weight: var(--weight-medium);
 }
+.ov-sync-meta strong.sync-bad { color: var(--danger-text); }
+.ov-sync-meta strong.sync-warn { color: var(--warning-text); }
 .ov-sync-meta small {
   grid-column: 1 / -1;
   color: var(--ui-text-muted);

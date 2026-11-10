@@ -413,6 +413,14 @@ export function useDashboardOverview(options: DashboardOverviewOptions) {
     const rows = platformSyncRows.value
     return `${rows.filter(row => row.state === 'online').length} / ${rows.length} 在线`
   })
+  /** 胶囊颜色必须跟真实在线数一致：有店铺掉线时不能继续显示绿色。 */
+  const platformOnlineTone = computed(() => {
+    const rows = platformSyncRows.value
+    if (!rows.length) return 'ui-chip--soft'
+    const online = rows.filter(row => row.state === 'online').length
+    if (online === rows.length) return 'ui-chip--success'
+    return online === 0 ? 'ui-chip--danger' : 'ui-chip--warning'
+  })
 
   const platformSyncRows = computed(() => {
     // The renderer can also be opened by Vite for visual review without Electron's
@@ -603,7 +611,7 @@ export function useDashboardOverview(options: DashboardOverviewOptions) {
     kpiRow, deltaClass, formatNumber,
     trendPlot, chartYAxis, gmvAreaPath, orderPath, gmvPath, tooltipStyle,
     trendCaption, trendEmptyHint,
-    platformSyncRows, platformOnlineSummary,
+    platformSyncRows, platformOnlineSummary, platformOnlineTone,
     collectState, refreshLabel, refreshData, loadDashboardData,
     loadSnapshots, loadCollectedMetrics,
     collectedState
