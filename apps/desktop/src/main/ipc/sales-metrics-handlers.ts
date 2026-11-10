@@ -12,7 +12,6 @@ import {
   salesMetricsPlanResumeSchema,
   salesMetricsPlanRunNowSchema,
   salesMetricsPlanUpdateSchema,
-  salesMetricsProductQuerySchema,
   salesMetricsQuerySchema,
   salesMetricsRunsQuerySchema
 } from '@shared/schemas/sales-metrics'
@@ -65,14 +64,6 @@ export function registerSalesMetricsHandlers(): void {
   handle(IPC_CHANNELS.SALES_METRICS_LIST, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
     const id = requestId(); const parsed = salesMetricsQuerySchema.safeParse(raw); if (!parsed.success) return inputError(id)
     try { return ok(salesMetricsCollectionService.list(parsed.data), id) } catch (error) { return serviceError(error, id) }
-  })
-  handle(IPC_CHANNELS.SALES_METRICS_PRODUCTS, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
-    const id = requestId(); const parsed = salesMetricsProductQuerySchema.safeParse(raw); if (!parsed.success) return inputError(id)
-    try { return ok(salesMetricsCollectionService.products(parsed.data), id) } catch (error) { return serviceError(error, id) }
-  })
-  handle(IPC_CHANNELS.SALES_METRICS_TOP_PRODUCTS, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {
-    const id = requestId(); const parsed = salesMetricsProductQuerySchema.safeParse(raw); if (!parsed.success) return inputError(id)
-    try { return ok(salesMetricsCollectionService.topProducts(parsed.data), id) } catch (error) { return serviceError(error, id) }
   })
 
   handle(IPC_CHANNELS.SALES_METRICS_PLAN_LIST, async (_event: IpcMainInvokeEvent, raw: unknown): Promise<IPCResult> => {

@@ -11,15 +11,14 @@ export function matchesTextToken(text: unknown, needle: string): boolean {
 /**
  * 单元格文本清洗（唯一实现，2026-10-15 审查 P2-1 收敛）
  *
- * 背景：shared 里曾有两份同名 `normalizeCellText` 且语义不同——发票/涉税域做
- * "整串重复两遍"去重但不剥零宽字符；商品域剥零宽字符但不做去重。同一批平台文本
+ * 背景：shared 里曾有两份同名 `normalizeCellText` 且语义不同——一份做
+ * "整串重复两遍"去重但不剥零宽字符；另一份剥零宽字符但不做去重。同一批平台文本
  * 按域走两套清洗，发票侧可能残留 `\u200b` 导致列比对/去重失败。
  *
  * 合并后：**剥零宽（\u200b-\u200f\ufeff）+ 连续空白压缩**是共同基座；
- * "整串重复两遍"折叠由 `dedupe` 显式开关（发票「处理记录」月份这类单元格需要，
- * 商品标题里的重复词有真语义、不需要）。各域入口只做参数选择，不再各写一份实现：
+ * "整串重复两遍"折叠由 `dedupe` 显式开关（发票「处理记录」月份这类单元格需要）。
+ * 各域入口只做参数选择，不再各写一份实现：
  *   · 发票域 → `@shared/constants/invoice` 的 normalizeCellText（dedupe: true）
- *   · 商品域 → `@shared/product-rules` 的 normalizeCellText（默认）
  */
 export function normalizeCellText(value: unknown, options: { dedupe?: boolean } = {}): string {
   const s = String(value ?? '')

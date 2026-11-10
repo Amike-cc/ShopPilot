@@ -22,7 +22,6 @@ const WINDOW_MANAGER = WM_FILES.map(f => read(`apps/desktop/src/main/browser/${f
 const SURFACE = read('apps/desktop/src/renderer/src/features/workbench/DashboardBrowserSurface.vue')
 const WORKSPACE = read('apps/desktop/src/renderer/src/stores/workspace.ts')
 const METRICS_SERVICE = read('apps/desktop/src/main/sales-metrics/sales-metrics-collection-service.ts')
-const SYNC_SERVICE = read('apps/desktop/src/main/products/product-sync-service.ts')
 
 describe('采集专用页：不占用户的活动位、不进标签栏', () => {
   it('专用标签页不激活、标记 internal、且不落库（否则下次开店会被当成用户的标签页恢复）', () => {
@@ -54,13 +53,5 @@ describe('采集服务不得使用用户正在用的标签页', () => {
     expect(METRICS_SERVICE).toContain('this.runtime.borrowCollectionPage(input.storeId)')
     // 这条最要紧：`waitForStoreWebContents` 返回的就是用户的活动标签页，采集一旦用它就会导航走用户的页面
     expect(METRICS_SERVICE).not.toContain('waitForStoreWebContents')
-  })
-
-  it('商品同步：同样只借专用页，且采完归还（失败路径也要还）', () => {
-    expect(SYNC_SERVICE).toContain('runtime.borrowCollectionPage(storeId)')
-    expect(SYNC_SERVICE).not.toContain('waitForStoreWebContents')
-    expect(SYNC_SERVICE).not.toContain("openStoreBrowser(storeId, { display: true, source: 'main' })")
-    // 三条退出路径都要归还：借不到页 / 登录门禁 / 采完或抛错
-    expect(SYNC_SERVICE.match(/releasePage\(\)/g)?.length).toBeGreaterThanOrEqual(4)
   })
 })

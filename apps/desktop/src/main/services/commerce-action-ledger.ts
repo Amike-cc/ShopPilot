@@ -22,9 +22,7 @@ const TRACKED = new Set([
   'collectInvoices', 'collectBusiness', 'collectEntity',
   'businessMetricsCollect', 'invoiceCollect', 'entityCollect',
   'businessMetricsCompare', 'commerceHealth', 'invoiceExport', 'entityApply',
-  'contentDraft', 'contentReview', 'contentPublish', 'campaignPlan', 'couponPlan', 'adPlan', 'adConfirm', 'customerInbox', 'customerDraftReply', 'customerSendReply',
-  'inventoryCollect', 'inventoryDiff', 'inventoryWriteback', 'skuCollect', 'skuDiff', 'skuWriteback',
-  'productSync', 'productList', 'productLibraryList', 'productDetailCollect', 'productPublishPreflight', 'productPublishOpen', 'productPublishVerify', 'productPublishReadback', 'productPublishAccept', 'productPublishChecklist', 'productPublishBatchProgress'
+  'contentDraft', 'contentReview', 'contentPublish', 'campaignPlan', 'couponPlan', 'adPlan', 'adConfirm', 'customerInbox', 'customerDraftReply', 'customerSendReply'
 ])
 
 export function commerceActionLedgerFor(db: Database.Database) {

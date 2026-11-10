@@ -51,8 +51,6 @@ export interface PlatformAdapterCapabilities {
   orders: boolean
   salesMetrics: boolean
   productSalesMetrics: boolean
-  products: boolean
-  inventory: boolean
   refunds: boolean
   salesData: boolean
 }

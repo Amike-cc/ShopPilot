@@ -136,10 +136,6 @@ export const AGENT_SIDE_EFFECT_SOFTWARE_ACTIONS: ReadonlySet<string> = new Set([
   'createBookmark', 'deleteBookmark',
   // 达人邀约会把私信真的发出去（提交类），风险等级必须是 write
   'runInvite',
-  // 商品域：采集/预检/回读会写本地台账，发布页代填和接受回读建议会产生明确写入
-  'productSync', 'productDetailCollect', 'productPublishPreflight',
-  'productPublishOpen', 'productPublishVerify', 'productPublishReadback', 'productPublishAccept',
-  'inventoryWriteback', 'skuWriteback',
   'entityApply', 'contentDraft', 'contentPublish',
   'campaignPlan', 'couponPlan', 'adPlan', 'adConfirm', 'customerDraftReply', 'customerSendReply',
   'createSkill', 'updateSkill', 'deleteSkill', 'createPlugin', 'updatePlugin', 'deletePlugin',
@@ -171,9 +167,7 @@ export const AGENT_CONFIRM_REQUIRED_ACTIONS: ReadonlySet<string> = new Set([
   'createStore', 'updateStore', 'archiveStore', 'restoreStore', 'deleteStorePermanent',
   'deleteTask', 'runTask', 'cancelTaskRun', 'restoreBackup',
   'createBookmark', 'deleteBookmark', 'deleteSkill',
-  // 发布页可选代填、以及接受回读建议都可能改变页面或本地草稿，必须人工确认。
-  'productPublishOpen', 'productPublishAccept',
-  'inventoryWriteback', 'skuWriteback', 'entityApply',
+  'entityApply',
   'contentPublish', 'adConfirm', 'customerSendReply',
   // Job 闭环里的判定类动作：批准/驳回等待人工确认的 Job、审阅结果、取消 Job。
   'approveJob', 'reviewJobResult', 'cancelJob',

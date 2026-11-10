@@ -12,7 +12,7 @@
  *   · 探针把"超时未响应"和"进程已消失/求值失败"都归成一种，界面于是把**崩溃**显示成**卡死**；
  *   · 视图地址用 `origin + pathname` 拼接，`about:blank` 会被显示成 `nullblank`。
  *
- * 放在 shared 的原因与 `navigation.ts` / `product-status.ts` 相同：主进程与渲染层读同一份定义，
+ * 放在 shared 的原因与 `navigation.ts` 相同：主进程与渲染层读同一份定义，
  * 纯函数、零依赖，单测可直接锁定（`tests/unit/browser-view-state.test.ts`）。
  */
 

@@ -287,7 +287,6 @@
         <UnifiedSettingsPage v-else-if="activePage === 'settings'" :initial-tab="settingsTab" @close="closeSettings" />
         <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" @busy-change="imageStudioBusy = $event" />
         <UnifiedGraphicSellPage v-else-if="activePage === 'graphic-sell'" @go-home="navigateTo('overview')" @busy-change="graphicSellBusy = $event" />
-        <ProductManagementPage v-else-if="activePage === 'products'" @navigate="navigateTo" @open-store="openStoreFromPage" />
         <UnifiedAppsPage v-else-if="activePage === 'ai' || activePage === 'apps'" :mode="activePage" @navigate="navigateTo" @open-assistant="openAssistant" @open-settings="openSettingsTab" />
         <DashboardOverviewPage
           v-else-if="activePage === 'overview'"
@@ -510,7 +509,6 @@ const UnifiedDataPage = defineAsyncComponent(() => import('./UnifiedDataPage.vue
 const UnifiedSettingsPage = defineAsyncComponent(() => import('./UnifiedSettingsPage.vue'))
 const UnifiedImageStudioPage = defineAsyncComponent(() => import('./UnifiedImageStudioPage.vue'))
 const UnifiedGraphicSellPage = defineAsyncComponent(() => import('./UnifiedGraphicSellPage.vue'))
-const ProductManagementPage = defineAsyncComponent(() => import('../products/ProductManagementPage.vue'))
 const UnifiedAppsPage = defineAsyncComponent(() => import('./UnifiedAppsPage.vue'))
 import DashboardOverviewPage from './components/DashboardOverviewPage.vue'
 import { waitForWorkspaceReady } from './use-dashboard-overview'
@@ -539,7 +537,6 @@ const agent = useAgentStore()
 type NavItem = { key: string; label: string; icon: string }
 const navItems: NavItem[] = [
   { key: 'overview', label: '经营总览', icon: 'home' },
-  { key: 'products', label: '商品管理', icon: 'box' },
   { key: 'stores', label: '店铺管理', icon: 'store' },
   { key: 'analytics', label: '数据分析', icon: 'chart' },
   { key: 'invoices', label: '发票中心', icon: 'receipt' },
@@ -549,20 +546,19 @@ const navItems: NavItem[] = [
 ]
 const activeNav = ref('经营总览')
 /**
- * 可选模块（商品/发票/涉税/AI 创作）支持在应用商城下载安装/卸载；
+ * 可选模块（发票/涉税/AI 创作）支持在应用商城下载安装/卸载；
  * 卸载后只隐藏入口与路由，数据保留。核心功能（总览/店铺/数据/商城/设置）不在过滤范围。
  */
 const visibleNavItems = computed(() => navItems.filter((item) => {
-  if (item.key === 'products') return isModuleInstalled('products')
   if (item.key === 'invoices') return isModuleInstalled('invoices')
   if (item.key === 'tax') return isModuleInstalled('tax')
   if (item.key === 'ai') return isModuleInstalled('ai')
   return true
 }))
 void ensureAppModulesLoaded()
-/** 侧栏导航分组（主控台三项 / 运营三项 / 工具两项；设置单独落在左下角） */
+/** 侧栏导航分组（主控台两项 / 运营三项 / 工具两项；设置单独落在左下角） */
 const navGroups = computed(() => [
-  { key: 'main', title: '', items: visibleNavItems.value.filter(item => ['经营总览', '商品管理', '店铺管理'].includes(item.label)) },
+  { key: 'main', title: '', items: visibleNavItems.value.filter(item => ['经营总览', '店铺管理'].includes(item.label)) },
   { key: 'ops', title: '运营', items: visibleNavItems.value.filter(item => ['数据分析', '发票中心', '涉税信息'].includes(item.label)) },
   { key: 'tools', title: '工具', items: visibleNavItems.value.filter(item => ['AI 创作', '应用商城'].includes(item.label)) }
 ])
@@ -576,14 +572,13 @@ const visibleStores = computed(() => {
   return active.filter(store => `${store.name} ${store.platform}`.toLowerCase().includes(keyword))
 })
 const PAGE_TITLES: Record<string, string> = {
-  overview: '经营总览', browser: '店铺工作台', products: '商品管理', stores: '店铺管理',
+  overview: '经营总览', browser: '店铺工作台', stores: '店铺管理',
   ai: 'AI 创作', analytics: '数据分析', invoices: '发票中心', tax: '涉税信息', apps: '应用商城', settings: '设置中心',
   'image-studio': '图片工作台', 'graphic-sell': '图文带货'
 }
 const pageTitle = computed(() => PAGE_TITLES[activePage.value] || '经营总览')
 /** 可选模块页面 → 模块键：未安装时直接回商城，不能让路由把人带进已卸载的模块 */
 const OPTIONAL_PAGE_MODULE: Record<string, OptionalModuleKey> = {
-  products: 'products',
   invoices: 'invoices',
   tax: 'tax',
   ai: 'ai',
@@ -605,7 +600,7 @@ function tickClock() {
   const pad = (n: number) => String(n).padStart(2, '0')
   nowLabel.value = `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
-type DashboardPage = 'overview' | 'browser' | 'products' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'image-studio' | 'graphic-sell'
+type DashboardPage = 'overview' | 'browser' | 'stores' | 'ai' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'image-studio' | 'graphic-sell'
 type SettingsTab = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'
 const activePage = ref<DashboardPage>('overview')
 /** 生图请求仍在运行时保留图片工作台，避免卸载页面丢失返回结果。 */
@@ -715,7 +710,7 @@ async function loadInvoiceTodo() {
 function showNotice(message: string) { notice.value = message; if (noticeTimer) window.clearTimeout(noticeTimer); noticeTimer = window.setTimeout(() => { notice.value = '' }, 3600) }
 function handleNav(item: { label: string }) {
   const pageByLabel: Record<string, DashboardPage> = {
-    '经营总览': 'overview', '商品管理': 'products', '店铺管理': 'stores',
+    '经营总览': 'overview', '店铺管理': 'stores',
     'AI 创作': 'ai', '数据分析': 'analytics', '发票中心': 'invoices', '涉税信息': 'tax', '应用商城': 'apps', '设置中心': 'settings'
   }
   mobileNavOpen.value = false
@@ -773,7 +768,6 @@ function navigateTo(page: DashboardPage) {
   }
   activePage.value = page
   if (page === 'overview') activeNav.value = '经营总览'
-  else if (page === 'products') activeNav.value = '商品管理'
   else if (page === 'stores') activeNav.value = '店铺管理'
   else if (page === 'ai') activeNav.value = 'AI 创作'
   else if (page === 'analytics') activeNav.value = '数据分析'

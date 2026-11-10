@@ -7,16 +7,15 @@
  */
 import { reactive } from 'vue'
 
-export type OptionalModuleKey = 'products' | 'invoices' | 'tax' | 'ai'
+export type OptionalModuleKey = 'invoices' | 'tax' | 'ai'
 
-export const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['products', 'invoices', 'tax', 'ai']
+export const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['invoices', 'tax', 'ai']
 
 /** 走通用 settings 通道的 ui.* 白名单键，按机器持久化 */
 const SETTING_KEY = 'ui.apps.installedModules'
 
 /** 缺省全部已安装：老用户升级后入口不消失；只有显式写过 [] 才会全部隐藏 */
 export const installedModules = reactive<Record<OptionalModuleKey, boolean>>({
-  products: true,
   invoices: true,
   tax: true,
   ai: true

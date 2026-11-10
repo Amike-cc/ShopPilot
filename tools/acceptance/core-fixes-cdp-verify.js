@@ -211,7 +211,7 @@ async function main() {
       JSON.stringify({ before: proxyCreated.data?.hasCredential, after: proxyUpdated?.data?.hasCredential }))
     if (proxyCreated.ok) await ui.eval(`return await window.shopilot.proxy.delete(${JSON.stringify(proxyCreated.data.id)})`)
 
-    const off = await ui.eval(`return await window.shopilot.settings.set('ui.apps.installedModules', ['products','invoices','tax'])`)
+    const off = await ui.eval(`return await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax'])`)
     check('写入模块卸载状态', off.ok === true)
     await ui.eval('location.reload(); return true')
     await sleep(1800)
@@ -224,7 +224,7 @@ async function main() {
     check('AI 卸载后发票待办仍在（未卸载）', invoiceCard === true && String(bodyAfter).includes('待开发票'))
     check('经营总览不再显示假的自定义日期', !String(bodyAfter).includes('自定义日期'))
 
-    await ui.eval(`return await window.shopilot.settings.set('ui.apps.installedModules', ['products','invoices','tax','ai'])`)
+    await ui.eval(`return await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax','ai'])`)
   } finally {
     if (ui) ui.close()
     try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* ignore */ }

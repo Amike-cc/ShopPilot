@@ -40,7 +40,7 @@ const SYNC_STEP = 31_000
 function result(storeId: string): SalesMetricsCollectionResult {
   return {
     storeId, platform: '拼多多', status: 'SUCCEEDED', startedAt: NOW, finishedAt: NOW,
-    periodStart: null, periodEnd: null, storeMetricsCount: 1, productMetricsCount: 0,
+    periodStart: null, periodEnd: null, storeMetricsCount: 1,
     inserted: 1, updated: 0, skipped: 0, failed: 0, sourceType: 'DOM', reasonCode: '',
     safeMessage: '', adapterVersion: 'v1', metricDefinitionVersion: 'sales-metrics-1',
     sourceUpdatedAt: null, dataStatus: 'REAL_VALUE', evidence: null

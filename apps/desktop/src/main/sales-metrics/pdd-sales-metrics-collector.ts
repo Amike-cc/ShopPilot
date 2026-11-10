@@ -12,7 +12,6 @@
  * 在那之前不要让这条路径参与生产采集——"结构摘要像候选"不等于"字段已验证"。
  */
 import type {
-  ProductSalesMetrics,
   SalesMetrics,
   SalesMetricsCollectionResult,
   SalesMetricsPeriodType,
@@ -26,7 +25,6 @@ export type ExtractorVerificationStatus = 'TEST_ONLY' | 'VERIFIED_REAL_PLATFORM'
 
 export interface PddSalesMetricsExtractorOutput {
   storeMetrics: SalesMetrics[]
-  productMetrics: ProductSalesMetrics[]
   sourceType: SalesMetricsSourceType
   safeMessage?: string
 }
@@ -43,7 +41,6 @@ export interface PddSalesMetricsExtractor {
 
 export interface PddSalesMetricsCollectorResult extends SalesMetricsCollectionResult {
   storeMetrics: SalesMetrics[]
-  productMetrics: ProductSalesMetrics[]
 }
 
 export interface PddSalesMetricsCollectorDependencies {
@@ -67,7 +64,6 @@ function baseResult(context: PlatformAdapterContext, periodType: SalesMetricsPer
     periodStart: bounds.start,
     periodEnd: bounds.end,
     storeMetricsCount: 0,
-    productMetricsCount: 0,
     inserted: 0,
     updated: 0,
     skipped: 0,
@@ -81,8 +77,7 @@ function baseResult(context: PlatformAdapterContext, periodType: SalesMetricsPer
     sourceUpdatedAt: null,
     dataStatus: 'SOURCE_UNVERIFIED',
     evidence: null,
-    storeMetrics: [],
-    productMetrics: []
+    storeMetrics: []
   }
 }
 
@@ -125,15 +120,12 @@ export class PddSalesMetricsCollector {
       const observation = await this.createNetworkObserver(context).observe({ timeoutMs: options.timeoutMs, maxResponses: 200, maxBodyBytes: 512 * 1024 })
       const extracted = await extractor.extract(context, observation)
       const storeMetrics = extracted.storeMetrics.filter(metric => metric.storeId === context.storeId && metric.platform === '拼多多')
-      const productMetrics = extracted.productMetrics.filter(metric => metric.storeId === context.storeId && metric.platform === '拼多多')
-      result.status = storeMetrics.length || productMetrics.length ? 'SUCCEEDED' : 'PARTIAL'
-      result.reasonCode = storeMetrics.length || productMetrics.length ? 'SALES_METRICS_EXTRACTED' : 'NO_METRICS_FOUND'
+      result.status = storeMetrics.length ? 'SUCCEEDED' : 'PARTIAL'
+      result.reasonCode = storeMetrics.length ? 'SALES_METRICS_EXTRACTED' : 'NO_METRICS_FOUND'
       result.safeMessage = extracted.safeMessage || (storeMetrics.length ? '已获取拼多多经营指标' : '未在当前页面发现经营指标')
       result.sourceType = extracted.sourceType
       result.storeMetrics = storeMetrics
-      result.productMetrics = productMetrics
       result.storeMetricsCount = storeMetrics.length
-      result.productMetricsCount = productMetrics.length
       result.dataStatus = storeMetrics.length ? deriveRowDataStatus(storeMetrics[0]) : 'NOT_COLLECTED'
       result.finishedAt = Date.now()
       return result

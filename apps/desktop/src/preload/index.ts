@@ -4,7 +4,7 @@
  * §10.1 Electron 安全：contextIsolation + sandbox
  */
 
-import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS, EVENT_CHANNELS, createIpcInvoker } from '@shared/contracts/ipc'
 import type { IPCResult, IpcRequest } from '@shared/contracts/ipc'
 import type { SellCopyInput } from '@shared/contracts/ai-sell-copy'
@@ -22,7 +22,7 @@ const eventListenerWrappers = new Map<string, Map<(...args: any[]) => void, (...
  * 运行时与 `ipcRenderer.invoke` 完全一致（同一函数、同样参数、同样 Promise），
  * 只是把「通道 ↔ 请求/响应形状」的校验从人脑挪给 tsc：`window.shopilot` 的方法名、
  * 通道字符串与返回信封都不变，改的是**调用点写错通道或写错入参时编译不过**。
- * 尚未接入契约的通道（products / ai / proxy / …）继续走原来的 `ipcRenderer.invoke(...)`。
+ * 尚未接入契约的通道（ai / proxy / …）继续走原来的 `ipcRenderer.invoke(...)`。
  */
 const invoke = createIpcInvoker((channel, ...args) => ipcRenderer.invoke(channel, ...args))
 
@@ -229,123 +229,6 @@ const api = {
     clearCookies: (storeId: string) => invoke(IPC_CHANNELS.SESSION_CLEAR_COOKIES, { storeId })
   },
 
-  // 商品管理：只暴露"同步（只读采集）+ 分页查询 + 台账"。
-  // **不暴露发布**——发布必须走任务引擎与人工确认门禁（方案 §7.9），不能从这个口子绕过。
-  products: {
-    sync: (input: { storeId: string; trigger?: 'manual' | 'schedule'; maxPages?: number; maxProducts?: number; timeoutMs?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC, input),
-    syncFull: (input: { storeId: string; trigger?: 'manual' | 'schedule'; maxPages?: number; maxProducts?: number; timeoutMs?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC_FULL, input),
-    // 请求中断进行中的全量详情采集（没有在跑时返回 requested:false，不假装成功）
-    syncFullCancel: (input: { storeId: string }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC_FULL_CANCEL, input),
-    list: (query: { storeId?: string; platform?: string; onlyOrphan?: boolean; platformStatus?: string; keyword?: string; sort?: string; order?: 'asc' | 'desc'; limit?: number; offset?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIST, query),
-    syncRuns: (query: { storeId?: string } = {}): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_SYNC_RUNS, query),
-    // 本地商品库（M2）：归并由用户触发；图片本地化只下载图片到本机
-    library: {
-      list: (query: { keyword?: string; status?: string[]; linked?: 'any' | 'linked' | 'unlinked'; platform?: string; sort?: string; order?: 'asc' | 'desc'; limit?: number; offset?: number } = {}): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_LIST, query),
-      // 回收站（v4 §3.4）：列表只读；恢复不自动重挂平台归并（D2）
-      trash: (query: { keyword?: string; limit?: number; offset?: number } = {}): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_TRASH, query),
-      restore: (productIds: string[]): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_RESTORE, { productIds }),
-      // v4 R2：新建空白商品 / 复制（媒体 sha256 复用）/ 归档流转 / 彻底删除（无发布记录才可）
-      create: (input: { title?: string } = {}): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_CREATE, input),
-      duplicate: (productId: string): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_DUPLICATE, { productId }),
-      setArchived: (input: { productId: string; archived: boolean }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_SET_ARCHIVED, input),
-      purge: (productId: string): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_PURGE, { productId }),
-      // v4 R3：批量（预览 → 执行）+ CSV 导出/导入
-      batchPreview: (input: { operation: string; productIds: string[]; params?: Record<string, unknown> }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_BATCH_PREVIEW, input),
-      batchExecute: (input: { operation: string; productIds: string[]; params?: Record<string, unknown> }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_BATCH_EXECUTE, input),
-      exportCsv: (input: { mode: 'selected' | 'filtered'; productIds?: string[]; query?: Record<string, unknown> }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_EXPORT_CSV, input),
-      importPreview: (csvText: string): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_PREVIEW, { csvText }),
-      importExecute: (csvText: string): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_EXECUTE, { csvText }),
-      importTemplate: (): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_IMPORT_TEMPLATE),
-      get: (productId: string): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_GET, { productId }),
-      save: (input: { productId: string; platform?: string; draft: unknown }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_SAVE, input),
-      saveAsLocal: (input: { platform: string; storeId: string; platformProductId: string; mergeLink?: boolean }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_SAVE_AS, input),
-      merge: (input: { linkId: string; productId: string }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_MERGE, input),
-      unmerge: (input: { linkId: string }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_UNMERGE, input),
-      remove: (productId: string): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_LIBRARY_REMOVE, { productId }),
-      localizeMedia: (productId: string): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_LOCALIZE, { productId }),
-      // v4 R2：编辑器媒体分区「添加本地图片」——主进程校验类型/大小后落盘，返回草稿媒体条目
-      importLocalImages: (input: { productId: string; paths: string[]; role: 'cover' | 'gallery' | 'detail' }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_IMPORT_LOCAL, input),
-      // Electron ≥32 移除了 File.path，官方路径是 webUtils.getPathForFile（必须在 preload 里调）
-      getPathForFile: (file: File): string => webUtils.getPathForFile(file),
-      // 图片本地化队列与保留策略：scan 只算、run 逐张下、orphans 只判定、cleanup 用户确认后才删
-      queueScan: (input: { maxItems?: number } = {}): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_QUEUE_SCAN, input),
-      queueRun: (input: { maxItems?: number } = {}): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_QUEUE_RUN, input),
-      orphans: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_ORPHANS, {}),
-      cleanupOrphans: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_MEDIA_CLEANUP, {})
-    },
-    // 详情页采集：只导航到详情页并读 DOM（商品图 + 规格），**不填写不提交**
-    detail: {
-      collect: (input: { storeId: string; platformProductId: string }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_DETAIL_COLLECT, input)
-    },
-    // 发布（M3）：**只到人工确认门禁为止**。这里没有任何"提交"能力 ——
-    // preflight 只算不写平台，open 只把页面开到发布页，items 是只读台账。
-    publish: {
-      preflight: (input: { productId: string; storeIds: string[] }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_PREFLIGHT, input),
-      open: (input: { itemId: string; fill?: boolean }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_OPEN, input),
-      items: (query: { limit?: number } = {}): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_ITEMS, query),
-      // 人工确认门禁（走任务引擎的 waitForUserConfirmation）：
-      // openGate 只是"开个门禁等人"，confirm 是**"用户说他已在平台上提交了"**（不是让应用去提交），
-      // verify 是只读回查。三个都没有替用户点提交的能力。
-      openGate: (input: { itemId: string; message?: string }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_OPEN_GATE, input),
-      confirm: (input: { itemId: string; approved: boolean }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_CONFIRM, input),
-      verify: (input: { itemId: string }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_VERIFY, input),
-      // 回读闭环（M4，方案 §7.5）：readback **只读页面**产出建议（不写库）；
-      // acceptSuggestion 是**用户逐条确认之后**才落库；checklist 是跨次记住的本地补全清单。
-      readback: (input: { itemId: string }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_READBACK, input),
-      acceptSuggestion: (input: { itemId: string; field: string; kind: 'suggest_default' | 'suggest_writeback' }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_ACCEPT, input),
-      checklist: (input: { productId: string; storeId: string }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_CHECKLIST, input),
-      // 批量编排（M5，方案 §7.8）：create 只建台账、progress 只读、skipStore 只改"还没开始"的项。
-      // 批量下的提交仍然只能由人在浏览器里点 —— 这里没有提交能力。
-      batchCreate: (input: { productIds: string[]; storeIds: string[] }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_BATCH_CREATE, input),
-      batchProgress: (input: { batchId: string }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_BATCH_PROGRESS, input),
-      // 「全部暂停」：只退回正在跑的，已经在等人工的保持等待
-      batchAbort: (input: { batchId: string }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_BATCH_ABORT, input),
-      batchSkipStore: (input: { batchId: string; storeId: string }): Promise<IPCResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.PRODUCT_PUBLISH_BATCH_SKIP_STORE, input)
-    }
-  },
-
   // 经营数据：只暴露安全的聚合结果和有限查询参数，不暴露 Session/请求凭据。
   // 计划管理只接受 storeId / 周期 / 分页 / 状态过滤——主进程用 Zod strict 再把一道关，
   // 多传一个字段直接判非法（不接受 SQL、URL、Session、WebContents 或任意脚本）。
@@ -358,10 +241,6 @@ const api = {
       invoke(IPC_CHANNELS.SALES_METRICS_LATEST, input),
     list: (input: IpcRequest<'salesMetrics:list'>) =>
       invoke(IPC_CHANNELS.SALES_METRICS_LIST, input),
-    products: (input: IpcRequest<'salesMetrics:products'>) =>
-      invoke(IPC_CHANNELS.SALES_METRICS_PRODUCTS, input),
-    topProducts: (input: IpcRequest<'salesMetrics:topProducts'>) =>
-      invoke(IPC_CHANNELS.SALES_METRICS_TOP_PRODUCTS, input),
     plans: (input: IpcRequest<'salesMetrics:plan:list'> = {}) =>
       invoke(IPC_CHANNELS.SALES_METRICS_PLAN_LIST, input),
     planGet: (storeId: string) =>

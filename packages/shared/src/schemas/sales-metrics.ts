@@ -45,14 +45,8 @@ export const salesMetricsLatestQuerySchema = salesMetricsQueryBase
   .pick({ storeId: true, periodType: true })
   .superRefine(checkPeriodRange)
 
-export const salesMetricsProductQuerySchema = salesMetricsQueryBase.extend({
-  sort: z.enum(['salesQuantity', 'paidSalesAmountMinor']).default('salesQuantity'),
-  limit: z.number().int().min(1).max(100).default(10)
-}).strict().superRefine(checkPeriodRange)
-
 export type SalesMetricsCollectionInputSchema = z.infer<typeof salesMetricsCollectionInputSchema>
 export type SalesMetricsQuerySchema = z.infer<typeof salesMetricsQuerySchema>
-export type SalesMetricsProductQuerySchema = z.infer<typeof salesMetricsProductQuerySchema>
 
 /* ------------------------------------------------------------------ *
  * 采集计划管理（§9）。

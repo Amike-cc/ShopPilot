@@ -1,3 +1,33 @@
+# ShopPilot 0.9.25 变更说明（彻底移除商品管理：功能、入口、代码与数据）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
+>
+> **数据不可恢复**：本次按用户要求同时清空商品相关数据库表与 `userData/product-media` 图片，升级后无法通过应用恢复这些商品数据；需要留存请先使用旧版备份。
+
+## 本次更新
+
+- **界面与入口全部移除**：左侧导航、应用商城业务应用、AI 创作「批量发布商品」卡、经营总览「批量发布商品」快捷操作、命令面板/页面标题/路由与可选模块 `products` 全部删除。
+- **经营总览快捷操作**：「批量发布商品」替换为「查看数据分析」（进入现有数据分析页，不新增业务逻辑）。
+- **代码层删除**：
+  - 渲染层 `features/products/*`（商品页、编辑器、分页、链接动作、上传目标）；
+  - preload `window.shopilot.products`、`env.d.ts` 类型、全部 `PRODUCT_*` IPC 通道与契约；
+  - 主进程 `products/` 全部服务、`product-handlers`、商品列表页读取器、商品图片协议；
+  - 共享商品规则/草稿/批量/发布/回读/媒体/状态/schema/contracts 与对应单测、验收脚本、文档。
+- **Agent 工具同步收敛**：移除商品同步/查询/详情/发布/回读，以及库存/SKU 采集、差异与写回动作；达人邀约的 `productIds`（平台商品 ID 文本）与 `invite_product_sets` 保持不变，邀请商品选择不受影响。
+- **数据分析保留**：`sales_metrics` 门店级经营指标、采集计划与平台对比不受影响；商品级 `product_sales_metrics` 及无 UI 的 `salesMetrics:products/topProducts` API 一并移除。
+- **数据清理**：
+  - 新增迁移 v37 `remove_product_management`：按外键顺序删除 `products / product_variants / product_media / product_platform_links / product_sku_links / product_platform_defaults / product_sync_runs / product_publish_jobs / product_publish_items / product_platform_requirements / commerce_writeback_proposals / product_sales_metrics`；
+  - 启动时删除 `userData/product-media` 目录（失败只记日志、下次启动重试）；不触碰店铺登录态 `Partitions`、店铺数据与发票/邀约数据。
+- 历史迁移 v19–v35 保留为数据库演进记录，v37 会在升级时统一清空这些表。
+
+## 验证
+
+- 单测 **167 个文件 / 1789 项全部通过**（移除商品域测试后）；typecheck 通过；lint 0 error。
+- 真机截图复查：侧栏无商品管理、商城无商品卡、AI 创作无批量发布卡、总览快捷操作正常、邀请面板商品 ID 输入仍在。
+- v37 迁移在单测的真实 SQLite 临时库中执行通过；生产库首次启动会执行同一迁移并清空商品目录。
+
+---
+
 # ShopPilot 0.9.24 变更说明（经营总览收尾：平台状态如实、待办上移）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。

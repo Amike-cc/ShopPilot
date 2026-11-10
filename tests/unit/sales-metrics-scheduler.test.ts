@@ -69,7 +69,7 @@ interface Harness {
 function result(storeId: string, status: SalesMetricsCollectionResult['status'], extra: Partial<SalesMetricsCollectionResult> = {}): SalesMetricsCollectionResult {
   return {
     storeId, platform: '拼多多', status, startedAt: NOW, finishedAt: NOW,
-    periodStart: 0, periodEnd: 0, storeMetricsCount: 0, productMetricsCount: 0,
+    periodStart: 0, periodEnd: 0, storeMetricsCount: 0,
     inserted: 0, updated: 0, skipped: 0, failed: 0, sourceType: 'DOM',
     reasonCode: 'TEST', safeMessage: '测试', adapterVersion: 'v1',
     metricDefinitionVersion: 'sales-metrics-1', sourceUpdatedAt: null,

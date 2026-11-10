@@ -6,7 +6,7 @@
 import { app, BrowserWindow, dialog, crashReporter } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
-import { writeFileSync, existsSync } from 'fs'
+import { writeFileSync, existsSync, rmSync } from 'fs'
 import { randomUUID } from 'crypto'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 import {
@@ -23,9 +23,6 @@ import { registerProfileAndMiscHandlers } from './ipc/profile-misc-handlers'
 import { registerProxyAndBackupHandlers } from './ipc/proxy-backup-handlers'
 import { registerPlatformHandlers } from './ipc/platform-handlers'
 import { registerSalesMetricsHandlers } from './ipc/sales-metrics-handlers'
-import { registerProductHandlers } from './ipc/product-handlers'
-import { backfillProductStatusesIfNeeded } from './products/product-library-service'
-import { registerProductMediaProtocol, registerProductMediaScheme } from './products/product-media-protocol'
 import { stopSalesMetricsScheduler } from './sales-metrics/sales-metrics-scheduler'
 import { stopInviteScheduler } from './services/invite-scheduler'
 import { registerTaskHandlers } from './ipc/task-handlers'
@@ -559,7 +556,6 @@ async function initialize(): Promise<void> {
     registerProxyAndBackupHandlers()
     registerPlatformHandlers()
     registerSalesMetricsHandlers()
-  registerProductHandlers()
     registerTaskHandlers()
     registerSessionAndSecurityHandlers()
   // 缓存清理与软件自检（设置中心「数据与维护」）
@@ -571,12 +567,6 @@ async function initialize(): Promise<void> {
     registerAgentDomainHandlers()
     registerCustomerServiceHandlers()
     console.log('IPC handlers registered')
-
-    // 商品域启动任务（v4 重设计）：
-    //   · 图片只读协议（缩略图用；仅映射 userData/product-media 之下的图片文件）；
-    //   · 展示状态一次性回填（幂等、失败不阻塞启动——见函数注释）。
-    registerProductMediaProtocol()
-    backfillProductStatusesIfNeeded()
 
     // 锁定动作的统一善后（手动锁定与空闲自动锁定同路径）- §189
     Security.setDestroySensitiveHook(() => {
@@ -703,9 +693,6 @@ app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'disable_non_pro
 app.commandLine.appendSwitch('webrtc.ip_handling_policy', 'disable_non_proxied_udp')
 app.commandLine.appendSwitch('dns-prefetch-disable')
 
-// 商品图片只读协议（v4 §4.7）：scheme 权限必须在 app ready 之前登记
-registerProductMediaScheme()
-
 // 单实例：两个实例同写一个 SQLite 库会互相干扰（M4 验收发现的结构性风险），
 // 第二次启动直接把已有窗口带到前台后退出。
 const gotTheLock = app.requestSingleInstanceLock()
@@ -723,10 +710,26 @@ if (!gotTheLock) {
     logMain('info', '检测到重复启动：已聚焦现有窗口')
   })
 }
+/**
+ * 商品管理已整体移除：清空它独占的 userData/product-media 图片。
+ * 每次启动检查一次（目录不存在时是空操作），失败只记日志、下次启动再试；
+ * 不碰 Partitions（店铺登录态）与其它目录。
+ */
+function purgeRemovedProductMedia(): void {
+  try {
+    const root = join(app.getPath('userData'), 'product-media')
+    if (!existsSync(root)) return
+    rmSync(root, { recursive: true, force: true })
+    logMain('info', '[cleanup] 已删除商品管理遗留的 product-media 目录')
+  } catch (error) {
+    logMain('warn', `[cleanup] 删除 product-media 失败（下次启动重试）：${String((error as Error)?.message || error).slice(0, 200)}`)
+  }
+}
 
 // 当 Electron 完成初始化时
 app.whenReady().then(async () => {
   if (!gotTheLock) return
+  purgeRemovedProductMedia()
   await initialize()
   createWindow()
 

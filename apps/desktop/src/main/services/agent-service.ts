@@ -78,11 +78,6 @@ import {
 import * as TaskStore from '../tasks/task-store'
 import * as TaskRunner from '../tasks/task-runner'
 import { isAppLocked } from './security-manager'
-import { productSyncService } from '../products/product-sync-service'
-import { productDetailService } from '../products/product-detail-service'
-import { productPublishService } from '../products/product-publish-service'
-import { ProductRepository } from '../products/product-repository'
-import { inventorySkuServiceFor } from '../products/inventory-sku-service'
 import type { AgentSoftwareActionResult, AgentSoftwareResultStatus } from '@shared/contracts/agent-software'
 import { commerceInsightServiceFor } from './commerce-insight-service'
 import { commerceGrowthServiceFor } from './commerce-growth-service'
@@ -95,7 +90,7 @@ function insightResultForAgent(result: { status: AgentSoftwareResultStatus | str
     else if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') summary[key] = value
     else summary[key] = JSON.stringify(value) ?? null
   }
-  const mapped = { actionType, status: productResultStatus(result.status), reasonCode: result.reasonCode, safeMessage: result.safeMessage, summary, evidence: result.evidence }
+  const mapped = { actionType, status: insightResultStatus(result.status), reasonCode: result.reasonCode, safeMessage: result.safeMessage, summary, evidence: result.evidence }
   return mapped
 }
 
@@ -203,7 +198,7 @@ const AGENT_PAGE_TASK_RE = /(读取|点击|填写|截图|页面|网页|表格|�
  * 软件功能词：命中时优先交给智能体回合（对话 + 白名单软件操作），
  * 避免“读取任务详情/采集发票”这类软件指令被误当成页面任务去观察页面。
  */
-const AGENT_SOFTWARE_FEATURE_RE = /(发票|经营数据|主体信息|营业执照|备份|回收站|子agent|子智能体|员工|团队|岗位|job|任务|记忆|面板|店铺列表|下载|书签|达人|邀约|商品同步|商品库|商品详情|商品发布|平台商品|库存|sku|退款|优惠券|营销|客服|标签页|新标签|tab|导航|浏览器|刷新|后退|前进)/i
+const AGENT_SOFTWARE_FEATURE_RE = /(发票|经营数据|主体信息|营业执照|备份|回收站|子agent|子智能体|员工|团队|岗位|job|任务|记忆|面板|店铺列表|下载|书签|达人|邀约|退款|优惠券|营销|客服|标签页|新标签|tab|导航|浏览器|刷新|后退|前进)/i
 
 function looksLikePageTask(goal: string): boolean {
   if (AGENT_SOFTWARE_FEATURE_RE.test(goal)) return false
@@ -283,12 +278,8 @@ const SOFTWARE_ACTION_LABELS: Record<AgentSoftwareAction['type'], string> = {
   listTools: '查看工具', listSkills: '查看技能', createSkill: '制作技能', runSkill: '运行技能', updateSkill: '更新技能', deleteSkill: '删除技能', createPlugin: '制作插件', listPlugins: '查看插件',
   runInvite: '发送达人邀约',
   collectInvoices: '采集发票', collectBusiness: '采集经营数据', collectEntity: '采集主体信息',
-  inventoryCollect: '采集库存价格', inventoryDiff: '比较库存价格', inventoryWriteback: '写回库存价格', skuCollect: '采集 SKU', skuDiff: '比较 SKU', skuWriteback: '写回 SKU',
   businessMetricsCollect: '采集经营指标', businessMetricsCompare: '比较经营指标', commerceHealth: '检查经营健康', invoiceCollect: '采集发票记录', invoiceExport: '导出发票', entityCollect: '采集经营主体', entityApply: '回填经营主体',
   contentDraft: '生成内容草稿', contentReview: '审核内容草稿', contentPublish: '发布内容', campaignPlan: '制定投放计划', couponPlan: '制定优惠券计划', adPlan: '制定广告计划', adConfirm: '确认广告投放', customerInbox: '查看客服收件箱', customerDraftReply: '生成客服草稿', customerSendReply: '发送客服回复',
-  productSync: '同步商品', productList: '查看平台商品', productLibraryList: '查看本地商品库', productDetailCollect: '采集商品详情',
-  productPublishPreflight: '预检商品发布', productPublishOpen: '打开商品发布页', productPublishVerify: '回读商品发布结果',
-  productPublishReadback: '回读发布字段', productPublishAccept: '接受发布回读建议', productPublishChecklist: '查看发布补全清单', productPublishBatchProgress: '查看批量发布进度',
   createBackup: '创建备份', restoreBackup: '恢复备份', writeMemory: '写入记忆',
   getJobDetail: '查看 Job 详情', jobFeedback: '提交 Job 反馈', reviewJobResult: '审阅 Job 结果', approveJob: '批准或驳回 Job', resumeJob: '安全恢复 Job', cancelJob: '取消 Job',
   updatePlugin: '修改插件', deletePlugin: '删除插件',
@@ -324,14 +315,6 @@ function describeSoftwareAction(action: AgentSoftwareAction): string {
   if (action.type === 'writeMemory') return `${label}「${action.title}」`
   if (action.type === 'createBackup') return `${label}${action.label ? `「${action.label}」` : ''}`
   if (action.type === 'collectInvoices' || action.type === 'collectBusiness' || action.type === 'collectEntity') return `${label}（${action.storeIds.length ? `${action.storeIds.length} 家店铺` : '全部支持店铺'}）`
-  if (action.type === 'productSync') return `${label}（${action.storeIds.length ? `${action.storeIds.length} 家店铺` : '全部支持店铺'}）`
-  if (action.type === 'productList' || action.type === 'productLibraryList') return `${label}${action.keyword ? `（关键词：${action.keyword}）` : ''}`
-  if (action.type === 'productDetailCollect') return `${label}（${action.storeId} / ${action.platformProductId}）`
-  if (action.type === 'productPublishPreflight') return `${label}（${action.productId} → ${action.storeIds.length} 家店铺）`
-  if (action.type === 'productPublishOpen') return `${label}（${action.itemId}）`
-  if (action.type === 'productPublishVerify' || action.type === 'productPublishReadback' || action.type === 'productPublishAccept') return `${label}（${action.itemId}）`
-  if (action.type === 'productPublishChecklist') return `${label}（${action.productId} / ${action.storeId}）`
-  if (action.type === 'productPublishBatchProgress') return `${label}（${action.batchId}）`
   if (action.type === 'getJobDetail' || action.type === 'jobFeedback' || action.type === 'approveJob' || action.type === 'resumeJob' || action.type === 'cancelJob') return `${label}（${action.jobId}）`
   if (action.type === 'reviewJobResult') return `${label}（${action.resultId} → ${action.approved ? '通过' : '驳回'}）`
   if (action.type === 'updatePlugin' || action.type === 'deletePlugin') return `${label}「${action.name || action.pluginId || ''}」`
@@ -1481,31 +1464,11 @@ function validateSoftwareAction(action: AgentSoftwareAction): void {
   if (action.type === 'createBookmark' && !getStore(action.storeId)) {
     softwareError('AGENT_STORE_NOT_AUTHORIZED', '目标店铺不存在或已移入回收站')
   }
-  if (action.type === 'productSync' && action.storeIds.length) {
-    for (const storeId of action.storeIds) {
-      if (!getStore(storeId)) softwareError('AGENT_STORE_NOT_AUTHORIZED', `商品同步目标店铺不存在或已移入回收站：${storeId}`)
-    }
-  }
-  if (action.type === 'productList' && action.storeId && !getStore(action.storeId)) {
-    softwareError('AGENT_STORE_NOT_AUTHORIZED', '商品查询目标店铺不存在或已移入回收站')
-  }
-  if (action.type === 'productDetailCollect' && !getStore(action.storeId)) {
-    softwareError('AGENT_STORE_NOT_AUTHORIZED', '商品详情采集目标店铺不存在或已移入回收站')
-  }
-  if (action.type === 'productPublishPreflight') {
-    if (!new ProductRepository(getDatabase()).getProduct(action.productId)) softwareError('PRODUCT_NOT_FOUND', '本地商品不存在或已删除')
-    for (const storeId of action.storeIds) {
-      if (!getStore(storeId)) softwareError('AGENT_STORE_NOT_AUTHORIZED', `发布目标店铺不存在或已移入回收站：${storeId}`)
-    }
-  }
-  if (action.type === 'productPublishChecklist' && !getStore(action.storeId)) {
-    softwareError('AGENT_STORE_NOT_AUTHORIZED', '发布补全清单目标店铺不存在或已移入回收站')
-  }
-  if (['inventoryDiff', 'inventoryWriteback', 'skuDiff', 'skuWriteback', 'businessMetricsCompare', 'invoiceExport', 'entityApply', 'campaignPlan', 'couponPlan', 'adPlan', 'adConfirm', 'customerInbox', 'customerDraftReply', 'customerSendReply'].includes(action.type)) {
+  if (['businessMetricsCompare', 'invoiceExport', 'entityApply', 'campaignPlan', 'couponPlan', 'adPlan', 'adConfirm', 'customerInbox', 'customerDraftReply', 'customerSendReply'].includes(action.type)) {
     const storeId = (action as { storeId: string }).storeId
     if (!getStore(storeId)) softwareError('AGENT_STORE_NOT_AUTHORIZED', '目标店铺不存在或已移入回收站')
   }
-  if (['inventoryCollect', 'skuCollect', 'businessMetricsCollect', 'commerceHealth', 'invoiceCollect', 'entityCollect'].includes(action.type)) {
+  if (['businessMetricsCollect', 'commerceHealth', 'invoiceCollect', 'entityCollect'].includes(action.type)) {
     const storeIds = (action as { storeIds: string[] }).storeIds
     for (const storeId of storeIds) if (!getStore(storeId)) softwareError('AGENT_STORE_NOT_AUTHORIZED', '目标店铺不存在或已移入回收站')
   }
@@ -1871,59 +1834,6 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
         break
         }
       // ── 库存/价格/SKU：读取本地快照并生成字段级差异；写回只记录人工提案 ──
-      case 'inventoryCollect': {
-        const result = inventorySkuServiceFor(getDatabase()).collect({ storeIds: step.action.storeIds, productIds: step.action.productIds })
-        messages.push(`库存价格采集：${result.safeMessage}，${result.rows.length} 条快照`)
-        const resultRecord = insightResultForAgent({ ...result, summary: { rows: result.rows.length, stores: step.action.storeIds.length, products: step.action.productIds.length }, evidence: { source: result.source, capturedAt: result.capturedAt, counts: { rows: result.rows.length } } }, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'inventoryDiff': {
-        const result = inventorySkuServiceFor(getDatabase()).diff({ storeId: step.action.storeId, changes: step.action.changes })
-        const changed = result.rows.reduce((count, row) => count + row.diffs.length, 0)
-        messages.push(`库存价格差异：${result.safeMessage}，${result.rows.length} 行、${changed} 个字段变化`)
-        const resultRecord = insightResultForAgent({ ...result, summary: { rows: result.rows.length, changedFields: changed, idempotencyKeys: result.rows.length }, evidence: { source: 'commerce_writeback_diff', capturedAt: result.capturedAt, counts: { rows: result.rows.length, changedFields: changed } } }, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'inventoryWriteback': {
-        const result = inventorySkuServiceFor(getDatabase()).writeback({ domain: 'inventory', storeId: step.action.storeId, changes: step.action.changes, confirmed: input.confirmed === true, confirmationId: step.action.confirmationId })
-        messages.push(`库存价格写回：${result.safeMessage}，提案 ${result.proposalIds.length} 条`)
-        const resultRecord = insightResultForAgent({ ...result, summary: { proposals: result.proposalIds.length, changedFields: result.rows.reduce((n, row) => n + row.diffs.length, 0), platformWriteback: false }, evidence: { source: 'commerce_writeback_proposals', capturedAt: result.capturedAt, counts: { proposals: result.proposalIds.length } } }, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'skuCollect': {
-        const result = inventorySkuServiceFor(getDatabase()).collect({ storeIds: step.action.storeIds, productIds: step.action.productIds, skuOnly: true })
-        messages.push(`SKU 采集：${result.safeMessage}，${result.rows.length} 条规格快照`)
-        const resultRecord = insightResultForAgent({ ...result, summary: { rows: result.rows.length, stores: step.action.storeIds.length, products: step.action.productIds.length }, evidence: { source: result.source, capturedAt: result.capturedAt, counts: { rows: result.rows.length } } }, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'skuDiff': {
-        const productId = step.action.productId
-        const result = inventorySkuServiceFor(getDatabase()).diff({ storeId: step.action.storeId, changes: step.action.changes.map(change => ({ ...change, productId })), skuOnly: true })
-        const changed = result.rows.reduce((count, row) => count + row.diffs.length, 0)
-        messages.push(`SKU 差异：${result.safeMessage}，${result.rows.length} 行、${changed} 个字段变化`)
-        const resultRecord = insightResultForAgent({ ...result, summary: { rows: result.rows.length, changedFields: changed, multiSpec: true }, evidence: { source: 'commerce_writeback_diff', capturedAt: result.capturedAt, counts: { rows: result.rows.length, changedFields: changed } } }, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'skuWriteback': {
-        const productId = step.action.productId
-        const result = inventorySkuServiceFor(getDatabase()).writeback({ domain: 'sku', storeId: step.action.storeId, changes: step.action.changes.map(change => ({ ...change, productId })), confirmed: input.confirmed === true, confirmationId: step.action.confirmationId })
-        messages.push(`SKU 写回：${result.safeMessage}，提案 ${result.proposalIds.length} 条；保留多规格结构`)
-        const resultRecord = insightResultForAgent({ ...result, summary: { proposals: result.proposalIds.length, changedFields: result.rows.reduce((n, row) => n + row.diffs.length, 0), multiSpec: true, platformWriteback: false }, evidence: { source: 'commerce_writeback_proposals', capturedAt: result.capturedAt, counts: { proposals: result.proposalIds.length } } }, step.action.type)
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      // ── 其余领域动作先走统一受控回执，避免把通用浏览器成功误报为领域完成
       case 'businessMetricsCompare': {
         const result = commerceInsightServiceFor(getDatabase()).compare({ storeId: step.action.storeId, period: step.action.period })
         messages.push(`经营指标比较：${result.safeMessage}`)
@@ -1983,157 +1893,6 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
         break
       }
       // ── 商品域：复用现有 Main 商品服务，不把商品 IPC 当成 Agent 能力的替代品 ──
-      case 'productSync': {
-        const stores = step.action.storeIds.length
-          ? step.action.storeIds.map(id => getStore(id)).filter((store): store is NonNullable<typeof store> => !!store)
-          : listStores()
-        if (!stores.length) {
-          messages.push('没有可同步的店铺')
-          break
-        }
-        const summaries: string[] = []
-        for (const store of stores) {
-          const result = await productSyncService.syncStore({
-            storeId: store.id,
-            trigger: 'manual',
-            maxPages: step.action.maxPages,
-            maxProducts: step.action.maxProducts
-          })
-          summaries.push(`${store.name}：${result.status}，读取 ${result.fetchedCount}，新增 ${result.insertedCount}，更新 ${result.updatedCount}，跳过 ${result.skippedCount}${result.safeMessage ? `（${result.safeMessage}）` : ''}`)
-          const resultRecord: AgentSoftwareActionResult = {
-            actionType: step.action.type,
-            status: productResultStatus(result.status),
-            reasonCode: result.reasonCode,
-            safeMessage: result.safeMessage,
-            summary: { storeId: result.storeId, platform: result.platform, fetched: result.fetchedCount, inserted: result.insertedCount, updated: result.updatedCount, skipped: result.skippedCount, missing: result.missingCount },
-            evidence: { source: 'product_sync_runs', capturedAt: result.finishedAt, runId: result.runId, counts: { fetched: result.fetchedCount, inserted: result.insertedCount, updated: result.updatedCount, skipped: result.skippedCount, missing: result.missingCount } }
-          }
-          recordCommerceActionLedger(step.action, resultRecord)
-          results.push(resultRecord)
-        }
-        messages.push(`商品同步完成：${summaries.join('；')}`)
-        break
-      }
-      case 'productList': {
-        const result = new ProductRepository(getDatabase()).listLinks({
-          storeId: step.action.storeId,
-          keyword: step.action.keyword,
-          onlyOrphan: step.action.onlyOrphan,
-          limit: step.action.limit,
-          offset: step.action.offset
-        })
-        const head = result.rows.slice(0, 8).map(row => `${row.storeName}/${row.platformTitle || row.platformProductId}：${row.platformStatus || 'unknown'}，价格 ${row.platformPriceMinor == null ? '—' : (row.platformPriceMinor / 100).toFixed(2)}，库存 ${row.platformStock == null ? '—' : row.platformStock}`)
-        messages.push(head.length
-          ? `本地平台商品共 ${result.total} 条（展示前 ${head.length} 条）：${head.join('；')}`
-          : '本地还没有符合条件的平台商品；可先执行“同步商品”')
-        const resultRecord: AgentSoftwareActionResult = {
-          actionType: step.action.type,
-          status: 'SUCCEEDED',
-          reasonCode: 'LOCAL_QUERY',
-          safeMessage: head.length ? '已读取本地平台商品台账' : '本地没有符合条件的平台商品',
-          summary: { total: result.total, returned: result.rows.length, storeId: step.action.storeId ?? null },
-          evidence: { source: 'product_platform_links', capturedAt: Date.now(), counts: { total: result.total, returned: result.rows.length } }
-        }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'productLibraryList': {
-        const result = new ProductRepository(getDatabase()).listProducts({ keyword: step.action.keyword, limit: step.action.limit, offset: step.action.offset })
-        const head = result.rows.slice(0, 8).map(row => `${row.title || '未命名'}（${row.status}，${row.variantCount} 个规格，${row.linkCount} 个平台链接）`)
-        messages.push(head.length
-          ? `本地商品库共 ${result.total} 条（展示前 ${head.length} 条）：${head.join('；')}`
-          : '本地商品库为空或没有符合条件的商品')
-        const resultRecord: AgentSoftwareActionResult = {
-          actionType: step.action.type,
-          status: 'SUCCEEDED',
-          reasonCode: 'LOCAL_QUERY',
-          safeMessage: head.length ? '已读取本地商品库摘要' : '本地商品库为空或没有符合条件的商品',
-          summary: { total: result.total, returned: result.rows.length },
-          evidence: { source: 'products', capturedAt: Date.now(), counts: { total: result.total, returned: result.rows.length } }
-        }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'productDetailCollect': {
-        const result = await productDetailService.collect({ storeId: step.action.storeId, platformProductId: step.action.platformProductId })
-        messages.push(`商品详情采集：${result.status}，${result.safeMessage}；图片 ${result.imageCount} 张，规格 ${result.skuCount} 条${result.specNames.length ? `（${result.specNames.join('、')}）` : ''}`)
-        const resultRecord: AgentSoftwareActionResult = {
-          actionType: step.action.type,
-          status: productResultStatus(result.status),
-          reasonCode: result.reasonCode,
-          safeMessage: result.safeMessage,
-          summary: { storeId: step.action.storeId, platformProductId: step.action.platformProductId, images: result.imageCount, skus: result.skuCount, specs: result.specNames.length },
-          evidence: { source: 'product_detail_collect', capturedAt: Date.now(), counts: { images: result.imageCount, skus: result.skuCount, specs: result.specNames.length } }
-        }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'productPublishPreflight': {
-        const result = productPublishService.preflight({ productId: step.action.productId, storeIds: step.action.storeIds })
-        messages.push(result.ok
-          ? `商品发布预检完成（Job ${result.jobId || '—'}，首项 ${result.itemId || '—'}）：${result.safeMessage}`
-          : `商品发布预检未通过：${result.safeMessage}`)
-        const resultRecord: AgentSoftwareActionResult = { actionType: step.action.type, status: result.ok ? 'SUCCEEDED' : 'FAILED', reasonCode: result.ok ? 'PREFLIGHT_OK' : 'PREFLIGHT_FAILED', safeMessage: result.safeMessage, summary: { productId: step.action.productId, stores: step.action.storeIds.length, itemId: result.itemId ?? null }, evidence: { source: 'product_publish_items', capturedAt: Date.now(), runId: result.jobId ?? null, counts: { stores: step.action.storeIds.length } } }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'productPublishOpen': {
-        const result = await productPublishService.openForHuman({ itemId: step.action.itemId, fill: step.action.fill === true })
-        messages.push(`商品发布页${result.ok ? '已打开并停在人工作业点' : '打开失败'}（${result.tier}）：${result.safeMessage}${result.url ? `；地址 ${sanitizeAgentUrl(result.url)}` : ''}`)
-        const resultRecord: AgentSoftwareActionResult = { actionType: step.action.type, status: result.ok ? 'WAITING_CONFIRMATION' : 'FAILED', reasonCode: result.ok ? 'WAITING_HUMAN' : 'OPEN_FAILED', safeMessage: result.safeMessage, summary: { itemId: step.action.itemId, tier: result.tier, urlOpened: result.ok, sideEffectStarted: result.ok }, evidence: { source: 'product_publish_items', capturedAt: Date.now(), counts: { opened: result.ok ? 1 : 0 } } }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'productPublishVerify': {
-        const result = await productPublishService.verifyAfterSubmit({ itemId: step.action.itemId, resync: step.action.resync !== false })
-        messages.push(`商品发布回读：${result.state}，匹配 ${result.matched} 条；${result.safeMessage}`)
-        const resultRecord: AgentSoftwareActionResult = { actionType: step.action.type, status: productResultStatus(result.state), reasonCode: result.state === 'confirmed' ? 'READBACK_CONFIRMED' : 'READBACK_REVIEW', safeMessage: result.safeMessage, summary: { itemId: step.action.itemId, state: result.state, matched: result.matched }, evidence: { source: 'product_publish_items', capturedAt: Date.now(), counts: { matched: result.matched } } }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'productPublishReadback': {
-        const result = await productPublishService.readbackFields({ itemId: step.action.itemId })
-        const countText = result.counts ? `建议存默认 ${result.counts.suggestDefault} 条、建议回写 ${result.counts.suggestWriteback} 条` : '没有形成字段计数'
-        messages.push(`商品发布字段回读：${result.safeMessage}（${countText}）`)
-        const resultRecord: AgentSoftwareActionResult = { actionType: step.action.type, status: result.ok ? 'SUCCEEDED' : 'FAILED', reasonCode: result.ok ? 'READBACK_FIELDS' : 'READBACK_FAILED', safeMessage: result.safeMessage, summary: { itemId: step.action.itemId, readFields: result.readFields.length, missingFields: result.missingFields.length }, evidence: { source: 'product_publish_readback', capturedAt: Date.now(), counts: { readFields: result.readFields.length, missingFields: result.missingFields.length, suggestions: result.suggestions.length } } }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'productPublishAccept': {
-        const result = productPublishService.acceptSuggestion({ itemId: step.action.itemId, field: step.action.field, kind: step.action.kind })
-        messages.push(result.ok ? `已接受商品发布回读建议：${result.safeMessage}` : `未接受商品发布回读建议：${result.safeMessage}`)
-        const resultRecord: AgentSoftwareActionResult = { actionType: step.action.type, status: result.ok ? 'SUCCEEDED' : 'FAILED', reasonCode: result.ok ? 'SUGGESTION_ACCEPTED' : 'SUGGESTION_REJECTED', safeMessage: result.safeMessage, summary: { itemId: step.action.itemId, field: step.action.field, kind: step.action.kind, accepted: result.ok }, evidence: { source: 'product_publish_items', capturedAt: Date.now(), counts: { accepted: result.ok ? 1 : 0 } } }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'productPublishChecklist': {
-        const rows = productPublishService.completionChecklistFor({ productId: step.action.productId, storeId: step.action.storeId })
-        messages.push(rows.length
-          ? `发布补全清单有 ${rows.length} 项：${rows.slice(0, 12).map(row => `${row.label}（${row.reason}）`).join('；')}`
-          : '发布补全清单为空：当前没有已记录的平台必填缺项')
-        const resultRecord: AgentSoftwareActionResult = { actionType: step.action.type, status: 'SUCCEEDED', reasonCode: 'CHECKLIST_READ', safeMessage: rows.length ? `读取到 ${rows.length} 项缺失字段` : '没有已记录的平台必填缺项', summary: { productId: step.action.productId, storeId: step.action.storeId, missing: rows.length }, evidence: { source: 'product_platform_requirements', capturedAt: Date.now(), counts: { missing: rows.length } } }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
-      case 'productPublishBatchProgress': {
-        const result = productPublishService.batchProgressFor({ batchId: step.action.batchId })
-        messages.push(result.progress
-          ? `批量发布 ${result.progress.summary}；共 ${result.items.length} 项`
-          : '找不到该批量发布台账')
-        const resultRecord: AgentSoftwareActionResult = { actionType: step.action.type, status: result.progress ? 'SUCCEEDED' : 'FAILED', reasonCode: result.progress ? 'BATCH_PROGRESS_READ' : 'BATCH_NOT_FOUND', safeMessage: result.progress ? result.progress.summary : '找不到该批量发布台账', summary: { batchId: step.action.batchId, items: result.items.length }, evidence: { source: 'product_publish_batch', capturedAt: Date.now(), counts: { items: result.items.length } } }
-        recordCommerceActionLedger(step.action, resultRecord)
-        results.push(resultRecord)
-        break
-      }
       case 'createBackup': {
         try {
           const record = await BackupManager.createBackup(step.action.label || `智能体备份`)
@@ -2514,7 +2273,7 @@ export async function executeAgentSoftwarePlan(raw: unknown): Promise<{ plan: Ag
 }
 
 /** 将领域服务状态收敛到 Agent 回执状态，未知值一律保守为 FAILED。 */
-function productResultStatus(status: string): AgentSoftwareResultStatus {
+function insightResultStatus(status: string): AgentSoftwareResultStatus {
   if (status === 'SUCCEEDED' || status === 'PARTIAL' || status === 'FAILED' || status === 'LOGIN_REQUIRED' || status === 'VERIFY_REQUIRED' || status === 'NOT_VERIFIED' || status === 'WAITING_CONFIRMATION' || status === 'RECOVERY_REQUIRED' || status === 'UNKNOWN') return status
   if (status === 'confirmed') return 'SUCCEEDED'
   if (status === 'needs_review') return 'PARTIAL'

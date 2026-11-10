@@ -2,8 +2,6 @@
 
 import type { IPCResult } from '@shared/contracts/ipc'
 import type {
-  ProductSalesMetrics,
-  ProductSalesMetricsListResult,
   SalesMetrics,
   SalesMetricsCollectionResult,
   SalesMetricsHealth,
@@ -175,70 +173,10 @@ declare global {
         deleteCookie: (storeId: string, name: string, domain: string, path: string, secure?: boolean) => Promise<IPCResult>
         clearCookies: (storeId: string) => Promise<IPCResult>
       }
-      // 商品管理：只有"同步（只读采集）+ 查询 + 台账"，**没有发布**（发布走任务引擎与人工门禁）
-      products: {
-        sync: (input: { storeId: string; trigger?: 'manual' | 'schedule'; maxPages?: number; maxProducts?: number; timeoutMs?: number }) => Promise<IPCResult>
-        syncFull: (input: { storeId: string; trigger?: 'manual' | 'schedule'; maxPages?: number; maxProducts?: number; timeoutMs?: number }) => Promise<IPCResult>
-        syncFullCancel: (input: { storeId: string }) => Promise<IPCResult>
-        list: (query: { storeId?: string; platform?: string; onlyOrphan?: boolean; platformStatus?: string; keyword?: string; sort?: string; order?: 'asc' | 'desc'; limit?: number; offset?: number }) => Promise<IPCResult>
-        syncRuns: (query?: { storeId?: string }) => Promise<IPCResult>
-        library: {
-          list: (query?: { keyword?: string; status?: string[]; linked?: 'any' | 'linked' | 'unlinked'; platform?: string; sort?: string; order?: 'asc' | 'desc'; limit?: number; offset?: number }) => Promise<IPCResult>
-          // 回收站（v4 §3.4）：列表只读；恢复不自动重挂平台归并（D2）
-          trash: (query?: { keyword?: string; limit?: number; offset?: number }) => Promise<IPCResult>
-          restore: (productIds: string[]) => Promise<IPCResult>
-          get: (productId: string) => Promise<IPCResult>
-          save: (input: { productId: string; platform?: string; draft: unknown }) => Promise<IPCResult>
-          saveAsLocal: (input: { platform: string; storeId: string; platformProductId: string; mergeLink?: boolean }) => Promise<IPCResult>
-          merge: (input: { linkId: string; productId: string }) => Promise<IPCResult>
-          unmerge: (input: { linkId: string }) => Promise<IPCResult>
-          remove: (productId: string) => Promise<IPCResult>
-          // v4 R2：新建空白商品 / 复制（媒体 sha256 复用）/ 归档流转 / 彻底删除（无发布记录才可）
-          create: (input?: { title?: string }) => Promise<IPCResult>
-          duplicate: (productId: string) => Promise<IPCResult>
-          setArchived: (input: { productId: string; archived: boolean }) => Promise<IPCResult>
-          purge: (productId: string) => Promise<IPCResult>
-          // v4 R3：批量（预览 → 执行）+ CSV 导出/导入
-          batchPreview: (input: { operation: string; productIds: string[]; params?: Record<string, unknown> }) => Promise<IPCResult>
-          batchExecute: (input: { operation: string; productIds: string[]; params?: Record<string, unknown> }) => Promise<IPCResult>
-          exportCsv: (input: { mode: 'selected' | 'filtered'; productIds?: string[]; query?: Record<string, unknown> }) => Promise<IPCResult>
-          importPreview: (csvText: string) => Promise<IPCResult>
-          importExecute: (csvText: string) => Promise<IPCResult>
-          importTemplate: () => Promise<IPCResult>
-          localizeMedia: (productId: string) => Promise<IPCResult>
-          // v4 R2 编辑器媒体分区：添加本地图片（主进程校验后落盘）；getPathForFile 供 <input type=file> 取绝对路径
-          importLocalImages: (input: { productId: string; paths: string[]; role: 'cover' | 'gallery' | 'detail' }) => Promise<IPCResult>
-          getPathForFile: (file: File) => string
-          queueScan: (input?: { maxItems?: number }) => Promise<IPCResult>
-          queueRun: (input?: { maxItems?: number }) => Promise<IPCResult>
-          orphans: () => Promise<IPCResult>
-          cleanupOrphans: () => Promise<IPCResult>
-        }
-        detail: {
-          collect: (input: { storeId: string; platformProductId: string }) => Promise<IPCResult>
-        }
-        publish: {
-          preflight: (input: { productId: string; storeIds: string[] }) => Promise<IPCResult>
-          open: (input: { itemId: string; fill?: boolean }) => Promise<IPCResult>
-          items: (query?: { limit?: number }) => Promise<IPCResult>
-          openGate: (input: { itemId: string; message?: string }) => Promise<IPCResult>
-          confirm: (input: { itemId: string; approved: boolean }) => Promise<IPCResult>
-          verify: (input: { itemId: string }) => Promise<IPCResult>
-          readback: (input: { itemId: string }) => Promise<IPCResult>
-          acceptSuggestion: (input: { itemId: string; field: string; kind: 'suggest_default' | 'suggest_writeback' }) => Promise<IPCResult>
-          checklist: (input: { productId: string; storeId: string }) => Promise<IPCResult>
-          batchCreate: (input: { productIds: string[]; storeIds: string[] }) => Promise<IPCResult>
-          batchProgress: (input: { batchId: string }) => Promise<IPCResult>
-          batchAbort: (input: { batchId: string }) => Promise<IPCResult>
-          batchSkipStore: (input: { batchId: string; storeId: string }) => Promise<IPCResult>
-        }
-      }
       salesMetrics: {
         collect: (input: { storeId: string; periodType?: string; periodStart?: number; periodEnd?: number; timeoutMs?: number }) => Promise<IPCResult<SalesMetricsCollectionResult>>
         latest: (input: { storeId: string; periodType?: string }) => Promise<IPCResult<SalesMetrics | null>>
         list: (input: { storeId: string; periodType?: string; periodStart?: number; periodEnd?: number; page?: number; pageSize?: number }) => Promise<IPCResult<SalesMetricsListResult>>
-        products: (input: { storeId: string; periodType?: string; periodStart?: number; periodEnd?: number; page?: number; pageSize?: number; sort?: string; limit?: number }) => Promise<IPCResult<ProductSalesMetricsListResult>>
-        topProducts: (input: { storeId: string; periodType?: string; page?: number; pageSize?: number; sort?: string; limit?: number }) => Promise<IPCResult<ProductSalesMetrics[]>>
         plans: (input?: { storeId?: string; platform?: string }) => Promise<IPCResult<SalesMetricsPlanListResult>>
         planGet: (storeId: string) => Promise<IPCResult<SalesMetricsPlanView>>
         planUpdate: (input: { storeId: string; enabled?: boolean; intervalMs?: number }) => Promise<IPCResult<SalesMetricsPlanView>>

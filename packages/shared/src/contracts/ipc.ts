@@ -57,7 +57,6 @@ import type {
   salesMetricsPlanResumeSchema,
   salesMetricsPlanRunNowSchema,
   salesMetricsPlanUpdateSchema,
-  salesMetricsProductQuerySchema,
   salesMetricsQuerySchema,
   salesMetricsRunsQuerySchema
 } from '../schemas/sales-metrics'
@@ -72,8 +71,6 @@ import type { CustomerMessageCheck, CustomerMessageStatusList } from '../contrac
 import type { ShopSessionStatusSummary } from '../contracts/shop-session'
 import type { PlatformLoginResult } from '../contracts/platform-adapter'
 import type {
-  ProductSalesMetrics,
-  ProductSalesMetricsListResult,
   SalesMetrics,
   SalesMetricsCollectionResult,
   SalesMetricsHealth,
@@ -230,67 +227,6 @@ export const IPC_CHANNELS = {
   SESSION_DELETE_COOKIE: 'session:deleteCookie',
   SESSION_CLEAR_COOKIES: 'session:clearCookies',
 
-
-  // 商品管理（商品管理方案 §5）：同步是**只读采集**；列表与台账供只读商品页使用。
-  // 发布不在这里——发布必须走任务引擎 + 人工确认门禁（方案 §7.9）。
-  PRODUCT_SYNC: 'products:sync',
-  PRODUCT_SYNC_FULL: 'products:syncFull',
-  /** 请求中断进行中的全量详情采集（2026-10-21 审查 P2-5：此前 5000 条串行无法取消）。 */
-  PRODUCT_SYNC_FULL_CANCEL: 'products:syncFullCancel',
-  PRODUCT_LIST: 'products:list',
-  PRODUCT_SYNC_RUNS: 'products:syncRuns',
-  // 本地商品库（M2）：归并**必须由用户触发**（方案 D2：绝不自动合并）；
-  // 图片本地化只下载图片到本机，不碰平台任何数据。
-  PRODUCT_LIBRARY_LIST: 'products:library:list',
-  PRODUCT_LIBRARY_GET: 'products:library:get',
-  PRODUCT_LIBRARY_SAVE: 'products:library:save',
-  PRODUCT_LIBRARY_SAVE_AS: 'products:library:saveAsLocal',
-  PRODUCT_LIBRARY_MERGE: 'products:library:merge',
-  PRODUCT_LIBRARY_UNMERGE: 'products:library:unmerge',
-  PRODUCT_LIBRARY_REMOVE: 'products:library:remove',
-  // v4 重设计（2026-10-15）：回收站列表 / 恢复（软删可逆；恢复不自动重挂平台归并——D2）
-  PRODUCT_LIBRARY_TRASH: 'products:library:trash',
-  PRODUCT_LIBRARY_RESTORE: 'products:library:restore',
-  // v4 R2（2026-10-15）：新建空白商品 / 复制（媒体 sha256 复用）/ 归档流转 / 彻底删除（无发布记录才可）
-  PRODUCT_LIBRARY_CREATE: 'products:library:create',
-  PRODUCT_LIBRARY_DUPLICATE: 'products:library:duplicate',
-  PRODUCT_LIBRARY_SET_ARCHIVED: 'products:library:setArchived',
-  PRODUCT_LIBRARY_PURGE: 'products:library:purge',
-  PRODUCT_MEDIA_LOCALIZE: 'products:media:localize',
-  // v4 R2：编辑器媒体分区「添加本地图片」（主进程校验类型/大小后入 product-media）
-  PRODUCT_MEDIA_IMPORT_LOCAL: 'products:media:importLocal',
-  // v4 R3：批量（预览 → 确认执行 → 回执）+ CSV 导出/导入
-  PRODUCT_LIBRARY_BATCH_PREVIEW: 'products:library:batchPreview',
-  PRODUCT_LIBRARY_BATCH_EXECUTE: 'products:library:batchExecute',
-  PRODUCT_LIBRARY_EXPORT_CSV: 'products:library:exportCsv',
-  PRODUCT_LIBRARY_IMPORT_PREVIEW: 'products:library:importPreview',
-  PRODUCT_LIBRARY_IMPORT_EXECUTE: 'products:library:importExecute',
-  PRODUCT_LIBRARY_IMPORT_TEMPLATE: 'products:library:importTemplate',
-  // 详情页采集（商品图 + 规格）：只导航并读 DOM，不填写不提交
-  PRODUCT_DETAIL_COLLECT: 'products:detail:collect',
-  // 发布（M3）：**只到人工确认门禁为止** —— 预检与打开发布页，没有任何提交动作
-  PRODUCT_PUBLISH_PREFLIGHT: 'products:publish:preflight',
-  PRODUCT_PUBLISH_OPEN: 'products:publish:open',
-  PRODUCT_PUBLISH_ITEMS: 'products:publish:items',
-  // 人工确认门禁（走任务引擎的 waitForUserConfirmation）：只开/放行门禁与只读回读，**不提交**
-  PRODUCT_PUBLISH_OPEN_GATE: 'products:publish:openGate',
-  PRODUCT_PUBLISH_CONFIRM: 'products:publish:confirm',
-  PRODUCT_PUBLISH_VERIFY: 'products:publish:verify',
-  // 回读闭环（M4，方案 §7.5）：readback 只读页面产出建议，accept 是**用户逐条确认后**才落库
-  PRODUCT_PUBLISH_READBACK: 'products:publish:readback',
-  PRODUCT_PUBLISH_ACCEPT: 'products:publish:acceptSuggestion',
-  PRODUCT_PUBLISH_CHECKLIST: 'products:publish:checklist',
-  // 批量编排（M5，方案 §7.8）：只建台账/看进度/跳过这家，**没有任何提交能力**
-  PRODUCT_PUBLISH_BATCH_CREATE: 'products:publish:batch:create',
-  PRODUCT_PUBLISH_BATCH_PROGRESS: 'products:publish:batch:progress',
-  PRODUCT_PUBLISH_BATCH_SKIP_STORE: 'products:publish:batch:skipStore',
-  // 「全部暂停」：只退回"正在跑"的，已经在等人工的保持等待（人工交接点不该被冲掉）
-  PRODUCT_PUBLISH_BATCH_ABORT: 'products:publish:batch:abort',
-  // 图片本地化队列与保留策略：scan 只算、run 逐张下、orphans 只判定、cleanup 用户确认后才删
-  PRODUCT_MEDIA_QUEUE_SCAN: 'products:media:queueScan',
-  PRODUCT_MEDIA_QUEUE_RUN: 'products:media:queueRun',
-  PRODUCT_MEDIA_ORPHANS: 'products:media:orphans',
-  PRODUCT_MEDIA_CLEANUP: 'products:media:cleanup',
 
   // 经营指标：只传店铺 ID、周期和分页参数；主进程负责 Session/平台校验。
   SALES_METRICS_COLLECT: 'salesMetrics:collect',
@@ -543,12 +479,6 @@ export const EVENT_CHANNELS = {
   BROWSER_TAB_CLOSE_REQUESTED: 'browser:tab:closeRequested',
   PROXY_HEALTH_CHANGED: 'proxy:healthChanged',
   SESSION_EXPIRED: 'session:expired',
-  /**
-   * 全量商品同步「详情阶段」的实时进度（2026-10-21 审查 P2-5）。
-   * payload：{ storeId, total, done, succeeded, failed, skipped, incomplete, canceled? }——
-   * 只有计数与店铺 id，不携带商品正文；done===total 时为最后一帧（canceled 标记是否被用户中断）。
-   */
-  PRODUCT_SYNC_FULL_PROGRESS: 'products:syncFullProgress',
   TASK_PROGRESS: 'task:progress',
   TASK_SCHEDULED_FIRED: 'task:scheduledFired',
   TASK_CONFIRMATION_REQUIRED: 'task:confirmationRequired',
@@ -595,10 +525,10 @@ export const EVENT_CHANNELS = {
  *   · 本层不 import electron（shared 是主/渲共用纯规则层）：`createIpcInvoker` 只做类型收窄，
  *     真正的 `ipcRenderer.invoke` 由 preload 注入。
  *
- * 已覆盖 12 个域 / 106 个通道：store · browser(+tab) · invite · task · snapshot · security ·
+ * 已覆盖 12 个域：store · browser(+tab) · invite · task · snapshot · security ·
  * session · settings · customerService · salesMetrics · extensions · maintenance。
  * 仍是扩展位（preload 继续走原来的 `ipcRenderer.invoke(...)`，行为不变，可按同一规则逐域接入）：
- * products / ai / proxy / bookmark / download / profile / overview / audit / diagnostics /
+ * ai / proxy / bookmark / download / profile / overview / audit / diagnostics /
  * backup / windowChrome / update / agent，以及 IPC_CHANNELS 里本就没有 preload 方法的通道。
  * ========================================================================================== */
 
@@ -852,14 +782,6 @@ export interface IpcContract {
     res: SalesMetrics | null
   }
   'salesMetrics:list': { req: z.input<typeof salesMetricsQuerySchema>; res: SalesMetricsListResult }
-  'salesMetrics:products': {
-    req: z.input<typeof salesMetricsProductQuerySchema>
-    res: ProductSalesMetricsListResult
-  }
-  'salesMetrics:topProducts': {
-    req: z.input<typeof salesMetricsProductQuerySchema>
-    res: ProductSalesMetrics[]
-  }
   'salesMetrics:plan:list': {
     req: z.input<typeof salesMetricsPlanListQuerySchema>
     res: SalesMetricsPlanListResult

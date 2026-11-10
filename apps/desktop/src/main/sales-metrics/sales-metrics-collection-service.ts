@@ -1,14 +1,11 @@
 import type { Session, WebContents } from 'electron'
 import type { Store } from '@shared/schemas/store'
 import type {
-  ProductSalesMetrics,
-  ProductSalesMetricsListResult,
   SalesMetrics,
   SalesMetricsCollectionResult,
   SalesMetricsEvidenceCheck,
   SalesMetricsListResult,
   SalesMetricsPeriodType,
-  SalesMetricsProductQuery,
   SalesMetricsQuery,
   SalesMetricsSourceType
 } from '@shared/contracts/sales-metrics'
@@ -95,7 +92,7 @@ function baseResult(storeId: string, platform: string, input: { periodType?: Sal
   return {
     storeId, platform, status: 'ERROR', startedAt: now, finishedAt: now,
     periodStart: period.start, periodEnd: period.end,
-    storeMetricsCount: 0, productMetricsCount: 0, inserted: 0, updated: 0, skipped: 0, failed: 0,
+    storeMetricsCount: 0, inserted: 0, updated: 0, skipped: 0, failed: 0,
     sourceType: 'NONE', reasonCode: 'SALES_METRICS_COLLECTION_FAILED', safeMessage: '经营数据采集失败',
     adapterVersion: null, metricDefinitionVersion: SALES_METRICS_METRIC_DEFINITION_VERSION,
     sourceUpdatedAt: null, dataStatus: 'UNKNOWN', evidence: null
@@ -367,7 +364,6 @@ export class SalesMetricsCollectionService {
       result.periodStart = period.start
       result.periodEnd = period.end
       result.storeMetricsCount = Number(adapterResult.storeMetricsCount) || 0
-      result.productMetricsCount = Number(adapterResult.productMetricsCount) || 0
 
       if (adapterResult.status === 'SUCCEEDED' || adapterResult.status === 'PARTIAL') {
         const collectedAt = Date.now()
@@ -383,11 +379,7 @@ export class SalesMetricsCollectionService {
             collectedAt, sourceType: adapterResult.sourceType, adapterVersion: adapter.adapterVersion,
             runId: runContext?.runId || null
           }))
-        const productMetrics = (adapterResult.productMetrics || [])
-          .filter(metric => metric.storeId === input.storeId && metric.platform === store.platform)
-
         result.skipped += (adapterResult.storeMetrics || []).length - storeMetrics.length
-          + (adapterResult.productMetrics || []).length - productMetrics.length
 
         // 证据自检：Adapter 自称成功也要过这一关。字段与页面结构对不上 → PAGE_CHANGED；
         // 只是缺字段 → 降级 PARTIAL。绝不允许"自称成功但拿不出证据"的数据写库。
@@ -408,15 +400,12 @@ export class SalesMetricsCollectionService {
           if (structural) return this.finish(result, runContext)
         }
 
-        if (storeMetrics.length || productMetrics.length) {
+        if (storeMetrics.length) {
           const storeCounts = this.runtime.repository.upsertStoreMetricsBatch(storeMetrics)
-          const productCounts = this.runtime.repository.upsertProductMetricsBatch(productMetrics)
-          result.inserted = storeCounts.inserted + productCounts.inserted
-          result.updated = storeCounts.updated + productCounts.updated
-          result.skipped += storeCounts.skipped + productCounts.skipped
-          result.dataStatus = storeMetrics.length
-            ? deriveRowDataStatus(storeMetrics[0])
-            : 'PARTIAL'
+          result.inserted = storeCounts.inserted
+          result.updated = storeCounts.updated
+          result.skipped += storeCounts.skipped
+          result.dataStatus = deriveRowDataStatus(storeMetrics[0])
         } else {
           result.dataStatus = 'NOT_COLLECTED'
         }
@@ -505,18 +494,6 @@ export class SalesMetricsCollectionService {
     if (this.runtime.isLocked()) throw new Error('APP_LOCKED')
     const id = assertStoreId(query.storeId); if (!this.runtime.getStore(id)) throw new Error('STORE_NOT_FOUND')
     return this.runtime.repository.getStoreMetrics({ ...query, storeId: id })
-  }
-
-  products(query: SalesMetricsProductQuery): ProductSalesMetricsListResult {
-    if (this.runtime.isLocked()) throw new Error('APP_LOCKED')
-    const id = assertStoreId(query.storeId); if (!this.runtime.getStore(id)) throw new Error('STORE_NOT_FOUND')
-    return this.runtime.repository.getProductMetrics({ ...query, storeId: id })
-  }
-
-  topProducts(query: SalesMetricsProductQuery): ProductSalesMetrics[] {
-    if (this.runtime.isLocked()) throw new Error('APP_LOCKED')
-    const id = assertStoreId(query.storeId); if (!this.runtime.getStore(id)) throw new Error('STORE_NOT_FOUND')
-    return this.runtime.repository.getTopProducts({ ...query, storeId: id })
   }
 }
 

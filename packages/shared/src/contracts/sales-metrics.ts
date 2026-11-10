@@ -153,26 +153,6 @@ export interface SalesMetrics {
   runId: string | null
 }
 
-export interface ProductSalesMetrics {
-  id: string
-  platform: string
-  storeId: string
-  platformProductId: string | null
-  platformSkuId: string | null
-  productTitle: string | null
-  skuName: string | null
-  imageUrl: string | null
-  salesQuantity: number | null
-  orderCount: number | null
-  grossSalesAmountMinor: number | null
-  paidSalesAmountMinor: number | null
-  refundQuantity: number | null
-  refundAmountMinor: number | null
-  periodStart: number
-  periodEnd: number
-  collectedAt: number
-}
-
 export interface SalesMetricsCollectionInput {
   storeId: string
   periodType?: SalesMetricsPeriodType
@@ -294,7 +274,6 @@ export interface SalesMetricsCollectionResult {
   periodStart: number | null
   periodEnd: number | null
   storeMetricsCount: number
-  productMetricsCount: number
   inserted: number
   updated: number
   skipped: number
@@ -440,25 +419,12 @@ export interface SalesMetricsQuery {
   pageSize?: number
 }
 
-export interface SalesMetricsProductQuery extends SalesMetricsQuery {
-  sort?: 'salesQuantity' | 'paidSalesAmountMinor'
-  limit?: number
-}
-
 export interface SalesMetricsListResult {
   storeId: string
   page: number
   pageSize: number
   total: number
   items: SalesMetrics[]
-}
-
-export interface ProductSalesMetricsListResult {
-  storeId: string
-  page: number
-  pageSize: number
-  total: number
-  items: ProductSalesMetrics[]
 }
 
 export interface SalesMetricsObservationSummary {

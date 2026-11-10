@@ -26,10 +26,10 @@ const PRELOAD_PATH = 'apps/desktop/src/preload/index.ts'
 const ENV_DTS_PATH = 'apps/desktop/src/renderer/src/env.d.ts'
 
 /**
- * preload 里不转发任何 IPC 的方法（事件订阅 / 本地文件路径），白名单必须显式列出来：
+ * preload 里不转发任何 IPC 的方法（事件订阅），白名单必须显式列出来：
  * 少了方法会报"无 IPC 调用"，多了会报"白名单已过期"，两边都不许静默。
  */
-const NON_IPC_METHODS = ['on', 'off', 'products.library.getPathForFile']
+const NON_IPC_METHODS = ['on', 'off']
 
 /** 通道取值集合（运行期真值；IPC_CHANNELS 是纯常量表，不依赖 electron） */
 const CHANNEL_VALUES: ReadonlySet<string> = new Set(Object.values(IPC_CHANNELS) as string[])

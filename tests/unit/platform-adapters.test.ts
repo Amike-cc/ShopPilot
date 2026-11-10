@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session, WebContents } from 'electron'
 import { findPlatform } from '@shared/constants/platforms'
 import { businessProfileFor } from '@shared/constants/business'
-import { hasProductProfile } from '@shared/constants/product'
 import { StoreStatus } from '@shared/enums/store-status'
 import type { PlatformAdapterCapabilities, PlatformLoginResult } from '@shared/contracts/platform-adapter'
 import type { ShopSessionStatusSummary } from '@shared/contracts/shop-session'
@@ -82,7 +81,7 @@ class TestAdapter implements PlatformAdapter {
   getCapabilities(): Readonly<PlatformAdapterCapabilities> {
     return {
       loginDetection: true, orders: false, salesMetrics: false, productSalesMetrics: false,
-      products: false, inventory: false, refunds: false, salesData: false
+      refunds: false, salesData: false
     }
   }
   detectLoginStatus(context: PlatformAdapterContext): Promise<PlatformLoginResult> { return this.detector(context) }
@@ -105,24 +104,16 @@ describe('PlatformAdapterRegistry', () => {
     expect(() => registry.getAdapter('未知平台')).toThrow('UNSUPPORTED_PLATFORM')
   })
 
-  it('所有平台都不再声明订单管理能力；商品能力位**只跟着实测档案走**', () => {
+  it('所有平台都不再声明订单管理能力', () => {
     const registry = createDefaultPlatformAdapterRegistry()
     for (const platform of registry.listPlatforms()) {
       const capabilities = registry.getAdapter(platform).getCapabilities()
       expect(capabilities).toMatchObject({
         loginDetection: true,
         orders: false,
-        inventory: false,
         refunds: false,
         salesData: false
       })
-      // 能力位纪律（方案 §5.2）：`products` 为真 ⟺ 该平台登记了**实测过**的商品档案。
-      // 声明了就必须真的能采；没实测过的平台不许点亮（否则界面会给出一个点了没用的"同步"按钮）。
-      expect(capabilities.products, platform).toBe(hasProductProfile(platform))
-    }
-    // 四家平台都已在真实登录态店铺上跑通商品列表（docs/product-profiles.md §7）
-    for (const platform of ['微信小店', '抖店', '拼多多', '快手小店']) {
-      expect(registry.getAdapter(platform).getCapabilities().products, platform).toBe(true)
     }
   })
 })
@@ -388,40 +379,6 @@ describe('登录检测的正向证据（经营数据锚点真的渲染出来）'
     expect(result.reasonCode).toBe('EXPLICIT_LOGIN_PAGE')
   })
 
-  // 2026-09-30 真机截图抓到的回归：商品同步会把店铺标签页导航到**商品列表页**并留在那里，
-  // 而登录正向锚点（经营数据：成交金额…）只在后台首页 → 重启后打开该店一直显示离线。
-  it('微信小店：店铺停在商品列表页时也算登录（表能渲染出来就说明登录着）', async () => {
-    const adapter = new WeChatShopAdapter(wechat)
-    // 只在"商品列表页就绪"那段脚本上回 true；基类的经营数据锚点一律 false（模拟"不在首页"）
-    const wc = {
-      isDestroyed: () => false,
-      getURL: () => 'https://store.weixin.qq.com/shop/goods/list',
-      executeJavaScript: vi.fn(async (code: string) => /marker = /.test(code) && /__q\('table'\)/.test(code))
-    }
-    const result = await adapter.detectLoginStatus(page({
-      platform: '微信小店',
-      currentUrl: 'https://store.weixin.qq.com/shop/goods/list',
-      webContents: wc as unknown as WebContents
-    }))
-    expect(result.status).toBe('LOGGED_IN')
-    expect(result.reasonCode).toBe('PROFILE_ANCHOR_RENDERED')
-  })
-
-  it('微信小店：不在商品列表页时不拿这条证据（别把任意有表格的页面当登录证据）', async () => {
-    const adapter = new WeChatShopAdapter(wechat)
-    const wc = {
-      isDestroyed: () => false,
-      getURL: () => 'https://store.weixin.qq.com/shop/settings',
-      executeJavaScript: vi.fn(async (code: string) => /marker = /.test(code) && /__q\('table'\)/.test(code))
-    }
-    const result = await adapter.detectLoginStatus(page({
-      platform: '微信小店',
-      currentUrl: 'https://store.weixin.qq.com/shop/settings',
-      webContents: wc as unknown as WebContents
-    }))
-    expect(result.status).toBe('UNKNOWN')
-  })
-
   // 2026-09-30 实测复现：快手店铺重开后一直显示离线，日志里是
   // `快手小店 -> UNKNOWN / PAGE_NOT_RECOGNIZED` —— 因为店铺停在 s.kwaixiaodian.com，
   // 而适配器只认 syt.kwaixiaodian.com。下面把两个域名都钉住。
@@ -459,9 +416,8 @@ describe('登录检测结果 → 店铺状态', () => {
   it('确认登录才置在线；确认是登录页/验证页置 needs_login；没拿到证据不改状态', () => {
     expect(storeStatusForLoginResult('LOGGED_IN')).toBe(StoreStatus.ONLINE)
     // ⚠️ 明确的否定证据必须落到 `needs_login`，**不能**塌成 `offline`（2026-10-02 修）。
-    // `offline` 的语义是"窗口没开 / 还没确认登录"（见 product-publish-rules.precheckPublish：
-    // offline/launching 只记 warning，needs_login 才阻断发布），两者混为一谈时登录失效的
-    // 店铺在界面上和"没开窗口"长得一样，概览的登录失效上报与发布阻断也永不触发。
+    // `offline` 的语义是"窗口没开 / 还没确认登录"，不能和"确认登录失效"混为一谈；
+    // 两者混在一起时，登录失效的店铺在界面上和"没开窗口"长得一样，概览也不会上报。
     expect(storeStatusForLoginResult('LOGIN_REQUIRED')).toBe(StoreStatus.NEEDS_LOGIN)
     expect(storeStatusForLoginResult('VERIFY_REQUIRED')).toBe(StoreStatus.NEEDS_LOGIN)
     // UNKNOWN / ERROR = "这次没拿到证据"：既不能断言在线，也不能断言离线。

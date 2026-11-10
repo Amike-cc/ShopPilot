@@ -26,7 +26,7 @@ describe('commerce agent action ledger', () => {
     const db = new Ctor!(':memory:')
     const shim = { exec: (sql: string) => db.exec(sql), prepare: (sql: string) => db.prepare(sql), transaction: (fn: () => void) => () => { db.exec('BEGIN'); try { fn(); db.exec('COMMIT') } catch (e) { db.exec('ROLLBACK'); throw e } } }
     migrate(shim as never)
-    const action = { type: 'productPublishOpen', itemId: 'item-1', fill: true } as any
+    const action = { type: 'contentPublish', draftId: 'draft-1', confirmationId: 'confirm-1' } as any
     const ledger = commerceActionLedgerFor(db as never)
     ledger.record(action, { actionType: action.type, status: 'RECOVERY_REQUIRED', reasonCode: 'SIDE_EFFECT', safeMessage: 'read back', summary: { sideEffectStarted: true }, evidence: { source: 'test', capturedAt: 1 } })
     ledger.record(action, { actionType: action.type, status: 'FAILED', reasonCode: 'RETRY', safeMessage: 'retry', summary: { sideEffectStarted: false }, evidence: { source: 'test', capturedAt: 2 } })
@@ -39,7 +39,7 @@ describe('commerce agent action ledger', () => {
     const shim = { exec: (sql: string) => db.exec(sql), prepare: (sql: string) => db.prepare(sql), transaction: (fn: () => void) => () => { db.exec('BEGIN'); try { fn(); db.exec('COMMIT') } catch (e) { db.exec('ROLLBACK'); throw e } } }
     migrate(shim as never)
     // 该回归只验证台账状态机；不绑定不存在的店铺，避免触发 stores 外键。
-    const action = { type: 'inventoryWriteback', changes: [{ productId: 'product-1', stock: 10 }] } as any
+    const action = { type: 'contentPublish', draftId: 'draft-2', confirmationId: 'confirm-2' } as any
     const ledger = commerceActionLedgerFor(db as never)
     ledger.start(action)
     expect(ledger.list({ limit: 1 })[0]).toMatchObject({ status: 'running', sideEffectStarted: false })
@@ -53,7 +53,7 @@ describe('commerce agent action ledger', () => {
     const db = new Ctor!(':memory:')
     const shim = { exec: (sql: string) => db.exec(sql), prepare: (sql: string) => db.prepare(sql), transaction: (fn: () => void) => () => { db.exec('BEGIN'); try { fn(); db.exec('COMMIT') } catch (e) { db.exec('ROLLBACK'); throw e } } }
     migrate(shim as never)
-    const action = { type: 'productLibraryList', limit: 10 } as any
+    const action = { type: 'contentPublish', draftId: 'draft-3', confirmationId: 'confirm-3' } as any
     const ledger = commerceActionLedgerFor(db as never)
     ledger.record(action, { actionType: action.type, status: 'FAILED', reasonCode: 'PAGE_NOT_READY', safeMessage: 'retryable', summary: { sideEffectStarted: false }, evidence: { source: 'test', capturedAt: 1 } })
     ledger.start(action)

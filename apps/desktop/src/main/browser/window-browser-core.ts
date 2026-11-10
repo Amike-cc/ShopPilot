@@ -230,14 +230,12 @@ if (typeof onStoreStatusChanged === 'function') {
  * 登录结论只由平台适配器给出（`platform-login-service.storeStatusForLoginResult`）：
  * 明确证据 → `online` / `needs_login`；拿不到证据 → **不改状态**。
  * 所以这里**不能**无条件写 `offline`（2026-10-02 修）——适配器的正向证据只存在于后台首页
- * （经营数据锚点）和商品列表页，店铺停在发布页/订单页/发票页时永远拿不到证据，无条件写
- * `offline` 会让"明明登录着、页面刚代填成功"的店铺被永久显示成离线。真机复现：微信小店
- * 16:51:05 被这次打开打回 `offline`，随后 3 秒一轮的复核在发布页上恒为 UNKNOWN，
- * 状态再也没回到 online（同一时刻 `[product-publish] 打开发布页 reached=true 代填=1` 成功）。
- * 这与"未知证据不得当作否定证据"是同一条纪律（见 docs/product-profiles.md §7.2①）。
+ * （经营数据锚点），店铺停在订单页/发票页/其它后台页面时永远拿不到证据，无条件写
+ * `offline` 会让"明明登录着、页面刚操作成功"的店铺被永久显示成离线。
+ * 这与"未知证据不得当作否定证据"是同一条纪律。
  *
  * 唯一要在这里推进的是**从未确认过登录**的新店：`incomplete -> offline`（§9.1 状态机的起点），
- * 否则新店会一直停在 `incomplete`，发布预检会按"店铺配置不完整"阻断。
+ * 否则新店会一直停在 `incomplete`。
  */
 function markBrowserWindowState(storeId: string): void {
   let current: string | undefined

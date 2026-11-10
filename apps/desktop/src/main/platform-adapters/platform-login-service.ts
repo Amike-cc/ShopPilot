@@ -267,9 +267,8 @@ function logResult(
  *
  * 为什么明确的否定证据要写 `needs_login` 而**不是** `offline`（2026-10-02 修）：
  * `offline` 在整套语义里是"**浏览器窗口没开 / 还没确认登录**"，不是"确认没登录"——
- * 这一点是产品其它地方明确定义并依赖的（`product-publish-rules.precheckPublish` 里
- * `offline`/`launching` 只记 warning，而 `needs_login` 才阻断发布；`docs/DEVELOPMENT_SPEC.md`
- * §9.1 的状态机也写着 `launching -> needs_login` / `online -> needs_login` / `needs_login -> online`）。
+ * 这一点是产品其它地方明确定义并依赖的（`docs/DEVELOPMENT_SPEC.md` §9.1 的状态机也写着
+ * `launching -> needs_login` / `online -> needs_login` / `needs_login -> online`）。
  * 此前这里把两种否定证据都塌成 `offline`，于是 `StoreStatus.NEEDS_LOGIN` **在整个代码库里
  * 一个生产者都没有**，后果是登录已失效的店铺：
  *   · 店铺卡/侧栏显示成灰色「离线」，和"窗口没开"长得一模一样，看不出要重新登录；

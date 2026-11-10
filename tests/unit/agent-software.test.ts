@@ -59,7 +59,6 @@ describe('Agent software scope', () => {
 
   it('keeps every commerce confirmation action inside the side-effect boundary', () => {
     const commerceConfirmationActions = [
-      'productPublishOpen', 'productPublishAccept', 'inventoryWriteback', 'skuWriteback',
       'entityApply', 'applyEntity',
       'contentPublish', 'adConfirm', 'customerSendReply'
     ]

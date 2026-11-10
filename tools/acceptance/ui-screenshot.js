@@ -24,7 +24,6 @@ const REAL_DB = path.join(process.env.APPDATA || '', 'shopilot', 'shopilot.db')
 
 const PAGES = [
   { key: 'overview', label: '经营总览' },
-  { key: 'products', label: '商品管理' },
   { key: 'stores', label: '店铺管理' },
   { key: 'analytics', label: '数据分析' },
   { key: 'invoices', label: '发票中心' },
@@ -89,7 +88,7 @@ async function main() {
 
     // 截图用的临时库副本：把可选模块全部启用，保证发票/涉税页面也能进入评审（不触碰真实库）。
     try {
-      await client.eval(`await window.shopilot.settings.set('ui.apps.installedModules', ['products','invoices','tax','ai']); return true`)
+      await client.eval(`await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax','ai']); return true`)
       await client.send('Page.reload', { ignoreCache: true })
       await sleep(2200)
     } catch (err) {
@@ -214,30 +213,6 @@ async function main() {
     await client.eval(`document.querySelector('.command-backdrop')?.click(); return true`)
     await sleep(300)
 
-    // 商品编辑器抽屉
-    await client.eval(`
-      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
-        .find(el => (el.textContent || '').trim().includes('商品管理'))
-      nav?.click(); return true
-    `)
-    await sleep(900)
-    const openedEditor = await client.eval(`
-      const edit = document.querySelector('[data-test^="local-edit-"]')
-      if (!edit) return false
-      edit.click(); return true
-    `)
-    await sleep(900)
-    await capture('product-editor')
-    await client.eval(`document.querySelector('[data-test="editor-close"]')?.click(); return true`)
-    await sleep(400)
-    await client.eval(`
-      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
-        .find(el => (el.textContent || '').trim().includes('经营总览'))
-      nav?.click(); return true
-    `)
-    await sleep(700)
-    if (!openedEditor) console.log('[shot] 商品编辑器未打开（没有可编辑商品）')
-
     // 店铺右键菜单
     await client.eval(`
       const card = document.querySelector('[data-test="store-card"]')
@@ -317,28 +292,6 @@ async function main() {
     await capture('collection-history')
     await client.eval(`document.querySelector('[data-test="collection-history-dialog"]')?.click(); return true`)
     await sleep(300)
-
-    // 商品发布预检面板
-    await client.eval(`
-      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
-        .find(el => (el.textContent || '').trim().includes('商品管理'))
-      nav?.click(); return true
-    `)
-    await sleep(900)
-    const preflightOpened = await client.eval(`
-      const preflight = document.querySelector('[data-test^="local-preflight-"]')
-      if (!preflight) return false
-      preflight.click(); return true
-    `)
-    await sleep(1800)
-    await capture('publish-preflight')
-    await client.eval(`
-      const panel = document.querySelector('[data-test="publish-preflight"]')
-      const close = panel ? [...panel.querySelectorAll('button')].find(el => (el.textContent || '').trim().includes('关闭')) : null
-      close?.click(); return true
-    `)
-    await sleep(300)
-    if (!preflightOpened) console.log('[shot] 发布预检未打开（可能没有在线店铺）')
 
     // 图片工作台「图文详情」模式
     await client.eval(`

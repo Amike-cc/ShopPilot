@@ -59,7 +59,7 @@ export interface SalesMetricsCapableAdapter extends PlatformAdapter {
   collectSalesMetrics(
     context: PlatformAdapterContext,
     options: { periodType: SalesMetricsPeriodType; periodStart?: number; periodEnd?: number; timeoutMs: number }
-  ): Promise<SalesMetricsCollectionResult & { storeMetrics?: import('@shared/contracts/sales-metrics').SalesMetrics[]; productMetrics?: import('@shared/contracts/sales-metrics').ProductSalesMetrics[] }>
+  ): Promise<SalesMetricsCollectionResult & { storeMetrics?: import('@shared/contracts/sales-metrics').SalesMetrics[] }>
   /**
    * 证据自检：本次拿到的字段是否真的由该来源产生。
    *
@@ -79,8 +79,6 @@ export const LOGIN_DETECTION_ONLY_CAPABILITIES: Readonly<PlatformAdapterCapabili
   orders: false,
   salesMetrics: false,
   productSalesMetrics: false,
-  products: false,
-  inventory: false,
   refunds: false,
   salesData: false
 })

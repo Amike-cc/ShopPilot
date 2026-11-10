@@ -196,7 +196,7 @@ function timeoutResult(storeId: string, platform: string): SalesMetricsCollectio
   const at = Date.now()
   return {
     storeId, platform, status: 'TIMEOUT', startedAt: at, finishedAt: at,
-    periodStart: null, periodEnd: null, storeMetricsCount: 0, productMetricsCount: 0,
+    periodStart: null, periodEnd: null, storeMetricsCount: 0,
     inserted: 0, updated: 0, skipped: 0, failed: 0, sourceType: 'NONE',
     reasonCode: 'COLLECTION_TIMEOUT', safeMessage: '本次采集超过时间上限，已中断',
     adapterVersion: null, metricDefinitionVersion: 'sales-metrics-1',

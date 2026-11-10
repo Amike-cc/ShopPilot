@@ -1036,7 +1036,7 @@ export const migrations: Migration[] = [
     version: 19,
     name: 'product_catalog',
     up: (db) => {
-      // 商品域建表（商品管理方案 §4；真机勘察记录见 docs/product-profiles.md）。
+      // 商品域历史建表（v37 已整体移除该功能并清空这些表）。
       //
       // 三条设计纪律（都能在迁移里看出来）：
       //   1) **平台原值与本地编辑值分开存** —— 平台侧同步回来的真相写进 *_links.platform_*，
@@ -1930,6 +1930,30 @@ export const migrations: Migration[] = [
         try { db.exec(sql) } catch { /* SQLite/旧库不支持删列时忽略 */ }
       }
     }
+  }
+  ,{
+    version: 37,
+    name: 'remove_product_management',
+    up: (db) => {
+      // 商品管理已从产品中整体移除（2026-11-10）：按外键依赖顺序清空商品目录/发布台账。
+      // 保留 invite_product_sets（达人邀约的商品 ID 集），它不属于商品管理。
+      db.exec(`
+        DROP TABLE IF EXISTS product_publish_items;
+        DROP TABLE IF EXISTS product_publish_jobs;
+        DROP TABLE IF EXISTS product_platform_requirements;
+        DROP TABLE IF EXISTS product_platform_defaults;
+        DROP TABLE IF EXISTS product_sku_links;
+        DROP TABLE IF EXISTS product_platform_links;
+        DROP TABLE IF EXISTS product_media;
+        DROP TABLE IF EXISTS product_variants;
+        DROP TABLE IF EXISTS products;
+        DROP TABLE IF EXISTS product_sync_runs;
+        DROP TABLE IF EXISTS commerce_writeback_proposals;
+        DROP TABLE IF EXISTS product_sales_metrics;
+      `)
+    },
+    // 数据已按用户要求永久清空，不能通过迁移恢复；保留空实现避免 runner 调 undefined。
+    down: () => { /* irreversible */ }
   }
 ]
 

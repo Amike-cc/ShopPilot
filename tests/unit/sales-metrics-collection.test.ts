@@ -858,9 +858,7 @@ describe('sales metrics · 采集服务门禁', () => {
           refundAmountMinor: 0, refundOrderCount: 0, refundQuantity: 0,
           netSalesAmountMinor: 1234, collectedAt: NOW, sourceUpdatedAt: null
         }],
-        productMetrics: [],
-        storeMetricsCount: 1,
-        productMetricsCount: 0
+        storeMetricsCount: 1
       })
     }
   }
