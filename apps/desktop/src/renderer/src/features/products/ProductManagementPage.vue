@@ -22,7 +22,7 @@ export const readbackCache: { current: null | { itemId: string; suggestions: unk
  *   · 回收站可见可恢复（软删可逆；不自动重挂平台归并——D2）。
  * 红线不回退：发布人工提交、归并人工确认、抓不到如实说、面板间不堆叠语义变化。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { hasProductProfile } from '@shared/constants/product'
 import { productStatusLabel } from '@shared/product-rules'
 import { PRODUCT_BATCH_LIMITS } from '@shared/product-batch'
@@ -45,10 +45,6 @@ import downloadImageIcon from '../../assets/generated/ui-icons/download-image-ge
 import cleanupIcon from '../../assets/generated/ui-icons/cleanup-gen.png'
 import acceptIcon from '../../assets/generated/ui-icons/accept-gen.png'
 import scanQueueIcon from '../../assets/generated/ui-icons/scan-queue-gen.png'
-import publishGateIcon from '../../assets/generated/ui-icons/publish-gate-sheet-gen.png'
-import publishConfirmIcon from '../../assets/generated/ui-icons/publish-confirm-sheet-gen.png'
-import publishAbandonIcon from '../../assets/generated/ui-icons/publish-abandon-sheet-gen.png'
-import panelCloseIcon from '../../assets/generated/ui-icons/panel-close-sheet-gen.png'
 import batchHandleStoreIcon from '../../assets/generated/ui-icons/batch-handle-store-gen.png'
 import batchSkipStoreIcon from '../../assets/generated/ui-icons/batch-skip-store-gen.png'
 import batchPauseIcon from '../../assets/generated/ui-icons/batch-pause-gen.png'
@@ -745,6 +741,9 @@ async function runPreflight(row: LocalRow): Promise<void> {
     if (!data?.precheck) { ws.toast('预检没有返回结果', 'error'); return }
     const store = online.find(item => item.id === data.precheck!.storeId)
     preflight.value = { productId: row.id, itemId: data.itemId, storeName: store?.name ?? '目标店铺', precheck: data.precheck }
+    // 预检面板在表格下方；不滚动的话用户只看到 toast，以为按钮没反应。
+    await nextTick()
+    document.querySelector('[data-test="publish-preflight"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     ws.toast(data.precheck.summary, data.precheck.verdict === 'blocked' ? 'error' : 'success')
   } finally {
     busy.value = false
@@ -856,7 +855,7 @@ function suggestionKindLabel(kind: string): string {
 function fieldActionLabel(action: string): string {
   return ({
     fill: '填入', fill_suggest: '建议填入（待你确认）', keep_platform: '保留平台值',
-    reuse_last: '用上次选择', skip_unsupported: '跳过（平台不支持）', leave_empty: '不填（本地也没有）'
+    reuse_last: '用上次选择', skip_unsupported: '跳过（平台不支持）', leave_empty: '不填'
   } as Record<string, string>)[action] || action
 }
 
@@ -1526,16 +1525,16 @@ onMounted(() => { void loadLinks(); void loadLocal() })
       <div class="product-drawer-actions" style="padding:12px 16px">
         <button type="button" class="unified-button primary" :data-test="'publish-open-page'"
                 :disabled="busy || preflight.precheck.verdict === 'blocked'" @click="openPublishPage(false)">
-                <img class="button-icon" :src="externalIcon" alt="" />打开平台发布页</button>
+                <AppIcon name="external" :size="15" />打开平台发布页</button>
         <button type="button" class="unified-button ghost" :data-test="'publish-open-fill'"
                 :disabled="busy || preflight.precheck.verdict === 'blocked'" @click="openPublishPage(true)">
-                <img class="button-icon" :src="publishIcon" alt="" />打开并预填（L1）</button>
-            <button type="button" class="unified-button ghost" :data-test="'publish-open-gate'" :disabled="busy" @click="openGate"><img class="button-icon" :src="publishGateIcon" alt="" />开人工确认门禁</button>
-        <button type="button" class="unified-button ghost" :data-test="'publish-confirm'" :disabled="busy" @click="confirmSubmitted(true)"><img class="button-icon" :src="publishConfirmIcon" alt="" />我已提交</button>
+                <AppIcon name="upload" :size="15" />打开并预填（L1）</button>
+            <button type="button" class="unified-button ghost" :data-test="'publish-open-gate'" :disabled="busy" @click="openGate"><AppIcon name="lock" :size="15" />开人工确认门禁</button>
+        <button type="button" class="unified-button ghost" :data-test="'publish-confirm'" :disabled="busy" @click="confirmSubmitted(true)"><AppIcon name="check" :size="15" />我已提交</button>
         <button type="button" class="unified-button ghost" :data-test="'publish-readback'" :disabled="busy" @click="runReadback">
-        <img class="button-icon" :src="scanQueueIcon" alt="" />回读页面实际值</button>
-        <button type="button" class="unified-button ghost" :disabled="busy" @click="confirmSubmitted(false)"><img class="button-icon" :src="publishAbandonIcon" alt="" />放弃这次发布</button>
-        <button type="button" class="unified-button ghost" @click="preflight = null"><img class="button-icon" :src="panelCloseIcon" alt="" />关闭</button>
+        <AppIcon name="eye" :size="15" />回读页面实际值</button>
+        <button type="button" class="unified-button ghost" :disabled="busy" @click="confirmSubmitted(false)"><AppIcon name="close" :size="15" />放弃这次发布</button>
+        <button type="button" class="unified-button ghost" @click="preflight = null"><AppIcon name="close" :size="15" />关闭</button>
         <span class="product-empty-hint">应用**不会**替你点提交：页面填完后由你自己提交。</span>
       </div>
     </div>

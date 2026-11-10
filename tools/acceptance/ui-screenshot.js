@@ -287,6 +287,83 @@ async function main() {
     await sleep(300)
     if (!openedStoreEdit) console.log('[shot] 店铺编辑未打开（没有店铺）')
 
+    // 店铺批量条与批量代理对话框
+    await client.eval(`document.querySelector('[data-test="store-bulk-toggle"]')?.click(); return true`)
+    await sleep(400)
+    await client.eval(`document.querySelector('[data-test="store-bulk-select-all"]')?.click(); return true`)
+    await sleep(300)
+    await capture('store-bulk-bar')
+    await client.eval(`document.querySelector('[data-test="store-bulk-proxy"]')?.click(); return true`)
+    await sleep(500)
+    await capture('store-bulk-proxy-dialog')
+    await client.eval(`
+      const cancel = [...document.querySelectorAll('[data-test="store-bulk-proxy-dialog"] button')]
+        .find(el => (el.textContent || '').trim().includes('取消'))
+      cancel?.click(); return true
+    `)
+    await sleep(300)
+    await client.eval(`document.querySelector('[data-test="store-bulk-exit"]')?.click(); return true`)
+    await sleep(300)
+
+    // 采集记录弹窗
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('发票中心'))
+      nav?.click(); return true
+    `)
+    await sleep(1400)
+    await client.eval(`document.querySelector('[data-test="collection-history-open"]')?.click(); return true`)
+    await sleep(800)
+    await capture('collection-history')
+    await client.eval(`document.querySelector('[data-test="collection-history-dialog"]')?.click(); return true`)
+    await sleep(300)
+
+    // 商品发布预检面板
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('商品管理'))
+      nav?.click(); return true
+    `)
+    await sleep(900)
+    const preflightOpened = await client.eval(`
+      const preflight = document.querySelector('[data-test^="local-preflight-"]')
+      if (!preflight) return false
+      preflight.click(); return true
+    `)
+    await sleep(1800)
+    await capture('publish-preflight')
+    await client.eval(`
+      const panel = document.querySelector('[data-test="publish-preflight"]')
+      const close = panel ? [...panel.querySelectorAll('button')].find(el => (el.textContent || '').trim().includes('关闭')) : null
+      close?.click(); return true
+    `)
+    await sleep(300)
+    if (!preflightOpened) console.log('[shot] 发布预检未打开（可能没有在线店铺）')
+
+    // 图片工作台「图文详情」模式
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('AI 创作'))
+      nav?.click(); return true
+    `)
+    await sleep(700)
+    await client.eval(`
+      const card = [...document.querySelectorAll('.app-card')]
+        .find(el => (el.textContent || '').includes('AI 生成商品图'))
+      card?.click(); return true
+    `)
+    await sleep(900)
+    const detailMode = await client.eval(`
+      const tab = document.querySelector('[data-test="studio-top-nav-detail"]')
+      if (!tab) return false
+      tab.click(); return true
+    `)
+    await sleep(900)
+    await capture('image-studio-detail')
+    await client.eval(`document.querySelector('[data-test="studio-top-nav-create"]')?.click(); return true`)
+    await sleep(400)
+    if (!detailMode) console.log('[shot] 图文详情页签未找到')
+
     // 收起态左栏
     await client.eval(`document.querySelector('[data-test="sidebar-collapse"]')?.click(); return true`)
     await sleep(600)

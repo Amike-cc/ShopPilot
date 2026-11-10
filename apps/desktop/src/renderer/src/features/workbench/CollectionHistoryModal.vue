@@ -17,7 +17,7 @@
               <td class="ch-time">{{ formatTime(row.finishedAt || row.startedAt) }}</td>
               <td>{{ row.storeName }}</td>
               <td><span class="ch-status" :class="`status-${row.status}`">{{ statusLabel(row.status) }}</span></td>
-              <td class="ch-error">
+              <td class="ch-error" :class="{ 'has-error': row.status === 'failed' || row.status === 'cancelled' || !!row.errorCode || !!row.errorMessage }">
                 <template v-if="row.errorCode || row.errorMessage">{{ row.errorCode || '' }}<template v-if="row.errorCode && row.errorMessage"> · </template>{{ row.errorMessage || '' }}</template>
                 <template v-else>{{ row.statusReason || '—' }}</template>
               </td>
@@ -89,14 +89,15 @@ onMounted(load)
 .loader { width: 18px; height: 18px; border: 2px solid rgba(163,143,255,.2); border-top-color: #7c5cff; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg) } }
 .ch-table-wrap { max-height: 420px; overflow: auto; }
-.ch-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.ch-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .ch-table th, .ch-table td { padding: 8px; border-bottom: 1px solid rgba(111,137,177,.12); text-align: left; vertical-align: top; }
-.ch-table th { color: var(--dash-text-muted); font-weight: 500; white-space: nowrap; }
+.ch-table th { position: sticky; top: 0; z-index: 1; background: #fff; color: var(--dash-text-muted); font-weight: 500; white-space: nowrap; }
 .ch-time { white-space: nowrap; color: var(--dash-text-muted); }
 .ch-status { padding: 2px 6px; border-radius: 5px; background: #eef1f7; color: var(--dash-text-muted); white-space: nowrap; }
 .ch-status.status-succeeded { background: #e8f5ee; color: #027a48; }
 .ch-status.status-failed { background: #fef3f2; color: #b42318; }
 .ch-status.status-running { background: #eaf2ff; color: #1d6fe8; }
-.ch-error { max-width: 420px; color: #b42318; word-break: break-word; }
+.ch-error { max-width: 420px; color: var(--dash-text-muted); word-break: break-word; }
+.ch-error.has-error { color: #b42318; }
 .unified-dialog-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
 </style>
