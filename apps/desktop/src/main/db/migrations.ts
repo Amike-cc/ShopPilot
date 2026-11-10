@@ -1954,6 +1954,25 @@ export const migrations: Migration[] = [
     },
     // 数据已按用户要求永久清空，不能通过迁移恢复；保留空实现避免 runner 调 undefined。
     down: () => { /* irreversible */ }
+  },
+  {
+    version: 38,
+    name: 'doudian_admin_home_url',
+    up: (db) => {
+      // 用户给定的抖店后台地址（2026-11-10）：只把仍停在根域名的抖店店铺迁到完整首页；
+      // 用户自行改过其它路径的店铺不覆盖。旧夹具可能没有 stores 表（只验证迁移链时）→ 跳过。
+      try {
+        db.prepare(`
+          UPDATE stores
+          SET admin_url = 'https://fxg.jinritemai.com/ffa/mshop/homepage/index', updated_at = ?
+          WHERE platform = '抖店'
+            AND admin_url IN ('https://fxg.jinritemai.com', 'https://fxg.jinritemai.com/')
+        `).run(Date.now())
+      } catch (error) {
+        if (!/no such table: stores/i.test(String((error as Error)?.message || error))) throw error
+      }
+    },
+    down: () => { /* 地址迁移不强行回滚，避免覆盖用户后续编辑 */ }
   }
 ]
 

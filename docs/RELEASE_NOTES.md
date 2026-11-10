@@ -1,3 +1,21 @@
+# ShopPilot 0.9.26 变更说明（抖店后台地址更新）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
+
+## 本次更新
+
+- 抖店新建店铺的默认后台地址更新为：`https://fxg.jinritemai.com/ffa/mshop/homepage/index`（此前只填根域名）。
+- 已有抖店店铺若后台地址仍是 `https://fxg.jinritemai.com` 或带尾斜杠的根地址，升级时自动迁移到上述完整首页；用户自行改过其它路径的店铺不覆盖。
+- 浏览器「首页」按钮、登录失效重开、店铺编辑对话框占位符同步使用该地址。
+- 新增 v38 `doudian_admin_home_url` 迁移；单测更新抖店 adminUrl 期望。
+
+## 验证
+
+- `platform-home-url` 单测通过；typecheck / 全量单测 / 打包发布流程通过。
+- 应用首次启动 v38 后，当前抖店店铺的后台地址会变为完整首页。
+
+---
+
 # ShopPilot 0.9.25 变更说明（彻底移除商品管理：功能、入口、代码与数据）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。

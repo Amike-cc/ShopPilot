@@ -9,13 +9,12 @@ import { platformAdminUrl, platformHomeUrl } from '@shared/constants/platforms'
  *   · 未声明的平台 → 回退 adminUrl（拼多多/微信/快手的既有行为不变）；
  *   · 自定义平台/未知平台 → 空串（调用方如实报"没有配置首页地址"）。
  *
- * adminUrl 与 homeUrl 是两件事：adminUrl 仍是"新建店铺默认填入的后台地址"，
- * 只把首页落地页换成更深的一层，避免两者被改成同一个值后无法区分。
+ * adminUrl 与 homeUrl 在抖店都使用用户给定的后台首页；其它平台仍以 adminUrl 作为首页兜底。
  */
 describe('平台默认首页地址', () => {
-  it('抖店使用用户给定的后台首页，adminUrl 保持后台根地址', () => {
+  it('抖店使用用户给定的后台地址，adminUrl 与 homeUrl 一致', () => {
     expect(platformHomeUrl('抖店')).toBe('https://fxg.jinritemai.com/ffa/mshop/homepage/index')
-    expect(platformAdminUrl('抖店')).toBe('https://fxg.jinritemai.com')
+    expect(platformAdminUrl('抖店')).toBe('https://fxg.jinritemai.com/ffa/mshop/homepage/index')
   })
 
   it('未声明 homeUrl 的平台回退 adminUrl', () => {

@@ -84,7 +84,8 @@ export const PLATFORM_CATALOG: readonly PlatformDef[] = [
   {
     name: '抖店',
     color: '#FE2C55',
-    adminUrl: 'https://fxg.jinritemai.com',
+    // 用户给定的店铺后台地址（2026-11-10）：新建抖店店铺默认填这里，不再只填根域名。
+    adminUrl: 'https://fxg.jinritemai.com/ffa/mshop/homepage/index',
     // 用户给定的后台首页（2026-11-09 更新）：浏览器「首页」按钮与登录失效重开都落在这里，
     // 不再只到根域名（根域名会再跳一次，慢且看不出当前店铺）。
     homeUrl: 'https://fxg.jinritemai.com/ffa/mshop/homepage/index',
@@ -97,7 +98,7 @@ export const PLATFORM_CATALOG: readonly PlatformDef[] = [
     // 本店的抖店后台当前未登录，**无法实测**发票入口，因此不写猜测深链；
     // 只给后台入口（登录后从「资金」里进发票）。
     invoiceRoutes: [
-      { title: '抖店后台（资金 → 发票）', url: 'https://fxg.jinritemai.com' }
+      { title: '抖店后台（资金 → 发票）', url: 'https://fxg.jinritemai.com/ffa/mshop/homepage/index' }
     ]
   }
 ]
