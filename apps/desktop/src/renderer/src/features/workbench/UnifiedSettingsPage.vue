@@ -77,7 +77,7 @@
         <div v-else-if="securityLoading && !securityLoaded" class="settings-note" role="status">正在读取应用锁状态…</div>
         <template v-else>
           <div class="security-status" data-test="security-state" :data-enabled="securityEnabled ? '1' : '0'">
-            <span class="security-status-dot" :class="{ on: securityEnabled }" aria-hidden="true"></span>
+            <span class="security-status-icon" :class="{ on: securityEnabled }" aria-hidden="true"><AppIcon :name="securityEnabled ? 'shield' : 'lock'" :size="17" /></span>
             <div class="security-status-copy"><strong>{{ securityEnabled ? '主密码已启用' : '未设置主密码' }}</strong><p>{{ securityEnabled ? '每次锁定后需主密码解锁；空闲自动锁定可单独配置。' : '建议设置：开启后可一键锁定应用，避免他人直接操作店铺。' }}</p></div>
           </div>
           <div v-if="!securityEnabled" class="settings-group" data-test="security-set-group">
@@ -184,7 +184,7 @@
           <div class="settings-field-row">
             <label class="settings-check">保留最近
               <select v-model.number="backupKeep" class="settings-backup-keep" data-test="maintenance-backup-keep" :disabled="backupKeepSaving || !backupKeepLoaded" @change="applyBackupKeep">
-                <option v-for="count in backupKeepOptions" :key="count" :value="count">{{ count }} 份</option>
+                <option v-for="count in backupKeepChoices" :key="count" :value="count">{{ count }} 份</option>
               </select>
             </label>
             <span class="settings-check-state">{{ backupKeepSaving ? '保存中…' : `超出 ${backupKeep} 份的旧备份会立即清理` }}</span>
@@ -403,6 +403,13 @@ const backupKeep = ref(7)
 const backupKeepLoaded = ref(false)
 const backupKeepSaving = ref(false)
 const backupKeepOptions = [3, 7, 14, 30]
+// 老版本可能写入过 1/5 等不在档位里的值：把它作为当前项一并列出，
+// 否则原生 select 找不到匹配项会显示空白（0.9.20 截图复现）。
+const backupKeepChoices = computed(() =>
+  backupKeepOptions.includes(backupKeep.value)
+    ? backupKeepOptions
+    : [...backupKeepOptions, backupKeep.value].sort((a, b) => a - b)
+)
 let savedBackupKeep = 7
 const warmLimitHint = computed(() => `当前 ${warmStoreLimitLabel(warmLimit.value)}。每多保活一家约多占 ${WARM_STORE_LIMITS.estimatedMbPerStore}MB；正在跑任务、采集或邀约的店铺不受此上限影响，不会被回收。`)
 const maintenanceLoading = ref(false)
@@ -1936,11 +1943,11 @@ onBeforeUnmount(() => {
 .settings-tab-alert{width:7px;height:7px;flex:none;border-radius:50%;background:#f04438;box-shadow:0 0 0 3px rgba(240,68,56,.14)}
 .security-status{display:flex;align-items:center;gap:12px;margin-top:14px;padding:14px 16px;border:1px solid #e9eef5;border-radius:12px;background:linear-gradient(135deg,#ffffff,#fafbfe)}
 .security-status[data-enabled='1']{border-color:#cdeeda;background:linear-gradient(135deg,#ffffff,#f6fdf9)}
-.security-status-dot{width:9px;height:9px;flex:none;border-radius:50%;background:#98a2b3}
-.security-status-dot.on{background:#12b76a;box-shadow:0 0 0 4px rgba(18,183,106,.16)}
+.security-status-icon{display:grid;width:36px;height:36px;flex:none;place-items:center;border-radius:10px;background:#f1f3f7;color:#667085}
+.security-status-icon.on{background:#e9f9f1;color:#067647}
 .security-status-copy{min-width:0;flex:1}
-.security-status-copy strong{color:#202939;font-size:13px}
-.security-status-copy p{margin:3px 0 0;color:#667085;font-size:10.5px}
+.security-status-copy strong{color:#202939;font-size:14px}
+.security-status-copy p{margin:3px 0 0;color:#667085;font-size:11.5px;line-height:1.5}
 .maintenance-toggle-row{align-items:center}
 /* 2026-11-09：扩展总开关用的 .maintenance-switch 一直没有样式（渲染成不可见按钮），
    与 .settings-switch 对齐补上；采集总开关同样复用这套。 */

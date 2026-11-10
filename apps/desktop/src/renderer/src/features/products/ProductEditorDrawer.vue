@@ -14,6 +14,7 @@
  * 已归档商品只读：横幅说明 + 全部输入禁用，操作只留「取消归档」与关闭。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import AppIcon from '../../components/ui/AppIcon.vue'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { parseSpecText, normalizeCellText } from '@shared/product-rules'
 import { productDraftIssues, type LocalProductDraft, type ProductDraftMedia } from '@shared/product-draft'
@@ -39,6 +40,7 @@ const localCategory = ref('')
 const tagDraft = ref('')
 const tags = ref<string[]>([])
 const mediaItems = ref<EditorMedia[]>([])
+const mediaLoadErrors = ref<string[]>([])
 const variants = ref<EditorVariant[]>([])
 const serverIssues = ref<DraftIssue[]>([])
 const archived = computed(() => props.status === 'archived')
@@ -114,7 +116,8 @@ async function reload(): Promise<void> {
   brand.value = data.draft.brand ?? ''
   localCategory.value = data.draft.localCategory ?? ''
   tags.value = [...(data.draft.tags ?? [])]
-  mediaItems.value = (data.draft.media ?? []).map(item => ({ ...item }))
+    mediaItems.value = (data.draft.media ?? []).map(item => ({ ...item }))
+    mediaLoadErrors.value = []
   variants.value = data.draft.variants.map(variant => ({
     specText: specToText(variant.spec ?? []),
     priceYuan: minorToYuan(variant.priceMinor),
@@ -158,6 +161,16 @@ function mediaSrc(item: EditorMedia): string | null {
   if (item.localPath) return `shopilot-media://local/${item.localPath}`
   return null // 未本地化的远程图不给 src：CSP 禁外链，显示占位才诚实
 }
+function mediaKey(item: EditorMedia, index: number): string {
+  return item.sha256 || item.remoteUrl || `media-${index}`
+}
+function markMediaError(item: EditorMedia, index: number): void {
+  const key = mediaKey(item, index)
+  if (!mediaLoadErrors.value.includes(key)) mediaLoadErrors.value = [...mediaLoadErrors.value, key]
+}
+function mediaFailed(item: EditorMedia, index: number): boolean {
+  return mediaLoadErrors.value.includes(mediaKey(item, index))
+}
 function setCover(index: number): void {
   const item = mediaItems.value[index]
   if (!item || item.role === 'cover') return
@@ -167,6 +180,7 @@ function setCover(index: number): void {
 }
 function removeMedia(index: number): void {
   mediaItems.value.splice(index, 1)
+  mediaLoadErrors.value = []
 }
 function mediaStateLabel(item: EditorMedia): string {
   return item.state === 'localized' ? '已本地化' : item.state === 'pending' ? '未下载' : item.state === 'failed' ? '下载失败' : item.state === 'blocked' ? '已拒绝' : '未知'
@@ -187,6 +201,7 @@ async function addLocalImages(): Promise<void> {
     if (!result.ok) { ws.toast('导入失败：' + result.error.message, 'error'); return }
     const payload = result.data as { imported: EditorMedia[]; skipped: Array<{ path: string; reason: string }> }
     for (const entry of payload.imported ?? []) mediaItems.value.push({ ...entry })
+    mediaLoadErrors.value = []
     const skipped = payload.skipped ?? []
     if (skipped.length) {
       const reasons: Record<string, string> = { too_large: '超过 10MB', unsupported_type: '不是支持的图片格式', svg_rejected: 'SVG 会被拒绝（可能内嵌脚本）', write_failed: '写盘失败', not_readable: '读不到文件', bad_path: '路径无效' }
@@ -296,10 +311,11 @@ async function save(): Promise<void> {
         <div v-if="!mediaItems.length" class="editor-media-empty">还没有图片。从平台另存的商品点「下载图片到本地」；或直接添加本机图片。</div>
         <div class="media-grid">
           <div v-for="(item, index) in mediaItems" :key="(item.sha256 || item.remoteUrl || 'm') + index" class="media-cell" :data-test="'editor-thumb-' + index">
-            <img v-if="mediaSrc(item)" :src="mediaSrc(item) || ''" alt="" class="media-img" />
-            <div v-else class="media-placeholder">
-              <span>{{ mediaStateLabel(item) }}</span>
-              <small v-if="item.failReason">{{ item.failReason }}</small>
+            <img v-if="mediaSrc(item) && !mediaFailed(item, index)" :src="mediaSrc(item) || ''" alt="" class="media-img" @error="markMediaError(item, index)" />
+            <div v-else class="media-placeholder" :title="mediaFailed(item, index) ? '本地文件可能已被清理；可点「下载图片到本地」重新获取' : mediaStateLabel(item)">
+              <AppIcon name="image" :size="17" />
+              <span>{{ mediaFailed(item, index) ? '图片缺失' : mediaStateLabel(item) }}</span>
+              <small v-if="!mediaFailed(item, index) && item.failReason">{{ item.failReason }}</small>
             </div>
             <div class="media-ops">
               <span class="media-role">{{ item.role === 'cover' ? '主图' : item.role === 'gallery' ? '图集' : item.role === 'detail' ? '详情' : 'SKU' }}</span>
@@ -391,7 +407,9 @@ async function save(): Promise<void> {
 .media-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .media-cell{display:flex;flex-direction:column;gap:4px;padding:6px;border:1px solid var(--dash-border);border-radius:10px;background:#fff}
 .media-img{width:100%;height:72px;object-fit:cover;border-radius:6px;background:#f4f5f7}
-.media-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;height:72px;border-radius:6px;background:#f4f5f7;color:var(--dash-text-muted);font-size:11px;gap:2px;text-align:center;padding:4px}
+.media-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;height:72px;border-radius:6px;background:#f4f5f7;color:var(--dash-text-muted);font-size:10.5px;gap:3px;text-align:center;padding:4px}
+.media-placeholder .ui-icon{color:var(--dash-text-disabled)}
+.media-placeholder small{font-size:9.5px;line-height:1.3}
 .media-ops{display:flex;align-items:center;flex-wrap:wrap;gap:4px}
 .media-role{font-size:10px;color:var(--dash-text-muted);margin-right:auto}
 .media-btn{border:1px solid var(--dash-border);border-radius:6px;background:#fff;color:var(--dash-text-soft);cursor:pointer;font-size:10px;padding:1px 6px}

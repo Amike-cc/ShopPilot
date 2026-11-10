@@ -49,6 +49,27 @@ export function messageRoleLabel(message: ConversationMessage): string {
   return 'root-ceo'
 }
 
+/**
+ * 历史/异常回合里，模型偶尔会把 {thought,reply} 原样落库（截断或解析失败）。
+ * 气泡里不能直接展示这段 JSON——尽量抽出 reply，抽不到才退回原文。
+ */
+function jsonStringField(raw: string, key: string): string {
+  const match = raw.match(new RegExp(`"${key}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"?`))
+  if (!match?.[1]) return ''
+  const value = match[1]
+  try { return JSON.parse(`"${value}"`) as string } catch {
+    return value.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+  }
+}
+
+export function displayMessageText(message: ConversationMessage): string {
+  const text = String(message.text || '')
+  if (message.role !== 'assistant') return text
+  const trimmed = text.trim()
+  if (!trimmed.startsWith('{') || !trimmed.includes('"reply"')) return text
+  return jsonStringField(trimmed, 'reply') || text
+}
+
 export function messageTone(message: ConversationMessage): ConversationTone {
   if (message.role === 'user') return 'info'
   if (message.thought) return 'neutral'

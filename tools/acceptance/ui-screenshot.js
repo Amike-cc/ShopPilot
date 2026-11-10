@@ -124,6 +124,27 @@ async function main() {
       console.log(`[shot] ${page.key.padEnd(11)} clicked=${clicked} → ${path.basename(file)}`)
     }
 
+    const capture = async (name) => {
+      const shot = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
+      fs.writeFileSync(path.join(OUT, `${name}.png`), Buffer.from(shot.data, 'base64'))
+      console.log(`[shot] ${name.padEnd(20)} → ${name}.png`)
+    }
+
+    // 设置中心各页签（AI / 安全 / 扩展 / 维护 / 关于）
+    for (const tab of ['ai', 'security', 'extensions', 'maintenance', 'about']) {
+      await client.eval(`document.querySelector('[data-test="settings-tab-${tab}"]')?.click(); return true`)
+      await sleep(tab === 'ai' || tab === 'maintenance' ? 1400 : 900)
+      if (tab === 'maintenance') {
+        const keep = await client.eval(`
+          const el = document.querySelector('[data-test="maintenance-backup-keep"]')
+          if (!el) return null
+          return { value: el.value, text: el.options[el.selectedIndex]?.textContent || '', disabled: el.disabled, width: el.getBoundingClientRect().width }
+        `)
+        console.log('[shot] backup keep select =', JSON.stringify(keep))
+      }
+      await capture(`settings-${tab}`)
+    }
+
     // 电商客服工作区（同窗切换，不是新窗口）
     const cs = await client.eval(`
       const btn = document.querySelector('[data-test="workspace-tab-customer-service"]')
@@ -141,6 +162,18 @@ async function main() {
     `)
     await sleep(900)
 
+    // 通知中心与智能体抽屉（回到经营工作台后）
+    await client.eval(`document.querySelector('[data-test="notification-bell"]')?.click(); return true`)
+    await sleep(500)
+    await capture('notification-center')
+    await client.eval(`document.querySelector('[data-test="notification-bell"]')?.click(); return true`)
+    await sleep(300)
+    await client.eval(`document.querySelector('.agent-orb')?.click(); return true`)
+    await sleep(900)
+    await capture('agent-drawer')
+    await client.eval(`document.querySelector('.agent-orb')?.click(); return true`)
+    await sleep(300)
+
     // 店铺浏览器（guest 宿主 + 标签栏 + 地址栏 + 右侧面板），最容易因外壳改动回归的一面
     const opened = await client.eval(`
       const card = document.querySelector('[data-test="store-card"]')
@@ -152,6 +185,17 @@ async function main() {
     const browserShot = await client.send('Page.captureScreenshot', { format: 'png' })
     fs.writeFileSync(path.join(OUT, 'browser.png'), Buffer.from(browserShot.data, 'base64'))
     console.log('[shot] browser     clicked=' + opened + ' → browser.png')
+    for (const [key, label] of [['bookmarks', '收藏'], ['downloads', '下载'], ['env', '环境']]) {
+      const clicked = await client.eval(`
+        const btn = [...document.querySelectorAll('.dashboard-browser-panel-tabs button')]
+          .find(el => (el.textContent || '').trim().includes(${JSON.stringify(label)}))
+        if (!btn) return false
+        btn.click(); return true
+      `)
+      await sleep(600)
+      await capture(`browser-panel-${key}`)
+      if (!clicked) console.log('[shot] 面板页签未找到：', label)
+    }
     await client.eval(`
       const item = [...document.querySelectorAll('.dashboard-nav-item')]
         .find(el => (el.textContent || '').trim().includes('经营总览'))
@@ -166,6 +210,30 @@ async function main() {
     fs.writeFileSync(path.join(OUT, 'command-palette.png'), Buffer.from(cmd.data, 'base64'))
     await client.eval(`document.querySelector('.command-backdrop')?.click(); return true`)
     await sleep(300)
+
+    // 商品编辑器抽屉
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('商品管理'))
+      nav?.click(); return true
+    `)
+    await sleep(900)
+    const openedEditor = await client.eval(`
+      const edit = document.querySelector('[data-test^="local-edit-"]')
+      if (!edit) return false
+      edit.click(); return true
+    `)
+    await sleep(900)
+    await capture('product-editor')
+    await client.eval(`document.querySelector('[data-test="editor-close"]')?.click(); return true`)
+    await sleep(400)
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('经营总览'))
+      nav?.click(); return true
+    `)
+    await sleep(700)
+    if (!openedEditor) console.log('[shot] 商品编辑器未打开（没有可编辑商品）')
 
     // 店铺右键菜单
     await client.eval(`
@@ -193,6 +261,28 @@ async function main() {
     fs.writeFileSync(path.join(OUT, 'store-create-dialog.png'), Buffer.from(dlg.data, 'base64'))
     await client.eval(`document.querySelector('[data-test="store-create-dialog"]')?.click(); return true`)
     await sleep(300)
+
+    // 店铺编辑对话框
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('店铺管理'))
+      nav?.click(); return true
+    `)
+    await sleep(700)
+    const openedStoreEdit = await client.eval(`
+      const edit = document.querySelector('[data-test="store-edit-open"]')
+      if (!edit) return false
+      edit.click(); return true
+    `)
+    await sleep(600)
+    await capture('store-edit-dialog')
+    await client.eval(`
+      const cancel = [...document.querySelectorAll('[data-test="store-edit-dialog"] button')]
+        .find(el => (el.textContent || '').trim().includes('取消'))
+      cancel?.click(); return true
+    `)
+    await sleep(300)
+    if (!openedStoreEdit) console.log('[shot] 店铺编辑未打开（没有店铺）')
 
     // 收起态左栏
     await client.eval(`document.querySelector('[data-test="sidebar-collapse"]')?.click(); return true`)

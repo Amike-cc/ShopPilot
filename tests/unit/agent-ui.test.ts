@@ -3,7 +3,7 @@ import { agentUiStateSchema, DEFAULT_AGENT_UI_STATE } from '@shared/schemas/agen
 import { redactAgentText } from '@shared/agent-privacy'
 import { clampOrbPoint, isOrbDrag, snapOrbToNearestEdge } from '../../apps/desktop/src/renderer/src/features/agent/orb-geometry'
 import { planStatusForJob, statusForJob } from '../../apps/desktop/src/renderer/src/features/agent/job-status'
-import { conversationStatusLabel, conversationStatusTone, groupThoughtMessages, messageTone, recoveryHint } from '../../apps/desktop/src/renderer/src/features/agent/conversation-state'
+import { conversationStatusLabel, conversationStatusTone, displayMessageText, groupThoughtMessages, messageTone, recoveryHint } from '../../apps/desktop/src/renderer/src/features/agent/conversation-state'
 
 describe('Agent UI persistence and orb movement helpers', () => {
   it('renders the conversation as a status-aware timeline', () => {
@@ -18,6 +18,19 @@ describe('Agent UI persistence and orb movement helpers', () => {
       { role: 'assistant', text: '已完成' }
     ])).toHaveLength(3)
     expect(recoveryHint('recovery_required')).toContain('回读平台状态')
+  })
+  it('renders legacy raw agent JSON as the reply, not as JSON in the bubble', () => {
+    expect(displayMessageText({
+      role: 'assistant',
+      text: '{"thought":"用户要查达人数","reply":"抖店目前有两家店铺。","actions":[]}'
+    })).toBe('抖店目前有两家店铺。')
+    expect(displayMessageText({
+      role: 'assistant',
+      text: '{"thought":"先切到已打开的店铺","reply":"我先切到 [1111]'
+    })).toBe('我先切到 [1111]')
+    expect(displayMessageText({ role: 'user', text: '{"reply":"不要动用户原文"}' }))
+      .toBe('{"reply":"不要动用户原文"}')
+    expect(displayMessageText({ role: 'assistant', text: '普通回复' })).toBe('普通回复')
   })
   it('maps job and task statuses without pretending blocked work succeeded', () => {
     expect(statusForJob('queued')).toBe('running')

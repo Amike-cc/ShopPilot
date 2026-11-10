@@ -97,9 +97,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEscape))
 .agent-header { display:flex;align-items:center;gap:9px;flex:0 0 auto;padding:9px 12px;border-bottom:1px solid var(--color-border); }
 .agent-title-mark { display:grid;place-items:center;width:30px;height:30px;overflow:hidden;border-radius:10px;background:linear-gradient(145deg,#2e86e9,#8150d9); }
 .agent-title-mark img { width:32px;height:32px;object-fit:contain; }
-.agent-title { display:flex;flex-direction:column;gap:2px; }.agent-title strong { font-size:13px; }.agent-presence { color:#067647;font-size:9px; }.agent-presence.working { color:#b54708; }.agent-presence.failed { color:#b42318; }
+.agent-title { display:flex;flex-direction:column;gap:2px; }.agent-title strong { font-size:13px; }.agent-presence { color:#067647;font-size:10.5px; }.agent-presence.working { color:#b54708; }.agent-presence.failed { color:#b42318; }
 .agent-close { display:grid;place-items:center;margin-left:auto;width:26px;height:26px;border:0;border-radius:7px;background:transparent;color:var(--color-text-secondary);cursor:pointer; }.agent-close img { width:16px;height:16px;object-fit:contain; }
-.agent-mode-note { flex:0 0 auto;padding:8px 12px;border-bottom:1px solid var(--color-border);color:var(--color-text-muted);font-size:10px;line-height:1.5; }
+.agent-mode-note { flex:0 0 auto;padding:8px 12px;border-bottom:1px solid var(--color-border);color:var(--color-text-muted);font-size:11px;line-height:1.5; }
 .agent-scroll-area { flex:1 1 auto;min-height:80px;overflow:auto;padding-bottom:8px;scroll-behavior:smooth; }
 .agent-error { display:flex;flex-direction:column;gap:3px;margin:4px 14px 12px;padding:8px 10px;border:1px solid rgba(224,116,116,.42);border-radius:8px;background:rgba(164,65,65,.08);color:var(--color-text-primary);font-size:10px; }.agent-error strong { color:#b42318; }.agent-error span { line-height:1.45; }
 .agent-jump-latest { position:absolute;left:50%;bottom:105px;z-index:6;transform:translateX(-50%);border:1px solid rgba(126,110,226,.65);border-radius:99px;padding:5px 12px;background:rgba(58,48,120,.92);color:#efeaff;font-size:10px;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.2); }
