@@ -1188,7 +1188,7 @@ onMounted(() => { void loadLinks(); void loadLocal() })
           </template>
         </div>
         <div v-else class="product-table-wrap">
-          <table class="product-table">
+          <table class="product-table local-product-table">
             <thead><tr><th class="th-check"><input type="checkbox" data-test="batch-check-all" :disabled="busy" :checked="allPageSelected" @change="toggleSelectAll" /></th><th class="th-thumb">图</th><th>标题</th><th>状态</th><th>挂载</th><th>规格</th><th>价格</th><th>库存</th><th>更新时间</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="row in localRows" :key="row.id" :data-test="'local-product-' + row.id">
@@ -1689,7 +1689,7 @@ onMounted(() => { void loadLinks(); void loadLocal() })
 .product-search{min-height:32px;width:280px;padding:0 10px;border:1px solid var(--dash-border);border-radius:8px;font-size:12px;color:var(--dash-text)}
 .product-select{min-height:32px;padding:0 8px;border:1px solid var(--dash-border);border-radius:8px;font-size:12px;color:var(--dash-text);background:#fff}
 .product-check{display:inline-flex;align-items:center;gap:5px;color:var(--dash-text-soft);font-size:12px;cursor:pointer}
-.product-table-wrap{margin-top:6px;margin-bottom:16px;border:1px solid var(--dash-border);border-radius:12px;background:#fff;overflow:hidden}
+.product-table-wrap{margin-top:6px;margin-bottom:16px;border:1px solid var(--dash-border);border-radius:12px;background:#fff;overflow-x:auto}
 .product-table-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--dash-border)}
 .product-table-head h2{margin:0;font-size:14px}
 .product-table-head span{color:var(--dash-text-muted);font-size:11px}
@@ -1772,4 +1772,10 @@ onMounted(() => { void loadLinks(); void loadLocal() })
 .product-actions>button .ui-icon{color:var(--dash-text-muted)}
 .product-actions>button:hover .ui-icon{color:currentColor}
 .product-table td{padding:8px 10px;vertical-align:middle}
+/* 1280 笔记本：先收起「规格 / 库存」两列（编辑器里仍可查看），保证操作列不被裁掉；更窄时表格可横向滚动。 */
+@media (max-width:1360px){
+  .local-product-table th:nth-child(6),.local-product-table td:nth-child(6),
+  .local-product-table th:nth-child(8),.local-product-table td:nth-child(8){display:none}
+  .local-product-table .product-title{max-width:280px}
+}
 </style>

@@ -1845,7 +1845,8 @@ onBeforeUnmount(() => {
 .settings-section{padding:20px 22px;border:1px solid #e7eaf0;border-radius:16px;background:#ffffff;box-shadow:0 12px 30px rgba(30,41,74,.06)}
 .settings-section-head{padding-bottom:15px;margin-bottom:16px;border-bottom:1px solid #eef1f6}
 .settings-section-head h2{font-size:16px;letter-spacing:-.01em}
-.settings-head-actions-row{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.settings-section-head>div:first-child{min-width:0;flex:1 1 auto}
+.settings-head-actions-row{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:0 0 auto;flex-wrap:wrap}
 .settings-unsaved{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border:1px solid #f0d7aa;border-radius:999px;background:#fffaf1;color:#9a5b08;font-size:10px;font-weight:600;white-space:nowrap}
 .settings-unsaved::before{width:6px;height:6px;border-radius:50%;background:#eaaa43;content:''}
 

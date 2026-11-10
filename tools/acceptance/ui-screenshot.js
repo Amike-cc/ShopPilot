@@ -16,7 +16,10 @@ const { waitForMainWindow, sleep } = require('./cdp-client')
 
 const ROOT = path.resolve(__dirname, '../..')
 const PORT = Number(process.env.SHOPILOT_SHOT_PORT || 9288)
-const OUT = path.join(ROOT, 'artifacts', 'ui-redesign')
+const WIDTH = Number(process.env.SHOPILOT_SHOT_WIDTH || 1440)
+const HEIGHT = Number(process.env.SHOPILOT_SHOT_HEIGHT || 940)
+const SHOT_DIR = process.env.SHOPILOT_SHOT_DIR || ''
+const OUT = path.join(ROOT, 'artifacts', 'ui-redesign', SHOT_DIR)
 const REAL_DB = path.join(process.env.APPDATA || '', 'shopilot', 'shopilot.db')
 
 const PAGES = [
@@ -70,13 +73,13 @@ async function main() {
       const main = list.find(t => t.type === 'page' && String(t.url).includes('index.html'))
       const { windowId } = await browserClient.send('Browser.getWindowForTarget', { targetId: main.id })
       await browserClient.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } })
-      await browserClient.send('Browser.setWindowBounds', { windowId, bounds: { width: 1440, height: 940 } })
-      console.log('[shot] 窗口调整为 1440×940')
+      await browserClient.send('Browser.setWindowBounds', { windowId, bounds: { width: WIDTH, height: HEIGHT } })
+      console.log(`[shot] 窗口调整为 ${WIDTH}×${HEIGHT}`)
       browserClient.close()
     } catch (err) {
       console.log('[shot] Browser 域不可用，改用 window.resizeTo：', err && err.message)
       const size = await client.eval(`
-        try { window.resizeTo(1440, 940) } catch (e) { return { error: String(e) } }
+        try { window.resizeTo(${WIDTH}, ${HEIGHT}) } catch (e) { return { error: String(e) } }
         await new Promise(r => setTimeout(r, 400))
         return { inner: [window.innerWidth, window.innerHeight], outer: [window.outerWidth, window.outerHeight] }
       `)

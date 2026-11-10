@@ -1171,5 +1171,6 @@ button.inv-chip:hover{border-color:rgba(151,120,255,.7);color:var(--dash-text)}
 .an-platform-card dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0 0}
 .an-platform-card dt{color:var(--dash-text-muted);font-size:10px}
 .an-platform-card dd{margin:2px 0 0;color:var(--dash-text);font-size:12px;font-weight:600;white-space:nowrap}
+@media(max-width:1360px){.unified-data-grid{grid-template-columns:1fr}}
 @media(max-width:768px){.an-toolbar-note{flex:1 1 100%;margin-left:0}.an-platform-card dl{grid-template-columns:1fr}}
 </style>
