@@ -58,6 +58,26 @@ const subtitle = computed(() => props.mode === 'invoices'
 const bizMetrics = BIZ_METRICS
 const totalCards = computed(() => { const t = dataCenter.value?.totals || {}; return [{ label: '店铺', value: t.stores ?? '—', note: `${t.online ?? 0} 家在线` }, { label: '平台', value: t.platforms ?? '—', note: '已配置的平台' }, { label: '指标快照', value: t.snapshots ?? '—', note: '本机采集记录' }, { label: '任务', value: t.tasks ?? '—', note: '任务定义总数' }] })
 const snapshotRows = computed<any[]>(() => dataCenter.value?.snapshots || [])
+/** 快照 key → 可读名称；未知自定义指标保留原 key，绝不猜。 */
+const SNAPSHOT_METRIC_LABELS: Record<string, string> = {
+  ...Object.fromEntries(BIZ_METRICS.map(metric => [metric.key, metric.label])),
+  'entity.name': '主体名称',
+  'entity.no': '统一社会信用代码',
+  'invite.quota': '邀约额度',
+  'invite.row': '邀约记录',
+  'invite.script': '邀约话术',
+  'invite.selectedCount': '已选达人'
+}
+function snapshotLabel(metric: unknown): string {
+  const key = String(metric || '')
+  if (SNAPSHOT_METRIC_LABELS[key]) return SNAPSHOT_METRIC_LABELS[key]
+  if (key.startsWith('detail.')) return '竞品详情快照'
+  if (key.startsWith('invoice.')) return '发票快照'
+  if (key.startsWith('tax.')) return '涉税快照'
+  if (key.startsWith('invite.')) return '邀约快照'
+  if (key.startsWith('product.')) return '商品快照'
+  return key
+}
 /**
  * 数据分析 · 经营指标聚合（2026-11-09）。
  *
@@ -537,7 +557,7 @@ const metricRows = computed(() => (analyticsData.value?.rows || [])
 const manualReady = computed(() => !!manual.storeId && manual.value != null && Number.isFinite(Number(manual.value)) && Number(manual.value) >= 0)
 function displayValue(value: unknown) { return value == null || value === '' ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value) }
 function formatTime(value: number) { return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
-function formatValue(value: unknown, key: string) { const number = typeof value === 'number' ? value : Number(value); if (!Number.isFinite(number)) return '—'; return key.includes('gmv') || key.includes('Amount') ? `¥ ${number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}` : number.toLocaleString('zh-CN') }
+function formatValue(value: unknown, key: string) { const number = typeof value === 'number' ? value : Number(value); if (!Number.isFinite(number)) return '—'; return /gmv|Amount|adSpend/i.test(key) ? `¥ ${number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}` : number.toLocaleString('zh-CN') }
 const exportScope = computed(() => {
   const key = activeLicense.value
   if (!key) return null
@@ -596,6 +616,8 @@ function openExportConfirm() {
     totalCards,
 
     snapshotRows,
+
+    snapshotLabel,
 
     analyticsData,
     analyticsState,

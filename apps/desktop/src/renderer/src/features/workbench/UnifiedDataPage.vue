@@ -36,7 +36,7 @@
           <div v-else-if="!metricRows.some(row => row.source !== 'NONE')" class="unified-empty compact">当前范围没有经营指标。请先运行自动采集，或点「采集经营数据」。</div>
           <div v-else class="unified-table-wrap"><table class="unified-table"><thead><tr><th>店铺</th><th>平台</th><th>来源</th><th>口径</th><th v-for="metric in bizMetrics" :key="metric.key">{{ metric.label }}</th><th>采集时间</th></tr></thead><tbody><tr v-for="row in metricRows" :key="row.storeId"><td>{{ row.storeName }}</td><td>{{ row.platform }}</td><td><span :class="['an-source', row.source.toLowerCase()]">{{ row.sourceLabel }}</span></td><td><span class="an-period">{{ row.periodLabel }}</span></td><td v-for="metric in bizMetrics" :key="metric.key">{{ formatValue(row.values[metric.key], metric.key) }}<em v-if="row.manual[metric.key]">手动</em></td><td>{{ row.lastAt ? formatTime(row.lastAt) : '—' }}</td></tr></tbody></table></div>
         </section>
-        <section class="unified-card"><div class="unified-card-head"><div><h2>指标快照</h2><span>{{ snapshotRows.length }} 条本机记录</span></div></div><div v-if="snapshotRows.length" class="snapshot-list"><div v-for="snapshot in snapshotRows.slice(0, 12)" :key="snapshot.storeId + snapshot.metric + snapshot.capturedAt" class="snapshot-row"><div><strong>{{ snapshot.metric }}</strong><small>{{ snapshot.storeName || snapshot.storeId }}</small></div><span>{{ displayValue(snapshot.value) }}</span></div></div><div v-else class="unified-empty compact">暂无快照</div></section>
+        <section class="unified-card"><div class="unified-card-head"><div><h2>指标快照</h2><span>{{ snapshotRows.length }} 条本机记录</span></div></div><div v-if="snapshotRows.length" class="snapshot-list"><div v-for="snapshot in snapshotRows.slice(0, 12)" :key="snapshot.storeId + snapshot.metric + snapshot.capturedAt" class="snapshot-row"><div><strong>{{ snapshotLabel(snapshot.metric) }}</strong><small>{{ snapshot.storeName || snapshot.storeId }}</small></div><span>{{ displayValue(snapshot.value) }}</span></div></div><div v-else class="unified-empty compact">暂无快照</div></section>
       </div>
 
       <section v-if="mode === 'analytics' && analyticsByPlatform.length" class="unified-card analytics-platform-card" data-test="analytics-platform-compare">
@@ -765,6 +765,7 @@ const {
   bizMetrics,
   totalCards,
   snapshotRows,
+  snapshotLabel,
   analyticsState,
   analyticsError,
   analyticsPeriod,
@@ -1143,6 +1144,10 @@ button.inv-chip:hover{border-color:rgba(151,120,255,.7);color:var(--dash-text)}
 .an-toolbar .ui-seg button.on{background:rgba(120,85,238,.35);color:#4c1d95}
 .an-platform{height:34px;min-width:150px;padding:0 9px;border:1px solid var(--dash-border);border-radius:8px;background:#ffffff;color:var(--dash-text-soft)}
 .an-toolbar-note{margin-left:auto;color:var(--dash-text-muted);font-size:11px}
+/* 经营指标表：数字列右对齐 + 行 hover，扫一眼就能对齐比较 */
+.data-wide .unified-table tbody tr:hover{background:#f8fafc}
+.data-wide .unified-table th:nth-child(n+5),.data-wide .unified-table td:nth-child(n+5){text-align:right;font-variant-numeric:tabular-nums}
+.data-wide .unified-table th:last-child,.data-wide .unified-table td:last-child{text-align:right}
 .an-source{display:inline-flex;align-items:center;padding:2px 6px;border-radius:5px;font-size:10px;white-space:nowrap}
 .an-source.auto{background:#e8f5ee;color:#027a48}
 .an-source.snapshot{background:#fff4e5;color:#b54708}

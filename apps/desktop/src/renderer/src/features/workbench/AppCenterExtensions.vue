@@ -304,7 +304,7 @@ onMounted(() => { void refresh() })
 .ace-btn.danger{border-color:rgba(217,45,32,.35);color:var(--danger-text)}
 .ace-btn.danger:hover:not(:disabled){border-color:var(--danger-text);color:var(--danger-text);background:rgba(217,45,32,.06)}
 .ace-catalog{display:flex;flex-direction:column;gap:var(--sp-2)}
-.ace-card{border:1px solid var(--ui-border);border-radius:var(--r-md);background:var(--ui-surface-sunken);padding:var(--sp-3)}
+.ace-card{border:1px solid var(--ui-border);border-radius:var(--r-md);background:var(--ui-surface);padding:var(--sp-3);box-shadow:var(--e1)}
 .ace-card-main{display:flex;align-items:flex-start;gap:12px}
 .ace-icon{display:grid;place-items:center;width:38px;height:38px;flex:0 0 auto;border-radius:var(--r-md);background:var(--brand-50);color:var(--brand-text)}
 .ace-icon svg{width:20px;height:20px}

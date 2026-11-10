@@ -1082,12 +1082,29 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 
 /* ---------------- 左栏 ---------------- */
 .dashboard-sidebar {
+  /* UI v3（2026-11-10）：深色左栏。只在本子树内重定义 ui-* 令牌，
+     子元素原本就引用这些变量，因此无需逐条改色；内容区保持浅色。 */
+  --ui-surface: #0b1120;
+  --ui-surface-subtle: #111a2e;
+  --ui-surface-sunken: #172138;
+  --ui-border: #1e293b;
+  --ui-border-strong: #2a3750;
+  --ui-text: #f1f5ff;
+  --ui-text-secondary: #c3cce0;
+  --ui-text-muted: #8a96b2;
+  --ui-text-disabled: #5b6780;
+  --brand-soft: rgba(124, 92, 245, 0.18);
+  --brand-soft-hover: rgba(124, 92, 245, 0.28);
+  --brand-text: #c4b5fd;
+  --brand: #7c5cf5;
+  --warning-text: #fbbf24;
+  --danger-text: #fb7185;
   display: flex;
   width: var(--shell-sidebar-w);
   min-width: var(--shell-sidebar-w);
   flex-direction: column;
-  border-right: 1px solid var(--ui-border);
-  background: var(--ui-surface);
+  border-right: 1px solid #1e293b;
+  background: #0b1120;
   color: var(--ui-text-secondary);
   transition:
     width var(--dur-base) var(--ease),
@@ -1097,6 +1114,9 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
   width: var(--shell-sidebar-collapsed-w);
   min-width: var(--shell-sidebar-collapsed-w);
 }
+.dashboard-sidebar ::-webkit-scrollbar { width: 8px; }
+.dashboard-sidebar ::-webkit-scrollbar-thumb { border-radius: 8px; background: #243049; }
+.dashboard-sidebar ::-webkit-scrollbar-track { background: transparent; }
 
 /* 品牌区 */
 .sb-brand {
@@ -1194,12 +1214,13 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
   color: var(--ui-text-secondary);
 }
 .sb-item.active {
-  background: var(--brand-soft);
-  color: var(--brand-text);
+  background: var(--brand);
+  color: #fff;
   font-weight: var(--weight-semibold);
+  box-shadow: 0 6px 18px -8px rgba(124, 92, 245, 0.8);
 }
 .sb-item.active .ui-icon {
-  color: var(--brand);
+  color: #fff;
 }
 .sb-item-label {
   overflow: hidden;

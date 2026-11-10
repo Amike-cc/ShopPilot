@@ -1220,7 +1220,7 @@ onMounted(() => { void loadLinks(); void loadLocal() })
                   <button type="button" class="unified-button ghost" :data-test="'local-copy-' + row.id" :disabled="busy" @click="duplicateProduct(row)">
                   <img class="button-icon" :src="batchHandleStoreIcon" alt="" />复制</button>
                   <button type="button" class="unified-button ghost" :data-test="'local-localize-' + row.id" :disabled="busy" @click="localizeMedia(row)">
-                  <img class="button-icon" :src="downloadImageIcon" alt="" />下载图片到本地</button>
+                  <img class="button-icon" :src="downloadImageIcon" alt="" />下载图片</button>
                   <button type="button" class="unified-button ghost" :data-test="'local-preflight-' + row.id" :disabled="busy" @click="runPreflight(row)">
                   <img class="button-icon" :src="preflightIcon" alt="" />发布预检</button>
                   <button v-if="row.status === 'archived'" type="button" class="unified-button ghost" :data-test="'local-unarchive-' + row.id" :disabled="busy" @click="setArchived(row, false)">

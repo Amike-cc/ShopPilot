@@ -35,7 +35,7 @@
         <div class="ov-main">
           <!-- 销售概览：标题 + 口径控件 + 6 个核心指标 + 趋势图同属一张卡，
                避免"指标与图各自一张卡、中间被 16px 空白割断"（旧版三张卡的问题） -->
-          <section id="sales-trend" class="ui-card ov-summary">
+          <section id="sales-trend" class="ui-card ov-summary ov-card-dark">
             <div class="ov-summary-head">
               <div class="ui-card__title">
                 <h2>销售概览</h2>
@@ -326,6 +326,52 @@ function handleQuickAction(action: (typeof quickActions)[number]) {
 .ov-summary {
   padding: var(--sp-4) var(--sp-5) var(--sp-5);
 }
+
+/* 销售概览 hero：深色卡（目标稿的第三块）。只在本卡内重定义令牌，
+   卡里的 KPI / 图表 / 胶囊页签一起反色；外层标题色单独覆盖。 */
+.ov-card-dark {
+  --ui-surface: #0b1224;
+  --ui-surface-subtle: #111a2e;
+  --ui-surface-sunken: #172138;
+  --ui-border: rgba(148, 163, 184, 0.18);
+  --ui-border-strong: rgba(148, 163, 184, 0.3);
+  --ui-text: #f8fafc;
+  --ui-text-secondary: #cbd5e1;
+  --ui-text-muted: #94a3b8;
+  --ui-text-disabled: #64748b;
+  --brand: #8b5cf6;
+  --brand-soft: rgba(124, 92, 245, 0.2);
+  --brand-text: #c4b5fd;
+  --delta-up: #34d399;
+  --delta-down: #fb7185;
+  border-color: rgba(124, 92, 245, 0.32);
+  background:
+    radial-gradient(120% 150% at 18% 0%, rgba(76, 61, 158, 0.55) 0%, rgba(11, 18, 36, 0) 55%),
+    linear-gradient(160deg, #111a33 0%, #0b1224 58%, #090f1d 100%);
+  box-shadow: 0 22px 60px -30px rgba(2, 6, 23, 0.8);
+}
+.ov-card-dark .ui-card__title h2 { color: #f8fafc; }
+.ov-card-dark .ui-card__title p { color: #94a3b8; }
+.ov-card-dark .ui-seg { background: rgba(148, 163, 184, 0.12); }
+.ov-card-dark .ui-seg button { color: #a9b6cc; }
+.ov-card-dark .ui-seg button.on { background: #7c5cf5; color: #fff; }
+.ov-card-dark .ov-platform { border-color: rgba(148, 163, 184, 0.28); background: rgba(15, 23, 42, 0.7); color: #dbe4f3; }
+.ov-card-dark .chart-grid-v { stroke: rgba(148, 163, 184, 0.08); }
+.ov-card-dark .chart-y-label,
+.ov-card-dark .chart-x-label { fill: #94a3b8; }
+.ov-card-dark .order-line { stroke: #38bdf8; }
+.ov-card-dark .order-point { stroke: #38bdf8; }
+.ov-card-dark .chart-hover-dot.orders { fill: #38bdf8; }
+.ov-card-dark .legend-dot.orders { background: #38bdf8; }
+.ov-card-dark .gmv-point { fill: #0b1224; }
+.ov-card-dark .chart-hover-dot.gmv { stroke: #0b1224; }
+.ov-card-dark .ui-empty { border-color: rgba(148, 163, 184, 0.18); background: rgba(15, 23, 42, 0.35); color: #94a3b8; }
+.ov-card-dark .ui-empty__icon { background: rgba(139, 92, 246, 0.2); color: #c4b5fd; }
+.ov-card-dark .ui-empty__title { color: #e2e8f0; }
+.ov-card-dark .ui-loading { color: #94a3b8; }
+.ov-card-dark .ov-caption { color: #94a3b8; }
+.ov-card-dark .ov-chart-wrap:has(.ui-empty) { min-height: 140px; }
+
 .ov-summary-head {
   display: flex;
   align-items: flex-start;
@@ -567,11 +613,13 @@ function handleQuickAction(action: (typeof quickActions)[number]) {
   padding: var(--sp-3);
   border: 1px solid var(--ui-border);
   border-radius: var(--r-md);
-  background: var(--ui-surface-subtle);
+  background: var(--ui-surface);
   transition:
     border-color var(--dur-base) var(--ease),
     background var(--dur-base) var(--ease);
 }
+.ov-tile.tone-purple { border-color: #ece5ff; background: #f8f5ff; }
+.ov-tile.tone-blue { border-color: #e3edff; background: #f5f9ff; }
 .ov-tile:hover {
   border-color: var(--brand-border);
   background: var(--ui-surface);
