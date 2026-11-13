@@ -22,20 +22,24 @@ const emit = defineEmits<{ close: [] }>()
 </script>
 
 <template>
-  <div class="sm-overlay" @click.self="emit('close')">
-    <section class="sm-card" role="dialog" aria-modal="true" :aria-label="title">
-      <header class="sm-head">
-        <div>
-          <h2>{{ title }}</h2>
-          <p>设置随功能保存在本机；关闭后回到当前页面，不会跳转到设置中心。</p>
+  <!-- Teleport：设置浮层必须相对视口居中。工具页的页头/步骤条可能带 transform、
+       backdrop-filter 或 overflow，这些都会成为 fixed 的包含块，让浮层被压缩成一条窄缝。 -->
+  <Teleport to="body">
+    <div class="sm-overlay" @click.self="emit('close')">
+      <section class="sm-card" role="dialog" aria-modal="true" :aria-label="title">
+        <header class="sm-head">
+          <div>
+            <h2>{{ title }}</h2>
+            <p>设置随功能保存在本机；关闭后回到当前页面，不会跳转到设置中心。</p>
+          </div>
+          <button type="button" class="sm-close" aria-label="关闭设置" @click="emit('close')">×</button>
+        </header>
+        <div class="sm-body">
+          <UnifiedSettingsPage :initial-tab="tab" :only-tabs="onlyTabs" :only-ai-sections="onlyAiSections" @close="emit('close')" />
         </div>
-        <button type="button" class="sm-close" aria-label="关闭设置" @click="emit('close')">×</button>
-      </header>
-      <div class="sm-body">
-        <UnifiedSettingsPage :initial-tab="tab" :only-tabs="onlyTabs" :only-ai-sections="onlyAiSections" @close="emit('close')" />
-      </div>
-    </section>
-  </div>
+      </section>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>

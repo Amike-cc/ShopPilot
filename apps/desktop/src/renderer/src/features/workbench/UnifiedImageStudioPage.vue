@@ -723,7 +723,7 @@ async function submitGeneration() {
 /* ① 输入 → ② 生成中 → ③ 完成 */
 .studio-steps-row{position:relative;display:flex;align-items:center;justify-content:center;min-height:32px;margin:0 0 16px}
 .studio-steps-row .studio-steps{margin:0}
-.studio-steps-settings{position:absolute;right:0;top:50%;transform:translateY(-50%)}
+.studio-steps-settings{position:absolute;right:0;top:0;bottom:0;display:flex;align-items:center}
 .detail-settings{position:absolute;right:0;top:0}
 .studio-steps{display:flex;align-items:center;justify-content:center;gap:0;margin:0 0 16px;padding:0;list-style:none}
 .studio-steps li{display:flex;align-items:center;gap:7px;color:#98a2b3;font-size:12px}
