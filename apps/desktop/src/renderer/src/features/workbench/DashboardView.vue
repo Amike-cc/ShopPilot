@@ -104,14 +104,18 @@
                 :class="['sb-store', 'store-card', { displayed: ws.displayedStoreId === store.id }]"
                 data-test="store-card"
                 :data-store-id="store.id"
-                :title="`${store.platform} · ${statusLabel(store.status)}`"
+                :title="`${store.platform} · ${statusLabel(store.status)} · 最近活动 ${storeLastActiveLabel(store.lastActiveAt)}`"
                 @click="openStoreFromPage(store.id)"
                 @contextmenu.prevent="openStoreContext(store, $event)"
               >
                 <PlatformIcon :name="store.platform" :size="16" />
                 <span class="sb-store-name">{{ store.name }}</span>
                 <span
-                  v-if="(ws.customerUnread[store.id] || 0) > 0"
+                  v-if="ws.openingStoreId === store.id"
+                  class="sb-store-opening"
+                >打开中…</span>
+                <span
+                  v-else-if="(ws.customerUnread[store.id] || 0) > 0"
                   class="ui-badge ui-badge--danger unread-badge store-unread-badge"
                   data-test="store-unread"
                   :title="`客服未读 ${ws.customerUnread[store.id]} 条`"
@@ -516,6 +520,7 @@ import DashboardOverviewPage from './components/DashboardOverviewPage.vue'
 import { waitForWorkspaceReady } from './use-dashboard-overview'
 import { ensureAppModulesLoaded, isModuleInstalled, type OptionalModuleKey } from './use-app-modules'
 import { buildWorkbenchNotifications, type WorkbenchNotificationItem } from './notification-center'
+import { storeLastActiveLabel } from './store-activity'
 import { useAgentStore } from '../../stores/agent'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
 import brandMark from '../../assets/brand/shopilot-mark.svg'
@@ -1325,6 +1330,13 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); docume
 }
 .sb-store-warn.offline {
   color: var(--danger-text);
+}
+.sb-store-opening {
+  flex: 0 0 auto;
+  color: var(--brand-text);
+  font-size: 10.5px;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
 }
 .sb-store .ui-dot {
   margin-left: 1px;

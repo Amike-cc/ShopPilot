@@ -58,7 +58,12 @@
         <button type="button" class="browser-zoom-value" :title="`当前缩放 ${zoomLabel}，点击复位 100%`" data-test="browser-zoom-value" @click="zoomBy('reset')">{{ zoomLabel }}</button>
         <button type="button" class="browser-zoom-btn" title="放大（Ctrl+=）" aria-label="放大页面" @click="zoomBy('in')">+</button>
       </div>
-      <span class="dashboard-browser-hint">页面内嵌 · 每店独立会话</span>
+      <span v-if="store" class="dashboard-browser-store" data-test="browser-current-store" :title="`当前店铺：${store.name} · ${store.platform} · 每店独立会话`">
+        <PlatformIcon :name="store.platform" :size="14" />
+        <strong>{{ store.name }}</strong>
+        <i :class="['browser-store-dot', store.status === 'online' ? 'online' : ['needs_login', 'proxy_error'].includes(store.status) ? 'warning' : 'offline']" aria-hidden="true"></i>
+      </span>
+      <span v-else class="dashboard-browser-hint">页面内嵌 · 每店独立会话</span>
     </div>
 
     <!-- 页面内查找（2026-11-08）：Ctrl+F 打开，Enter/Shift+Enter 跳转，Esc 关闭。
@@ -1475,6 +1480,13 @@ onBeforeUnmount(() => {
 .dashboard-browser-url:focus-within { border-color: rgba(135, 102, 246, .7); box-shadow: 0 0 0 2px rgba(135, 102, 246, .12); }
 .dashboard-browser-url input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--dash-text-soft); font-size: 11px; }
 .dashboard-browser-hint { flex: 0 0 auto; color: var(--dash-text-muted); font-size: 10px; }
+/* 当前店铺徽标：取代原来无信息的「页面内嵌」提示，让收起左栏时也知道现在是谁的会话 */
+.dashboard-browser-store { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 210px; flex: 0 1 auto; padding: 3px 8px; border: 1px solid var(--dash-border); border-radius: 999px; background: var(--ui-surface-subtle); color: var(--dash-text-soft); font-size: 10.5px; }
+.dashboard-browser-store strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); }
+.browser-store-dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: #94a3b8; }
+.browser-store-dot.online { background: #12b76a; }
+.browser-store-dot.warning { background: #f79009; }
+.browser-store-dot.offline { background: #ef4444; }
 .dashboard-browser-body { min-width: 0; min-height: 0; flex: 1; display: flex; gap: 12px; overflow: hidden; }
 .dashboard-browser-surface.picker-mode .dashboard-browser-body { flex: 0 0 clamp(320px, calc(100vh - 190px), 1000px); width: calc(100% - min(980px, 70vw)); max-width: calc(100% - min(980px, 70vw)); height: clamp(320px, calc(100vh - 190px), 1000px); align-self: flex-start; }
 .dashboard-browser-surface.picker-mode .dashboard-browser-panel { display: none; }
@@ -1623,6 +1635,7 @@ onBeforeUnmount(() => {
 @media (max-width: 820px) {
   .dashboard-browser-surface { padding: 12px 14px 16px; }
   .dashboard-browser-hint { display: none; }
+  .dashboard-browser-store { display: none; }
   .dashboard-browser-panel { width: 244px; min-width: 244px; }
   .dashboard-browser-tab { min-width: 118px; max-width: 200px; }
 }

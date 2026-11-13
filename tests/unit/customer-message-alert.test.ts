@@ -198,7 +198,8 @@ describe('界面侧：红点数据 + 提示音', () => {
 describe('侧栏红点：客服入口 + 对应店铺行', () => {
   it('店铺行显示该店未读数，客服入口显示总数（都只在 >0 时出现）', () => {
     expect(DASHBOARD).toContain('data-test="store-unread"')
-    expect(DASHBOARD).toMatch(/v-if="\(ws\.customerUnread\[store\.id\] \|\| 0\) > 0"/)
+    // 打开中状态优先占位，未读红点顺延为 v-else-if；两者互斥不叠加
+    expect(DASHBOARD).toMatch(/v-else-if="\(ws\.customerUnread\[store\.id\] \|\| 0\) > 0"/)
     expect(DASHBOARD).toContain('data-test="customer-service-unread"')
     expect(DASHBOARD).toMatch(/v-if="customerUnreadTotal > 0"/)
     // 超过 99 折叠显示，别把行撑坏

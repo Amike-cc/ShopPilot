@@ -117,6 +117,8 @@ export const useWorkspaceStore = defineStore('workspace', {
     displaySource: 'renderer' as 'renderer' | 'main',
     /** 已打开浏览器的店铺集合 */
     openStoreIds: [] as string[],
+    /** 正在打开工作区的店铺：卡片/侧栏显示「正在打开…」，避免重复点击与无反馈等待 */
+    openingStoreId: null as string | null,
     /** 各店铺标签页（事件驱动） */
     tabsByStore: {} as Record<string, TabInfo[]>,
     activeTabIdByStore: {} as Record<string, string | null>,
@@ -495,14 +497,22 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async openStore(storeId: string) {
-      const res = await window.shopilot.browser.open(storeId)
-      if (res.ok) {
-        this.selectedStoreId = storeId
-        this.displayedStoreId = storeId
-        if (!this.openStoreIds.includes(storeId)) this.openStoreIds.push(storeId)
-        await Promise.all([this.refreshBookmarks(), this.refreshDownloads()])
-      } else {
-        this.toast('打开店铺浏览器失败: ' + res.error.message, 'error')
+      this.openingStoreId = storeId
+      try {
+        const res = await window.shopilot.browser.open(storeId)
+        if (res.ok) {
+          this.selectedStoreId = storeId
+          this.displayedStoreId = storeId
+          if (!this.openStoreIds.includes(storeId)) this.openStoreIds.push(storeId)
+          // 主进程同时会写 last_active_at，这里先本地更新，侧栏/卡片的「最近使用」无需等刷新
+          const store = this.stores.find(item => item.id === storeId)
+          if (store) store.lastActiveAt = Date.now()
+          await Promise.all([this.refreshBookmarks(), this.refreshDownloads()])
+        } else {
+          this.toast('打开店铺浏览器失败: ' + res.error.message, 'error')
+        }
+      } finally {
+        if (this.openingStoreId === storeId) this.openingStoreId = null
       }
     },
 
