@@ -1,12 +1,12 @@
 <template>
-  <section class="agent-drawer" role="dialog" aria-modal="false" aria-label="AI 对话">
+  <section class="agent-drawer" role="dialog" aria-modal="false" :aria-label="props.title">
     <header class="agent-header">
       <div class="agent-title-mark"><img :src="assistantIcon" alt="" /></div>
       <div class="agent-title">
-        <strong>AI 对话</strong>
+        <strong>{{ props.title }}</strong>
         <span :class="['agent-presence', { working: agent.busy, failed: agent.status === 'failed' }]">{{ presenceLabel }}</span>
       </div>
-      <button class="agent-close" type="button" aria-label="关闭对话面板" title="关闭" @click="emit('close')"><img :src="closeIcon" alt="" /></button>
+      <button v-if="!props.embedded" class="agent-close" type="button" aria-label="关闭对话面板" title="关闭" @click="emit('close')"><img :src="closeIcon" alt="" /></button>
     </header>
 
     <div class="agent-mode-note" data-test="agent-chat-only">
@@ -33,6 +33,7 @@ import AgentMessageList from './AgentMessageList.vue'
 import assistantIcon from '../../assets/generated/ai-assistant-generated.png'
 import closeIcon from '../../assets/generated/ui-icons/close.png'
 
+const props = withDefaults(defineProps<{ embedded?: boolean; title?: string }>(), { embedded: false, title: 'AI 对话' })
 const emit = defineEmits<{ close: [] }>()
 const agent = useAgentStore()
 const scrollArea = ref<HTMLElement | null>(null)
@@ -70,6 +71,7 @@ function jumpToLatest() {
 }
 
 function onEscape(event: KeyboardEvent) {
+  if (props.embedded) return
   if (event.key !== 'Escape' || event.defaultPrevented) return
   event.preventDefault()
   emit('close')

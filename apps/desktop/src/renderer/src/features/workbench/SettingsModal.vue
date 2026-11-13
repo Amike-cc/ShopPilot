@@ -9,11 +9,13 @@
 import UnifiedSettingsPage from './UnifiedSettingsPage.vue'
 
 type SettingsTabKey = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'
+type AiConfigSectionKey = 'text' | 'image' | 'image-text'
 
 defineProps<{
   title: string
   tab?: SettingsTabKey
   onlyTabs?: SettingsTabKey[]
+  onlyAiSections?: AiConfigSectionKey[]
 }>()
 
 const emit = defineEmits<{ close: [] }>()
@@ -30,7 +32,7 @@ const emit = defineEmits<{ close: [] }>()
         <button type="button" class="sm-close" aria-label="关闭设置" @click="emit('close')">×</button>
       </header>
       <div class="sm-body">
-        <UnifiedSettingsPage :initial-tab="tab" :only-tabs="onlyTabs" @close="emit('close')" />
+        <UnifiedSettingsPage :initial-tab="tab" :only-tabs="onlyTabs" :only-ai-sections="onlyAiSections" @close="emit('close')" />
       </div>
     </section>
   </div>

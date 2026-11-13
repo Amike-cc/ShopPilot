@@ -32,11 +32,6 @@ export function isModuleInstalled(key: string): boolean {
   return installedModules[key as OptionalModuleKey] !== false
 }
 
-/** AI 创作是壳页：只要三个 AI 工具里任意一个装了，就保留侧栏入口。 */
-export function isAiHubInstalled(): boolean {
-  return AI_TOOL_MODULE_KEYS.some(key => isModuleInstalled(key))
-}
-
 /** 首次进入工作台/商城时读一次；读不到按全部已安装处理，绝不因为读失败藏入口 */
 export async function ensureAppModulesLoaded(): Promise<void> {
   if (loaded) return

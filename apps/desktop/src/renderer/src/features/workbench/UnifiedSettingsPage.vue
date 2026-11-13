@@ -26,12 +26,12 @@
         <div class="settings-note">保存会同时写入两组覆盖值；不联网探测可达性，保存前只做格式校验。</div>
       </section>
       <section v-else-if="activeTab === 'ai'" class="settings-section ai-settings-section" data-test="settings-ai" data-unified-test="unified-settings-ai">
-        <div class="settings-section-head"><div><h2>AI 配置</h2><p>Agent 文本、商品图生成、商品图文本分析分别保存地址、模型、超时和 API Key；Key 只经主进程 safeStorage 保存，页面不回显。</p></div></div>
+        <div class="settings-section-head"><div><h2>AI 配置</h2><p>{{ aiConfigIntro }}</p></div></div>
         <div v-if="aiLoadError" class="settings-note error ai-load-error" role="alert">{{ aiLoadError }}<button type="button" class="settings-inline-retry" :disabled="aiConfigLoading" @click="loadAi">{{ aiConfigLoading ? '读取中…' : '重试读取' }}</button></div>
         <div v-else-if="aiConfigLoading" class="settings-note ai-load-error" role="status">正在读取 AI 配置…</div>
-        <div class="ai-config-summary" data-test="ai-config-summary"><div class="ai-summary-copy"><span class="settings-kicker">CONFIGURATION</span><strong>{{ configuredSummary }}</strong><p>此状态表示配置项完整度；接口可用性请查看各卡片的连接测试结果。</p></div><div class="ai-summary-statuses"><span class="ai-summary-status" :class="{ ready: aiReady }"><i></i><b>Agent 文本</b><em>{{ aiReady ? '已配置' : '待配置' }}</em></span><span class="ai-summary-status" :class="{ ready: imageReady }"><i></i><b>生图接口</b><em>{{ imageReady ? '已配置' : '待配置' }}</em></span><span class="ai-summary-status" :class="{ ready: imageTextReady }"><i></i><b>生图文本</b><em>{{ imageTextReady ? '已配置' : '待配置' }}</em></span></div></div>
-        <div class="ai-config-grid">
-          <section class="ai-config-card" data-test="text-ai-config">
+        <div class="ai-config-summary" data-test="ai-config-summary"><div class="ai-summary-copy"><span class="settings-kicker">CONFIGURATION</span><strong>{{ configuredSummary }}</strong><p>此状态表示配置项完整度；接口可用性请查看各卡片的连接测试结果。</p></div><div class="ai-summary-statuses"><span v-if="aiSectionVisible('text')" class="ai-summary-status" :class="{ ready: aiReady }"><i></i><b>Agent 文本</b><em>{{ aiReady ? '已配置' : '待配置' }}</em></span><span v-if="aiSectionVisible('image')" class="ai-summary-status" :class="{ ready: imageReady }"><i></i><b>生图接口</b><em>{{ imageReady ? '已配置' : '待配置' }}</em></span><span v-if="aiSectionVisible('image-text')" class="ai-summary-status" :class="{ ready: imageTextReady }"><i></i><b>生图文本</b><em>{{ imageTextReady ? '已配置' : '待配置' }}</em></span></div></div>
+        <div :class="['ai-config-grid', { 'ai-config-grid--filtered': Boolean(props.onlyAiSections?.length) }]">
+          <section v-if="aiSectionVisible('text')" class="ai-config-card" data-test="text-ai-config">
             <div class="ai-card-head"><div><span class="settings-kicker">TEXT / AGENT</span><h3>文本 API</h3><p>Agent 与通用对话使用这套配置；商品图片页面的分析文本使用下方独立配置。</p></div><span class="ai-status" :class="{ ok: aiReady }">{{ aiReady ? '配置完整' : '待完善' }}</span></div>
             <label class="settings-field"><span>服务商</span><select v-model="aiProvider" :disabled="aiConfigLoading || !aiLoaded" @change="applyPreset"><option v-for="preset in presets" :key="preset.key" :value="preset.key">{{ preset.label }}</option><option value="__custom__">自定义</option></select></label>
             <label class="settings-field"><span>文本接口地址</span><input v-model="aiDraft.endpoint" data-test="ai-endpoint" data-unified-test="text-ai-endpoint" spellcheck="false" placeholder="https://api.example.com/v1" :disabled="aiConfigLoading || !aiLoaded" /></label>
@@ -43,7 +43,7 @@
             <div v-if="aiMessage" class="settings-note" data-test="ai-msg" :class="{ ok: aiOk }">{{ aiMessage }}</div>
             <div v-if="aiModels.length" class="settings-field image-model-picker"><span>已读取的文本模型</span><select data-test="ai-model-pick" :value="aiDraft.model" @change="pickAiModel(($event.target as HTMLSelectElement).value)"><option value="">— 选择后填入模型名 —</option><option v-for="model in aiModels" :key="model" :value="model">{{ model }}</option></select></div>
           </section>
-          <section class="ai-config-card image-ai-config-card" data-test="image-ai-config">
+          <section v-if="aiSectionVisible('image')" class="ai-config-card image-ai-config-card" data-test="image-ai-config">
             <div class="ai-card-head"><div><span class="settings-kicker">IMAGE / GENERATION</span><h3>生图 API</h3><p>商品图生成和图片编辑只使用这套独立配置。</p></div><span class="ai-status" :class="{ ok: imageReady }">{{ imageReady ? '配置完整' : '待完善' }}</span></div>
             <label class="settings-field"><span>生图接口地址</span><input v-model="imageDraft.endpoint" data-test="image-ai-endpoint" spellcheck="false" placeholder="https://api.example.com/v1 或 /images/generations" :disabled="aiConfigLoading || !aiLoaded" /></label>
             <div v-if="imageResolvedEndpoint" class="settings-note">实际生图请求：<code>{{ imageResolvedEndpoint }}</code><br><template v-if="imageModelsUrl">模型列表：<code>{{ imageModelsUrl }}</code></template></div>
@@ -55,7 +55,7 @@
             <div v-if="imageModels.length" class="settings-field image-model-picker"><span>已读取的生图模型</span><select :value="imageDraft.model" @change="pickImageModel(($event.target as HTMLSelectElement).value)"><option value="">— 选择后填入模型名 —</option><option v-for="model in imageModels" :key="model" :value="model">{{ model }}</option></select></div>
             <div class="settings-note">图片生成可能产生第三方费用；“测试生图接口”只读 GET /models，不会发起付费图片生成。没有真实图片返回时，工作台只显示空状态。</div>
           </section>
-          <section class="ai-config-card image-text-ai-config-card" data-test="image-text-ai-config">
+          <section v-if="aiSectionVisible('image-text')" class="ai-config-card image-text-ai-config-card" data-test="image-text-ai-config">
             <div class="ai-card-head"><div><span class="settings-kicker">IMAGE / TEXT ANALYSIS</span><h3>生图文本 API</h3><p>仅用于 AI 生成商品图片页面的商品分析和提示词整理，不会读取或修改 Agent 配置。</p></div><span class="ai-status" :class="{ ok: imageTextReady }">{{ imageTextReady ? '配置完整' : '待完善' }}</span></div>
             <div v-if="imageTextLoadError" class="settings-note error" role="alert">{{ imageTextLoadError }}<button type="button" class="settings-inline-retry" :disabled="imageTextConfigLoading" @click="loadImageTextAi">{{ imageTextConfigLoading ? '读取中…' : '重试读取' }}</button></div>
             <div v-else-if="imageTextConfigLoading" class="settings-note" role="status">正在读取分析配置…</div>
@@ -321,7 +321,8 @@ import { parseAutoCollectionEnabled, AUTO_COLLECTION_SETTING } from '@shared/con
 import { AI_IMAGE_TIMEOUT_MAX_MS, AI_PROVIDER_PRESETS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS, DEFAULT_AI_ENDPOINT, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL, DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, INVITE_SQUARE_URLS_SETTING, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint } from '@shared/constants/ai'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 
-const props = defineProps<{ initialTab?: TabKey; onlyTabs?: TabKey[] }>()
+type AiConfigSectionKey = 'text' | 'image' | 'image-text'
+const props = defineProps<{ initialTab?: TabKey; onlyTabs?: TabKey[]; onlyAiSections?: AiConfigSectionKey[] }>()
 const emit = defineEmits<{ close: [] }>()
 const ws = useWorkspaceStore()
 const tabs = [
@@ -338,6 +339,13 @@ const visibleTabs = computed(() => {
   return only && only.length ? tabs.filter(tab => only.includes(tab.key)) : tabs
 })
 const activeTab = ref<TabKey>(props.initialTab || visibleTabs.value[0]?.key || 'entry')
+/** 从某个 AI 工具页打开设置时只展示它实际使用的配置，避免一个工具改到另一个工具的 Key。 */
+function aiSectionVisible(section: AiConfigSectionKey): boolean {
+  return !props.onlyAiSections?.length || props.onlyAiSections.includes(section)
+}
+const aiConfigIntro = computed(() => props.onlyAiSections?.length
+  ? '只显示当前工具使用的接口配置；Key 只经主进程 safeStorage 保存，页面不回显。'
+  : 'Agent 文本、商品图生成、商品图文本分析分别保存地址、模型、超时和 API Key；Key 只经主进程 safeStorage 保存，页面不回显。')
 const savedMessage = ref('')
 let savedMessageTimer: ReturnType<typeof setTimeout> | null = null
 /** 保存成功的页头提示：6 秒后自动淡出（再次保存会重置计时；有未保存修改时模板上隐藏） */
@@ -647,8 +655,15 @@ const imageTextReady = computed(() => Boolean(imageTextLoaded.value && imageText
 const configuredSummary = computed(() => {
   if (aiConfigLoading.value || imageTextConfigLoading.value) return '正在读取 AI 配置…'
   if (aiLoadError.value && imageTextLoadError.value) return 'AI 配置读取失败'
-  const count = [aiReady.value, imageReady.value, imageTextReady.value].filter(Boolean).length
-  return count === 3 ? '三套 AI 配置完整' : '已完成 ' + count + '/3 套 AI 配置'
+  const sections: Array<{ key: AiConfigSectionKey; ready: boolean }> = [
+    { key: 'text', ready: aiReady.value },
+    { key: 'image', ready: imageReady.value },
+    { key: 'image-text', ready: imageTextReady.value }
+  ]
+  const visible = sections.filter(section => aiSectionVisible(section.key))
+  const count = visible.filter(section => section.ready).length
+  if (visible.length === 3) return count === 3 ? '三套 AI 配置完整' : '已完成 ' + count + '/3 套 AI 配置'
+  return count === visible.length ? '当前工具的 AI 配置完整' : `当前工具已完成 ${count}/${visible.length} 项配置`
 })
 const updateSourceLabel = computed(() => updateStatus.feedSource === 'github' ? 'GitHub Releases' : updateStatus.feedSource === 'env-override' ? '自定义更新源' : '开发环境')
 const updateMessage = computed(() => {
@@ -2018,4 +2033,9 @@ onBeforeUnmount(() => {
 /* 全页设置与其它页面共用同一种页头：不再套一张独立的白卡 */
 .unified-settings-page .settings-hero{padding:4px 2px 18px;border:0;border-radius:0;background:transparent;box-shadow:none;overflow:visible}
 .unified-settings-page .settings-hero:after{display:none}
+/* 工具级设置只显示 1–2 张卡：按实际数量自适应，不留下三分之二的空白 */
+.ai-config-grid--filtered{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.ai-config-grid--filtered .ai-config-card{max-width:720px}
+.ai-config-grid--filtered .image-text-ai-config-card{grid-column:auto}
+@media(max-width:640px){.ai-config-grid--filtered{grid-template-columns:minmax(0,1fr)}}
 </style>

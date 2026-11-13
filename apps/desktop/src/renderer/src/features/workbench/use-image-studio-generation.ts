@@ -682,7 +682,7 @@ function removeCompetitorReference(index: number) { competitorReferences.value.s
 
 function requestGeneration() {
   generationError.value = ''; generationNotice.value = ''
-  if (!configured.value) { generationError.value = '当前没有可用的真实 AI 配置，请先打开设置中心。'; return }
+  if (!configured.value) { generationError.value = '当前没有可用的真实 AI 配置，请先点右上角「模型设置」。'; return }
   if (modeNeedsSource.value) { generationError.value = `「${modeConfig.value.label}」需要先上传商品素材图作为原图。`; return }
   if (modeNeedsReference.value) { generationError.value = mode.value === 'edit' ? '自由编辑请先上传参考图，再描述要修改的内容。' : '商品复刻请先上传竞品参考图，便于借鉴构图和风格。'; return }
   if (modeNeedsLibraryAsset.value) { generationError.value = libraryAssetRequirement.value; return }
@@ -696,7 +696,7 @@ function buildPrompt(kind: ImageKind, modeKey: CreativeModeKey = mode.value) {
   return [
     prompt.value.trim(),
     productName.value.trim() ? `商品名称：${productName.value.trim()}` : '',
-    `生图设置：模型 ${usedModel.value || '设置中心未配置'}，比例 ${selectedRatio.value}，字体 ${effectiveFontOption.value.prompt}`,
+      `生图设置：模型 ${usedModel.value || '未配置'}，比例 ${selectedRatio.value}，字体 ${effectiveFontOption.value.prompt}`,
     modeKey === 'create' ? `生成风格：${generationStyle.value}${unifiedStyle.value ? '（统一风格）' : ''}；平台：${platform.value}` : '',
     modeKey === 'quantity' && materials.value.length ? `商品数量图：${materials.value.map((item, index) => `${item.name} ${Math.min(99, Math.max(1, Math.round(Number(variantCounts.value[index]) || 1)))} 件`).join('、')}` : '',
     modeKey === 'quantity' ? `指定文案：${quantityCopy.value.trim() || '不强制渲染文字，只清晰呈现商品数量'}` : '',
@@ -737,7 +737,7 @@ async function toImageSourceAsync(asset: UploadAsset | null) {
 async function requestSceneGeneration() {
   if (sceneGenerating.value) return
   sceneGenerationError.value = ''
-  if (!configured.value) { sceneGenerationError.value = '请先在设置中心配置生图模型。'; return }
+  if (!configured.value) { sceneGenerationError.value = '请先点右上角「模型设置」配置生图模型。'; return }
   if (!window.shopilot) { sceneGenerationError.value = '当前预览环境没有可用的图片生成接口。'; return }
   if (!materials.value.length && !sceneReference.value) { sceneGenerationError.value = '请先上传商品素材图或场景参考图。'; return }
   sceneConfirmOpen.value = true

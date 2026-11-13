@@ -185,7 +185,7 @@ async function main() {
     // ---------- 3) AI 商品分析入口 ----------
     check('侧栏可以回到「经营总览」', await navTo('经营总览'))
 
-    // 「短视频去重」和「影像级干扰」占位均已删除：快捷操作与 AI 创作页都不该再出现。
+    // 「短视频去重」和「影像级干扰」占位均已删除：快捷操作与 AI 工具页都不该再出现。
     // 两个层次都要断言：① 旧锚点必须消失；② **文本级**（含被 CSS 隐藏的节点）不含该文案——
     // 只查 data-test 的话，改个 key 把占位加回来仍会全绿（2026-10-18 独立复验 F3）。
     const overviewTiles = await ui.eval(`
@@ -202,13 +202,13 @@ async function main() {
         overviewTiles.interference === false && overviewTiles.dedupeText === false && overviewTiles.interferenceText === false,
       JSON.stringify(overviewTiles))
 
-    check('侧栏可以进入「AI 创作」页（占位卡片所在页）', await navTo('AI 创作'))
+    check('侧栏可以进入独立的「AI 生成商品图」页', await navTo('AI 生成商品图'))
     const appsPage = await ui.eval(`
       // 用 textContent 而不是 innerText：连被 CSS 隐藏的卡片一起算，删除才是真删干净
       const text = document.body.textContent || ''
       return { dedupe: text.includes('短视频去重'), interference: text.includes('影像级干扰') }
     `)
-    check('「AI 创作」页不再出现「短视频去重」或「影像级干扰」占位',
+    check('AI 工具页面不再出现「短视频去重」或「影像级干扰」占位',
       appsPage.dedupe === false && appsPage.interference === false, JSON.stringify(appsPage))
     check('侧栏可以再回到「经营总览」', await navTo('经营总览'))
 

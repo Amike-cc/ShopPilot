@@ -56,20 +56,19 @@ describe('图文带货：跨进程链路四处对接', () => {
   })
 })
 
-describe('图文带货：AI 创作入口与工作台路由', () => {
-  it('AI 创作页新增真实卡片（不是占位，不是“暂不可用”）', () => {
-    expect(appsPage).toContain('data-test="app-graphic-sell"')
-    expect(appsPage).toContain("emit('navigate', 'graphic-sell')")
-    // 2026-11-09 应用商城重构：图文带货从「系统页面目录」移到 AI 工具卡，断言跟着新入口
+describe('图文带货：独立入口与工作台路由', () => {
+  it('商城保留图文带货的独立安装卡与直达入口（不再是 AI 创作壳页里的卡片）', () => {
     expect(appsPage).toContain("testId: 'apps-ai-graphic'")
+    expect(appsPage).toContain("page: 'graphic-sell'")
     expect(appsPage).toContain('图文带货')
+    expect(appsPage).not.toContain("mode === 'ai'")
   })
 
-  it('DashboardView 挂载页面、标题、AI 创作高亮与离开保护', () => {
+  it('DashboardView 给图文带货独立侧栏入口、挂载页面与离开保护', () => {
     expect(dashboard).toContain('UnifiedGraphicSellPage')
     expect(dashboard).toContain("activePage === 'graphic-sell'")
     expect(dashboard).toContain("'graphic-sell': '图文带货'")
-    expect(dashboard).toContain("page === 'image-studio' || page === 'graphic-sell'")
+    expect(dashboard).toContain("{ key: 'graphic-sell', label: '图文带货'")
     // 生成中离开 = 丢掉已返回的文案/图片，必须被拦住
     expect(dashboard).toContain('const graphicSellBusy = ref(false)')
     expect(dashboard).toContain('graphicSellBusy = $event')

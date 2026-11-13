@@ -28,9 +28,9 @@ const PAGES = [
   { key: 'analytics', label: '数据分析' },
   { key: 'invoices', label: '发票中心' },
   { key: 'tax', label: '涉税信息' },
-  { key: 'apps', label: 'AI 创作' },
-  { key: 'image-studio', label: 'AI 生成商品图', via: 'ai-card' },
-  { key: 'graphic-sell', label: '图文带货', via: 'ai-card' },
+  { key: 'assistant', label: 'AI 电商助手' },
+  { key: 'image-studio', label: 'AI 生成商品图' },
+  { key: 'graphic-sell', label: '图文带货' },
   { key: 'app-center', label: '应用商城' },
   { key: 'settings', label: '设置中心', via: 'data-test' }
 ]
@@ -105,14 +105,9 @@ async function main() {
         }
         if (${JSON.stringify(page.via || '')} === 'ai-card') {
           const nav = [...document.querySelectorAll('.dashboard-nav-item')]
-            .find(el => (el.textContent || '').trim().includes('AI 创作'))
+            .find(el => (el.textContent || '').trim().includes(label))
           if (!nav) return false
-          nav.click()
-          await new Promise(r => setTimeout(r, 700))
-          const card = [...document.querySelectorAll('.app-card')]
-            .find(el => (el.textContent || '').includes(label))
-          if (!card) return false
-          card.click(); return true
+          nav.click(); return true
         }
         const item = [...document.querySelectorAll('.dashboard-nav-item')]
           .find(el => (el.textContent || '').trim().includes(label))
@@ -147,7 +142,38 @@ async function main() {
       await capture(`settings-${tab}`)
     }
 
-    // AI 工具独立启停：卸载「AI 生成商品图」后，商城保留安装入口、AI 创作页只剩其他工具。
+    // 每个 AI 工具只显示自己使用的模型配置（设置跟着工具走）
+    await client.eval(`document.querySelector('[data-test="nav-assistant"]')?.click(); return true`)
+    await sleep(700)
+    await client.eval(`document.querySelector('[data-test="ai-tool-settings"]')?.click(); return true`)
+    await sleep(600)
+    const assistantCfg = await client.eval(`
+      return {
+        text: Boolean(document.querySelector('[data-test="text-ai-config"]')),
+        image: Boolean(document.querySelector('[data-test="image-ai-config"]')),
+        imageText: Boolean(document.querySelector('[data-test="image-text-ai-config"]'))
+      }
+    `)
+    await capture('assistant-model-settings')
+    await client.eval(`document.querySelector('.sm-close')?.click(); return true`)
+    await sleep(300)
+    await client.eval(`document.querySelector('[data-test="nav-image-studio"]')?.click(); return true`)
+    await sleep(800)
+    await client.eval(`document.querySelector('[data-test="ai-tool-settings"]')?.click(); return true`)
+    await sleep(600)
+    const imageCfg = await client.eval(`
+      return {
+        text: Boolean(document.querySelector('[data-test="text-ai-config"]')),
+        image: Boolean(document.querySelector('[data-test="image-ai-config"]')),
+        imageText: Boolean(document.querySelector('[data-test="image-text-ai-config"]'))
+      }
+    `)
+    await capture('image-studio-model-settings')
+    await client.eval(`document.querySelector('.sm-close')?.click(); return true`)
+    await sleep(300)
+    console.log('[shot] 工具级模型设置 =', JSON.stringify({ assistantCfg, imageCfg }))
+
+    // AI 工具独立启停：卸载「AI 生成商品图」后，商城保留安装入口，侧栏只隐藏这一个工具。
     await client.eval(`
       const nav = [...document.querySelectorAll('.dashboard-nav-item')]
         .find(el => (el.textContent || '').trim().includes('应用商城'))
@@ -162,25 +188,15 @@ async function main() {
     `)
     await sleep(900)
     await capture('app-center-ai-image-removed')
-    await client.eval(`
-      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
-        .find(el => (el.textContent || '').trim().includes('AI 创作'))
-      nav?.click(); return true
+    const aiImageEntryGone = await client.eval(`
+      return {
+        navGone: !document.querySelector('[data-test="nav-image-studio"]'),
+        othersKept: Boolean(document.querySelector('[data-test="nav-assistant"]') && document.querySelector('[data-test="nav-graphic-sell"]'))
+      }
     `)
-    await sleep(700)
-    const aiImageCardGone = await client.eval(`
-      return ![...document.querySelectorAll('.app-card')].some(el => (el.textContent || '').includes('AI 生成商品图'))
-    `)
-    await capture('apps-ai-image-removed')
-    await client.eval(`
-      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
-        .find(el => (el.textContent || '').trim().includes('应用商城'))
-      nav?.click(); return true
-    `)
-    await sleep(700)
     await client.eval(`document.querySelector('[data-test="apps-ai-install-ai-image"]')?.click(); return true`)
     await sleep(900)
-    console.log(`[shot] AI 工具独立卸载=${removedAiImage} 卡片隐藏=${aiImageCardGone}，已重新安装`)
+    console.log(`[shot] AI 工具独立卸载=${removedAiImage} 入口隐藏=${JSON.stringify(aiImageEntryGone)}，已重新安装`)
 
     // 助手独立卸载：总览不再出现「问问 AI」与悬浮球，但其他 AI 工具仍在。
     await client.eval(`
@@ -198,7 +214,8 @@ async function main() {
     const assistantArtifactsGone = await client.eval(`
       return {
         orb: !document.querySelector('.agent-orb'),
-        ask: !document.body.innerText.includes('问问 AI')
+        ask: !document.body.innerText.includes('问问 AI'),
+        nav: !document.querySelector('[data-test="nav-assistant"]')
       }
     `)
     await capture('overview-ai-assistant-removed')
@@ -360,17 +377,10 @@ async function main() {
 
     // 图片工作台「图文详情」模式
     await client.eval(`
-      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
-        .find(el => (el.textContent || '').trim().includes('AI 创作'))
+      const nav = document.querySelector('[data-test="nav-image-studio"]')
       nav?.click(); return true
     `)
     await sleep(700)
-    await client.eval(`
-      const card = [...document.querySelectorAll('.app-card')]
-        .find(el => (el.textContent || '').includes('AI 生成商品图'))
-      card?.click(); return true
-    `)
-    await sleep(900)
     const detailMode = await client.eval(`
       const tab = document.querySelector('[data-test="studio-top-nav-detail"]')
       if (!tab) return false

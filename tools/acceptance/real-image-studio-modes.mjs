@@ -141,11 +141,9 @@ const record = (label, startedAt, state, save) => {
 // Seed one real source image through the page's own example-material control.
 if (!(await ev(`return Boolean(document.querySelector('[data-test="studio-top-nav-create"]'))`))) {
   await ev(`
-    const nav = [...document.querySelectorAll('button')].find(button => button.innerText.trim() === 'AI 创作');
-    const card = [...document.querySelectorAll('.app-card-action')].find(item => item.innerText.includes('AI 生成商品图'));
-    if (card) card.click();
-    else if (nav) nav.click();
-    else throw new Error('AI 商品创作 entry not found');
+    const nav = document.querySelector('[data-test="nav-image-studio"]');
+    if (!nav) throw new Error('AI 商品创作 entry not found');
+    nav.click();
     return true;
   `)
   for (let i = 0; i < 40; i++) {

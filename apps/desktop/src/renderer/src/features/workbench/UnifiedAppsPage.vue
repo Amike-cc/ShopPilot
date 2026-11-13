@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /**
- * 应用商城 / AI 创作（v4 重设计 R1，2026-10-15）。
+ * 应用商城（v4 重设计 R1，2026-10-15；2026-11-13 起只负责商城）。
  *
- * 本文件只负责 AI 创作与应用商城两个静态视图。
+ * AI 工具已拆成三个独立功能：各自有侧栏入口、页面和自己的模型设置；
+ * 商城只负责下载安装/卸载，不再保留「AI 创作」壳页。
  */
 import { computed, onMounted, ref } from 'vue'
 import aiAppIcon from '../../assets/icons/nav-ai.svg'
@@ -12,15 +13,10 @@ import analyticsAppIcon from '../../assets/icons/app-analytics.svg'
 import invoicesAppIcon from '../../assets/icons/app-invoices.svg'
 import taxAppIcon from '../../assets/icons/app-tax.svg'
 import graphicSellAppIcon from '../../assets/icons/settings-square.svg'
-import assistantArt from '../../assets/generated/ai-assistant-generated.png'
-import assistantOpenIcon from '../../assets/generated/ui-icons/assistant-open-gen.png'
-import AppIcon from '../../components/ui/AppIcon.vue'
 import AppCenterExtensions from './AppCenterExtensions.vue'
-import SettingsModal from './SettingsModal.vue'
 import { ensureAppModulesLoaded, isModuleInstalled, setModuleInstalled, type OptionalModuleKey } from './use-app-modules'
 
-type Mode = 'ai' | 'apps'
-type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'image-studio' | 'graphic-sell'
+type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'assistant' | 'image-studio' | 'graphic-sell'
 type AppTone = 'violet' | 'blue' | 'cyan' | 'orange' | 'indigo' | 'green' | 'pink' | 'slate' | 'amber'
 
 interface AppLink {
@@ -34,15 +30,11 @@ interface AppLink {
   page: Page
 }
 
-const props = defineProps<{ mode: Mode }>()
 const emit = defineEmits<{
   navigate: [page: Page]
-  'open-assistant': []
 }>()
-const title = computed(() => props.mode === 'ai' ? 'AI 创作工具' : '应用商城')
-const subtitle = computed(() => props.mode === 'ai'
-  ? '访问当前已接入的 AI 助手与模型配置。'
-  : '安装插件与扩展，进入 AI 工具、业务应用与系统页面；插件随应用内置，离线可装。')
+const title = '应用商城'
+const subtitle = '安装插件与扩展，进入 AI 工具、业务应用与系统页面；插件随应用内置，离线可装。'
 
 /** 图标底色：资源本身是浅色描边（为深色底准备），这里用 mask 着色，不改动图标文件 */
 const appTones: Record<AppTone, { bg: string; fg: string }> = {
@@ -76,7 +68,7 @@ interface AiToolLink {
   note: 'text' | 'image' | 'graphic'
   tone: AppTone
   icon: string
-  page: Page | 'assistant'
+  page: Page
 }
 const aiTools: AiToolLink[] = [
   { key: 'ai-assistant', testId: 'apps-ai-assistant', label: 'AI 电商助手', description: '纯文本对话：讨论问题、整理思路、给出手动操作建议；不会读取或操作店铺与软件数据。', category: '对话', note: 'text', tone: 'violet', icon: aiAppIcon, page: 'assistant' },
@@ -90,7 +82,6 @@ function aiToolNote(tool: AiToolLink): string {
   return graphicModelStatus.value
 }
 function openAiTool(tool: AiToolLink): void {
-  if (tool.page === 'assistant') { emit('open-assistant'); return }
   emit('navigate', tool.page)
 }
 
@@ -117,12 +108,6 @@ const showSystem = ref(false)
 const moduleNotice = ref('')
 const moduleError = ref('')
 const moduleBusy = ref('')
-
-const aiSettingsOpen = ref(false)
-
-function openAiSettings(): void {
-  aiSettingsOpen.value = true
-}
 
 function moduleKeyOf(item: AppLink): OptionalModuleKey {
   return item.key as OptionalModuleKey
@@ -222,10 +207,8 @@ function openApp(item: AppLink): void {
 }
 
 onMounted(() => {
-  if (props.mode === 'apps') {
-    void ensureAppModulesLoaded()
-    void loadAiStatus()
-  }
+  void ensureAppModulesLoaded()
+  void loadAiStatus()
 })
 
 /**
@@ -240,30 +223,16 @@ function iconMask(url: string): Record<string, string> {
 </script>
 
 <template>
-  <section class="unified-page unified-apps-page" :data-test="`unified-${mode}-page`">
+  <section class="unified-page unified-apps-page" data-test="unified-apps-page">
     <header class="unified-page-head">
       <div>
-        <span class="dashboard-eyebrow">WORKSPACE / {{ mode === 'ai' ? 'AI STUDIO' : 'STORE' }}</span>
+        <span class="dashboard-eyebrow">WORKSPACE / STORE</span>
         <h1>{{ title }}</h1>
         <p>{{ subtitle }}</p>
       </div>
     </header>
 
-    <template v-if="mode === 'ai'">
-      <div v-if="isModuleInstalled('ai-assistant')" class="ai-assistant-card">
-        <div class="ai-orb" aria-hidden="true"><img :src="assistantArt" alt="" /></div>
-        <div class="ai-assistant-copy" data-test="ai-assistant-copy"><span class="available-pill"><i></i>已接入</span><h2>AI 电商助手</h2><p>纯文本对话：可以讨论问题、整理思路或给出手动操作建议；不会读取或操作店铺、网页、任务与软件数据。</p></div>
-        <button type="button" class="unified-button primary" @click="emit('open-assistant')"><img class="button-icon" :src="assistantOpenIcon" alt="" />打开助手</button>
-      </div>
-      <div class="app-card-grid">
-        <article v-if="isModuleInstalled('ai-image')" class="app-card app-card-action" @click="emit('navigate', 'image-studio')" @keydown.enter="emit('navigate', 'image-studio')" tabindex="0" role="button"><span class="app-card-icon purple"><AppIcon name="sparkles" :size="20" /></span><div><h2>AI 生成商品图</h2><p>进入模型选择、对话生图和真实结果预览工作台。</p></div><span class="app-card-arrow"><AppIcon name="chevron-right" :size="16" /></span></article>
-        <article v-if="isModuleInstalled('ai-graphic')" class="app-card app-card-action" data-test="app-graphic-sell" @click="emit('navigate', 'graphic-sell')" @keydown.enter="emit('navigate', 'graphic-sell')" tabindex="0" role="button"><span class="app-card-icon orange"><AppIcon name="image" :size="20" /></span><div><h2>图文带货</h2><p>填商品信息，AI 写带货文案并生成多张配图；可编辑、复制、保存。</p></div><span class="app-card-arrow"><AppIcon name="chevron-right" :size="16" /></span></article>
-        <article class="app-card app-card-action" @click="openAiSettings()" @keydown.enter="openAiSettings()" tabindex="0" role="button"><span class="app-card-icon violet"><AppIcon name="settings" :size="20" /></span><div><h2>AI 模型配置</h2><p>查看文本/生图服务商、模型连接与凭据状态。</p></div><span class="app-card-arrow"><AppIcon name="chevron-right" :size="16" /></span></article>
-      </div>
-    </template>
-
-    <template v-else>
-      <div class="apps-center">
+    <div class="apps-center">
         <p v-if="moduleNotice" class="ac-notice" role="status">{{ moduleNotice }}</p>
         <p v-if="moduleError" class="ac-notice error" role="alert">{{ moduleError }}</p>
         <AppCenterExtensions />
@@ -385,14 +354,6 @@ function iconMask(url: string): Record<string, string> {
         </div>
 
       </div>
-    </template>
-    <SettingsModal
-      v-if="mode === 'ai' && aiSettingsOpen"
-      title="AI 创作 · 功能设置"
-      tab="ai"
-      :only-tabs="['ai']"
-      @close="aiSettingsOpen = false"
-    />
   </section>
 </template>
 <style scoped>

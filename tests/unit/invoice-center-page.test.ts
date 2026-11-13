@@ -14,7 +14,7 @@ const ACCEPTANCE = readFileSync(resolve('tools/acceptance/invoice-license-local-
 describe('发票中心独立页面入口', () => {
   it('侧栏提供独立入口并映射到 invoices 页面', () => {
     expect(DASHBOARD).toContain("{ key: 'invoices', label: '发票中心'")
-    expect(DASHBOARD).toContain("'发票中心': 'invoices'")
+    expect(DASHBOARD).toContain("navigateTo(item.key as DashboardPage)")
     expect(DASHBOARD).toContain("else if (page === 'invoices') activeNav.value = '发票中心'")
     expect(DASHBOARD).toContain(':data-test="`nav-${item.key}`"')
   })

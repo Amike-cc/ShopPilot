@@ -4,13 +4,14 @@
       <div class="gs-brand">
         <button type="button" class="gs-brand-mark" aria-label="返回首页" @click="emit('go-home')"><img :src="brandMark" alt="" /></button>
         <strong>ShopPilot</strong>
-        <span class="gs-crumb">图片工作台 / 图文带货</span>
+        <span class="gs-crumb">图文带货</span>
       </div>
       <div class="gs-status-bar" data-test="graphic-sell-config">
         <span class="gs-status" :class="readiness.copyReady ? 'ready' : 'warn'" :title="copyStatusHint"><i></i>文案：{{ readiness.copyLabel }}</span>
         <span class="gs-status" :class="readiness.imageReady ? 'ready' : 'warn'" :title="imageStatusHint"><i></i>生图：{{ readiness.imageLabel }}</span>
         <button type="button" class="gs-ghost-button" data-test="graphic-sell-history-toggle" :aria-expanded="historyOpen" @click="historyOpen = !historyOpen">历史记录 <em>{{ historySessions.length }}</em></button>
         <button type="button" class="gs-ghost-button" :disabled="generating" @click="resetAll">清空</button>
+        <AiToolSettings title="图文带货 · 模型设置" :sections="['image', 'image-text']" />
       </div>
     </header>
 
@@ -116,7 +117,7 @@
           </ol>
           <p v-if="configError" class="gs-error">{{ configError }}</p>
           <p v-else-if="!readiness.copyReady || !readiness.imageReady" class="gs-warn" data-test="graphic-sell-config-warning">
-            {{ readiness.copyReady ? '' : '文案接口未配置；' }}{{ readiness.imageReady ? '' : '生图接口未配置；' }}请到「设置中心 → AI 配置」补齐后再生成。
+            {{ readiness.copyReady ? '' : '文案接口未配置；' }}{{ readiness.imageReady ? '' : '生图接口未配置；' }}请点右上角「模型设置」补齐后再生成。
           </p>
           <p v-if="!configError && readiness.copyReady && readiness.imageReady && requiresProductImage && !materials.length" class="gs-warn" data-test="graphic-sell-effect-hint">
             当前效果「{{ effectOption.label }}」需要先上传商品图：生成时会以它为准保住颜色、面料、图案与刺绣文字一致。
@@ -183,7 +184,7 @@
 
           <p v-if="generationNotice" class="gs-warn">{{ generationNotice }}</p>
           <p v-if="generationError" class="gs-error" data-test="graphic-sell-error">{{ generationError }}</p>
-          <p v-if="copy.source === 'main-text'" class="gs-hint">本次文案由「主文本 API 回退」生成（设置中心未单独配置生图文本 API）。</p>
+          <p v-if="copy.source === 'main-text'" class="gs-hint">本次文案由「主文本 API 回退」生成（本工具未单独配置生图文本 API）。</p>
         </template>
       </main>
 
@@ -242,6 +243,7 @@ import {
   sellModelLabel
 } from './graphic-sell'
 import { useGraphicSellGeneration } from './use-graphic-sell'
+import AiToolSettings from './AiToolSettings.vue'
 // 用户提供的 4 张参考效果图（俯拍躺床 / 玩偶与小猫点缀 / 不同姿势），直接作为模板预览
 import effectBedPinkTeddy from '../../assets/ui/graphic-sell/effect-bed-pink-teddy.jpg'
 import effectBedBlueCat from '../../assets/ui/graphic-sell/effect-bed-blue-cat.jpg'
@@ -318,10 +320,10 @@ const platformNote = computed(() => GRAPHIC_SELL_PLATFORM_OPTIONS.find(item => i
 const styleNote = computed(() => GRAPHIC_SELL_STYLE_OPTIONS.find(item => item.key === style.value)?.note || '')
 const copyStatusHint = computed(() => readiness.value.copyReady
   ? `文案将走：${readiness.value.copyLabel}`
-  : '未配置：请到设置中心 → AI 配置 → 生图文本 API（或主文本 API）填写地址、模型和 Key')
+        : '未配置：点右上角「模型设置」→ 生图文本 API（或主文本 API）填写地址、模型和 Key')
 const imageStatusHint = computed(() => readiness.value.imageReady
   ? `生图模型：${config.value?.imageModel || readiness.value.imageLabel}`
-  : '未配置：请到设置中心 → AI 配置 → 生图接口填写地址、模型和 Key')
+        : '未配置：点右上角「模型设置」→ 生图接口填写地址、模型和 Key')
 const avatarLetter = computed(() => (productName.value.trim() || '图文带货').slice(0, 1))
 const previewAspect = computed(() => ratio.value.replace(':', ' / '))
 

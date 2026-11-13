@@ -10,7 +10,7 @@ const ACCEPTANCE = readFileSync(resolve('tools/acceptance/tax-report-real-verify
 describe('涉税信息独立页面与功能模块', () => {
   it('侧栏入口、路由映射和页面标题独立于发票中心', () => {
     expect(DASHBOARD).toContain("{ key: 'tax', label: '涉税信息'")
-    expect(DASHBOARD).toContain("'涉税信息': 'tax'")
+    expect(DASHBOARD).toContain("navigateTo(item.key as DashboardPage)")
     expect(DASHBOARD).toContain("else if (page === 'tax') activeNav.value = '涉税信息'")
     expect(DASHBOARD).toContain('activePage === \'tax\'')
     expect(DASHBOARD).toContain('mode="tax"')

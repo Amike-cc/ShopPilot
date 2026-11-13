@@ -1,10 +1,11 @@
 <template>
   <section class="image-studio-page" :class="{ 'detail-mode': mode === 'detail' }" data-test="unified-image-studio-page">
     <header class="studio-page-head">
-      <div class="studio-brand"><button type="button" class="studio-brand-mark" aria-label="返回首页" @click="emit('go-home')"><img :src="brandMark" alt="" /></button><strong>ShopPilot</strong><span class="studio-brand-sub">图片工作台</span></div>
+      <div class="studio-brand"><button type="button" class="studio-brand-mark" aria-label="返回首页" @click="emit('go-home')"><img :src="brandMark" alt="" /></button><strong>ShopPilot</strong><span class="studio-brand-sub">AI 生成商品图</span></div>
       <nav class="studio-top-nav" data-test="studio-top-nav" aria-label="AI 商品创作导航">
         <button v-for="item in creativeModes" :key="item.key" type="button" :class="{ active: mode === item.key }" :data-test="`studio-top-nav-${item.key}`" :disabled="generating || sceneGenerating || confirmOpen || sceneConfirmOpen" @click="mode = item.key">{{ item.label }}</button>
       </nav>
+      <AiToolSettings title="AI 生成商品图 · 模型设置" :sections="['image', 'image-text']" />
     </header>
 
     <template v-if="mode === 'detail'">
@@ -33,7 +34,7 @@
             <select v-model="detailNoteStyle" class="detail-select" data-test="detail-note-style"><option value="种草分享">种草分享</option><option value="测评对比">测评对比</option><option value="生活方式">生活方式</option><option value="使用教程">使用教程</option></select>
             <label class="detail-field-label">卡片数量</label>
             <div class="detail-segmented"><button v-for="count in [4,5,6,7,8]" :key="count" type="button" :class="{ active: detailCardCount === count }" @click="detailCardCount = count">{{ count }}</button><input v-model.number="detailCardCount" type="number" min="1" max="9" aria-label="卡片数量" @change="normalizeContentCount('detail')" /></div>
-            <label class="detail-field-label">生图模型</label><select :value="usedModel || '未配置'" class="detail-select" data-test="detail-model" disabled :title="usedModel ? '模型来自设置中心，生成时使用此模型' : '请先在设置中心配置生图模型'"><option>{{ usedModel || '未配置' }}</option></select>
+            <label class="detail-field-label">生图模型</label><select :value="usedModel || '未配置'" class="detail-select" data-test="detail-model" disabled :title="usedModel ? '模型来自本工具「模型设置」，生成时使用此模型' : '请点右上角「模型设置」配置生图模型'"><option>{{ usedModel || '未配置' }}</option></select>
             <label class="detail-field-label">发布比例</label><select v-model="detailRatio" class="detail-select" data-test="detail-ratio"><option v-for="ratio in ratioOptions" :key="ratio.key" :value="ratio.key">{{ ratio.label }}</option></select>
             <label class="detail-field-label">字体</label><div class="font-select-control detail-font-control"><select v-model="detailFont" class="detail-select" data-test="detail-font"><option v-for="font in fontOptions" :key="font.key" :value="font.key">{{ font.label }}</option></select><span class="font-info" data-test="detail-font-meta" :title="fontLicenseHint" :aria-label="fontLicenseHint">⚠</span></div>
           </section>
@@ -300,7 +301,7 @@
           </section>
           <section class="config-card">
             <h3 class="config-title"><i>3</i>生图设置</h3>
-            <label class="inline-field">生图模型<select :value="usedModel || '未配置'" data-test="image-model" disabled :title="usedModel ? '模型来自设置中心，生成时使用此模型' : '请先在设置中心配置生图模型'"><option>{{ usedModel || '未配置' }}</option></select></label>
+            <label class="inline-field">生图模型<select :value="usedModel || '未配置'" data-test="image-model" disabled :title="usedModel ? '模型来自本工具「模型设置」，生成时使用此模型' : '请点右上角「模型设置」配置生图模型'"><option>{{ usedModel || '未配置' }}</option></select></label>
             <label class="inline-field">比例大小<select v-model="selectedRatio" data-test="image-ratio"><option v-for="ratio in ratioOptions" :key="ratio.key" :value="ratio.key">{{ ratio.label }}</option></select></label>
             <label class="inline-field">字体<span class="font-select-control"><select v-model="selectedFont" data-test="image-font"><option v-for="font in fontOptions" :key="font.key" :value="font.key">{{ font.label }}</option></select><span class="font-info" data-test="image-font-meta" :title="fontLicenseHint" :aria-label="fontLicenseHint">⚠</span></span></label>
            <p class="config-note">输出图片会按所选比例进行构图</p>
@@ -422,6 +423,7 @@ import modelEffectOneArt from '../../assets/ui/image-studio/reference-site/model
 import modelEffectTwoArt from '../../assets/ui/image-studio/reference-site/model-effect-2.jpg'
 import { useImageStudioGeneration, KIND_LABEL, HISTORY_MAX_ITEMS, type GeneratedImage } from './use-image-studio-generation'
 import { useImageStudioHistory } from './use-image-studio-history'
+import AiToolSettings from './AiToolSettings.vue'
 
 const emit = defineEmits<{ (event: 'go-home'): void; (event: 'busy-change', busy: boolean): void }>()
 // ---------- 生成域 / 历史域（状态机与生命周期见 use-image-studio-*.ts）----------

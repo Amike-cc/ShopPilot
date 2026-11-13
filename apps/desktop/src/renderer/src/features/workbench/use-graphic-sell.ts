@@ -313,11 +313,11 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
     generationNotice.value = ''
     if (generating.value) return
     if (!readiness.value.copyReady) {
-      generationError.value = '文案接口未配置：请到「设置中心 → AI 配置」填写「生图文本 API」（或主文本 API）的地址、模型和 Key。'
+      generationError.value = '文案接口未配置：请点页面右上角「模型设置」填写「生图文本 API」（或主文本 API）的地址、模型和 Key。'
       return
     }
     if (!readiness.value.imageReady) {
-      generationError.value = '生图接口未配置：请到「设置中心 → AI 配置」填写生图接口的地址、模型和 Key，否则没有配图。'
+      generationError.value = '生图接口未配置：请点页面右上角「模型设置」填写生图接口的地址、模型和 Key，否则没有配图。'
       return
     }
     if (requiresProductImage.value && !materials.value.length) {
