@@ -35,7 +35,7 @@ const open = ref(false)
 </template>
 
 <style scoped>
-.ai-tool-settings{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 11px;border:1px solid var(--ui-border);border-radius:var(--r-sm);background:var(--ui-surface);color:var(--ui-text-soft);font-size:var(--text-12);font-weight:var(--weight-medium);cursor:pointer;white-space:nowrap}
+.ai-tool-settings{display:inline-flex;align-items:center;gap:6px;min-height:32px;flex:0 0 auto;padding:0 11px;border:1px solid var(--ui-border);border-radius:var(--r-sm);background:var(--ui-surface);color:var(--ui-text-soft);font-size:var(--text-12);font-weight:var(--weight-medium);cursor:pointer;white-space:nowrap}
 .ai-tool-settings:hover{border-color:var(--brand-border);color:var(--brand-text)}
 .ai-tool-settings:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 </style>
