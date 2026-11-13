@@ -336,7 +336,7 @@ function formatDate(value: number): string {
 <style scoped>
 /* 图文带货是浅色工作台（外层导航仍是深色壳）：左配置面板 + 中笔记画布 + 右侧历史抽屉。 */
 .graphic-sell-page{position:relative;display:flex;flex-direction:column;height:100%;min-height:0;min-width:0;overflow:hidden;background:#f5f7fb;color:#16275e}
-.gs-head{display:flex;align-items:center;justify-content:space-between;gap:16px;height:58px;min-height:58px;flex:0 0 58px;padding:0 24px;border-bottom:1px solid #edf0f5;background:rgba(255,255,255,.96);backdrop-filter:blur(10px);z-index:5}
+.gs-head{display:flex;align-items:center;justify-content:space-between;gap:16px;height:58px;min-height:58px;flex:0 0 58px;padding:0 148px 0 24px;border-bottom:1px solid #edf0f5;background:rgba(255,255,255,.96);backdrop-filter:blur(10px);z-index:5}
 .gs-brand{display:flex;align-items:center;gap:8px;min-width:0;color:#1e2a41;font-size:15px}
 .gs-brand-mark{display:grid;place-items:center;width:31px;height:31px;padding:0;border:1px solid var(--ui-border);border-radius:8px;background:#fff;cursor:pointer;box-shadow:var(--e1)}
 .gs-brand-mark img{width:23px;height:23px;object-fit:contain}

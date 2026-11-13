@@ -5,7 +5,6 @@
       <nav class="studio-top-nav" data-test="studio-top-nav" aria-label="AI 商品创作导航">
         <button v-for="item in creativeModes" :key="item.key" type="button" :class="{ active: mode === item.key }" :data-test="`studio-top-nav-${item.key}`" :disabled="generating || sceneGenerating || confirmOpen || sceneConfirmOpen" @click="mode = item.key">{{ item.label }}</button>
       </nav>
-      <AiToolSettings title="AI 生成商品图 · 模型设置" :sections="['image', 'image-text']" />
     </header>
 
     <template v-if="mode === 'detail'">
@@ -41,7 +40,7 @@
         </aside>
 
         <main class="detail-canvas">
-          <div class="detail-canvas-head"><h1>商品一键生成笔记</h1><p>配套图片、标题、正文和话题，一次备齐</p></div>
+          <div class="detail-canvas-head"><h1>商品一键生成笔记</h1><p>配套图片、标题、正文和话题，一次备齐</p><div class="detail-settings"><AiToolSettings title="AI 生成商品图 · 模型设置" :sections="['image', 'image-text']" /></div></div>
           <div class="detail-preview-wrap">
             <div class="detail-preview-title"><strong>完整小红书笔记</strong><span>案例示意</span></div>
             <div class="detail-case-controls" role="group" aria-label="案例演示控制">
@@ -208,11 +207,16 @@
 
     <template v-else>
     <!-- ① 输入 → ② 生成中 → ③ 完成（跟着真实状态走） -->
-    <ol class="studio-steps" data-test="studio-steps">
-      <li :class="{ active: step === 1, done: step > 1 }"><i>{{ step > 1 ? '✓' : '1' }}</i><span>输入</span></li>
-      <li :class="{ active: step === 2, done: step > 2 }"><i>{{ step > 2 ? '✓' : '2' }}</i><span>生成中</span></li>
-      <li :class="{ active: step === 3 }"><i>3</i><span>完成</span></li>
-    </ol>
+    <div class="studio-steps-row">
+      <ol class="studio-steps" data-test="studio-steps">
+        <li :class="{ active: step === 1, done: step > 1 }"><i>{{ step > 1 ? '✓' : '1' }}</i><span>输入</span></li>
+        <li :class="{ active: step === 2, done: step > 2 }"><i>{{ step > 2 ? '✓' : '2' }}</i><span>生成中</span></li>
+        <li :class="{ active: step === 3 }"><i>3</i><span>完成</span></li>
+      </ol>
+      <div class="studio-steps-settings">
+        <AiToolSettings title="AI 生成商品图 · 模型设置" :sections="['image', 'image-text']" />
+      </div>
+    </div>
 
     <div class="studio-layout">
       <div class="studio-main">
@@ -717,6 +721,10 @@ async function submitGeneration() {
 .studio-button.ghost{background:rgba(255,255,255,.68)}
 .studio-button:disabled{cursor:not-allowed;opacity:.55}
 /* ① 输入 → ② 生成中 → ③ 完成 */
+.studio-steps-row{position:relative;display:flex;align-items:center;justify-content:center;min-height:32px;margin:0 0 16px}
+.studio-steps-row .studio-steps{margin:0}
+.studio-steps-settings{position:absolute;right:0;top:50%;transform:translateY(-50%)}
+.detail-settings{position:absolute;right:0;top:0}
 .studio-steps{display:flex;align-items:center;justify-content:center;gap:0;margin:0 0 16px;padding:0;list-style:none}
 .studio-steps li{display:flex;align-items:center;gap:7px;color:#98a2b3;font-size:12px}
 .studio-steps li+li::before{content:'';width:clamp(60px,16vw,220px);height:1px;margin:0 12px;background:#dbe3ef}
