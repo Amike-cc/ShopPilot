@@ -66,6 +66,34 @@ const businessApps: AppLink[] = [
   { key: 'tax', label: '涉税信息', description: '查看平台按季度报送的涉税经营数据与主体汇总。', note: '季度报送 · 只读核对', tone: 'green', icon: taxAppIcon, page: 'tax' }
 ]
 
+/** AI 工具：三个入口各自独立安装/卸载，不再由「AI 创作」整包控制。 */
+interface AiToolLink {
+  key: OptionalModuleKey
+  testId: string
+  label: string
+  description: string
+  category: string
+  note: 'text' | 'image' | 'graphic'
+  tone: AppTone
+  icon: string
+  page: Page | 'assistant'
+}
+const aiTools: AiToolLink[] = [
+  { key: 'ai-assistant', testId: 'apps-ai-assistant', label: 'AI 电商助手', description: '纯文本对话：讨论问题、整理思路、给出手动操作建议；不会读取或操作店铺与软件数据。', category: '对话', note: 'text', tone: 'violet', icon: aiAppIcon, page: 'assistant' },
+  { key: 'ai-image', testId: 'apps-ai-image', label: 'AI 生成商品图', description: '填商品信息、对话式生图，结果可直接预览与保存。', category: '内容创作', note: 'image', tone: 'pink', icon: aiAppIcon, page: 'image-studio' },
+  { key: 'ai-graphic', testId: 'apps-ai-graphic', label: '图文带货', description: 'AI 写带货笔记文案并生成多张配图，可编辑、复制与保存。', category: '内容创作', note: 'graphic', tone: 'orange', icon: graphicSellAppIcon, page: 'graphic-sell' }
+]
+const aiInstalledCount = computed(() => aiTools.filter(tool => isModuleInstalled(tool.key)).length)
+function aiToolNote(tool: AiToolLink): string {
+  if (tool.note === 'text') return textModelStatus.value
+  if (tool.note === 'image') return imageModelStatus.value
+  return graphicModelStatus.value
+}
+function openAiTool(tool: AiToolLink): void {
+  if (tool.page === 'assistant') { emit('open-assistant'); return }
+  emit('navigate', tool.page)
+}
+
 /**
  * 系统页面：产品底座（店铺/数据/设置），不可卸载。
  * 这些入口在左侧导航都有，折叠起来只作为「不想找侧栏」时的备用路径。
@@ -89,7 +117,6 @@ const showSystem = ref(false)
 const moduleNotice = ref('')
 const moduleError = ref('')
 const moduleBusy = ref('')
-const aiInstalled = computed(() => isModuleInstalled('ai'))
 
 const aiSettingsOpen = ref(false)
 
@@ -131,16 +158,26 @@ async function uninstallBusiness(item: AppLink): Promise<void> {
   await setBusinessInstalled(item, false)
 }
 
-async function toggleAiModule(next: boolean): Promise<void> {
-  if (!next && !window.confirm('卸载「AI 创作」？\n助手、生图与图文带货入口会隐藏，模型配置与历史保留；可随时在应用商城重新下载安装。')) return
-  moduleBusy.value = 'ai'
+async function setAiToolInstalled(tool: AiToolLink, next: boolean): Promise<void> {
+  moduleBusy.value = tool.key
   moduleError.value = ''
-  const result = await setModuleInstalled('ai', next)
+  const result = await setModuleInstalled(tool.key, next)
   if (!result.ok) moduleError.value = result.error || (next ? '下载安装失败' : '卸载失败')
   else {
-    sayModule(next ? '已下载安装「AI 创作」，可在 AI 页面打开「功能设置」' : '已卸载「AI 创作」，模型配置与历史保留')
+    sayModule(next ? `已下载安装「${tool.label}」，可在功能页面打开设置` : `已卸载「${tool.label}」，模型配置与历史保留`)
   }
   moduleBusy.value = ''
+}
+function installAiTool(tool: AiToolLink): Promise<void> {
+  return setAiToolInstalled(tool, true)
+}
+async function uninstallAiTool(tool: AiToolLink): Promise<void> {
+  if (!window.confirm(`卸载「${tool.label}」？\n该工具入口会从左侧导航和 AI 创作页隐藏，模型配置与历史保留；可随时在应用商城重新下载安装。`)) return
+  await setAiToolInstalled(tool, false)
+}
+function activateAiTool(tool: AiToolLink): void {
+  if (isModuleInstalled(tool.key)) openAiTool(tool)
+  else void installAiTool(tool)
 }
 const aiStatus = ref<{ text: AiConfigShape | null; image: AiConfigShape | null; imageText: AiConfigShape | null } | null>(null)
 const aiStatusLoading = ref(false)
@@ -213,14 +250,14 @@ function iconMask(url: string): Record<string, string> {
     </header>
 
     <template v-if="mode === 'ai'">
-      <div class="ai-assistant-card">
+      <div v-if="isModuleInstalled('ai-assistant')" class="ai-assistant-card">
         <div class="ai-orb" aria-hidden="true"><img :src="assistantArt" alt="" /></div>
         <div class="ai-assistant-copy" data-test="ai-assistant-copy"><span class="available-pill"><i></i>已接入</span><h2>AI 电商助手</h2><p>纯文本对话：可以讨论问题、整理思路或给出手动操作建议；不会读取或操作店铺、网页、任务与软件数据。</p></div>
         <button type="button" class="unified-button primary" @click="emit('open-assistant')"><img class="button-icon" :src="assistantOpenIcon" alt="" />打开助手</button>
       </div>
       <div class="app-card-grid">
-        <article class="app-card app-card-action" @click="emit('navigate', 'image-studio')" @keydown.enter="emit('navigate', 'image-studio')" tabindex="0" role="button"><span class="app-card-icon purple"><AppIcon name="sparkles" :size="20" /></span><div><h2>AI 生成商品图</h2><p>进入模型选择、对话生图和真实结果预览工作台。</p></div><span class="app-card-arrow"><AppIcon name="chevron-right" :size="16" /></span></article>
-        <article class="app-card app-card-action" data-test="app-graphic-sell" @click="emit('navigate', 'graphic-sell')" @keydown.enter="emit('navigate', 'graphic-sell')" tabindex="0" role="button"><span class="app-card-icon orange"><AppIcon name="image" :size="20" /></span><div><h2>图文带货</h2><p>填商品信息，AI 写带货文案并生成多张配图；可编辑、复制、保存。</p></div><span class="app-card-arrow"><AppIcon name="chevron-right" :size="16" /></span></article>
+        <article v-if="isModuleInstalled('ai-image')" class="app-card app-card-action" @click="emit('navigate', 'image-studio')" @keydown.enter="emit('navigate', 'image-studio')" tabindex="0" role="button"><span class="app-card-icon purple"><AppIcon name="sparkles" :size="20" /></span><div><h2>AI 生成商品图</h2><p>进入模型选择、对话生图和真实结果预览工作台。</p></div><span class="app-card-arrow"><AppIcon name="chevron-right" :size="16" /></span></article>
+        <article v-if="isModuleInstalled('ai-graphic')" class="app-card app-card-action" data-test="app-graphic-sell" @click="emit('navigate', 'graphic-sell')" @keydown.enter="emit('navigate', 'graphic-sell')" tabindex="0" role="button"><span class="app-card-icon orange"><AppIcon name="image" :size="20" /></span><div><h2>图文带货</h2><p>填商品信息，AI 写带货文案并生成多张配图；可编辑、复制、保存。</p></div><span class="app-card-arrow"><AppIcon name="chevron-right" :size="16" /></span></article>
         <article class="app-card app-card-action" @click="openAiSettings()" @keydown.enter="openAiSettings()" tabindex="0" role="button"><span class="app-card-icon violet"><AppIcon name="settings" :size="20" /></span><div><h2>AI 模型配置</h2><p>查看文本/生图服务商、模型连接与凭据状态。</p></div><span class="app-card-arrow"><AppIcon name="chevron-right" :size="16" /></span></article>
       </div>
     </template>
@@ -231,65 +268,40 @@ function iconMask(url: string): Record<string, string> {
         <p v-if="moduleError" class="ac-notice error" role="alert">{{ moduleError }}</p>
         <AppCenterExtensions />
 
-        <!-- AI 工具（可整体下载安装/卸载） -->
+        <!-- AI 工具：三个工具各自独立下载安装/卸载 -->
         <div class="ac-section ac-section-row">
           <h2>AI 工具</h2>
-          <span class="ac-kind">增值</span>
-          <span class="ac-count">3</span>
-          <div class="ac-section-actions">
-            <button
-              type="button"
-              class="ac-link"
-              data-test="apps-ai-module-toggle"
-              :disabled="moduleBusy === 'ai'"
-              @click="toggleAiModule(!aiInstalled)"
-            >{{ moduleBusy === 'ai' ? '处理中…' : aiInstalled ? '卸载 AI 创作' : '下载安装 AI 创作' }}</button>
-          </div>
+          <span class="ac-kind">可下载/卸载</span>
+          <span class="ac-count">{{ aiInstalledCount }}/{{ aiTools.length }}</span>
         </div>
         <p v-if="aiStatusError" class="ac-hint error">读取模型状态失败：{{ aiStatusError }}</p>
-        <p v-if="!aiInstalled" class="ac-hint">AI 创作未安装：点右上「下载安装 AI 创作」恢复助手、生图与图文带货。</p>
-        <div v-else class="ac-grid" data-test="apps-ai-grid">
-          <article class="ac-card" role="button" tabindex="0" data-test="apps-ai-assistant" @click="emit('open-assistant')" @keydown.enter="emit('open-assistant')" @keydown.space.prevent="emit('open-assistant')">
+        <p class="ac-hint">三个 AI 工具独立安装与卸载；模型配置和创作历史保留。</p>
+        <div class="ac-grid" data-test="apps-ai-grid">
+          <article
+            v-for="tool in aiTools"
+            :key="tool.key"
+            class="ac-card"
+            role="button"
+            tabindex="0"
+            :data-test="tool.testId"
+            @click="activateAiTool(tool)"
+            @keydown.enter="activateAiTool(tool)"
+            @keydown.space.prevent="activateAiTool(tool)"
+          >
             <div class="ac-top">
-              <span class="ac-icon" :style="{ background: appTones.violet.bg, color: appTones.violet.fg }"><i :style="iconMask(aiAppIcon)"></i></span>
-              <span class="ac-cat">对话</span>
+              <span class="ac-icon" :style="{ background: appTones[tool.tone].bg, color: appTones[tool.tone].fg }"><i :style="iconMask(tool.icon)"></i></span>
+              <span class="ac-cat" :class="{ off: !isModuleInstalled(tool.key) }">{{ isModuleInstalled(tool.key) ? tool.category : '未安装' }}</span>
             </div>
-            <h3>AI 电商助手</h3>
-            <p class="ac-desc">纯文本对话：讨论问题、整理思路、给出手动操作建议；不会读取或操作店铺与软件数据。</p>
+            <h3>{{ tool.label }}</h3>
+            <p class="ac-desc">{{ tool.description }}</p>
             <div class="ac-foot">
-              <span class="ac-note">{{ textModelStatus }}</span>
-              <span class="ac-open">打开
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
-              </span>
-            </div>
-          </article>
-
-          <article class="ac-card" role="button" tabindex="0" data-test="apps-ai-image" @click="emit('navigate', 'image-studio')" @keydown.enter="emit('navigate', 'image-studio')" @keydown.space.prevent="emit('navigate', 'image-studio')">
-            <div class="ac-top">
-              <span class="ac-icon" :style="{ background: appTones.pink.bg, color: appTones.pink.fg }"><i :style="iconMask(aiAppIcon)"></i></span>
-              <span class="ac-cat">内容创作</span>
-            </div>
-            <h3>AI 生成商品图</h3>
-            <p class="ac-desc">填商品信息、对话式生图，结果可直接预览与保存。</p>
-            <div class="ac-foot">
-              <span class="ac-note">{{ imageModelStatus }}</span>
-              <span class="ac-open">打开
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
-              </span>
-            </div>
-          </article>
-
-          <article class="ac-card" role="button" tabindex="0" data-test="apps-ai-graphic" @click="emit('navigate', 'graphic-sell')" @keydown.enter="emit('navigate', 'graphic-sell')" @keydown.space.prevent="emit('navigate', 'graphic-sell')">
-            <div class="ac-top">
-              <span class="ac-icon" :style="{ background: appTones.orange.bg, color: appTones.orange.fg }"><i :style="iconMask(graphicSellAppIcon)"></i></span>
-              <span class="ac-cat">内容创作</span>
-            </div>
-            <h3>图文带货</h3>
-            <p class="ac-desc">AI 写带货笔记文案并生成多张配图，可编辑、复制与保存。</p>
-            <div class="ac-foot">
-              <span class="ac-note">{{ graphicModelStatus }}</span>
-              <span class="ac-open">打开
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+              <span class="ac-note">{{ isModuleInstalled(tool.key) ? aiToolNote(tool) : '下载安装后使用' }}</span>
+              <span class="ac-actions">
+                <template v-if="isModuleInstalled(tool.key)">
+                  <button type="button" class="ac-action" @click.stop="openAiTool(tool)">打开</button>
+                  <button type="button" class="ac-action danger" :data-test="`apps-ai-uninstall-${tool.key}`" :disabled="moduleBusy === tool.key" @click.stop="uninstallAiTool(tool)">卸载</button>
+                </template>
+                <button v-else type="button" class="ac-action primary" :data-test="`apps-ai-install-${tool.key}`" :disabled="moduleBusy === tool.key" @click.stop="installAiTool(tool)">{{ moduleBusy === tool.key ? '安装中…' : '下载安装' }}</button>
               </span>
             </div>
           </article>

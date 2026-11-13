@@ -61,7 +61,7 @@ describe('图文带货：AI 创作入口与工作台路由', () => {
     expect(appsPage).toContain('data-test="app-graphic-sell"')
     expect(appsPage).toContain("emit('navigate', 'graphic-sell')")
     // 2026-11-09 应用商城重构：图文带货从「系统页面目录」移到 AI 工具卡，断言跟着新入口
-    expect(appsPage).toContain('data-test="apps-ai-graphic"')
+    expect(appsPage).toContain("testId: 'apps-ai-graphic'")
     expect(appsPage).toContain('图文带货')
   })
 

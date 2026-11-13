@@ -490,7 +490,7 @@
     </div>
 
     <AgentDock
-      v-if="hasNativeBridge && isModuleInstalled('ai')"
+      v-if="hasNativeBridge && isModuleInstalled('ai-assistant')"
       :locked="ws.appLocked"
     />
   </section>
@@ -512,7 +512,7 @@ const UnifiedGraphicSellPage = defineAsyncComponent(() => import('./UnifiedGraph
 const UnifiedAppsPage = defineAsyncComponent(() => import('./UnifiedAppsPage.vue'))
 import DashboardOverviewPage from './components/DashboardOverviewPage.vue'
 import { waitForWorkspaceReady } from './use-dashboard-overview'
-import { ensureAppModulesLoaded, isModuleInstalled, type OptionalModuleKey } from './use-app-modules'
+import { ensureAppModulesLoaded, isAiHubInstalled, isModuleInstalled, type OptionalModuleKey } from './use-app-modules'
 import { buildWorkbenchNotifications, type WorkbenchNotificationItem } from './notification-center'
 import { useAgentStore } from '../../stores/agent'
 import { useWorkspaceStore, type StoreRow } from '../../stores/workspace'
@@ -552,7 +552,7 @@ const activeNav = ref('经营总览')
 const visibleNavItems = computed(() => navItems.filter((item) => {
   if (item.key === 'invoices') return isModuleInstalled('invoices')
   if (item.key === 'tax') return isModuleInstalled('tax')
-  if (item.key === 'ai') return isModuleInstalled('ai')
+  if (item.key === 'ai') return isAiHubInstalled()
   return true
 }))
 void ensureAppModulesLoaded()
@@ -581,9 +581,8 @@ const pageTitle = computed(() => PAGE_TITLES[activePage.value] || '经营总览'
 const OPTIONAL_PAGE_MODULE: Record<string, OptionalModuleKey> = {
   invoices: 'invoices',
   tax: 'tax',
-  ai: 'ai',
-  'image-studio': 'ai',
-  'graphic-sell': 'ai'
+  'image-studio': 'ai-image',
+  'graphic-sell': 'ai-graphic'
 }
 /**
  * 客服未读总数（2026-10-16「实时检测店铺消息」）：侧栏客服入口红点用。
@@ -734,6 +733,10 @@ function preventBusyAiStudioExit() {
   return false
 }
 function navigateTo(page: DashboardPage) {
+  if (page === 'ai' && !isAiHubInstalled()) {
+    showNotice('「AI 创作」里的工具都未安装，可在应用商城下载安装')
+    page = 'apps'
+  }
   const moduleKey = OPTIONAL_PAGE_MODULE[page]
   if (moduleKey && !isModuleInstalled(moduleKey)) {
     showNotice(`「${PAGE_TITLES[page] || '该功能'}」未安装，可在应用商城下载安装`)
@@ -947,8 +950,8 @@ async function syncStoreContextOcclusion() {
   await bridge.browser.setViewsObscured(overlap)
 }
 async function openAssistant() {
-  if (!isModuleInstalled('ai')) {
-    showNotice('「AI 创作」未安装，可在应用商城下载安装')
+  if (!isModuleInstalled('ai-assistant')) {
+    showNotice('「AI 电商助手」未安装，可在应用商城下载安装')
     navigateTo('apps')
     return
   }

@@ -18,7 +18,7 @@
             <AppIcon name="refresh" :size="14" />
             {{ refreshLabel }}
           </button>
-          <button v-if="aiInstalled" type="button" class="ui-btn ui-btn--primary" @click="emit('open-assistant')">
+          <button v-if="aiAssistantInstalled" type="button" class="ui-btn ui-btn--primary" @click="emit('open-assistant')">
             <AppIcon name="sparkles" :size="14" />
             问问 AI
           </button>
@@ -216,7 +216,7 @@
             </div>
           </section>
 
-          <section v-if="aiInstalled" id="ai-assistant" class="ui-card ov-ai">
+          <section v-if="aiAssistantInstalled" id="ai-assistant" class="ui-card ov-ai">
             <div class="ov-ai-icon" aria-hidden="true"><AppIcon name="sparkles" :size="18" /></div>
             <h2>AI 电商助手</h2>
             <p>创作、优化、分析，一站完成。只给建议，不替你动店铺数据。</p>
@@ -283,10 +283,11 @@ const quickActions = [
  * 侧栏与路由已有守卫，但总览的 AI 按钮/卡片和待开发票卡是独立渲染的，
  * 守卫只在点击后跳商城——用户仍会看到一个"装了但点不开"的入口，语义不一致。
  */
-const aiInstalled = computed(() => isModuleInstalled('ai'))
+const aiAssistantInstalled = computed(() => isModuleInstalled('ai-assistant'))
+const aiImageInstalled = computed(() => isModuleInstalled('ai-image'))
 const invoicesInstalled = computed(() => isModuleInstalled('invoices'))
 const visibleQuickActions = computed(() => quickActions.filter(action => {
-  if (action.key === 'image') return aiInstalled.value
+  if (action.key === 'image') return aiImageInstalled.value
   return true
 }))
 function handleQuickAction(action: (typeof quickActions)[number]) {

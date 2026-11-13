@@ -88,7 +88,7 @@ async function main() {
 
     // 截图用的临时库副本：把可选模块全部启用，保证发票/涉税页面也能进入评审（不触碰真实库）。
     try {
-      await client.eval(`await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax','ai']); return true`)
+      await client.eval(`await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax','ai-assistant','ai-image','ai-graphic']); return true`)
       await client.send('Page.reload', { ignoreCache: true })
       await sleep(2200)
     } catch (err) {
@@ -146,6 +146,71 @@ async function main() {
       }
       await capture(`settings-${tab}`)
     }
+
+    // AI 工具独立启停：卸载「AI 生成商品图」后，商城保留安装入口、AI 创作页只剩其他工具。
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('应用商城'))
+      nav?.click(); return true
+    `)
+    await sleep(700)
+    const removedAiImage = await client.eval(`
+      window.confirm = () => true
+      const btn = document.querySelector('[data-test="apps-ai-uninstall-ai-image"]')
+      if (!btn) return false
+      btn.click(); return true
+    `)
+    await sleep(900)
+    await capture('app-center-ai-image-removed')
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('AI 创作'))
+      nav?.click(); return true
+    `)
+    await sleep(700)
+    const aiImageCardGone = await client.eval(`
+      return ![...document.querySelectorAll('.app-card')].some(el => (el.textContent || '').includes('AI 生成商品图'))
+    `)
+    await capture('apps-ai-image-removed')
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('应用商城'))
+      nav?.click(); return true
+    `)
+    await sleep(700)
+    await client.eval(`document.querySelector('[data-test="apps-ai-install-ai-image"]')?.click(); return true`)
+    await sleep(900)
+    console.log(`[shot] AI 工具独立卸载=${removedAiImage} 卡片隐藏=${aiImageCardGone}，已重新安装`)
+
+    // 助手独立卸载：总览不再出现「问问 AI」与悬浮球，但其他 AI 工具仍在。
+    await client.eval(`
+      window.confirm = () => true
+      document.querySelector('[data-test="apps-ai-uninstall-ai-assistant"]')?.click(); return true
+    `)
+    await sleep(900)
+    await capture('app-center-ai-assistant-removed')
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('经营总览'))
+      nav?.click(); return true
+    `)
+    await sleep(700)
+    const assistantArtifactsGone = await client.eval(`
+      return {
+        orb: !document.querySelector('.agent-orb'),
+        ask: !document.body.innerText.includes('问问 AI')
+      }
+    `)
+    await capture('overview-ai-assistant-removed')
+    await client.eval(`
+      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
+        .find(el => (el.textContent || '').trim().includes('应用商城'))
+      nav?.click(); return true
+    `)
+    await sleep(700)
+    await client.eval(`document.querySelector('[data-test="apps-ai-install-ai-assistant"]')?.click(); return true`)
+    await sleep(900)
+    console.log('[shot] 助手独立卸载验证 =', JSON.stringify(assistantArtifactsGone))
 
     // 电商客服工作区（同窗切换，不是新窗口）
     const cs = await client.eval(`

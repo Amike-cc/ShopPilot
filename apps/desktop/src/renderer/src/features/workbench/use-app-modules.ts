@@ -7,9 +7,11 @@
  */
 import { reactive } from 'vue'
 
-export type OptionalModuleKey = 'invoices' | 'tax' | 'ai'
+export type OptionalModuleKey = 'invoices' | 'tax' | 'ai-assistant' | 'ai-image' | 'ai-graphic'
 
-export const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['invoices', 'tax', 'ai']
+export const AI_TOOL_MODULE_KEYS: OptionalModuleKey[] = ['ai-assistant', 'ai-image', 'ai-graphic']
+
+export const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['invoices', 'tax', ...AI_TOOL_MODULE_KEYS]
 
 /** 走通用 settings 通道的 ui.* 白名单键，按机器持久化 */
 const SETTING_KEY = 'ui.apps.installedModules'
@@ -18,7 +20,9 @@ const SETTING_KEY = 'ui.apps.installedModules'
 export const installedModules = reactive<Record<OptionalModuleKey, boolean>>({
   invoices: true,
   tax: true,
-  ai: true
+  'ai-assistant': true,
+  'ai-image': true,
+  'ai-graphic': true
 })
 
 let loaded = false
@@ -26,6 +30,11 @@ let loading: Promise<void> | null = null
 
 export function isModuleInstalled(key: string): boolean {
   return installedModules[key as OptionalModuleKey] !== false
+}
+
+/** AI 创作是壳页：只要三个 AI 工具里任意一个装了，就保留侧栏入口。 */
+export function isAiHubInstalled(): boolean {
+  return AI_TOOL_MODULE_KEYS.some(key => isModuleInstalled(key))
 }
 
 /** 首次进入工作台/商城时读一次；读不到按全部已安装处理，绝不因为读失败藏入口 */
@@ -37,7 +46,13 @@ export async function ensureAppModulesLoaded(): Promise<void> {
       const result = await window.shopilot.settings.get(SETTING_KEY)
       const list = result.ok ? result.data?.value : null
       if (Array.isArray(list)) {
-        for (const key of OPTIONAL_MODULE_KEYS) installedModules[key] = list.includes(key)
+        // 旧版只有一个 'ai' 键；升级后把它展开为三个独立 AI 工具（已安装）。
+        const legacyAi = list.includes('ai')
+        for (const key of OPTIONAL_MODULE_KEYS) {
+          installedModules[key] = AI_TOOL_MODULE_KEYS.includes(key)
+            ? legacyAi || list.includes(key)
+            : list.includes(key)
+        }
       }
     } catch {
       /* 读失败保持默认（全部已安装） */
