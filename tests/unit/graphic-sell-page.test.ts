@@ -114,6 +114,17 @@ describe('图文带货：独立入口与工作台路由', () => {
     expect(page).not.toContain('假数据')
     expect(page).not.toContain('示例结果')
   })
+
+  it('结果页重设计为「封面预览 + 文案卡」，不再堆叠旧笔记卡与配图网格', () => {
+    expect(page).toContain('gs-result-layout')
+    expect(page).toContain('gs-cover-overlay')
+    expect(page).toContain('gs-filmstrip')
+    expect(page).toContain('data-test="graphic-sell-edit-cover"')
+    expect(page).not.toContain('class="gs-note"')
+    expect(page).not.toContain('class="gs-image-grid"')
+    // 封面大字只做预览叠加，保存图片不含文字，界面必须说清楚
+    expect(page).toContain('封面大字仅用于预览排版，保存的图片不含文字')
+  })
 })
 
 describe('图文带货：生成流程与数据边界', () => {

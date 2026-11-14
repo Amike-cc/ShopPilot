@@ -145,11 +145,11 @@ export function buildSellCopyMessages(input: NormalizedSellCopyInput): SellCopyM
     '只输出一个 JSON 对象，不要输出 Markdown 代码块、解释、前言或结语。JSON 字段固定为：',
     '{"title":"笔记标题","body":"笔记正文","tags":["话题1","话题2"],"coverText":"封面大字","imagePrompts":["第 1 张图的画面描述"]}',
     '硬性要求：',
-    `1. title ≤ ${SELL_COPY_LIMITS.title} 字，不带话题标签、不带引号；`,
-    `2. body ≤ ${SELL_COPY_LIMITS.body} 字，可含换行，按目标平台的图文笔记语言习惯分段；`,
-    `3. tags 为 3–${SELL_COPY_LIMITS.tags} 条话题，去掉 # 前缀，每条 ≤ ${SELL_COPY_LIMITS.tag} 字；`,
-    `4. coverText 是封面大字 / 首图贴纸文案，≤ ${SELL_COPY_LIMITS.coverText} 字，不要引号；`,
-    `5. imagePrompts 必须正好 ${imageCount} 条，每条 ≤ ${SELL_COPY_LIMITS.imagePrompt} 字，是可直接用于文生图的画面描述：写清主体、场景、构图、光线与色调；画面要为封面排版留出留白，不要在图中生成文字、水印、品牌标识或平台 Logo；`,
+    `1. title ≤ ${SELL_COPY_LIMITS.title} 字，12–20 字最佳：写出具体卖点 + 使用场景，不要「好物推荐」「必入」「绝了」这类空泛词，不带话题标签、不带引号；`,
+    `2. body ≤ ${SELL_COPY_LIMITS.body} 字，可含换行，2–3 个短段：先写使用场景与痛点，再写真实体验与细节，最后给搭配/选购建议；不要复述标题，不要编造销量、评价或数据；`,
+    `3. tags 为 3–${SELL_COPY_LIMITS.tags} 条话题，去掉 # 前缀，每条 ≤ ${SELL_COPY_LIMITS.tag} 字；优先商品品类 + 使用场景 + 人群，不要堆无关热词；`,
+    `4. coverText 是封面大字 / 首图贴纸文案，≤ ${SELL_COPY_LIMITS.coverText} 字，只讲一个核心利益点，不要引号与标点；`,
+    `5. imagePrompts 必须正好 ${imageCount} 条，每条 ≤ ${SELL_COPY_LIMITS.imagePrompt} 字，是可直接用于文生图的画面描述：写清主体、场景、构图、光线与色调；第 1 条按封面构图（主体略低、顶部留白），其余分别承担细节、面料/工艺、使用场景，不要多张写成同一种构图；画面要为封面排版留出留白，不要在图中生成文字、水印、品牌标识或平台 Logo；`,
     '6. 不夸大功效，不编造数据、销量、评价、认证或价格；用户没有提供的金额、规格、成分与功效一律不要出现；',
     '7. 以用户消息里的商品信息与图片为唯一事实来源，看不到或不确定的内容不要补写。'
   ].join('\n')

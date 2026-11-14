@@ -354,7 +354,7 @@ describe('效果模板：躺床俯拍（用户提供的参考效果）', () => {
       expect(prompt).toContain('不要摆拍式微笑')
       // 商业成片质量与单张完整画面：每张都要带，不能只写在模板里
       expect(prompt).toContain('商业成片标准')
-      expect(prompt).toContain('主体占画面 55%–75%')
+      expect(prompt).toContain('主体占画面 45%–70%')
       expect(prompt).toContain('单张完整画面')
       expect(prompt).toContain('不要拼图、分屏、多格')
     }

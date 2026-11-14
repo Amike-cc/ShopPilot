@@ -138,54 +138,68 @@
         </section>
 
         <template v-else-if="copy">
-          <section class="gs-note" data-test="graphic-sell-result">
-            <header class="gs-note-head">
-              <span class="gs-avatar">{{ avatarLetter }}</span>
-              <div><b>图文带货预览</b><small>{{ platform }} · {{ style }}</small></div>
-              <span class="gs-note-model" :title="`文案模型：${copy.model}`">{{ copy.model }}</span>
-            </header>
-            <div class="gs-note-media" :style="{ aspectRatio: previewAspect }">
-              <img v-if="activeImage" :src="activeImage.url" :alt="`配图 ${activeImage.index + 1}`" data-test="graphic-sell-active-image" />
-              <div v-else class="gs-media-placeholder">配图待生成</div>
-              <span v-if="activeImage" class="gs-page-count">{{ activeImageIndex + 1 }} / {{ images.length || imageCount }}</span>
+          <div class="gs-result-head">
+            <div>
+              <span class="gs-kicker">RESULT</span>
+              <h1>这套图文可以发了</h1>
+              <p>{{ platform }} · {{ style }} · {{ effectOption.label }} · {{ ratioLabel }}</p>
             </div>
-            <div v-if="images.length > 1" class="gs-thumbs" data-test="graphic-sell-thumbs">
-              <button v-for="(image, index) in images" :key="index" type="button" :class="{ active: activeImageIndex === index }" @click="activeImageIndex = index"><img :src="image.url" :alt="`配图 ${index + 1}`" /></button>
-            </div>
-            <div class="gs-note-body">
-              <p v-if="editableCoverText.trim()" class="gs-cover-text">封面大字：{{ editableCoverText }}</p>
-              <label class="gs-field">标题<input v-model="editableTitle" :maxlength="SELL_COPY_LIMITS.title" data-test="graphic-sell-edit-title" /></label>
-              <label class="gs-field">正文<textarea v-model="editableBody" :maxlength="SELL_COPY_LIMITS.body" rows="6" data-test="graphic-sell-edit-body"></textarea></label>
-              <label class="gs-field">话题标签<input v-model="editableTagsText" maxlength="220" placeholder="空格 / 逗号分隔，例如：露营 收纳 好物分享" data-test="graphic-sell-edit-tags" /></label>
-              <p class="gs-tags"><span v-for="tag in editableTags" :key="tag">#{{ tag }}</span></p>
-            </div>
-            <footer class="gs-note-actions">
+            <div class="gs-result-actions">
               <button type="button" class="gs-button primary" data-test="graphic-sell-copy-full" @click="copySellText('full')">复制完整文案</button>
               <button type="button" class="gs-button" @click="copySellText('title')">复制标题</button>
               <button type="button" class="gs-button" @click="copySellText('body')">复制正文</button>
               <button type="button" class="gs-button" @click="copySellText('tags')">复制话题</button>
-            </footer>
-          </section>
-
-          <section class="gs-images" data-test="graphic-sell-images">
-            <div class="gs-section-head"><h2>生成配图</h2><span>{{ images.length }} / {{ imageCount }} 张 · {{ ratioLabel }}</span></div>
-            <p v-if="images.length" class="gs-hint">哪张不满意可单独「重绘」：只重发这一张，文案与其它配图保持不变。</p>
-            <div v-if="!images.length" class="gs-images-empty">{{ generationNotice || generationError || '配图尚未返回，可点下方「换一批重新生成」再试。' }}</div>
-            <div v-else class="gs-image-grid">
-              <figure v-for="(image, index) in images" :key="index" :class="{ active: activeImageIndex === index, regenerating: regeneratingIndex === index }" @click="activeImageIndex = index">
-                <div v-if="regeneratingIndex === index" class="gs-image-redrawing"><span class="gs-loader"></span>重绘中…</div>
-                <img v-else :src="image.url" :alt="`配图 ${index + 1}`" />
-                <figcaption>
-                  <span>配图 {{ index + 1 }}</span>
-                  <span class="gs-image-actions">
-                    <button type="button" :disabled="saving || generating || regeneratingIndex >= 0" @click.stop="activeImageIndex = index; saveActiveImage()">保存</button>
-                    <button type="button" :data-test="`graphic-sell-regenerate-${index}`" :disabled="generating || regeneratingIndex >= 0" @click.stop="activeImageIndex = index; regenerateImage(index)">重绘</button>
-                  </span>
-                </figcaption>
-              </figure>
             </div>
-            <p v-if="saveNotice" class="gs-save" :class="{ error: saveNoticeError }">{{ saveNotice }}<button v-if="savedPath" type="button" @click="revealSavedImage">打开文件夹</button></p>
-          </section>
+          </div>
+
+          <div class="gs-result-layout" data-test="graphic-sell-result">
+            <section class="gs-cover-card" data-test="graphic-sell-images">
+              <div class="gs-cover-stage" :style="{ aspectRatio: previewAspect }">
+                <img v-if="activeImage" :src="activeImage.url" :alt="`配图 ${activeImage.index + 1}`" data-test="graphic-sell-active-image" />
+                <div v-else class="gs-media-placeholder">配图待生成</div>
+                <div v-if="activeImage && editableCoverText.trim()" class="gs-cover-overlay" aria-hidden="true">
+                  <span>封面大字 · 预览</span>
+                  <strong>{{ editableCoverText }}</strong>
+                </div>
+                <span v-if="activeImage" class="gs-page-count">{{ activeImageIndex + 1 }} / {{ images.length || imageCount }}</span>
+                <div v-if="activeImage && regeneratingIndex === activeImageIndex" class="gs-image-redrawing"><span class="gs-loader"></span>重绘中…</div>
+              </div>
+
+              <p v-if="images.length" class="gs-hint">哪张不满意可单独「重绘」：只重发这一张，文案与其它配图保持不变。</p>
+              <div class="gs-filmstrip" data-test="graphic-sell-thumbs">
+                <div v-for="(image, index) in images" :key="index" :class="['gs-film-item', { active: activeImageIndex === index }]">
+                  <button type="button" class="gs-film-thumb" :aria-label="`查看第 ${index + 1} 张配图`" @click="activeImageIndex = index">
+                    <img :src="image.url" :alt="`配图 ${index + 1}`" />
+                    <em v-if="index === 0">封面</em>
+                  </button>
+                  <span class="gs-film-tools">
+                    <button type="button" :data-test="`graphic-sell-regenerate-${index}`" :disabled="generating || regeneratingIndex >= 0" @click="activeImageIndex = index; regenerateImage(index)">重绘</button>
+                    <button type="button" :disabled="saving || generating || regeneratingIndex >= 0" @click="activeImageIndex = index; saveActiveImage()">保存</button>
+                  </span>
+                </div>
+                <div v-if="!images.length" class="gs-images-empty">{{ generationNotice || generationError || '配图尚未返回，可点下方「换一批重新生成」再试。' }}</div>
+              </div>
+
+              <div class="gs-cover-tools">
+                <button type="button" class="gs-button" :disabled="!activeImage || saving || generating || regeneratingIndex >= 0" @click="saveActiveImage">保存当前图</button>
+                <button type="button" class="gs-button" :disabled="!activeImage || generating || regeneratingIndex >= 0" @click="activeImageIndex >= 0 && regenerateImage(activeImageIndex)">重绘当前图</button>
+                <span class="gs-hint">封面大字仅用于预览排版，保存的图片不含文字。</span>
+              </div>
+              <p v-if="saveNotice" class="gs-save" :class="{ error: saveNoticeError }">{{ saveNotice }}<button v-if="savedPath" type="button" @click="revealSavedImage">打开文件夹</button></p>
+            </section>
+
+            <section class="gs-copy-card">
+              <header class="gs-copy-head">
+                <div><span class="gs-kicker">CAPTION</span><h2>文案</h2></div>
+                <span class="gs-note-model" :title="`文案模型：${copy.model}`">{{ copy.model }}</span>
+              </header>
+              <label class="gs-field">封面大字<input v-model="editableCoverText" :maxlength="SELL_COPY_LIMITS.coverText" data-test="graphic-sell-edit-cover" /></label>
+              <label class="gs-field">标题<input v-model="editableTitle" :maxlength="SELL_COPY_LIMITS.title" data-test="graphic-sell-edit-title" /></label>
+              <label class="gs-field">正文<textarea v-model="editableBody" :maxlength="SELL_COPY_LIMITS.body" rows="8" data-test="graphic-sell-edit-body"></textarea></label>
+              <label class="gs-field">话题标签<input v-model="editableTagsText" maxlength="220" placeholder="空格 / 逗号分隔，例如：露营 收纳 好物分享" data-test="graphic-sell-edit-tags" /></label>
+              <p class="gs-tags"><span v-for="tag in editableTags" :key="tag">#{{ tag }}</span></p>
+            </section>
+          </div>
 
           <p v-if="generationNotice" class="gs-warn">{{ generationNotice }}</p>
           <p v-if="generationError" class="gs-error" data-test="graphic-sell-error">{{ generationError }}</p>
@@ -328,7 +342,6 @@ const copyStatusHint = computed(() => readiness.value.copyReady
 const imageStatusHint = computed(() => readiness.value.imageReady
   ? `生图模型：${config.value?.imageModel || readiness.value.imageLabel}`
         : '未配置：点右上角「模型设置」→ 生图接口填写地址、模型和 Key')
-const avatarLetter = computed(() => (productName.value.trim() || '图文带货').slice(0, 1))
 const previewAspect = computed(() => ratio.value.replace(':', ' / '))
 
 function formatDate(value: number): string {
@@ -424,7 +437,36 @@ function formatDate(value: number): string {
 @keyframes gs-spin{to{transform:rotate(360deg)}}
 .gs-progress-steps{display:flex;gap:16px;margin-top:8px;color:#98a2b3;font-size:11px}
 .gs-progress-steps .active{color:#4d5be0;font-weight:600}
-.gs-progress-steps .done{color:#1d7a55}
+/* ---------- 结果页：封面预览 + 文案编辑，替代原来的长卡片堆叠 ---------- */
+.gs-result-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:2px}
+.gs-result-head h1{margin:3px 0 4px;color:#1f2a44;font-size:20px;letter-spacing:-.02em}
+.gs-result-head p{margin:0;color:#7a8bad;font-size:11px}
+.gs-result-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.gs-result-layout{display:grid;grid-template-columns:minmax(300px,1.05fr) minmax(300px,.95fr);gap:14px;align-items:start;max-width:980px}
+.gs-cover-card{display:flex;min-width:0;flex-direction:column;gap:10px;padding:14px;border:1px solid rgba(103,143,207,.2);border-radius:16px;background:#fff;box-shadow:0 15px 38px rgba(91,125,180,.1)}
+.gs-cover-stage{position:relative;display:grid;place-items:center;width:100%;max-height:520px;overflow:hidden;border-radius:12px;background:#0f172a}
+.gs-cover-stage>img{display:block;width:100%;height:100%;object-fit:cover}
+.gs-cover-overlay{position:absolute;inset:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:4px;padding:7% 10% 16%;background:linear-gradient(180deg,rgba(15,23,42,.55),rgba(15,23,42,0));color:#fff;text-align:center;pointer-events:none}
+.gs-cover-overlay span{font-size:9px;letter-spacing:.08em;opacity:.8}
+.gs-cover-overlay strong{max-width:100%;font-size:clamp(16px,2vw,24px);line-height:1.25;letter-spacing:-.01em;text-shadow:0 2px 10px rgba(0,0,0,.35);overflow-wrap:anywhere}
+.gs-cover-stage .gs-image-redrawing{position:absolute;inset:0;width:100%;height:100%;aspect-ratio:auto;background:rgba(244,248,255,.9)}
+.gs-filmstrip{display:flex;gap:8px;overflow-x:auto;padding:2px 1px;scrollbar-width:thin}
+.gs-film-item{display:flex;flex:0 0 76px;flex-direction:column;gap:3px}
+.gs-film-thumb{position:relative;width:76px;height:76px;padding:0;overflow:hidden;border:1px solid #e3e9f2;border-radius:9px;background:#fff;cursor:pointer}
+.gs-film-thumb img{display:block;width:100%;height:100%;object-fit:cover}
+.gs-film-thumb em{position:absolute;left:3px;top:3px;padding:1px 4px;border-radius:4px;background:rgba(15,23,42,.72);color:#fff;font-size:8px;font-style:normal}
+.gs-film-item.active .gs-film-thumb{border-color:#6d4aff;box-shadow:0 0 0 2px rgba(109,74,255,.16)}
+.gs-film-tools{display:flex;justify-content:center;gap:2px}
+.gs-film-tools button{padding:1px 4px;border:1px solid #dbe3f2;border-radius:5px;background:#fff;color:#4f5f83;font-size:9px;cursor:pointer}
+.gs-film-tools button:hover{border-color:#9fb0f7;color:#2f3fc4}
+.gs-film-tools button:disabled{cursor:not-allowed;opacity:.5}
+.gs-cover-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.gs-cover-tools .gs-hint{flex:1;min-width:150px;margin:0}
+.gs-copy-card{display:flex;min-width:0;flex-direction:column;padding:14px;border:1px solid rgba(103,143,207,.2);border-radius:16px;background:#fff;box-shadow:0 15px 38px rgba(91,125,180,.1)}
+.gs-copy-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px}
+.gs-copy-head h2{margin:2px 0 0;color:#22304c;font-size:16px}
+.gs-copy-card .gs-field:last-of-type{margin-bottom:6px}
+.gs-copy-card textarea{min-height:150px}
 .gs-note{display:flex;flex-direction:column;gap:0;max-width:760px;overflow:hidden;border:1px solid rgba(103,143,207,.2);border-radius:16px;background:#fff;box-shadow:0 15px 38px rgba(91,125,180,.12)}
 .gs-note-head{display:flex;align-items:center;gap:9px;padding:12px 14px;border-bottom:1px solid #f0f3f8}
 .gs-avatar{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:linear-gradient(150deg,#ffe0c2,#ffc7a0);color:#a9641c;font-size:13px;font-weight:600}
@@ -508,4 +550,5 @@ function formatDate(value: number): string {
 .gs-advanced-toggle:hover{background:rgba(103,143,207,.06)}
 .gs-advanced-body{padding:2px 14px 12px;border-top:1px solid rgba(103,143,207,.14)}
 .gs-advanced-body .gs-field:first-child,.gs-advanced-body .gs-pair:first-child{margin-top:10px}
+@media (max-width:900px){.gs-result-layout{grid-template-columns:minmax(0,1fr)}.gs-cover-stage{max-height:520px}}
 </style>

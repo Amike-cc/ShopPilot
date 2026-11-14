@@ -199,6 +199,14 @@ describe('buildSellCopyMessages：固定 system + 结构化 user', () => {
     expect(system).toContain(`≤ ${SELL_COPY_LIMITS.body} 字`)
     expect(system).toContain(`≤ ${SELL_COPY_LIMITS.coverText} 字`)
     expect(system).toContain(`≤ ${SELL_COPY_LIMITS.imagePrompt} 字`)
+    // 质量导向：标题要具体，正文按场景→体验→建议，配图按角色分工
+    expect(system).toContain('12–20 字最佳')
+    expect(system).toContain('具体卖点 + 使用场景')
+    expect(system).toContain('不要「好物推荐」')
+    expect(system).toContain('2–3 个短段')
+    expect(system).toContain('不要复述标题')
+    expect(system).toContain('第 1 条按封面构图')
+    expect(system).toContain('不要多张写成同一种构图')
   })
 
   it('imagePrompts 条数约束随 imageCount 变化', () => {
