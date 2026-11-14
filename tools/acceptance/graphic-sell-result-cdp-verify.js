@@ -119,8 +119,8 @@ function startMock() {
   }
   const requests = []
   const server = http.createServer((req, res) => {
-    let body = ''
-    req.on('data', chunk => { body += chunk.toString('binary') })
+    let _body = ''
+    req.on('data', chunk => { _body += chunk.toString('binary') })
     req.on('end', () => {
       requests.push({ method: req.method, url: req.url })
       if (req.method === 'POST' && /chat\/completions/.test(String(req.url))) {
