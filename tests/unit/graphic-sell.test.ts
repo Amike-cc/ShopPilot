@@ -312,6 +312,10 @@ describe('效果模板：躺床俯拍（用户提供的参考效果）', () => {
     expect(graphicSellEffectDefaults('flatlay').model).toBe('none')
     expect(getGraphicSellEffect('auto').requiresProductImage).toBe(false)
     expect(GRAPHIC_SELL_EFFECT_OPTIONS.map(item => item.key)).toEqual(['bed-lying', 'flatlay', 'auto'])
+    // 模板说明直接写适用品类，减少用户选错场景
+    expect(getGraphicSellEffect('bed-lying').note).toContain('适合童装')
+    expect(getGraphicSellEffect('flatlay').note).toContain('适合鞋包')
+    expect(getGraphicSellEffect('auto').note).toContain('适合美妆')
   })
 
   it('躺床俯拍提示词：90° 俯拍 + 闭眼安睡 + 单一主体 + 商品一致性与禁止编造，不再混入文案场景', () => {
@@ -332,6 +336,9 @@ describe('效果模板：躺床俯拍（用户提供的参考效果）', () => {
     const second = buildGraphicSellImagePrompt(input, result, 1, '9:16', bedLying)
     expect(second).toContain('上半身俯拍')
     expect(second).not.toContain('全身俯拍主图')
+    // 封面留白只给第 1 张，后续图不重复要求顶部大留白
+    expect(first).toContain('画面上方预留 22%–28%')
+    expect(second).not.toContain('画面上方预留 22%–28%')
 
     const third = buildGraphicSellImagePrompt(input, result, 2, '9:16', bedLying)
     // 实测旧版第 3 张被画成人像特写；现在明确要求面料/工艺特写
@@ -345,6 +352,11 @@ describe('效果模板：躺床俯拍（用户提供的参考效果）', () => {
       expect(prompt).toContain('只出现一位人物与一套商品')
       expect(prompt).toContain('不要出现任何字母')
       expect(prompt).toContain('不要摆拍式微笑')
+      // 商业成片质量与单张完整画面：每张都要带，不能只写在模板里
+      expect(prompt).toContain('商业成片标准')
+      expect(prompt).toContain('主体占画面 55%–75%')
+      expect(prompt).toContain('单张完整画面')
+      expect(prompt).toContain('不要拼图、分屏、多格')
     }
   })
 

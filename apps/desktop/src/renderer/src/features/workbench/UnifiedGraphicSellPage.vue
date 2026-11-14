@@ -18,27 +18,18 @@
     <div class="gs-body">
       <aside class="gs-form" aria-label="图文带货配置">
         <section class="gs-card">
-          <h3><i>1</i>商品信息 <em>* 名称必填</em></h3>
+          <h3><i>1</i>商品 <em>* 名称与商品图必填</em></h3>
           <label class="gs-field">商品名称
-            <input v-model="productName" type="text" :maxlength="SELL_COPY_LIMITS.productName" placeholder="例如：便携折叠露营椅" data-test="graphic-sell-product-name" />
+            <input v-model="productName" type="text" :maxlength="SELL_COPY_LIMITS.productName" placeholder="例如：儿童加厚摇粒绒家居服" data-test="graphic-sell-product-name" />
           </label>
-          <label class="gs-field">卖点 / 使用场景 <small>选填</small>
-            <textarea v-model="sellingPoints" :maxlength="SELL_COPY_LIMITS.sellingPoints" rows="3" placeholder="例如：轻量铝合金支架、3 秒收纳、承重 120kg，适合露营 / 钓鱼 / 野餐" data-test="graphic-sell-selling-points"></textarea>
+          <label class="gs-field">卖点 / 场景 <small>选填，写得越具体文案越好</small>
+            <textarea v-model="sellingPoints" :maxlength="SELL_COPY_LIMITS.sellingPoints" rows="2" placeholder="例如：双面摇粒绒、柔软不扎、机洗不变形、居家 / 幼儿园都合适" data-test="graphic-sell-selling-points"></textarea>
             <span class="gs-count">{{ sellingPoints.length }} / {{ SELL_COPY_LIMITS.sellingPoints }}</span>
           </label>
-          <div class="gs-pair">
-            <label class="gs-field">售价 <small>选填</small><input v-model="price" :maxlength="SELL_COPY_LIMITS.price" placeholder="例如 ¥129" data-test="graphic-sell-price" /></label>
-            <label class="gs-field">原价 <small>选填</small><input v-model="originalPrice" :maxlength="SELL_COPY_LIMITS.originalPrice" placeholder="例如 ¥199" data-test="graphic-sell-original-price" /></label>
-          </div>
-          <label class="gs-field">目标人群 <small>选填</small><input v-model="audience" :maxlength="SELL_COPY_LIMITS.audience" placeholder="例如：露营新手、有娃家庭" data-test="graphic-sell-audience" /></label>
-        </section>
-
-        <section class="gs-card">
-          <h3><i>2</i>商品图 <em>{{ requiresProductImage ? '该效果必填' : '选填' }} · {{ materials.length }}/{{ MAX_GRAPHIC_SELL_MATERIALS }}</em></h3>
-          <p class="gs-hint">效果模板要用商品图做参考，才能保住颜色、面料、图案与刺绣文字一致；「AI 自由设计」可以不上传。</p>
+          <div class="gs-upload-head"><span>商品图</span><em>{{ materials.length }}/{{ MAX_GRAPHIC_SELL_MATERIALS }}</em></div>
           <div class="gs-dropzone" :class="{ full: materials.length >= MAX_GRAPHIC_SELL_MATERIALS }" role="button" tabindex="0" data-test="graphic-sell-material-dropzone" @click="materialInput?.click()" @keydown.enter.prevent="materialInput?.click()" @dragover.prevent @drop.prevent="onMaterialDrop">
             <input ref="materialInput" class="gs-visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" data-test="graphic-sell-material-input" @change="onMaterialFiles" />
-            <span class="gs-plus">+</span><strong>拖拽或点击上传</strong><small>PNG / JPEG，单张 ≤ 5MB，最多 3 张</small>
+            <span class="gs-plus">+</span><strong>拖拽或点击上传</strong><small>平铺 / 细节 / 模特图都可，单张 ≤ 5MB，最多 3 张</small>
           </div>
           <ul v-if="materials.length" class="gs-materials">
             <li v-for="(item, index) in materials" :key="`${item.name}-${index}`">
@@ -47,10 +38,11 @@
             </li>
           </ul>
           <p v-if="uploadError" class="gs-error">{{ uploadError }}</p>
+          <p class="gs-hint">AI 只以你上传的商品图为准，保住颜色、面料、图案与文字；不会凭空改款。</p>
         </section>
 
         <section class="gs-card">
-          <h3><i>3</i>效果模板 <em>决定配图的场景与构图</em></h3>
+          <h3><i>2</i>选择效果 <em>决定场景与构图</em></h3>
           <div class="gs-effects" role="group" aria-label="效果模板">
             <button
               v-for="item in GRAPHIC_SELL_EFFECT_OPTIONS"
@@ -67,41 +59,54 @@
             </button>
           </div>
           <div v-if="effectOption.key === 'bed-lying'" class="gs-effect-ref" data-test="graphic-sell-effect-reference">
-            <div class="gs-effect-ref-head"><strong>参考效果</strong><small>俯拍躺床 · 9:16 · 商品由模特自然展示</small></div>
-            <div class="gs-effect-ref-grid">
+            <button type="button" class="gs-effect-ref-head" :aria-expanded="effectRefOpen" @click="effectRefOpen = !effectRefOpen">
+              <span><strong>参考效果</strong><small>俯拍躺床 · 9:16 · 商品由模特自然展示</small></span>
+              <AppIcon :name="effectRefOpen ? 'chevron-up' : 'chevron-down'" :size="14" />
+            </button>
+            <div v-if="effectRefOpen" class="gs-effect-ref-grid">
               <img v-for="(art, index) in effectReferenceArts" :key="index" :src="art" :alt="`参考效果 ${index + 1}`" />
             </div>
           </div>
-          <label class="gs-field">出镜模特
-            <select v-model="model" data-test="graphic-sell-model" :disabled="Boolean(effectOption.forcedModel)">
-              <option v-for="item in modelOptions" :key="item.key" :value="item.key">{{ item.label }} · {{ item.note }}</option>
-            </select>
-          </label>
         </section>
 
-        <section class="gs-card">
-          <h3><i>4</i>发布设置</h3>
-          <label class="gs-field">平台
-            <select v-model="platform" data-test="graphic-sell-platform">
-              <option v-for="item in GRAPHIC_SELL_PLATFORM_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
-            </select>
-            <span class="gs-hint">{{ platformNote }}</span>
-          </label>
-          <label class="gs-field">笔记风格
-            <select v-model="style" data-test="graphic-sell-style">
-              <option v-for="item in GRAPHIC_SELL_STYLE_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
-            </select>
-            <span class="gs-hint">{{ styleNote }}</span>
-          </label>
-          <span class="gs-field-label">配图数量</span>
-          <div class="gs-segmented" role="group" aria-label="配图数量" data-test="graphic-sell-image-count">
-            <button v-for="count in GRAPHIC_SELL_IMAGE_COUNT_OPTIONS" :key="count" type="button" :class="{ active: imageCount === count }" @click="imageCount = count">{{ count }} 张</button>
+        <section class="gs-advanced-card">
+          <button type="button" class="gs-advanced-toggle" data-test="graphic-sell-advanced-toggle" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
+            <span><AppIcon name="settings" :size="14" />更多设置 <small>模特 · 价格 · 人群 · 平台 · 风格 · 数量 · 比例</small></span>
+            <AppIcon :name="advancedOpen ? 'chevron-up' : 'chevron-down'" :size="15" />
+          </button>
+          <div v-if="advancedOpen" class="gs-advanced-body" data-test="graphic-sell-advanced">
+            <div class="gs-pair">
+              <label class="gs-field">售价 <small>选填</small><input v-model="price" :maxlength="SELL_COPY_LIMITS.price" placeholder="例如 ¥129" data-test="graphic-sell-price" /></label>
+              <label class="gs-field">原价 <small>选填</small><input v-model="originalPrice" :maxlength="SELL_COPY_LIMITS.originalPrice" placeholder="例如 ¥199" data-test="graphic-sell-original-price" /></label>
+            </div>
+            <label class="gs-field">目标人群 <small>选填</small><input v-model="audience" :maxlength="SELL_COPY_LIMITS.audience" placeholder="例如：露营新手、有娃家庭" data-test="graphic-sell-audience" /></label>
+            <label class="gs-field">出镜模特
+              <select v-model="model" data-test="graphic-sell-model" :disabled="Boolean(effectOption.forcedModel)">
+                <option v-for="item in modelOptions" :key="item.key" :value="item.key">{{ item.label }} · {{ item.note }}</option>
+              </select>
+            </label>
+            <div class="gs-pair">
+              <label class="gs-field">平台
+                <select v-model="platform" data-test="graphic-sell-platform">
+                  <option v-for="item in GRAPHIC_SELL_PLATFORM_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
+                </select>
+              </label>
+              <label class="gs-field">笔记风格
+                <select v-model="style" data-test="graphic-sell-style">
+                  <option v-for="item in GRAPHIC_SELL_STYLE_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
+                </select>
+              </label>
+            </div>
+            <span class="gs-field-label">配图数量</span>
+            <div class="gs-segmented" role="group" aria-label="配图数量" data-test="graphic-sell-image-count">
+              <button v-for="count in GRAPHIC_SELL_IMAGE_COUNT_OPTIONS" :key="count" type="button" :class="{ active: imageCount === count }" @click="imageCount = count">{{ count }} 张</button>
+            </div>
+            <label class="gs-field">图片比例
+              <select v-model="ratio" data-test="graphic-sell-ratio">
+                <option v-for="item in GRAPHIC_SELL_RATIO_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
+              </select>
+            </label>
           </div>
-          <label class="gs-field">图片比例
-            <select v-model="ratio" data-test="graphic-sell-ratio">
-              <option v-for="item in GRAPHIC_SELL_RATIO_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
-            </select>
-          </label>
         </section>
       </aside>
 
@@ -111,8 +116,8 @@
           <h1>一次生成整套带货图文</h1>
           <p>先出标题、正文与话题标签，再按文案里的逐图画面描述生成配图；生成后可编辑、复制与保存。</p>
           <ol class="gs-flow">
-            <li><b>1</b><strong>填商品信息</strong><small>名称必填，卖点 / 价格选填</small></li>
-            <li><b>2</b><strong>上传商品图</strong><small>效果模板靠它保住商品一致</small></li>
+            <li><b>1</b><strong>填商品名称</strong><small>再上传 1–3 张商品图</small></li>
+            <li><b>2</b><strong>选一个效果</strong><small>默认躺床俯拍，可直接用</small></li>
             <li><b>3</b><strong>AI 出文案 + 配图</strong><small>{{ effectOption.label }} · {{ imageCount }} 张 · {{ ratioLabel }}</small></li>
           </ol>
           <p v-if="configError" class="gs-error">{{ configError }}</p>
@@ -208,17 +213,13 @@
 
     <div v-if="confirmOpen" class="gs-confirm-backdrop" @click.self="confirmOpen = false">
       <section class="gs-confirm" role="dialog" aria-modal="true" aria-labelledby="gs-confirm-title" data-test="graphic-sell-confirm">
-        <h2 id="gs-confirm-title">确认开始生成？</h2>
-        <p>请求会发送到已保存的 AI 接口并可能产生第三方费用；先出文案，再按文案逐张出配图。</p>
+        <h2 id="gs-confirm-title">确认生成这套图文？</h2>
+        <p>将请求 {{ plannedRequestCount }} 次接口，可能产生第三方费用；先出文案，再按逐图描述生成配图。</p>
         <dl>
-          <div><dt>文案接口</dt><dd>{{ readiness.copyLabel }}</dd></div>
-          <div><dt>生图服务</dt><dd>{{ imageStatusHint }}</dd></div>
           <div><dt>商品</dt><dd>{{ productName.trim() }}</dd></div>
-          <div><dt>平台 / 风格</dt><dd>{{ platform }} · {{ style }}</dd></div>
-          <div><dt>效果模板</dt><dd>{{ effectOption.label }} · 出镜：{{ sellModelLabel(model) }}</dd></div>
-          <div><dt>配图</dt><dd>{{ imageCount }} 张 · {{ ratioLabel }}</dd></div>
-          <div><dt>请求次数</dt><dd>{{ plannedRequestCount }} 次（1 次文案 + {{ plannedRequestCount - 1 }} 次配图）</dd></div>
-          <div v-if="materials.length"><dt>商品素材</dt><dd>{{ materials.map(item => item.name).join('、') }}</dd></div>
+          <div><dt>效果</dt><dd>{{ effectOption.label }} · {{ imageCount }} 张 · {{ ratioLabel }}</dd></div>
+          <div><dt>接口</dt><dd>{{ readiness.copyLabel }} · {{ readiness.imageLabel }}</dd></div>
+          <div v-if="materials.length"><dt>商品图</dt><dd>{{ materials.length }} 张</dd></div>
         </dl>
         <div class="gs-confirm-actions">
           <button type="button" class="gs-button" @click="confirmOpen = false">取消</button>
@@ -230,7 +231,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import AppIcon from '../../components/ui/AppIcon.vue'
 import brandMark from '../../assets/generated/shopilot-logo-generated.png'
 import { SELL_COPY_LIMITS } from '@shared/contracts/ai-sell-copy'
 import {
@@ -239,8 +241,7 @@ import {
   GRAPHIC_SELL_PLATFORM_OPTIONS,
   GRAPHIC_SELL_RATIO_OPTIONS,
   GRAPHIC_SELL_STYLE_OPTIONS,
-  MAX_GRAPHIC_SELL_MATERIALS,
-  sellModelLabel
+  MAX_GRAPHIC_SELL_MATERIALS
 } from './graphic-sell'
 import { useGraphicSellGeneration } from './use-graphic-sell'
 import AiToolSettings from './AiToolSettings.vue'
@@ -316,8 +317,11 @@ const {
   removeHistorySession
 } = useGraphicSellGeneration({ emit })
 
-const platformNote = computed(() => GRAPHIC_SELL_PLATFORM_OPTIONS.find(item => item.key === platform.value)?.note || '')
-const styleNote = computed(() => GRAPHIC_SELL_STYLE_OPTIONS.find(item => item.key === style.value)?.note || '')
+/** 简化首屏：模特/价格/人群/平台/风格/数量/比例默认折叠，效果与商品保持可见 */
+const advancedOpen = ref(false)
+/** 参考图库默认收起：效果说明已经写清场景，想对照时再展开 */
+const effectRefOpen = ref(false)
+
 const copyStatusHint = computed(() => readiness.value.copyReady
   ? `文案将走：${readiness.value.copyLabel}`
         : '未配置：点右上角「模型设置」→ 生图文本 API（或主文本 API）填写地址、模型和 Key')
@@ -396,10 +400,12 @@ function formatDate(value: number): string {
 .gs-effect-name em{padding:1px 6px;border-radius:999px;background:#efe9ff;color:#5b3df5;font-size:9px;font-style:normal;font-weight:600}
 .gs-effect small{color:#8b96ab;font-size:10px;line-height:1.5}
 .gs-effect-ref{margin-bottom:10px;padding:9px;border:1px solid rgba(103,143,207,.2);border-radius:10px;background:rgba(247,250,255,.8)}
-.gs-effect-ref-head{display:flex;align-items:baseline;gap:8px;margin-bottom:7px}
+.gs-effect-ref-head{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:0;border:0;background:transparent;color:inherit;cursor:pointer;text-align:left}
+.gs-effect-ref-head>span{display:flex;align-items:baseline;gap:8px;min-width:0}
+.gs-effect-ref-head:hover strong{color:#4d5be0}
 .gs-effect-ref-head strong{color:#31508d;font-size:10px}
 .gs-effect-ref-head small{color:#98a2b3;font-size:9px}
-.gs-effect-ref-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.gs-effect-ref-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:7px}
 .gs-effect-ref-grid img{display:block;width:100%;aspect-ratio:9/16;object-fit:cover;border-radius:6px;background:#eef2f8}
 .gs-canvas{display:flex;flex-direction:column;gap:14px;min-width:0;min-height:0;overflow-y:auto;padding:0 2px 16px;scrollbar-width:thin}
 .gs-empty{display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:320px;padding:28px;border:1px solid rgba(103,143,207,.18);border-radius:18px;background:rgba(255,255,255,.86);box-shadow:0 15px 38px rgba(91,125,180,.1);text-align:center}
@@ -491,4 +497,15 @@ function formatDate(value: number): string {
 .gs-confirm-actions{display:flex;justify-content:flex-end;gap:8px}
 .gs-visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media (max-width:1080px){.gs-body{grid-template-columns:minmax(0,1fr)}.gs-form{max-height:44vh}.gs-note,.gs-images{max-width:none}}
+/* 商品图与商品信息合并后的小标题 */
+.gs-upload-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 0 6px;color:#31508d;font-size:11px}
+.gs-upload-head em{color:#8796b8;font-size:10px;font-style:normal}
+/* 更多设置：默认折叠，首屏只留商品、商品图与效果 */
+.gs-advanced-card{flex:none;border:1px solid rgba(103,143,207,.2);border-radius:14px;background:rgba(255,255,255,.72);overflow:hidden}
+.gs-advanced-toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:11px 14px;border:0;background:transparent;color:#31508d;cursor:pointer;text-align:left}
+.gs-advanced-toggle>span{display:inline-flex;align-items:center;gap:6px;min-width:0;font-size:11px;font-weight:600}
+.gs-advanced-toggle small{overflow:hidden;color:#8796b8;font-size:10px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
+.gs-advanced-toggle:hover{background:rgba(103,143,207,.06)}
+.gs-advanced-body{padding:2px 14px 12px;border-top:1px solid rgba(103,143,207,.14)}
+.gs-advanced-body .gs-field:first-child,.gs-advanced-body .gs-pair:first-child{margin-top:10px}
 </style>

@@ -112,11 +112,11 @@ export const GRAPHIC_SELL_EFFECT_OPTIONS: readonly GraphicSellEffectOption[] = [
   {
     key: 'bed-lying',
     label: '躺床俯拍',
-    note: '正上方 90° 俯拍：一位模特仰卧在柔和床品上，商品由模特自然穿戴；至多一个玩偶或小猫点缀',
+    note: '适合童装、家居服、床品：正上方 90° 俯拍，一位模特仰卧在柔和床品上，商品由模特自然穿戴',
     recommendedModel: 'child',
     recommendedRatio: '9:16',
     requiresProductImage: true,
-    scene: '参考效果：柔和床品背景的正上方 90° 垂直俯拍，画面水平、不要倾斜透视。只有一位儿童模特仰卧在床品上，商品由模特自然穿戴；床品与枕头为与商品同色系的低饱和色（商品粉色→浅粉床品，商品蓝色→雾蓝床品），有自然褶皱与柔和阴影；柔和均匀的窗光、低饱和粉彩/清透色调；画面安静、干净、有居家生活感。画面中只允许一位模特与至多一件同色系毛绒玩偶或一只小猫，不添加其它道具、发饰或人物。',
+    scene: '参考效果：柔和床品背景的正上方 90° 垂直俯拍，画面水平、不要倾斜透视。只有一位儿童模特仰卧在床品上，商品由模特自然穿戴；床品与枕头为与商品同色系的低饱和纯色或极轻纹理（商品粉色→浅粉床品，商品蓝色→雾蓝床品），不要大花纹、格纹、卡通印花或文字；有自然褶皱与柔和阴影；柔和均匀的窗光、低饱和粉彩/清透色调；画面安静、干净、有居家生活感。画面中只允许一位模特与至多一件同色系毛绒玩偶或一只小猫，不添加其它道具、发饰或人物。',
     poses: [
       '全身俯拍主图：模特仰卧居中，双臂自然放松、双腿并拢或微曲；全身与商品完整入画、双脚不裁切；眼睛轻闭、表情安静放松（像睡着一样），不看镜头、不微笑摆拍；四周留出约 8–12% 的干净空间。',
       '上半身俯拍：取景到腰胯以上，头微侧、眼睛轻闭，表情安静；重点是领口、袖型、胸前面料与版型，商品占据画面主体。',
@@ -133,7 +133,7 @@ export const GRAPHIC_SELL_EFFECT_OPTIONS: readonly GraphicSellEffectOption[] = [
   {
     key: 'flatlay',
     label: '平铺净景',
-    note: '无人出镜：商品平铺在干净浅色背景上，正上方 90° 目录级俯拍',
+    note: '适合鞋包、配饰、非服装商品：无人出镜，商品在干净浅色背景上正上方 90° 俯拍',
     recommendedModel: 'none',
     recommendedRatio: '3:4',
     forcedModel: 'none',
@@ -150,7 +150,7 @@ export const GRAPHIC_SELL_EFFECT_OPTIONS: readonly GraphicSellEffectOption[] = [
   {
     key: 'auto',
     label: 'AI 自由设计',
-    note: '按文案自动设计每张图（不套用固定场景，适合非服装类商品）',
+    note: '适合美妆、食品、家电等：按文案自动设计每张图，不套用固定场景',
     recommendedModel: 'auto',
     recommendedRatio: '3:4',
     requiresProductImage: false,
@@ -467,7 +467,16 @@ export const GRAPHIC_SELL_AUTO_EFFECT_CONTEXT: GraphicSellEffectContext = { effe
  * 文字条款刻意写成**条件式**：2026-10-19 实测生成图出现 `D' laudi` 之类假英文——
  * 商品图里本来没有字，但旧提示词说"保持刺绣文字不变"，模型就自己编了字。
  */
-const PRODUCT_FIDELITY_CLAUSE = '商品一致性（最高优先级）：严格保持上传商品参考图里的商品本体——颜色（色相/明度）、面料质感（摇粒绒/法兰绒绒面）、图案、领口/袖口/裤脚、版型比例都不变；不得改变款式，也不得添加参考图里没有的图案。如果参考图是平铺商品图，请让模特穿上该商品（服装类）。商品上的文字/logo 只在参考图确实有时才原样保留；参考图没有文字时，画面里不要出现任何文字或字母，更不要编造品牌名。'
+const PRODUCT_FIDELITY_CLAUSE = '商品一致性（最高优先级）：严格保持上传商品参考图里的商品本体——颜色（色相/明度）、面料质感（摇粒绒/法兰绒绒面）、图案、领口/袖口/裤脚、版型比例都不变；不得改变款式，也不得添加参考图里没有的图案。如果参考图是平铺商品图，请让模特穿上该商品（服装类）；商品必须自然穿戴或摆放在真实场景里，不要使用透明人台、假人模特或悬空摆拍。商品上的文字/logo 只在参考图确实有时才原样保留；参考图没有文字时，画面里不要出现任何文字或字母，更不要编造品牌名。'
+
+/**
+ * 商业成片标准：模型容易输出"AI 插画感 / 过度 HDR / 背景糊成一片"的图，
+ * 这里把摄影质感、主体占比、色彩与整套一致性写死，作为效果模板之外的第二道质量约束。
+ */
+const COMMERCIAL_QUALITY_CLAUSE = '商业成片标准：全画幅商业摄影质感，50–85mm 等效焦段，商品主体占画面 55%–75%，焦点落在商品主体上，面料纹理、缝线与版型细节清晰；背景柔和但不糊成一片，保留真实环境层次；色温约 5000–5500K，颜色真实不过饱和，不使用 HDR、强对比滤镜、AI 插画感或塑料质感；同一套图保持同一模特、同一发型、同一套商品、同一场景与同一光线，不换人、不换装、不换背景。'
+
+/** 单张完整画面：电商图里常见的"拼图/分屏/贴纸"会直接毁掉可用性 */
+const SINGLE_FRAME_CLAUSE = '单张完整画面：不要拼图、分屏、多格、边框、文字贴纸、画中画或前后对比排版；一张图只表达一个完整画面。'
 
 /**
  * 真实感条款：实测旧提示词下模型默认输出"磨皮娃娃脸 + 睁眼微笑看镜头"的影楼写真，
@@ -494,6 +503,9 @@ export function buildGraphicSellImagePrompt(
 ): string {
   const total = clampSellCopyImageCount(input.imageCount)
   const seq = Math.min(total, Math.max(1, index + 1))
+  const coverSpace = seq === 1
+    ? '封面构图：画面上方预留 22%–28% 的干净背景留白（不放商品、人脸、手部或道具），供封面标题排版；主体重心略低于画面中线。'
+    : ''
   const effect = getGraphicSellEffect(context?.effect)
   const model = effect.forcedModel || normalizeSellModel(context?.model)
   const base = [
@@ -512,9 +524,12 @@ export function buildGraphicSellImagePrompt(
     return [
       ...base,
       coverHint,
+      coverSpace,
       `画面：${scene}`,
       PRODUCT_FIDELITY_CLAUSE,
       PHOTO_REALISM_CLAUSE,
+      COMMERCIAL_QUALITY_CLAUSE,
+      SINGLE_FRAME_CLAUSE,
       '文字要求：画面内不要生成任何文字、数字、价格标签、水印或品牌标识；若文案需要标题，只留干净的排版留白。'
     ].filter(Boolean).join('\n')
   }
@@ -526,8 +541,11 @@ export function buildGraphicSellImagePrompt(
     `效果模板：${effect.label}。${effect.scene}`,
     `出镜模特：${sellModelPrompt(model)}`,
     shot ? `本张构图：${shot}` : '',
+    coverSpace,
     PRODUCT_FIDELITY_CLAUSE,
     PHOTO_REALISM_CLAUSE,
+    COMMERCIAL_QUALITY_CLAUSE,
+    SINGLE_FRAME_CLAUSE,
     NO_INVENTION_CLAUSE,
     '画面要求：正上方俯拍视角稳定（不要倾斜、不要夸张透视）；商品占画面主体、细节清晰；床品/背景与商品同色系、低饱和、有自然褶皱与轻阴影；四周保留自然留白，不要把人体关节或商品裁到画外。'
   ].filter(Boolean).join('\n')

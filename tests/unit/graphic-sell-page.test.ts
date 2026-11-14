@@ -167,7 +167,8 @@ describe('图文带货：参考效果模板（2026-10-19 按用户 4 张参考�
     expect(composable).toContain('requiresProductImage')
     // 没有商品图时按钮不可点 / 明确提示，不发一个保不住商品本体的请求
     expect(composable).toContain('效果需要先上传商品图')
-    expect(page).toContain('requiresProductImage ? \'该效果必填\'')
+    expect(page).toContain('名称与商品图必填')
+    expect(page).toContain('requiresProductImage && !materials.length')
   })
 
   it('模板进入生图提示词：场景、模特、逐张构图、商品一致性，且请求带 effect/model', () => {
