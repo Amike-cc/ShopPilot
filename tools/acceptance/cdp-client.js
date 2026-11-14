@@ -16,17 +16,30 @@ class CdpClient {
     this.ws = new WebSocket(url)
     this.id = 0
     this.pending = new Map()
+    this.listeners = new Map()
     this.ready = new Promise((resolve, reject) => {
       this.ws.onopen = () => resolve()
       this.ws.onerror = error => reject(error instanceof Error ? error : new Error('CDP 连接失败'))
     })
     this.ws.onmessage = event => {
       const message = JSON.parse(event.data)
-      if (!message.id || !this.pending.has(message.id)) return
+      if (!message.id) {
+        const handlers = this.listeners.get(message.method)
+        if (handlers) for (const handler of handlers) handler(message.params || {})
+        return
+      }
+      if (!this.pending.has(message.id)) return
       const pending = this.pending.get(message.id)
       this.pending.delete(message.id)
       message.error ? pending.reject(new Error(message.error.message)) : pending.resolve(message.result)
     }
+  }
+
+  /** 订阅 CDP 事件（如 Runtime.exceptionThrown、Page.loadEventFired）。 */
+  on(method, handler) {
+    if (!this.listeners.has(method)) this.listeners.set(method, new Set())
+    this.listeners.get(method).add(handler)
+    return () => this.listeners.get(method)?.delete(handler)
   }
 
   send(method, params = {}) {
@@ -57,7 +70,16 @@ async function waitForMainWindow(port, { urlIncludes = 'index.html', timeoutMs =
   while (Date.now() < deadline) {
     try {
       const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json()
-      const target = list.find(item => item.type === 'page' && String(item.url || '').includes(urlIncludes))
+      // 主窗口是 file://.../renderer/index.html。不能只按 urlIncludes 匹配：
+      // 店铺页也可能带 index.html（如拼多多客服 chat-merchant/index.html#/），
+      // 会先命中店铺页导致 window.shopilot 不存在。
+      const target =
+        list.find(
+          item =>
+            item.type === 'page' &&
+            String(item.url || '').startsWith('file://') &&
+            String(item.url || '').includes(urlIncludes)
+        ) || list.find(item => item.type === 'page' && item.title === 'ShopPilot')
       if (target) {
         const client = new CdpClient(target.webSocketDebuggerUrl)
         await client.ready

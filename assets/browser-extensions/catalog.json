@@ -8,6 +8,14 @@
       "summary": "抖店罗盘商品榜单/竞品详情：一键复制链接、批量下载带货视频 mp4",
       "description": "在抖店罗盘（compass.jinritemai.com）的商品榜单与竞品详情页注入下载按钮：可复制视频链接，也可批量下载 mp4。\n\nShopPilot 适配说明：原版依赖 chrome.downloads（Electron 未实现）与 downloads 权限（应用安全边界硬阻断），本内置版本改为「后台拉流 → 页面触发下载」通道，最终由 ShopPilot 的下载管理器落盘，并沿用应用统一的保存位置规则。\n\n使用前提：店铺会话里已登录罗盘（首次需在应用内登录一次）。",
       "tags": ["抖店", "罗盘", "视频下载"]
+    },
+    {
+      "key": "product-image-downloader",
+      "dir": "product-image-downloader",
+      "name": "商品图片下载器",
+      "summary": "抖店 / 拼多多商品页：一键下载轮播主图与详情描述图原图",
+      "description": "在抖店商品详情预览页（haohuo.jinritemai.com）、拼多多手机商品页（mobile.yangkeduo.com/goods.html）和拼多多商家后台商品编辑页（mms.pinduoduo.com/goods/goods_add）右下角注入「下载图片」按钮，自动识别轮播主图与详情描述图，可勾选后批量下载、悬停预览原图，也可复制原图链接。\n\nShopPilot 适配说明：图片 CDN 允许跨域，内容脚本直接取流后用 <a download> 交给 ShopPilot 下载管理器落盘（扩展不申请 downloads 权限）；若 CDN 策略变化导致页面取流失败，自动退回后台扩展上下文取流。文件名按「商品标题_主图/详情图_序号」生成。拼多多手机页优先读服务端 window.rawData 的商品图库（type 1/13=主图、2=详情图），读不到时按页面图片兜底；手机页需要消费者登录，商家后台编辑页不依赖手机站登录。",
+      "tags": ["抖店", "商品", "图片下载"]
     }
   ]
 }

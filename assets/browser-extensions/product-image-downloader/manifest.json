@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "商品图片下载器",
+  "version": "1.1.0",
+  "description": "抖店 / 拼多多商品页：一键下载主图与详情图原图",
+  "permissions": [],
+  "host_permissions": [
+    "https://haohuo.jinritemai.com/*",
+    "https://*.ecombdimg.com/*",
+    "https://*.byteimg.com/*",
+    "https://*.douyinpic.com/*",
+    "https://*.jinritemai.com/*",
+    "https://mobile.yangkeduo.com/*",
+    "https://mobile.pinduoduo.com/*",
+    "https://mms.pinduoduo.com/*",
+    "https://*.pddpic.com/*",
+    "https://*.yangkeduo.com/*",
+    "https://*.pinduoduo.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://haohuo.jinritemai.com/ecommerce/trade/detail/*",
+        "https://mobile.yangkeduo.com/goods.html*",
+        "https://mobile.pinduoduo.com/goods.html*",
+        "https://mms.pinduoduo.com/goods/goods_add/*"
+      ],
+      "js": [
+        "pdd-gallery.js",
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
