@@ -95,6 +95,9 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
   const readiness = computed(() => resolveGraphicSellReadiness(config.value))
 
   /* ------------------------------ 生成状态 ------------------------------ */
+  /** AI 策划中（只出文案与逐图脚本，不产生图片费用） */
+  const planning = ref(false)
+  /** 出图中（按已确认的策划逐张生成配图） */
   const generating = ref(false)
   /** 生成阶段文案（“正在生成带货文案…” / “正在生成配图 2/4…”），如实显示在按钮与结果区 */
   const phase = ref('')
@@ -123,7 +126,9 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
   const editableBody = ref('')
   const editableTagsText = ref('')
   const editableCoverText = ref('')
-  const busy = computed(() => generating.value || regeneratingIndex.value >= 0)
+  /** AI 策划出的逐图脚本；第 2 步允许用户改文案后再确认出图 */
+  const editableImagePrompts = ref<string[]>([])
+  const busy = computed(() => planning.value || generating.value || regeneratingIndex.value >= 0)
   watch(busy, value => emit('busy-change', value), { immediate: true })
 
   /* ------------------------------ 保存/复制反馈 ------------------------------ */
@@ -151,16 +156,25 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
   const effectOption = computed(() => getGraphicSellEffect(effect.value))
   const modelOptions = computed(() => GRAPHIC_SELL_MODEL_OPTIONS)
   const requiresProductImage = computed(() => effectOption.value.requiresProductImage)
-  const canGenerate = computed(() => Boolean(productName.value.trim())
+  const canPlan = computed(() => Boolean(productName.value.trim())
     && readiness.value.copyReady
-    && readiness.value.imageReady
     // 效果模板靠"上传的商品图"保住商品本体；没图就别让用户花钱生成一件"长得像"的商品
     && (!requiresProductImage.value || materials.value.length > 0))
+  const canGenerateImages = computed(() => Boolean(copy.value && lastRequest.value && readiness.value.imageReady && images.value.length === 0))
+  /** 当前向导步骤：1 上传 / 2 AI 策划确认 / 3 出图预览 */
+  const step = computed<1 | 2 | 3>(() => {
+    if (planning.value) return 2
+    if (!copy.value) return 1
+    if (images.value.length || generating.value || regeneratingIndex.value >= 0) return 3
+    return 2
+  })
   const activeImage = computed(() => images.value[activeImageIndex.value] || null)
   const editableTags = computed(() => parseGraphicSellTags(editableTagsText.value))
   const fullText = computed(() => graphicSellFullText(editableTitle.value, editableBody.value, editableTags.value))
-  /** 确认框里如实写清本次要发几次请求：1 次文案 + 配图分批（效果模板一张一请求） */
-  const plannedRequestCount = computed(() => 1 + graphicSellImageBatches(imageCount.value, graphicSellImageBatchSize(effect.value)).length)
+  /** 确认框里如实写清本次要发几次配图请求（效果模板一张一请求） */
+  const plannedImageRequestCount = computed(() => graphicSellImageBatches(imageCount.value, graphicSellImageBatchSize(effect.value)).length)
+  /** 兼容旧调用：策划 1 次 + 配图分批 */
+  const plannedRequestCount = computed(() => 1 + plannedImageRequestCount.value)
   const ratioLabel = computed(() => GRAPHIC_SELL_RATIO_OPTIONS.find(option => option.key === ratio.value)?.label || ratio.value)
 
   function normalizeImageCount(): void {
@@ -293,6 +307,7 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
     editableBody.value = ''
     editableTagsText.value = ''
     editableCoverText.value = ''
+    editableImagePrompts.value = []
     savedPath.value = ''
     saveNotice.value = ''
     saveNoticeError.value = false
@@ -305,19 +320,16 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
     editableBody.value = result.body
     editableTagsText.value = result.tags.join(' ')
     editableCoverText.value = result.coverText
+    editableImagePrompts.value = result.imagePrompts.slice(0, clampSellCopyImageCount(imageCount.value))
   }
 
-  /** 生成前的可执行校验：每条失败都直接说清下一步，不弹一个含糊的"参数错误"。 */
+  /** 第 1 步 → 第 2 步：只做 AI 策划（文案 + 逐图脚本），不产生图片费用。 */
   function requestGeneration(): void {
     generationError.value = ''
     generationNotice.value = ''
-    if (generating.value) return
+    if (busy.value) return
     if (!readiness.value.copyReady) {
       generationError.value = '文案接口未配置：请点页面右上角「模型设置」填写「生图文本 API」（或主文本 API）的地址、模型和 Key。'
-      return
-    }
-    if (!readiness.value.imageReady) {
-      generationError.value = '生图接口未配置：请点页面右上角「模型设置」填写生图接口的地址、模型和 Key，否则没有配图。'
       return
     }
     if (requiresProductImage.value && !materials.value.length) {
@@ -336,16 +348,13 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
       images: materials.value
     })
     if (!validation.ok) { generationError.value = validation.message; return }
-    confirmOpen.value = true
+    void runPlan(validation.input)
   }
 
-  async function submitGeneration(): Promise<void> {
-    if (generating.value) return
-    confirmOpen.value = false
-    generationError.value = ''
-    generationNotice.value = ''
-    // 在任何 FileReader / 网络请求开始前固定本次参数：请求期间用户改控件也不能让结果与确认框不一致
-    const requestForm = {
+  async function runPlan(input: SellCopyInput): Promise<void> {
+    if (!window.shopilot) { generationError.value = '当前预览环境没有 Electron 桥，无法生成。'; return }
+    // 在任何 FileReader / 网络请求开始前固定本次参数：请求期间用户改控件也不能让结果与策划不一致
+    const requestForm: GraphicSellFormState = {
       productName: productName.value,
       sellingPoints: sellingPoints.value,
       price: price.value,
@@ -357,34 +366,23 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
       images: [...materials.value]
     }
     const requestRatio = ratio.value
-    const requestRatioLabel = GRAPHIC_SELL_RATIO_OPTIONS.find(option => option.key === requestRatio)?.label || requestRatio
-    // 效果模板与模特在请求期间固定：用户中途改模板也不能让同一套图混两种场景
     const requestEffect = effect.value
     const requestModel = model.value
-    // 模板模式一张一请求：每张构图（正面/侧身/近景/氛围）才会按参考效果轮换
-    const requestBatchSize = graphicSellImageBatchSize(requestEffect)
-    const validation = buildGraphicSellInput(requestForm)
-    if (!validation.ok) { generationError.value = validation.message; return }
-    const input: SellCopyInput = { ...validation.input, imageCount: requestForm.imageCount }
-    if (!window.shopilot) { generationError.value = '当前预览环境没有 Electron 桥，无法生成。'; return }
-
-    const sourceImages = requestForm.images
+    const planMaterials = requestForm.images || []
+    const sourceImages = planMaterials
       .slice(0, SELL_COPY_LIMITS.maxImages)
       .map(toImageSource)
       .filter((item): item is { name: string; mimeType: string; b64Json: string } => Boolean(item))
-    if (sourceImages.length !== requestForm.images.slice(0, SELL_COPY_LIMITS.maxImages).length) {
+    if (sourceImages.length !== planMaterials.slice(0, SELL_COPY_LIMITS.maxImages).length) {
       generationError.value = '部分商品图读取失败，请重新上传后再试。'
       return
     }
 
-    generating.value = true
-    // 不在这里 clearResults：「换一批」失败时上一次的结果要原样保留（2026-10-21 审查 P2-28），
-    // 清空动作挪到下面文案请求成功、结果校验通过之后；首次生成没有旧结果，语义不变
     const sessionId = `sell-${Date.now()}`
     const createdAt = Date.now()
+    planning.value = true
+    phase.value = readiness.value.copyChannel === 'main-text' ? '正在用主文本 API 策划图文…' : '正在策划图文…'
     try {
-      /* ① 文案（主进程组装提示词并解析 JSON；未单独配置生图文本 API 时自动回退主文本 API） */
-      phase.value = readiness.value.copyChannel === 'main-text' ? '正在用主文本 API 生成带货文案…' : '正在生成带货文案…'
       const response = await window.shopilot.ai.generateSellCopy(input)
       if (!response.ok) {
         generationError.value = describeGraphicSellError(response.error)
@@ -395,26 +393,71 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
         generationError.value = '文案接口返回的内容不完整（缺少标题和正文），请重试或换一个文本模型。'
         return
       }
-      // 新文案已到手才清旧结果：放在 applyResult 之前，避免把刚写进界面的新结果又清掉
+      // 新策划已到手才清旧结果：失败时上一次策划原样保留
       clearResults()
       applyResult(result)
       lastRequest.value = { sessionId, createdAt, form: requestForm, ratio: requestRatio, effect: requestEffect, model: requestModel, input, result, sourceImages }
       upsertHistory(sessionId, createdAt, requestForm, requestRatio, result, requestEffect, requestModel)
+    } catch (error: unknown) {
+      generationError.value = describeGraphicSellError(error)
+    } finally {
+      planning.value = false
+      phase.value = ''
+    }
+  }
 
-      /* ② 配图：按效果模板的逐张构图请求，单次最多 4 张；少于目标张数时继续补发 */
-      let remaining = requestForm.imageCount
-      let attempts = 0
-      const failures: string[] = []
-      while (remaining > 0 && attempts < requestForm.imageCount + 2) {
+  /** 第 2 步 → 第 3 步：已确认策划，出图前只做一次费用确认。 */
+  function requestImageGeneration(): void {
+    generationError.value = ''
+    generationNotice.value = ''
+    if (busy.value || !copy.value) return
+    if (!readiness.value.imageReady) {
+      generationError.value = '生图接口未配置：请点页面右上角「模型设置」填写生图接口的地址、模型和 Key，否则没有配图。'
+      return
+    }
+    if (!lastRequest.value) {
+      generationError.value = '请先完成 AI 策划，再确认出图。'
+      return
+    }
+    confirmOpen.value = true
+  }
+
+  async function submitGeneration(): Promise<void> {
+    if (generating.value) return
+    confirmOpen.value = false
+    const request = lastRequest.value
+    if (!request) {
+      generationError.value = '请先完成 AI 策划，再确认出图。'
+      return
+    }
+    generationError.value = ''
+    generationNotice.value = ''
+    // 用户可能在策划页改了逐图脚本：出图使用界面上确认后的版本
+    const result: SellCopyResult = { ...request.result, imagePrompts: [...editableImagePrompts.value] }
+    request.result = result
+    images.value = []
+    activeImageIndex.value = 0
+    // 模板模式一张一请求：每张构图（正面/侧身/近景/氛围）才会按参考效果轮换
+    const requestBatchSize = graphicSellImageBatchSize(request.effect)
+    const requestCount = clampSellCopyImageCount(request.form.imageCount)
+    const requestRatioLabel = GRAPHIC_SELL_RATIO_OPTIONS.find(option => option.key === request.ratio)?.label || request.ratio
+    // lastRequest 是 ref，取出来的数组会被 Vue 包成响应式 Proxy；IPC 结构化克隆不能传 Proxy
+    const sourceImages = request.sourceImages.map(item => ({ ...item }))
+    let remaining = requestCount
+    let attempts = 0
+    const failures: string[] = []
+    generating.value = true
+    try {
+      while (remaining > 0 && attempts < requestCount + 2) {
         attempts += 1
-        const requestCount = Math.min(requestBatchSize, remaining)
-        const startIndex = requestForm.imageCount - remaining
-        phase.value = `正在生成配图 ${startIndex + 1}/${requestForm.imageCount}…`
+        const perRequest = Math.min(requestBatchSize, remaining)
+        const startIndex = requestCount - remaining
+        phase.value = `正在生成配图 ${startIndex + 1}/${requestCount}…`
         try {
           const imageResponse = await window.shopilot.ai.generateImage({
-            prompt: buildGraphicSellImagePrompt(input, result, startIndex, requestRatioLabel, { effect: requestEffect, model: requestModel }),
-            size: graphicSellRequestSize(requestRatio),
-            n: requestCount,
+            prompt: buildGraphicSellImagePrompt(request.input, result, startIndex, requestRatioLabel, { effect: request.effect, model: request.model }),
+            size: graphicSellRequestSize(request.ratio),
+            n: perRequest,
             confirmed: true,
             sourceImages
           })
@@ -423,10 +466,10 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
             ? (imageResponse.data.images as unknown[]).map(readGeneratedImageUrl).filter((url): url is string => Boolean(url))
             : []
           if (!urls.length) throw new Error('接口没有返回可预览的图片')
-          const batch = urls.slice(0, requestCount).map((url: string, offset: number) => ({ url, index: startIndex + offset }))
+          const batch = urls.slice(0, perRequest).map((url: string, offset: number) => ({ url, index: startIndex + offset }))
           images.value = [...images.value, ...batch]
           remaining -= batch.length
-          upsertHistory(sessionId, createdAt, requestForm, requestRatio, result, requestEffect, requestModel)
+          upsertHistory(request.sessionId, request.createdAt, request.form, request.ratio, result, request.effect, request.model)
         } catch (error: unknown) {
           failures.push(errorText(error, '配图生成失败'))
           break
@@ -436,8 +479,6 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
         generationNotice.value = `配图还差 ${remaining} 张：${failures.join('；') || '接口未返回足够图片'}`
       }
       phase.value = ''
-    } catch (error: unknown) {
-      generationError.value = describeGraphicSellError(error)
     } finally {
       generating.value = false
       phase.value = ''
@@ -457,12 +498,13 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
     generationError.value = ''
     try {
       const ratioLabelText = GRAPHIC_SELL_RATIO_OPTIONS.find(option => option.key === request.ratio)?.label || request.ratio
+      const sourceImages = request.sourceImages.map(item => ({ ...item }))
       const response = await window.shopilot.ai.generateImage({
         prompt: buildGraphicSellImagePrompt(request.input, request.result, targetIndex, ratioLabelText, { effect: request.effect, model: request.model }),
         size: graphicSellRequestSize(request.ratio),
         n: 1,
         confirmed: true,
-        sourceImages: request.sourceImages
+        sourceImages
       })
       if (!response.ok) throw new Error(response.error.message)
       const imagesData = Array.isArray(response.data?.images) ? response.data.images as unknown[] : []
@@ -664,6 +706,7 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
   }
 
   function resetAll(): void {
+    if (busy.value) return
     productName.value = ''
     sellingPoints.value = ''
     price.value = ''
@@ -702,7 +745,7 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
   onBeforeUnmount(() => {
     flushPendingPersist()
     // 页面被卸载后父级收不到 busy=false 会一直拦截导航，这里显式复位
-    if (generating.value) emit('busy-change', false)
+    if (generating.value || planning.value) emit('busy-change', false)
     if (actionTimer) window.clearTimeout(actionTimer)
   })
 
@@ -738,9 +781,11 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
     readiness,
     loadAiConfig,
     // 生成
+    planning,
     generating,
     regeneratingIndex,
     phase,
+    step,
     generationError,
     generationNotice,
     confirmOpen,
@@ -753,12 +798,16 @@ export function useGraphicSellGeneration(options: GraphicSellOptions) {
     editableBody,
     editableTagsText,
     editableCoverText,
+    editableImagePrompts,
     editableTags,
     fullText,
-    canGenerate,
+    canPlan,
+    canGenerateImages,
+    plannedImageRequestCount,
     plannedRequestCount,
     ratioLabel,
     requestGeneration,
+    requestImageGeneration,
     submitGeneration,
     resetAll,
     // 保存/复制

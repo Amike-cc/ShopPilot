@@ -28,10 +28,12 @@ class CDP {
     this.ws = new WebSocket(url)
     this.id = 0
     this.pending = new Map()
+    this.events = []
     this.ready = new Promise((resolve, reject) => { this.ws.onopen = resolve; this.ws.onerror = reject })
     this.ws.onmessage = event => {
       const message = JSON.parse(event.data)
-      if (!message.id || !this.pending.has(message.id)) return
+      if (!message.id) { this.events.push(message); return }
+      if (!this.pending.has(message.id)) return
       const pending = this.pending.get(message.id)
       this.pending.delete(message.id)
       message.error ? pending.reject(new Error(message.error.message)) : pending.resolve(message.result)
@@ -108,7 +110,9 @@ function startMock() {
       '封面俯拍：儿童仰卧在浅粉床品上，全身与家居服完整入画，顶部留白',
       '上半身细节：领口、袖口与绒面纹理清晰',
       '面料特写：双面摇粒绒的绒毛与缝线',
-      '居家场景：孩子侧卧，旁边一只白色小猫'
+      '居家场景：孩子侧卧，旁边一只白色小猫',
+      '坐姿场景：孩子坐在床边，展示整套版型',
+      '细节补充：裤脚罗纹与走线'
     ],
     model: 'mock-text',
     elapsedMs: 120
@@ -180,12 +184,35 @@ async function main() {
 
     await setText(ui, '[data-test="graphic-sell-product-name"]', '儿童加厚摇粒绒家居服')
     await setText(ui, '[data-test="graphic-sell-selling-points"]', '双面摇粒绒、柔软不扎、机洗不变形')
+    // 第 1 步 → 第 2 步：AI 策划免费，不出图
     await ui.eval(`document.querySelector('[data-test="graphic-sell-generate-button"]')?.click(); return true`)
-    await waitFor(ui, `return Boolean(document.querySelector('[data-test="graphic-sell-confirm"]'))`, 5000)
+    const planned = await waitFor(ui, `return Boolean(document.querySelector('[data-test="graphic-sell-plan"]'))`, 15000)
+    check('AI 策划先产出卡片脚本，不直接出图', planned && !(await ui.eval(`return Boolean(document.querySelector('[data-test="graphic-sell-active-image"]'))`)))
+    const plan = await ui.eval(`
+      return {
+        prompts: document.querySelectorAll('[data-test^="graphic-sell-plan-prompt-"]').length,
+        title: document.querySelector('[data-test="graphic-sell-edit-title"]')?.value || '',
+        step: document.querySelector('.gs-wizard-step.active')?.textContent || '',
+        estimate: document.querySelector('.gs-estimate')?.textContent?.trim() || ''
+      }
+    `)
+    check('策划页可确认/修改逐图脚本与文案', plan.prompts >= 4 && plan.title.includes('摇粒绒') && plan.step.includes('AI 策划'), JSON.stringify(plan))
+    const planShot = await ui.send('Page.captureScreenshot', { format: 'png' })
+    fs.writeFileSync(path.join(OUT, 'redesign-plan.png'), Buffer.from(planShot.data, 'base64'))
+
+    // 第 2 步 → 第 3 步：确认出图
+    const imageGate = await ui.eval(`
+      const btn = document.querySelector('[data-test="graphic-sell-generate-images"]')
+      return { found: Boolean(btn), disabled: btn?.disabled ?? null, warning: document.body.innerText.includes('生图接口未配置') }
+    `)
+    check('确认出图按钮可用（生图配置已读取）', imageGate.found && imageGate.disabled === false, JSON.stringify(imageGate))
+    await ui.eval(`document.querySelector('[data-test="graphic-sell-generate-images"]')?.click(); return true`)
+    const confirmOpened = await waitFor(ui, `return Boolean(document.querySelector('[data-test="graphic-sell-confirm"]'))`, 5000)
+    check('出图前弹出费用确认', confirmOpened)
     await ui.eval(`document.querySelector('[data-test="graphic-sell-confirm-submit"]')?.click(); return true`)
 
     const result = await waitFor(ui, `return Boolean(document.querySelector('[data-test="graphic-sell-result"]')) && document.querySelectorAll('.gs-film-thumb img').length >= 4`, 40000)
-    check('文案与 4 张配图生成并进入新结果页', result)
+    check('确认后生成 4 张配图并进入结果页', result)
     check('文案接口与生图接口都被调用', mock.requests.some(item => /chat\/completions/.test(item.url)) && mock.requests.filter(item => /images\/(generations|edits)/.test(item.url)).length >= 4, JSON.stringify(mock.requests))
     const layout = await ui.eval(`
       return {

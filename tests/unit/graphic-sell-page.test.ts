@@ -106,7 +106,8 @@ describe('图文带货：独立入口与工作台路由', () => {
     expect(page).toContain(':data-test="`graphic-sell-regenerate-${index}`"')
     expect(page).toContain('哪张不满意可单独「重绘」')
     // 生成按钮在配置未齐/未填商品名/重绘中时不可点；空状态如实说明缺哪套接口
-    expect(page).toContain(':disabled="generating || regeneratingIndex >= 0 || !canGenerate"')
+    expect(page).toContain(':disabled="planning || generating || regeneratingIndex >= 0 || (step === 1 ? !canPlan : false)"')
+    expect(page).toContain('!canGenerateImages')
     expect(page).toContain('文案接口未配置')
     expect(page).toContain('生图接口未配置')
     // 不允许把“示例/假数据”当生成结果展示
@@ -124,6 +125,27 @@ describe('图文带货：独立入口与工作台路由', () => {
     expect(page).not.toContain('class="gs-image-grid"')
     // 封面大字只做预览叠加，保存图片不含文字，界面必须说清楚
     expect(page).toContain('封面大字仅用于预览排版，保存的图片不含文字')
+  })
+
+  it('三步向导：上传 → AI 策划（免费）→ 确认后出图', () => {
+    expect(page).toContain('gs-wizard')
+    expect(page).toContain('1</b>上传商品图')
+    expect(page).toContain('2</b>AI 策划')
+    expect(page).toContain('3</b>出图与预览')
+    expect(page).toContain('data-test="graphic-sell-plan"')
+    expect(page).toContain(':data-test="`graphic-sell-plan-prompt-${index}`"')
+    expect(page).toContain('data-test="graphic-sell-generate-images"')
+    expect(page).toContain('AI 策划（免费）')
+    expect(page).toContain('确认出图（')
+    expect(composable).toContain('const planning = ref(false)')
+    expect(composable).toContain('const step = computed<1 | 2 | 3>')
+    expect(composable).toContain('function requestImageGeneration()')
+    expect(composable).toContain('function requestGeneration()')
+  })
+
+  it('IPC 传 sourceImages 前先去掉 Vue 响应式 Proxy（否则结构化克隆失败）', () => {
+    expect(composable).toContain('request.sourceImages.map(item => ({ ...item }))')
+    expect(composable).not.toContain('sourceImages: request.sourceImages')
   })
 })
 
@@ -186,7 +208,7 @@ describe('图文带货：参考效果模板（2026-10-19 按用户 4 张参考�
     expect(logic).toContain('效果模板：${effect.label}')
     expect(logic).toContain('商品一致性（最高优先级）')
     expect(logic).toContain('本张构图：')
-    expect(composable).toContain('{ effect: requestEffect, model: requestModel }')
+    expect(composable).toContain('{ effect: request.effect, model: request.model }')
     expect(composable).toContain('const requestEffect = effect.value')
     expect(composable).toContain('const requestModel = model.value')
     // 模板选择会同时套用推荐模特与比例，并记住选择

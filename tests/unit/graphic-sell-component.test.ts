@@ -123,7 +123,7 @@ describe('图文带货工作台挂载与生成流程', () => {
     const root = mountPage()
     await flush()
     expect(byTest(root, 'graphic-sell-page')).not.toBeNull()
-    expect(root.textContent).toContain('一次生成整套带货图文')
+    expect(root.textContent).toContain('上传商品图，先免费策划')
     expect(root.textContent).toContain('当前预览环境没有 Electron 桥')
     // 没有配置就不允许生成；结果区也不出现
     expect((byTest(root, 'graphic-sell-generate-button') as HTMLButtonElement).disabled).toBe(true)
@@ -137,8 +137,12 @@ describe('图文带货工作台挂载与生成流程', () => {
 
     // 默认就是用户要的参考效果：效果卡高亮、9:16、儿童模特、4 张参考效果图
     expect(byTest(root, 'graphic-sell-effect-bed-lying')?.className).toContain('active')
+    click(byTest(root, 'graphic-sell-advanced-toggle') as HTMLElement)
+    await nextTick()
     expect((byTest(root, 'graphic-sell-ratio') as HTMLSelectElement).value).toBe('9:16')
     expect((byTest(root, 'graphic-sell-model') as HTMLSelectElement).value).toBe('child')
+    click((byTest(root, 'graphic-sell-effect-reference') as HTMLElement).querySelector('button') as HTMLElement)
+    await nextTick()
     expect(byTest(root, 'graphic-sell-effect-reference')?.querySelectorAll('img')).toHaveLength(4)
     expect(root.textContent).toContain('参考效果')
 
@@ -172,6 +176,7 @@ describe('图文带货工作台挂载与生成流程', () => {
 
     // 本次不传商品图：切到不依赖商品图的 AI 自由设计模板
     click(byTest(root, 'graphic-sell-effect-auto') as HTMLElement)
+    click(byTest(root, 'graphic-sell-advanced-toggle') as HTMLElement)
     await nextTick()
 
     const nameInput = byTest(root, 'graphic-sell-product-name') as HTMLInputElement
@@ -180,15 +185,26 @@ describe('图文带货工作台挂载与生成流程', () => {
     setValue(byTest(root, 'graphic-sell-price') as HTMLInputElement, '¥129')
     await nextTick()
 
-    const generate = byTest(root, 'graphic-sell-generate-button') as HTMLButtonElement
-    expect(generate.disabled).toBe(false)
-    click(generate)
+    // 第 1 步 → 第 2 步：只策划，不出图
+    const planButton = byTest(root, 'graphic-sell-generate-button') as HTMLButtonElement
+    expect(planButton.disabled).toBe(false)
+    click(planButton)
+    await flush(8)
+    expect(byTest(root, 'graphic-sell-plan')).not.toBeNull()
+    expect(byTest(root, 'graphic-sell-confirm')).toBeNull()
+    expect(calls.generateImage).toHaveLength(0)
+    expect(byTest(root, 'graphic-sell-plan-prompt-0')).not.toBeNull()
+
+    // 第 2 步 → 第 3 步：确认费用后才出图
+    const imageButton = byTest(root, 'graphic-sell-generate-images') as HTMLButtonElement
+    expect(imageButton.disabled).toBe(false)
+    click(imageButton)
     await nextTick()
-    // 先确认再发请求：确认框里能看到本次请求参数
     const confirm = byTest(root, 'graphic-sell-confirm')
     expect(confirm).not.toBeNull()
     expect(confirm?.textContent).toContain('便携折叠露营椅')
-    expect(confirm?.textContent).toContain('1 次文案')
+    expect(confirm?.textContent).toContain('1 次配图接口')
+    expect(confirm?.textContent).toContain('共 4 张')
 
     click(byTest(root, 'graphic-sell-confirm-submit') as HTMLElement)
     await flush(12)
@@ -218,11 +234,12 @@ describe('图文带货工作台挂载与生成流程', () => {
     expect((byTest(root, 'graphic-sell-edit-body') as HTMLTextAreaElement).value).toContain('3 秒收纳，后备箱不占地')
     expect(result?.textContent).toContain('#露营')
     expect(result?.textContent).toContain('3 秒收纳')
-    expect(byTest(root, 'graphic-sell-thumbs')?.querySelectorAll('button')).toHaveLength(4)
-    expect(byTest(root, 'graphic-sell-images')?.querySelectorAll('figure')).toHaveLength(4)
+    expect(byTest(root, 'graphic-sell-thumbs')?.querySelectorAll('.gs-film-thumb')).toHaveLength(4)
+    expect(byTest(root, 'graphic-sell-images')?.querySelectorAll('.gs-film-item')).toHaveLength(4)
+    expect(byTest(root, 'graphic-sell-images')?.querySelector('.gs-phone')).not.toBeNull()
     expect(byTest(root, 'graphic-sell-action-notice')).toBeNull()
-    // 生成结束，按钮恢复成“换一批”
-    expect(byTest(root, 'graphic-sell-generate-button')?.textContent).toContain('换一批')
+    // 生成结束，按钮恢复成“重新策划”
+    expect(byTest(root, 'graphic-sell-generate-button')?.textContent).toContain('重新策划')
 
     // 单张重绘：只重发这一张（n=1），不重新请求文案，也不重发其它三张
     const regenerate = byTest(root, 'graphic-sell-regenerate-1') as HTMLButtonElement
@@ -234,7 +251,7 @@ describe('图文带货工作台挂载与生成流程', () => {
     expect(calls.generateImage[1].n).toBe(1)
     expect(calls.generateImage[1].confirmed).toBe(true)
     expect(byTest(root, 'graphic-sell-action-notice')?.textContent).toContain('已重绘第 2 张')
-    expect(byTest(root, 'graphic-sell-images')?.querySelectorAll('figure')).toHaveLength(4)
+    expect(byTest(root, 'graphic-sell-images')?.querySelectorAll('.gs-film-item')).toHaveLength(4)
   })
 
   it('文案接口失败时给出可执行中文错误，且不会假装生成了配图', async () => {
@@ -248,8 +265,6 @@ describe('图文带货工作台挂载与生成流程', () => {
     setValue(byTest(root, 'graphic-sell-product-name') as HTMLInputElement, '露营椅')
     await nextTick()
     click(byTest(root, 'graphic-sell-generate-button') as HTMLElement)
-    await nextTick()
-    click(byTest(root, 'graphic-sell-confirm-submit') as HTMLElement)
     await flush(8)
 
     const error = byTest(root, 'graphic-sell-error')

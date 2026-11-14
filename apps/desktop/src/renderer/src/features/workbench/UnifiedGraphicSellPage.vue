@@ -15,6 +15,14 @@
       </div>
     </header>
 
+    <nav class="gs-wizard" aria-label="图文带货步骤">
+      <span :class="['gs-wizard-step', { active: step === 1, done: step > 1 }]"><b>1</b>上传商品图</span>
+      <i aria-hidden="true"></i>
+      <span :class="['gs-wizard-step', { active: step === 2, done: step > 2 }]"><b>2</b>AI 策划</span>
+      <i aria-hidden="true"></i>
+      <span :class="['gs-wizard-step', { active: step === 3, done: step > 3 }]"><b>3</b>出图与预览</span>
+    </nav>
+
     <div class="gs-body">
       <aside class="gs-form" aria-label="图文带货配置">
         <section class="gs-card">
@@ -26,6 +34,11 @@
             <textarea v-model="sellingPoints" :maxlength="SELL_COPY_LIMITS.sellingPoints" rows="2" placeholder="例如：双面摇粒绒、柔软不扎、机洗不变形、居家 / 幼儿园都合适" data-test="graphic-sell-selling-points"></textarea>
             <span class="gs-count">{{ sellingPoints.length }} / {{ SELL_COPY_LIMITS.sellingPoints }}</span>
           </label>
+          <span class="gs-field-label">目标平台</span>
+          <div class="gs-platform-pills" role="group" aria-label="目标平台" data-test="graphic-sell-platform">
+            <button v-for="item in GRAPHIC_SELL_PLATFORM_OPTIONS" :key="item.key" type="button" :class="{ active: platform === item.key }" :aria-pressed="platform === item.key" @click="platform = item.key">{{ item.label }}</button>
+          </div>
+          <p class="gs-hint">{{ platformHint }}</p>
           <div class="gs-upload-head"><span>商品图</span><em>{{ materials.length }}/{{ MAX_GRAPHIC_SELL_MATERIALS }}</em></div>
           <div class="gs-dropzone" :class="{ full: materials.length >= MAX_GRAPHIC_SELL_MATERIALS }" role="button" tabindex="0" data-test="graphic-sell-material-dropzone" @click="materialInput?.click()" @keydown.enter.prevent="materialInput?.click()" @dragover.prevent @drop.prevent="onMaterialDrop">
             <input ref="materialInput" class="gs-visually-hidden" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" data-test="graphic-sell-material-input" @change="onMaterialFiles" />
@@ -85,18 +98,11 @@
                 <option v-for="item in modelOptions" :key="item.key" :value="item.key">{{ item.label }} · {{ item.note }}</option>
               </select>
             </label>
-            <div class="gs-pair">
-              <label class="gs-field">平台
-                <select v-model="platform" data-test="graphic-sell-platform">
-                  <option v-for="item in GRAPHIC_SELL_PLATFORM_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
-                </select>
-              </label>
-              <label class="gs-field">笔记风格
-                <select v-model="style" data-test="graphic-sell-style">
-                  <option v-for="item in GRAPHIC_SELL_STYLE_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
-                </select>
-              </label>
-            </div>
+            <label class="gs-field">笔记风格
+              <select v-model="style" data-test="graphic-sell-style">
+                <option v-for="item in GRAPHIC_SELL_STYLE_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
+              </select>
+            </label>
             <span class="gs-field-label">配图数量</span>
             <div class="gs-segmented" role="group" aria-label="配图数量" data-test="graphic-sell-image-count">
               <button v-for="count in GRAPHIC_SELL_IMAGE_COUNT_OPTIONS" :key="count" type="button" :class="{ active: imageCount === count }" @click="imageCount = count">{{ count }} 张</button>
@@ -111,14 +117,14 @@
       </aside>
 
       <main class="gs-canvas">
-        <section v-if="!copy && !generating" class="gs-empty" data-test="graphic-sell-empty">
+        <section v-if="!copy && !planning && !generating" class="gs-empty" data-test="graphic-sell-empty">
           <span class="gs-kicker">IMAGE + TEXT COMMERCE</span>
-          <h1>一次生成整套带货图文</h1>
-          <p>先出标题、正文与话题标签，再按文案里的逐图画面描述生成配图；生成后可编辑、复制与保存。</p>
+          <h1>上传商品图，先免费策划</h1>
+          <p>AI 先出卡片脚本与带货文案，你确认或修改后再出图；策划不收费，只有出图按张计费。</p>
           <ol class="gs-flow">
-            <li><b>1</b><strong>填商品名称</strong><small>再上传 1–3 张商品图</small></li>
-            <li><b>2</b><strong>选一个效果</strong><small>默认躺床俯拍，可直接用</small></li>
-            <li><b>3</b><strong>AI 出文案 + 配图</strong><small>{{ effectOption.label }} · {{ imageCount }} 张 · {{ ratioLabel }}</small></li>
+            <li><b>1</b><strong>上传商品图</strong><small>名称与 1–3 张商品图</small></li>
+            <li><b>2</b><strong>AI 策划（免费）</strong><small>卡片脚本、标题、正文与话题</small></li>
+            <li><b>3</b><strong>确认后出图</strong><small>{{ effectOption.label }} · {{ imageCount }} 张 · {{ ratioLabel }}</small></li>
           </ol>
           <p v-if="configError" class="gs-error">{{ configError }}</p>
           <p v-else-if="!readiness.copyReady || !readiness.imageReady" class="gs-warn" data-test="graphic-sell-config-warning">
@@ -130,14 +136,46 @@
           <p v-if="generationError" class="gs-error" data-test="graphic-sell-error">{{ generationError }}</p>
         </section>
 
-        <section v-else-if="generating" class="gs-progress" data-test="graphic-sell-progress">
+        <section v-else-if="planning || generating" class="gs-progress" data-test="graphic-sell-progress">
           <span class="gs-loader"></span>
-          <h2>{{ phase || '正在生成…' }}</h2>
-          <p>文案与配图分两步请求；配图按逐图画面描述一张张出，请勿离开本页。</p>
-          <div class="gs-progress-steps"><span :class="{ done: Boolean(copy) }">① 带货文案</span><span :class="{ active: Boolean(copy) && !images.length, done: images.length > 0 }">② 配图 {{ images.length }}/{{ imageCount }}</span></div>
+          <h2>{{ phase || (planning ? '正在策划图文…' : '正在生成配图…') }}</h2>
+          <p>{{ planning ? 'AI 正在分析商品图并规划卡片脚本，策划免费。' : '按已确认的卡片脚本逐张出图，请勿离开本页。' }}</p>
+          <div class="gs-progress-steps"><span :class="{ done: Boolean(copy) }">① AI 策划</span><span :class="{ active: Boolean(copy) && !images.length, done: images.length > 0 }">② 出图 {{ images.length }}/{{ imageCount }}</span></div>
         </section>
 
-        <template v-else-if="copy">
+        <div v-else-if="copy && !images.length" class="gs-plan-layout" data-test="graphic-sell-plan">
+          <section class="gs-plan-card">
+            <header class="gs-copy-head">
+              <div><span class="gs-kicker">PLAN</span><h2>AI 策划 · {{ editableImagePrompts.length }} 张卡片</h2></div>
+              <span class="gs-note-model" :title="`文案模型：${copy.model}`">{{ copy.model }}</span>
+            </header>
+            <p class="gs-hint">先确认每张卡片的画面脚本；出图时会按这里的描述逐张生成。可直接修改。</p>
+            <ol class="gs-plan-list">
+              <li v-for="(prompt, index) in editableImagePrompts" :key="index">
+                <span class="gs-plan-index">{{ index + 1 }}</span>
+                <div class="gs-plan-copy">
+                  <strong>{{ index === 0 ? '封面卡片' : index === editableImagePrompts.length - 1 ? '氛围 / 场景卡片' : '细节卡片' }}</strong>
+                  <textarea v-model="editableImagePrompts[index]" :maxlength="SELL_COPY_LIMITS.imagePrompt" rows="2" :data-test="`graphic-sell-plan-prompt-${index}`"></textarea>
+                </div>
+              </li>
+            </ol>
+          </section>
+          <section class="gs-copy-card">
+            <header class="gs-copy-head">
+              <div><span class="gs-kicker">CAPTION</span><h2>带货文案</h2></div>
+              <span class="gs-note-model" :title="`文案模型：${copy.model}`">{{ copy.model }}</span>
+            </header>
+            <label class="gs-field">封面大字<input v-model="editableCoverText" :maxlength="SELL_COPY_LIMITS.coverText" data-test="graphic-sell-edit-cover" /></label>
+            <label class="gs-field">标题<input v-model="editableTitle" :maxlength="SELL_COPY_LIMITS.title" data-test="graphic-sell-edit-title" /></label>
+            <label class="gs-field">正文<textarea v-model="editableBody" :maxlength="SELL_COPY_LIMITS.body" rows="7" data-test="graphic-sell-edit-body"></textarea></label>
+            <label class="gs-field">话题标签<input v-model="editableTagsText" maxlength="220" placeholder="空格 / 逗号分隔" data-test="graphic-sell-edit-tags" /></label>
+            <p class="gs-tags"><span v-for="tag in editableTags" :key="tag">#{{ tag }}</span></p>
+          </section>
+          <p v-if="generationError" class="gs-error" data-test="graphic-sell-error" style="grid-column:1/-1">{{ generationError }}</p>
+          <p v-if="generationNotice" class="gs-warn" style="grid-column:1/-1">{{ generationNotice }}</p>
+        </div>
+
+        <template v-else-if="copy && images.length">
           <div class="gs-result-head">
             <div>
               <span class="gs-kicker">RESULT</span>
@@ -154,15 +192,24 @@
 
           <div class="gs-result-layout" data-test="graphic-sell-result">
             <section class="gs-cover-card" data-test="graphic-sell-images">
-              <div class="gs-cover-stage" :style="{ aspectRatio: previewAspect }">
-                <img v-if="activeImage" :src="activeImage.url" :alt="`配图 ${activeImage.index + 1}`" data-test="graphic-sell-active-image" />
-                <div v-else class="gs-media-placeholder">配图待生成</div>
-                <div v-if="activeImage && editableCoverText.trim()" class="gs-cover-overlay" aria-hidden="true">
-                  <span>封面大字 · 预览</span>
-                  <strong>{{ editableCoverText }}</strong>
+              <div class="gs-phone">
+                <div class="gs-phone-status"><span>9:41</span><i>5G</i><b></b></div>
+                <div class="gs-cover-stage" :style="{ aspectRatio: previewAspect }">
+                  <img v-if="activeImage" :src="activeImage.url" :alt="`配图 ${activeImage.index + 1}`" data-test="graphic-sell-active-image" />
+                  <div v-else class="gs-media-placeholder">配图待生成</div>
+                  <div v-if="activeImage && editableCoverText.trim()" class="gs-cover-overlay" aria-hidden="true">
+                    <span>封面大字 · 预览</span>
+                    <strong>{{ editableCoverText }}</strong>
+                  </div>
+                  <span v-if="activeImage" class="gs-page-count">{{ activeImageIndex + 1 }} / {{ images.length || imageCount }}</span>
+                  <div v-if="activeImage && regeneratingIndex === activeImageIndex" class="gs-image-redrawing"><span class="gs-loader"></span>重绘中…</div>
                 </div>
-                <span v-if="activeImage" class="gs-page-count">{{ activeImageIndex + 1 }} / {{ images.length || imageCount }}</span>
-                <div v-if="activeImage && regeneratingIndex === activeImageIndex" class="gs-image-redrawing"><span class="gs-loader"></span>重绘中…</div>
+                <div class="gs-phone-caption">
+                  <strong>{{ editableTitle || '笔记标题' }}</strong>
+                  <p>{{ editableBody || '正文预览' }}</p>
+                  <div class="gs-tags"><span v-for="tag in editableTags" :key="tag">#{{ tag }}</span></div>
+                </div>
+                <div class="gs-phone-actions" aria-hidden="true"><span>♡ 点赞</span><span>💬 评论</span><span>☆ 收藏</span><b>立即购买</b></div>
               </div>
 
               <p v-if="images.length" class="gs-hint">哪张不满意可单独「重绘」：只重发这一张，文案与其它配图保持不变。</p>
@@ -177,7 +224,6 @@
                     <button type="button" :disabled="saving || generating || regeneratingIndex >= 0" @click="activeImageIndex = index; saveActiveImage()">保存</button>
                   </span>
                 </div>
-                <div v-if="!images.length" class="gs-images-empty">{{ generationNotice || generationError || '配图尚未返回，可点下方「换一批重新生成」再试。' }}</div>
               </div>
 
               <div class="gs-cover-tools">
@@ -220,24 +266,26 @@
     </div>
 
     <footer class="gs-footer">
-      <p class="gs-estimate">{{ regeneratingIndex >= 0 ? `正在重绘第 ${regeneratingIndex + 1} 张配图…` : generating ? phase : `将请求 ${plannedRequestCount} 次接口：1 次文案 + ${plannedRequestCount - 1} 次配图` }}</p>
+      <p class="gs-estimate">{{ regeneratingIndex >= 0 ? `正在重绘第 ${regeneratingIndex + 1} 张配图…` : planning || generating ? phase : step === 1 ? 'AI 策划免费；确认脚本后再出图，出图按张计费' : step === 2 ? `将请求 ${plannedImageRequestCount} 次配图接口（共 ${imageCount} 张）；策划不收费` : '出图完成，可单张重绘或重新策划' }}</p>
       <p v-if="actionNotice" class="gs-action-notice" :class="{ error: actionNoticeError }" data-test="graphic-sell-action-notice">{{ actionNotice }}</p>
-      <button type="button" class="gs-generate" data-test="graphic-sell-generate-button" :disabled="generating || regeneratingIndex >= 0 || !canGenerate" @click="requestGeneration"><span>ϟ</span>{{ generating ? (phase || '生成中…') : copy ? '换一批重新生成' : '生成带货图文' }}</button>
+      <button v-if="step === 2" type="button" class="gs-button" :disabled="planning || generating || regeneratingIndex >= 0" @click="requestGeneration">重新策划</button>
+      <button v-if="step === 2" type="button" class="gs-generate" data-test="graphic-sell-generate-images" :disabled="generating || regeneratingIndex >= 0 || !canGenerateImages" @click="requestImageGeneration"><span>⚡</span>{{ generating ? (phase || '出图中…') : `确认出图（${imageCount} 张）` }}</button>
+      <button v-else type="button" class="gs-generate" data-test="graphic-sell-generate-button" :disabled="planning || generating || regeneratingIndex >= 0 || (step === 1 ? !canPlan : false)" @click="requestGeneration"><span>⚡</span>{{ planning ? (phase || '策划中…') : step === 1 ? 'AI 策划（免费）' : '重新策划' }}</button>
     </footer>
 
     <div v-if="confirmOpen" class="gs-confirm-backdrop" @click.self="confirmOpen = false">
       <section class="gs-confirm" role="dialog" aria-modal="true" aria-labelledby="gs-confirm-title" data-test="graphic-sell-confirm">
-        <h2 id="gs-confirm-title">确认生成这套图文？</h2>
-        <p>将请求 {{ plannedRequestCount }} 次接口，可能产生第三方费用；先出文案，再按逐图描述生成配图。</p>
+        <h2 id="gs-confirm-title">确认按这份策划出图？</h2>
+        <p>将请求 {{ plannedImageRequestCount }} 次配图接口，共 {{ imageCount }} 张，可能产生第三方费用；策划本身不收费。</p>
         <dl>
           <div><dt>商品</dt><dd>{{ productName.trim() }}</dd></div>
           <div><dt>效果</dt><dd>{{ effectOption.label }} · {{ imageCount }} 张 · {{ ratioLabel }}</dd></div>
-          <div><dt>接口</dt><dd>{{ readiness.copyLabel }} · {{ readiness.imageLabel }}</dd></div>
+          <div><dt>配图接口</dt><dd>{{ readiness.imageLabel }}</dd></div>
           <div v-if="materials.length"><dt>商品图</dt><dd>{{ materials.length }} 张</dd></div>
         </dl>
         <div class="gs-confirm-actions">
           <button type="button" class="gs-button" @click="confirmOpen = false">取消</button>
-          <button type="button" class="gs-button primary" data-test="graphic-sell-confirm-submit" @click="submitGeneration">确认发送</button>
+          <button type="button" class="gs-button primary" data-test="graphic-sell-confirm-submit" @click="submitGeneration">确认出图</button>
         </div>
       </section>
     </div>
@@ -294,9 +342,11 @@ const {
   config,
   configError,
   readiness,
+  planning,
   generating,
   regeneratingIndex,
   phase,
+  step,
   generationError,
   generationNotice,
   confirmOpen,
@@ -308,11 +358,14 @@ const {
   editableBody,
   editableTagsText,
   editableCoverText,
+  editableImagePrompts,
   editableTags,
-  canGenerate,
-  plannedRequestCount,
+  canPlan,
+  canGenerateImages,
+  plannedImageRequestCount,
   ratioLabel,
   requestGeneration,
+  requestImageGeneration,
   submitGeneration,
   resetAll,
   saving,
@@ -335,6 +388,7 @@ const {
 const advancedOpen = ref(false)
 /** 参考图库默认收起：效果说明已经写清场景，想对照时再展开 */
 const effectRefOpen = ref(false)
+const platformHint = computed(() => GRAPHIC_SELL_PLATFORM_OPTIONS.find(item => item.key === platform.value)?.note || '')
 
 const copyStatusHint = computed(() => readiness.value.copyReady
   ? `文案将走：${readiness.value.copyLabel}`
@@ -467,6 +521,36 @@ function formatDate(value: number): string {
 .gs-copy-head h2{margin:2px 0 0;color:#22304c;font-size:16px}
 .gs-copy-card .gs-field:last-of-type{margin-bottom:6px}
 .gs-copy-card textarea{min-height:150px}
+/* 向导步骤条 */
+.gs-wizard{display:flex;align-items:center;justify-content:center;gap:8px;flex:0 0 auto;padding:8px 24px;border-bottom:1px solid #edf0f5;background:rgba(255,255,255,.86)}
+.gs-wizard-step{display:inline-flex;align-items:center;gap:6px;color:#98a2b3;font-size:11px;white-space:nowrap}
+.gs-wizard-step b{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#eef2f8;color:#7a8bad;font-size:10px;font-weight:600}
+.gs-wizard-step.active{color:#3d4bd6;font-weight:600}
+.gs-wizard-step.active b{background:#6d4aff;color:#fff}
+.gs-wizard-step.done b{background:#e7f8f0;color:#0c8a5f}
+.gs-wizard i{width:42px;height:1px;background:#e3e9f2}
+/* 第 2 步：策划脚本 + 文案确认 */
+.gs-plan-layout{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(300px,.9fr);gap:14px;align-items:start;max-width:980px}
+.gs-plan-card,.gs-copy-card{display:flex;min-width:0;flex-direction:column;padding:14px;border:1px solid rgba(103,143,207,.2);border-radius:16px;background:#fff;box-shadow:0 15px 38px rgba(91,125,180,.1)}
+.gs-plan-list{display:flex;flex-direction:column;gap:9px;max-height:520px;margin:0;padding:0;overflow-y:auto;list-style:none;scrollbar-width:thin}
+.gs-plan-list li{display:flex;gap:9px;padding:9px;border:1px solid #e7ecf6;border-radius:10px;background:#fbfcff}
+.gs-plan-index{display:grid;place-items:center;width:20px;height:20px;flex:0 0 20px;border-radius:50%;background:#e8ecff;color:#5b3df5;font-size:10px;font-weight:600}
+.gs-plan-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:5px}
+.gs-plan-copy strong{color:#31508d;font-size:11px}
+.gs-plan-copy textarea{width:100%;min-height:48px;padding:6px 8px;border:1px solid #e3e9f2;border-radius:7px;resize:vertical;background:#fff;color:#3b4a66;font:inherit;font-size:11px;line-height:1.55}
+.gs-plan-copy textarea:focus{border-color:#9fb0f7;outline:2px solid rgba(109,74,255,.12)}
+/* 第 3 步：手机预览 */
+.gs-phone{width:min(100%,282px);margin:0 auto;padding:6px;border-radius:26px;background:#0f172a;box-shadow:0 18px 42px rgba(15,23,42,.28)}
+.gs-phone .gs-cover-stage{max-height:330px;border-radius:20px}
+.gs-phone-status{display:flex;align-items:center;justify-content:space-between;padding:2px 12px 6px;color:#cbd5e1;font-size:9px;letter-spacing:.02em}
+.gs-phone-status b{width:46px;height:5px;border-radius:999px;background:#334155}
+.gs-phone-caption{padding:8px 10px 6px;color:#e2e8f0}
+.gs-phone-caption strong{display:block;overflow:hidden;font-size:12px;line-height:1.45;text-overflow:ellipsis;white-space:nowrap}
+.gs-phone-caption p{display:-webkit-box;margin:4px 0 0;overflow:hidden;color:#94a3b8;font-size:10px;line-height:1.55;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.gs-phone-caption .gs-tags{margin:6px 0 0}
+.gs-phone-caption .gs-tags span{color:#93c5fd;font-size:9.5px}
+.gs-phone-actions{display:flex;align-items:center;gap:10px;padding:6px 10px 8px;color:#cbd5e1;font-size:9px}
+.gs-phone-actions b{margin-left:auto;padding:3px 8px;border-radius:999px;background:#fe2c55;color:#fff;font-size:9px;font-weight:600}
 .gs-note{display:flex;flex-direction:column;gap:0;max-width:760px;overflow:hidden;border:1px solid rgba(103,143,207,.2);border-radius:16px;background:#fff;box-shadow:0 15px 38px rgba(91,125,180,.12)}
 .gs-note-head{display:flex;align-items:center;gap:9px;padding:12px 14px;border-bottom:1px solid #f0f3f8}
 .gs-avatar{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:linear-gradient(150deg,#ffe0c2,#ffc7a0);color:#a9641c;font-size:13px;font-weight:600}
@@ -542,6 +626,10 @@ function formatDate(value: number): string {
 /* 商品图与商品信息合并后的小标题 */
 .gs-upload-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 0 6px;color:#31508d;font-size:11px}
 .gs-upload-head em{color:#8796b8;font-size:10px;font-style:normal}
+.gs-platform-pills{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 4px}
+.gs-platform-pills button{padding:4px 9px;border:1px solid #e3e9f2;border-radius:999px;background:#f8fafd;color:#65758f;font-size:10px;cursor:pointer}
+.gs-platform-pills button:hover{border-color:#9fb0f7;color:#3d4bd6}
+.gs-platform-pills button.active{border-color:#6d4aff;background:#f1efff;color:#4d3bd6;font-weight:600}
 /* 更多设置：默认折叠，首屏只留商品、商品图与效果 */
 .gs-advanced-card{flex:none;border:1px solid rgba(103,143,207,.2);border-radius:14px;background:rgba(255,255,255,.72);overflow:hidden}
 .gs-advanced-toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:11px 14px;border:0;background:transparent;color:#31508d;cursor:pointer;text-align:left}
@@ -550,5 +638,5 @@ function formatDate(value: number): string {
 .gs-advanced-toggle:hover{background:rgba(103,143,207,.06)}
 .gs-advanced-body{padding:2px 14px 12px;border-top:1px solid rgba(103,143,207,.14)}
 .gs-advanced-body .gs-field:first-child,.gs-advanced-body .gs-pair:first-child{margin-top:10px}
-@media (max-width:900px){.gs-result-layout{grid-template-columns:minmax(0,1fr)}.gs-cover-stage{max-height:520px}}
+@media (max-width:900px){.gs-result-layout,.gs-plan-layout{grid-template-columns:minmax(0,1fr)}.gs-cover-stage{max-height:520px}}
 </style>
