@@ -17,7 +17,12 @@ const props = defineProps<{
   label?: string
 }>()
 
+const emit = defineEmits<{ closed: [] }>()
 const open = ref(false)
+function close(): void {
+  open.value = false
+  emit('closed')
+}
 </script>
 
 <template>
@@ -30,7 +35,7 @@ const open = ref(false)
     tab="ai"
     :only-tabs="['ai']"
     :only-ai-sections="props.sections"
-    @close="open = false"
+    @close="close"
   />
 </template>
 

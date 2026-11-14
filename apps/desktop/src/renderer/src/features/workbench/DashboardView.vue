@@ -290,6 +290,7 @@
         <UnifiedDataPage v-else-if="activePage === 'tax'" mode="tax" @open-store="openStoreFromPage" />
         <UnifiedSettingsPage v-else-if="activePage === 'settings'" :initial-tab="settingsTab" @close="closeSettings" />
         <UnifiedImageStudioPage v-else-if="activePage === 'image-studio'" @go-home="navigateTo('overview')" @busy-change="imageStudioBusy = $event" />
+        <UnifiedChatImagePage v-else-if="activePage === 'chat-image'" @go-home="navigateTo('overview')" @busy-change="chatImageBusy = $event" />
         <UnifiedGraphicSellPage v-else-if="activePage === 'graphic-sell'" @go-home="navigateTo('overview')" @busy-change="graphicSellBusy = $event" />
         <UnifiedAssistantPage v-else-if="activePage === 'assistant'" />
         <UnifiedAppsPage v-else-if="activePage === 'apps'" @navigate="navigateTo" />
@@ -513,6 +514,7 @@ const UnifiedStorePage = defineAsyncComponent(() => import('./UnifiedStorePage.v
 const UnifiedDataPage = defineAsyncComponent(() => import('./UnifiedDataPage.vue'))
 const UnifiedSettingsPage = defineAsyncComponent(() => import('./UnifiedSettingsPage.vue'))
 const UnifiedImageStudioPage = defineAsyncComponent(() => import('./UnifiedImageStudioPage.vue'))
+const UnifiedChatImagePage = defineAsyncComponent(() => import('./UnifiedChatImagePage.vue'))
 const UnifiedGraphicSellPage = defineAsyncComponent(() => import('./UnifiedGraphicSellPage.vue'))
 const UnifiedAssistantPage = defineAsyncComponent(() => import('./UnifiedAssistantPage.vue'))
 const UnifiedAppsPage = defineAsyncComponent(() => import('./UnifiedAppsPage.vue'))
@@ -550,6 +552,7 @@ const navItems: NavItem[] = [
   { key: 'tax', label: '涉税信息', icon: 'percent' },
   { key: 'assistant', label: 'AI 电商助手', icon: 'sparkles' },
   { key: 'image-studio', label: 'AI 生成商品图', icon: 'image' },
+  { key: 'chat-image', label: '对话生图', icon: 'message' },
   { key: 'graphic-sell', label: '图文带货', icon: 'edit' },
   { key: 'apps', label: '应用商城', icon: 'grid' }
 ]
@@ -563,6 +566,7 @@ const OPTIONAL_PAGE_MODULE: Record<string, OptionalModuleKey> = {
   tax: 'tax',
   assistant: 'ai-assistant',
   'image-studio': 'ai-image',
+  'chat-image': 'ai-chat-image',
   'graphic-sell': 'ai-graphic'
 }
 const visibleNavItems = computed(() => navItems.filter((item) => {
@@ -574,7 +578,7 @@ void ensureAppModulesLoaded()
 const navGroups = computed(() => [
   { key: 'main', title: '', items: visibleNavItems.value.filter(item => ['经营总览', '店铺管理'].includes(item.label)) },
   { key: 'ops', title: '运营', items: visibleNavItems.value.filter(item => ['数据分析', '发票中心', '涉税信息'].includes(item.label)) },
-  { key: 'ai', title: 'AI 工具', items: visibleNavItems.value.filter(item => ['AI 电商助手', 'AI 生成商品图', '图文带货'].includes(item.label)) },
+  { key: 'ai', title: 'AI 工具', items: visibleNavItems.value.filter(item => ['AI 电商助手', 'AI 生成商品图', '对话生图', '图文带货'].includes(item.label)) },
   { key: 'tools', title: '工具', items: visibleNavItems.value.filter(item => ['应用商城'].includes(item.label)) }
 ].filter(group => group.items.length > 0))
 /** 店铺搜索：只在店铺多到列表要滚的时候出现，少店铺时不占一行 */
@@ -589,7 +593,7 @@ const visibleStores = computed(() => {
 const PAGE_TITLES: Record<string, string> = {
   overview: '经营总览', browser: '店铺工作台', stores: '店铺管理',
   assistant: 'AI 电商助手', analytics: '数据分析', invoices: '发票中心', tax: '涉税信息', apps: '应用商城', settings: '设置中心',
-  'image-studio': 'AI 生成商品图', 'graphic-sell': '图文带货'
+  'image-studio': 'AI 生成商品图', 'graphic-sell': '图文带货', 'chat-image': '对话生图'
 }
 const pageTitle = computed(() => PAGE_TITLES[activePage.value] || '经营总览')
 /**
@@ -607,11 +611,13 @@ function tickClock() {
   const pad = (n: number) => String(n).padStart(2, '0')
   nowLabel.value = `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
-type DashboardPage = 'overview' | 'browser' | 'stores' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'assistant' | 'image-studio' | 'graphic-sell'
+type DashboardPage = 'overview' | 'browser' | 'stores' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'assistant' | 'image-studio' | 'chat-image' | 'graphic-sell'
 type SettingsTab = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'
 const activePage = ref<DashboardPage>('overview')
 /** 生图请求仍在运行时保留图片工作台，避免卸载页面丢失返回结果。 */
 const imageStudioBusy = ref(false)
+/** 对话生图生成中同理：消息与结果只在页面内存里，切走会丢。 */
+const chatImageBusy = ref(false)
 /** 图文带货生成中同理：文案/配图请求未返回时不允许把页面切走。 */
 const graphicSellBusy = ref(false)
 const settingsReturnPage = ref<DashboardPage>('overview')
@@ -734,6 +740,11 @@ function preventBusyAiStudioExit() {
     showNotice('图文仍在生成，完成后再离开，避免丢失结果。')
     return true
   }
+  if (activePage.value === 'chat-image' && chatImageBusy.value) {
+    activeNav.value = '对话生图'
+    showNotice('对话仍在生成图片，完成后再离开，避免丢失结果。')
+    return true
+  }
   return false
 }
 function navigateTo(page: DashboardPage) {
@@ -778,6 +789,7 @@ function navigateTo(page: DashboardPage) {
   else if (page === 'tax') activeNav.value = '涉税信息'
   else if (page === 'apps') activeNav.value = '应用商城'
   else if (page === 'image-studio') activeNav.value = 'AI 生成商品图'
+  else if (page === 'chat-image') activeNav.value = '对话生图'
   else if (page === 'graphic-sell') activeNav.value = '图文带货'
 }
 /** 设置中心页签白名单：环境面板等入口只允许跳到已知页签，未知值回落到默认「平台入口」 */

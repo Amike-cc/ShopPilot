@@ -16,7 +16,7 @@ import graphicSellAppIcon from '../../assets/icons/settings-square.svg'
 import AppCenterExtensions from './AppCenterExtensions.vue'
 import { ensureAppModulesLoaded, isModuleInstalled, setModuleInstalled, type OptionalModuleKey } from './use-app-modules'
 
-type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'assistant' | 'image-studio' | 'graphic-sell'
+type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'assistant' | 'image-studio' | 'chat-image' | 'graphic-sell'
 type AppTone = 'violet' | 'blue' | 'cyan' | 'orange' | 'indigo' | 'green' | 'pink' | 'slate' | 'amber'
 
 interface AppLink {
@@ -73,6 +73,7 @@ interface AiToolLink {
 const aiTools: AiToolLink[] = [
   { key: 'ai-assistant', testId: 'apps-ai-assistant', label: 'AI 电商助手', description: '纯文本对话：讨论问题、整理思路、给出手动操作建议；不会读取或操作店铺与软件数据。', category: '对话', note: 'text', tone: 'violet', icon: aiAppIcon, page: 'assistant' },
   { key: 'ai-image', testId: 'apps-ai-image', label: 'AI 生成商品图', description: '填商品信息、对话式生图，结果可直接预览与保存。', category: '内容创作', note: 'image', tone: 'pink', icon: aiAppIcon, page: 'image-studio' },
+  { key: 'ai-chat-image', testId: 'apps-ai-chat-image', label: '对话生图', description: '用聊天描述画面，连续追问；可基于上一张结果继续修改并保存。', category: '内容创作', note: 'image', tone: 'cyan', icon: aiAppIcon, page: 'chat-image' },
   { key: 'ai-graphic', testId: 'apps-ai-graphic', label: '图文带货', description: 'AI 写带货笔记文案并生成多张配图，可编辑、复制与保存。', category: '内容创作', note: 'graphic', tone: 'orange', icon: graphicSellAppIcon, page: 'graphic-sell' }
 ]
 const aiInstalledCount = computed(() => aiTools.filter(tool => isModuleInstalled(tool.key)).length)
@@ -244,8 +245,8 @@ function iconMask(url: string): Record<string, string> {
           <span class="ac-count">{{ aiInstalledCount }}/{{ aiTools.length }}</span>
         </div>
         <p v-if="aiStatusError" class="ac-hint error">读取模型状态失败：{{ aiStatusError }}</p>
-        <p class="ac-hint">三个 AI 工具独立安装与卸载；模型配置和创作历史保留。</p>
-        <div class="ac-grid" data-test="apps-ai-grid">
+        <p class="ac-hint">AI 工具各自独立安装与卸载；模型配置和创作历史保留。</p>
+        <div class="ac-grid ac-grid--ai" data-test="apps-ai-grid">
           <article
             v-for="tool in aiTools"
             :key="tool.key"
@@ -404,4 +405,7 @@ function iconMask(url: string): Record<string, string> {
 .ai-assistant-card .available-pill{color:#6ee7b7}
 .ai-assistant-card .available-pill i{background:#34d399}
 .ai-assistant-card .ai-orb{background:radial-gradient(circle at 50% 42%,#1b2540,#0d1527 70%);border-color:rgba(167,134,255,.65)}
+/* AI 工具四张卡在 1280 宽度下一行排开；窄到放不下再自动换行 */
+.ac-grid--ai{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+@media(max-width:860px){.ac-grid--ai{grid-template-columns:1fr}}
 </style>

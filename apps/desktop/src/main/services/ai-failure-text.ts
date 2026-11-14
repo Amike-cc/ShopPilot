@@ -89,13 +89,16 @@ export function describeAiFailure(error: unknown): AiFailureText {
   //    状态码必须有 HTTP 上下文：裸三位数会把 "bytes=500"、"retry after 500 ms" 误判成 5xx，
   //    也会命中 URL 端口（`http://127.0.0.1:500/v1/…`）。
   if (/fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|socket hang up|network error|ERR_NETWORK|ERR_CONNECTION/i.test(detail)) {
-    return { code, message: `连不上 AI 接口：请到设置中心核对接口地址与网络${withDetail(detail)}` }
+    return { code, message: `连不上 AI 接口：请在「模型设置」核对接口地址与网络${withDetail(detail)}` }
   }
   if (/timeout|timed out|ETIMEDOUT|aborted|超时/i.test(detail)) {
-    return { code, message: `AI 接口响应超时：可稍后重试或调大设置里的超时时间${withDetail(detail)}` }
+    return { code, message: `AI 接口响应超时：可稍后重试或在「模型设置」调大超时时间${withDetail(detail)}` }
+  }
+  if (/quota|insufficient[_ ]?(quota|balance)|balance|billing|not enough quota/i.test(detail)) {
+    return { code, message: `AI 接口额度不足：请检查账户余额/额度后重试${withDetail(detail)}` }
   }
   if (/(?<![\d:])(401|403)(?!\d)|unauthorized|invalid api key|incorrect api key|invalid_api_key/i.test(detail)) {
-    return { code, message: `AI 接口拒绝了凭据：请到设置中心检查 API Key 是否有效${withDetail(detail)}` }
+    return { code, message: `AI 接口拒绝了凭据：请到对应 AI 工具的「模型设置」检查 API Key 是否有效${withDetail(detail)}` }
   }
   if (/(?<![\d:])429(?!\d)|rate limit|too many requests/i.test(detail)) {
     return { code, message: `AI 接口限流（429）：请稍后重试${withDetail(detail)}` }

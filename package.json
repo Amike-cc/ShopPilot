@@ -1,6 +1,6 @@
 {
   "name": "shopilot",
-  "version": "0.9.33",
+  "version": "0.9.34",
   "description": "ShopPilot - 电商店铺浏览器工作台",
   "private": true,
   "packageManager": "pnpm@10.34.7",
@@ -50,6 +50,7 @@
     "test:store-management": "node tools/acceptance/store-management-cdp-verify.js",
     "test:plugin-update": "node tools/acceptance/plugin-update-cdp-verify.js",
     "test:collection-history": "node tools/acceptance/collection-history-cdp-verify.js",
+    "test:chat-image": "node tools/acceptance/chat-image-cdp-verify.js",
     "test:store-import": "node tools/acceptance/store-import-cdp-verify.js"
   },
   "dependencies": {

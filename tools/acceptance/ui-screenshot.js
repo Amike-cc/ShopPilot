@@ -30,6 +30,7 @@ const PAGES = [
   { key: 'tax', label: '涉税信息' },
   { key: 'assistant', label: 'AI 电商助手' },
   { key: 'image-studio', label: 'AI 生成商品图' },
+  { key: 'chat-image', label: '对话生图' },
   { key: 'graphic-sell', label: '图文带货' },
   { key: 'app-center', label: '应用商城' },
   { key: 'settings', label: '设置中心', via: 'data-test' }
@@ -88,7 +89,7 @@ async function main() {
 
     // 截图用的临时库副本：把可选模块全部启用，保证发票/涉税页面也能进入评审（不触碰真实库）。
     try {
-      await client.eval(`await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax','ai-assistant','ai-image','ai-graphic']); return true`)
+      await client.eval(`await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax','ai-assistant','ai-image','ai-chat-image','ai-graphic']); return true`)
       await client.send('Page.reload', { ignoreCache: true })
       await sleep(2200)
     } catch (err) {

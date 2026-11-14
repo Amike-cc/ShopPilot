@@ -14,23 +14,30 @@ describe('describeAiFailure：AI 失败文案（主进程 → 界面）', () => 
 
   it('网络不可达 → 中文可执行提示，且保留截断后的原始摘要', () => {
     expect(describeAiFailure(new TypeError('fetch failed')).message)
-      .toMatch(/^连不上 AI 接口：请到设置中心核对接口地址与网络（原始错误：fetch failed）$/)
+      .toMatch(/^连不上 AI 接口：请在「模型设置」核对接口地址与网络（原始错误：fetch failed）$/)
     expect(describeAiFailure(new Error('connect ECONNREFUSED 127.0.0.1:9392')).message).toContain('连不上 AI 接口')
     expect(describeAiFailure({ code: 'AI_REQUEST_FAILED', message: 'getaddrinfo ENOTFOUND api.example.com' }).message).toContain('连不上 AI 接口')
   })
 
   it('超时 → 中文提示（含 AbortError 这种底层名）', () => {
     expect(describeAiFailure(new Error('The operation was aborted due to timeout')).message).toContain('响应超时')
-    expect(describeAiFailure({ message: 'request ETIMEDOUT' }).message).toContain('稍后重试或调大设置里的超时时间')
+    expect(describeAiFailure({ message: 'request ETIMEDOUT' }).message).toContain('在「模型设置」调大超时时间')
   })
 
   it('凭据被拒 / 限流 / 服务端错误各自映射', () => {
     expect(describeAiFailure({ message: 'HTTP 401 Unauthorized' }).message).toContain('检查 API Key 是否有效')
-    expect(describeAiFailure({ message: 'Incorrect API key provided' }).message).toContain('检查 API Key 是否有效')
+    expect(describeAiFailure({ message: 'Incorrect API key provided' }).message).toContain('对应 AI 工具的「模型设置」')
     expect(describeAiFailure({ message: '429 Too Many Requests' }).message).toContain('限流（429）')
     expect(describeAiFailure({ message: 'rate limit exceeded' }).message).toContain('限流（429）')
     expect(describeAiFailure({ message: '502 Bad Gateway' }).message).toContain('服务端错误')
     expect(describeAiFailure({ message: 'Internal Server Error 500' }).message).toContain('服务端错误')
+  })
+
+  it('额度/余额不足单独说明，不误报成 API Key 失效', () => {
+    const quota = describeAiFailure({ message: 'HTTP 403 {"error":{"message":"Not enough quota to pre-consume for this request"}}' })
+    expect(quota.message).toContain('额度不足')
+    expect(quota.message).not.toContain('API Key 是否有效')
+    expect(describeAiFailure({ message: 'insufficient_quota' }).message).toContain('额度不足')
   })
 
   it('已经是中文可读文案的错误原样透传（配置/入参类请求根本没发出去，不该说成"AI 请求失败"）', () => {

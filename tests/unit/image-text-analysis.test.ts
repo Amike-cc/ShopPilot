@@ -232,7 +232,7 @@ describe('analysisPromptText：清洗模型返回', () => {
 
 describe('describeAnalysisError：中文可执行提示（分层：主进程已本地化的中文原样透传）', () => {
   it('主进程已给中文文案 → 原样显示，不再加前缀/不再二次映射（复验 F2：三层套娃）', () => {
-    const mainText = '连不上 AI 接口：请到设置中心核对接口地址与网络（原始错误：fetch failed）'
+    const mainText = '连不上 AI 接口：请在「模型设置」核对接口地址与网络（原始错误：fetch failed）'
     expect(describeAnalysisError({ code: 'AI_REQUEST_FAILED', message: mainText })).toBe(mainText)
     expect(describeAnalysisError({ code: 'AI_IMAGE_TEXT_NOT_CONFIGURED', message: '既没有单独的"生图文本 API"，也没有可用的文本 API；请在「设置中心 → AI 配置」里配置其中一套' }))
       .toBe('既没有单独的"生图文本 API"，也没有可用的文本 API；请在「设置中心 → AI 配置」里配置其中一套')
