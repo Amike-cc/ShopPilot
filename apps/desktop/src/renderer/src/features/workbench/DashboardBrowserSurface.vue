@@ -1,6 +1,6 @@
 <template>
   <section class="dashboard-browser-surface" data-test="dashboard-browser-surface" aria-label="店铺浏览器">
-    <div class="dashboard-browser-tabs" role="tablist" aria-label="店铺标签页">
+    <div class="dashboard-browser-tabs" role="tablist" aria-label="店铺标签页" @dblclick.self="newTabAndFocus" @wheel="onTabsWheel">
       <button
         v-for="(tab, tabIndex) in ws.displayedTabs"
         :key="tab.id"
@@ -13,6 +13,7 @@
         :data-tab-id="tab.id"
         :title="tab.isPinned ? '已固定：一键关闭会保留' : (tab.title || tab.url)"
         @click="onTabClick(tab, $event)"
+        @auxclick="onTabAuxClick(tab, $event)"
         @contextmenu.prevent.stop="openTabMenu(tab, $event)"
         @dragstart="onTabDragStart(tab, $event)"
         @dragover.prevent
@@ -24,7 +25,7 @@
         <span class="browser-tab-title" :title="tab.title || tab.url">{{ tab.title || '新标签页' }}</span>
         <span class="browser-tab-close" title="关闭标签页" @click.stop="ws.closeTab(tab.id)"><AppIcon name="close" :size="12" /></span>
       </button>
-      <button type="button" class="dashboard-browser-tab-add" title="新标签页" @click="ws.newTab()"><AppIcon name="plus" :size="15" /></button>
+      <button type="button" class="dashboard-browser-tab-add" title="新标签页（Ctrl+T）" data-test="browser-new-tab" @click="newTabAndFocus"><AppIcon name="plus" :size="15" /></button>
       <!-- 多选模式：只有真的选中了才出现，避免常驻占用标签栏宽度 -->
       <div v-if="selectedTabIds.length" class="dashboard-tabs-batch" data-test="tabs-batch-bar">
         <span class="tabs-batch-count" data-test="tabs-batch-count">已选 {{ selectedTabIds.length }} 个</span>
@@ -45,14 +46,24 @@
     </div>
 
     <div class="dashboard-browser-address address-bar">
-      <button type="button" class="browser-nav-button" title="后退" @click="ws.tabControl('back')"><AppIcon name="arrow-left" :size="16" /></button>
-      <button type="button" class="browser-nav-button" title="前进" @click="ws.tabControl('forward')"><AppIcon name="arrow-right" :size="16" /></button>
-      <button type="button" class="browser-nav-button" title="刷新" @click="ws.tabControl('reload')"><AppIcon name="refresh" :size="15" /></button>
+      <button type="button" class="browser-nav-button" title="后退（Alt+←）" @click="ws.tabControl('back')"><AppIcon name="arrow-left" :size="16" /></button>
+      <button type="button" class="browser-nav-button" title="前进（Alt+→）" @click="ws.tabControl('forward')"><AppIcon name="arrow-right" :size="16" /></button>
+      <button type="button" class="browser-nav-button" title="刷新（Ctrl+R / F5）" @click="ws.tabControl('reload')"><AppIcon name="refresh" :size="15" /></button>
       <button type="button" class="browser-nav-button home-btn nav-btn" data-test="nav-home" :disabled="!homeUrl" :title="homeUrl ? `店铺首页：${homeUrl}` : '店铺首页'" @click="goHome"><AppIcon name="home" :size="15" /></button>
       <label class="dashboard-browser-url" aria-label="当前页面地址">
         <AppIcon name="search" :size="14" />
-        <input v-model="urlDraft" spellcheck="false" @keydown.enter="submitUrl" />
+        <input ref="urlInput" v-model="urlDraft" spellcheck="false" data-test="browser-url-input" placeholder="输入网址，回车打开" @focus="selectAddress" @keydown.enter="submitUrl" />
       </label>
+      <button
+        type="button"
+        class="browser-nav-button bookmark-btn"
+        :class="{ on: currentBookmarked }"
+        data-test="browser-bookmark"
+        :disabled="!canBookmark"
+        :title="currentBookmarked ? '当前页已在收藏中（Ctrl+D）' : '收藏当前页（Ctrl+D）'"
+        :aria-label="currentBookmarked ? '当前页已在收藏中' : '收藏当前页'"
+        @click="bookmarkCurrent"
+      ><AppIcon name="star" :size="15" /></button>
       <div v-if="activeWebviewKey" class="browser-zoom" data-test="browser-zoom">
         <button type="button" class="browser-zoom-btn" title="缩小（Ctrl+-）" aria-label="缩小页面" @click="zoomBy('out')">−</button>
         <button type="button" class="browser-zoom-value" :title="`当前缩放 ${zoomLabel}，点击复位 100%`" data-test="browser-zoom-value" @click="zoomBy('reset')">{{ zoomLabel }}</button>
@@ -439,6 +450,68 @@ function onTabCloseRequested(payload: { storeId?: string, tabId?: string, mode?:
 }
 
 const store = computed(() => ws.stores.find(item => item.id === ws.displayedStoreId) || null)
+
+// ---------- 浏览器常用动作：地址栏聚焦 / 收藏当前页 / 标签切换 ----------
+const urlInput = ref<HTMLInputElement | null>(null)
+const currentUrl = computed(() => ws.activeTab?.url || urlDraft.value || '')
+const canBookmark = computed(() => Boolean(ws.displayedStoreId) && /^https?:\/\//i.test(currentUrl.value))
+const currentBookmarked = computed(() =>
+  Boolean(currentUrl.value) && ws.bookmarks.some((item: { url?: string }) => String(item?.url || '') === currentUrl.value)
+)
+function selectAddress(event: FocusEvent): void {
+  // 与浏览器一致：点进地址栏即全选，直接输入就替换
+  const input = event.target as HTMLInputElement
+  input.select()
+}
+function focusAddress(): void {
+  void nextTick(() => { urlInput.value?.focus(); urlInput.value?.select() })
+}
+async function newTabAndFocus(): Promise<void> {
+  await ws.newTab()
+  focusAddress()
+}
+async function bookmarkCurrent(): Promise<void> {
+  if (!canBookmark.value) return
+  if (currentBookmarked.value) {
+    ws.toast('当前页已在收藏中', 'info')
+    openPanel('bookmarks')
+    return
+  }
+  const result = await window.shopilot.bookmark.create({
+    storeId: ws.displayedStoreId || undefined,
+    url: currentUrl.value,
+    title: ws.activeTab?.title || currentUrl.value
+  })
+  if (!result.ok) { ws.toast('收藏失败: ' + result.error.message, 'error'); return }
+  await ws.refreshBookmarks()
+  ws.toast('已收藏当前页', 'success')
+}
+function switchTabByOffset(delta: number): void {
+  const tabs = ws.displayedTabs
+  if (tabs.length < 2) return
+  const index = tabs.findIndex(tab => tab.id === ws.activeTab?.id)
+  const next = tabs[(index + delta + tabs.length) % tabs.length]
+  if (next) void ws.activateTab(next.id)
+}
+function activateTabAt(index: number): void {
+  const tabs = ws.displayedTabs
+  if (!tabs.length) return
+  const target = index >= 8 ? tabs[tabs.length - 1] : tabs[index]
+  if (target) void ws.activateTab(target.id)
+}
+function onTabAuxClick(tab: { id: string }, event: MouseEvent): void {
+  if (event.button !== 1) return
+  event.preventDefault()
+  void ws.closeTab(tab.id)
+}
+/** 标签多到溢出时，鼠标滚轮横向滚动标签栏（与浏览器一致），不触发页面滚动 */
+function onTabsWheel(event: WheelEvent): void {
+  const el = event.currentTarget as HTMLElement | null
+  if (!el || el.scrollWidth <= el.clientWidth + 1) return
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+  event.preventDefault()
+  el.scrollLeft += event.deltaY
+}
 const platformHomeUrls = ref<Record<string, string>>({})
 const homeUrl = computed(() => store.value
   // 优先级：用户在设置中心按平台覆盖 → 平台档案声明的具体首页（如抖店 trade/dashboard）→ 店铺后台地址
@@ -649,6 +722,23 @@ function onZoomCommand(payload: { storeId?: string; action?: string }): void {
   if (!props.active) return
   if (payload?.storeId && payload.storeId !== ws.displayedStoreId) return
   zoomBy(payload.action === 'out' ? 'out' : payload.action === 'reset' ? 'reset' : 'in')
+}
+
+/** 页面内浏览器快捷键：主进程只转发动作，状态与 UI 都在这里处理 */
+function onBrowserShortcut(payload: { storeId?: string; action?: string; index?: number }): void {
+  if (!props.active) return
+  if (payload?.storeId && payload.storeId !== ws.displayedStoreId) return
+  switch (payload?.action) {
+    case 'new-tab': void newTabAndFocus(); break
+    case 'focus-address': focusAddress(); break
+    case 'bookmark': void bookmarkCurrent(); break
+    case 'next-tab': switchTabByOffset(1); break
+    case 'prev-tab': switchTabByOffset(-1); break
+    case 'activate-tab': activateTabAt(Number(payload.index) || 0); break
+    case 'reload': void ws.tabControl('reload'); break
+    case 'back': void ws.tabControl('back'); break
+    case 'forward': void ws.tabControl('forward'); break
+  }
 }
 
 function onWindowKeydown(event: KeyboardEvent): void {
@@ -940,8 +1030,22 @@ function onBrowserKeydown(event: KeyboardEvent) {
     return
   }
   if (!ws.displayedStoreId) return
+  if (event.key === 'F5') { event.preventDefault(); void ws.tabControl('reload'); return }
+  // Alt+← / Alt+→：与浏览器一致的前进后退
+  if (event.altKey && !event.ctrlKey && !event.metaKey) {
+    if (event.key === 'ArrowLeft') { event.preventDefault(); void ws.tabControl('back') }
+    else if (event.key === 'ArrowRight') { event.preventDefault(); void ws.tabControl('forward') }
+    return
+  }
   if (!(event.ctrlKey || event.metaKey)) return
-  if (event.key.toLowerCase() !== 'w') return
+  const key = event.key.toLowerCase()
+  if (key === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); void newTabAndFocus(); return }
+  if (key === 'l' && !event.shiftKey && !event.altKey) { event.preventDefault(); focusAddress(); return }
+  if (key === 'd' && !event.shiftKey && !event.altKey) { event.preventDefault(); void bookmarkCurrent(); return }
+  if (key === 'r' && !event.shiftKey) { event.preventDefault(); void ws.tabControl('reload'); return }
+  if (key === 'tab') { event.preventDefault(); switchTabByOffset(event.shiftKey ? -1 : 1); return }
+  if (!event.shiftKey && !event.altKey && /^[1-9]$/.test(key)) { event.preventDefault(); activateTabAt(Number(key) - 1); return }
+  if (key !== 'w') return
   event.preventDefault()
   // Ctrl+Shift+W 关闭全部 / Ctrl+Alt+W 关闭其他（都先弹确认）；Ctrl+W 关当前页（与浏览器一致）
   if (event.shiftKey) { requestCloseAll(); return }
@@ -1341,7 +1445,10 @@ async function confirmRun(runId: string, approved: boolean) {
   await ws.refreshTasks()
 }
 
-watch(() => ws.activeTab?.url, value => { urlDraft.value = value || '' }, { immediate: true })
+watch(() => ws.activeTab?.url, value => {
+  // 新标签页的内部地址不显示给用户：地址栏留空，直接显示占位提示，输入即替换
+  urlDraft.value = value && value !== 'about:blank' ? value : ''
+}, { immediate: true })
 watch(() => confirmations.value.length, count => { if (count > 0) panelOpen.value = true })
 // 宿主不再随切页销毁（页面状态要留住），因此"回到浏览器页时重读设置"必须显式做：
 // 平台首页地址、达人广场地址、类目树都可能刚在设置中心被改过，靠旧的"重新挂载"刷新已经不成立。
@@ -1368,6 +1475,7 @@ onMounted(async () => {
   // 焦点在店铺页面里时按键由主进程 before-input-event 转发（页面脚本吞不掉）
   window.shopilot.on(EVENT_CHANNELS.BROWSER_FIND_REQUESTED, onFindRequested)
   window.shopilot.on(EVENT_CHANNELS.BROWSER_ZOOM_COMMAND, onZoomCommand)
+  window.shopilot.on(EVENT_CHANNELS.BROWSER_SHORTCUT, onBrowserShortcut)
   void ws.refreshTasks()
   void ws.refreshSecurity()
   void refreshPlatformHomeUrls()
@@ -1390,6 +1498,7 @@ onBeforeUnmount(() => {
   window.shopilot.off(EVENT_CHANNELS.SESSION_EXPIRED, onSessionExpired)
   window.shopilot.off(EVENT_CHANNELS.BROWSER_FIND_REQUESTED, onFindRequested)
   window.shopilot.off(EVENT_CHANNELS.BROWSER_ZOOM_COMMAND, onZoomCommand)
+  window.shopilot.off(EVENT_CHANNELS.BROWSER_SHORTCUT, onBrowserShortcut)
 })
 </script>
 
@@ -1476,6 +1585,8 @@ onBeforeUnmount(() => {
 .dashboard-browser-address { gap: 6px; min-height: 38px; padding: 0 8px; border: 1px solid var(--dash-border); border-radius: 10px; background: #f7f9fd; }
 .browser-nav-button { display:grid;place-items:center; width: 28px; height: 28px; padding: 0; line-height: 1; }.browser-nav-button .ui-icon { color:var(--dash-text-soft); }
 .browser-nav-button:disabled { cursor: default; opacity: .4; }
+.bookmark-btn.on { color: #b45309; background: rgba(245, 158, 11, .12); }
+.bookmark-btn.on .ui-icon { fill: currentColor; }
 .dashboard-browser-url .ui-icon { flex:0 0 auto; color:var(--dash-text-muted); }.dashboard-browser-url { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 9px; border: 1px solid rgba(111, 137, 177, .16); border-radius: 7px; background: #ffffff; color: var(--dash-text-muted); }
 .dashboard-browser-url:focus-within { border-color: rgba(135, 102, 246, .7); box-shadow: 0 0 0 2px rgba(135, 102, 246, .12); }
 .dashboard-browser-url input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--dash-text-soft); font-size: 11px; }

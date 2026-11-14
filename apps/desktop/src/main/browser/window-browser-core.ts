@@ -1447,10 +1447,37 @@ function attachBrowserToolShortcuts(wc: Electron.WebContents, storeId: string, t
     // 按住不放会连发 keyDown：查找条若跟着连开/缩放跟着连跳，手感会很差
     if (input.isAutoRepeat) return
     const mod = process.platform === 'darwin' ? input.meta : input.control
-    if (!mod) return
     // code（物理键位）优先，避免非拉丁布局下 key 不是 f / = / - 而漏判；缺失时退回 key
     const code = String(input.code || '')
     const key = String(input.key || '').toLowerCase()
+    const emitShortcut = (action: string, index?: number): void => {
+      event.preventDefault()
+      emitToRenderer(EVENT_CHANNELS.BROWSER_SHORTCUT, {
+        storeId,
+        tabId,
+        action,
+        ...(typeof index === 'number' ? { index } : {})
+      })
+    }
+
+    // F5 刷新 / Alt+←→ 前进后退：不带 Ctrl，先于下面的 mod 判断
+    if (key === 'f5') { emitShortcut('reload'); return }
+    if (input.alt && !mod) {
+      if (key === 'arrowleft') { emitShortcut('back'); return }
+      if (key === 'arrowright') { emitShortcut('forward'); return }
+    }
+
+    if (!mod) return
+
+    // 浏览器级动作：新建标签 / 定位地址栏 / 收藏当前页 / 数字键切标签
+    if (!input.shift && !input.alt) {
+      if (code === 'KeyT' || key === 't') { emitShortcut('new-tab'); return }
+      if (code === 'KeyL' || key === 'l') { emitShortcut('focus-address'); return }
+      if (code === 'KeyD' || key === 'd') { emitShortcut('bookmark'); return }
+      const digit = /^Digit([1-9])$/.exec(code) || /^([1-9])$/.exec(key)
+      if (digit) { emitShortcut('activate-tab', Number(digit[1]) - 1); return }
+    }
+    if (key === 'tab') { emitShortcut(input.shift ? 'prev-tab' : 'next-tab'); return }
 
     if (code === 'KeyF' || key === 'f') {
       event.preventDefault()

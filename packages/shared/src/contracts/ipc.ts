@@ -468,6 +468,12 @@ export const EVENT_CHANNELS = {
    */
   BROWSER_FIND_REQUESTED: 'browser:findRequested',
   BROWSER_ZOOM_COMMAND: 'browser:zoomCommand',
+  /**
+   * 页面内浏览器级快捷键（2026-11-14）：Ctrl+T / Ctrl+L / Ctrl+D / Ctrl+Tab / Ctrl+1..9、
+   * Alt+←/→、F5。焦点在 guest 页面里时只有 before-input-event 能拦到；主进程只转发动作，
+   * 新建标签、聚焦地址栏、收藏等状态都在渲染层。
+   */
+  BROWSER_SHORTCUT: 'browser:shortcut',
   BROWSER_CRASHED: 'browser:crashed',
   /**
    * 店铺页面内的批量关闭快捷键（Ctrl+Shift+W 全部 / Ctrl+Alt+W 其他）。
