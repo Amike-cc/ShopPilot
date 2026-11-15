@@ -29,10 +29,10 @@
         <div class="settings-section-head"><div><h2>AI 配置</h2><p>{{ aiConfigIntro }}</p></div></div>
         <div v-if="aiLoadError" class="settings-note error ai-load-error" role="alert">{{ aiLoadError }}<button type="button" class="settings-inline-retry" :disabled="aiConfigLoading" @click="loadAi">{{ aiConfigLoading ? '读取中…' : '重试读取' }}</button></div>
         <div v-else-if="aiConfigLoading" class="settings-note ai-load-error" role="status">正在读取 AI 配置…</div>
-        <div class="ai-config-summary" data-test="ai-config-summary"><div class="ai-summary-copy"><span class="settings-kicker">CONFIGURATION</span><strong>{{ configuredSummary }}</strong><p>此状态表示配置项完整度；接口可用性请查看各卡片的连接测试结果。</p></div><div class="ai-summary-statuses"><span v-if="aiSectionVisible('text')" class="ai-summary-status" :class="{ ready: aiReady }"><i></i><b>Agent 文本</b><em>{{ aiReady ? '已配置' : '待配置' }}</em></span><span v-if="aiSectionVisible('image')" class="ai-summary-status" :class="{ ready: imageReady }"><i></i><b>生图接口</b><em>{{ imageReady ? '已配置' : '待配置' }}</em></span><span v-if="aiSectionVisible('image-text')" class="ai-summary-status" :class="{ ready: imageTextReady }"><i></i><b>生图文本</b><em>{{ imageTextReady ? '已配置' : '待配置' }}</em></span></div></div>
+        <div class="ai-config-summary" data-test="ai-config-summary"><div class="ai-summary-copy"><span class="settings-kicker">CONFIGURATION</span><strong>{{ configuredSummary }}</strong><p>此状态表示配置项完整度；接口可用性请查看各卡片的连接测试结果。</p></div><div class="ai-summary-statuses"><span v-if="aiSectionVisible('text')" class="ai-summary-status" :class="{ ready: aiReady }"><i></i><b>Agent 文本</b><em>{{ aiReady ? '已配置' : '待配置' }}</em></span><span v-if="aiSectionVisible('image')" class="ai-summary-status" :class="{ ready: imageReady }"><i></i><b>生图接口</b><em>{{ imageReady ? '已配置' : '待配置' }}</em></span></div></div>
         <div :class="['ai-config-grid', { 'ai-config-grid--filtered': Boolean(props.onlyAiSections?.length) }]">
           <section v-if="aiSectionVisible('text')" class="ai-config-card" data-test="text-ai-config">
-            <div class="ai-card-head"><div><span class="settings-kicker">TEXT / AGENT</span><h3>文本 API</h3><p>Agent 与通用对话使用这套配置；图文带货的文案生成使用下方独立配置。</p></div><span class="ai-status" :class="{ ok: aiReady }">{{ aiReady ? '配置完整' : '待完善' }}</span></div>
+            <div class="ai-card-head"><div><span class="settings-kicker">TEXT / AGENT</span><h3>文本 API</h3><p>Agent 与通用对话使用这套配置；不会读取或修改生图与店铺数据。</p></div><span class="ai-status" :class="{ ok: aiReady }">{{ aiReady ? '配置完整' : '待完善' }}</span></div>
             <label class="settings-field"><span>服务商</span><select v-model="aiProvider" :disabled="aiConfigLoading || !aiLoaded" @change="applyPreset"><option v-for="preset in presets" :key="preset.key" :value="preset.key">{{ preset.label }}</option><option value="__custom__">自定义</option></select></label>
             <label class="settings-field"><span>文本接口地址</span><input v-model="aiDraft.endpoint" data-test="ai-endpoint" data-unified-test="text-ai-endpoint" spellcheck="false" placeholder="https://api.example.com/v1" :disabled="aiConfigLoading || !aiLoaded" /></label>
             <div v-if="resolvedEndpoint" class="settings-note">实际请求：<code>{{ resolvedEndpoint }}</code><br><template v-if="modelsUrl">模型列表：<code>{{ modelsUrl }}</code></template></div>
@@ -54,20 +54,6 @@
             <div v-if="imageMessage" class="settings-note" :class="{ ok: imageOk }">{{ imageMessage }}</div>
             <div v-if="imageModels.length" class="settings-field image-model-picker"><span>已读取的生图模型</span><select :value="imageDraft.model" @change="pickImageModel(($event.target as HTMLSelectElement).value)"><option value="">— 选择后填入模型名 —</option><option v-for="model in imageModels" :key="model" :value="model">{{ model }}</option></select></div>
             <div class="settings-note">图片生成可能产生第三方费用；“测试生图接口”只读 GET /models，不会发起付费图片生成。没有真实图片返回时，工作台只显示空状态。</div>
-          </section>
-          <section v-if="aiSectionVisible('image-text')" class="ai-config-card image-text-ai-config-card" data-test="image-text-ai-config">
-            <div class="ai-card-head"><div><span class="settings-kicker">IMAGE / TEXT ANALYSIS</span><h3>生图文本 API</h3><p>用于图文带货的标题、正文与逐图卡片脚本，不会读取或修改 Agent 配置。</p></div><span class="ai-status" :class="{ ok: imageTextReady }">{{ imageTextReady ? '配置完整' : '待完善' }}</span></div>
-            <div v-if="imageTextLoadError" class="settings-note error" role="alert">{{ imageTextLoadError }}<button type="button" class="settings-inline-retry" :disabled="imageTextConfigLoading" @click="loadImageTextAi">{{ imageTextConfigLoading ? '读取中…' : '重试读取' }}</button></div>
-            <div v-else-if="imageTextConfigLoading" class="settings-note" role="status">正在读取分析配置…</div>
-            <label class="settings-field"><span>分析文本接口地址</span><input v-model="imageTextDraft.endpoint" data-test="image-text-ai-endpoint" spellcheck="false" placeholder="https://api.example.com/v1" :disabled="imageTextConfigLoading || !imageTextLoaded" /></label>
-            <div v-if="imageTextResolvedEndpoint" class="settings-note">实际请求：<code>{{ imageTextResolvedEndpoint }}</code><br><template v-if="imageTextModelsUrl">模型列表：<code>{{ imageTextModelsUrl }}</code></template></div>
-            <label class="settings-field"><span>分析文本模型名</span><input v-model="imageTextDraft.model" data-test="image-text-ai-model" spellcheck="false" placeholder="例如 deepseek-chat、qwen-plus" :disabled="imageTextConfigLoading || !imageTextLoaded" /></label>
-            <label class="settings-field"><span>分析文本超时（毫秒）</span><input v-model.number="imageTextDraft.timeoutMs" type="number" min="3000" max="120000" :disabled="imageTextConfigLoading || !imageTextLoaded" /></label>
-            <label class="settings-field"><span>分析文本 API Key</span><input v-model="imageTextKey" type="password" autocomplete="new-password" :placeholder="imageTextHasKey ? '已配置，留空不修改' : '粘贴商品分析文本 API Key'" :disabled="imageTextConfigLoading || !imageTextLoaded" /></label>
-            <div class="settings-actions"><button type="button" class="unified-button primary" :disabled="imageTextSaving || imageTextConfigLoading || !imageTextLoaded" @click="saveImageTextAi()"><AppIcon name="check" :size="15" />{{ imageTextSaving ? '保存中…' : '保存生图文本配置' }}</button><button type="button" class="unified-button ghost" :disabled="imageTextLoading || imageTextTesting || imageTextSaving || imageTextConfigLoading || !imageTextLoaded" @click="fetchImageTextModels"><AppIcon name="refresh" :size="15" />{{ imageTextLoading ? '读取中…' : '获取分析模型' }}</button><button type="button" class="unified-button ghost" :disabled="imageTextTesting || imageTextLoading || imageTextSaving || imageTextConfigLoading || !imageTextLoaded" @click="testImageTextAi"><AppIcon name="play" :size="15" />{{ imageTextTesting ? '测试中…' : '测试分析接口' }}</button><button v-if="imageTextHasKey" type="button" class="unified-button danger" :disabled="imageTextSaving || imageTextConfigLoading || !imageTextLoaded" @click="clearImageTextKey"><AppIcon name="trash" :size="15" />清除分析 Key</button></div>
-            <div v-if="imageTextMessage" class="settings-note" :class="{ ok: imageTextOk }">{{ imageTextMessage }}</div>
-            <div v-if="imageTextModels.length" class="settings-field image-model-picker"><span>已读取的分析模型</span><select :value="imageTextDraft.model" @change="pickImageTextModel(($event.target as HTMLSelectElement).value)"><option value="">— 选择后填入模型名 —</option><option v-for="model in imageTextModels" :key="model" :value="model">{{ model }}</option></select></div>
-            <div class="settings-note">此配置只负责整理卖点、场景和图片提示词；真正生成图片仍只使用上面的生图 API。测试只发起最小文本请求，未配置时页面保持明确不可用状态。</div>
           </section>
         </div>
       </section>
@@ -318,10 +304,10 @@ import {
   type SoftwareDiagnosticsReport
 } from '@shared/software-diagnostics'
 import { parseAutoCollectionEnabled, AUTO_COLLECTION_SETTING } from '@shared/constants/collection'
-import { AI_IMAGE_TIMEOUT_MAX_MS, AI_PROVIDER_PRESETS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS, DEFAULT_AI_ENDPOINT, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL, DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, INVITE_SQUARE_URLS_SETTING, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint } from '@shared/constants/ai'
+import { AI_IMAGE_TIMEOUT_MAX_MS, AI_PROVIDER_PRESETS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS, DEFAULT_AI_ENDPOINT, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, INVITE_SQUARE_URLS_SETTING, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint } from '@shared/constants/ai'
 import { EVENT_CHANNELS } from '@shared/contracts/ipc'
 
-type AiConfigSectionKey = 'text' | 'image' | 'image-text'
+type AiConfigSectionKey = 'text' | 'image'
 const props = defineProps<{ initialTab?: TabKey; onlyTabs?: TabKey[]; onlyAiSections?: AiConfigSectionKey[] }>()
 const emit = defineEmits<{ close: [] }>()
 const ws = useWorkspaceStore()
@@ -345,7 +331,7 @@ function aiSectionVisible(section: AiConfigSectionKey): boolean {
 }
 const aiConfigIntro = computed(() => props.onlyAiSections?.length
   ? '只显示当前工具使用的接口配置；Key 只经主进程 safeStorage 保存，页面不回显。'
-  : 'Agent 文本、商品图生成、商品图文本分析分别保存地址、模型、超时和 API Key；Key 只经主进程 safeStorage 保存，页面不回显。')
+  : 'Agent 文本与生图接口分别保存地址、模型、超时和 API Key；Key 只经主进程 safeStorage 保存，页面不回显。')
 const savedMessage = ref('')
 let savedMessageTimer: ReturnType<typeof setTimeout> | null = null
 /** 保存成功的页头提示：6 秒后自动淡出（再次保存会重置计时；有未保存修改时模板上隐藏） */
@@ -578,19 +564,6 @@ const imageMessage = ref('')
 const imageOk = ref(false)
 const imageModels = ref<string[]>([])
 
-const imageTextDraft = reactive({ endpoint: DEFAULT_AI_IMAGE_TEXT_ENDPOINT, model: DEFAULT_AI_IMAGE_TEXT_MODEL, timeoutMs: DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS })
-const imageTextKey = ref('')
-const imageTextHasKey = ref(false)
-const imageTextConfigLoading = ref(false)
-const imageTextLoaded = ref(false)
-const imageTextLoadError = ref('')
-const imageTextSaving = ref(false)
-const imageTextLoading = ref(false)
-const imageTextTesting = ref(false)
-const imageTextMessage = ref('')
-const imageTextOk = ref(false)
-const imageTextModels = ref<string[]>([])
-
 const updateChannel = ref('stable')
 const updateAutoCheck = ref(false)
 const savedUpdateChannel = ref('stable')
@@ -606,7 +579,7 @@ const updateStatus = reactive<{ state: string; currentVersion: string; channel?:
 /** 页签级错误角标：某页签读取失败时在导航常显提示，不用点进去才发现 */
 const tabIssues = computed<Record<TabKey, boolean>>(() => ({
   entry: Boolean(homeLoadError.value || squareLoadError.value),
-  ai: Boolean(aiLoadError.value || imageTextLoadError.value),
+  ai: Boolean(aiLoadError.value),
   security: Boolean(securityLoadError.value),
   extensions: Boolean(extensionsError.value),
   maintenance: Boolean(maintenanceLoadError.value),
@@ -647,22 +620,18 @@ const resolvedEndpoint = computed(() => normalizeAiEndpoint(aiDraft.endpoint))
 const modelsUrl = computed(() => modelsUrlFromChat(aiDraft.endpoint) || '')
 const imageResolvedEndpoint = computed(() => normalizeImageEndpoint(imageDraft.endpoint))
 const imageModelsUrl = computed(() => modelsUrlFromImageEndpoint(imageDraft.endpoint) || '')
-const imageTextResolvedEndpoint = computed(() => normalizeAiEndpoint(imageTextDraft.endpoint))
-const imageTextModelsUrl = computed(() => modelsUrlFromChat(imageTextDraft.endpoint) || '')
 const aiReady = computed(() => Boolean(aiLoaded.value && aiHasKey.value && aiDraft.endpoint.trim() && aiDraft.model.trim() && isUsableAiEndpoint(resolvedEndpoint.value)))
 const imageReady = computed(() => Boolean(aiLoaded.value && imageHasKey.value && imageDraft.endpoint.trim() && imageDraft.model.trim() && isUsableAiEndpoint(imageResolvedEndpoint.value)))
-const imageTextReady = computed(() => Boolean(imageTextLoaded.value && imageTextHasKey.value && imageTextDraft.endpoint.trim() && imageTextDraft.model.trim() && isUsableAiEndpoint(imageTextResolvedEndpoint.value)))
 const configuredSummary = computed(() => {
-  if (aiConfigLoading.value || imageTextConfigLoading.value) return '正在读取 AI 配置…'
-  if (aiLoadError.value && imageTextLoadError.value) return 'AI 配置读取失败'
+  if (aiConfigLoading.value) return '正在读取 AI 配置…'
+  if (aiLoadError.value) return 'AI 配置读取失败'
   const sections: Array<{ key: AiConfigSectionKey; ready: boolean }> = [
     { key: 'text', ready: aiReady.value },
-    { key: 'image', ready: imageReady.value },
-    { key: 'image-text', ready: imageTextReady.value }
+    { key: 'image', ready: imageReady.value }
   ]
   const visible = sections.filter(section => aiSectionVisible(section.key))
   const count = visible.filter(section => section.ready).length
-  if (visible.length === 3) return count === 3 ? '三套 AI 配置完整' : '已完成 ' + count + '/3 套 AI 配置'
+  if (visible.length === 2) return count === 2 ? '两套 AI 配置完整' : '已完成 ' + count + '/2 套 AI 配置'
   return count === visible.length ? '当前工具的 AI 配置完整' : `当前工具已完成 ${count}/${visible.length} 项配置`
 })
 const updateSourceLabel = computed(() => updateStatus.feedSource === 'github' ? 'GitHub Releases' : updateStatus.feedSource === 'env-override' ? '自定义更新源' : '开发环境')
@@ -680,7 +649,6 @@ function selectTab(tab: TabKey) {
   if (tab !== activeTab.value && !confirmDiscardDrafts()) return
   activeTab.value = tab
   if (tab === 'ai' && !aiLoaded.value && !aiConfigLoading.value) void loadAi()
-  if (tab === 'ai' && !imageTextLoaded.value && !imageTextConfigLoading.value) void loadImageTextAi()
   if (tab === 'security' && !securityLoaded.value && !securityLoading.value) void loadSecurity()
   if (tab === 'extensions') {
     if (!extensionsLoaded.value && !extensionsLoading.value) void loadExtensions()
@@ -1388,27 +1356,6 @@ async function loadAi() {
   }
 }
 
-async function loadImageTextAi() {
-  if (imageTextConfigLoading.value) return
-  imageTextConfigLoading.value = true
-  imageTextLoaded.value = false
-  imageTextLoadError.value = ''
-  try {
-    const result = await window.shopilot.ai.imageTextConfigGet()
-    if (!result.ok) throw new Error(responseError(result, '读取生图文本配置失败'))
-    imageTextDraft.endpoint = result.data.imageTextEndpoint || DEFAULT_AI_IMAGE_TEXT_ENDPOINT
-    imageTextDraft.model = result.data.imageTextModel || DEFAULT_AI_IMAGE_TEXT_MODEL
-    imageTextDraft.timeoutMs = result.data.imageTextTimeoutMs || DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS
-    imageTextHasKey.value = Boolean(result.data.hasImageTextKey)
-    imageTextLoaded.value = true
-  } catch (error) {
-    imageTextLoaded.value = false
-    imageTextLoadError.value = '读取生图文本配置失败：' + String((error as Error)?.message || error)
-  } finally {
-    imageTextConfigLoading.value = false
-  }
-}
-
 function applyPreset() {
   const preset = presets.find(item => item.key === aiProvider.value)
   if (!preset?.baseUrl) return
@@ -1492,41 +1439,6 @@ async function saveImageAi(notify = true): Promise<boolean> {
     return false
   } finally {
     imageSaving.value = false
-  }
-}
-
-async function saveImageTextAi(notify = true): Promise<boolean> {
-  if (!validateAiEndpoint(imageTextDraft.endpoint, '分析文本 API', normalizeAiEndpoint)) {
-    imageTextMessage.value = '分析文本 API 地址无效：公网服务必须使用 HTTPS，本机服务可使用 HTTP。'
-    imageTextOk.value = false
-    return false
-  }
-  const timeoutMs = validateTimeout(imageTextDraft.timeoutMs, AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, '分析文本超时')
-  if (timeoutMs === null) { imageTextMessage.value = '分析文本超时值无效'; imageTextOk.value = false; return false }
-  imageTextSaving.value = true
-  imageTextMessage.value = ''
-  try {
-    const result = await window.shopilot.ai.imageTextConfigSet({ endpoint: imageTextDraft.endpoint.trim(), model: imageTextDraft.model.trim(), timeoutMs })
-    if (!result.ok) throw new Error(responseError(result, '保存生图文本 API 配置失败'))
-    imageTextHasKey.value = Boolean(result.data.hasImageTextKey)
-    if (imageTextKey.value.trim()) {
-      const keyResult = await window.shopilot.ai.setImageTextKey(imageTextKey.value.trim())
-      if (!keyResult.ok) throw new Error('分析文本配置已保存，但 API Key 保存失败：' + responseError(keyResult, '请检查密钥后重试'))
-      imageTextHasKey.value = Boolean(keyResult.data.hasImageTextKey)
-      imageTextKey.value = ''
-    }
-    savedMessage.value = '生图文本 API 配置已保存'
-    imageTextMessage.value = '生图文本 API 配置已保存'
-    imageTextOk.value = true
-    if (notify) ws.toast(imageTextMessage.value, 'success')
-    return true
-  } catch (error) {
-    imageTextMessage.value = String((error as Error)?.message || error)
-    imageTextOk.value = false
-    ws.toast(imageTextMessage.value, 'error')
-    return false
-  } finally {
-    imageTextSaving.value = false
   }
 }
 
@@ -1631,57 +1543,6 @@ async function clearImageKey() {
 }
 
 function pickImageModel(name: string) { if (name) imageDraft.model = name }
-
-async function fetchImageTextModels() {
-  imageTextLoading.value = true
-  imageTextModels.value = []
-  try {
-    if (!await saveImageTextAi(false)) return
-    const result = await window.shopilot.ai.listImageTextModels()
-    if (!result.ok) throw new Error(responseError(result, '获取分析模型失败'))
-    imageTextModels.value = result.data.models
-    imageTextMessage.value = '已获取 ' + result.data.models.length + ' 个分析模型'
-    imageTextOk.value = true
-  } catch (error) {
-    imageTextMessage.value = '获取分析模型失败：' + String((error as Error)?.message || error)
-    imageTextOk.value = false
-  } finally {
-    imageTextLoading.value = false
-  }
-}
-
-async function testImageTextAi() {
-  imageTextTesting.value = true
-  try {
-    if (!await saveImageTextAi(false)) return
-    const result = await window.shopilot.ai.testImageText()
-    if (!result.ok) throw new Error(responseError(result, '分析接口测试失败'))
-    imageTextMessage.value = '分析接口可用：模型 ' + result.data.model + ' · ' + result.data.elapsedMs + 'ms'
-    imageTextOk.value = true
-  } catch (error) {
-    imageTextMessage.value = '分析接口失败：' + String((error as Error)?.message || error)
-    imageTextOk.value = false
-  } finally {
-    imageTextTesting.value = false
-  }
-}
-
-async function clearImageTextKey() {
-  if (!window.confirm('确认清除生图文本 API Key？')) return
-  try {
-    const result = await window.shopilot.ai.clearImageTextKey()
-    if (!result.ok) throw new Error(responseError(result, '清除分析 API Key 失败'))
-    imageTextHasKey.value = false
-    imageTextMessage.value = '生图文本 API Key 已清除'
-    imageTextOk.value = true
-  } catch (error) {
-    imageTextMessage.value = '清除分析 API Key 失败：' + String((error as Error)?.message || error)
-    imageTextOk.value = false
-    ws.toast(imageTextMessage.value, 'error')
-  }
-}
-
-function pickImageTextModel(name: string) { if (name) imageTextDraft.model = name }
 
 async function loadUpdate() {
   if (updateLoading.value) return
@@ -1802,7 +1663,6 @@ watch(() => aiDraft.endpoint, () => {
   aiProvider.value = presets.find(item => item.baseUrl && normalizeAiEndpoint(item.baseUrl) === normalizeAiEndpoint(aiDraft.endpoint))?.key || '__custom__'
 })
 watch(() => imageDraft.endpoint, () => { imageModels.value = [] })
-watch(() => imageTextDraft.endpoint, () => { imageTextModels.value = [] })
 watch(homeDraft, () => { entryValidationError.value = '' }, { deep: true })
 watch(squareDraft, () => { entryValidationError.value = '' }, { deep: true })
 watch(() => props.initialTab, value => { if (value) selectTab(value) })
@@ -1815,7 +1675,6 @@ onMounted(() => {
   void loadPlatformUrls()
   void loadSquareUrls()
   void loadAi()
-  void loadImageTextAi()
   if (activeTab.value === 'about') void loadUpdate()
   if (activeTab.value === 'security') void loadSecurity()
   if (activeTab.value === 'maintenance') void loadMaintenance()
@@ -1831,7 +1690,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .button-icon{width:16px;height:16px;object-fit:contain;vertical-align:-3px;margin-right:4px}.unified-page{min-width:0;min-height:0;height:100%;overflow:auto;padding:22px 24px 32px;color:var(--dash-text)}.unified-page-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:16px}.unified-page-head h1{margin:5px 0 7px;font-size:25px}.unified-page-head p{margin:0;color:var(--dash-text-muted);font-size:12px}.settings-save-state{color:#027a48;font-size:11px}.settings-layout{display:grid;grid-template-columns:190px minmax(0,1fr);gap:12px;min-height:0}.settings-layout-single{grid-template-columns:minmax(0,1fr)}.settings-nav{display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid var(--dash-border);border-radius:13px;background:#ecedee;align-self:start}.settings-nav button{display:flex;align-items:center;gap:9px;height:38px;padding:0 10px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--dash-text-muted);text-align:left;cursor:pointer}.settings-nav button:hover,.settings-nav button:focus-visible{background:rgba(124,92,255,.12);color:var(--dash-text);outline:none}.settings-nav button.active{border-color:rgba(135,102,246,.42);background:rgba(112,76,232,.18);color:#4c1d95}.settings-nav span{width:18px;color:#5b3df5;text-align:center}.settings-nav .settings-tab-icon{flex:0 0 auto;color:currentColor}.settings-content{min-width:0}.settings-section{padding:19px;border:1px solid var(--dash-border);border-radius:13px;background:#ffffff}.settings-section-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:18px}.settings-section h2{margin:0 0 6px;font-size:17px}.settings-section p{margin:0;color:var(--dash-text-muted);font-size:11px}.unified-button{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;min-height:32px;padding:0 13px;border:1px solid var(--dash-border);border-radius:9px;background:#ffffff;color:var(--dash-text-soft);cursor:pointer}.unified-button:hover,.unified-button:focus-visible{border-color:rgba(151,120,255,.7);color:var(--dash-text);outline:none}.unified-button.primary{border-color:#5b3df5;background:#6d4aff;color:#ffffff}.unified-button.danger{border-color:rgba(217,45,32,.35);color:#d92d20}.unified-button:disabled{opacity:.55;cursor:not-allowed}.settings-field-row{display:flex;align-items:end;gap:10px;margin:11px 0}.settings-field-row label,.settings-field{display:flex;flex-direction:column;gap:6px;flex:1;color:var(--dash-text-soft);font-size:11px}.settings-field-row input,.settings-field input,.settings-field select{height:34px;padding:0 10px;border:1px solid var(--dash-border);border-radius:8px;background:#f7f9fd;color:var(--dash-text-soft);outline:none}.settings-field-row input:focus,.settings-field input:focus,.settings-field select:focus{border-color:rgba(145,113,255,.78);box-shadow:0 0 0 2px rgba(145,113,255,.14)}.settings-note{margin-top:14px;padding:10px 12px;border-radius:8px;background:#edeef0;color:var(--dash-text-muted);font-size:11px;line-height:1.6}.settings-note.ok{border:1px solid rgba(32,209,154,.35);color:#027a48}.settings-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:14px}.about-hero{display:flex;align-items:center;gap:12px;padding-bottom:18px;border-bottom:1px solid var(--dash-border)}.about-mark img{width:34px;height:34px;object-fit:contain}.about-mark{display:grid;width:46px;height:46px;place-items:center;border-radius:13px;background:linear-gradient(135deg,#f3f0fc,#a280ff);color:#fff;font-size:24px;box-shadow:0 0 24px rgba(135,102,246,.4)}.about-hero h2{margin:0}.about-hero p{margin:5px 0 0}.about-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:18px}.about-grid>div{display:flex;flex-direction:column;gap:7px;padding:12px;border-radius:9px;background:#f7f9fd}.about-grid span{color:var(--dash-text-muted);font-size:10px}.about-grid strong{font-size:15px}.about-grid select{height:29px;border:1px solid var(--dash-border);border-radius:6px;background:#ffffff;color:var(--dash-text-soft)}.about-toggle{justify-content:space-between}.update-autocheck{display:flex;align-items:center;gap:7px;color:var(--dash-text-soft);font-size:11px;cursor:pointer}.update-autocheck input{accent-color:#8c5cff}.update-autocheck em{font-style:normal;color:var(--dash-text-muted)}.update-message{margin-left:auto;color:var(--dash-text-muted);font-size:11px}.update-message.not-available{color:#027a48}.update-message.error{color:#f04438}
 @media(max-width:820px){.settings-layout{grid-template-columns:1fr}.settings-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.about-grid{grid-template-columns:1fr}.settings-field-row{align-items:stretch;flex-direction:column}}
-.ai-settings-section{min-height:0}.ai-config-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ai-config-card{min-width:0;padding:15px;border:1px solid rgba(111,134,183,.22);border-radius:11px;background:rgba(8,16,30,.42)}.image-ai-config-card{border-color:rgba(147,105,255,.32);background:linear-gradient(145deg,rgba(41,29,76,.28),#f7f9fd)}.image-text-ai-config-card{border-color:rgba(74,191,218,.3);background:linear-gradient(145deg,rgba(18,67,84,.2),#f7f9fd)}.ai-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px}.ai-card-head h3{margin:4px 0 5px;font-size:15px}.ai-card-head p{margin:0;color:var(--dash-text-muted);font-size:10px;line-height:1.5}.settings-kicker{color:#9b83ef;font-size:9px;letter-spacing:.14em}.ai-status{padding:4px 7px;border:1px solid rgba(229,168,86,.28);border-radius:999px;color:#b54708;font-size:9px}.ai-status.ok{border-color:rgba(34,209,157,.3);color:#027a48}.image-model-picker{margin-top:12px}.ai-config-card .settings-note{word-break:break-word}.ai-config-card code{color:#5b3df5;font-size:10px}@media(max-width:1260px){.ai-config-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:900px){.ai-config-grid{grid-template-columns:1fr}}
+.ai-settings-section{min-height:0}.ai-config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.ai-config-card{min-width:0;padding:15px;border:1px solid rgba(111,134,183,.22);border-radius:11px;background:rgba(8,16,30,.42)}.image-ai-config-card{border-color:rgba(147,105,255,.32);background:linear-gradient(145deg,rgba(41,29,76,.28),#f7f9fd)}.ai-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px}.ai-card-head h3{margin:4px 0 5px;font-size:15px}.ai-card-head p{margin:0;color:var(--dash-text-muted);font-size:10px;line-height:1.5}.settings-kicker{color:#9b83ef;font-size:9px;letter-spacing:.14em}.ai-status{padding:4px 7px;border:1px solid rgba(229,168,86,.28);border-radius:999px;color:#b54708;font-size:9px}.ai-status.ok{border-color:rgba(34,209,157,.3);color:#027a48}.image-model-picker{margin-top:12px}.ai-config-card .settings-note{word-break:break-word}.ai-config-card code{color:#5b3df5;font-size:10px}@media(max-width:1260px){.ai-config-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:900px){.ai-config-grid{grid-template-columns:1fr}}
 /* 页面底与页头（压缩高度、去掉重阴影；三代叠加的装饰性标签已随页面重构移除） */
 .unified-settings-page{background:radial-gradient(circle at 86% 0%,rgba(113,82,224,.08),transparent 26%),linear-gradient(145deg,#f2f3f5,#eef0f3)}
 .settings-hero{position:relative;align-items:center;padding:14px 18px;border:1px solid #e6e9f0;border-radius:16px;background:linear-gradient(135deg,#ffffff,#fafbfe);box-shadow:0 10px 26px rgba(30,41,74,.06);overflow:hidden}
@@ -1900,7 +1759,6 @@ onBeforeUnmount(() => {
 .ai-config-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .ai-config-card{padding:18px;border-radius:14px;box-shadow:0 12px 26px rgba(0,0,0,.14);transition:transform .18s,border-color .18s,box-shadow .18s}
 .ai-config-card:hover{transform:translateY(-2px);box-shadow:0 17px 34px rgba(0,0,0,.22)}
-.image-text-ai-config-card{grid-column:1/-1}
 .ai-card-head{min-height:64px;padding-bottom:13px;border-bottom:1px solid #eef1f7}
 .ai-card-head h3{font-size:16px}
 .ai-card-head p{max-width:420px}
@@ -1919,7 +1777,6 @@ onBeforeUnmount(() => {
 .ai-config-card::before{position:absolute;inset:0 0 auto;height:3px;background:linear-gradient(90deg,var(--ai-accent),color-mix(in srgb,var(--ai-accent) 24%,#fff));content:''}
 .ai-config-card:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--ai-accent) 28%,#e4e7ef);box-shadow:0 14px 30px rgba(36,43,66,.11)}
 .image-ai-config-card{--ai-accent:#7758e8;border-color:#e7e2f7;background:linear-gradient(180deg,#fff 0%,#fcfbff 100%)}
-.image-text-ai-config-card{--ai-accent:#258ca5;border-color:#dcecf0;background:linear-gradient(180deg,#fff 0%,#f9fcfd 100%)}
 .ai-card-head{min-height:78px;margin-bottom:2px;border-color:#edf0f5}
 .ai-card-head h3{color:#202939;letter-spacing:-.02em}
 .ai-card-head p{color:#667085;font-size:11px}
@@ -1942,9 +1799,9 @@ onBeforeUnmount(() => {
 .ai-config-card .settings-actions .unified-button.danger{border-color:#f3c7c3;background:#fffafa;color:#b42318}
 .ai-config-card .image-model-picker{margin-top:14px}
 .ai-config-card code{overflow-wrap:anywhere;color:var(--ai-accent)}
-@media(min-width:1500px){.ai-config-grid{grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch}.image-text-ai-config-card{grid-column:auto}}
-@media(max-width:1499px) and (min-width:901px){.ai-config-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch}.image-text-ai-config-card{grid-column:1/-1}}
-@media(max-width:900px){.ai-config-grid{grid-template-columns:minmax(0,1fr);gap:12px}.image-text-ai-config-card{grid-column:auto}.ai-card-head{min-height:0}}
+@media(min-width:1500px){.ai-config-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch}}
+@media(max-width:1499px) and (min-width:901px){.ai-config-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch}}
+@media(max-width:900px){.ai-config-grid{grid-template-columns:minmax(0,1fr);gap:12px}.ai-card-head{min-height:0}}
 @media(prefers-reduced-motion:reduce){.ai-config-card,.ai-config-card:hover{transition:none;transform:none}}
 .settings-note.error{border:1px solid #fecdca;background:#fff4f2;color:#b42318}.settings-inline-retry{margin-left:8px;padding:3px 8px;border:1px solid #fecdca;border-radius:6px;background:#fff;color:#b42318;font:inherit;cursor:pointer}.settings-inline-retry:disabled{opacity:.6;cursor:wait}.ai-load-error{display:flex;align-items:center;justify-content:space-between;gap:10px}.update-release-notes pre{max-height:240px;overflow:auto;white-space:pre-wrap;font:inherit}.settings-nav button[aria-current="page"]{font-weight:700}
 /* ---- 分组 / 安全 / 数据与维护（平台入口合并与新页签） ---- */
@@ -2036,6 +1893,5 @@ onBeforeUnmount(() => {
 /* 工具级设置只显示 1–2 张卡：按实际数量自适应，不留下三分之二的空白 */
 .ai-config-grid--filtered{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
 .ai-config-grid--filtered .ai-config-card{max-width:720px}
-.ai-config-grid--filtered .image-text-ai-config-card{grid-column:auto}
 @media(max-width:640px){.ai-config-grid--filtered{grid-template-columns:minmax(0,1fr)}}
 </style>

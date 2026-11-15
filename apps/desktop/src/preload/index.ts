@@ -7,7 +7,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS, EVENT_CHANNELS, createIpcInvoker } from '@shared/contracts/ipc'
 import type { IPCResult, IpcRequest } from '@shared/contracts/ipc'
-import type { SellCopyInput } from '@shared/contracts/ai-sell-copy'
 import { PLATFORM_CATALOG } from '@shared/constants/platforms'
 import type { AgentUiState } from '@shared/schemas/agent'
 
@@ -380,16 +379,6 @@ const api = {
     clearImageKey: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_KEY_CLEAR),
     testImage: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEST),
     listImageModels: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_MODELS_LIST),
-    imageTextConfigGet: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_CONFIG_GET),
-    imageTextConfigSet: (input: { endpoint?: string, model?: string, timeoutMs?: number }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_CONFIG_SET, input),
-    setImageTextKey: (key: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_KEY_SET, { key }),
-    clearImageTextKey: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_KEY_CLEAR),
-    testImageText: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_TEST),
-    listImageTextModels: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_MODELS_LIST),
-    // 图文带货文案：结构化输入，提示词与 JSON 解析都在主进程（AI 域未接入 IpcContract，继续走旧路径）
-    generateSellCopy: (input: SellCopyInput): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_SELL_COPY, JSON.parse(JSON.stringify(input))),
     generateImage: (input: { prompt: string; size?: string; n?: number; confirmed?: boolean; sourceImages?: Array<{ name: string; mimeType: string; b64Json: string }> }): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_GENERATE, JSON.parse(JSON.stringify(input))),
     // 把生成结果存到本地（不传 outputPath 时主进程弹"另存为"）

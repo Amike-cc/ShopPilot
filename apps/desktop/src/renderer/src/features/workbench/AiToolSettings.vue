@@ -2,14 +2,14 @@
 /**
  * 单个 AI 工具自己的设置入口（2026-11-13）。
  *
- * 三个 AI 工具已经是独立功能：设置必须跟着工具走，且只显示这个工具真正使用的接口，
- * 避免在「商品图」里改到「助手」的 Key。配置仍写同一批 settings/ai 通道，不建第二套配置源。
+ * 两个 AI 工具已经是独立功能：设置必须跟着工具走，且只显示这个工具真正使用的接口，
+ * 避免在「对话生图」里改到「助手」的 Key。配置仍写同一批 settings/ai 通道，不建第二套配置源。
  */
 import { ref } from 'vue'
 import AppIcon from '../../components/ui/AppIcon.vue'
 import SettingsModal from './SettingsModal.vue'
 
-type AiConfigSectionKey = 'text' | 'image' | 'image-text'
+type AiConfigSectionKey = 'text' | 'image'
 
 const props = defineProps<{
   title: string

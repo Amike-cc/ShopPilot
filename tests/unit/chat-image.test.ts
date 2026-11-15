@@ -95,7 +95,6 @@ describe('对话生图：独立模块接线', () => {
     expect(composable).toContain('window.shopilot.ai.saveImage({')
     expect(composable).toContain("throw new Error('接口没有返回可预览的图片')")
     // 不接文本模型，不偷偷把对话发给另一个供应商
-    expect(composable).not.toContain('generateSellCopy')
     expect(composable).not.toContain('chatComplete')
   })
 

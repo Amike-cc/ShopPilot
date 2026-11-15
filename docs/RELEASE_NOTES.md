@@ -1,18 +1,29 @@
-# ShopPilot 0.9.37 变更说明（商品图片下载器：取消保存目录即取消下载）
+# ShopPilot 0.9.37 变更说明（商品图片下载器取消下载 + 删除「图文带货」）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
 
 ## 本次更新
 
-- **商品图片下载器（扩展 1.2.2）：在「选择保存文件夹」弹窗点取消，会取消整批下载**：
+- **彻底删除「图文带货」功能**：
+  - 侧栏 AI 工具只保留「AI 电商助手」「对话生图」，应用商城、页面路由与安装键 `ai-graphic` 一并移除；
+  - 删除图文带货页面、状态/纯逻辑模块、共享文案契约 `ai-sell-copy`、主进程文案生成链路与专属测试/验收脚本；
+  - 删除只服务该功能的「生图文本 API」配置（`ai.imageText.*`、`ai:image-text:*` IPC、专用 Key 与设置卡片），避免留下不可达的配置入口；
+  - 「对话生图」继续使用共享的生图 API，模型设置与生成链路不受影响。
+- **商品图片下载器（扩展 1.2.3）：在「选择保存文件夹」弹窗点取消，会取消整批下载**：
   - 主进程不再只是丢弃文件；弹窗结果通过 `__shopilot_image_save_result` 事件回传页面；
   - 插件立即停止本批抓图与下载触发，状态改为「已取消下载（未选择保存文件夹）」；
   - 本次批次不产生 `downloads` 记录、不新增文件，下载按钮恢复可点，已选图片保持不变；
   - 选择目录时仍按 0.9.36 的行为整批保存到所选文件夹。
+- **等用户选完目录再开始下载**：弹窗停留期间不再先把整批图片触发出去（否则会撞 Chromium 单页连续下载上限，后面的图静默丢失）；选完后再按 8 张/批节流触发，长批次也能全量落盘。
+- 成功提示改为「已触发 N 张下载；已保存到所选文件夹，右侧栏『下载』可查看」。
 - 保留 0.9.36 的「每次下载先选保存位置」、抖店/拼多多主图与详情图识别、悬停预览与批量下载。
 
 ## 验证
 
+- 删除功能守卫单测：AI 工具只剩 2 个独立入口，`use-app-modules` 不再含 `ai-graphic`，preload 不再暴露 `generateSellCopy`，共享契约不再含 `AI_IMAGE_TEXT_*`。
+- 全量单测 1677 项通过；类型检查与 ESLint 0 error。
+- `node tools/acceptance/renderer-entries-cdp-verify.js` 10/10：店铺分组、登录态检测与「AI 生成商品图 / 图文带货」删除守卫。
+- 真机截图核对 `artifacts/ui-redesign/app-center.png` / `settings-ai.png`：AI 工具仅 2 项，AI 配置只剩文本与生图两张卡片，无空列或按钮裁切。
 - 新增取消验收 `node tools/acceptance/product-image-cancel-verify.js` 8/8：状态为「已取消下载」、按钮恢复、零下载记录。
 - 回归（`SHOPILOT_TEST_IMAGE_SAVE_DIR` 临时目录）：抖店 20/20、拼多多编辑页 18/18、拼多多手机页 16/16。
 - `product-image-downloader` 单测 9 项、`pdd-gallery` 单测 5 项；typecheck、ESLint 0 error。

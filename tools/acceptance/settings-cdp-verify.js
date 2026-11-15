@@ -208,7 +208,7 @@ async function main() {
 
     await openSettings('ai')
     const aiShape = await cdp.eval(`return {cards:[...document.querySelectorAll('.ai-config-card')].map(x=>x.dataset.test), endpoint:document.querySelector('[data-test="ai-endpoint"]')?.value, keyType:document.querySelector('[data-test="ai-key"]')?.type, overflow:document.querySelector('[data-test="settings-ai"]')?.scrollWidth>document.querySelector('[data-test="settings-ai"]')?.clientWidth+1}`)
-    check('AI 配置页以三张独立卡片加载', aiShape.cards.join(',') === 'text-ai-config,image-ai-config,image-text-ai-config' && aiShape.keyType === 'password' && aiShape.overflow === false, JSON.stringify(aiShape))
+    check('AI 配置页以两张独立卡片加载', aiShape.cards.join(',') === 'text-ai-config,image-ai-config' && aiShape.keyType === 'password' && aiShape.overflow === false, JSON.stringify(aiShape))
 
     const textEndpoint = `${fixtureBase}/v1`
     await setInput('[data-test="ai-endpoint"]', textEndpoint)
@@ -234,7 +234,7 @@ async function main() {
     fixture.setChatFailure(true)
     await clickAndWait('[data-test="ai-test"]')
     const failedTextTest = await cdp.eval(`return {message:document.querySelector('[data-test="ai-msg"]')?.textContent||'',summary:document.querySelector('[data-test="ai-config-summary"] strong')?.textContent.trim()||'',textStatus:document.querySelector('[data-test="ai-config-summary"] .ai-summary-status em')?.textContent.trim()||''}`)
-    check('文本接口失败时摘要只表示配置完整度', /连接失败/.test(failedTextTest.message) && failedTextTest.summary === '已完成 1/3 套 AI 配置' && failedTextTest.textStatus === '已配置', JSON.stringify(failedTextTest))
+    check('文本接口失败时摘要只表示配置完整度', /连接失败/.test(failedTextTest.message) && failedTextTest.summary === '已完成 1/2 套 AI 配置' && failedTextTest.textStatus === '已配置', JSON.stringify(failedTextTest))
     fixture.setChatFailure(false)
     await cdp.eval(`window.confirm=()=>true; document.querySelector('[data-test="ai-key-clear"]')?.click(); await new Promise(r=>setTimeout(r,500)); return true`)
     const textCleared = await cdp.eval(`return (await window.shopilot.ai.configGet()).data.hasKey`)
@@ -263,23 +263,7 @@ async function main() {
     check('生图 AI 只读测试连接成功', /生图接口可用/.test(imageMsg), imageMsg)
     await cdp.eval(`window.confirm=()=>true; document.querySelector('[data-test="image-ai-config"] .danger')?.click(); await new Promise(r=>setTimeout(r,450)); return true`)
     check('生图 AI Key 可清除', (await cdp.eval(`return (await window.shopilot.ai.configGet()).data.hasImageKey`)) === false)
-
-    await setInput('[data-test="image-text-ai-endpoint"]', textEndpoint)
-    await setInput('[data-test="image-text-ai-model"]', 'fixture-chat')
-    await setInput('[data-test="image-text-ai-config"] input[type="number"]', '30000')
-    await setInput('[data-test="image-text-ai-config"] input[type="password"]', 'fixture-analysis-key')
-    await clickAndWait('[data-test="image-text-ai-config"] .settings-actions .primary')
-    const analysisConfig = await cdp.eval(`return await window.shopilot.ai.configGet()`)
-    check('生图文本 AI 独立保存且不覆盖文本/生图配置', analysisConfig.ok && analysisConfig.data.imageTextEndpoint === textEndpoint && analysisConfig.data.hasImageTextKey === true && analysisConfig.data.endpoint === textEndpoint && analysisConfig.data.imageEndpoint === `${fixtureBase}/v1/images/generations`, JSON.stringify(analysisConfig.data))
-    await clickAndWait('[data-test="image-text-ai-config"] .settings-actions button:nth-child(2)')
-    const analysisModels = await cdp.eval(`return {options:[...document.querySelectorAll('[data-test="image-text-ai-config"] .image-model-picker option')].map(x=>x.value), msg:document.querySelector('[data-test="image-text-ai-config"] .settings-note.ok')?.textContent||''}`)
-    check('生图文本 AI 获取分析模型', analysisModels.options.includes('fixture-chat') && /已获取/.test(analysisModels.msg), JSON.stringify(analysisModels))
-    await clickAndWait('[data-test="image-text-ai-config"] .settings-actions button:nth-child(3)')
-    const analysisMsg = await cdp.eval(`return document.querySelector('[data-test="image-text-ai-config"] .settings-note.ok')?.textContent||''`)
-    check('生图文本 AI 测试连接成功', /分析接口可用/.test(analysisMsg), analysisMsg)
-    await cdp.eval(`window.confirm=()=>true; document.querySelector('[data-test="image-text-ai-config"] .danger')?.click(); await new Promise(r=>setTimeout(r,450)); return true`)
-    check('生图文本 AI Key 可清除', (await cdp.eval(`return (await window.shopilot.ai.configGet()).data.hasImageTextKey`)) === false)
-    check('AI fixture 请求覆盖模型列表和文本测试', fixture.stats().modelsRequests >= 3 && fixture.stats().chatRequests >= 2, JSON.stringify(fixture.stats()))
+    check('AI fixture 请求覆盖模型列表和文本测试', fixture.stats().modelsRequests >= 2 && fixture.stats().chatRequests >= 2, JSON.stringify(fixture.stats()))
 
     await openSettings('about')
     const about = await cdp.eval(`return {version:document.querySelector('[data-test="about-version"]')?.textContent||'', channel:document.querySelector('[data-test="update-channel"]')?.value, auto:document.querySelector('[data-test="update-autocheck"]')?.checked, message:document.querySelector('[data-test="update-message"]')?.textContent||'', check:!!document.querySelector('[data-test="update-check-btn"]')}`)

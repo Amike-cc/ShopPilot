@@ -11,20 +11,15 @@ export const DEFAULT_AI_ENDPOINT = 'https://api.deepseek.com/v1/chat/completions
 export const DEFAULT_AI_MODEL = 'deepseek-chat'
 export const DEFAULT_AI_TIMEOUT_MS = 30000
 /**
- * 生图与"生图文本"两条链路单独给更宽的超时。
+ * 生图链路单独给更宽的超时。
  *
- * 为什么不能共用 30000（2026-10-03 实测）：一次生图实测 25~40 秒；生图文本模型
- * （如 gpt-6.1-sol）一次卖点分析实测约 25 秒——30 秒默认值正好卡在边界上，
- * 用户看到的是"AI 分析卖点 不能用"（AI_TIMEOUT），但配置其实完全正确。
+ * 为什么不能共用 30000（2026-10-03 实测）：一次生图实测 25~40 秒，
+ * 30 秒默认值正好卡在边界上，用户看到的是"生图超时"，但配置其实完全正确。
  */
 export const DEFAULT_AI_IMAGE_TIMEOUT_MS = 600000
-export const DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS = 120000
 /** 生图接口必须显式配置，避免把文本 API 或文本 Key 当成图片服务使用。 */
 export const DEFAULT_AI_IMAGE_ENDPOINT = ''
 export const DEFAULT_AI_IMAGE_MODEL = ''
-/** 生图文本 API（图文带货文案）也必须显式配置，不继承 Agent 文本配置。 */
-export const DEFAULT_AI_IMAGE_TEXT_ENDPOINT = ''
-export const DEFAULT_AI_IMAGE_TEXT_MODEL = ''
 /** 超时可配范围（毫秒） */
 export const AI_TIMEOUT_MIN_MS = 3000
 export const AI_TIMEOUT_MAX_MS = 120000
@@ -52,13 +47,6 @@ export const AI_IMAGE_SETTING_KEYS = {
   endpoint: 'ai.image.endpoint',
   model: 'ai.image.model',
   timeoutMs: 'ai.image.timeoutMs'
-} as const
-
-/** 图文带货文案生成使用的「生图文本 API」配置。 */
-export const AI_IMAGE_TEXT_SETTING_KEYS = {
-  endpoint: 'ai.imageText.endpoint',
-  model: 'ai.imageText.model',
-  timeoutMs: 'ai.imageText.timeoutMs'
 } as const
 
 /** 达人广场地址覆盖表（按平台名），留空表示用平台档案里的内置默认 */

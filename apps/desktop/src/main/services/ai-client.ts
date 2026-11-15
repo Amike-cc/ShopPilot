@@ -12,23 +12,21 @@
  */
 
 import { getDatabase } from '../db/database'
-import { getAiImageKey, getAiImageTextKey, getAiKey, hasAiImageKey, hasAiImageTextKey, hasAiKey } from './credential-store'
+import { getAiImageKey, getAiKey, hasAiImageKey, hasAiKey } from './credential-store'
 import { logMain } from './logger'
 import { ModelGovernanceError, assertMeteredBudget, recordModelUsage, resolveMeteringTarget } from './model-governance'
 import { buildChatRequestBody, buildChatRequestHeaders, buildVisionUserContent, clampMaxOutputTokens, DEFAULT_TEMPERATURE } from './model-request'
-import { buildSellCopyMessages, normalizeSellCopyInput, parseSellCopyOutput } from './ai-sell-copy'
-import type { SellCopyResult } from '@shared/contracts/ai-sell-copy'
-// 生图 / 生图文本两条链路各自的默认超时（30 秒对这两条链路太紧，见 constants/ai.ts 注释）
-import { DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS } from '@shared/constants/ai'
+// 生图链路单独给更宽的默认超时（30 秒太紧，见 constants/ai.ts 注释）
+import { DEFAULT_AI_IMAGE_TIMEOUT_MS } from '@shared/constants/ai'
 
 export {
-  DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL,
-  DEFAULT_AI_IMAGE_TIMEOUT_MS, DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS,
+  DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL,
+  DEFAULT_AI_IMAGE_TIMEOUT_MS,
   AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, normalizeAiImageTimeoutMs, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint, imageUrlFromChat,
   imageEditUrlFromGeneration
 } from '@shared/constants/ai'
 import {
-  AI_IMAGE_SETTING_KEYS, AI_IMAGE_TEXT_SETTING_KEYS, DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL,
+  AI_IMAGE_SETTING_KEYS, DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL,
   AI_TIMEOUT_MIN_MS, AI_TIMEOUT_MAX_MS, normalizeAiImageTimeoutMs, normalizeAiEndpoint, normalizeImageEndpoint, modelsUrlFromChat, modelsUrlFromImageEndpoint,
   imageEditUrlFromGeneration
 } from '@shared/constants/ai'
@@ -48,12 +46,6 @@ export interface AiConfig {
   imageModel: string
   imageTimeoutMs: number
   hasImageKey: boolean
-  /** 图文带货文案使用的「生图文本 API」，完全独立于 Agent 与生图 API。 */
-  imageTextEndpoint: string
-  resolvedImageTextEndpoint: string
-  imageTextModel: string
-  imageTextTimeoutMs: number
-  hasImageTextKey: boolean
 }
 
 export class AiError extends Error {
@@ -81,12 +73,6 @@ export function getAiConfig(): AiConfig {
   const imageEndpoint = String(readSetting(AI_IMAGE_SETTING_KEYS.endpoint) ?? '').trim() || DEFAULT_AI_IMAGE_ENDPOINT
   const imageModel = String(readSetting(AI_IMAGE_SETTING_KEYS.model) ?? '').trim() || DEFAULT_AI_IMAGE_MODEL
   const imageTimeoutMs = normalizeAiImageTimeoutMs(readSetting(AI_IMAGE_SETTING_KEYS.timeoutMs) ?? DEFAULT_AI_IMAGE_TIMEOUT_MS)
-  const imageTextEndpoint = String(readSetting(AI_IMAGE_TEXT_SETTING_KEYS.endpoint) ?? '').trim() || DEFAULT_AI_IMAGE_TEXT_ENDPOINT
-  const imageTextModel = String(readSetting(AI_IMAGE_TEXT_SETTING_KEYS.model) ?? '').trim() || DEFAULT_AI_IMAGE_TEXT_MODEL
-  const rawImageTextTimeout = Number(readSetting(AI_IMAGE_TEXT_SETTING_KEYS.timeoutMs) ?? DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS)
-  const imageTextTimeoutMs = Number.isFinite(rawImageTextTimeout)
-    ? Math.min(Math.max(Math.round(rawImageTextTimeout), AI_TIMEOUT_MIN_MS), AI_TIMEOUT_MAX_MS)
-    : DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS
   // 中转站/自建网关常只给"基础地址"：统一规范化后再用（拼接规则见 shared/constants/ai.ts）
   return {
     endpoint,
@@ -98,12 +84,7 @@ export function getAiConfig(): AiConfig {
     resolvedImageEndpoint: normalizeImageEndpoint(imageEndpoint),
     imageModel,
     imageTimeoutMs,
-    hasImageKey: hasAiImageKey(),
-    imageTextEndpoint,
-    resolvedImageTextEndpoint: normalizeAiEndpoint(imageTextEndpoint),
-    imageTextModel,
-    imageTextTimeoutMs,
-    hasImageTextKey: hasAiImageTextKey()
+    hasImageKey: hasAiImageKey()
   }
 }
 
@@ -131,8 +112,6 @@ export interface AiChatResult {
   elapsedMs: number
   inputTokens: number
   outputTokens: number
-  /** 这次文本补全实际用的是哪一套配置：单独的"生图文本 API"还是回退到主文本 API。 */
-  source?: 'image-text' | 'main-text'
 }
 
 /**
@@ -314,167 +293,6 @@ export async function listModels(): Promise<{ models: string[]; elapsedMs: numbe
     throw new AiError('AI_REQUEST_FAILED', String(e?.message || e).slice(0, 180))
   } finally {
     clearTimeout(timer)
-  }
-}
-
-/**
- * 「生图文本 API」的补全调用（图文带货文案使用）。
- *
- * **生图文本 API 是可选的**（2026-10-02 重构）：单独配置了 `ai.imageText.*` + `ai_cred.imageTextKey`
- * 就用那一套；没配置时**回退到设置里那一套文本 API**（与 Agent 同源）。
- *
- * 回退时走 `chatComplete` 而不是自己拼请求：这样用量与日预算仍然被计量，
- * 返回值里带 `source`，界面据此如实显示这次文案生成用的是哪一套配置。
- */
-export async function chatCompleteForImageText(opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number; images?: Array<{ mimeType: string; b64Json: string }> }): Promise<AiChatResult> {
-  const cfg = getAiConfig()
-  const key = getAiImageTextKey()
-  if (!key || !key.trim() || !cfg.imageTextEndpoint || !cfg.imageTextModel) {
-    try {
-      const result = await chatComplete({ system: opts.system, user: opts.user, maxTokens: opts.maxTokens, images: opts.images })
-      return { ...result, source: 'main-text' }
-    } catch (e: any) {
-      if (e instanceof AiError && e.code === 'AI_NOT_CONFIGURED') {
-        throw new AiError('AI_IMAGE_TEXT_NOT_CONFIGURED', '既没有单独的"生图文本 API"，也没有可用的文本 API；请在「设置中心 → AI 配置」里配置其中一套')
-      }
-      throw e
-    }
-  }
-  const endpoint = cfg.resolvedImageTextEndpoint || normalizeAiEndpoint(cfg.imageTextEndpoint)
-  if (!endpoint) throw new AiError('AI_BAD_ENDPOINT', '生图文本接口地址无效，请填写基础地址或完整的 /chat/completions 地址')
-  assertEndpointUsable(endpoint)
-
-  const maxTokens = clampMaxOutputTokens(opts.maxTokens ?? 800, 64, 1600)
-  const timeoutMs = Math.min(Math.max(Math.round(Number(opts.timeoutMs ?? cfg.imageTextTimeoutMs)), AI_TIMEOUT_MIN_MS), AI_TIMEOUT_MAX_MS)
-  const ac = new AbortController()
-  const timer = setTimeout(() => ac.abort(), timeoutMs)
-  const t0 = Date.now()
-  try {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: buildChatRequestHeaders(key),
-      body: JSON.stringify(buildChatRequestBody({
-        model: cfg.imageTextModel,
-        system: opts.system,
-        user: opts.user,
-        temperature: DEFAULT_TEMPERATURE,
-        maxTokens,
-        userContent: opts.images?.length ? buildVisionUserContent(opts.user, opts.images) : undefined,
-        stream: false
-      })),
-      signal: ac.signal
-    })
-    const bodyText = await res.text()
-    if (!res.ok) throw new AiError('AI_REQUEST_FAILED', `HTTP ${res.status} ${bodyText.slice(0, 180)}`)
-    let data: any = null
-    try { data = JSON.parse(bodyText) } catch { throw new AiError('AI_REQUEST_FAILED', '生图文本接口响应不是合法 JSON') }
-    const text = String(data?.choices?.[0]?.message?.content ?? '').trim()
-    if (!text) throw new AiError('AI_EMPTY_OUTPUT', '生图文本模型返回了空内容')
-    return {
-      text,
-      model: String(data?.model || cfg.imageTextModel),
-      elapsedMs: Date.now() - t0,
-      inputTokens: usageTokensFrom(data, 'prompt_tokens'),
-      outputTokens: usageTokensFrom(data, 'completion_tokens'),
-      source: 'image-text' as const
-    }
-  } catch (e: any) {
-    if (e instanceof AiError) throw e
-    if (e?.name === 'AbortError') {
-      // 如实说清"这不是配置错，是模型慢"并给出可执行的下一步：
-      // 用户配的是对的，但 30 秒默认值会让一次 25~40 秒的分析被判成失败。
-      throw new AiError('AI_TIMEOUT', `生图文本请求超过 ${timeoutMs}ms 未返回（当前文本模型较慢）。可在「设置中心 → AI 配置 → 生图文本 API」把超时调到 ${AI_TIMEOUT_MAX_MS}ms 后重试。`)
-    }
-    throw new AiError('AI_REQUEST_FAILED', String(e?.message || e).slice(0, 180))
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-/**
- * 「图文带货」工作台的文案生成：先清洗渲染层输入，再走「生图文本 API」生成结构化带货笔记
- * （标题 / 正文 / 话题 / 封面文案 / 逐图画面描述）。
- *
- * 两条纪律：
- * - 提示词与 JSON 解析都在本链路内完成，渲染层只能提供结构化字段（不能注入 system）；
- * - 模型的 JSON 输出不一定合法：解析失败会降级成纯文本笔记（title 一定非空），
- *   不把原始 JSON / Markdown 直接透给渲染层。
- */
-export async function generateSellCopyText(raw: unknown): Promise<SellCopyResult> {
-  const normalized = normalizeSellCopyInput(raw)
-  // 校验失败由这里统一包成 AiError：ai-sell-copy 是纯逻辑模块，不 import AiError（避免循环依赖）
-  if (!normalized.ok) throw new AiError(normalized.code, normalized.message)
-  const input = normalized.input
-  const messages = buildSellCopyMessages(input)
-  const result = await chatCompleteForImageText({
-    system: messages.system,
-    user: messages.user,
-    maxTokens: messages.maxTokens,
-    images: input.images
-  })
-  const copy = parseSellCopyOutput(result.text, input)
-  return {
-    ...copy,
-    model: result.model,
-    elapsedMs: result.elapsedMs,
-    source: result.source === 'main-text' ? 'main-text' : 'image-text',
-    imageCount: input.images.length
-  }
-}
-
-/** 生图文本配置的模型列表读取，使用独立端点与独立 Key。 */
-export async function listImageTextModels(): Promise<{ models: string[]; elapsedMs: number }> {
-  const cfg = getAiConfig()
-  const key = getAiImageTextKey()
-  if (!key || !key.trim()) throw new AiError('AI_IMAGE_TEXT_NOT_CONFIGURED', '未配置生图文本 API Key（设置 → AI 配置 → 生图文本 API）')
-  if (!cfg.imageTextEndpoint) throw new AiError('AI_IMAGE_TEXT_NOT_CONFIGURED', '请先配置生图文本 API 地址')
-  const endpoint = cfg.resolvedImageTextEndpoint || normalizeAiEndpoint(cfg.imageTextEndpoint)
-  if (!endpoint) throw new AiError('AI_BAD_ENDPOINT', '生图文本接口地址无效，请填写基础地址或完整的 /chat/completions 地址')
-  assertEndpointUsable(endpoint)
-  const url = modelsUrlFromChat(cfg.imageTextEndpoint)
-  if (!url) throw new AiError('AI_BAD_ENDPOINT', '生图文本接口地址无法推导出 /models 地址')
-
-  const ac = new AbortController()
-  const timeoutMs = Math.min(cfg.imageTextTimeoutMs, 20000)
-  const timer = setTimeout(() => ac.abort(), timeoutMs)
-  const t0 = Date.now()
-  try {
-    const res = await fetch(url, { method: 'GET', headers: buildChatRequestHeaders(key), signal: ac.signal })
-    const bodyText = await res.text()
-    if (!res.ok) throw new AiError('AI_REQUEST_FAILED', `HTTP ${res.status} ${bodyText.slice(0, 180)}`)
-    let data: any = null
-    try { data = JSON.parse(bodyText) } catch { throw new AiError('AI_REQUEST_FAILED', '生图文本模型接口响应不是合法 JSON') }
-    const arr = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : null
-    if (!arr) throw new AiError('AI_REQUEST_FAILED', '生图文本模型接口没有返回模型列表（期望 { data: [{ id }] }）')
-    const models = [...new Set(arr.map((x: any) => String(x?.id ?? x?.name ?? x ?? '').trim()).filter(Boolean))].sort() as string[]
-    if (!models.length) throw new AiError('AI_EMPTY_OUTPUT', '生图文本接口没有返回任何可用模型')
-    logMain('info', `[ai:image-text] 获取可用模型成功 count=${models.length} ${Date.now() - t0}ms`)
-    return { models, elapsedMs: Date.now() - t0 }
-  } catch (e: any) {
-    if (e instanceof AiError) throw e
-    if (e?.name === 'AbortError') throw new AiError('AI_TIMEOUT', `生图文本模型请求超过 ${timeoutMs}ms 未返回`)
-    throw new AiError('AI_REQUEST_FAILED', String(e?.message || e).slice(0, 180))
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-/** 生图文本配置的连通性检查：只发最小文本请求，不调用图片生成。 */
-export async function testImageTextConnection(): Promise<{ ok: true; model: string; elapsedMs: number } | { ok: false; code: string; message: string }> {
-  try {
-    const r = await chatCompleteForImageText({
-      system: '你是连通性测试助手。',
-      user: '只回复两个字：可用',
-      maxTokens: 16,
-      timeoutMs: Math.min(getAiConfig().imageTextTimeoutMs, 20000)
-    })
-    logMain('info', `[ai:image-text] 测试连接成功 model=${r.model} ${r.elapsedMs}ms`)
-    return { ok: true, model: r.model, elapsedMs: r.elapsedMs }
-  } catch (e: any) {
-    const code = e instanceof AiError ? e.code : 'AI_REQUEST_FAILED'
-    const message = String(e?.message || e).replace(/^[A-Z_]+:\s*/, '')
-    logMain('warn', `[ai:image-text] 测试连接失败 ${code}: ${message}`)
-    return { ok: false, code, message }
   }
 }
 

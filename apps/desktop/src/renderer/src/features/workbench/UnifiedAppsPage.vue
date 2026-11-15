@@ -12,11 +12,10 @@ import storesAppIcon from '../../assets/icons/app-stores.svg'
 import analyticsAppIcon from '../../assets/icons/app-analytics.svg'
 import invoicesAppIcon from '../../assets/icons/app-invoices.svg'
 import taxAppIcon from '../../assets/icons/app-tax.svg'
-import graphicSellAppIcon from '../../assets/icons/settings-square.svg'
 import AppCenterExtensions from './AppCenterExtensions.vue'
 import { ensureAppModulesLoaded, isModuleInstalled, setModuleInstalled, type OptionalModuleKey } from './use-app-modules'
 
-type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'assistant' | 'chat-image' | 'graphic-sell'
+type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'assistant' | 'chat-image'
 type AppTone = 'violet' | 'blue' | 'cyan' | 'orange' | 'indigo' | 'green' | 'pink' | 'slate' | 'amber'
 
 interface AppLink {
@@ -58,28 +57,25 @@ const businessApps: AppLink[] = [
   { key: 'tax', label: '涉税信息', description: '查看平台按季度报送的涉税经营数据与主体汇总。', note: '季度报送 · 只读核对', tone: 'green', icon: taxAppIcon, page: 'tax' }
 ]
 
-/** AI 工具：三个入口各自独立安装/卸载，不再由「AI 创作」整包控制。 */
+/** AI 工具：两个入口各自独立安装/卸载，不再由「AI 创作」整包控制。 */
 interface AiToolLink {
   key: OptionalModuleKey
   testId: string
   label: string
   description: string
   category: string
-  note: 'text' | 'image' | 'graphic'
+  note: 'text' | 'image'
   tone: AppTone
   icon: string
   page: Page
 }
 const aiTools: AiToolLink[] = [
   { key: 'ai-assistant', testId: 'apps-ai-assistant', label: 'AI 电商助手', description: '纯文本对话：讨论问题、整理思路、给出手动操作建议；不会读取或操作店铺与软件数据。', category: '对话', note: 'text', tone: 'violet', icon: aiAppIcon, page: 'assistant' },
-  { key: 'ai-chat-image', testId: 'apps-ai-chat-image', label: '对话生图', description: '用聊天描述画面，连续追问；可基于上一张结果继续修改并保存。', category: '内容创作', note: 'image', tone: 'cyan', icon: aiAppIcon, page: 'chat-image' },
-  { key: 'ai-graphic', testId: 'apps-ai-graphic', label: '图文带货', description: 'AI 写带货笔记文案并生成多张配图，可编辑、复制与保存。', category: '内容创作', note: 'graphic', tone: 'orange', icon: graphicSellAppIcon, page: 'graphic-sell' }
+  { key: 'ai-chat-image', testId: 'apps-ai-chat-image', label: '对话生图', description: '用聊天描述画面，连续追问；可基于上一张结果继续修改并保存。', category: '内容创作', note: 'image', tone: 'cyan', icon: aiAppIcon, page: 'chat-image' }
 ]
 const aiInstalledCount = computed(() => aiTools.filter(tool => isModuleInstalled(tool.key)).length)
 function aiToolNote(tool: AiToolLink): string {
-  if (tool.note === 'text') return textModelStatus.value
-  if (tool.note === 'image') return imageModelStatus.value
-  return graphicModelStatus.value
+  return tool.note === 'text' ? textModelStatus.value : imageModelStatus.value
 }
 function openAiTool(tool: AiToolLink): void {
   emit('navigate', tool.page)
@@ -100,8 +96,6 @@ interface AiConfigShape {
   hasKey?: boolean
   imageModel?: string
   hasImageKey?: boolean
-  imageTextModel?: string
-  hasImageTextKey?: boolean
 }
 
 const showSystem = ref(false)
@@ -157,14 +151,14 @@ function installAiTool(tool: AiToolLink): Promise<void> {
   return setAiToolInstalled(tool, true)
 }
 async function uninstallAiTool(tool: AiToolLink): Promise<void> {
-  if (!window.confirm(`卸载「${tool.label}」？\n该工具入口会从左侧导航和 AI 创作页隐藏，模型配置与历史保留；可随时在应用商城重新下载安装。`)) return
+  if (!window.confirm(`卸载「${tool.label}」？\n该工具入口会从左侧导航和 AI 工具组隐藏，模型配置与历史保留；可随时在应用商城重新下载安装。`)) return
   await setAiToolInstalled(tool, false)
 }
 function activateAiTool(tool: AiToolLink): void {
   if (isModuleInstalled(tool.key)) openAiTool(tool)
   else void installAiTool(tool)
 }
-const aiStatus = ref<{ text: AiConfigShape | null; image: AiConfigShape | null; imageText: AiConfigShape | null } | null>(null)
+const aiStatus = ref<{ text: AiConfigShape | null; image: AiConfigShape | null } | null>(null)
 const aiStatusLoading = ref(false)
 const aiStatusError = ref('')
 
@@ -176,12 +170,11 @@ async function loadAiStatus(): Promise<void> {
   aiStatusLoading.value = true
   aiStatusError.value = ''
   try {
-    const [text, image, imageText] = await Promise.all([
+    const [text, image] = await Promise.all([
       window.shopilot.ai.configGet(),
-      window.shopilot.ai.imageConfigGet(),
-      window.shopilot.ai.imageTextConfigGet()
+      window.shopilot.ai.imageConfigGet()
     ])
-    aiStatus.value = { text: configOf(text), image: configOf(image), imageText: configOf(imageText) }
+    aiStatus.value = { text: configOf(text), image: configOf(image) }
   } catch (e) {
     aiStatusError.value = String((e as Error)?.message || e)
   } finally {
@@ -197,10 +190,6 @@ function modelStatus(cfg: AiConfigShape | null, modelKey: keyof AiConfigShape, k
 
 const textModelStatus = computed(() => modelStatus(aiStatus.value?.text ?? null, 'model', 'hasKey'))
 const imageModelStatus = computed(() => modelStatus(aiStatus.value?.image ?? null, 'imageModel', 'hasImageKey'))
-const graphicModelStatus = computed(() => {
-  const cfg = aiStatus.value?.imageText || aiStatus.value?.text
-  return modelStatus(cfg ?? null, aiStatus.value?.imageText ? 'imageTextModel' : 'model', aiStatus.value?.imageText ? 'hasImageTextKey' : 'hasKey')
-})
 
 function openApp(item: AppLink): void {
   emit('navigate', item.page)

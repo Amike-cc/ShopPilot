@@ -3,9 +3,9 @@ import { describeAiFailure } from '../../apps/desktop/src/main/services/ai-failu
 
 describe('describeAiFailure：AI 失败文案（主进程 → 界面）', () => {
   it('未配置类错误原样透传（可执行的中文提示不能被重映射成"凭据被拒绝"）', () => {
-    const text = '既没有单独的"生图文本 API"，也没有可用的文本 API；请在「设置中心 → AI 配置」里配置其中一套'
-    expect(describeAiFailure({ code: 'AI_IMAGE_TEXT_NOT_CONFIGURED', message: text }))
-      .toEqual({ code: 'AI_IMAGE_TEXT_NOT_CONFIGURED', message: text })
+    const text = '未配置生图 API Key（设置 → AI 配置 → 生图 API）'
+    expect(describeAiFailure({ code: 'AI_IMAGE_NOT_CONFIGURED', message: text }))
+      .toEqual({ code: 'AI_IMAGE_NOT_CONFIGURED', message: text })
     expect(describeAiFailure({ code: 'AI_NOT_CONFIGURED', message: '未配置大模型 API Key（设置 → AI 配置）' }))
       .toEqual({ code: 'AI_NOT_CONFIGURED', message: '未配置大模型 API Key（设置 → AI 配置）' })
     // 没有 message 时也要给出可执行的兜底，而不是空串
@@ -45,7 +45,7 @@ describe('describeAiFailure：AI 失败文案（主进程 → 界面）', () => 
     expect(describeAiFailure({ code: 'AI_BAD_ENDPOINT', message: '接口地址须为 https://（仅 127.0.0.1 / localhost 允许 http://）' }))
       .toEqual({ code: 'AI_BAD_ENDPOINT', message: '接口地址须为 https://（仅 127.0.0.1 / localhost 允许 http://）' })
     expect(describeAiFailure({ code: 'AI_BAD_INPUT', message: '第 1 个参考图片类型不受支持' }).message).toBe('第 1 个参考图片类型不受支持')
-    expect(describeAiFailure({ code: 'AI_EMPTY_OUTPUT', message: '生图文本模型返回了空内容' }).message).toBe('生图文本模型返回了空内容')
+    expect(describeAiFailure({ code: 'AI_EMPTY_OUTPUT', message: '生图模型返回了空内容' }).message).toBe('生图模型返回了空内容')
     // 非 AI 域的显式错误码：走中性框（不冠 AI 语义），见下一条用例
     expect(describeAiFailure({ code: 'STORE_NOT_FOUND', message: '店铺不存在' }))
       .toEqual({ code: 'STORE_NOT_FOUND', message: '操作失败：店铺不存在' })

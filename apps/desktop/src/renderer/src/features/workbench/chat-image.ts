@@ -18,7 +18,7 @@ export const CHAT_IMAGE_COUNT_OPTIONS = [1, 2, 4] as const
 /** 与商品图工作台同口径：上传参考图单张最大 5MB */
 export const CHAT_IMAGE_MAX_REFERENCE_BYTES = 5 * 1024 * 1024
 
-/** 生图接口只接受这三种尺寸（与 graphic-sell 的映射保持一致） */
+/** 生图接口只接受这三种尺寸 */
 export function chatImageRequestSize(ratio: string): '1024x1024' | '1536x1024' | '1024x1536' {
   if (ratio === '4:3') return '1536x1024'
   if (ratio === '1:1') return '1024x1024'

@@ -9,7 +9,7 @@
 import UnifiedSettingsPage from './UnifiedSettingsPage.vue'
 
 type SettingsTabKey = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'
-type AiConfigSectionKey = 'text' | 'image' | 'image-text'
+type AiConfigSectionKey = 'text' | 'image'
 
 defineProps<{
   title: string

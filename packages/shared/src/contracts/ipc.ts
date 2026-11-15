@@ -425,15 +425,6 @@ export const IPC_CHANNELS = {
   AI_IMAGE_KEY_CLEAR: 'ai:image:key:clear',
   AI_IMAGE_TEST: 'ai:image:test',
   AI_IMAGE_MODELS_LIST: 'ai:image:models:list',
-  // 生图文本 API（图文带货的文案生成）；与 Agent 文本配置完全分离
-  AI_IMAGE_TEXT_CONFIG_GET: 'ai:image-text:config:get',
-  AI_IMAGE_TEXT_CONFIG_SET: 'ai:image-text:config:set',
-  AI_IMAGE_TEXT_KEY_SET: 'ai:image-text:key:set',
-  AI_IMAGE_TEXT_KEY_CLEAR: 'ai:image-text:key:clear',
-  AI_IMAGE_TEXT_TEST: 'ai:image-text:test',
-  AI_IMAGE_TEXT_MODELS_LIST: 'ai:image-text:models:list',
-  // 图文带货文案生成：渲染层只提交受限结构化字段，提示词组装与 JSON 解析都在主进程（防注入）
-  AI_IMAGE_TEXT_SELL_COPY: 'ai:image-text:sell-copy',
   // 生成图片（主进程持有 API Key，渲染层只提交受限提示词）
   AI_IMAGE_GENERATE: 'ai:image:generate',
   // 保存生成结果到本地磁盘（另存为对话框；带 outputPath 时直接写该路径，供验收脚本使用）

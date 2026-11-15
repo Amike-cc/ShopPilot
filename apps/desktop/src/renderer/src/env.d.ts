@@ -268,16 +268,6 @@ declare global {
         clearImageKey: () => Promise<IPCResult>
         testImage: () => Promise<IPCResult>
         listImageModels: () => Promise<IPCResult>
-        imageTextConfigGet: () => Promise<IPCResult>
-        imageTextConfigSet: (input: { endpoint?: string; model?: string; timeoutMs?: number }) => Promise<IPCResult>
-        setImageTextKey: (key: string) => Promise<IPCResult>
-        clearImageTextKey: () => Promise<IPCResult>
-        testImageText: () => Promise<IPCResult>
-        listImageTextModels: () => Promise<IPCResult>
-        /** 图文带货文案：由主进程组装提示词并清洗模型返回，渲染层只传结构化商品信息。
-         * 注意：这里不能跨包复用 @shared/contracts/ai-sell-copy 的 SellCopyInput（全局 declare 环境不参与别名解析），
-         * 类型为手工内联——字段与 @shared/contracts/ai-sell-copy 的 SellCopyInput 保持同步，改契约时必须一起改。 */
-        generateSellCopy: (input: { productName?: string; sellingPoints?: string; price?: string; originalPrice?: string; audience?: string; platform?: string; style?: string; imageCount?: number; images?: Array<{ mimeType: string; b64Json: string }> }) => Promise<IPCResult>
         generateImage: (input: { prompt: string; size?: string; n?: number; confirmed?: boolean; sourceImages?: Array<{ name: string; mimeType: string; b64Json: string }> }) => Promise<IPCResult>
         // 生成结果落盘与定位（不传 outputPath 时主进程弹"另存为"）
         saveImage: (input: { b64Json: string; mimeType?: string; suggestedName?: string; outputPath?: string }) => Promise<IPCResult>

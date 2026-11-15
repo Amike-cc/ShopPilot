@@ -7,9 +7,9 @@
  */
 import { reactive } from 'vue'
 
-export type OptionalModuleKey = 'invoices' | 'tax' | 'ai-assistant' | 'ai-chat-image' | 'ai-graphic'
+export type OptionalModuleKey = 'invoices' | 'tax' | 'ai-assistant' | 'ai-chat-image'
 
-export const AI_TOOL_MODULE_KEYS: OptionalModuleKey[] = ['ai-assistant', 'ai-chat-image', 'ai-graphic']
+export const AI_TOOL_MODULE_KEYS: OptionalModuleKey[] = ['ai-assistant', 'ai-chat-image']
 
 export const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['invoices', 'tax', ...AI_TOOL_MODULE_KEYS]
 
@@ -27,8 +27,7 @@ export const installedModules = reactive<Record<OptionalModuleKey, boolean>>({
   invoices: true,
   tax: true,
   'ai-assistant': true,
-  'ai-chat-image': true,
-  'ai-graphic': true
+  'ai-chat-image': true
 })
 
 let loaded = false
@@ -69,7 +68,7 @@ export async function ensureAppModulesLoaded(): Promise<void> {
       const result = await window.shopilot.settings.get(SETTING_KEY)
       const list = result.ok ? result.data?.value : null
       if (Array.isArray(list)) {
-        // 旧版只有一个 'ai' 键；升级后把它展开为三个独立 AI 工具（已安装）。
+        // 旧版只有一个 'ai' 键；升级后把它展开为两个独立 AI 工具（已安装）。
         const legacyAi = list.includes('ai')
         for (const key of OPTIONAL_MODULE_KEYS) {
           installedModules[key] = AI_TOOL_MODULE_KEYS.includes(key)

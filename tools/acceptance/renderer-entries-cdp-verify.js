@@ -5,7 +5,7 @@
  *   1) 店铺分组：卡片「分组」按钮 → 页内浮层 → 保存 → 主进程 store.list 真的落库 → 清除归零
  *      （修复前 `store:setGroup` 有 handler/preload/类型，渲染层零调用，分组只能看不能设）
  *   2) 登录状态主动检测：环境面板 → `session-check-login` → 结论如实上屏
- *   3) 「AI 生成商品图」已彻底删除：侧栏、快捷操作与页面文本都不再出现
+ *   3) 「AI 生成商品图」「图文带货」已彻底删除：侧栏、快捷操作与页面文本都不再出现
  *
  * 不在本脚本内：平台商品「解除归并」需要先有 platform link 数据（要真平台同步或造库），
  * 其入口由 `tests/unit/product-link-actions.test.ts` 的接线守卫 + vue-tsc 覆盖。
@@ -181,18 +181,18 @@ async function main() {
           /检测失败/.test(loginCheck.note)),
       JSON.stringify(loginCheck))
 
-    // ---------- 3) 「AI 生成商品图」已彻底删除 ----------
+    // ---------- 3) 「AI 生成商品图」与「图文带货」已彻底删除 ----------
     check('侧栏可以回到「经营总览」', await navTo('经营总览'))
-    const removedImageFeature = await ui.eval(`
+    const removedFeatures = await ui.eval(`
       return {
-        nav: !document.querySelector('[data-test="nav-image-studio"]'),
-        quick: !document.querySelector('[data-test="quick-action-image"]'),
-        text: !(document.body.textContent || '').includes('AI 生成商品图')
+        nav: !document.querySelector('[data-test="nav-image-studio"]') && ![...document.querySelectorAll('.dashboard-nav-item')].some(el => (el.textContent || '').includes('图文带货')),
+        quick: !document.querySelector('[data-test="quick-action-image"]') && !document.querySelector('[data-test="quick-action-graphic-sell"]'),
+        text: !(document.body.textContent || '').includes('AI 生成商品图') && !(document.body.textContent || '').includes('图文带货')
       }
     `)
-    check('侧栏、快捷操作与页面文本都不再出现「AI 生成商品图」',
-      removedImageFeature.nav && removedImageFeature.quick && removedImageFeature.text,
-      JSON.stringify(removedImageFeature))
+    check('侧栏、快捷操作与页面文本都不再出现「AI 生成商品图」或「图文带货」',
+      removedFeatures.nav && removedFeatures.quick && removedFeatures.text,
+      JSON.stringify(removedFeatures))
 
   } finally {
     try { ui?.close() } catch { /* 已断开 */ }
