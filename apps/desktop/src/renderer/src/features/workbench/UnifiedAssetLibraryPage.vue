@@ -366,6 +366,13 @@ async function revealDetail(): Promise<void> {
 
 function useAsReference(): void {
   if (!detail.value) return
+  const base64 = detail.value.dataUrl.split(',')[1] || ''
+  const bytes = Math.ceil(base64.length * 3 / 4)
+  // 素材库允许 20MB 原图，但「对话生图」参考图接口只接受 5MB；这里提前拦住，避免大请求发出去才失败。
+  if (bytes > 5 * 1024 * 1024) {
+    say('这张素材超过 5MB，对话生图参考图上限是 5MB；请先压缩后再使用', true)
+    return
+  }
   setPendingAssetReference({ name: detail.value.item.name, dataUrl: detail.value.dataUrl })
   detailOpen.value = false
   emit('use-as-reference')

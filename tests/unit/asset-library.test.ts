@@ -142,6 +142,7 @@ describe('素材库页面与对话生图互通', () => {
 
   it('「用于对话生图」经一次性交接进入参考图，不写持久状态', () => {
     expect(page).toContain('setPendingAssetReference')
+    expect(page).toContain('超过 5MB')
     expect(bridge).toContain('takePendingAssetReference')
     expect(bridge).toContain('pendingAssetReference.value = null')
     expect(chatPage).toContain('takePendingAssetReference()')
