@@ -22,24 +22,14 @@ export const DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS = 120000
 /** 生图接口必须显式配置，避免把文本 API 或文本 Key 当成图片服务使用。 */
 export const DEFAULT_AI_IMAGE_ENDPOINT = ''
 export const DEFAULT_AI_IMAGE_MODEL = ''
-/** 商品图片工作台的文本分析 API 也必须显式配置，不继承 Agent 文本配置。 */
+/** 生图文本 API（图文带货文案）也必须显式配置，不继承 Agent 文本配置。 */
 export const DEFAULT_AI_IMAGE_TEXT_ENDPOINT = ''
 export const DEFAULT_AI_IMAGE_TEXT_MODEL = ''
-
 /** 超时可配范围（毫秒） */
 export const AI_TIMEOUT_MIN_MS = 3000
 export const AI_TIMEOUT_MAX_MS = 120000
 /** 图片生成可能等待较慢的异步上游，单独允许最多 10 分钟。 */
 export const AI_IMAGE_TIMEOUT_MAX_MS = 600000
-
-/**
- * 商品分析（AI_IMAGE_TEXT_ANALYZE）单次最多接受的图片张数。
- *
- * 业务口径（当前上限 3 张）：商品图片工作台的上传界面与主进程收口都按这个数截断。
- * 之前 Main 两处各写一个字面量（一处注释还写成"最多 2 张"），此处收敛为同一份常量；
- * 单张 ≤ 8MB 与 MIME 白名单口径见各收口处的注释，不在这里重复。
- */
-export const AI_PRODUCT_ANALYSIS_IMAGE_LIMIT = 3
 
 /** 兼容旧版本保存的 120 秒默认值，同时保留用户主动设置的更短值。 */
 export function normalizeAiImageTimeoutMs(value: unknown): number {
@@ -64,7 +54,7 @@ export const AI_IMAGE_SETTING_KEYS = {
   timeoutMs: 'ai.image.timeoutMs'
 } as const
 
-/** AI 生成商品图片页面的卖点分析/提示词整理专用文本 API 配置。 */
+/** 图文带货文案生成使用的「生图文本 API」配置。 */
 export const AI_IMAGE_TEXT_SETTING_KEYS = {
   endpoint: 'ai.imageText.endpoint',
   model: 'ai.imageText.model',

@@ -6,8 +6,8 @@
  * 而同类导出（诊断包）早就有 `assertSafeExportPath`（仅用户目录/系统临时目录）。
  *
  * 规则与 `assertSafeExportPath`（diagnostics.ts）同源，两处差异**刻意**：
- *   · 非打包态额外放行**应用根目录**下——设计留档脚本（capture-implemented / real-ai-image-test）
- *     把截图与生成图写进仓库的 artifacts/、assets/，打包用户不受此放行影响；
+ *   · 非打包态额外放行**应用根目录**下——设计留档脚本把截图与生成图写进仓库的
+ *     artifacts/、assets/，打包用户不受此放行影响；
  *   · 扩展名不在这里收口（调用方按 mimeType 决定并补名），只要求"补名后的路径"落在允许根内。
  *
  * 单独成模块的原因：可被单测直接导入（只依赖 electron 的 app.isPackaged/getAppPath，可 mock），

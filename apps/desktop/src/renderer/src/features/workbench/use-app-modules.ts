@@ -7,9 +7,9 @@
  */
 import { reactive } from 'vue'
 
-export type OptionalModuleKey = 'invoices' | 'tax' | 'ai-assistant' | 'ai-image' | 'ai-chat-image' | 'ai-graphic'
+export type OptionalModuleKey = 'invoices' | 'tax' | 'ai-assistant' | 'ai-chat-image' | 'ai-graphic'
 
-export const AI_TOOL_MODULE_KEYS: OptionalModuleKey[] = ['ai-assistant', 'ai-image', 'ai-chat-image', 'ai-graphic']
+export const AI_TOOL_MODULE_KEYS: OptionalModuleKey[] = ['ai-assistant', 'ai-chat-image', 'ai-graphic']
 
 export const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['invoices', 'tax', ...AI_TOOL_MODULE_KEYS]
 
@@ -27,7 +27,6 @@ export const installedModules = reactive<Record<OptionalModuleKey, boolean>>({
   invoices: true,
   tax: true,
   'ai-assistant': true,
-  'ai-image': true,
   'ai-chat-image': true,
   'ai-graphic': true
 })

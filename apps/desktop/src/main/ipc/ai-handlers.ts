@@ -14,7 +14,7 @@ import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { IPC_CHANNELS, type IPCResult } from '@shared/contracts/ipc'
 import type { SellCopyInput } from '@shared/contracts/ai-sell-copy'
-import { AI_IMAGE_SETTING_KEYS, AI_IMAGE_TEXT_SETTING_KEYS, AI_IMAGE_TIMEOUT_MAX_MS, AI_PRODUCT_ANALYSIS_IMAGE_LIMIT, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS } from '@shared/constants/ai'
+import { AI_IMAGE_SETTING_KEYS, AI_IMAGE_TEXT_SETTING_KEYS, AI_IMAGE_TIMEOUT_MAX_MS, AI_TIMEOUT_MAX_MS, AI_TIMEOUT_MIN_MS } from '@shared/constants/ai'
 import { getDatabase } from '../db/database'
 import * as AiClient from '../services/ai-client'
 import { deleteAiImageKey, deleteAiImageTextKey, deleteAiKey, hasAiImageKey, hasAiImageTextKey, hasAiKey, saveAiImageKey, saveAiImageTextKey, saveAiKey } from '../services/credential-store'
@@ -227,7 +227,7 @@ export function registerAiHandlers(): void {
       }
       if (changed.length) {
         writeAudit('ai.imageTextConfig', 'success', { requestId: auditRequestId(requestId, changed.join(',')) })
-        logMain('info', `[ai:image-text] 商品分析文本配置已更新：${changed.join(',')}（不含 API Key）`)
+        logMain('info', `[ai:image-text] 生图文本配置已更新：${changed.join(',')}（不含 API Key）`)
       }
       return success(AiClient.getAiConfig())
     } catch (e: any) {
@@ -249,7 +249,7 @@ export function registerAiHandlers(): void {
       }
       saveAiImageTextKey(key)
       writeAudit('ai.imageTextKeySet', 'success', { requestId })
-      logMain('info', '[ai:image-text] 商品分析文本 API Key 已更新（safeStorage 加密存储，不回显）')
+      logMain('info', '[ai:image-text] 生图文本 API Key 已更新（safeStorage 加密存储，不回显）')
       return success({ hasImageTextKey: hasAiImageTextKey() })
     } catch (e: any) {
       writeAudit('ai.imageTextKeySet', 'failure', { requestId: auditRequestId(requestId, String(e?.code || 'AI_IMAGE_TEXT_KEY_SAVE_FAILED')) })
@@ -349,42 +349,6 @@ export function registerAiHandlers(): void {
       const message = String(e?.message || e).replace(/^[A-Z_]+:\s*/, '')
       writeAudit('ai.imageText.models', 'failure', { requestId: auditRequestId(requestId, code) })
       logMain('warn', `[ai:image-text] 获取可用模型失败 ${code}: ${message}`)
-      return failure(code, message)
-    }
-  })
-
-  // 商品分析只接受结构化字段 + 受限图片，由 Main 负责组装提示词，避免 Renderer 注入任意 system/工具指令。
-  ipcMain.handle(IPC_CHANNELS.AI_IMAGE_TEXT_ANALYZE, async (event: IpcMainInvokeEvent, input: { name?: string; tags?: string; price?: string; originalPrice?: string; images?: Array<{ mimeType?: string; b64Json?: string }> }): Promise<IPCResult> => {
-    const requestId = randomUUID()
-    try {
-      assertTrusted(event)
-      const name = String(input?.name || '').trim().slice(0, 120)
-      const tags = String(input?.tags || '').trim().slice(0, 240)
-      const price = String(input?.price || '').trim().slice(0, 24)
-      const originalPrice = String(input?.originalPrice || '').trim().slice(0, 24)
-      // 图片：最多 AI_PRODUCT_ANALYSIS_IMAGE_LIMIT（3）张，单张 ≤ 8MB，类型白名单（与上传时一致）
-      const images = (Array.isArray(input?.images) ? input.images : []).slice(0, AI_PRODUCT_ANALYSIS_IMAGE_LIMIT).map(item => ({
-        mimeType: String(item?.mimeType || '').split(';')[0].trim().toLowerCase(),
-        b64Json: String(item?.b64Json || '')
-      })).filter(item => {
-        if (!item.b64Json || !['image/png', 'image/jpeg', 'image/webp'].includes(item.mimeType)) return false
-        return Math.ceil(item.b64Json.length * 3 / 4) <= 8 * 1024 * 1024
-      })
-      if (!name && !tags && !images.length) {
-        writeAudit('ai.imageText.analyze', 'failure', { requestId: auditRequestId(requestId, 'AI_EMPTY_SOURCE') })
-        return failure('AI_EMPTY_SOURCE', '请先上传商品图，或填写商品名称/卖点，再请求 AI 分析')
-      }
-      const result = await AiClient.analyzeImageProductText({ name, tags, price, originalPrice, images })
-      const usedVision = images.length > 0
-      writeAudit('ai.imageText.analyze', 'success', { requestId: auditRequestId(requestId, `${result.model}${usedVision ? `(读图${images.length}张)` : ''}${result.source === 'main-text' ? '(回退主文本 API)' : ''}`) })
-      // source / 读图张数一并回传：界面要如实显示这次分析用的是哪套配置、有没有真的看图
-      return success({ text: result.text, model: result.model, elapsedMs: result.elapsedMs, source: result.source, imageCount: images.length })
-    } catch (e: any) {
-      const denied = deniedResult(e)
-      if (denied) return denied
-      const { code, message } = describeAiFailure(e)
-      writeAudit('ai.imageText.analyze', 'failure', { requestId: auditRequestId(requestId, code) })
-      logMain('warn', `[ai:image-text] 商品分析失败 ${code}: ${message}`)
       return failure(code, message)
     }
   })

@@ -115,7 +115,7 @@ export function credentialRefs(proxyId: string): { usernameRef: string; password
 export const AI_KEY_SETTING = 'ai_cred.key'
 /** 生图 API 独立凭据；不能复用文本 AI Key，避免误发到不同供应商。 */
 export const AI_IMAGE_KEY_SETTING = 'ai_cred.imageKey'
-/** AI 生成商品图片页面的文本分析专用凭据；不复用 Agent 文本 Key。 */
+/** 图文带货文案使用的「生图文本 API」专用凭据；不复用 Agent 文本 Key。 */
 export const AI_IMAGE_TEXT_KEY_SETTING = 'ai_cred.imageTextKey'
 
 export function saveAiKey(key: string): void {

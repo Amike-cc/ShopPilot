@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
  *
  * 为什么单独钉：这个功能跨四处接线（shared 通道 / 主进程 handler / preload / 渲染层页面与路由），
  * 少接一处不会编译失败，只会在运行期表现为"卡片点进去没反应"或"按钮点了没请求"。
- * 与 image-studio-parity.test.ts 同一套做法：只扫源码文本，不 import electron、不起窗口。
+ * 与页面级接线守卫同一套做法：只扫源码文本，不 import electron、不起窗口。
  */
 
 const readSource = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
@@ -166,7 +166,7 @@ describe('图文带货：生成流程与数据边界', () => {
 
   it('组参在渲染层就按 shared 上限与白名单收口', () => {
     expect(logic).toContain("from '@shared/contracts/ai-sell-copy'")
-    expect(logic).toContain('dataUrlToAnalysisImage')
+    expect(logic).toContain('dataUrlToImagePayload')
     expect(logic).toContain('normalizeSellCopyPlatform')
     expect(logic).toContain('clampSellCopyImageCount')
     expect(logic).toContain('SELL_COPY_LIMITS')

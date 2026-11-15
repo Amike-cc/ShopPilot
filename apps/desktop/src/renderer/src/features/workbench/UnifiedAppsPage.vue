@@ -16,7 +16,7 @@ import graphicSellAppIcon from '../../assets/icons/settings-square.svg'
 import AppCenterExtensions from './AppCenterExtensions.vue'
 import { ensureAppModulesLoaded, isModuleInstalled, setModuleInstalled, type OptionalModuleKey } from './use-app-modules'
 
-type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'assistant' | 'image-studio' | 'chat-image' | 'graphic-sell'
+type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'assistant' | 'chat-image' | 'graphic-sell'
 type AppTone = 'violet' | 'blue' | 'cyan' | 'orange' | 'indigo' | 'green' | 'pink' | 'slate' | 'amber'
 
 interface AppLink {
@@ -72,7 +72,6 @@ interface AiToolLink {
 }
 const aiTools: AiToolLink[] = [
   { key: 'ai-assistant', testId: 'apps-ai-assistant', label: 'AI 电商助手', description: '纯文本对话：讨论问题、整理思路、给出手动操作建议；不会读取或操作店铺与软件数据。', category: '对话', note: 'text', tone: 'violet', icon: aiAppIcon, page: 'assistant' },
-  { key: 'ai-image', testId: 'apps-ai-image', label: 'AI 生成商品图', description: '填商品信息、对话式生图，结果可直接预览与保存。', category: '内容创作', note: 'image', tone: 'pink', icon: aiAppIcon, page: 'image-studio' },
   { key: 'ai-chat-image', testId: 'apps-ai-chat-image', label: '对话生图', description: '用聊天描述画面，连续追问；可基于上一张结果继续修改并保存。', category: '内容创作', note: 'image', tone: 'cyan', icon: aiAppIcon, page: 'chat-image' },
   { key: 'ai-graphic', testId: 'apps-ai-graphic', label: '图文带货', description: 'AI 写带货笔记文案并生成多张配图，可编辑、复制与保存。', category: '内容创作', note: 'graphic', tone: 'orange', icon: graphicSellAppIcon, page: 'graphic-sell' }
 ]

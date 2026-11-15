@@ -20,7 +20,7 @@ const PORT = Number(process.env.SHOPILOT_GRAPHIC_RESULT_CDP_PORT || 9394)
 const MOCK_PORT = Number(process.env.SHOPILOT_GRAPHIC_RESULT_MOCK_PORT || 9395)
 const RUNTIME = process.env.SHOPILOT_RUNTIME_EXE || 'D:\\ShopPilot-runtime\\electron.exe'
 const OUT = path.join(ROOT, 'artifacts', 'graphic-sell')
-const SAMPLE_IMAGE = path.join(ROOT, 'apps/desktop/src/renderer/src/assets/ui/image-studio/reference-site/effect-1.jpg')
+const SAMPLE_IMAGE = path.join(ROOT, 'tools/acceptance/fixtures/product-sample.jpg')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 class CDP {

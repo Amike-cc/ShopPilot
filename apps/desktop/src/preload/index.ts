@@ -387,8 +387,6 @@ const api = {
     clearImageTextKey: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_KEY_CLEAR),
     testImageText: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_TEST),
     listImageTextModels: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_MODELS_LIST),
-    analyzeImageProduct: (input: { name?: string; tags?: string; price?: string; originalPrice?: string; images?: Array<{ mimeType: string; b64Json: string }> }): Promise<IPCResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_ANALYZE, JSON.parse(JSON.stringify(input))),
     // 图文带货文案：结构化输入，提示词与 JSON 解析都在主进程（AI 域未接入 IpcContract，继续走旧路径）
     generateSellCopy: (input: SellCopyInput): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_TEXT_SELL_COPY, JSON.parse(JSON.stringify(input))),

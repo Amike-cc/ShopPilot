@@ -1,12 +1,11 @@
 /**
- * 渲染层补齐入口验收 —— 2026-10-18
+ * 渲染层补齐入口验收 —— 2026-10-18；2026-11-15 更新（删除「AI 生成商品图」）
  *
- * 覆盖本轮补齐的「后端/IPC/类型都齐、渲染层没有入口」缺口里两个可离线验收的项：
+ * 覆盖可离线验收的入口：
  *   1) 店铺分组：卡片「分组」按钮 → 页内浮层 → 保存 → 主进程 store.list 真的落库 → 清除归零
  *      （修复前 `store:setGroup` 有 handler/preload/类型，渲染层零调用，分组只能看不能设）
- *   2) AI 商品分析：AI 创作页「✦ AI 分析商品」→ `ai.analyzeImageProduct`；未配置文本 API 时
- *      必须**行内**如实报中文错误（不是 alert / 不是静默失败），且按钮只在有素材来源时可点
- *      （修复前设置中心可配 Key、主进程有实现，但渲染层零调用，配置空转）
+ *   2) 登录状态主动检测：环境面板 → `session-check-login` → 结论如实上屏
+ *   3) 「AI 生成商品图」已彻底删除：侧栏、快捷操作与页面文本都不再出现
  *
  * 不在本脚本内：平台商品「解除归并」需要先有 platform link 数据（要真平台同步或造库），
  * 其入口由 `tests/unit/product-link-actions.test.ts` 的接线守卫 + vue-tsc 覆盖。
@@ -182,79 +181,18 @@ async function main() {
           /检测失败/.test(loginCheck.note)),
       JSON.stringify(loginCheck))
 
-    // ---------- 3) AI 商品分析入口 ----------
+    // ---------- 3) 「AI 生成商品图」已彻底删除 ----------
     check('侧栏可以回到「经营总览」', await navTo('经营总览'))
-
-    // 「短视频去重」和「影像级干扰」占位均已删除：快捷操作与 AI 工具页都不该再出现。
-    // 两个层次都要断言：① 旧锚点必须消失；② **文本级**（含被 CSS 隐藏的节点）不含该文案——
-    // 只查 data-test 的话，改个 key 把占位加回来仍会全绿（2026-10-18 独立复验 F3）。
-    const overviewTiles = await ui.eval(`
+    const removedImageFeature = await ui.eval(`
       return {
-        image: !!document.querySelector('[data-test="quick-action-image"]'),
-        dedupe: !!document.querySelector('[data-test="quick-action-dedupe"]'),
-        interference: !!document.querySelector('[data-test="quick-action-interference"]'),
-        dedupeText: (document.body.textContent || '').includes('短视频去重'),
-        interferenceText: (document.body.textContent || '').includes('影像级干扰')
+        nav: !document.querySelector('[data-test="nav-image-studio"]'),
+        quick: !document.querySelector('[data-test="quick-action-image"]'),
+        text: !(document.body.textContent || '').includes('AI 生成商品图')
       }
     `)
-    check('快捷操作不再展示已删除的「短视频去重」或「影像级干扰」占位（锚点 + 文本双层）',
-      overviewTiles.image === true && overviewTiles.dedupe === false &&
-        overviewTiles.interference === false && overviewTiles.dedupeText === false && overviewTiles.interferenceText === false,
-      JSON.stringify(overviewTiles))
-
-    check('侧栏可以进入独立的「AI 生成商品图」页', await navTo('AI 生成商品图'))
-    const appsPage = await ui.eval(`
-      // 用 textContent 而不是 innerText：连被 CSS 隐藏的卡片一起算，删除才是真删干净
-      const text = document.body.textContent || ''
-      return { dedupe: text.includes('短视频去重'), interference: text.includes('影像级干扰') }
-    `)
-    check('AI 工具页面不再出现「短视频去重」或「影像级干扰」占位',
-      appsPage.dedupe === false && appsPage.interference === false, JSON.stringify(appsPage))
-    check('侧栏可以再回到「经营总览」', await navTo('经营总览'))
-
-    const enterStudio = await ui.eval(`
-      const tile = document.querySelector('[data-test="quick-action-btn-image"]')
-      if (!tile) return { tile: false }
-      tile.click()
-      const deadline = Date.now() + 12000
-      while (Date.now() < deadline) {
-        if (document.querySelector('[data-test="unified-image-studio-page"]')) return { tile: true, studio: true }
-        await new Promise(r => setTimeout(r, 220))
-      }
-      return { tile: true, studio: false }
-    `)
-    check('快捷操作「AI 生成商品图」进入图片工作台', enterStudio.tile === true && enterStudio.studio === true, JSON.stringify(enterStudio))
-
-    const analyzeIdle = await ui.eval(`
-      const button = document.querySelector('[data-test="image-prompt-analyze"]')
-      return { present: !!button, disabled: button ? button.disabled === true : null }
-    `)
-    check('「✦ AI 分析商品」按钮存在，且没有商品名/描述/素材时不可点（不产生空请求）',
-      analyzeIdle.present === true && analyzeIdle.disabled === true, JSON.stringify(analyzeIdle))
-
-    const analyzeRun = await ui.eval(`
-      const name = document.querySelector('[data-test="product-name"]')
-      name.value = '入口验收商品'
-      name.dispatchEvent(new Event('input', { bubbles: true }))
-      await new Promise(r => setTimeout(r, 200))
-      const button = document.querySelector('[data-test="image-prompt-analyze"]')
-      const enabled = button.disabled !== true
-      button.click()
-      const deadline = Date.now() + 20000
-      let error = ''
-      let note = ''
-      while (Date.now() < deadline) {
-        error = (document.querySelector('[data-test="image-prompt-analyze-error"]')?.textContent || '').trim()
-        note = (document.querySelector('[data-test="image-prompt-analyze-note"]')?.textContent || '').trim()
-        if (error || note) break
-        await new Promise(r => setTimeout(r, 250))
-      }
-      return { enabled, error, note, busy: button.textContent.trim() }
-    `)
-    // 验收用全新 userData：生图文本 API 与主文本 API 都没配，必须走「如实报错」这条路径。
-    check('填了商品名后可点，未配置文本 API 时行内给出中文错误（不静默、不 alert）',
-      analyzeRun.enabled === true && /未配置|配置/.test(analyzeRun.error) && analyzeRun.note === '',
-      JSON.stringify(analyzeRun))
+    check('侧栏、快捷操作与页面文本都不再出现「AI 生成商品图」',
+      removedImageFeature.nav && removedImageFeature.quick && removedImageFeature.text,
+      JSON.stringify(removedImageFeature))
 
   } finally {
     try { ui?.close() } catch { /* 已断开 */ }

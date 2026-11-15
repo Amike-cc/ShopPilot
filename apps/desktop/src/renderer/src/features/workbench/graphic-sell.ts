@@ -19,17 +19,17 @@ import {
   type SellCopyResult,
   type SellCopySource
 } from '@shared/contracts/ai-sell-copy'
-import { dataUrlToAnalysisImage, type AnalysisSourceImage } from './image-text-analysis'
+import { dataUrlToImagePayload, type ImageSource } from './image-payload'
 
 /** 商品素材图：最多 3 张（与文案接口读图上限一致） */
 export const MAX_GRAPHIC_SELL_MATERIALS = SELL_COPY_LIMITS.maxImages
 /**
- * 单张素材上传上限。主进程文案接口允许 8MB，但生图编辑端点的既有上传体验是 5MB
- * （见 UnifiedImageStudioPage 的上传文案），这里与用户可见的文案保持一致。
+ * 单张素材上传上限。主进程文案接口允许 8MB，但生图编辑端点的既有上传体验是 5MB，
+ * 这里与用户可见的上传文案保持一致。
  */
 export const MAX_GRAPHIC_SELL_MATERIAL_BYTES = 5 * 1024 * 1024
 
-/** 与 use-image-studio-generation 的 UploadAsset 同形 */
+/** 页面素材状态：文件名、字节数与预览用 data URL */
 export interface GraphicSellMaterial {
   name: string
   size: number
@@ -342,7 +342,7 @@ export function buildGraphicSellInput(form: GraphicSellFormState): GraphicSellIn
   const images: SellCopyImagePayload[] = []
   for (const image of form?.images || []) {
     if (images.length >= SELL_COPY_LIMITS.maxImages) break
-    const payload = dataUrlToAnalysisImage(image as AnalysisSourceImage)
+    const payload = dataUrlToImagePayload(image as ImageSource)
     if (payload) images.push(payload)
   }
   const uploaded = Array.isArray(form?.images) ? form.images.length : 0
@@ -741,7 +741,7 @@ export function parseGraphicSellHistory(raw: string | null | undefined): Graphic
   }
 }
 
-/** 与 image-studio-ratios 的请求尺寸表保持同一套映射（3:4 → 1024x1536 等） */
+/** 生图接口的尺寸参数（3:4 → 1024x1536 等），与页面比例选项一一对应 */
 export function graphicSellRequestSize(ratio: string): '1024x1024' | '1536x1024' | '1024x1536' {
   if (ratio === '1:1') return '1024x1024'
   if (ratio === '4:3') return '1536x1024'

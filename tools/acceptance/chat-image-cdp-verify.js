@@ -104,7 +104,7 @@ async function waitFor(ui, expression, timeoutMs = 20000) {
 }
 
 function startMockServer() {
-  const sample = fs.readFileSync(path.join(ROOT, 'apps/desktop/src/renderer/src/assets/ui/image-studio/reference-site/effect-1.jpg'))
+  const sample = fs.readFileSync(path.join(ROOT, 'tools/acceptance/fixtures/product-sample.jpg'))
   const b64 = sample.toString('base64')
   const requests = []
   const server = http.createServer((req, res) => {

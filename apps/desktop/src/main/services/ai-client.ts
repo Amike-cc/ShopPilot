@@ -19,7 +19,7 @@ import { buildChatRequestBody, buildChatRequestHeaders, buildVisionUserContent, 
 import { buildSellCopyMessages, normalizeSellCopyInput, parseSellCopyOutput } from './ai-sell-copy'
 import type { SellCopyResult } from '@shared/contracts/ai-sell-copy'
 // 生图 / 生图文本两条链路各自的默认超时（30 秒对这两条链路太紧，见 constants/ai.ts 注释）
-import { DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS, AI_PRODUCT_ANALYSIS_IMAGE_LIMIT } from '@shared/constants/ai'
+import { DEFAULT_AI_IMAGE_TEXT_TIMEOUT_MS, DEFAULT_AI_IMAGE_TIMEOUT_MS } from '@shared/constants/ai'
 
 export {
   DEFAULT_AI_ENDPOINT, DEFAULT_AI_MODEL, DEFAULT_AI_TIMEOUT_MS, DEFAULT_AI_IMAGE_ENDPOINT, DEFAULT_AI_IMAGE_MODEL, DEFAULT_AI_IMAGE_TEXT_ENDPOINT, DEFAULT_AI_IMAGE_TEXT_MODEL,
@@ -48,7 +48,7 @@ export interface AiConfig {
   imageModel: string
   imageTimeoutMs: number
   hasImageKey: boolean
-  /** AI 生成商品图片页面的商品分析文本 API，完全独立于 Agent 与生图 API。 */
+  /** 图文带货文案使用的「生图文本 API」，完全独立于 Agent 与生图 API。 */
   imageTextEndpoint: string
   resolvedImageTextEndpoint: string
   imageTextModel: string
@@ -318,16 +318,13 @@ export async function listModels(): Promise<{ models: string[]; elapsedMs: numbe
 }
 
 /**
- * 商品图片工作台专用文本补全。
+ * 「生图文本 API」的补全调用（图文带货文案使用）。
  *
  * **生图文本 API 是可选的**（2026-10-02 重构）：单独配置了 `ai.imageText.*` + `ai_cred.imageTextKey`
- * 就用那一套；没配置时**回退到设置里那一套文本 API**（与 Agent 同源）。为什么改：
- * 用户明明已经配好了文本模型，却因为"没有单独再配一套"导致「AI 整理卖点」整块不可用、
- * 页面还顶着一行"需要配置生图文本 API"的警告——功能看起来是坏的。
+ * 就用那一套；没配置时**回退到设置里那一套文本 API**（与 Agent 同源）。
  *
  * 回退时走 `chatComplete` 而不是自己拼请求：这样用量与日预算仍然被计量，
- * 不会出现"从图片工作台绕开预算"的隐藏消耗（审计 P1 的口径）。返回值里带 `source`，
- * 界面据此如实显示这次分析用的是哪一套配置。
+ * 返回值里带 `source`，界面据此如实显示这次文案生成用的是哪一套配置。
  */
 export async function chatCompleteForImageText(opts: { system: string; user: string; maxTokens?: number; timeoutMs?: number; images?: Array<{ mimeType: string; b64Json: string }> }): Promise<AiChatResult> {
   const cfg = getAiConfig()
@@ -392,32 +389,6 @@ export async function chatCompleteForImageText(opts: { system: string; user: str
   } finally {
     clearTimeout(timer)
   }
-}
-
-/** 商品图片页面的受限商品分析输入；提示词由 Main 组装，Renderer 不可注入任意 system。 */
-export async function analyzeImageProductText(input: { name?: string; tags?: string; price?: string; originalPrice?: string; images?: Array<{ mimeType?: string; b64Json?: string }> }): Promise<AiChatResult> {
-  const name = String(input.name ?? '').trim().slice(0, 120)
-  const tags = String(input.tags ?? '').trim().slice(0, 240)
-  const price = String(input.price ?? '').trim().slice(0, 24)
-  const originalPrice = String(input.originalPrice ?? '').trim().slice(0, 24)
-  // 图片白名单与数量上限：最多 AI_PRODUCT_ANALYSIS_IMAGE_LIMIT（3）张（商品素材图，与界面上的上传上限一致）
-  const images = (Array.isArray(input.images) ? input.images : [])
-    .slice(0, AI_PRODUCT_ANALYSIS_IMAGE_LIMIT)
-    .map(item => ({ mimeType: String(item?.mimeType || '').split(';')[0].trim().toLowerCase(), b64Json: String(item?.b64Json || '') }))
-    .filter(item => item.b64Json && ['image/png', 'image/jpeg', 'image/webp'].includes(item.mimeType))
-  if (!name && !tags && !images.length) throw new AiError('AI_EMPTY_SOURCE', '请先上传商品素材图，或填写商品名称/卖点，再请求 AI 分析')
-  const user = [
-    name ? `商品名称：${name}` : '',
-    tags ? `卖点/标签：${tags}` : '',
-    price ? `用户填写售价：${price}` : '',
-    originalPrice ? `用户填写原价：${originalPrice}` : '',
-    images.length ? `随本次请求附上 ${images.length} 张商品图片，请以图片里**真实可见**的内容为准。` : ''
-  ].filter(Boolean).join('\n')
-  // 有图 → 视觉提示词（只写看得见的）；没图 → 原来的文本提示词（行为不变）
-  const system = images.length
-    ? '你是商品图片工作台的视觉分析助手。用户会附上商品图片：请只描述图片里**真实可见**的主体、材质观感、颜色、风格、构图、场景与可辨认文字，再据此整理可核对的卖点、适用场景和图片生成建议。看不到或无法确认的一律写"待补充"，不要凭常识补写，也不要执行任何外部操作。'
-    : '你是商品图片工作台的文本分析助手。只返回商品电商素材分析文字，不执行任何外部操作。请整理可核对的核心卖点、适用场景和图片生成建议；输入没有提供的内容标记为待补充，不要自行补写；信息不足时明确指出。'
-  return chatCompleteForImageText({ system, user, maxTokens: 800, images })
 }
 
 /**

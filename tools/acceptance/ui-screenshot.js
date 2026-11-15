@@ -29,7 +29,6 @@ const PAGES = [
   { key: 'invoices', label: '发票中心' },
   { key: 'tax', label: '涉税信息' },
   { key: 'assistant', label: 'AI 电商助手' },
-  { key: 'image-studio', label: 'AI 生成商品图' },
   { key: 'chat-image', label: '对话生图' },
   { key: 'graphic-sell', label: '图文带货' },
   { key: 'app-center', label: '应用商城' },
@@ -89,7 +88,7 @@ async function main() {
 
     // 截图用的临时库副本：把可选模块全部启用，保证发票/涉税页面也能进入评审（不触碰真实库）。
     try {
-      await client.eval(`await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax','ai-assistant','ai-image','ai-chat-image','ai-graphic']); return true`)
+      await client.eval(`await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax','ai-assistant','ai-chat-image','ai-graphic']); return true`)
       await client.send('Page.reload', { ignoreCache: true })
       await sleep(2200)
     } catch (err) {
@@ -158,46 +157,7 @@ async function main() {
     await capture('assistant-model-settings')
     await client.eval(`document.querySelector('.sm-close')?.click(); return true`)
     await sleep(300)
-    await client.eval(`document.querySelector('[data-test="nav-image-studio"]')?.click(); return true`)
-    await sleep(800)
-    await client.eval(`document.querySelector('[data-test="ai-tool-settings"]')?.click(); return true`)
-    await sleep(600)
-    const imageCfg = await client.eval(`
-      return {
-        text: Boolean(document.querySelector('[data-test="text-ai-config"]')),
-        image: Boolean(document.querySelector('[data-test="image-ai-config"]')),
-        imageText: Boolean(document.querySelector('[data-test="image-text-ai-config"]'))
-      }
-    `)
-    await capture('image-studio-model-settings')
-    await client.eval(`document.querySelector('.sm-close')?.click(); return true`)
-    await sleep(300)
-    console.log('[shot] 工具级模型设置 =', JSON.stringify({ assistantCfg, imageCfg }))
-
-    // AI 工具独立启停：卸载「AI 生成商品图」后，商城保留安装入口，侧栏只隐藏这一个工具。
-    await client.eval(`
-      const nav = [...document.querySelectorAll('.dashboard-nav-item')]
-        .find(el => (el.textContent || '').trim().includes('应用商城'))
-      nav?.click(); return true
-    `)
-    await sleep(700)
-    const removedAiImage = await client.eval(`
-      window.confirm = () => true
-      const btn = document.querySelector('[data-test="apps-ai-uninstall-ai-image"]')
-      if (!btn) return false
-      btn.click(); return true
-    `)
-    await sleep(900)
-    await capture('app-center-ai-image-removed')
-    const aiImageEntryGone = await client.eval(`
-      return {
-        navGone: !document.querySelector('[data-test="nav-image-studio"]'),
-        othersKept: Boolean(document.querySelector('[data-test="nav-assistant"]') && document.querySelector('[data-test="nav-graphic-sell"]'))
-      }
-    `)
-    await client.eval(`document.querySelector('[data-test="apps-ai-install-ai-image"]')?.click(); return true`)
-    await sleep(900)
-    console.log(`[shot] AI 工具独立卸载=${removedAiImage} 入口隐藏=${JSON.stringify(aiImageEntryGone)}，已重新安装`)
+    console.log('[shot] 助手模型设置 =', JSON.stringify(assistantCfg))
 
     // 助手独立卸载：总览不再出现「问问 AI」与悬浮球，但其他 AI 工具仍在。
     await client.eval(`
@@ -375,23 +335,6 @@ async function main() {
     await capture('collection-history')
     await client.eval(`document.querySelector('[data-test="collection-history-dialog"]')?.click(); return true`)
     await sleep(300)
-
-    // 图片工作台「图文详情」模式
-    await client.eval(`
-      const nav = document.querySelector('[data-test="nav-image-studio"]')
-      nav?.click(); return true
-    `)
-    await sleep(700)
-    const detailMode = await client.eval(`
-      const tab = document.querySelector('[data-test="studio-top-nav-detail"]')
-      if (!tab) return false
-      tab.click(); return true
-    `)
-    await sleep(900)
-    await capture('image-studio-detail')
-    await client.eval(`document.querySelector('[data-test="studio-top-nav-create"]')?.click(); return true`)
-    await sleep(400)
-    if (!detailMode) console.log('[shot] 图文详情页签未找到')
 
     // 收起态左栏
     await client.eval(`document.querySelector('[data-test="sidebar-collapse"]')?.click(); return true`)

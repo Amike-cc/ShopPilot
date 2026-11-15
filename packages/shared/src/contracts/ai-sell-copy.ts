@@ -26,8 +26,7 @@ export const SELL_COPY_DEFAULT_IMAGE_COUNT = 4
  * 输入/输出上限。
  *
  * 与主进程 handler 的清洗口径一致：超长内容在进模型前就截断，不让用户因为多写两行字
- * 收到一个“请求失败”。图片上限与现有「AI 生成商品图」页面的商品分析保持一致
- * （最多 3 张、单张 ≤ 8MB、png/jpeg/webp）。
+ * 收到一个“请求失败”。图片上限沿用生图链路的收口（最多 3 张、单张 ≤ 8MB、png/jpeg/webp）。
  */
 export const SELL_COPY_LIMITS = {
   productName: 120,
@@ -47,7 +46,7 @@ export const SELL_COPY_LIMITS = {
   imagePrompt: 200
 } as const
 
-/** 图片 MIME 白名单（与主进程 handler、生图文本分析共用同一集合） */
+/** 图片 MIME 白名单（与主进程 handler、渲染层图片收口共用同一集合） */
 export const SELL_COPY_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const
 export type SellCopyImageMimeType = typeof SELL_COPY_IMAGE_MIME_TYPES[number]
 

@@ -274,7 +274,6 @@ declare global {
         clearImageTextKey: () => Promise<IPCResult>
         testImageText: () => Promise<IPCResult>
         listImageTextModels: () => Promise<IPCResult>
-        analyzeImageProduct: (input: { name?: string; tags?: string; price?: string; originalPrice?: string; images?: Array<{ mimeType: string; b64Json: string }> }) => Promise<IPCResult>
         /** 图文带货文案：由主进程组装提示词并清洗模型返回，渲染层只传结构化商品信息。
          * 注意：这里不能跨包复用 @shared/contracts/ai-sell-copy 的 SellCopyInput（全局 declare 环境不参与别名解析），
          * 类型为手工内联——字段与 @shared/contracts/ai-sell-copy 的 SellCopyInput 保持同步，改契约时必须一起改。 */

@@ -224,7 +224,7 @@ async function main() {
     check('AI 卸载后发票待办仍在（未卸载）', invoiceCard === true && String(bodyAfter).includes('待开发票'))
     check('经营总览不再显示假的自定义日期', !String(bodyAfter).includes('自定义日期'))
 
-    await ui.eval(`return await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax','ai-assistant','ai-image','ai-graphic'])`)
+    await ui.eval(`return await window.shopilot.settings.set('ui.apps.installedModules', ['invoices','tax','ai-assistant','ai-graphic','ai-chat-image'])`)
   } finally {
     if (ui) ui.close()
     try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* ignore */ }

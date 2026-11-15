@@ -245,15 +245,15 @@ import { isModuleInstalled } from '../use-app-modules'
  * 首屏注意力被平均分配；新版把 6 个 KPI 与趋势图收进同一张主卡（先看结论再看走势），
  * 右栏只放"需要你处理的事"（同步异常、待开发票）与 AI 入口。
  *
- * 契约：data-test="overview-refresh" / quick-action-{image,analytics} /
- * quick-action-btn-{image,analytics} 必须保留（renderer-entries、image-analysis 验收按这些锚点点击）。
+ * 契约：data-test="overview-refresh" / quick-action-analytics / quick-action-btn-analytics
+ * 必须保留（renderer-entries 验收按这些锚点点击）。
  */
 defineProps<{
   invoiceTodoState: LoadState
   pendingInvoices: Array<{ id: string; name: string; badge: string; tone: string }>
 }>()
 const emit = defineEmits<{
-  navigate: [page: 'stores' | 'analytics' | 'image-studio']
+  navigate: [page: 'stores' | 'analytics']
   'open-invoices': []
   'open-assistant': []
   notice: [message: string]
@@ -275,7 +275,6 @@ const {
 
 /** 图标改为 AppIcon 名字：旧版两个 44px PNG 与侧栏图标风格不一致 */
 const quickActions = [
-  { key: 'image', label: 'AI 生成商品图', description: '白底图、场景图，选模型直接出图', icon: 'image', tone: 'purple', available: true, actionLabel: '立即创作' },
   { key: 'analytics', label: '查看数据分析', description: '按店铺与平台核对经营指标和快照', icon: 'chart', tone: 'blue', available: true, actionLabel: '去查看' }
 ]
 /**
@@ -284,14 +283,9 @@ const quickActions = [
  * 守卫只在点击后跳商城——用户仍会看到一个"装了但点不开"的入口，语义不一致。
  */
 const aiAssistantInstalled = computed(() => isModuleInstalled('ai-assistant'))
-const aiImageInstalled = computed(() => isModuleInstalled('ai-image'))
 const invoicesInstalled = computed(() => isModuleInstalled('invoices'))
-const visibleQuickActions = computed(() => quickActions.filter(action => {
-  if (action.key === 'image') return aiImageInstalled.value
-  return true
-}))
+const visibleQuickActions = computed(() => quickActions)
 function handleQuickAction(action: (typeof quickActions)[number]) {
-  if (action.key === 'image') { emit('navigate', 'image-studio'); return }
   if (action.key === 'analytics') { emit('navigate', 'analytics'); return }
   if (action.available) emit('notice', `${action.label}：${action.description}`)
 }

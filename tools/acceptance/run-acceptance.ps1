@@ -75,13 +75,9 @@ Run-Step 'sec' 'node tools/acceptance/sec-runner.js'
 # 42 assertions, ports 9380/9381 (override with SHOPILOT_TABS_CDP_PORT / SHOPILOT_TABS_SITE_PORT).
 # The script kills its own process tree only.
 Run-Step 'tabs-batch-close' 'node tools/acceptance/tabs-batch-close-cdp-verify.js'
-# Renderer entries that previously had backend+IPC but no UI: store grouping and AI product
-# analysis over CDP: 9 assertions, ports 9390/9391 (SHOPILOT_ENTRIES_CDP_PORT / _SITE_PORT).
+# Renderer entries over CDP: store grouping, session check, and deletion guard for the
+# removed AI image studio: 10 assertions, ports 9390/9391 (SHOPILOT_ENTRIES_CDP_PORT / _SITE_PORT).
 Run-Step 'renderer-entries' 'node tools/acceptance/renderer-entries-cdp-verify.js'
-# AI product analysis SUCCESS path against a local OpenAI-compatible stub (no real key, no cost):
-# config -> image studio -> analyze, 11 assertions, CDP port 9394 / stub port 9392.
-# SHOPILOT_ANALYSIS_NEGATIVE=1 must go red (guards against vacuous passes).
-Run-Step 'image-analysis' 'node tools/acceptance/image-analysis-cdp-verify.js'
 Run-Step 'm4-full' 'node tools/acceptance/m4-runner.js'
 Run-Step 'custom-local' 'node tools/acceptance/custom-task-local-verify.js'
 Run-Step 'invite-live-log' 'node tools/acceptance/invite-live-log-verify.js'
