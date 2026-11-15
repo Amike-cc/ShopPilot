@@ -7,8 +7,8 @@
         <span class="al-brand-sub">素材库</span>
       </div>
       <div class="al-head-actions">
-        <span class="al-count" data-test="asset-library-count">{{ items.length }} 张素材</span>
-        <button type="button" class="al-button ghost" data-test="asset-library-refresh" :disabled="loading || importing" @click="load">
+        <span class="al-count" data-test="asset-library-count">{{ libraryTotal }} 张素材<template v-if="capacityHint"> · 已用 {{ capacityHint }}</template></span>
+        <button type="button" class="al-button ghost" data-test="asset-library-refresh" :disabled="loading || importing" @click="load(true)">
           <AppIcon name="refresh" :size="15" />刷新
         </button>
         <button type="button" class="al-button primary" data-test="asset-library-import" :disabled="importing" @click="fileInput?.click()">
@@ -43,7 +43,7 @@
 
       <div v-if="loading && !items.length" class="al-loading" role="status">正在读取素材库…</div>
 
-      <div v-else-if="!items.length" class="al-empty" data-test="asset-library-empty">
+      <div v-else-if="!libraryTotal" class="al-empty" data-test="asset-library-empty">
         <div class="al-empty-mark" aria-hidden="true"><AppIcon name="image" :size="28" /></div>
         <h1>把常用图片收进一个库</h1>
         <p>导入商品图、场景图或对话生图的结果，按名称和标签检索；详情里可一键作为「对话生图」的下一轮参考图。</p>
@@ -53,17 +53,17 @@
 
       <template v-else>
         <div class="al-result-line">
-          <span>{{ filteredItems.length }} 张符合条件</span>
+          <span>{{ total }} 张符合条件<template v-if="items.length < total">（已显示 {{ items.length }}）</template></span>
           <button v-if="query || sourceFilter !== 'all' || tagFilter" type="button" @click="clearFilters">清除筛选</button>
         </div>
-        <div v-if="!filteredItems.length" class="al-empty compact" data-test="asset-library-no-match">
+        <div v-if="!items.length" class="al-empty compact" data-test="asset-library-no-match">
           <div class="al-empty-mark" aria-hidden="true"><AppIcon name="search" :size="24" /></div>
           <h1>没有匹配的素材</h1>
           <p>换个关键词或清除筛选再试。</p>
         </div>
         <div v-else class="al-grid" data-test="asset-library-grid">
           <article
-            v-for="item in filteredItems"
+            v-for="item in items"
             :key="item.id"
             class="al-card"
             :data-test="`asset-library-item-${item.id}`"
@@ -84,6 +84,12 @@
               </div>
             </div>
           </article>
+        </div>
+
+        <div v-if="items.length < total" class="al-more">
+          <button type="button" class="al-button" data-test="asset-library-more" :disabled="loadingMore" @click="loadMore">
+            {{ loadingMore ? '加载中…' : `加载更多（还有 ${total - items.length} 张）` }}
+          </button>
         </div>
       </template>
 
@@ -142,13 +148,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppIcon from '../../components/ui/AppIcon.vue'
 import brandMark from '../../assets/generated/shopilot-logo-generated.png'
 import {
   ASSET_LIBRARY_LIMITS,
   assetSourceLabel,
-  filterAssetLibraryItems,
   formatAssetSize,
   normalizeAssetTags,
   type AssetLibraryItem,
@@ -163,6 +168,12 @@ const emit = defineEmits<{ 'go-home': []; 'use-as-reference': [] }>()
 const items = ref<AssetLibraryItem[]>([])
 const allTags = ref<string[]>([])
 const loading = ref(false)
+const loadingMore = ref(false)
+/** 符合当前筛选的总条数（主进程 COUNT 出来的，不是当前页长度） */
+const total = ref(0)
+/** 库里的总量与占用：容量提示用 */
+const libraryTotal = ref(0)
+const libraryBytes = ref(0)
 const loadError = ref('')
 const notice = ref('')
 const noticeIsError = ref(false)
@@ -182,11 +193,12 @@ const editTags = ref('')
 const saving = ref(false)
 const deleting = ref(false)
 
-const filteredItems = computed(() => filterAssetLibraryItems(items.value, {
-  query: query.value,
-  source: sourceFilter.value,
-  tag: tagFilter.value
-}))
+/** 用得接近上限才提示，平时不占视觉位置 */
+const capacityHint = computed(() => {
+  const used = libraryBytes.value
+  if (!used || used / ASSET_LIBRARY_LIMITS.maxTotalBytes < 0.8) return ''
+  return formatAssetSize(used)
+})
 
 function sourceLabel(source: AssetLibrarySource): string {
   return assetSourceLabel(source)
@@ -197,22 +209,74 @@ function say(text: string, isError = false): void {
   noticeIsError.value = isError
 }
 
-async function load(): Promise<void> {
+/**
+ * 读取列表。reset=true 从第一页重读，false 追加下一页。
+ *
+ * 分页 + 服务端筛选（2026-11-15 审查）：以前一次拉 1000 条带缩略图，满库 40–80MB 走 IPC，
+ * 而且本地筛选在分页后只能搜到当前页。现在每一页由主进程 COUNT + LIMIT 给出。
+ *
+ * 并发用「请求代次」而不是 loading 开关：筛选变化时常有加载在飞，直接 return 会把最新的
+ * 那次搜索丢掉（表现就是搜了没反应）。代次只保留最后一次请求的结果。
+ */
+let loadSeq = 0
+async function load(reset = true): Promise<void> {
+  const seq = ++loadSeq
+  const offset = reset ? 0 : items.value.length
   loading.value = true
   loadError.value = ''
   try {
-    const result = await window.shopilot.assets.list()
+    const result = await window.shopilot.assets.list({
+      query: query.value,
+      source: sourceFilter.value,
+      tag: tagFilter.value,
+      offset,
+      limit: ASSET_LIBRARY_LIMITS.pageSize
+    })
+    if (seq !== loadSeq) return
     if (!result.ok) throw new Error(result.error.message)
-    const data = (result.data || { items: [], total: 0, tags: [] }) as AssetLibraryListResult
-    items.value = Array.isArray(data.items) ? data.items : []
+    const data = (result.data || {
+      items: [], total: 0, libraryTotal: 0, libraryBytes: 0, tags: []
+    }) as AssetLibraryListResult
+    const page = Array.isArray(data.items) ? data.items : []
+    items.value = reset ? page : [...items.value, ...page]
+    total.value = Number(data.total) || 0
+    libraryTotal.value = Number(data.libraryTotal) || 0
+    libraryBytes.value = Number(data.libraryBytes) || 0
     allTags.value = Array.isArray(data.tags) ? data.tags : []
     if (tagFilter.value && !allTags.value.includes(tagFilter.value)) tagFilter.value = ''
   } catch (error) {
-    loadError.value = `读取素材库失败：${error instanceof Error ? error.message : String(error)}`
+    if (seq === loadSeq) loadError.value = `读取素材库失败：${error instanceof Error ? error.message : String(error)}`
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
+
+async function loadMore(): Promise<void> {
+  // 有整表重读在飞时不追加，避免把旧页拼到新筛选结果后面
+  if (loading.value || loadingMore.value || items.value.length >= total.value) return
+  loadingMore.value = true
+  try {
+    await load(false)
+  } finally {
+    loadingMore.value = false
+  }
+}
+
+/** 筛选变化 → 防抖重读第一页（搜索框每敲一个字不该打一次 IPC） */
+const SEARCH_DEBOUNCE_MS = 120
+let reloadTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleReload(): void {
+  if (reloadTimer) clearTimeout(reloadTimer)
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null
+    void load(true)
+  }, SEARCH_DEBOUNCE_MS)
+}
+watch([query, sourceFilter, tagFilter], () => scheduleReload())
+onBeforeUnmount(() => {
+  if (reloadTimer) clearTimeout(reloadTimer)
+  reloadTimer = null
+})
 
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -231,6 +295,8 @@ async function importFiles(files: FileList | File[]): Promise<void> {
   let added = 0
   let duplicated = 0
   let failed = 0
+  /** 库满/超容量的原因要原样告诉用户，别混在"无法读取"里 */
+  let fullReason = ''
   try {
     for (const file of list) {
       if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) {
@@ -251,11 +317,21 @@ async function importFiles(files: FileList | File[]): Promise<void> {
         if (!result.ok) throw new Error(result.error.message)
         if (result.data?.duplicate) duplicated += 1
         else added += 1
-      } catch {
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (/素材库(最多|总容量)/.test(message)) {
+          // 已经满了：后面的文件不用再试，直接停
+          fullReason = message
+          break
+        }
         failed += 1
       }
     }
     await load()
+    if (fullReason) {
+      say(fullReason + (added ? `（本次已导入 ${added} 张）` : ''), true)
+      return
+    }
     const parts = [`已导入 ${added} 张`]
     if (duplicated) parts.push(`${duplicated} 张重复已跳过`)
     if (failed) parts.push(`${failed} 张无法读取`)
@@ -326,7 +402,7 @@ async function saveDetail(): Promise<void> {
     if (!result.ok) throw new Error(result.error.message)
     const updated = result.data as AssetLibraryItem
     detail.value = { ...detail.value, item: updated }
-    items.value = items.value.map(item => item.id === updated.id ? updated : item)
+    // 改名/改标签会影响筛选命中与排序，直接重读第一页（不再本地 map 拼一份可能过期的列表）
     await load()
     say('素材信息已保存')
   } catch (error) {
@@ -426,6 +502,7 @@ onMounted(() => { void load() })
 .al-empty p{max-width:520px;margin:0 0 18px;color:var(--dash-text-muted);font-size:12px;line-height:1.7}
 .al-empty-hint{margin-top:10px;color:var(--dash-text-muted);font-size:10px}
 .al-result-line{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;color:var(--dash-text-muted);font-size:11px}
+.al-more{display:flex;justify-content:center;padding:16px 0 4px}
 .al-result-line button{padding:0;border:0;background:transparent;color:#6d4df2;font-size:11px;cursor:pointer}
 .al-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:14px}
 .al-card{min-width:0;overflow:hidden;border:1px solid var(--ui-border);border-radius:12px;background:#fff;box-shadow:0 4px 14px rgba(30,38,60,.05);cursor:pointer;transition:transform .16s,border-color .16s,box-shadow .16s}

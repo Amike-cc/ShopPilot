@@ -114,7 +114,12 @@ const IMAGE_CANCEL_WINDOW_MS = 30 * 1000
  */
 const VIDEO_SAVE_FOLDER_MARKER = '__shopilot_pick_video_folder__.mp4'
 const BLOB_VIDEO_FOLDER_SESSION_MS = 5 * 60 * 1000
-const BLOB_VIDEO_CANCEL_WINDOW_MS = 5 * 60 * 1000
+/**
+ * 取消后丢弃后续 blob 视频的窗口（2026-11-15 审查：原来 5 分钟，比图片的 30 秒长一个量级）。
+ * 正常批次每批先发 marker，marker 会把窗口清零；这个窗口只兜「旧版插件/直接触发 blob」的
+ * 路径，60 秒足够覆盖同一批的连续触发，又不至于让用户点完取消后一分钟内的正常下载静默消失。
+ */
+const BLOB_VIDEO_CANCEL_WINDOW_MS = 60 * 1000
 
 /**
  * 把保存位置弹窗的结果告诉页面里的插件：detail 只用字符串，跨 isolated world 安全。
@@ -690,6 +695,8 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
           const now = Date.now()
           if (now < blobVideoCancelledUntil) {
             event.preventDefault()
+            // 2026-11-15 审查：以前这里静默丢弃，页面看不到"为什么没落盘"；每次丢弃都回传 cancel。
+            notifyVideoSaveResult(webContents, 'cancel')
             return
           }
           if (!blobVideoFolder.dir || now > blobVideoFolder.expiresAt) {

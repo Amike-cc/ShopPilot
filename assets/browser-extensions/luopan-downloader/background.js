@@ -49,25 +49,34 @@ function notifyJob(job, ok, error) {
   } catch (e) {}
 }
 
-/** 视频直链下载：5xx/429/网络错误重试 2 次；403/404 是签名过期，重试也没用。 */
+/**
+ * 视频直链下载：5xx/429/网络错误重试 2 次；403/404 是签名过期，重试也没用。
+ *
+ * 2026-11-15 修：旧实现把「非重试状态码」的 throw 写在同一个 try 里，被自己的 catch
+ * 接住后又走了一遍重试——403/404 实际打了 3 次（复现脚本实测），与注释和发布说明相反。
+ * 现在只有网络异常进 catch，状态码判定在 try 外。
+ */
 async function fetchVideo(url) {
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
+    let res = null;
     try {
-      const res = await fetch(url, { credentials: 'omit' });
-      if (res.ok) return res;
-      const status = res.status;
-      if (status >= 500 || status === 429) {
-        lastErr = new Error('HTTP ' + status + '（服务端繁忙，稍后重试）');
-        await sleep(900 * (attempt + 1));
-        continue;
-      }
-      throw new Error('HTTP ' + status + '（直链可能已过期，请重新抓取）');
+      res = await fetch(url, { credentials: 'omit' });
     } catch (err) {
       lastErr = err;
       if (attempt >= 2) throw err;
       await sleep(900 * (attempt + 1));
+      continue;
     }
+    if (res.ok) return res;
+    const status = res.status;
+    if (!(status >= 500 || status === 429)) {
+      // 403/404：直链签名已过期，再打两次只会多拉长失败时间、抬高风控概率
+      throw new Error('HTTP ' + status + '（直链可能已过期，请重新抓取）');
+    }
+    lastErr = new Error('HTTP ' + status + '（服务端繁忙，稍后重试）');
+    if (attempt >= 2) throw lastErr;
+    await sleep(900 * (attempt + 1));
   }
   throw lastErr || new Error('下载失败');
 }

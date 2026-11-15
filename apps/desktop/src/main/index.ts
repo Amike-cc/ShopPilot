@@ -3,7 +3,7 @@
  * Electron 主进程入口
  */
 
-import { app, BrowserWindow, dialog, crashReporter } from 'electron'
+import { app, BrowserWindow, dialog, crashReporter, Menu } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { writeFileSync, existsSync, rmSync } from 'fs'
@@ -32,6 +32,8 @@ import { registerExtensionHandlers } from './ipc/extension-handlers'
 import { registerUpdateHandlers } from './ipc/update-handlers'
 import { registerAiHandlers } from './ipc/ai-handlers'
 import { registerAssetLibraryHandlers } from './ipc/asset-library-handlers'
+import { reconcileAssetLibrary } from './services/asset-library'
+import { buildShellContextMenu, runShellMenuAction, toShellMenuInput, toShellMenuTemplate } from './browser/shell-context-menu'
 import { registerAgentHandlers } from './ipc/agent-handlers'
 import { registerAgentDomainHandlers } from './ipc/agent-domain-handlers'
 import { registerCustomerServiceHandlers } from './ipc/customer-service-handlers'
@@ -242,6 +244,25 @@ function createWindow(): void {
     },
     backgroundColor: '#1a1a1a',
     show: false
+  })
+
+  /**
+   * 壳层右键菜单（2026-11-15）：Electron 默认没有右键菜单，主干输入框（地址栏、搜索、表单）
+   * 右键一律无反应——用户实报「网址栏不能复制粘贴」就是这个（键盘 Ctrl+C/V 本身正常）。
+   * 只作用于主窗口自己的 webContents；店铺页面的菜单由 window-browser-core 给 guest 单独挂。
+   */
+  const shellWin = mainWindow
+  shellWin.webContents.on('context-menu', (_event, params) => {
+    const items = buildShellContextMenu(toShellMenuInput(params))
+    if (!items.length) return
+    // 验收用：原生菜单截不进 CDP 截图，只能靠日志证明"事件到了、菜单项组出来了"
+    if (process.env.SHOPILOT_ACCEPTANCE === '1') {
+      logMain('info', `[shell-menu] popup items=${items.length} editable=${!!params.isEditable} selection=${String(params.selectionText || '').length}`)
+    }
+    const menu = Menu.buildFromTemplate(toShellMenuTemplate(items, id => {
+      runShellMenuAction(id, shellWin.webContents)
+    }))
+    menu.popup({ window: shellWin })
   })
 
   // Electron does not expose a guest's partition string on Session. Carry an
@@ -579,6 +600,19 @@ async function initialize(): Promise<void> {
     })
     startBackgroundServices()
     customerMessageMonitor.start()
+
+    // 素材库对账（2026-11-15 审查）：清掉「文件写了、行没写进去」的崩溃残留，
+    // 并统计库内缺文件的条目。放到启动后 5 秒，不和首屏抢磁盘。
+    setTimeout(() => {
+      try {
+        const result = reconcileAssetLibrary()
+        if (result.removed || result.missing) {
+          logMain('info', `素材库对账：清理孤儿 ${result.removed}，缺文件 ${result.missing}（共 ${result.scanned} 条）`)
+        }
+      } catch (e: any) {
+        logMain('warn', '素材库对账失败（不影响使用）: ' + String(e?.message || e))
+      }
+    }, 5000)
 
     // 历史遗留的 Agent 记忆目录（%APPDATA%\ShopPilot\agent-memory）搬到 userData 之下：
     // 否则它会落在备份/诊断包/卸载清理的边界之外（2026-09-28 审查实测两个目录同时存在）。

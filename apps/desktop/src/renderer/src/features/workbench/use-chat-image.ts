@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import {
   buildChatImagePrompt,
+  chatImageRatioLabel,
   chatImageRequestSize,
   clampChatImageCount,
   chatImageSaveName,
@@ -20,6 +21,22 @@ export interface ChatImageResult {
   elapsedMs: number
 }
 
+/**
+ * 这一轮生成实际用的参数（2026-11-15 用户要求「模型、比例、张数在对话框显示」）。
+ *
+ * 存在**助手消息**上而不是用户消息上：参数是这次生成的事实，失败时也要留着，
+ * 用户能直接从对话里对上"当时选的什么、为什么只出一张"。
+ * `model` 取接口回报的模型（可能和服务配置不同），取不到才退回配置值。
+ */
+export interface ChatImageRequestParams {
+  model: string
+  ratio: ChatImageRatio
+  /** 比例的中文标签，与下拉框同源（见 chatImageRatioLabel） */
+  ratioLabel: string
+  /** 本轮请求的张数（已收口到 1–4） */
+  count: number
+}
+
 export interface ChatImageMessage {
   id: string
   role: 'user' | 'assistant'
@@ -27,8 +44,27 @@ export interface ChatImageMessage {
   at: number
   /** 用户这一轮附带的参考图（用于回显） */
   reference?: ChatImageAttachment | null
+  /** 这一轮的生图参数（仅助手消息） */
+  params?: ChatImageRequestParams
+  /**
+   * 产生这条结果（或这次失败）的提示词原文（仅助手消息）。
+   *
+   * 存在的唯一理由：失败重试要能拿回原文。此前只能靠"往上翻找上一条用户消息"，
+   * 一旦中间插了别的轮次就会重试错内容。
+   */
+  prompt?: string
   images?: ChatImageResult[]
   error?: string
+}
+
+/** 一次生成的入参：失败重试时用它把"当时的选择"原样还原，而不是拿当前选择器去覆盖 */
+export interface ChatImageSubmitOptions {
+  ratio?: ChatImageRatio
+  count?: number
+  /** 重试时沿用原来的参考图（不再从下一轮引用里取） */
+  reference?: ChatImageAttachment | null
+  /** 重试：替换这条失败消息，而不是再追一轮 */
+  replaceMessageId?: string
 }
 
 interface ImageConfigView {
@@ -107,8 +143,16 @@ export function useChatImage() {
     noticeIsError.value = false
   }
 
-  async function send(): Promise<void> {
-    const text = draft.value.trim()
+  /**
+   * 一次生成（重构 2026-11-16）。
+   *
+   * 之前 `send()` 把"读输入框 / 读选择器 / 清引用 / 发请求"全揉在一起，导致两件事做不到：
+   *   · 失败重试——拿不回"当时用的提示词和参数"，只能让用户重敲；
+   *   · 参数回放——重试必须按**原来的**比例/张数，而不是当前选择器。
+   * 现在文本与参数都从入参来，`send()` 只是它的一个薄包装。
+   */
+  async function submit(rawText: string, options: ChatImageSubmitOptions = {}): Promise<void> {
+    const text = String(rawText || '').trim()
     if (!text || busy.value) return
     notice.value = ''
     noticeIsError.value = false
@@ -118,24 +162,34 @@ export function useChatImage() {
       return
     }
 
-    const attachment = reference.value
+    const requestedRatio = options.ratio || ratio.value
+    const attachment = options.reference !== undefined ? options.reference : reference.value
     const source = attachment ? chatImageSourceFromDataUrl(attachment.dataUrl, attachment.name) : null
-    const requested = clampChatImageCount(imageCount.value)
-    messages.value.push({
-      id: id('user'),
-      role: 'user',
-      text,
-      at: Date.now(),
-      reference: attachment
-    })
-    draft.value = ''
-    reference.value = null
+    const requested = clampChatImageCount(options.count ?? imageCount.value)
+    const requestedModel = model.value
+    const retrying = Boolean(options.replaceMessageId)
+
+    if (retrying) {
+      // 重试：把失败的那条原位替换掉，不重复追加用户消息（否则对话里会出现两遍同样的话）
+      messages.value = messages.value.filter(message => message.id !== options.replaceMessageId)
+    } else {
+      messages.value.push({
+        id: id('user'),
+        role: 'user',
+        text,
+        at: Date.now(),
+        reference: attachment
+      })
+      draft.value = ''
+      reference.value = null
+    }
+
     busy.value = true
-    phase.value = '正在生成图片…'
+    phase.value = retrying ? '正在重试…' : '正在生成图片…'
     try {
       const result = await window.shopilot.ai.generateImage({
         prompt: buildChatImagePrompt(text, Boolean(source)),
-        size: chatImageRequestSize(ratio.value),
+        size: chatImageRequestSize(requestedRatio),
         n: requested,
         confirmed: true,
         ...(source ? { sourceImages: [source] } : {})
@@ -151,9 +205,17 @@ export function useChatImage() {
         role: 'assistant',
         text: '',
         at: Date.now(),
+        prompt: text,
+        reference: attachment,
+        params: {
+          model: String(data.model || requestedModel || '—'),
+          ratio: requestedRatio,
+          ratioLabel: chatImageRatioLabel(requestedRatio),
+          count: requested
+        },
         images: images.map(url => ({
           url,
-          model: String(data.model || model.value || '—'),
+          model: String(data.model || requestedModel || '—'),
           elapsedMs: Number(data.elapsedMs || 0)
         }))
       })
@@ -164,12 +226,46 @@ export function useChatImage() {
         role: 'assistant',
         text: '',
         at: Date.now(),
+        prompt: text,
+        reference: attachment,
+        // 失败时也留下参数：用户能看出"是 2 张都没出来，还是比例选错了"，也是重试的依据
+        params: {
+          model: String(requestedModel || '—'),
+          ratio: requestedRatio,
+          ratioLabel: chatImageRatioLabel(requestedRatio),
+          count: requested
+        },
         error: error instanceof Error ? error.message : String(error)
       })
     } finally {
       busy.value = false
       phase.value = ''
     }
+  }
+
+  /** 发送输入框里的内容（读取当前选择器） */
+  async function send(): Promise<void> {
+    await submit(draft.value)
+  }
+
+  /**
+   * 失败重试：按那条消息记录的提示词与参数重发。
+   * 没有记录提示词（理论上不会有）时如实提示，不猜一条去发。
+   */
+  async function retry(messageId: string): Promise<void> {
+    const failed = messages.value.find(message => message.id === messageId)
+    if (!failed || busy.value) return
+    const text = String(failed.prompt || '').trim()
+    if (!text) {
+      say('这条消息没有记录提示词，无法重试；请重新描述一次', true)
+      return
+    }
+    await submit(text, {
+      ratio: failed.params?.ratio,
+      count: failed.params?.count,
+      reference: failed.reference ?? null,
+      replaceMessageId: messageId
+    })
   }
 
   async function saveImage(url: string, index: number): Promise<void> {
@@ -209,6 +305,9 @@ export function useChatImage() {
     clearReference,
     reset,
     send,
+    submit,
+    retry,
+    say,
     saveImage
   }
 }

@@ -107,6 +107,8 @@ function startMockServer() {
   const sample = fs.readFileSync(path.join(ROOT, 'tools/acceptance/fixtures/product-sample.jpg'))
   const b64 = sample.toString('base64')
   const requests = []
+  /** 重试用例：同一个带 RETRY_ONCE 标记的提示词，第一次故意 500，之后正常 */
+  let retryFailures = 0
   const server = http.createServer((req, res) => {
     let body = ''
     req.on('data', chunk => { body += chunk.toString('binary') })
@@ -116,6 +118,13 @@ function startMockServer() {
       if (req.method !== 'POST' || !/images\/(generations|edits)/.test(String(req.url))) {
         res.writeHead(404, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: { message: 'not found' } }))
+        return
+      }
+      // multipart 里中文是 utf8 字节，用 latin1 读到的 body 也能匹配 ASCII 标记
+      if (body.includes('RETRY_ONCE') && retryFailures === 0) {
+        retryFailures += 1
+        res.writeHead(500, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'mock 500（首次故意失败）' } }))
         return
       }
       res.writeHead(200, { 'content-type': 'application/json' })
@@ -131,6 +140,8 @@ function startMockServer() {
 async function main() {
   fs.mkdirSync(OUT, { recursive: true })
   if (!fs.existsSync(RUNTIME)) throw new Error(`找不到验收运行时：${RUNTIME}`)
+  /** 粘贴用例的载荷：复用验收夹具（真 JPEG，走 File → FileReader → data URL 全链路） */
+  const PASTE_B64 = fs.readFileSync(path.join(ROOT, 'tools/acceptance/fixtures/product-sample.jpg')).toString('base64')
   const mock = await startMockServer()
   const userData = path.join(os.tmpdir(), 'shopilot-chat-image-' + Date.now())
   fs.mkdirSync(userData, { recursive: true })
@@ -158,6 +169,23 @@ async function main() {
     const modelText = await ui.eval(`return document.querySelector('[data-test="chat-image-model"]')?.textContent || ''`)
     check('页面显示真实生图模型', modelText.includes('mock-image'), modelText)
 
+    // 2026-11-16 重构：比例/张数搬进输入框上方，成为可直接改的控制条
+    const control = await ui.eval(`
+      const bar = document.querySelector('[data-test="chat-image-composer-meta"]')
+      const ratio = bar && bar.querySelector('[data-test="chat-image-ratio"]')
+      const count = bar && bar.querySelector('[data-test="chat-image-count"]')
+      const model = bar && bar.querySelector('[data-test="chat-image-composer-model"]')
+      return {
+        inBar: Boolean(ratio && count),
+        ratio: ratio ? ratio.value : '',
+        count: count ? count.value : '',
+        model: model ? (model.textContent || '').trim() : ''
+      }
+    `)
+    check('比例/张数在输入框上方，模型与顶栏一致',
+      control.inBar && control.ratio === '1:1' && control.count === '1' && control.model.includes('mock-image'),
+      JSON.stringify(control))
+
     await setText(ui, '[data-test="chat-image-input"]', '白色背景的帆布托特包商品主图，柔和阴影')
     const sent = await click(ui, '[data-test="chat-image-send"]')
     const first = await waitFor(ui, `return document.querySelectorAll('[data-test="chat-image-assistant-message"]').length >= 1`, 25000)
@@ -169,6 +197,19 @@ async function main() {
     check('第一轮结果图真实渲染（data URL + 已解码）', firstImage.src.startsWith('data:image/') && firstImage.naturalWidth > 0, JSON.stringify(firstImage))
     check('纯文字请求走 /images/generations', mock.requests.some(item => /images\/generations/.test(item.url) && !item.hasImageField), JSON.stringify(mock.requests))
 
+    // 2026-11-15：每轮参数（模型 · 比例 · 张数）要显示在对话里
+    const paramText = await ui.eval(`
+      const squeeze = el => el ? (el.textContent || '').replace(/\\s+/g, ' ').trim() : ''
+      return {
+        message: squeeze(document.querySelector('[data-test="chat-image-message-params"]')),
+        count: document.querySelectorAll('[data-test="chat-image-message-params"]').length
+      }
+    `)
+    check('助手消息里显示「模型 · 比例 · 张数」',
+      paramText.message.includes('mock-image') && paramText.message.includes('1 : 1 方图') && paramText.message.includes('1 张'),
+      JSON.stringify(paramText))
+    check('每条生成消息各带一份参数（不是只显示最新一条）', paramText.count === 1, JSON.stringify({ count: paramText.count }))
+
     const toLibrary = await click(ui, '[data-test^="chat-image-to-library-"]')
     const inLibrary = await waitFor(ui, `
       const result = await window.shopilot.assets.list()
@@ -179,6 +220,10 @@ async function main() {
       return result.ok ? result.data.items.find(item => item.source === 'chat-image') : null
     `)
     check('生成结果可一键存入素材库（source=chat-image）', toLibrary && inLibrary && Boolean(libraryItem), JSON.stringify(libraryItem && { name: libraryItem.name, tags: libraryItem.tags, source: libraryItem.source }))
+    // 2026-11-16 修：页面里 `say` 从来没被定义过，「存入素材库」成功后抛 ReferenceError，
+    // 用户永远看不到成功提示（图片其实存进去了）。这条断言钉住"提示真的出现了"。
+    const libraryNotice = await ui.eval(`return (document.querySelector('.ci-notice')?.textContent || '').trim()`)
+    check('存入素材库后有成功提示（此前 say 未定义，提示永远是空的）', libraryNotice.includes('已存入素材库'), JSON.stringify(libraryNotice))
     await ui.send('Page.captureScreenshot', { format: 'png' }).then(result => fs.writeFileSync(path.join(OUT, 'chat-image-result.png'), Buffer.from(result.data, 'base64')))
 
     const useRef = await click(ui, '[data-test^="chat-image-use-reference-"]')
@@ -192,6 +237,62 @@ async function main() {
     const editRequest = mock.requests.find(item => /images\/edits/.test(item.url))
     check('参考图请求走 /images/edits 且是 multipart image', Boolean(editRequest?.hasImageField && /multipart\/form-data/i.test(editRequest.contentType)), JSON.stringify(editRequest || null))
     await ui.send('Page.captureScreenshot', { format: 'png' }).then(result => fs.writeFileSync(path.join(OUT, 'chat-image-reference-result.png'), Buffer.from(result.data, 'base64')))
+
+    // ---- 2026-11-16 重构后的对话框能力 ----
+
+    // 1) 点结果图放大，Esc 关闭
+    await ui.eval(`document.querySelector('[data-test^="chat-image-result-"]')?.click(); return true`)
+    await sleep(500)
+    const previewOpen = await ui.eval(`return Boolean(document.querySelector('[data-test="chat-image-preview"]'))`)
+    await ui.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 })
+    await ui.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 })
+    await sleep(500)
+    const previewClosed = await ui.eval(`return !document.querySelector('[data-test="chat-image-preview"]')`)
+    check('点结果图可放大查看，Esc 关闭', previewOpen && previewClosed, JSON.stringify({ previewOpen, previewClosed }))
+
+    // 2) 失败一键重试：mock 对 RETRY_ONCE 首次返回 500，点重试后替换失败消息并出图
+    const beforeRetry = await ui.eval(`return document.querySelectorAll('[data-test="chat-image-assistant-message"]').length`)
+    await setText(ui, '[data-test="chat-image-input"]', '请生成 RETRY_ONCE 标记的白色马克杯图')
+    await click(ui, '[data-test="chat-image-send"]')
+    const failedShown = await waitFor(ui, `return Boolean(document.querySelector('[data-test^="chat-image-retry-"]'))`, 25000)
+    check('生成失败时出现「按原参数重试」', failedShown)
+    await click(ui, '[data-test^="chat-image-retry-"]')
+    const retried = await waitFor(ui, `
+      const rows = [...document.querySelectorAll('[data-test="chat-image-assistant-message"]')]
+      const last = rows[rows.length - 1]
+      return !document.querySelector('[data-test^="chat-image-retry-"]') && Boolean(last && last.querySelector('img'))
+    `, 25000)
+    const retryState = await ui.eval(`
+      const rows = [...document.querySelectorAll('[data-test="chat-image-assistant-message"]')]
+      const last = rows[rows.length - 1]
+      return {
+        assistants: rows.length,
+        users: document.querySelectorAll('[data-test="chat-image-user-message"]').length,
+        lastError: last ? (last.querySelector('[role="alert"]')?.textContent || '') : '',
+        lastParams: last ? (last.querySelector('[data-test="chat-image-message-params"]')?.textContent || '') : ''
+      }
+    `)
+    check('重试替换失败消息并出图，不重复追加用户消息',
+      retried && retryState.assistants === beforeRetry + 1 && retryState.users === retryState.assistants && !retryState.lastError,
+      JSON.stringify({ beforeRetry, ...retryState }))
+    check('重试沿用原参数（比例/张数没被选择器带跑）', retryState.lastParams.includes('1 : 1 方图') && retryState.lastParams.includes('1 张'), JSON.stringify(retryState.lastParams))
+
+    // 3) 粘贴截图直接作为下一轮参考图（与上传共用同一套校验）
+    const pasted = await ui.eval(`
+      const ta = document.querySelector('[data-test="chat-image-input"]')
+      const binary = atob(${JSON.stringify(PASTE_B64)})
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+      const dt = new DataTransfer()
+      dt.items.add(new File([bytes], 'pasted-shot.jpg', { type: 'image/jpeg' }))
+      const event = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })
+      ta.dispatchEvent(event)
+      await new Promise(r => setTimeout(r, 600))
+      const chip = document.querySelector('[data-test="chat-image-reference"]')
+      return { chip: Boolean(chip), text: (chip?.textContent || '').replace(/\\s+/g, ' ').trim() }
+    `)
+    check('粘贴截图即作为下一轮参考图', pasted.chip && pasted.text.includes('pasted-shot'), JSON.stringify(pasted))
+    await ui.send('Page.captureScreenshot', { format: 'png' }).then(result => fs.writeFileSync(path.join(OUT, 'chat-image-refactor.png'), Buffer.from(result.data, 'base64')))
   } catch (error) {
     check('验收执行未抛异常', false, String(error?.stack || error))
     console.error(appLog.split('\n').slice(-30).join('\n'))

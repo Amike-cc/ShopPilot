@@ -390,7 +390,9 @@ const api = {
 
   // 素材库：只传 data URL / id，不暴露本地绝对路径
   assets: {
-    list: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.ASSETS_LIST),
+    // 列表按页取（筛选与分页都在主进程做）；不传参数 = 第一页
+    list: (input?: { query?: string; source?: 'upload' | 'chat-image' | 'all'; tag?: string; offset?: number; limit?: number }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ASSETS_LIST, input ? JSON.parse(JSON.stringify(input)) : {}),
     addDataUrl: (input: { dataUrl: string; name?: string; tags?: string[]; source?: 'upload' | 'chat-image' }): Promise<IPCResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.ASSETS_ADD_DATA_URL, JSON.parse(JSON.stringify(input))),
     update: (input: { id: string; name?: string; tags?: string[] }): Promise<IPCResult> =>

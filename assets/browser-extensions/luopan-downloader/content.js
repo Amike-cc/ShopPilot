@@ -30,14 +30,22 @@
   const items = new Map();       // videoId -> item（主动拉取/页面推送累积，只增不删）
   let loading = false;
   let lastError = '';
-  /** 当前榜单数据对应的参数签名：页面换筛选后与之不符即重拉 */
-  let rankSig = '';
+  /**
+   * 「当前数据对应哪套筛选」的签名。**只用页面请求原始参数算**（与 syncRankSource 同源）。
+   *
+   * 2026-11-15 审查：之前这里存的是 rankBaseParams() 的签名（合并了 DEFAULT_CFG 和补出来的
+   * begin_date/end_date），却拿去和页面原始参数的签名比——两边口径不同，差一个键就永不相等，
+   * 于是每 1.8 秒重启一次拉取，20 页永远翻不完。现在两边都从页面参数算，口径一致。
+   */
+  let rankPageSig = '';
   /** 上一次榜单拉取完成的时间（performance.now），用来忽略「旧请求」 */
   let rankLoadAt = 0;
   /** 本轮拉取开始时间：总榜请求在拉取中途落地时，结束后也要补一次 */
   let rankLoadStartedAt = 0;
-  /** 加载期间用户又换了筛选：记下最新签名，本轮结束后补拉 */
-  let rankPendingSig = '';
+  /** 榜单重启限流：同一口径不一致时防止每 1.8 秒重启一次（2026-11-15 审查） */
+  const RANK_RESTART_WINDOW_MS = 30 * 1000;
+  const RANK_RESTART_MAX = 2;
+  let rankRestarts = [];
   /** 榜单加载代次：切换页面/强制重拉时旧请求回来不能覆盖新数据 */
   let rankRun = 0;
   let rankWatchStarted = false;
@@ -549,9 +557,11 @@
     } finally {
       videoFolderPending = false;
     }
-    if (result === 'cancel') {
-      renderErrorChip('罗盘下载：已取消保存位置，本批视频不会下载');
-      flash(btn, '已取消');
+    if (result === 'cancel' || result === 'timeout') {
+      renderErrorChip(result === 'cancel'
+        ? '罗盘下载：已取消保存位置，本批视频不会下载'
+        : '罗盘下载：保存位置 120 秒未确认，本批视频不会下载');
+      flash(btn, result === 'cancel' ? '已取消' : '未确认保存位置');
       return false;
     }
     return true;
@@ -634,8 +644,13 @@
     if (dlState) {
       dlState.total += jobs.length;
       dlState.btn = btn;
+      dlState.lastAt = Date.now();
     } else {
-      dlState = { total: jobs.length, done: 0, failed: 0, errors: [], btn: btn, cancelled: false };
+      // jobs/lastAt：按 job id 去重 + 无进展兜底（2026-11-15 审查），见 DL_JOB_* 注释
+      dlState = {
+        total: jobs.length, done: 0, failed: 0, errors: [], btn: btn, cancelled: false,
+        jobs: new Set(), lastAt: Date.now()
+      };
     }
     keepAlive(true);
     chrome.runtime.sendMessage({ type: 'LP_DOWNLOAD', jobs: jobs }, function (resp) {
@@ -918,7 +933,10 @@
       }
       if (run !== rankRun) return;
       const params = rankBaseParams();
-      rankSig = paramsSignature(params);       // 记录「当前数据对应哪套参数」
+      // 只记录「页面参数」的签名（与 syncRankSource 同源）；合并后的 params 不参与比较，
+      // 否则 DEFAULT_CFG / 补出来的日期会被当成"用户换了筛选"。
+      const pageP = latestFilterParams(MARKET_API) || latestFilterParams(RANK_API);
+      rankPageSig = pageP && Object.keys(pageP).length ? paramsSignature(pageP) : '';
       let emptyStreak = 0;
       for (let p = 1; p <= RANK_MAX_PAGE; p++) {
         if (run !== rankRun) return;           // 被新的强制重拉取代：旧请求结果直接丢弃
@@ -1182,33 +1200,30 @@
     const p = marketEntry ? latestRequestParams(MARKET_API, true) : latestRequestParams(RANK_API, true);
     if (!p) return;
     const sig = paramsSignature(p);
-    // 用户在当前拉取结束前又换了筛选：先记下最新签名，等本轮结束再补拉。
-    // 旧实现直接 return，且 rankLoadAt 在结束时才写——这个筛选变化会被永久忽略。
     if (loading) {
-      if (sig !== rankSig) {
-        // 别等 20 页翻完再补拉：立即用最新筛选重启，第一页就能对上当前表格
-        rankSig = sig;
-        rankPendingSig = '';
+      if (sig !== rankPageSig) {
+        // 别等 20 页翻完再补拉：立即用最新筛选重启，第一页就能对上当前表格。
+        // 两侧签名同源（都取页面请求原始参数），不会因为 DEFAULT_CFG / begin_date 的差异
+        // 误判成"筛选变了"。限流仍然保留：真·连续换筛选时不要把接口打爆。
+        const now = Date.now();
+        rankRestarts = rankRestarts.filter(function (t) { return now - t < RANK_RESTART_WINDOW_MS; });
+        if (rankRestarts.length >= RANK_RESTART_MAX) {
+          rankPageSig = sig;
+          renderErrorChip('罗盘下载：筛选变化过于频繁，已暂停重拉；稍后点插件弹窗「重新抓取」即可');
+          return;
+        }
+        rankRestarts.push(now);
+        rankPageSig = sig;
         resetRankView();
         loadRankAll(true);
       }
       return;
     }
-    if (rankPendingSig) {
-      const pending = rankPendingSig;
-      rankPendingSig = '';
-      if (pending !== rankSig) {
-        rankSig = pending;
-        resetRankView();
-        loadRankAll();
-        return;
-      }
-    }
     // 只认「晚于上一次拉取」的页面请求；总榜请求若在本轮拉取中途落地，结束后也要补拉。
     const afterLoadStart = !!marketEntry && entry.startTime > rankLoadStartedAt;
     if (entry.startTime <= rankLoadAt && !afterLoadStart) return;
-    if (sig === rankSig) return;
-    rankSig = sig;
+    if (sig === rankPageSig) return;
+    rankPageSig = sig;
     // 页面换了类目/价格带/搜索词：旧数据不再对应当前表格，清掉重拉
     resetRankView();
     loadRankAll();
@@ -1766,6 +1781,13 @@
     if (!msg || !msg.type) return;
     if (msg.type === 'LP_JOB') {
       if (!dlState) { reply({ ok: true }); return; }
+      // 同一条终态可能重投（SW 重连、页面重注入）：按 job id 去重，否则 done/failed 会多算
+      const jobId = String(msg.id || '');
+      if (jobId) {
+        if (dlState.jobs.has(jobId)) { reply({ ok: true }); return; }
+        dlState.jobs.add(jobId);
+      }
+      dlState.lastAt = Date.now();
       if (msg.ok) dlState.done++;
       else {
         dlState.failed++;
@@ -1886,8 +1908,11 @@
     // 只靠 rankBooted 首启一次会让按钮持续缺失/串商品。
     if (!rankWatchStarted) { rankWatchStarted = true; watchPageKeyword(); }
     if (rankHintTimer) { clearTimeout(rankHintTimer); rankHintTimer = null; }
-    rankPendingSig = '';
-    rankSig = '';
+    rankRestarts = [];
+    // 立刻把「当前页面筛选」记成已知签名：否则 boot 期间 tick 会把「页面有参数、我这边还是空」
+    // 当成一次筛选变化，白耗一次重启预算（连点两次就会弹出「筛选变化过于频繁」）。
+    const bootFilter = latestFilterParams(MARKET_API) || latestFilterParams(RANK_API);
+    rankPageSig = bootFilter && Object.keys(bootFilter).length ? paramsSignature(bootFilter) : '';
     rankLoadAt = 0;
     resetRankView();
     loadRankAll(true);
@@ -1946,9 +1971,42 @@
     }
   }
 
+  /**
+   * 下载进度兜底（2026-11-15 审查）。
+   *
+   * `dlState` 只在 processed >= total 时清空，靠 LP_JOB 逐条累加。任何一条终态丢失
+   * （页签导航、扩展重载、主进程卡在同步文件夹弹窗）都会让按钮永远停在「下载 x/y」、
+   * keepalive 端口不释放，下一批还把新任务加进同一个计数器。
+   *
+   * 阈值取「无任何终态消息」的静默时长，而不是整批耗时：单个大文件（44MB）在慢网下
+   * 也要几十秒才回一条，所以 2 分钟只提示、10 分钟才放弃跟踪，且**不谎报完成**——
+   * 真实落盘结果以应用右侧「下载」面板为准。
+   */
+  const DL_JOB_WARN_MS = 120 * 1000;
+  const DL_JOB_GIVE_UP_MS = 600 * 1000;
+  function watchDownloadSilence() {
+    if (!dlState) return;
+    const silent = Date.now() - (dlState.lastAt || 0);
+    if (silent < DL_JOB_WARN_MS) return;
+    const pending = Math.max(0, dlState.total - dlState.done - dlState.failed);
+    if (silent >= DL_JOB_GIVE_UP_MS) {
+      keepAlive(false);
+      renderErrorChip('罗盘下载：后台队列 ' + Math.round(silent / 60000) + ' 分钟没有回音，已停止跟踪；' +
+        (pending > 0 ? '仍有 ' + pending + ' 个未确认，' : '') + '请到右侧「下载」面板核对结果');
+      dlState = null;
+      return;
+    }
+    if (!dlState.warned) {
+      dlState.warned = true;
+      renderErrorChip('罗盘下载：后台队列 2 分钟没有回音，可能已中断；' +
+        (pending > 0 ? '剩 ' + pending + ' 个未确认，' : '') + '请到右侧「下载」面板核对');
+    }
+  }
+
   function boot() {
     tick();
     setInterval(tick, 1800);
+    setInterval(watchDownloadSilence, 5000);
   }
 
   if (document.readyState === 'loading') {

@@ -382,8 +382,8 @@
       </section>
     </div>
 
-    <!-- 通用确认 -->
-    <div v-if="confirmDialog.open" class="ui-overlay" data-test="confirm-dialog" @click.self="dismissConfirmDialog">
+    <!-- 通用确认：可能叠在回收站浮层之上（点「彻底删除」），必须显式抬高层级 -->
+    <div v-if="confirmDialog.open" class="ui-overlay ui-overlay--stacked" data-test="confirm-dialog" @click.self="dismissConfirmDialog">
       <section class="ui-dialog" role="alertdialog" aria-modal="true" aria-label="确认操作">
         <div class="ui-dialog__head">
           <div><h2>{{ confirmDialog.title }}</h2><p>{{ confirmDialog.message }}</p></div>

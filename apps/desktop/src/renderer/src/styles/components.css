@@ -740,6 +740,17 @@
   backdrop-filter: blur(3px);
   animation: ui-fade-in var(--dur-base) var(--ease);
 }
+/**
+ * 叠在另一个浮层之上的浮层（2026-11-15 修：回收站里点「彻底删除」）。
+ *
+ * 所有 `.ui-overlay` 同为 `position:fixed` + 同一个 z-index，谁在上面只取决于 DOM 顺序；
+ * 确认框在模板里排在回收站**之前**，于是被回收站的遮罩整块盖住——看得见一点模糊的变化，
+ * 但点不到、也读不到文案。用户实报的「显示位置不正确」就是这个。
+ * 需要"浮层里再开浮层"时给它加这个类，别用 DOM 顺序去赌。
+ */
+.ui-overlay--stacked {
+  z-index: calc(var(--z-overlay) + 10);
+}
 .ui-dialog {
   display: flex;
   width: min(452px, 100%);

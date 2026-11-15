@@ -8,17 +8,7 @@
       </div>
       <div class="ci-head-actions">
         <span class="ci-model" :class="{ off: !configured }" data-test="chat-image-model">模型：{{ model || '未配置' }}</span>
-        <label class="ci-select"><span>比例</span>
-          <select v-model="ratio" data-test="chat-image-ratio" :disabled="busy">
-            <option v-for="item in CHAT_IMAGE_RATIO_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
-          </select>
-        </label>
-        <label class="ci-select"><span>张数</span>
-          <select v-model.number="imageCount" data-test="chat-image-count" :disabled="busy">
-            <option v-for="count in CHAT_IMAGE_COUNT_OPTIONS" :key="count" :value="count">{{ count }} 张</option>
-          </select>
-        </label>
-        <button type="button" class="ci-ghost" data-test="chat-image-new" :disabled="busy || !messages.length" @click="reset">新对话</button>
+        <button type="button" class="ci-ghost" data-test="chat-image-new" :disabled="busy || !messages.length" @click="resetChat">新对话</button>
         <AiToolSettings title="对话生图 · 模型设置" :sections="['image']" @closed="reloadConfig" />
       </div>
     </header>
@@ -46,13 +36,34 @@
           </div>
           <div v-else class="ci-row assistant" data-test="chat-image-assistant-message">
             <div class="ci-bubble assistant">
+              <div v-if="message.params" class="ci-msg-params" data-test="chat-image-message-params">
+                <span class="ci-msg-model" :title="message.params.model">{{ message.params.model }}</span>
+                <span>{{ message.params.ratioLabel }}</span>
+                <span>{{ message.params.count }} 张</span>
+              </div>
               <div v-if="message.error" class="ci-error" role="alert">
                 <strong>生成失败</strong>
                 <p>{{ message.error }}</p>
+                <button
+                  type="button"
+                  class="ci-retry"
+                  :data-test="`chat-image-retry-${message.id}`"
+                  :disabled="busy"
+                  @click="retry(message.id)"
+                >
+                  <AppIcon name="refresh" :size="13" />按原参数重试
+                </button>
               </div>
               <div v-else-if="message.images?.length" class="ci-result-grid" :class="{ single: message.images.length === 1 }">
                 <figure v-for="(image, imageIndex) in message.images" :key="image.url.slice(-32) + imageIndex" class="ci-result">
-                  <img :src="image.url" :alt="`对话生成图片 ${imageIndex + 1}`" loading="lazy" @load="scrollToBottom" />
+                  <img
+                    :src="image.url"
+                    :alt="`对话生成图片 ${imageIndex + 1}`"
+                    loading="lazy"
+                    :data-test="`chat-image-result-${message.id}-${imageIndex}`"
+                    @load="scrollToBottom(false)"
+                    @click="openPreview(image.url, imageIndex + 1)"
+                  />
                   <figcaption>
                     <span class="ci-result-meta">{{ image.model }}<template v-if="image.elapsedMs"> · {{ (image.elapsedMs / 1000).toFixed(1) }}s</template></span>
                     <span class="ci-result-actions">
@@ -82,6 +93,19 @@
         <div v-if="configError" class="ci-config-error" role="alert">{{ configError }}</div>
         <div v-if="attachError" class="ci-config-error" role="alert">{{ attachError }}</div>
         <div v-if="notice" :class="['ci-notice', { error: noticeIsError }]" role="status">{{ notice }}</div>
+        <div class="ci-composer-meta ci-controls" data-test="chat-image-composer-meta">
+          <span class="ci-control-model" data-test="chat-image-composer-model" :title="model || '未配置'"><i>模型</i>{{ model || '未配置' }}</span>
+          <label class="ci-control"><i>比例</i>
+            <select v-model="ratio" data-test="chat-image-ratio" :disabled="busy">
+              <option v-for="item in CHAT_IMAGE_RATIO_OPTIONS" :key="item.key" :value="item.key">{{ item.label }}</option>
+            </select>
+          </label>
+          <label class="ci-control"><i>张数</i>
+            <select v-model.number="imageCount" data-test="chat-image-count" :disabled="busy">
+              <option v-for="count in CHAT_IMAGE_COUNT_OPTIONS" :key="count" :value="count">{{ count }} 张</option>
+            </select>
+          </label>
+        </div>
         <div class="ci-composer">
           <button type="button" class="ci-attach" title="上传参考图（下一轮生效）" aria-label="上传参考图" :disabled="busy" @click="materialInput?.click()">
             <AppIcon name="upload" :size="16" />
@@ -93,7 +117,8 @@
             rows="2"
             maxlength="1000"
             data-test="chat-image-input"
-            placeholder="描述你想要的图片；回车发送，Shift+回车换行"
+            placeholder="描述你想要的图片；回车发送，Shift+回车换行；直接粘贴截图会作为下一轮参考图"
+            @paste="onPaste"
             @keydown.enter.exact.prevent="sendMessage"
           ></textarea>
           <button type="button" class="ci-send" data-test="chat-image-send" :disabled="!draft.trim() || busy || !configured" @click="sendMessage">
@@ -101,16 +126,25 @@
           </button>
         </div>
         <p class="ci-hint">
-          每轮按「{{ ratio }} · {{ imageCount }} 张」生成；「基于这张改」会把该图作为下一轮参考图。
+          「基于这张改」会把该图作为下一轮参考图；粘贴截图等同上传参考图。
           {{ configured ? '结果来自真实生图接口，保存时选择本地路径。' : '生图接口未配置，请点右上角「模型设置」。' }}
         </p>
       </div>
     </div>
+
+    <!-- 结果图放大：生成图常有细节要核对，缩略图看不准；Esc / 点空白关闭 -->
+    <Teleport to="body">
+      <div v-if="preview" class="ci-lightbox" data-test="chat-image-preview" role="dialog" aria-modal="true" aria-label="查看生成图片" @click.self="closePreview">
+        <button type="button" class="ci-lightbox-close" aria-label="关闭预览" data-test="chat-image-preview-close" @click="closePreview">×</button>
+        <img :src="preview.url" :alt="`生成图片 ${preview.index} 放大查看`" @click="closePreview" />
+        <span class="ci-lightbox-cap">第 {{ preview.index }} 张 · 点击图片或按 Esc 关闭</span>
+      </div>
+    </Teleport>
   </section>
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppIcon from '../../components/ui/AppIcon.vue'
 import AiToolSettings from './AiToolSettings.vue'
 import brandMark from '../../assets/generated/shopilot-logo-generated.png'
@@ -141,6 +175,8 @@ const {
   clearReference,
   reset,
   send,
+  retry,
+  say,
   saveImage
 } = useChatImage()
 
@@ -150,25 +186,59 @@ const EXAMPLES = [
   '咖啡杯场景图，木质桌面，清晨侧光'
 ]
 
+/** 输入框上方的控制条：比例/张数在这里直接改（原来在顶栏，敲字时要抬头去找） */
+
 const scrollArea = ref<HTMLElement | null>(null)
 const composerInput = ref<HTMLTextAreaElement | null>(null)
 const materialInput = ref<HTMLInputElement | null>(null)
 const attachError = ref('')
+/** 结果图放大查看（null = 关闭）；生成图常要核对细节，缩略图看不准 */
+const preview = ref<{ url: string; index: number } | null>(null)
 
-function scrollToBottom(): void {
+/** 离底部这么近才算"还在看最新" —— 用户往上翻历史时不要把他拽回底部 */
+const NEAR_BOTTOM_PX = 140
+function nearBottom(): boolean {
+  const area = scrollArea.value
+  if (!area) return true
+  return area.scrollHeight - area.scrollTop - area.clientHeight <= NEAR_BOTTOM_PX
+}
+/**
+ * 滚到底。force=true 只用在"我自己刚发了一条"之后；
+ * 新结果落地、图片解码完成一律不强制，避免打断上翻阅读。
+ */
+function scrollToBottom(force = false): void {
+  if (!force && !nearBottom()) return
   void nextTick(() => {
     const area = scrollArea.value
     if (area) area.scrollTop = area.scrollHeight
   })
 }
+
+function openPreview(url: string, index: number): void {
+  preview.value = { url, index }
+}
+function closePreview(): void {
+  preview.value = null
+}
+function onPreviewKeydown(event: KeyboardEvent): void {
+  if (!preview.value || event.key !== 'Escape') return
+  event.preventDefault()
+  closePreview()
+}
+
 function useExample(text: string): void {
   draft.value = text
   composerInput.value?.focus()
 }
 async function sendMessage(): Promise<void> {
   await send()
-  scrollToBottom()
+  scrollToBottom(true)
   composerInput.value?.focus()
+}
+function resetChat(): void {
+  reset()
+  preview.value = null
+  attachError.value = ''
 }
 function useResultAsReference(message: ChatImageMessage, image: ChatImageResult): void {
   setReference({
@@ -195,27 +265,64 @@ async function saveToLibrary(url: string, index: number): Promise<void> {
     say(`存入素材库失败：${error instanceof Error ? error.message : String(error)}`, true)
   }
 }
+/**
+ * 把一张图片文件变成「下一轮参考图」。
+ *
+ * 上传与粘贴共用：两处的校验（类型 / 5MB）必须一致，否则"粘贴能过、上传不过"这类差异
+ * 会变成难复现的怪事。文案里带上来源，用户知道是哪次操作被拒了。
+ */
+function applyReferenceFile(file: File, origin: '上传' | '粘贴'): void {
+  attachError.value = ''
+  if (!/^image\/(png|jpeg)$/i.test(file.type)) {
+    attachError.value = `${origin}的内容不是 PNG / JPEG，无法作为参考图`
+    return
+  }
+  if (file.size > CHAT_IMAGE_MAX_REFERENCE_BYTES) {
+    attachError.value = `${origin}的图片 ${(file.size / 1024 / 1024).toFixed(1)}MB，超过参考图 5MB 上限`
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => setReference({ name: file.name || `${origin}的图片-${Date.now()}.png`, dataUrl: String(reader.result || '') })
+  reader.onerror = () => { attachError.value = `${origin}的图片读取失败，请重试一次` }
+  reader.readAsDataURL(file)
+}
 function onMaterialFiles(event: Event): void {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  attachError.value = ''
-  if (!file) return
-  if (!/^image\/(png|jpeg)$/i.test(file.type)) { attachError.value = '参考图只支持 PNG / JPEG'; return }
-  if (file.size > CHAT_IMAGE_MAX_REFERENCE_BYTES) { attachError.value = '参考图单张不能超过 5MB'; return }
-  const reader = new FileReader()
-  reader.onload = () => setReference({ name: file.name, dataUrl: String(reader.result || '') })
-  reader.onerror = () => { attachError.value = '读取参考图失败，请重新选择' }
-  reader.readAsDataURL(file)
+  if (file) applyReferenceFile(file, '上传')
 }
+/**
+ * 粘贴入图：截图直接当参考图，省掉"存成文件再点上传"。
+ * 只有剪贴板里**真带图片**时才拦默认行为，普通文本粘贴照旧。
+ */
+function onPaste(event: ClipboardEvent): void {
+  const items = event.clipboardData?.items
+  if (!items) return
+  for (const item of items) {
+    if (item.kind !== 'file') continue
+    const file = item.getAsFile()
+    if (!file || !/^image\//i.test(file.type)) continue
+    event.preventDefault()
+    const named = file.name ? file : new File([file], `粘贴的图片-${Date.now()}.png`, { type: file.type })
+    applyReferenceFile(named, '粘贴')
+    return
+  }
+}
+
 watch(busy, value => emit('busy-change', value))
-watch(() => messages.value.length, scrollToBottom, { flush: 'post' })
-watch(attachError, scrollToBottom, { flush: 'post' })
+// 只在"还在看最新"时跟随；新消息落地不强制滚动
+watch(() => messages.value.length, () => scrollToBottom(false), { flush: 'post' })
+watch(attachError, () => scrollToBottom(false), { flush: 'post' })
+// 开始打字就把上次的参考图错误收掉，别让它一直挂在那儿
+watch(draft, () => { if (attachError.value) attachError.value = '' })
 onMounted(() => {
   void reloadConfig()
+  window.addEventListener('keydown', onPreviewKeydown)
   const pending = takePendingAssetReference()
   if (pending) setReference(pending)
 })
+onBeforeUnmount(() => window.removeEventListener('keydown', onPreviewKeydown))
 </script>
 
 <style scoped>
@@ -228,8 +335,13 @@ onMounted(() => {
 .ci-head-actions{display:flex;align-items:center;gap:9px;min-width:0;flex-wrap:wrap;justify-content:flex-end}
 .ci-model{max-width:185px;overflow:hidden;padding:3px 8px;border:1px solid var(--ui-border);border-radius:999px;color:var(--success-text);background:var(--success-soft);font-size:10.5px;text-overflow:ellipsis;white-space:nowrap}
 .ci-model.off{color:var(--warning-text);background:var(--warning-soft);border-color:rgba(247,144,9,.28)}
-.ci-select{display:inline-flex;align-items:center;gap:5px;color:var(--ui-text-muted);font-size:10.5px;white-space:nowrap}
-.ci-select select{height:30px;padding:0 6px;border:1px solid var(--ui-border);border-radius:7px;background:#fff;color:var(--ui-text-soft);font:inherit}
+.ci-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 2px 6px;color:var(--ui-text-muted);font-size:10px;line-height:1.5}
+.ci-control{display:inline-flex;align-items:center;gap:5px;color:var(--ui-text-muted);font-size:10px;white-space:nowrap}
+.ci-control i,.ci-control-model i{font-style:normal;opacity:.65}
+.ci-control select{height:26px;padding:0 4px;border:1px solid var(--ui-border);border-radius:6px;background:#fff;color:var(--ui-text-soft);font:inherit;font-size:10.5px}
+.ci-control select:disabled{opacity:.55;cursor:not-allowed}
+.ci-control-model{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:240px}
+.ci-control-model{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ci-ghost{min-height:30px;padding:0 10px;border:1px solid var(--ui-border);border-radius:7px;background:#fff;color:var(--ui-text-soft);font-size:10.5px;cursor:pointer}
 .ci-ghost:hover:not(:disabled){border-color:var(--brand-border);color:var(--brand-text)}
 .ci-ghost:disabled{opacity:.5;cursor:not-allowed}
@@ -250,11 +362,19 @@ onMounted(() => {
 .ci-bubble.user p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .ci-bubble.assistant{width:auto;max-width:min(760px,92%);border:1px solid var(--ui-border);background:var(--ui-surface);color:var(--ui-text)}
 .ci-ref-inline{display:inline-flex;align-items:center;gap:7px;margin-bottom:8px;padding:4px 7px;border-radius:8px;background:rgba(255,255,255,.18);font-size:10px}
+/* 消息里的生图参数（模型 · 比例 · 张数）：一行小字，长了省略模型名，别把气泡撑爆 */
+.ci-msg-params{display:flex;align-items:center;gap:0;margin-bottom:8px;color:var(--ui-text-muted);font-size:9.5px}
+.ci-msg-params>span{position:relative;padding:0 7px;white-space:nowrap}
+.ci-msg-params>span+span::before{content:'';position:absolute;left:0;top:50%;width:2px;height:2px;margin-top:-1px;border-radius:50%;background:currentColor;opacity:.55}
+.ci-msg-params>span:first-child{padding-left:0}
+.ci-msg-model{max-width:220px;overflow:hidden;text-overflow:ellipsis}
+/* 输入框上方常驻控制条：模型只读，比例/张数直接改 */
+.ci-composer-meta{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:0 2px 6px;color:var(--ui-text-muted);font-size:10px;line-height:1.5}
 .ci-ref-inline img{width:34px;height:34px;border-radius:6px;object-fit:cover}
 .ci-result-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .ci-result-grid.single{grid-template-columns:minmax(0,1fr)}
 .ci-result{display:flex;min-width:0;flex-direction:column;margin:0;overflow:hidden;border:1px solid var(--ui-border);border-radius:11px;background:var(--ui-surface-subtle)}
-.ci-result img{display:block;width:100%;max-height:460px;object-fit:contain;background:#f1f4fa}
+.ci-result img{display:block;width:100%;max-height:460px;object-fit:contain;background:#f1f4fa;cursor:zoom-in}
 .ci-result figcaption{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 8px;border-top:1px solid var(--ui-border);flex-wrap:wrap}
 .ci-result-meta{min-width:0;overflow:hidden;color:var(--ui-text-muted);font-size:9.5px;text-overflow:ellipsis;white-space:nowrap}
 .ci-result-actions{display:inline-flex;gap:5px;flex:0 0 auto}
@@ -264,6 +384,14 @@ onMounted(() => {
 .ci-error{padding:2px 0}
 .ci-error strong{color:var(--danger-text);font-size:11px}
 .ci-error p{margin:5px 0 0;color:var(--danger-text);font-size:11.5px;line-height:1.55;overflow-wrap:anywhere}
+.ci-retry{display:inline-flex;align-items:center;gap:4px;margin-top:9px;padding:3px 9px;border:1px solid rgba(217,45,32,.32);border-radius:6px;background:#fff;color:var(--danger-text);font-size:10.5px;cursor:pointer}
+.ci-retry:hover:not(:disabled){border-color:var(--danger-text)}
+.ci-retry:disabled{opacity:.5;cursor:not-allowed}
+/* 结果图放大：遮罩层单独放在 body 上（Teleport），不受气泡 overflow 裁剪 */
+.ci-lightbox{position:fixed;inset:0;z-index:var(--z-overlay);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;padding:32px;background:rgba(8,12,22,.84);backdrop-filter:blur(4px)}
+.ci-lightbox img{max-width:min(92vw,1200px);max-height:calc(100vh - 120px);object-fit:contain;border-radius:10px;box-shadow:0 24px 80px rgba(0,0,0,.5);cursor:zoom-out}
+.ci-lightbox-close{position:absolute;top:18px;right:20px;width:34px;height:34px;border:1px solid rgba(255,255,255,.28);border-radius:50%;background:rgba(255,255,255,.1);color:#fff;font-size:18px;line-height:1;cursor:pointer}
+.ci-lightbox-cap{color:rgba(255,255,255,.72);font-size:11px}
 .ci-generating{display:flex;align-items:center;gap:9px;margin:2px 0 16px;padding:10px 12px;border:1px dashed rgba(109,74,255,.35);border-radius:11px;background:rgba(109,74,255,.05);color:var(--ui-text-muted);font-size:11.5px}
 .ci-spinner{width:13px;height:13px;border:2px solid rgba(109,74,255,.24);border-top-color:#6d4aff;border-radius:50%;animation:ci-spin .8s linear infinite}
 @keyframes ci-spin{to{transform:rotate(360deg)}}

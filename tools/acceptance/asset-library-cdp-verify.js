@@ -19,7 +19,7 @@ const ROOT = path.resolve(__dirname, '../..')
 const PORT = Number(process.env.SHOPILOT_ASSETS_CDP_PORT || 9416)
 const FIXTURES = [
   { file: 'tools/acceptance/fixtures/product-sample.jpg', name: '商品主图.jpg', type: 'image/jpeg' },
-  { file: 'apps/desktop/src/renderer/src/assets/ui/graphic-sell/effect-bed-pink-teddy.jpg', name: '粉色床品.jpg', type: 'image/jpeg' }
+  { file: 'tools/acceptance/fixtures/asset-second.jpg', name: '粉色床品.jpg', type: 'image/jpeg' }
 ].map(item => ({ ...item, data: fs.readFileSync(path.join(ROOT, item.file)).toString('base64') }))
 
 async function main() {

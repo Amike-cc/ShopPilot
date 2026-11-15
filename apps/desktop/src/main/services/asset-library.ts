@@ -7,13 +7,17 @@
  */
 import { app, nativeImage } from 'electron'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   ASSET_LIBRARY_LIMITS,
+  assetLikePattern,
+  diffAssetFiles,
+  normalizeAssetListInput,
   normalizeAssetName,
   normalizeAssetTags,
   type AssetLibraryItem,
+  type AssetLibraryListInput,
   type AssetLibraryListResult,
   type AssetLibraryReadResult,
   type AssetLibrarySource
@@ -119,6 +123,19 @@ function insertBuffer(input: {
   const existing = db.prepare('SELECT * FROM asset_library_items WHERE sha256 = ? ORDER BY created_at ASC LIMIT 1').get(sha256) as any
   if (existing) return { item: mapItem(existing), duplicate: true }
 
+  // 容量软上限（2026-11-15 审查）：单张 20MB、原来没有条数/总容量限制，
+  // userData/asset-library 可以无界长。超限明确报错，不做"偷偷写满磁盘"。
+  const stat = db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM asset_library_items').get() as any
+  const itemCount = Number(stat?.n) || 0
+  const usedBytes = Number(stat?.bytes) || 0
+  if (itemCount >= ASSET_LIBRARY_LIMITS.maxItems) {
+    throw new AssetLibraryError('ASSET_LIBRARY_FULL', `素材库最多 ${ASSET_LIBRARY_LIMITS.maxItems} 张，请先删掉一些再导入`)
+  }
+  if (usedBytes + input.buffer.length > ASSET_LIBRARY_LIMITS.maxTotalBytes) {
+    const capGb = (ASSET_LIBRARY_LIMITS.maxTotalBytes / 1024 / 1024 / 1024).toFixed(0)
+    throw new AssetLibraryError('ASSET_LIBRARY_FULL', `素材库总容量上限 ${capGb} GB，请先删掉一些再导入`)
+  }
+
   const id = `ast_${randomUUID().replace(/-/g, '').slice(0, 20)}`
   const fileName = `${id}.${ext}`
   const target = assetPath(fileName)
@@ -156,18 +173,56 @@ export function addAssetFromDataUrl(input: {
   return insertBuffer({ buffer, mimeType: match[1], name: input.name, tags: input.tags, source: input.source })
 }
 
-export function listAssets(): AssetLibraryListResult {
-  const db = getDatabase()
-  const rows = db.prepare('SELECT * FROM asset_library_items ORDER BY updated_at DESC LIMIT ?').all(ASSET_LIBRARY_LIMITS.listLimit) as any[]
-  const items = rows.map(mapItem)
+/** 全库标签计数：只读 tags_json 一列（2000 行也就几十 KB），不用把整表带缩略图捞上来。 */
+function aggregateTags(): string[] {
+  const rows = getDatabase().prepare('SELECT tags_json FROM asset_library_items').all() as any[]
   const counts = new Map<string, number>()
-  for (const item of items) {
-    for (const tag of item.tags) counts.set(tag, (counts.get(tag) || 0) + 1)
+  for (const row of rows) {
+    for (const tag of parseTags(row.tags_json)) counts.set(tag, (counts.get(tag) || 0) + 1)
   }
-  const tags = [...counts.entries()]
+  return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
     .map(([tag]) => tag)
-  return { items, total: items.length, tags }
+}
+
+/**
+ * 列表（分页 + 服务端筛选）。
+ *
+ * 2026-11-15 审查后改：以前一次返回最多 1000 条、每条带 480px 缩略图 base64，
+ * 满库约 40–80MB 走 IPC；筛选还是在渲染层本地做，分页后本地筛选只能搜到当前页，
+ * 所以筛选一并下推到 SQL。
+ */
+export function listAssets(input: AssetLibraryListInput = {}): AssetLibraryListResult {
+  const filter = normalizeAssetListInput(input)
+  const db = getDatabase()
+  const where: string[] = []
+  const args: unknown[] = []
+  if (filter.query) {
+    where.push("(name LIKE ? ESCAPE '\\' OR tags_json LIKE ? ESCAPE '\\')")
+    const like = assetLikePattern(filter.query)
+    args.push(like, like)
+  }
+  if (filter.tag) {
+    where.push("tags_json LIKE ? ESCAPE '\\'")
+    args.push(assetLikePattern(filter.tag, true))
+  }
+  if (filter.source !== 'all') {
+    where.push('source = ?')
+    args.push(filter.source)
+  }
+  const whereSql = where.length ? ` WHERE ${where.join(' AND ')}` : ''
+  const matched = Number((db.prepare(`SELECT COUNT(*) AS n FROM asset_library_items${whereSql}`).get(...args) as any)?.n) || 0
+  const rows = db.prepare(
+    `SELECT * FROM asset_library_items${whereSql} ORDER BY updated_at DESC LIMIT ? OFFSET ?`
+  ).all(...args, filter.limit, filter.offset) as any[]
+  const stat = db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM asset_library_items').get() as any
+  return {
+    items: rows.map(mapItem),
+    total: matched,
+    libraryTotal: Number(stat?.n) || 0,
+    libraryBytes: Number(stat?.bytes) || 0,
+    tags: aggregateTags()
+  }
 }
 
 export function readAsset(id: string): AssetLibraryReadResult {
@@ -216,4 +271,44 @@ export function assetFilePathForReveal(id: string): string {
   const filePath = assetPath(row.file_name)
   if (!existsSync(filePath)) throw new AssetLibraryError('ASSET_FILE_MISSING', '素材原图丢失，可能被手动删除')
   return filePath
+}
+
+/**
+ * 启动时对账（2026-11-15 审查）：
+ *
+ * - 磁盘上有、库里没有的 `ast_*.png|jpg|webp`：应用崩溃在"写文件"和"写行"之间会留下这种文件，
+ *   没人回收就会一直占磁盘。**只删 1 小时前的**，避免和正在导入的中间态抢文件。
+ * - 库里有、磁盘上没有的：只统计并记日志，不改行、不静默删记录（详情页会如实报「原图丢失」）。
+ *
+ * 不是受管命名的文件一概不动（用户自己丢进目录的东西不在我们职责内）。
+ */
+export function reconcileAssetLibrary(): { removed: number; missing: number; scanned: number } {
+  const db = getDatabase()
+  const rows = db.prepare('SELECT file_name FROM asset_library_items').all() as any[]
+  const dbNames = rows.map(row => String(row.file_name || '')).filter(Boolean)
+  let diskNames: string[] = []
+  try {
+    diskNames = readdirSync(libraryDir())
+  } catch (error) {
+    logMain('warn', `[asset-library] 对账读目录失败：${String((error as Error)?.message || error).slice(0, 160)}`)
+    return { removed: 0, missing: 0, scanned: dbNames.length }
+  }
+  const { orphans, missing } = diffAssetFiles(dbNames, diskNames)
+  let removed = 0
+  const now = Date.now()
+  for (const name of orphans) {
+    try {
+      const full = assetPath(name)
+      const info = statSync(full)
+      if (now - info.mtimeMs < 60 * 60 * 1000) continue
+      unlinkSync(full)
+      removed += 1
+    } catch {
+      /* 已被别的进程删掉/被占用：跳过，下次启动再收 */
+    }
+  }
+  if (removed || missing.length) {
+    logMain('info', `[asset-library] 对账完成：清理孤儿文件 ${removed} 个，库内缺文件 ${missing.length} 个（共 ${dbNames.length} 条）`)
+  }
+  return { removed, missing: missing.length, scanned: dbNames.length }
 }

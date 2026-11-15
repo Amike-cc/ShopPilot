@@ -15,8 +15,19 @@ export const ASSET_LIBRARY_LIMITS = {
   tags: 8,
   /** 单张素材最大字节数（与生图参考图 5MB 上限分开，原图允许更大） */
   maxBytes: 20 * 1024 * 1024,
-  /** 单次列表最多返回条数 */
-  listLimit: 1000
+  /**
+   * 单页条数（2026-11-15 审查后改）。
+   *
+   * 原来一次返回 1000 条、每条带 480px 缩略图 base64：满库约 40–80MB 字符串走 IPC 进渲染层，
+   * 而且每次增删都要全量重传。现在列表按页取，筛选下推到 SQL，页大小 60。
+   */
+  pageSize: 60,
+  /** 单页条数上限（IPC 传入的 limit 会被夹到 [1, maxPageSize]） */
+  maxPageSize: 120,
+  /** 库容量软上限：条数 */
+  maxItems: 2000,
+  /** 库容量软上限：总字节（2GB） */
+  maxTotalBytes: 2 * 1024 * 1024 * 1024
 } as const
 
 export type AssetLibrarySource = 'upload' | 'chat-image'
@@ -36,10 +47,30 @@ export interface AssetLibraryItem {
   updatedAt: number
 }
 
+/** 列表查询：筛选条件与分页都由主进程执行，渲染层不再拉全库再本地过滤。 */
+export interface AssetLibraryListInput {
+  /** 关键词：匹配名称或标签文本 */
+  query?: string
+  /** 来源筛选，缺省 all */
+  source?: AssetLibrarySource | 'all'
+  /** 单个标签精确匹配（JSON 数组里出现该标签） */
+  tag?: string
+  /** 偏移，从 0 开始 */
+  offset?: number
+  /** 本页条数，缺省 pageSize */
+  limit?: number
+}
+
 export interface AssetLibraryListResult {
+  /** 当前页的素材 */
   items: AssetLibraryItem[]
+  /** 符合筛选条件的总条数（不是库总量） */
   total: number
-  /** 当前库中出现过的标签（去重、按使用次数降序） */
+  /** 库里的总条数（容量提示用） */
+  libraryTotal: number
+  /** 库里的总字节（容量提示用） */
+  libraryBytes: number
+  /** 全库出现过的标签（去重、按使用次数降序） */
   tags: string[]
 }
 
@@ -75,20 +106,66 @@ export function normalizeAssetTags(raw: unknown): string[] {
   return out
 }
 
-/** 素材库页面的本地筛选：名称/标签关键词 + 来源 + 单个标签。 */
-export function filterAssetLibraryItems(
-  items: readonly AssetLibraryItem[],
-  options: { query?: string; source?: AssetLibrarySource | 'all'; tag?: string } = {}
-): AssetLibraryItem[] {
-  const query = String(options.query || '').trim().toLowerCase()
-  const source = options.source || 'all'
-  const tag = String(options.tag || '').trim()
-  return items.filter(item => {
-    if (source !== 'all' && item.source !== source) return false
-    if (tag && !item.tags.includes(tag)) return false
-    if (!query) return true
-    return `${item.name} ${item.tags.join(' ')}`.toLowerCase().includes(query)
-  })
+/**
+ * 列表查询的规范化：非法输入一律夹到合法范围。
+ *
+ * 渲染层可能传 -1、NaN、1e9 —— 直接拼进 SQL 会变成全表扫描或空页，
+ * 所以在主进程真正查询前先过这里。
+ */
+export function normalizeAssetListInput(raw: AssetLibraryListInput | null | undefined): {
+  query: string
+  source: AssetLibrarySource | 'all'
+  tag: string
+  offset: number
+  limit: number
+} {
+  const input = raw || {}
+  const query = typeof input.query === 'string' ? input.query.replace(/[\r\n\t]+/g, ' ').trim().slice(0, 120) : ''
+  const tag = typeof input.tag === 'string' ? input.tag.trim().slice(0, ASSET_LIBRARY_LIMITS.tag) : ''
+  const source: AssetLibrarySource | 'all' =
+    input.source === 'chat-image' || input.source === 'upload' ? input.source : 'all'
+  const rawOffset = Number(input.offset)
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.min(Math.floor(rawOffset), 1_000_000) : 0
+  const rawLimit = Number(input.limit)
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0
+    ? Math.min(Math.floor(rawLimit), ASSET_LIBRARY_LIMITS.maxPageSize)
+    : ASSET_LIBRARY_LIMITS.pageSize
+  return { query, source, tag, offset, limit }
+}
+
+/**
+ * 关键词 → SQL LIKE 模式（转义 `\` `%` `_`，配合 `ESCAPE '\'` 使用）。
+ * exact=true 用于标签精确匹配：标签存在 JSON 数组里，匹配 `"标签"` 比子串更准，
+ * 避免「主图」命中「主图2」。
+ */
+export function assetLikePattern(text: string, exact = false): string {
+  const escaped = String(text).replace(/[\\%_]/g, ch => `\\${ch}`)
+  return exact ? `%"${escaped}"%` : `%${escaped}%`
+}
+
+/** 受管的原图文件名（`ast_<20 位 hex>.<png|jpg|webp>`）；对账只处理这种文件，别的文件一概不动。 */
+const ASSET_FILE_PATTERN = /^ast_[a-z0-9]{20}\.(png|jpg|webp)$/i
+
+export function isAssetFileName(name: unknown): boolean {
+  return ASSET_FILE_PATTERN.test(String(name || ''))
+}
+
+/**
+ * 磁盘与数据库的文件对账（纯函数，便于单测）。
+ *
+ * - orphans：磁盘上有、库里没有 → 可删（应用崩溃在"写文件"和"写行"之间的残留）
+ * - missing：库里有、磁盘上没有 → 只报告，不改行（详情页已有「原图丢失」的如实提示）
+ */
+export function diffAssetFiles(
+  dbFileNames: readonly string[],
+  diskFileNames: readonly string[]
+): { orphans: string[]; missing: string[] } {
+  const db = new Set(dbFileNames.map(name => String(name || '')).filter(Boolean))
+  const disk = new Set(diskFileNames.map(name => String(name || '')).filter(name => isAssetFileName(name)))
+  return {
+    orphans: [...disk].filter(name => !db.has(name)).sort(),
+    missing: [...db].filter(name => !disk.has(name)).sort()
+  }
 }
 
 export function formatAssetSize(bytes: unknown): string {

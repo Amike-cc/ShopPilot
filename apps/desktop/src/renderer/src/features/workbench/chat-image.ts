@@ -30,6 +30,19 @@ export function clampChatImageCount(value: unknown): number {
   return Math.min(4, Math.max(1, numeric))
 }
 
+/**
+ * 比例 key → 界面上的中文标签（2026-11-15）。
+ *
+ * 对话里要回显"这张图是用什么比例生成的"，直接显示 `1:1` 太省事、显示别名又会和下拉框
+ * 对不上；统一从这里取，下拉框与消息回显用的是同一份标签。未知 key 原样返回、空值给「—」，
+ * 不猜也不编。
+ */
+export function chatImageRatioLabel(ratio: unknown): string {
+  const key = String(ratio || '')
+  if (!key) return '—'
+  return CHAT_IMAGE_RATIO_OPTIONS.find(item => item.key === key)?.label || key
+}
+
 /** 有参考图时明确「只改指定部分」，避免模型把整张图重画导致主体丢失 */
 export function buildChatImagePrompt(text: string, hasReference: boolean): string {
   const instruction = String(text || '').trim()

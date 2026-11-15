@@ -44,10 +44,17 @@ function assertTrusted(event: IpcMainInvokeEvent): void {
 }
 
 export function registerAssetLibraryHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.ASSETS_LIST, (event: IpcMainInvokeEvent): IPCResult => {
+  ipcMain.handle(IPC_CHANNELS.ASSETS_LIST, (event: IpcMainInvokeEvent, input?: {
+    query?: string
+    source?: 'upload' | 'chat-image' | 'all'
+    tag?: string
+    offset?: number
+    limit?: number
+  }): IPCResult => {
     try {
       assertTrusted(event)
-      return success(listAssets())
+      // 筛选/分页都在服务层过 normalizeAssetListInput：非法值夹到合法范围，不拼进 SQL 裸用
+      return success(listAssets(input || {}))
     } catch (error) {
       return failure(error)
     }

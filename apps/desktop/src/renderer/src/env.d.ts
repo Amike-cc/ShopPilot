@@ -274,7 +274,7 @@ declare global {
         revealImage: (path: string) => Promise<IPCResult>
       }
       assets: {
-        list: () => Promise<IPCResult>
+        list: (input?: { query?: string; source?: 'upload' | 'chat-image' | 'all'; tag?: string; offset?: number; limit?: number }) => Promise<IPCResult>
         addDataUrl: (input: { dataUrl: string; name?: string; tags?: string[]; source?: 'upload' | 'chat-image' }) => Promise<IPCResult>
         update: (input: { id: string; name?: string; tags?: string[] }) => Promise<IPCResult>
         remove: (id: string) => Promise<IPCResult>
