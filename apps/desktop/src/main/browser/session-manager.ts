@@ -107,6 +107,16 @@ const IMAGE_FOLDER_SESSION_MS = 30 * 1000
 const IMAGE_CANCEL_WINDOW_MS = 30 * 1000
 
 /**
+ * 浏览器插件「带货视频下载」的保存位置 marker。
+ * 插件每批先触发这个 0 字节 mp4；主进程同步弹文件夹框并取消 marker 本身，
+ * 实际视频随后落进所选目录。blob 视频不能像直链视频那样 preventDefault 后重发
+ * （blob URL 离开页面上下文就失效），所以必须走同步 setSavePath。
+ */
+const VIDEO_SAVE_FOLDER_MARKER = '__shopilot_pick_video_folder__.mp4'
+const BLOB_VIDEO_FOLDER_SESSION_MS = 5 * 60 * 1000
+const BLOB_VIDEO_CANCEL_WINDOW_MS = 5 * 60 * 1000
+
+/**
  * 把保存位置弹窗的结果告诉页面里的插件：detail 只用字符串，跨 isolated world 安全。
  * 取消时插件要停止继续抓图/触发下载，并把状态改成“已取消下载”，不能只让主进程丢文件。
  */
@@ -114,6 +124,17 @@ function notifyImageSaveResult(webContents: WebContents, result: 'ok' | 'cancel'
   try {
     const script =
       `document.dispatchEvent(new CustomEvent('__shopilot_image_save_result', { detail: ${JSON.stringify(result)} }))`
+    void webContents.executeJavaScript(script).catch(() => { /* 页面已关闭 */ })
+  } catch {
+    /* webContents 已销毁 */
+  }
+}
+
+/** 带货视频插件：保存目录选择结果回传页面（detail 只用字符串，跨 isolated world 安全）。 */
+function notifyVideoSaveResult(webContents: WebContents, result: 'ok' | 'cancel'): void {
+  try {
+    const script =
+      `document.dispatchEvent(new CustomEvent('__lp_video_save_result', { detail: ${JSON.stringify(result)} }))`
     void webContents.executeJavaScript(script).catch(() => { /* 页面已关闭 */ })
   } catch {
     /* webContents 已销毁 */
@@ -477,6 +498,9 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
     /** 插件图片的保存目录会话（每批 marker 选定后，这一批图片都落这里）。 */
     const imageFolder: { dir: string; expiresAt: number } = { dir: '', expiresAt: 0 }
     let imageBatchCancelledUntil = 0
+    /** 插件 blob 视频的保存目录会话（marker 选定后，这一批视频都落这里）。 */
+    const blobVideoFolder: { dir: string; expiresAt: number } = { dir: '', expiresAt: 0 }
+    let blobVideoCancelledUntil = 0
     sess.on('will-download', (event, item, webContents) => {
     try {
       const pageUrl = (() => { try { return webContents.getURL() } catch { return undefined } })()
@@ -569,6 +593,51 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
         wireDownload(targetItem, downloadId, fileName)
       }
 
+      /**
+       * 插件 blob 视频的文件夹选择（同步）：blob 不能 preventDefault 后 downloadURL 重发，
+       * 必须在 will-download 里同步 setSavePath。测试环境用 VIDEO_SAVE_* 跳过原生弹窗。
+       */
+      const pickBlobVideoFolder = (): string => {
+        if (String(process.env.SHOPILOT_TEST_VIDEO_SAVE_CANCEL || '').trim() === '1') return ''
+        const testDir = String(process.env.SHOPILOT_TEST_VIDEO_SAVE_DIR || '').trim()
+        if (testDir) {
+          mkdirSync(testDir, { recursive: true })
+          return testDir
+        }
+        try {
+          const parent = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+          const options = {
+            title: '选择视频保存文件夹（本批视频都会存到这里）',
+            defaultPath: blobVideoFolder.dir || join(app.getPath('userData'), 'stores', storeId, 'downloads'),
+            properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>
+          }
+          const picked = parent ? dialog.showOpenDialogSync(parent, options) : dialog.showOpenDialogSync(options)
+          return picked && picked[0] ? picked[0] : ''
+        } catch (error) {
+          logMain('warn', `[download] 视频保存文件夹选择失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
+          return ''
+        }
+      }
+
+      const saveBlobVideo = (targetItem: typeof item, originalName: string) => {
+        const dir = blobVideoFolder.dir
+        mkdirSync(dir, { recursive: true })
+        let fileName = originalName
+        let target = join(dir, fileName)
+        let seq = 1
+        while (existsSync(target)) {
+          const parsed = parse(originalName)
+          fileName = `${parsed.name}(${seq})${parsed.ext}`
+          target = join(dir, fileName)
+          seq++
+        }
+        targetItem.setSavePath(target)
+        const downloadId = recordDownload(storeId, fileName, target, pageUrl)
+        registerDownloadItem(downloadId, targetItem)
+        emitDownloadCreated({ id: downloadId, storeId, fileName, filePath: target })
+        wireDownload(targetItem, downloadId, fileName)
+      }
+
       /*
        * 商品图片下载器：每批先触发一个 0 字节 marker（文件名固定），主进程在这里同步
        * 弹文件夹选择框；marker 本身 preventDefault 不落盘、不写记录。选定后本批图片都
@@ -594,6 +663,52 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
       }
 
       if (isVideo) {
+        /**
+         * 插件 blob 视频（罗盘扩展把 mp4 分块拼成 Blob 再触发）不能走下面直链视频的
+         * preventDefault + downloadURL 重发：blob URL 离开页面上下文就失效，重发会丢文件。
+         * 这里改用同步文件夹框 + setSavePath，保留 blob 不变。
+         */
+        const itemUrl = (() => { try { return String(item.getURL() || '') } catch { return '' } })()
+        if (itemUrl.startsWith('blob:')) {
+          if (suggested === VIDEO_SAVE_FOLDER_MARKER) {
+            event.preventDefault()
+            blobVideoCancelledUntil = 0
+            const picked = pickBlobVideoFolder()
+            if (picked) {
+              blobVideoFolder.dir = picked
+              blobVideoFolder.expiresAt = Date.now() + BLOB_VIDEO_FOLDER_SESSION_MS
+              notifyVideoSaveResult(webContents, 'ok')
+              logMain('info', `[download] 视频保存位置已选择 store=${storeId} dir=${picked}`)
+            } else {
+              blobVideoFolder.dir = ''
+              blobVideoCancelledUntil = Date.now() + BLOB_VIDEO_CANCEL_WINDOW_MS
+              notifyVideoSaveResult(webContents, 'cancel')
+              logMain('info', `[download] 视频保存位置未选择（用户取消），本批视频不下载 store=${storeId}`)
+            }
+            return
+          }
+          const now = Date.now()
+          if (now < blobVideoCancelledUntil) {
+            event.preventDefault()
+            return
+          }
+          if (!blobVideoFolder.dir || now > blobVideoFolder.expiresAt) {
+            // 兼容旧版插件/直接触发 blob：没收到 marker 也必须先问
+            const picked = pickBlobVideoFolder()
+            if (!picked) {
+              blobVideoCancelledUntil = now + BLOB_VIDEO_CANCEL_WINDOW_MS
+              notifyVideoSaveResult(webContents, 'cancel')
+              event.preventDefault()
+              return
+            }
+            blobVideoFolder.dir = picked
+            notifyVideoSaveResult(webContents, 'ok')
+          }
+          blobVideoFolder.expiresAt = Date.now() + BLOB_VIDEO_FOLDER_SESSION_MS
+          saveBlobVideo(item, suggested)
+          return
+        }
+
         /**
          * 「一批只问一次」（2026-11-02 用户要求）：
          *   · 一批的第一个视频 → 弹一次**文件夹**选择框；确认后该批全部自动落进所选文件夹；

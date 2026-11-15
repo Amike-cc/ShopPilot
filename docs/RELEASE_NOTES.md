@@ -1,3 +1,25 @@
+# ShopPilot 0.9.40 变更说明（罗盘带货视频下载器 2.9.0：先选目录 + 可靠后台队列）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
+
+## 本次更新
+
+- **罗盘带货视频下载器升级到 2.9.0**（设置 → 浏览器扩展里可更新/重装）：
+  - 每批下载前先选保存文件夹；取消则整批不解析、不下载、不产生记录，状态明确显示「已取消保存位置」。
+  - blob 视频不再走 `preventDefault + downloadURL` 重发（blob URL 离开页面上下文会失效，之前会丢文件），改为主进程同步 `setSavePath` 后原样落盘；文件夹选择结果通过 `__lp_video_save_result` 事件回传页面。
+  - 后台队列保活：内容脚本在批次期间保持 `lp-keepalive` 长连接，MV3 Service Worker 不被回收，长批次不再中途静默中断。
+  - 下载失败可重试：5xx / 429 / 网络错误自动重试 2 次；403/404 视为签名过期立即失败，不做无意义重试。
+  - 每个任务的终态回传页面：按钮显示「下载 x/y」「完成 n · 失败 m」，错误 chip 显示具体文件名与原因，不再只显示「已提交」。
+- 主进程新增 blob 视频文件夹 marker、取消窗口与按店铺 session 隔离；测试环境可用 `SHOPILOT_TEST_VIDEO_SAVE_DIR` / `SHOPILOT_TEST_VIDEO_SAVE_CANCEL` 跳过原生弹窗。
+
+## 验证
+
+- 新增 `luopan-downloader` 接线单测 7 项：版本、marker、取消语义、blob setSavePath、keepalive、重试范围、LP_JOB 进度回传。
+- 真机下载：真实罗盘短视频榜点击下载，测试目录落盘 6 个 mp4（11.8–26.5MB，全部可读）；另用 64KB 合成 blob 验证 marker 先选目录、随后同批文件直接落盘。
+- typecheck / ESLint 0 error；全量单测 1695 项通过。
+
+---
+
 # ShopPilot 0.9.39 变更说明（素材库参考图上限提示）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。

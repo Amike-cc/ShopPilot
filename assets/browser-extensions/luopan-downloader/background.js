@@ -31,6 +31,54 @@ function persistStat() {
   try { chrome.storage.local.set({ lpStat: stat }); } catch (e) {}
 }
 
+function sleep(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+/** 每个任务的终态回传页面：页面据此显示真实进度/失败，而不是只看到“已提交”。 */
+function notifyJob(job, ok, error) {
+  if (!job || !job.tabId) return;
+  try {
+    chrome.tabs.sendMessage(job.tabId, {
+      type: 'LP_JOB',
+      id: job.id || '',
+      ok: !!ok,
+      filename: job.filename || '',
+      error: String(error || '').slice(0, 200)
+    }, function () { void chrome.runtime.lastError; });
+  } catch (e) {}
+}
+
+/** 视频直链下载：5xx/429/网络错误重试 2 次；403/404 是签名过期，重试也没用。 */
+async function fetchVideo(url) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url, { credentials: 'omit' });
+      if (res.ok) return res;
+      const status = res.status;
+      if (status >= 500 || status === 429) {
+        lastErr = new Error('HTTP ' + status + '（服务端繁忙，稍后重试）');
+        await sleep(900 * (attempt + 1));
+        continue;
+      }
+      throw new Error('HTTP ' + status + '（直链可能已过期，请重新抓取）');
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= 2) throw err;
+      await sleep(900 * (attempt + 1));
+    }
+  }
+  throw lastErr || new Error('下载失败');
+}
+
+/* MV3 Service Worker 可能在长队列中途休眠；内容脚本在下载期间保持一个长连接，
+ * 连接存在时 SW 不会被回收，任务不会静默中断。 */
+chrome.runtime.onConnect.addListener(function (port) {
+  if (!port || port.name !== 'lp-keepalive') return;
+  port.onMessage.addListener(function () {});
+});
+
 function next() {
   while (active < CONCURRENCY && queue.length > 0) {
     const job = queue.shift();
@@ -74,17 +122,19 @@ function submit(job) {
       console.warn('[罗盘下载] 失败:', job.filename, err || '');
     }
     persistStat();
+    notifyJob(job, ok, err);
     next();
   };
 
   (async function () {
     if (!job.tabId) throw new Error('找不到来源标签页（下载必须在罗盘页面里发起）');
     const id = 'dl_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    job.id = id;
     const name = String(job.filename || '').split(/[\\/]/).pop().replace(/[\\/:*?"<>|]/g, '_').slice(0, 120) || 'video.mp4';
 
     // 视频直链是签名 URL：fetch 走扩展自己的上下文（host_permissions 内不受 CORS 限制），
     // 不带 Cookie（签名 URL 不需要，也避免把店铺 Cookie 扩散给 CDN）。
-    const res = await fetch(job.url, { credentials: 'omit' });
+    const res = await fetchVideo(job.url);
     if (!res.ok) throw new Error('HTTP ' + res.status + '（直链可能已过期，请重新抓取）');
 
     if (!res.body || !res.body.getReader) {

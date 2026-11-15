@@ -34,6 +34,14 @@
   let rankSig = '';
   /** 上一次榜单拉取完成的时间（performance.now），用来忽略「旧请求」 */
   let rankLoadAt = 0;
+  /** 本轮拉取开始时间：总榜请求在拉取中途落地时，结束后也要补一次 */
+  let rankLoadStartedAt = 0;
+  /** 加载期间用户又换了筛选：记下最新签名，本轮结束后补拉 */
+  let rankPendingSig = '';
+  /** 榜单加载代次：切换页面/强制重拉时旧请求回来不能覆盖新数据 */
+  let rankRun = 0;
+  let rankWatchStarted = false;
+  let rankHintTimer = null;
 
   // detail
   let detailVideos = [];
@@ -488,7 +496,108 @@
     return `${it.folder || '罗盘带货视频'}/${parts.join('_')}.mp4`;
   }
 
+  /** 后台下载批次状态：按钮进度、失败可见、SW 断线提示 */
+  let dlState = null;
+  let dlKeepPort = null;
+  let dlKeepStopping = false;
+  /** 每批下载前先问保存目录：marker 的结果 */
+  let videoFolderResult = null;
+  let videoFolderPending = false;
+
+  function triggerVideoFolderMarker() {
+    return new Promise(function (resolve) {
+      videoFolderResult = null;
+      videoFolderPending = true;
+      try {
+        const blob = new Blob([''], { type: 'video/mp4' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = '__shopilot_pick_video_folder__.mp4';
+        a.style.display = 'none';
+        (document.body || document.documentElement).appendChild(a);
+        a.click();
+        setTimeout(function () {
+          try { a.remove(); } catch (e) {}
+          try { URL.revokeObjectURL(url); } catch (e) {}
+        }, 60000);
+      } catch (e) {
+        videoFolderPending = false;
+        resolve('timeout');
+        return;
+      }
+      const deadline = Date.now() + 120000;
+      (function wait() {
+        if (videoFolderResult) {
+          resolve(videoFolderResult);
+          return;
+        }
+        if (Date.now() > deadline) {
+          resolve('timeout');
+          return;
+        }
+        setTimeout(wait, 150);
+      })();
+    });
+  }
+
+  async function ensureVideoFolder(btn) {
+    flash(btn, '选择保存位置…');
+    let result = 'timeout';
+    try {
+      result = await triggerVideoFolderMarker();
+    } finally {
+      videoFolderPending = false;
+    }
+    if (result === 'cancel') {
+      renderErrorChip('罗盘下载：已取消保存位置，本批视频不会下载');
+      flash(btn, '已取消');
+      return false;
+    }
+    return true;
+  }
+
+  function keepAlive(on) {
+    if (on) {
+      if (dlKeepPort) return;
+      try {
+        dlKeepPort = chrome.runtime.connect({ name: 'lp-keepalive' });
+        dlKeepPort.onDisconnect.addListener(function () {
+          dlKeepPort = null;
+          if (dlKeepStopping) return;
+          if (dlState && !dlState.cancelled) {
+            renderErrorChip('罗盘下载：后台下载任务已断开，队列可能中断；请重新点击下载（浏览器扩展被重载时也会这样）');
+          }
+        });
+      } catch (e) {
+        dlKeepPort = null;
+      }
+      return;
+    }
+    dlKeepStopping = true;
+    try { if (dlKeepPort) dlKeepPort.disconnect(); } catch (e) {}
+    dlKeepPort = null;
+    setTimeout(function () { dlKeepStopping = false; }, 300);
+  }
+
+  /** 主进程选完/取消保存位置后回传：取消时本批视频不会落盘，不能还报“下载完成”。 */
+  document.addEventListener('__lp_video_save_result', function (event) {
+    const detail = event && event.detail;
+    if (detail !== 'ok' && detail !== 'cancel') return;
+    videoFolderResult = detail;
+    // marker 的结果由 ensureVideoFolder 等待；这里不要再动上一批的 dlState
+    if (videoFolderPending) return;
+    if (detail === 'cancel') {
+      if (dlState) dlState.cancelled = true;
+      renderErrorChip('罗盘下载：已取消保存位置，本批视频不会落盘');
+    } else if (dlState && !dlState.cancelled) {
+      renderErrorChip(null);
+    }
+  });
+
   async function downloadVideos(list, btn) {
+    // 先问保存目录：用户取消就整批不解析链接、不占换链配额、不产生后台任务
+    if (!(await ensureVideoFolder(btn))) return;
     // 同一视频可能以不同 ref 在多页出现：先按内容去重，别为同一条视频换两次链
     const valid = [];
     const seen = new Set();
@@ -522,9 +631,22 @@
       return;
     }
     flash(btn, `提交 ${jobs.length} 个…`);
+    if (dlState) {
+      dlState.total += jobs.length;
+      dlState.btn = btn;
+    } else {
+      dlState = { total: jobs.length, done: 0, failed: 0, errors: [], btn: btn, cancelled: false };
+    }
+    keepAlive(true);
     chrome.runtime.sendMessage({ type: 'LP_DOWNLOAD', jobs: jobs }, function (resp) {
       void chrome.runtime.lastError;
-      flash(btn, resp && resp.ok ? `已提交 ${jobs.length} 个` : '提交失败');
+      if (!resp || !resp.ok) {
+        keepAlive(false);
+        dlState = null;
+        flash(btn, '提交失败');
+      } else {
+        flash(btn, `已提交 ${jobs.length} 个`);
+      }
     });
   }
 
@@ -544,15 +666,26 @@
         // 条目以 video_ref 兜底保住按钮渲染；真实链接在复制/下载时用 ref 解析（entity_by_ref）。
         const id = String(v.video_id || v.video_ref || '');
         if (!id) continue;
+        // 2026-11-15：短视频榜/总榜的 product_info 字段并不完全同名（name / product_name /
+        // goods_name 都出现过）。只认 p.name 会让 productName 为空 → 行按钮永远匹配不上，
+        // 表现成“插件没反应”。这里把常见别名都兜住；同时保留商品图，名称缺失时按图匹配。
+        const productName = String(
+          p.name || p.product_name || p.productName || p.goods_name || p.product_title || p.title || ''
+        ).replace(/\s+/g, ' ').trim();
+        const productId = String(p.id || p.product_id || p.goods_id || p.spu_id || '');
+        const productImage = String(
+          p.image_url || p.cover_url || p.cover || (Array.isArray(p.url_list) && p.url_list[0]) || ''
+        );
         out.push({
           videoId: id,
           ref: String(v.video_ref || ''),
           playUrl: v.video_play_url || '',
-          title: String(v.video_name || '').replace(/\s+/g, ' ').trim(),
-          author: v.author_name || '',
-          publishTs: v.publish_ts || 0,
-          productId: String(p.id || ''),
-          productName: p.name || '',
+          title: String(v.video_name || v.video_title || '').replace(/\s+/g, ' ').trim(),
+          author: v.author_name || v.author_nick_name || '',
+          publishTs: v.publish_ts || v.publish_time || 0,
+          productId: productId,
+          productName: productName,
+          productImage: productImage,
           rank: p.rank || 0,
           price: p.price_bin || ''
         });
@@ -565,6 +698,8 @@
    * 经页面桥重放接口 = 调用罗盘自己的签名包装器，签名自动附加（2026-11-09 实测三接口全通）。
    * 不再依赖 hook 时序竞态；页面推送通道保留作补充。 */
   const RANK_API = '/compass_api/shop/product/product_rank/video_bring_good';
+  /** 总榜接口：页面筛选变化时它一定在主线程发请求，用它反推当前类目/价格带/周期。 */
+  const MARKET_API = '/compass_api/shop/product/product_rank/market_hot_sale';
   const DETAIL_API = '/compass_api/shop/product/compete_product_detail/flow_source/flow_more';
   const RANK_PAGE_SIZE = 10;     // 榜单接口把 page_size 卡在 10
   const RANK_MAX_PAGE = 20;      // 10 × 20 = 200 条
@@ -635,6 +770,22 @@
     return out;
   }
 
+  /**
+   * 从某个 rank 接口的页面请求里取“当前筛选”参数。
+   * 保留 rank_data_type/activity_id：它们是接口选择参数，不是易变分页参数。
+   */
+  function latestFilterParams(apiPath) {
+    const p = latestRequestParams(apiPath, true) || latestRequestParams(apiPath);
+    if (!p) return {};
+    const out = {};
+    Object.keys(p).forEach(function (k) {
+      if (REQ_SKIP.indexOf(k) < 0 && p[k] !== '') out[k] = p[k];
+    });
+    if (p.rank_data_type) out.rank_data_type = p.rank_data_type;
+    if (p.activity_id !== undefined && p.activity_id !== '') out.activity_id = p.activity_id;
+    return out;
+  }
+
   /** 业务参数的稳定签名：只保留会改变数据集的键（分页/签名已剔除） */
   function paramsSignature(p) {
     return Object.keys(p || {})
@@ -655,7 +806,13 @@
       const v = urlParam(k);
       if (v) fromUrl[k] = v;
     });
-    const out = Object.assign({}, DEFAULT_CFG, pageRankParams(), fromUrl);
+    const videoP = latestFilterParams(RANK_API);
+    const marketP = latestFilterParams(MARKET_API);
+    // 短视频榜自己的请求可能跑在 worker 里，页面 performance 看不到；总榜 market_hot_sale
+    // 一定在主线程发请求，且类目/价格带/周期相同——用它覆盖默认参数，避免插件拿旧默认类目
+    // 拉到另一批商品（表现为“有数据但行按钮全不出现”）。
+    const out = Object.assign({}, DEFAULT_CFG, videoP, marketP, fromUrl);
+    if (videoP.rank_data_type) out.rank_data_type = videoP.rank_data_type;
     if (!out.begin_date || !out.end_date) {
       const dr = readPageDateRange() || dateRange();
       if (!out.begin_date) out.begin_date = dr.begin_date;
@@ -714,31 +871,57 @@
   }
 
   async function fetchRankPage(no, params) {
-    const qs = new URLSearchParams(Object.assign({}, params, {
+    const merged = Object.assign({}, params, {
       page_no: String(no),
       page_size: String(RANK_PAGE_SIZE),
-      rank_data_type: '1',
-      activity_id: ''
-    })).toString();
+      rank_data_type: params.rank_data_type || '1'
+    });
+    if (params.activity_id === undefined) merged.activity_id = '';
+    const qs = new URLSearchParams(merged).toString();
     const json = await pageFetchRetry(`${location.origin}${RANK_API}?${qs}`);
     if (!json || json.st !== 0) throw new Error((json && json.msg) || ('st=' + (json && json.st)));
+    // 排查用：记录响应顶层结构（2026-11-15 短视频榜疑似走 module_data，不是 data_result）
+    try {
+      const d = json.data || {};
+      const md = d.module_data || {};
+      const moduleKeys = Object.keys(md);
+      const moduleKey = moduleKeys.find(function (k) { return /video|rank|goods/i.test(k); }) || moduleKeys[0] || '';
+      document.documentElement.setAttribute('data-lp-raw', JSON.stringify({
+        dataKeys: Object.keys(d).slice(0, 15),
+        moduleKeys: moduleKeys.slice(0, 10),
+        resultLen: Array.isArray(d.data_result) ? d.data_result.length : -1,
+        moduleKey: moduleKey,
+        moduleSample: moduleKey ? JSON.stringify(md[moduleKey]).slice(0, 700) : ''
+      }).slice(0, 1400));
+    } catch (e) {}
     const products = (json.data && json.data.data_result) || [];
     return { rows: parseRank(json), products: products.length };
   }
 
-  async function loadRankAll() {
-    if (loading) return;
+  async function loadRankAll(force) {
+    if (loading && !force) return;
+    const run = ++rankRun;
+    rankLoadStartedAt = performance.now();
     loading = true;
     lastError = '';
     try {
       const ready = await injectFetcher();
+      if (run !== rankRun) return;
       diag.bridge = ready.ok ? 'ok' : 'fail';
       persistDiag();
       if (!ready.ok) throw new Error('页面桥初始化失败（' + ready.reason + '）');
+      // 等页面总榜请求出现（带当前类目/价格带/周期），避免先用 DEFAULT_CFG 拉错类目；
+      // 短视频榜自己的请求可能在 worker 里，页面 performance 看不到，总榜请求是最可靠的过滤来源。
+      const waitParamsStart = performance.now();
+      while (run === rankRun && !latestRequestEntry(MARKET_API, true) && performance.now() - waitParamsStart < 4000) {
+        await sleep(250);
+      }
+      if (run !== rankRun) return;
       const params = rankBaseParams();
       rankSig = paramsSignature(params);       // 记录「当前数据对应哪套参数」
       let emptyStreak = 0;
       for (let p = 1; p <= RANK_MAX_PAGE; p++) {
+        if (run !== rankRun) return;           // 被新的强制重拉取代：旧请求结果直接丢弃
         let page = null;
         try {
           page = await fetchRankPage(p, params);   // 瞬态错误（风控/限流/5xx）在内部冷却重试
@@ -747,6 +930,7 @@
           noteError(lastError);
           break;
         }
+        if (run !== rankRun) return;
         applyRankRows(page.rows);
         // page_size 卡的是「商品数」，不是视频条数——必须用商品数判断是否到底
         emptyStreak = page.products ? 0 : emptyStreak + 1;
@@ -755,9 +939,12 @@
         await sleep(PAGE_GAP_MS + Math.random() * 250);
       }
     } finally {
-      rankLoadAt = performance.now();
-      loading = false;
+      if (run === rankRun) {
+        rankLoadAt = performance.now();
+        loading = false;
+      }
     }
+    if (run !== rankRun) return;
     if (!items.size) {
       renderErrorChip('罗盘下载：抓取失败' + (lastError ? '：' + lastError : '') + '（请确认已登录罗盘；点插件弹窗「重新抓取」重试）');
     } else {
@@ -814,13 +1001,22 @@
   /** ref → 抖音 videoId 的按需缓存：复制/下载解析成功后写入，后续点击直接命中 */
   const refCache = new Map();
 
+  /** 商品图比对键：去掉 query 与 ~tplv- 模板，只留素材文件名 */
+  function imageKey(url) {
+    const path = String(url || '').split('?')[0].split('#')[0];
+    const m = path.match(/\/([^/]+?)(?:~tplv-[^/]*)?$/);
+    return m ? m[1] : path;
+  }
+
   function groups() {
     const map = new Map();
     for (const it of items.values()) {
-      const key = it.productId || ('single_' + it.videoId);
+      // productId 缺失时不能一条视频一个组：否则行按钮只能下到该商品的第一条视频。
+      // 优先按 productId；其次按商品名；两者都没有才退化成单视频组。
+      const key = it.productId || (it.productName ? 'name_' + it.productName : ('single_' + it.videoId));
       let g = map.get(key);
       if (!g) {
-        g = { pid: key, rank: it.rank || 0, productName: it.productName || '', videos: [] };
+        g = { pid: key, rank: it.rank || 0, productName: it.productName || '', productImage: it.productImage || '', videos: [] };
         map.set(key, g);
       }
       g.videos.push(it);
@@ -849,12 +1045,26 @@
       if (!cell) continue;
 
       const text = tr.innerText || '';
-      const g = gs.find(function (x) {
+      let g = gs.find(function (x) {
         return x.productName && text.indexOf(x.productName) >= 0;
       }) || gs.find(function (x) {
         return x.productName && x.productName.length > 10 &&
           text.indexOf(x.productName.slice(0, 10)) >= 0;
       });
+      // 名称对不上（接口字段别名/标题截断/同名商品）时按商品图兜底：
+      // 商品单元格通常在第 2 列；找不到就扫一个“只有 1 张图”的单元格。
+      if (!g) {
+        let productImg = tds[1] && tds[1].querySelector('img');
+        if (!productImg) {
+          for (let k = 0; k < tds.length && !productImg; k++) {
+            if (tds[k].querySelectorAll('img').length === 1) productImg = tds[k].querySelector('img');
+          }
+        }
+        const want = productImg ? imageKey(productImg.currentSrc || productImg.src) : '';
+        if (want) {
+          g = gs.find(function (x) { return x.productImage && imageKey(x.productImage) === want; });
+        }
+      }
       if (!g) continue;
 
       // 已有按钮：商品对得上就留着，对不上（搜索结果换行）就重挂，避免复制到错的商品
@@ -956,21 +1166,51 @@
     return null;
   }
 
-  function syncRankSource() {
-    if (mode !== 'rank' || loading) return;
-    const entry = latestRequestEntry(RANK_API, true);
-    // 只认「晚于上一次拉取」的页面请求：自己拉取的请求不能让这里反复触发
-    if (!entry || entry.startTime <= rankLoadAt) return;
-    const p = latestRequestParams(RANK_API, true);
-    if (!p) return;
-    const sig = paramsSignature(p);
-    if (sig === rankSig) return;
-    rankSig = sig;
-    // 页面换了类目/价格带/搜索词：旧数据不再对应当前表格，清掉重拉
+  function resetRankView() {
     items.clear();
     const old = document.querySelectorAll('.lp-rowbtns');
     for (let i = 0; i < old.length; i++) old[i].remove();
     renderErrorChip(null);
+  }
+
+  function syncRankSource() {
+    if (mode !== 'rank') return;
+    // 总榜接口在主线程发请求，能稳定反映当前筛选；短视频榜请求可能跑在 worker 里看不到。
+    const marketEntry = latestRequestEntry(MARKET_API, true);
+    const entry = marketEntry || latestRequestEntry(RANK_API, true);
+    if (!entry) return;
+    const p = marketEntry ? latestRequestParams(MARKET_API, true) : latestRequestParams(RANK_API, true);
+    if (!p) return;
+    const sig = paramsSignature(p);
+    // 用户在当前拉取结束前又换了筛选：先记下最新签名，等本轮结束再补拉。
+    // 旧实现直接 return，且 rankLoadAt 在结束时才写——这个筛选变化会被永久忽略。
+    if (loading) {
+      if (sig !== rankSig) {
+        // 别等 20 页翻完再补拉：立即用最新筛选重启，第一页就能对上当前表格
+        rankSig = sig;
+        rankPendingSig = '';
+        resetRankView();
+        loadRankAll(true);
+      }
+      return;
+    }
+    if (rankPendingSig) {
+      const pending = rankPendingSig;
+      rankPendingSig = '';
+      if (pending !== rankSig) {
+        rankSig = pending;
+        resetRankView();
+        loadRankAll();
+        return;
+      }
+    }
+    // 只认「晚于上一次拉取」的页面请求；总榜请求若在本轮拉取中途落地，结束后也要补拉。
+    const afterLoadStart = !!marketEntry && entry.startTime > rankLoadStartedAt;
+    if (entry.startTime <= rankLoadAt && !afterLoadStart) return;
+    if (sig === rankSig) return;
+    rankSig = sig;
+    // 页面换了类目/价格带/搜索词：旧数据不再对应当前表格，清掉重拉
+    resetRankView();
     loadRankAll();
   }
 
@@ -978,15 +1218,20 @@
     setInterval(function () {
       if (mode !== 'rank') return;
       try {
+        const gs = groups();
+        const sample = gs.slice(0, 3).map(function (g) {
+          return (g.productName || '-') + '#' + (g.productImage ? imageKey(g.productImage) : '-');
+        }).join('|');
         document.documentElement.setAttribute('data-lp-kw',
-          'kw=' + (readPageKeyword() || '') + ';loading=' + loading + ';items=' + items.size);
+          'kw=' + (readPageKeyword() || '') + ';loading=' + loading + ';items=' + items.size +
+          ';g=' + gs.length + ';sample=' + sample.slice(0, 200));
       } catch (e) {}
     }, 1500);
   }
 
   /** 榜单兜底提示：主动拉取完成后仍无数据才显示（正常情况下按钮会先出现） */
   function startRankHintTimer() {
-    setTimeout(function () {
+    return setTimeout(function () {
       if (mode === 'rank' && items.size === 0 && !loading) {
         renderErrorChip('罗盘下载：未获取到榜单数据' + (lastError ? '：' + lastError : '') + '。请确认已登录罗盘，或点插件弹窗「重新抓取」重试');
       }
@@ -1519,6 +1764,42 @@
 
   chrome.runtime.onMessage.addListener(function (msg, sender, reply) {
     if (!msg || !msg.type) return;
+    if (msg.type === 'LP_JOB') {
+      if (!dlState) { reply({ ok: true }); return; }
+      if (msg.ok) dlState.done++;
+      else {
+        dlState.failed++;
+        if (msg.error && dlState.errors.length < 5) dlState.errors.push(String(msg.error).slice(0, 120));
+      }
+      const processed = dlState.done + dlState.failed;
+      if (dlState.cancelled) {
+        // 已取消保存位置：只更新进度，最终保留“本批不会落盘”的提示
+        if (processed >= dlState.total) { keepAlive(false); dlState = null; }
+        else flash(dlState.btn, `下载 ${processed}/${dlState.total}`);
+        reply({ ok: true });
+        return;
+      }
+      if (msg.ok) {
+        flash(dlState.btn, `下载 ${processed}/${dlState.total}`);
+      } else {
+        renderErrorChip('罗盘下载：' + (msg.filename || '视频') + ' 失败：' + (msg.error || '未知错误') +
+          (processed < dlState.total ? '（其余继续）' : ''));
+        flash(dlState.btn, `下载 ${processed}/${dlState.total} · 失败 ${dlState.failed}`);
+      }
+      if (processed >= dlState.total) {
+        keepAlive(false);
+        if (dlState.failed) {
+          renderErrorChip('罗盘下载：完成 ' + dlState.done + ' 个，失败 ' + dlState.failed + ' 个：' + dlState.errors.join('；'));
+          flash(dlState.btn, `完成 ${dlState.done} · 失败 ${dlState.failed}`);
+        } else {
+          renderErrorChip(null);
+          flash(dlState.btn, `已下载 ${dlState.done} 个`);
+        }
+        dlState = null;
+      }
+      reply({ ok: true });
+      return;
+    }
     if (msg.type === 'LP_CHUNK') {
       try {
         const buf = lpChunks[msg.id] || (lpChunks[msg.id] = { parts: [], received: 0 });
@@ -1601,9 +1882,16 @@
   }
 
   function startRank() {
-    loadRankAll();          // v2.7.0：主动经页面桥拉取（不再等页面推送）
-    watchPageKeyword();
-    startRankHintTimer();
+    // 每次回到榜单页都要重拉：SPA 从别的页面切回来时旧的 items 已经和当前表格不对应，
+    // 只靠 rankBooted 首启一次会让按钮持续缺失/串商品。
+    if (!rankWatchStarted) { rankWatchStarted = true; watchPageKeyword(); }
+    if (rankHintTimer) { clearTimeout(rankHintTimer); rankHintTimer = null; }
+    rankPendingSig = '';
+    rankSig = '';
+    rankLoadAt = 0;
+    resetRankView();
+    loadRankAll(true);
+    rankHintTimer = startRankHintTimer();
   }
 
   function startDetail(force) {
@@ -1614,12 +1902,23 @@
     loadDetail();
   }
 
+  /** 离开榜单/详情页时清掉注入 UI，避免 SPA 切页后工具条挂在别的页面 */
+  function cleanupInjected() {
+    const sels = ['.lp-rowbtns', '.lp-drowbtns', '.lp-dbar'];
+    for (let i = 0; i < sels.length; i++) {
+      const nodes = document.querySelectorAll(sels[i]);
+      for (let k = 0; k < nodes.length; k++) nodes[k].remove();
+    }
+    renderErrorChip(null);
+  }
+
   function tick() {
     const m = detectMode();
     if (m !== mode) {
       mode = m;
-      if (m === 'rank' && !rankBooted) { rankBooted = true; startRank(); }
-      if (m === 'detail') startDetail();
+      cleanupInjected();
+      if (m === 'rank') { rankBooted = true; startRank(); }
+      if (m === 'detail') { detailTabSeen = false; startDetail(true); }
     }
 
     if (mode === 'rank') {
