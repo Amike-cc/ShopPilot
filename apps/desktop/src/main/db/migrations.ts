@@ -1973,6 +1973,35 @@ export const migrations: Migration[] = [
       }
     },
     down: () => { /* 地址迁移不强行回滚，避免覆盖用户后续编辑 */ }
+  },
+  {
+    version: 39,
+    name: 'asset_library',
+    up: (db) => {
+      // 素材库（2026-11-15）：原图落 userData/asset-library，库里只存元数据与缩略图。
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS asset_library_items (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          file_name TEXT NOT NULL,
+          mime_type TEXT NOT NULL,
+          size INTEGER NOT NULL,
+          width INTEGER NOT NULL DEFAULT 0,
+          height INTEGER NOT NULL DEFAULT 0,
+          tags_json TEXT NOT NULL DEFAULT '[]',
+          source TEXT NOT NULL DEFAULT 'upload',
+          thumb_b64 TEXT NOT NULL DEFAULT '',
+          sha256 TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_asset_library_updated ON asset_library_items(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_asset_library_sha ON asset_library_items(sha256);
+      `)
+    },
+    down: (db) => {
+      db.exec('DROP TABLE IF EXISTS asset_library_items')
+    }
   }
 ]
 

@@ -388,6 +388,18 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.AI_IMAGE_REVEAL, { path })
   },
 
+  // 素材库：只传 data URL / id，不暴露本地绝对路径
+  assets: {
+    list: (): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.ASSETS_LIST),
+    addDataUrl: (input: { dataUrl: string; name?: string; tags?: string[]; source?: 'upload' | 'chat-image' }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ASSETS_ADD_DATA_URL, JSON.parse(JSON.stringify(input))),
+    update: (input: { id: string; name?: string; tags?: string[] }): Promise<IPCResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ASSETS_UPDATE, JSON.parse(JSON.stringify(input))),
+    remove: (id: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.ASSETS_REMOVE, id),
+    read: (id: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.ASSETS_READ, id),
+    reveal: (id: string): Promise<IPCResult> => ipcRenderer.invoke(IPC_CHANNELS.ASSETS_REVEAL, id)
+  },
+
   // 事件监听
   on: (channel: string, callback: (...args: any[]) => void): void => {
     // 只允许白名单事件

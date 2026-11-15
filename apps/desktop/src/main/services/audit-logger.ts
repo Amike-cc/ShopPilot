@@ -31,6 +31,7 @@ export type AuditAction =
   | 'update.check' | 'update.download' | 'update.install'
   | 'ai.keySet' | 'ai.keyClear' | 'ai.test' | 'ai.generate' | 'ai.models' | 'ai.config'
   | 'ai.imageConfig' | 'ai.imageKeySet' | 'ai.imageKeyClear' | 'ai.image.test' | 'ai.image.models' | 'ai.imageSave'
+  | 'assets.add' | 'assets.update' | 'assets.remove'
   // 技能/插件/分享包属于「定义变更」：会改变后续 Job 能自动执行什么，必须留痕（2026-09-26 审计 P2）。
   | 'agent.skill.create' | 'agent.skill.update' | 'agent.skill.delete' | 'agent.skill.run'
   | 'agent.plugin.create' | 'agent.plugin.update' | 'agent.plugin.delete'

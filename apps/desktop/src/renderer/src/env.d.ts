@@ -273,6 +273,14 @@ declare global {
         saveImage: (input: { b64Json: string; mimeType?: string; suggestedName?: string; outputPath?: string }) => Promise<IPCResult>
         revealImage: (path: string) => Promise<IPCResult>
       }
+      assets: {
+        list: () => Promise<IPCResult>
+        addDataUrl: (input: { dataUrl: string; name?: string; tags?: string[]; source?: 'upload' | 'chat-image' }) => Promise<IPCResult>
+        update: (input: { id: string; name?: string; tags?: string[] }) => Promise<IPCResult>
+        remove: (id: string) => Promise<IPCResult>
+        read: (id: string) => Promise<IPCResult>
+        reveal: (id: string) => Promise<IPCResult>
+      }
       agent: {
         uiGet: () => Promise<IPCResult<AgentUiState>>
         uiSet: (state: AgentUiState) => Promise<IPCResult<AgentUiState>>

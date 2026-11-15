@@ -15,7 +15,7 @@ import taxAppIcon from '../../assets/icons/app-tax.svg'
 import AppCenterExtensions from './AppCenterExtensions.vue'
 import { ensureAppModulesLoaded, isModuleInstalled, setModuleInstalled, type OptionalModuleKey } from './use-app-modules'
 
-type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'assistant' | 'chat-image'
+type Page = 'stores' | 'analytics' | 'invoices' | 'tax' | 'settings' | 'assistant' | 'chat-image' | 'assets'
 type AppTone = 'violet' | 'blue' | 'cyan' | 'orange' | 'indigo' | 'green' | 'pink' | 'slate' | 'amber'
 
 interface AppLink {
@@ -57,25 +57,28 @@ const businessApps: AppLink[] = [
   { key: 'tax', label: '涉税信息', description: '查看平台按季度报送的涉税经营数据与主体汇总。', note: '季度报送 · 只读核对', tone: 'green', icon: taxAppIcon, page: 'tax' }
 ]
 
-/** AI 工具：两个入口各自独立安装/卸载，不再由「AI 创作」整包控制。 */
+/** AI 工具：三个入口各自独立安装/卸载，不再由「AI 创作」整包控制。 */
 interface AiToolLink {
   key: OptionalModuleKey
   testId: string
   label: string
   description: string
   category: string
-  note: 'text' | 'image'
+  note: 'text' | 'image' | 'library'
   tone: AppTone
   icon: string
   page: Page
 }
 const aiTools: AiToolLink[] = [
   { key: 'ai-assistant', testId: 'apps-ai-assistant', label: 'AI 电商助手', description: '纯文本对话：讨论问题、整理思路、给出手动操作建议；不会读取或操作店铺与软件数据。', category: '对话', note: 'text', tone: 'violet', icon: aiAppIcon, page: 'assistant' },
-  { key: 'ai-chat-image', testId: 'apps-ai-chat-image', label: '对话生图', description: '用聊天描述画面，连续追问；可基于上一张结果继续修改并保存。', category: '内容创作', note: 'image', tone: 'cyan', icon: aiAppIcon, page: 'chat-image' }
+  { key: 'ai-chat-image', testId: 'apps-ai-chat-image', label: '对话生图', description: '用聊天描述画面，连续追问；可基于上一张结果继续修改并保存。', category: '内容创作', note: 'image', tone: 'cyan', icon: aiAppIcon, page: 'chat-image' },
+  { key: 'ai-assets', testId: 'apps-ai-assets', label: '素材库', description: '集中管理上传与 AI 生成的图片，支持搜索、标签与一键作为生图参考。', category: '内容资产', note: 'library', tone: 'indigo', icon: aiAppIcon, page: 'assets' }
 ]
 const aiInstalledCount = computed(() => aiTools.filter(tool => isModuleInstalled(tool.key)).length)
 function aiToolNote(tool: AiToolLink): string {
-  return tool.note === 'text' ? textModelStatus.value : imageModelStatus.value
+  if (tool.note === 'text') return textModelStatus.value
+  if (tool.note === 'image') return imageModelStatus.value
+  return '本地素材 · 可作生图参考'
 }
 function openAiTool(tool: AiToolLink): void {
   emit('navigate', tool.page)

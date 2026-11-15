@@ -290,6 +290,7 @@
         <UnifiedDataPage v-else-if="activePage === 'tax'" mode="tax" @open-store="openStoreFromPage" />
         <UnifiedSettingsPage v-else-if="activePage === 'settings'" :initial-tab="settingsTab" @close="closeSettings" />
         <UnifiedChatImagePage v-else-if="activePage === 'chat-image'" @go-home="navigateTo('overview')" @busy-change="chatImageBusy = $event" />
+        <UnifiedAssetLibraryPage v-else-if="activePage === 'assets'" @go-home="navigateTo('overview')" @use-as-reference="navigateTo('chat-image')" />
         <UnifiedAssistantPage v-else-if="activePage === 'assistant'" />
         <UnifiedAppsPage v-else-if="activePage === 'apps'" @navigate="navigateTo" />
         <DashboardOverviewPage
@@ -512,6 +513,7 @@ const UnifiedStorePage = defineAsyncComponent(() => import('./UnifiedStorePage.v
 const UnifiedDataPage = defineAsyncComponent(() => import('./UnifiedDataPage.vue'))
 const UnifiedSettingsPage = defineAsyncComponent(() => import('./UnifiedSettingsPage.vue'))
 const UnifiedChatImagePage = defineAsyncComponent(() => import('./UnifiedChatImagePage.vue'))
+const UnifiedAssetLibraryPage = defineAsyncComponent(() => import('./UnifiedAssetLibraryPage.vue'))
 const UnifiedAssistantPage = defineAsyncComponent(() => import('./UnifiedAssistantPage.vue'))
 const UnifiedAppsPage = defineAsyncComponent(() => import('./UnifiedAppsPage.vue'))
 import DashboardOverviewPage from './components/DashboardOverviewPage.vue'
@@ -548,6 +550,7 @@ const navItems: NavItem[] = [
   { key: 'tax', label: '涉税信息', icon: 'percent' },
   { key: 'assistant', label: 'AI 电商助手', icon: 'sparkles' },
   { key: 'chat-image', label: '对话生图', icon: 'message' },
+  { key: 'assets', label: '素材库', icon: 'image' },
   { key: 'apps', label: '应用商城', icon: 'grid' }
 ]
 const activeNav = ref('经营总览')
@@ -559,7 +562,8 @@ const OPTIONAL_PAGE_MODULE: Record<string, OptionalModuleKey> = {
   invoices: 'invoices',
   tax: 'tax',
   assistant: 'ai-assistant',
-  'chat-image': 'ai-chat-image'
+  'chat-image': 'ai-chat-image',
+  assets: 'ai-assets'
 }
 const visibleNavItems = computed(() => navItems.filter((item) => {
   const moduleKey = OPTIONAL_PAGE_MODULE[item.key]
@@ -570,7 +574,7 @@ void ensureAppModulesLoaded()
 const navGroups = computed(() => [
   { key: 'main', title: '', items: visibleNavItems.value.filter(item => ['经营总览', '店铺管理'].includes(item.label)) },
   { key: 'ops', title: '运营', items: visibleNavItems.value.filter(item => ['数据分析', '发票中心', '涉税信息'].includes(item.label)) },
-  { key: 'ai', title: 'AI 工具', items: visibleNavItems.value.filter(item => ['AI 电商助手', '对话生图'].includes(item.label)) },
+  { key: 'ai', title: 'AI 工具', items: visibleNavItems.value.filter(item => ['AI 电商助手', '对话生图', '素材库'].includes(item.label)) },
   { key: 'tools', title: '工具', items: visibleNavItems.value.filter(item => ['应用商城'].includes(item.label)) }
 ].filter(group => group.items.length > 0))
 /** 店铺搜索：只在店铺多到列表要滚的时候出现，少店铺时不占一行 */
@@ -585,7 +589,7 @@ const visibleStores = computed(() => {
 const PAGE_TITLES: Record<string, string> = {
   overview: '经营总览', browser: '店铺工作台', stores: '店铺管理',
   assistant: 'AI 电商助手', analytics: '数据分析', invoices: '发票中心', tax: '涉税信息', apps: '应用商城', settings: '设置中心',
-  'chat-image': '对话生图'
+  'chat-image': '对话生图', assets: '素材库'
 }
 const pageTitle = computed(() => PAGE_TITLES[activePage.value] || '经营总览')
 /**
@@ -603,7 +607,7 @@ function tickClock() {
   const pad = (n: number) => String(n).padStart(2, '0')
   nowLabel.value = `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
-type DashboardPage = 'overview' | 'browser' | 'stores' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'assistant' | 'chat-image'
+type DashboardPage = 'overview' | 'browser' | 'stores' | 'analytics' | 'apps' | 'settings' | 'invoices' | 'tax' | 'assistant' | 'chat-image' | 'assets'
 type SettingsTab = 'entry' | 'ai' | 'security' | 'extensions' | 'maintenance' | 'about'
 const activePage = ref<DashboardPage>('overview')
 /** 对话生图生成中：消息与结果只在页面内存里，切走会丢。 */
@@ -767,6 +771,7 @@ function navigateTo(page: DashboardPage) {
   else if (page === 'tax') activeNav.value = '涉税信息'
   else if (page === 'apps') activeNav.value = '应用商城'
   else if (page === 'chat-image') activeNav.value = '对话生图'
+  else if (page === 'assets') activeNav.value = '素材库'
 }
 /** 设置中心页签白名单：环境面板等入口只允许跳到已知页签，未知值回落到默认「平台入口」 */
 const SETTINGS_TABS: SettingsTab[] = ['entry', 'ai', 'security', 'extensions', 'maintenance', 'about']

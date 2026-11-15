@@ -1,3 +1,29 @@
+# ShopPilot 0.9.38 变更说明（AI 工具新增「素材库」）
+
+> **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。
+
+## 本次更新
+
+- **AI 工具新增独立「素材库」**（模块键 `ai-assets`）：
+  - 侧栏「AI 工具」新增入口，应用商城独立安装/卸载；老用户升级后一次性补装，之后主动卸载不会再补回；
+  - 支持导入 PNG / JPEG / WebP（单张 ≤20MB），也可把「对话生图」结果一键存入素材库；
+  - 列表按最近使用排序，显示缩略图、名称、像素尺寸、文件大小、来源与标签；
+  - 支持名称/标签搜索、来源筛选、标签快捷筛选；
+  - 详情可改名称与标签、在文件夹中定位、删除原图；相同图片按 SHA-256 去重，不重复占空间；
+  - **「用于对话生图」**：把素材设为对话生图的下一轮参考图，自动切到生图页并显示参考图 chip；
+  - 原图存 `userData/asset-library`，SQLite 只存元数据与缩略图；渲染层只传 data URL / id，不暴露本地绝对路径。
+- 素材库不使用任何模型或 API Key，导入、检索、删除全部离线可用。
+
+## 验证
+
+- 新增 `asset-library` 纯逻辑与接线单测 11 项：名称/标签收口、筛选、大小文案、迁移表、IPC 三方一致、一次性上装、页面钩子与对话生图互通。
+- 全量单测 1688 项通过；typecheck 与 ESLint 0 error。
+- 真机验收 `node tools/acceptance/asset-library-cdp-verify.js` 13/13：导入两张图 → 缩略图解码 → 搜索 → 详情改名/标签 → 用于对话生图 → 删除 → AI 来源筛选 → 重启后仍在。
+- 对话生图回归 10/10：新增「存入素材库」按钮后，mock 生成结果以 `source=chat-image` 入库，原有两轮改图链路不变。
+- 真机截图：`artifacts/release-0.9.38/assets.png`、`artifacts/ui-redesign/app-center.png`。
+
+---
+
 # ShopPilot 0.9.37 变更说明（商品图片下载器取消下载 + 删除「图文带货」）
 
 > **构建标签：INTERNAL_BUILD** —— 当前未配置 Windows 代码签名证书，本包用于内部试用和验收（签名配置就绪说明见 docs/RELEASE_SIGNING.md）。

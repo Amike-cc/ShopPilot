@@ -430,7 +430,14 @@ export const IPC_CHANNELS = {
   // 保存生成结果到本地磁盘（另存为对话框；带 outputPath 时直接写该路径，供验收脚本使用）
   AI_IMAGE_SAVE: 'ai:image:save',
   // 在文件管理器里定位刚保存的图片
-  AI_IMAGE_REVEAL: 'ai:image:reveal'
+  AI_IMAGE_REVEAL: 'ai:image:reveal',
+  // 素材库：原图由主进程落盘，渲染层只按 id 读写元数据与内容
+  ASSETS_LIST: 'assets:list',
+  ASSETS_ADD_DATA_URL: 'assets:addDataUrl',
+  ASSETS_UPDATE: 'assets:update',
+  ASSETS_REMOVE: 'assets:remove',
+  ASSETS_READ: 'assets:read',
+  ASSETS_REVEAL: 'assets:reveal'
 } as const
 
 /**

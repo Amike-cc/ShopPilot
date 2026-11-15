@@ -168,6 +168,17 @@ async function main() {
     `)
     check('第一轮结果图真实渲染（data URL + 已解码）', firstImage.src.startsWith('data:image/') && firstImage.naturalWidth > 0, JSON.stringify(firstImage))
     check('纯文字请求走 /images/generations', mock.requests.some(item => /images\/generations/.test(item.url) && !item.hasImageField), JSON.stringify(mock.requests))
+
+    const toLibrary = await click(ui, '[data-test^="chat-image-to-library-"]')
+    const inLibrary = await waitFor(ui, `
+      const result = await window.shopilot.assets.list()
+      return result.ok && result.data.items.some(item => item.source === 'chat-image')
+    `, 6000)
+    const libraryItem = await ui.eval(`
+      const result = await window.shopilot.assets.list()
+      return result.ok ? result.data.items.find(item => item.source === 'chat-image') : null
+    `)
+    check('生成结果可一键存入素材库（source=chat-image）', toLibrary && inLibrary && Boolean(libraryItem), JSON.stringify(libraryItem && { name: libraryItem.name, tags: libraryItem.tags, source: libraryItem.source }))
     await ui.send('Page.captureScreenshot', { format: 'png' }).then(result => fs.writeFileSync(path.join(OUT, 'chat-image-result.png'), Buffer.from(result.data, 'base64')))
 
     const useRef = await click(ui, '[data-test^="chat-image-use-reference-"]')

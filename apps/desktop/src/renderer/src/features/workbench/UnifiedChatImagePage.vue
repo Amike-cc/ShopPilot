@@ -57,6 +57,7 @@
                     <span class="ci-result-meta">{{ image.model }}<template v-if="image.elapsedMs"> · {{ (image.elapsedMs / 1000).toFixed(1) }}s</template></span>
                     <span class="ci-result-actions">
                       <button type="button" :data-test="`chat-image-save-${message.id}-${imageIndex}`" @click="saveImage(image.url, imageIndex + 1)">保存</button>
+                      <button type="button" :data-test="`chat-image-to-library-${message.id}-${imageIndex}`" @click="saveToLibrary(image.url, imageIndex + 1)">存入素材库</button>
                       <button type="button" class="primary" :data-test="`chat-image-use-reference-${message.id}-${imageIndex}`" @click="useResultAsReference(message, image)">基于这张改</button>
                     </span>
                   </figcaption>
@@ -119,6 +120,7 @@ import {
   CHAT_IMAGE_RATIO_OPTIONS
 } from './chat-image'
 import { useChatImage, type ChatImageMessage, type ChatImageResult } from './use-chat-image'
+import { takePendingAssetReference } from './asset-library-bridge'
 
 const emit = defineEmits<{ 'go-home': []; 'busy-change': [busy: boolean] }>()
 const {
@@ -175,6 +177,24 @@ function useResultAsReference(message: ChatImageMessage, image: ChatImageResult)
   })
   composerInput.value?.focus()
 }
+async function saveToLibrary(url: string, index: number): Promise<void> {
+  if (!/^data:image\/(png|jpeg|webp);base64,/i.test(url)) {
+    say('这张图没有可存入素材库的图片数据', true)
+    return
+  }
+  try {
+    const result = await window.shopilot.assets.addDataUrl({
+      dataUrl: url,
+      name: `对话生图-${String(index).padStart(2, '0')}`,
+      tags: ['AI生成'],
+      source: 'chat-image'
+    })
+    if (!result.ok) throw new Error(result.error.message)
+    say(result.data?.duplicate ? '素材库已有这张图，未重复保存' : '已存入素材库，可在「素材库」查看和打标签')
+  } catch (error) {
+    say(`存入素材库失败：${error instanceof Error ? error.message : String(error)}`, true)
+  }
+}
 function onMaterialFiles(event: Event): void {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -191,7 +211,11 @@ function onMaterialFiles(event: Event): void {
 watch(busy, value => emit('busy-change', value))
 watch(() => messages.value.length, scrollToBottom, { flush: 'post' })
 watch(attachError, scrollToBottom, { flush: 'post' })
-onMounted(() => { void reloadConfig() })
+onMounted(() => {
+  void reloadConfig()
+  const pending = takePendingAssetReference()
+  if (pending) setReference(pending)
+})
 </script>
 
 <style scoped>

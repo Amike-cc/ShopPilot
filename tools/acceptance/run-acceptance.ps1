@@ -78,6 +78,9 @@ Run-Step 'tabs-batch-close' 'node tools/acceptance/tabs-batch-close-cdp-verify.j
 # Renderer entries over CDP: store grouping, session check, and deletion guard for the
 # removed AI image studio: 10 assertions, ports 9390/9391 (SHOPILOT_ENTRIES_CDP_PORT / _SITE_PORT).
 Run-Step 'renderer-entries' 'node tools/acceptance/renderer-entries-cdp-verify.js'
+# Asset library (AI tool): import via file input, search/tag/edit, use as chat-image reference,
+# delete, AI-source filter, persistence. Ports 9416 (SHOPILOT_ASSETS_CDP_PORT).
+Run-Step 'asset-library' 'node tools/acceptance/asset-library-cdp-verify.js'
 Run-Step 'm4-full' 'node tools/acceptance/m4-runner.js'
 Run-Step 'custom-local' 'node tools/acceptance/custom-task-local-verify.js'
 Run-Step 'invite-live-log' 'node tools/acceptance/invite-live-log-verify.js'

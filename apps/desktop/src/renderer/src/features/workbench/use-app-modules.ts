@@ -7,9 +7,9 @@
  */
 import { reactive } from 'vue'
 
-export type OptionalModuleKey = 'invoices' | 'tax' | 'ai-assistant' | 'ai-chat-image'
+export type OptionalModuleKey = 'invoices' | 'tax' | 'ai-assistant' | 'ai-chat-image' | 'ai-assets'
 
-export const AI_TOOL_MODULE_KEYS: OptionalModuleKey[] = ['ai-assistant', 'ai-chat-image']
+export const AI_TOOL_MODULE_KEYS: OptionalModuleKey[] = ['ai-assistant', 'ai-chat-image', 'ai-assets']
 
 export const OPTIONAL_MODULE_KEYS: OptionalModuleKey[] = ['invoices', 'tax', ...AI_TOOL_MODULE_KEYS]
 
@@ -21,13 +21,16 @@ const SETTING_KEY = 'ui.apps.installedModules'
  * 不会再被补回来（标记已存在）。
  */
 const CHAT_IMAGE_INTRODUCED_KEY = 'ui.apps.aiChatImageIntroduced'
+/** 素材库是 0.9.38 新增工具，用独立标记给老用户补装一次。 */
+const ASSET_LIBRARY_INTRODUCED_KEY = 'ui.apps.aiAssetsIntroduced'
 
 /** 缺省全部已安装：老用户升级后入口不消失；只有显式写过 [] 才会全部隐藏 */
 export const installedModules = reactive<Record<OptionalModuleKey, boolean>>({
   invoices: true,
   tax: true,
   'ai-assistant': true,
-  'ai-chat-image': true
+  'ai-chat-image': true,
+  'ai-assets': true
 })
 
 let loaded = false
@@ -38,25 +41,33 @@ export function isModuleInstalled(key: string): boolean {
 }
 
 /**
- * 对话生图是一次新增工具：老用户的 installedModules 白名单里没有这个键。
+ * 新增 AI 工具的一次性上架：老用户的 installedModules 白名单里没有这个键。
  * 只在「标志位不存在」时补装一次，并把新列表写回；用户之后主动卸载会写标志位，
  * 下次启动不会再补回来。
  */
-async function introduceChatImageIfNeeded(list: string[]): Promise<void> {
+async function introduceAiToolIfNeeded(key: OptionalModuleKey, markerKey: string, list: string[]): Promise<void> {
   try {
-    if (list.includes('ai-chat-image')) {
-      await window.shopilot.settings.set(CHAT_IMAGE_INTRODUCED_KEY, true)
+    if (list.includes(key)) {
+      await window.shopilot.settings.set(markerKey, true)
       return
     }
-    const marker = await window.shopilot.settings.get(CHAT_IMAGE_INTRODUCED_KEY)
+    const marker = await window.shopilot.settings.get(markerKey)
     if (marker.ok && marker.data?.value === true) return
-    installedModules['ai-chat-image'] = true
-    const next = OPTIONAL_MODULE_KEYS.filter((key) => installedModules[key])
+    installedModules[key] = true
+    const next = OPTIONAL_MODULE_KEYS.filter((item) => installedModules[item])
     const saved = await window.shopilot.settings.set(SETTING_KEY, next)
-    if (saved.ok) await window.shopilot.settings.set(CHAT_IMAGE_INTRODUCED_KEY, true)
+    if (saved.ok) await window.shopilot.settings.set(markerKey, true)
   } catch {
     /* 读不到标志位就不擅自改安装状态；用户仍可从应用商城安装 */
   }
+}
+
+async function introduceChatImageIfNeeded(list: string[]): Promise<void> {
+  await introduceAiToolIfNeeded('ai-chat-image', CHAT_IMAGE_INTRODUCED_KEY, list)
+}
+
+async function introduceAssetLibraryIfNeeded(list: string[]): Promise<void> {
+  await introduceAiToolIfNeeded('ai-assets', ASSET_LIBRARY_INTRODUCED_KEY, list)
 }
 
 /** 首次进入工作台/商城时读一次；读不到按全部已安装处理，绝不因为读失败藏入口 */
@@ -68,14 +79,17 @@ export async function ensureAppModulesLoaded(): Promise<void> {
       const result = await window.shopilot.settings.get(SETTING_KEY)
       const list = result.ok ? result.data?.value : null
       if (Array.isArray(list)) {
-        // 旧版只有一个 'ai' 键；升级后把它展开为两个独立 AI 工具（已安装）。
+        // 旧版只有一个 'ai' 键；升级后把它展开为当前全部独立 AI 工具（已安装）。
         const legacyAi = list.includes('ai')
         for (const key of OPTIONAL_MODULE_KEYS) {
           installedModules[key] = AI_TOOL_MODULE_KEYS.includes(key)
             ? legacyAi || list.includes(key)
             : list.includes(key)
         }
-        if (!legacyAi) await introduceChatImageIfNeeded(list)
+        if (!legacyAi) {
+          await introduceChatImageIfNeeded(list)
+          await introduceAssetLibraryIfNeeded(list)
+        }
       }
     } catch {
       /* 读失败保持默认（全部已安装） */

@@ -31,6 +31,7 @@ import { registerMaintenanceHandlers } from './ipc/maintenance-handlers'
 import { registerExtensionHandlers } from './ipc/extension-handlers'
 import { registerUpdateHandlers } from './ipc/update-handlers'
 import { registerAiHandlers } from './ipc/ai-handlers'
+import { registerAssetLibraryHandlers } from './ipc/asset-library-handlers'
 import { registerAgentHandlers } from './ipc/agent-handlers'
 import { registerAgentDomainHandlers } from './ipc/agent-domain-handlers'
 import { registerCustomerServiceHandlers } from './ipc/customer-service-handlers'
@@ -563,6 +564,7 @@ async function initialize(): Promise<void> {
   registerExtensionHandlers()
     registerUpdateHandlers()
     registerAiHandlers()
+    registerAssetLibraryHandlers()
     registerAgentHandlers()
     registerAgentDomainHandlers()
     registerCustomerServiceHandlers()
