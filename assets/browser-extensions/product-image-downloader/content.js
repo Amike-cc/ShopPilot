@@ -1088,6 +1088,16 @@
     } catch {
       /* 应用不认 marker 时继续走默认下载目录 */
     }
+    /*
+     * 等主进程回传文件夹选择结果后再开始抓图/触发下载。
+     * 为什么必须等：弹窗停留期间如果先把 16 张全部触发，Chromium 的单页连续下载上限
+     * 可能把后面的图静默丢掉；等用户选完再发，一批最多 8 张在途，稳定落到所选目录。
+     * 新应用会在弹窗关闭时立即回传；旧应用没有这个事件，最多等 120 秒后按旧行为继续。
+     */
+    const waitDeadline = Date.now() + 120000
+    while (!saveFolderResult && Date.now() < waitDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 150))
+    }
     if (saveFolderResult === 'cancel') {
       finishCancelled()
       return
@@ -1134,7 +1144,7 @@
     if (failed) {
       setStatus(`已触发 ${done} 张，${failed} 张失败（带红点的图可再次下载）`, 'error')
     } else {
-      setStatus(`已触发 ${done} 张下载；在保存位置弹窗中取消则不会落盘，右侧栏「下载」可查看`, 'ok')
+      setStatus(`已触发 ${done} 张下载；已保存到所选文件夹，右侧栏「下载」可查看`, 'ok')
     }
   }
 
