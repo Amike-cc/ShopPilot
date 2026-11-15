@@ -1061,6 +1061,15 @@
     syncFooter()
     syncTiles()
 
+    // 先让应用弹「选择保存位置」：0 字节 marker 被主进程拦截，不落盘、不写下载记录。
+    // 每次点击都会重新问一次；这一批图片在用户选定文件夹后才开始落盘。
+    setStatus('请选择图片保存文件夹…', 'busy')
+    try {
+      await enqueueDownload(new Blob([''], { type: 'text/plain' }), '__shopilot_pick_folder__.txt')
+    } catch {
+      /* 应用不认 marker 时继续走默认下载目录 */
+    }
+
     const title = state.title || readPageTitle()
     const queue = items.slice()
     let done = 0
@@ -1093,7 +1102,7 @@
     if (failed) {
       setStatus(`已触发 ${done} 张，${failed} 张失败（带红点的图可再次下载）`, 'error')
     } else {
-      setStatus(`已触发 ${done} 张下载，请在应用下载面板查看`, 'ok')
+      setStatus(`已触发 ${done} 张下载；在保存位置弹窗中取消则不会落盘，右侧栏「下载」可查看`, 'ok')
     }
   }
 

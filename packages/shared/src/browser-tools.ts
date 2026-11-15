@@ -85,6 +85,25 @@ export function canControlDownload(state: unknown): boolean {
   return isDownloadActiveState(state)
 }
 
+/* --------------------------- 商品图片下载器 --------------------------- */
+
+/**
+ * 商品图片下载器（浏览器插件）的文件名：`<商品标题>_主图_01.jpg` / `_详情图_01.jpg`。
+ * 主进程靠这个识别“插件图片下载”，在 will-download 里先问保存文件夹。
+ */
+export const PLUGIN_IMAGE_DOWNLOAD_PATTERN =
+  /_(主图|详情图)_\d{2}(\(\d+\))?\.(?:jpe?g|png|webp|gif|heic|avif)$/i
+
+/**
+ * 插件每批下载前先触发一个 0 字节标记下载；主进程拦截它、同步弹文件夹选择框，
+ * 不落盘、不写下载记录。这样“每次点击下载”都会问一次，而不是靠时间窗口猜批次。
+ */
+export const IMAGE_SAVE_FOLDER_MARKER = '__shopilot_pick_folder__.txt'
+
+export function isPluginImageDownload(fileName: unknown): boolean {
+  return PLUGIN_IMAGE_DOWNLOAD_PATTERN.test(String(fileName || ''))
+}
+
 /* ------------------------------ 多店保活 ------------------------------ */
 
 /**

@@ -37,6 +37,19 @@ async function waitForShopilot(main) {
   return false
 }
 
+/** 应用刚启动时扩展文件偶发被占用，install 会失败；重试几次（插件中心真实用户也可重试）。 */
+async function installPlugin(main) {
+  let result = null
+  for (let i = 0; i < 4; i++) {
+    result = await main.eval(
+      `return await window.shopilot.extensions.installFromCatalog(${JSON.stringify(PLUGIN_KEY)})`
+    )
+    if (result && result.ok === true) return result
+    await sleep(800)
+  }
+  return result
+}
+
 async function findPage() {
   for (let i = 0; i < 45; i++) {
     const list = await listTargets()
@@ -81,16 +94,11 @@ async function main() {
     main.close()
     return checker.summary('商品图片下载器验收')
   }
-  if (!entry.installed || !entry.enabled) {
-    const installed = await main.eval(
-      `return await window.shopilot.extensions.installFromCatalog(${JSON.stringify(PLUGIN_KEY)})`
-    )
-    checker.check('插件安装并启用', !!installed && installed.ok === true)
-    if (installed && installed.data && installed.data.masterOff) {
-      await main.eval('return await window.shopilot.extensions.setMaster(true)')
-    }
-  } else {
-    checker.check('插件已安装并启用', true, `v${entry.version}`)
+  // 每次都从插件目录重装一次：开发期插件文件会变，install 才会把新文件复制到 userData
+  const installed = await installPlugin(main)
+  checker.check('插件已安装/升级到目录版本', !!installed && installed.ok === true, `v${entry.version}`)
+  if (installed && installed.data && installed.data.masterOff) {
+    await main.eval('return await window.shopilot.extensions.setMaster(true)')
   }
   // 开发期改了插件文件：必须 reload 才会进已加载的店铺会话（install 不会刷新）
   const reloaded = await main.eval(

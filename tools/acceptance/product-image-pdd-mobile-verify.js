@@ -59,6 +59,19 @@ async function waitForShopilot(main) {
   return false
 }
 
+/** 应用刚启动时扩展文件偶发被占用，install 会失败；重试几次。 */
+async function installPlugin(main) {
+  let result = null
+  for (let i = 0; i < 4; i++) {
+    result = await main.eval(
+      `return await window.shopilot.extensions.installFromCatalog(${JSON.stringify(PLUGIN_KEY)})`
+    )
+    if (result && result.ok === true) return result
+    await sleep(800)
+  }
+  return result
+}
+
 function buildFixtureHtml() {
   const gallery = []
   MAIN_IDS.forEach((id, index) => {
@@ -139,8 +152,11 @@ async function main() {
     main.close()
     return checker.summary('商品图片下载器 · 拼多多手机页验收')
   }
-  if (!entry.installed || !entry.enabled) {
-    await main.eval(`return await window.shopilot.extensions.installFromCatalog(${JSON.stringify(PLUGIN_KEY)})`)
+  // 每次都重装，确保目录里的新插件文件覆盖 userData 里的旧副本
+  const installed = await installPlugin(main)
+  if (!installed || installed.ok !== true) throw new Error('插件安装失败: ' + JSON.stringify(installed).slice(0, 300))
+  if (installed.data && installed.data.masterOff) {
+    await main.eval('return await window.shopilot.extensions.setMaster(true)')
   }
   const reloaded = await main.eval(`return await window.shopilot.extensions.reload(${JSON.stringify(entry.id)})`)
   checker.check('插件已安装并重载到店铺会话', !!reloaded && reloaded.ok === true, `v${entry.version}`)

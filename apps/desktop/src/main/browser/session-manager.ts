@@ -6,6 +6,7 @@
 import { app, dialog, session, Session, WebContents, BrowserWindow } from 'electron'
 import { isAllowedCustomerServiceUrl } from '@shared/contracts/customer-service'
 import { storeSessionPartition } from '@shared/contracts/shop-session'
+import { IMAGE_SAVE_FOLDER_MARKER, isPluginImageDownload } from '@shared/browser-tools'
 import { getDatabase } from '../db/database'
 import { join, parse } from 'path'
 import { mkdirSync, existsSync } from 'fs'
@@ -95,6 +96,15 @@ const VIDEO_DOWNLOAD_EXT_RE = /\.(mp4|webm|mov|m4v|avi|mkv|flv|wmv|mpg|mpeg|3gp|
  *   · videoReissueNames —— 重发时恢复原始文件名（downloadURL 会丢 download 属性）。
  */
 const VIDEO_FOLDER_SESSION_MS = 60 * 1000
+
+/**
+ * 商品图片下载器（插件）的保存文件夹会话。
+ * 一次「下载选中」会连续触发 N 张图片（插件按 350ms/张、每 8 张停 2 秒节流），
+ * 30 秒足够覆盖一整批；下一次点击会先触发新的 marker，重新询问，不受这个窗口影响。
+ */
+const IMAGE_FOLDER_SESSION_MS = 30 * 1000
+/** 用户在文件夹框点取消后，这一批后续图片直接丢弃，不再逐张弹框。 */
+const IMAGE_CANCEL_WINDOW_MS = 30 * 1000
 
 /** 唯一放行的权限：剪贴板**写入**（页面的"复制"按钮要用）。读取一律拒绝——
  *  剪贴板里可能是用户刚复制的密码/验证码/订单信息，页面没有理由能读到它。
@@ -450,6 +460,9 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
     let videoFolderAsking = false
     const videoPendingNames = new Map<string, string>()
     const videoReissueNames = new Map<string, string>()
+    /** 插件图片的保存目录会话（每批 marker 选定后，这一批图片都落这里）。 */
+    const imageFolder: { dir: string; expiresAt: number } = { dir: '', expiresAt: 0 }
+    let imageBatchCancelledUntil = 0
     sess.on('will-download', (event, item, webContents) => {
     try {
       const pageUrl = (() => { try { return webContents.getURL() } catch { return undefined } })()
@@ -457,6 +470,110 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
       const mime = (() => { try { return String(item.getMimeType() || '') } catch { return '' } })()
       /** 视频（2026-11-02 用户要求）：弹系统「另存为」让用户选保存位置，不再自动落盘。 */
       const isVideo = /^video\//i.test(mime) || VIDEO_DOWNLOAD_EXT_RE.test(suggested)
+
+      /** 下载进度/终态的统一接线（非视频图片与普通下载共用）。 */
+      const wireDownload = (targetItem: typeof item, downloadId: string, fileName: string) => {
+        targetItem.on('updated', (_e2, state) => {
+          // 暂停时以 isPaused 为准：否则一暂停就被写成"中断"，「继续」按钮直接消失（2026-11-08）
+          if (isItemPaused(targetItem)) {
+            updateDownloadState(downloadId, 'paused')
+            emitDownloadProgress({
+              id: downloadId, storeId, state: 'paused',
+              receivedBytes: targetItem.getReceivedBytes(), totalBytes: targetItem.getTotalBytes()
+            })
+            return
+          }
+          if (state !== 'progressing') updateDownloadState(downloadId, 'interrupted')
+          emitDownloadProgress({
+            id: downloadId, storeId,
+            state: state === 'progressing' ? 'progressing' : 'interrupted',
+            receivedBytes: targetItem.getReceivedBytes(), totalBytes: targetItem.getTotalBytes()
+          })
+        })
+
+        targetItem.on('done', (_e2, state) => {
+          const finalState = state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted'
+          if (finalState === 'completed') {
+            updateDownloadState(downloadId, 'completed', targetItem.getReceivedBytes())
+          } else {
+            updateDownloadState(downloadId, finalState)
+          }
+          emitDownloadProgress({
+            id: downloadId, storeId, state: finalState,
+            receivedBytes: targetItem.getReceivedBytes(), totalBytes: targetItem.getTotalBytes()
+          })
+          if (finalState !== 'completed') {
+            logMain('warn', `[download] ${finalState} store=${storeId} file=${fileName}`)
+          }
+        })
+      }
+
+      /**
+       * 同步弹文件夹选择框（setSavePath 只能在 will-download 里同步调用）。
+       * 测试环境用 SHOPILOT_TEST_IMAGE_SAVE_DIR 跳过原生弹窗，验收才能无人值守跑完。
+       */
+      const pickImageFolder = (): string => {
+        const testDir = String(process.env.SHOPILOT_TEST_IMAGE_SAVE_DIR || '').trim()
+        if (testDir) {
+          mkdirSync(testDir, { recursive: true })
+          return testDir
+        }
+        try {
+          const parent = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
+          const options = {
+            title: '选择图片保存文件夹（本批图片都会存到这里）',
+            defaultPath: imageFolder.dir || join(app.getPath('userData'), 'stores', storeId, 'downloads'),
+            properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>
+          }
+          const picked = parent ? dialog.showOpenDialogSync(parent, options) : dialog.showOpenDialogSync(options)
+          return picked && picked[0] ? picked[0] : ''
+        } catch (error) {
+          logMain('warn', `[download] 图片保存文件夹选择失败 store=${storeId}: ${String((error as Error)?.message || error).slice(0, 160)}`)
+          return ''
+        }
+      }
+
+      /** 插件图片落盘到用户选的目录（重名追加序号，与默认下载目录同一规则）。 */
+      const savePluginImage = (targetItem: typeof item, originalName: string) => {
+        const dir = imageFolder.dir
+        mkdirSync(dir, { recursive: true })
+        let fileName = originalName
+        let target = join(dir, fileName)
+        let seq = 1
+        while (existsSync(target)) {
+          const parsed = parse(originalName)
+          fileName = `${parsed.name}(${seq})${parsed.ext}`
+          target = join(dir, fileName)
+          seq++
+        }
+        targetItem.setSavePath(target)
+        const downloadId = recordDownload(storeId, fileName, target, pageUrl)
+        registerDownloadItem(downloadId, targetItem)
+        emitDownloadCreated({ id: downloadId, storeId, fileName, filePath: target })
+        wireDownload(targetItem, downloadId, fileName)
+      }
+
+      /*
+       * 商品图片下载器：每批先触发一个 0 字节 marker（文件名固定），主进程在这里同步
+       * 弹文件夹选择框；marker 本身 preventDefault 不落盘、不写记录。选定后本批图片都
+       * 落进该目录；用户取消则本批后续图片在 IMAGE_CANCEL_WINDOW_MS 内直接丢弃，
+       * 不会逐张弹框、也不会偷偷落到默认下载目录。
+       */
+      if (suggested === IMAGE_SAVE_FOLDER_MARKER) {
+        event.preventDefault()
+        imageBatchCancelledUntil = 0
+        const picked = pickImageFolder()
+        if (picked) {
+          imageFolder.dir = picked
+          imageFolder.expiresAt = Date.now() + IMAGE_FOLDER_SESSION_MS
+          logMain('info', `[download] 图片保存位置已选择 store=${storeId} dir=${picked}`)
+        } else {
+          imageFolder.dir = ''
+          imageBatchCancelledUntil = Date.now() + IMAGE_CANCEL_WINDOW_MS
+          logMain('info', `[download] 图片保存位置未选择（用户取消），本批图片不下载 store=${storeId}`)
+        }
+        return
+      }
 
       if (isVideo) {
         /**
@@ -571,6 +688,28 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
         return
       }
 
+      // 商品图片下载器：用户选了目录后，这一批图片都落该目录；窗口过期/旧版插件没发
+      // marker 时也补问一次，绝不退回到"偷偷存默认目录"。
+      if (isPluginImageDownload(suggested)) {
+        const now = Date.now()
+        if (now < imageBatchCancelledUntil) {
+          event.preventDefault()
+          return
+        }
+        if (!imageFolder.dir || now > imageFolder.expiresAt) {
+          const picked = pickImageFolder()
+          if (!picked) {
+            imageBatchCancelledUntil = now + IMAGE_CANCEL_WINDOW_MS
+            event.preventDefault()
+            return
+          }
+          imageFolder.dir = picked
+        }
+        imageFolder.expiresAt = Date.now() + IMAGE_FOLDER_SESSION_MS
+        savePluginImage(item, suggested)
+        return
+      }
+
       // 非视频：沿用自动落盘。重名追加序号（文件名**不带店铺前缀**，2026-11-02 用户要求：
       // 下载目录本身就按店铺分目录，前缀在文件名里是冗余信息）。
       //
@@ -597,41 +736,7 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
       registerDownloadItem(downloadId, item)
       // 新下载要让界面立刻看到（此前 BROWSER_DOWNLOAD_CREATED 两侧皆空＝死事件）
       emitDownloadCreated({ id: downloadId, storeId, fileName, filePath: target })
-
-      item.on('updated', (_e2, state) => {
-        // 暂停时以 isPaused 为准：否则一暂停就被写成"中断"，「继续」按钮直接消失（2026-11-08）
-        if (isItemPaused(item)) {
-          updateDownloadState(downloadId, 'paused')
-          emitDownloadProgress({
-            id: downloadId, storeId, state: 'paused',
-            receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes()
-          })
-          return
-        }
-        if (state !== 'progressing') updateDownloadState(downloadId, 'interrupted')
-        emitDownloadProgress({
-          id: downloadId, storeId,
-          state: state === 'progressing' ? 'progressing' : 'interrupted',
-          receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes()
-        })
-      })
-
-      item.on('done', (_e2, state) => {
-        const finalState = state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted'
-        if (finalState === 'completed') {
-          updateDownloadState(downloadId, 'completed', item.getReceivedBytes())
-        } else {
-          updateDownloadState(downloadId, finalState)
-        }
-        // 完成/中断/取消都要推：面板据此更新，失败也才有用户可见的终点
-        emitDownloadProgress({
-          id: downloadId, storeId, state: finalState,
-          receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes()
-        })
-        if (finalState !== 'completed') {
-          logMain('warn', `[download] ${finalState} store=${storeId} file=${fileName}`)
-        }
-      })
+      wireDownload(item, downloadId, fileName)
     } catch (err) {
       // 目录创建/落盘准备失败：**不要**让下载悄悄落到 Chromium 默认目录而应用无记录。
       // 取消它并留日志，用户至少能在下载面板看到一条 cancelled。

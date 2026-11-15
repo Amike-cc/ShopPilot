@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parseCatalogIndex } from '@shared/extension-catalog'
+import { IMAGE_SAVE_FOLDER_MARKER, isPluginImageDownload } from '@shared/browser-tools'
 import { validateExtensionManifest } from '../../apps/desktop/src/main/services/extension-manifest'
 
 const ROOT = resolve(__dirname, '../..')
@@ -110,6 +111,16 @@ describe('商品图片下载器（product-image-downloader）', () => {
     expect(content).toContain('function itemKey(item)')
     expect(content).toContain('data-key=')
     expect(content).not.toMatch(/state\.selection\.add\(item\.url\)/)
+  })
+
+  it('主进程能识别插件图片文件名，并与插件共用同一个「选择保存位置」marker', () => {
+    expect(isPluginImageDownload('2027新年福到我家_主图_01.jpg')).toBe(true)
+    expect(isPluginImageDownload('植绒小灯笼_详情图_09(1).jpg')).toBe(true)
+    expect(isPluginImageDownload('__shopilot_pick_folder__.txt')).toBe(false)
+    const content = readFileSync(join(PLUGIN_DIR, 'content.js'), 'utf8')
+    expect(content).toContain(IMAGE_SAVE_FOLDER_MARKER)
+    expect(content).toContain('请选择图片保存文件夹')
+    expect(content).toContain('取消则不会落盘')
   })
 
   it('悬停缩略图在面板左侧显示大图预览（原图，不接收鼠标事件）', () => {
