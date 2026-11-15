@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "商品图片下载器",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "抖店 / 拼多多商品页：一键下载主图与详情图原图",
   "permissions": [],
   "host_permissions": [

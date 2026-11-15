@@ -121,6 +121,8 @@ describe('商品图片下载器（product-image-downloader）', () => {
     expect(content).toContain(IMAGE_SAVE_FOLDER_MARKER)
     expect(content).toContain('请选择图片保存文件夹')
     expect(content).toContain('取消则不会落盘')
+    expect(content).toContain('__shopilot_image_save_result')
+    expect(content).toContain('已取消下载（未选择保存文件夹）')
   })
 
   it('悬停缩略图在面板左侧显示大图预览（原图，不接收鼠标事件）', () => {

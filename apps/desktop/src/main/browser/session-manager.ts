@@ -103,8 +103,22 @@ const VIDEO_FOLDER_SESSION_MS = 60 * 1000
  * 30 秒足够覆盖一整批；下一次点击会先触发新的 marker，重新询问，不受这个窗口影响。
  */
 const IMAGE_FOLDER_SESSION_MS = 30 * 1000
-/** 用户在文件夹框点取消后，这一批后续图片直接丢弃，不再逐张弹框。 */
+/** 用户在保存位置弹窗点取消后，这一批后续图片直接丢弃，不再逐张弹框。 */
 const IMAGE_CANCEL_WINDOW_MS = 30 * 1000
+
+/**
+ * 把保存位置弹窗的结果告诉页面里的插件：detail 只用字符串，跨 isolated world 安全。
+ * 取消时插件要停止继续抓图/触发下载，并把状态改成“已取消下载”，不能只让主进程丢文件。
+ */
+function notifyImageSaveResult(webContents: WebContents, result: 'ok' | 'cancel'): void {
+  try {
+    const script =
+      `document.dispatchEvent(new CustomEvent('__shopilot_image_save_result', { detail: ${JSON.stringify(result)} }))`
+    void webContents.executeJavaScript(script).catch(() => { /* 页面已关闭 */ })
+  } catch {
+    /* webContents 已销毁 */
+  }
+}
 
 /** 唯一放行的权限：剪贴板**写入**（页面的"复制"按钮要用）。读取一律拒绝——
  *  剪贴板里可能是用户刚复制的密码/验证码/订单信息，页面没有理由能读到它。
@@ -513,6 +527,8 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
        * 测试环境用 SHOPILOT_TEST_IMAGE_SAVE_DIR 跳过原生弹窗，验收才能无人值守跑完。
        */
       const pickImageFolder = (): string => {
+        // 测试钩子：模拟用户点取消（验收检查“取消后不再下载/不落盘”）
+        if (String(process.env.SHOPILOT_TEST_IMAGE_SAVE_CANCEL || '').trim() === '1') return ''
         const testDir = String(process.env.SHOPILOT_TEST_IMAGE_SAVE_DIR || '').trim()
         if (testDir) {
           mkdirSync(testDir, { recursive: true })
@@ -566,10 +582,12 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
         if (picked) {
           imageFolder.dir = picked
           imageFolder.expiresAt = Date.now() + IMAGE_FOLDER_SESSION_MS
+          notifyImageSaveResult(webContents, 'ok')
           logMain('info', `[download] 图片保存位置已选择 store=${storeId} dir=${picked}`)
         } else {
           imageFolder.dir = ''
           imageBatchCancelledUntil = Date.now() + IMAGE_CANCEL_WINDOW_MS
+          notifyImageSaveResult(webContents, 'cancel')
           logMain('info', `[download] 图片保存位置未选择（用户取消），本批图片不下载 store=${storeId}`)
         }
         return
@@ -700,10 +718,12 @@ async function configureSession(sess: Session, storeId: string): Promise<void> {
           const picked = pickImageFolder()
           if (!picked) {
             imageBatchCancelledUntil = now + IMAGE_CANCEL_WINDOW_MS
+            notifyImageSaveResult(webContents, 'cancel')
             event.preventDefault()
             return
           }
           imageFolder.dir = picked
+          notifyImageSaveResult(webContents, 'ok')
         }
         imageFolder.expiresAt = Date.now() + IMAGE_FOLDER_SESSION_MS
         savePluginImage(item, suggested)

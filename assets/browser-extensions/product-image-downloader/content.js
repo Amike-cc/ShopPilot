@@ -240,6 +240,17 @@
   shadow.append(style, app, preview)
   ;(document.documentElement || document.body).appendChild(host)
 
+  /**
+   * 主进程在保存位置弹窗关闭后会派发这个事件：detail 是 'ok' / 'cancel'。
+   * 取消时插件要立刻停掉本批抓图与下载触发，并把状态改成“已取消下载”，
+   * 不能只靠主进程丢文件而界面还显示成功。
+   */
+  let saveFolderResult = null
+  document.addEventListener('__shopilot_image_save_result', event => {
+    const detail = event && event.detail
+    if (detail === 'ok' || detail === 'cancel') saveFolderResult = detail
+  })
+
   /* ------------------------------------------------------------------ */
   /* 采集                                                                */
   /* ------------------------------------------------------------------ */
@@ -1055,11 +1066,19 @@
     }
     const total = items.length
     state.busy = true
+    saveFolderResult = null
     state.failed.clear()
     clearStatus()
     setStatus(`准备下载 ${total} 张…`, 'busy')
     syncFooter()
     syncTiles()
+
+    const finishCancelled = () => {
+      state.busy = false
+      syncFooter()
+      syncTiles()
+      setStatus('已取消下载（未选择保存文件夹）', 'error')
+    }
 
     // 先让应用弹「选择保存位置」：0 字节 marker 被主进程拦截，不落盘、不写下载记录。
     // 每次点击都会重新问一次；这一批图片在用户选定文件夹后才开始落盘。
@@ -1069,6 +1088,10 @@
     } catch {
       /* 应用不认 marker 时继续走默认下载目录 */
     }
+    if (saveFolderResult === 'cancel') {
+      finishCancelled()
+      return
+    }
 
     const title = state.title || readPageTitle()
     const queue = items.slice()
@@ -1077,6 +1100,10 @@
 
     const worker = async () => {
       while (queue.length) {
+        if (saveFolderResult === 'cancel') {
+          queue.length = 0
+          break
+        }
         const item = queue.shift()
         try {
           setStatus(
@@ -1084,6 +1111,7 @@
             'busy'
           )
           const result = await fetchImage(item.url)
+          if (saveFolderResult === 'cancel') break
           await enqueueDownload(result.blob, buildFilename(title, item, result.mime))
           done++
         } catch (error) {
@@ -1096,6 +1124,10 @@
     }
 
     await Promise.all([worker(), worker()])
+    if (saveFolderResult === 'cancel') {
+      finishCancelled()
+      return
+    }
     state.busy = false
     syncFooter()
     syncTiles()
